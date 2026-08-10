@@ -1,4 +1,4 @@
-module github.com/snaraj/website-infrastructure/websites/naranjo.online
+module github.com/snaraj/naranjo.online
 
 go 1.26.0
 

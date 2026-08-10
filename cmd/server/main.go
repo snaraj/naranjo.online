@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/snaraj/website-infrastructure/websites/naranjo.online/internal/server"
-	website "github.com/snaraj/website-infrastructure/websites/naranjo.online/internal/web"
+	"github.com/snaraj/naranjo.online/internal/server"
+	website "github.com/snaraj/naranjo.online/internal/web"
 )
 
 const (

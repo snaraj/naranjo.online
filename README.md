@@ -1,33 +1,75 @@
-# naranjo.online — Go + Svelte
+# naranjo.online
 
-The production path is a Svelte build embedded into a dependency-free Go HTTP
-binary and packaged in a shell-less distroless image. The current frontend
-contract is `Hello World!`; the service also exposes `/livez` and `/readyz`.
+[![PR gate](https://github.com/snaraj/naranjo.online/actions/workflows/pr-gate.yml/badge.svg)](https://github.com/snaraj/naranjo.online/actions/workflows/pr-gate.yml)
+[![CodeQL](https://github.com/snaraj/naranjo.online/actions/workflows/codeql.yml/badge.svg)](https://github.com/snaraj/naranjo.online/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/snaraj/naranjo.online?sort=semver)](https://github.com/snaraj/naranjo.online/releases)
 
-Small version-controlled UI material belongs under `frontend/src/assets/` in
-the documented image, audio, video, icon, font, or texture category. Each file
-must stay below the repository's small-asset ceiling. Components build logical
-URLs with `src/lib/media.ts`; they never know a Pi path, volume, or origin.
+Samuel's personal corner of the internet — portfolio, professional home, and
+whatever deserves a permanent URL. A Svelte frontend embedded into a single
+dependency-free Go binary, shipped as a distroless multi-arch container and a
+Helm chart, deployed by digest onto a self-hosted Kubernetes platform behind
+Cloudflare.
 
-Heavy images, FLAC, source video, and delivery derivatives never enter this
-tree, the Svelte output, Go embed, OCI build context, Flux, a ConfigMap, a Secret,
-or etcd. The Go service has focused tests for bounded regular-file streaming,
-HEAD/Range/conditionals, MIME, cache classes, traversal, symlinks, missing files,
-and overload. Production still sets `MEDIA_ENABLED=false`, renders no volume,
-and the chart schema rejects enablement until ADR 0012's Pi/storage/backup/load
-evidence exists. Current Cloudflare self-serve terms also make deliberate
-large-media delivery a zero-spend `NO-GO`, independent of local code readiness.
+## How it works
 
-`frontend/package-lock.json`, both builder stages, Go modules, and CI selectors
-must match the exact public pins in `versions.env`; the contract fails a partial
-Dependabot upgrade instead of guessing compatible versions. `npm ci` keeps
-lifecycle scripts disabled, then the Svelte checks, dependency-free source
-tests, generated-artifact budgets, Go tests, and production-handler cache/header
-smoke tests run before a container can be accepted. The container build and
-multi-arch publication still require the pinned CI builder. Until a reviewed
-published image digest exists, the HelmRelease remains suspended and the
-all-zero digest sentinel blocks deployment readiness.
+```mermaid
+flowchart LR
+    dev[Svelte source] -->|vite build| dist[Hashed static bundle]
+    dist -->|go:embed| bin[Go binary]
+    bin -->|3-stage build| img["Distroless image (amd64+arm64)"]
+    chart[Helm chart] --> rel
+    img -->|cosign signed, digest pinned| rel[Release vX.Y.Z]
+    rel -->|GitOps pulls by digest| k8s[Kubernetes on the home platform]
+    k8s --> cf[Cloudflare Tunnel] --> visitors((Visitors))
+```
 
-Python is not in this application or image. Repository-level Python checks exist
-only because they provide dependency-free policy/redaction on the current
-workstation.
+The Go service serves the embedded bundle with strict caching, conditional
+requests, security headers, and `/livez` + `/readyz` probes on port 8080.
+There is no runtime dependency beyond the Go standard library.
+
+## Development
+
+```sh
+# Frontend: build first — the Go embed test expects the bundle to exist.
+cd frontend
+npm ci --ignore-scripts
+npm run check && npm test && npm run build
+
+# Backend
+cd ..
+go vet ./... && go test ./...
+
+# Container (both production architectures)
+docker build .
+```
+
+Toolchain pins live in CI (`node 24.19.0`, `npm 11.17.0`, `go 1.26.5`);
+newer local versions generally work, CI is authoritative.
+
+## Releases
+
+One tag does everything: pushing `vX.Y.Z` (matching `VERSION` and the chart
+version — CI enforces the three-way lock) builds and publishes:
+
+- `ghcr.io/snaraj/naranjo-online:vX.Y.Z` — multi-arch image, keyless-signed
+  (Cosign), with SBOM and SLSA provenance; deployment consumes the digest,
+  never the tag.
+- `ghcr.io/snaraj/charts/naranjo-online` — the Helm chart as an OCI
+  artifact, same version, also signed.
+- A GitHub Release with the immutable digests and human notes.
+
+Version tags are immutable: the publisher refuses to reuse one, on purpose,
+with no override. See [CHANGELOG.md](CHANGELOG.md) for history and
+[SECURITY.md](SECURITY.md) for the security posture.
+
+## Media
+
+Small UI assets live under `frontend/src/assets/` in documented categories
+with a per-file size ceiling. Heavy media (source video, FLAC, delivery
+derivatives) never enters this repository, the bundle, the image, or the
+cluster control plane — it is served from dedicated storage on the platform.
+
+## License
+
+Code is [MIT](LICENSE). Site content — text, images, video, audio, branding
+— is **all rights reserved**; the license does not extend to it.
