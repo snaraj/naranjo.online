@@ -4,6 +4,8 @@
     createDisclosure,
     dismiss,
     focusLeft,
+    outsidePress,
+    pressBegan,
     swatchKeyTarget,
     triggerClick,
     triggerPointerDown
@@ -28,6 +30,22 @@
 
   function onTriggerPointerdown(): void {
     triggerPointerDown(disclosure);
+  }
+
+  // A press beginning on a swatch arms the focusout suppression that keeps
+  // the popover visible until the swatch's click lands (WebKit fires the
+  // widget's focusout mid-press because buttons never take focus there).
+  function onSwatchPointerdown(): void {
+    pressBegan(disclosure);
+  }
+
+  // Any press outside the widget dismisses — independent of focus, which may
+  // already sit on the page after a suppressed focusout or abandoned press.
+  function onWindowPointerdown(event: PointerEvent): void {
+    const target = event.target;
+    if (!(target instanceof Node && (root?.contains(target) ?? false))) {
+      outsidePress(disclosure);
+    }
   }
 
   async function onTriggerClick(): Promise<void> {
@@ -93,6 +111,8 @@
      aria-expanded disclosure semantics on purpose: aria-haspopup would
      announce a menu, but the popover is a group of pressed-state buttons
      (review F4). -->
+<svelte:window onpointerdown={onWindowPointerdown} />
+
 <div class="theme-menu" bind:this={root} onfocusout={onFocusOut}>
   <button
     type="button"
@@ -124,6 +144,7 @@
         class="swatch swatch-{theme.id}"
         aria-label={theme.label}
         aria-pressed={selected === theme.id}
+        onpointerdown={onSwatchPointerdown}
         onclick={() => choose(theme.id)}
         onkeydown={onSwatchKeydown}
       >

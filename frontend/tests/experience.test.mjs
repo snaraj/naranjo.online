@@ -177,12 +177,17 @@ test('theme toggle: swatch popover, token-pure colors, machine-wired', () => {
   );
 
   // The component must delegate every open/close decision to the tested
-  // state machine — pointerdown latch included (the F1 fix) — and return
-  // focus to the trigger only when a dismissal reports it was open.
+  // state machine — the trigger latch (F1 fix) and the swatch press-in-
+  // flight guard plus outside-press dismissal (F5 fix) included — and
+  // return focus to the trigger only when a dismissal reports it was open.
   assert.match(themeMenu, /from '\.\/disclosure'/);
   assert.match(themeMenu, /onpointerdown=\{onTriggerPointerdown\}/);
   assert.match(themeMenu, /triggerPointerDown\(disclosure\)/);
   assert.match(themeMenu, /triggerClick\(disclosure\)/);
+  assert.match(themeMenu, /onpointerdown=\{onSwatchPointerdown\}/);
+  assert.match(themeMenu, /pressBegan\(disclosure\)/);
+  assert.match(themeMenu, /<svelte:window onpointerdown=\{onWindowPointerdown\} \/>/);
+  assert.match(themeMenu, /outsidePress\(disclosure\)/);
   assert.match(themeMenu, /if \(dismiss\(disclosure\)\) \{\n\s*trigger\?\.focus\(\)/);
   assert.match(themeMenu, /hidden=\{!disclosure\.open\}/);
 

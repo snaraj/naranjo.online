@@ -27,8 +27,9 @@ SemVer and match image/chart tags exactly.
   instantly, same stylesheet, no reload, no asset refetch; fully
   keyboard-driven (arrows/Home/End, Escape with focus return, focus-out
   dismissal) with 44px targets and reduced-motion-aware animation, its
-  open/close logic an extracted, behavior-tested state machine that
-  closes-and-stays-closed across engine focus differences. `styles.css`
+  open/close logic an extracted, behavior-tested state machine whose
+  press-in-flight guard keeps dismissal and pointer selection correct
+  across engine focus differences. `styles.css`
   holds every palette value exactly once as `--palette-*` definitions
   that theme blocks and swatches only reference. A bundle whose
   index.html cannot be stamped now fails construction; parity pins hold
