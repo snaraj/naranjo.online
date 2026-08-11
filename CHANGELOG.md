@@ -7,6 +7,24 @@ SemVer and match image/chart tags exactly.
 ## [Unreleased]
 
 ### Added
+- Reading modes (#22): named color schemes like the OSRS wiki — light,
+  dark, and a sepia placeholder seeded from the wiki's browntown values
+  — instead of a binary toggle. `styles.css` becomes a custom-property
+  token layer: light is the default `:root` palette, each further mode
+  is one `[data-theme]` override block with its own `color-scheme`, and
+  with no explicit choice `prefers-color-scheme: dark` maps the dark
+  tokens in. Zero flash with no inline script and no CSP change: the
+  origin precomputes one `data-theme`-stamped `index.html` variant per
+  mode at construction — own bytes and digest ETag each, from memory,
+  no request-path templating — and selects by the `theme` cookie,
+  failing closed to the unstamped default on anything unregistered; the
+  document response now carries `Vary: Cookie` so storing caches key
+  copies per variant. A dependency-free accessible toggle (native
+  disclosure + radio group) sets the cookie (`path=/`, 365 days,
+  `SameSite=Lax`) and swaps `data-theme` instantly — same stylesheet,
+  no reload, no asset refetch. A bundle whose index.html cannot be
+  stamped now fails construction; parity pins hold the Go theme list,
+  the frontend registry, and the CSS blocks together.
 - Panel framework (#21): a versioned read-only JSON API under
   `/api/panels` (index) and `/api/panels/<id>` (full panel), served
   through the existing security wrappers in the site's revalidated

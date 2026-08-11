@@ -113,7 +113,49 @@ func newHandler(assets fs.FS) (*handler, error) {
 	if !ok {
 		return nil, fmt.Errorf("read embedded index: %w", fs.ErrNotExist)
 	}
-	return &handler{files: files, index: index}, nil
+	// Reading modes (issue #22, the OSRS-wiki mechanism adapted): one stamped
+	// document variant per theme is prepared here, from the bytes already in
+	// memory — no second filesystem read — so a theme cookie costs the request
+	// path one map lookup and TTFB stays identical to every other embedded
+	// response. Each variant is a full staticFile with its own digest ETag,
+	// keeping conditional requests correct per representation.
+	themed := make(map[string]*staticFile, len(readingThemes))
+	for _, theme := range readingThemes {
+		stamped, err := stampReadingTheme(index.body, theme)
+		if err != nil {
+			return nil, fmt.Errorf("prepare %s reading-mode variant: %w", theme, err)
+		}
+		themed[theme] = newStaticFile("index.html", stamped)
+	}
+	return &handler{files: files, index: index, themed: themed}, nil
+}
+
+// stampReadingTheme returns a copy of the document whose <html> element
+// carries the theme's data-theme attribute, so the chosen token block applies
+// before any stylesheet or script decision — zero flash without inline JS.
+// Only a lowercase <html delimited like real markup is stamped; a bundle
+// without one fails construction rather than silently shipping documents that
+// can never change theme.
+func stampReadingTheme(document []byte, theme string) ([]byte, error) {
+	const openTag = "<html"
+	start := bytes.Index(document, []byte(openTag))
+	if start < 0 {
+		return nil, fmt.Errorf("document has no <html> element to stamp")
+	}
+	insertAt := start + len(openTag)
+	if insertAt >= len(document) {
+		return nil, fmt.Errorf("document ends inside its <html> element")
+	}
+	switch document[insertAt] {
+	case '>', ' ', '\t', '\r', '\n':
+	default:
+		return nil, fmt.Errorf("document has no <html> element to stamp")
+	}
+	stamp := []byte(` data-theme="` + theme + `"`)
+	stamped := make([]byte, 0, len(document)+len(stamp))
+	stamped = append(stamped, document[:insertAt]...)
+	stamped = append(stamped, stamp...)
+	return append(stamped, document[insertAt:]...), nil
 }
 
 // newStaticFile derives the response identity for one embedded file. The
@@ -193,7 +235,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// document from the origin again. "no-store" would forbid storage outright
 		// and make every navigation a full origin round trip for no safety gain:
 		// this document is public, holds no visitor data, and its ETag is a digest.
-		h.index.serveTo(w, r, "index.html")
+		//
+		// The document is also the one response that varies by the theme cookie.
+		// Because no-cache permits storing it, Vary: Cookie is meaningful here —
+		// it keys stored copies per variant so a shared cache can never satisfy
+		// one visitor's navigation with another visitor's theme. Every other
+		// response is cookie-independent and deliberately carries no Vary.
+		w.Header().Add("Vary", "Cookie")
+		h.documentVariant(r).serveTo(w, r, "index.html")
 		return
 	}
 	// Traversal, directory, placeholder, and unknown names all miss the
@@ -204,6 +253,23 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	file.serveTo(w, r, name)
+}
+
+// documentVariant selects the precomputed index.html for this visitor. A
+// theme cookie naming a registered reading mode selects its stamped variant;
+// every other state — no cookie, an unregistered value, case drift, hostile
+// garbage — fails closed to the unstamped default, whose tokens follow
+// prefers-color-scheme. All bytes and validators were prepared at
+// construction, so this is one parse and one map lookup on the hot path.
+func (h *handler) documentVariant(r *http.Request) *staticFile {
+	cookie, err := r.Cookie(themeCookie)
+	if err != nil {
+		return h.index
+	}
+	if variant, ok := h.themed[cookie.Value]; ok {
+		return variant
+	}
+	return h.index
 }
 
 // rejectAmbiguousPath runs before ServeMux so it returns a terminal 404 instead

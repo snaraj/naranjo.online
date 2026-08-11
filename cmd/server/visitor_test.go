@@ -364,3 +364,93 @@ func TestHostileVisitorStaysBlind(t *testing.T) {
 
 	drainScenario(t, runResult)
 }
+
+// TestVisitorPicksAReadingMode is the reading-modes story (issue #22) over
+// real transport: a first visit gets the unstamped default document, choosing
+// a mode makes the very next navigation ship that theme inside the HTML —
+// stamped by the origin from the cookie the toggle set, so there is nothing
+// to flash — each mode carries its own cache identity, returning in a mode
+// revalidates to a cheap 304, and a hostile cookie value falls back to the
+// default. The harness asserts the security baseline on every navigation.
+func TestVisitorPicksAReadingMode(t *testing.T) {
+	requireBuiltFrontend(t)
+	base, runResult := bootServer(t, nil)
+	session := testsupport.NewVisitor(t, base)
+	variantETags := map[string]string{}
+
+	t.Run("first visit, no choice: the unstamped document follows the OS scheme", func(t *testing.T) {
+		visitor := session.On(t)
+		shell := visitor.Navigate("/")
+		if shell.StatusCode != http.StatusOK {
+			t.Fatalf("GET / = %d", shell.StatusCode)
+		}
+		if bytes.Contains(shell.Body, []byte("data-theme")) {
+			t.Error("the default document must ship unstamped; prefers-color-scheme owns it")
+		}
+		if got := shell.Header.Get("Vary"); got != "Cookie" {
+			t.Errorf("document Vary = %q, want Cookie so shared caches key stored copies per theme", got)
+		}
+		if got := shell.Header.Get("Cache-Control"); got != "no-cache" {
+			t.Errorf("document Cache-Control = %q, want no-cache", got)
+		}
+		if !bytes.Contains(shell.Body, []byte("data-static-fallback")) {
+			t.Error("themed serving lost the static application fallback marker")
+		}
+		variantETags["default"] = shell.Header.Get("ETag")
+	})
+
+	t.Run("chooses each mode: the stamped variant with its own cache identity", func(t *testing.T) {
+		visitor := session.On(t)
+		for _, theme := range []string{"dark", "sepia", "light"} {
+			// The toggle writes the cookie; the browser replays the previous
+			// variant's validator. The switch must answer a full 200 of the
+			// new representation, never a 304 into the wrong colors.
+			visitor.SetCookie("theme", theme)
+			response := visitor.Navigate("/")
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("GET / with the %s cookie = %d, want 200", theme, response.StatusCode)
+			}
+			if stamp := []byte(`<html data-theme="` + theme + `"`); !bytes.Contains(response.Body, stamp) {
+				t.Errorf("%s document lacks its stamp %q", theme, stamp)
+			}
+			if got := response.Header.Get("Vary"); got != "Cookie" {
+				t.Errorf("%s document Vary = %q, want Cookie", theme, got)
+			}
+			variantETags[theme] = response.Header.Get("ETag")
+		}
+		holders := map[string]string{}
+		for theme, etag := range variantETags {
+			if etag == "" {
+				t.Errorf("%s document carried no ETag", theme)
+			}
+			if holder, duplicate := holders[etag]; duplicate {
+				t.Errorf("%s and %s share one ETag; every variant needs its own validator", theme, holder)
+			}
+			holders[etag] = theme
+		}
+	})
+
+	t.Run("returns in the chosen mode: revalidates to an empty 304", func(t *testing.T) {
+		revisit := session.On(t).Navigate("/")
+		if revisit.StatusCode != http.StatusNotModified || len(revisit.Body) != 0 {
+			t.Fatalf("revisit = %d with %d body bytes, want an empty 304 from the replayed validator", revisit.StatusCode, len(revisit.Body))
+		}
+	})
+
+	t.Run("hostile cookie value: fails closed to the default document", func(t *testing.T) {
+		visitor := session.On(t)
+		visitor.SetCookie("theme", "browntown")
+		response := visitor.Navigate("/")
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("GET / with an unregistered cookie = %d, want the full default document", response.StatusCode)
+		}
+		if bytes.Contains(response.Body, []byte("data-theme")) {
+			t.Error("an unregistered theme value must never select a stamped variant")
+		}
+		if got := response.Header.Get("ETag"); got != variantETags["default"] {
+			t.Errorf("fallback ETag = %q, want the default document identity %q", got, variantETags["default"])
+		}
+	})
+
+	drainScenario(t, runResult)
+}

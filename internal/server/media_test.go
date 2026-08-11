@@ -328,7 +328,9 @@ func TestReservedMediaSegmentsParity(t *testing.T) {
 // files, preventing fallthrough around the bounded media handler.
 func TestMediaRemainsAbsentByDefault(t *testing.T) {
 	assets := fstest.MapFS{
-		"index.html":              &fstest.MapFile{Data: []byte("index")},
+		// The <html> element is required: construction stamps the reading-mode
+		// variants onto it and fails closed on a bundle without one.
+		"index.html":              &fstest.MapFile{Data: []byte("<html>index</html>")},
 		"media/mutable/song.flac": &fstest.MapFile{Data: []byte("must stay private")},
 	}
 	site, err := New(assets)
