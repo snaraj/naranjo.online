@@ -6,6 +6,10 @@ SemVer and match image/chart tags exactly.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.8] - 2026-08-11
+
 ### Added
 - Production-readiness test sweep. A 28-row RFC 9110 precondition matrix
   locks when an abusive `Range` header may be answered with the
