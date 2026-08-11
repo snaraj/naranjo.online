@@ -91,6 +91,19 @@ func (f *fakeServer) capturedDeadline() (time.Time, bool) {
 	return f.shutdownCtx.Deadline()
 }
 
+// TestShutdownBoundStaysInsideTheGracePeriod pins the documented value
+// itself, not just its plumbing: the tests below prove Shutdown receives a
+// deadline of exactly shutdownTimeout, so without this guard a changed
+// constant would move every assertion with it and never fail anything. The
+// chart deliberately relies on the Kubernetes default 30-second termination
+// grace period; the drain bound must leave real headroom inside it.
+func TestShutdownBoundStaysInsideTheGracePeriod(t *testing.T) {
+	t.Parallel()
+	if shutdownTimeout != 10*time.Second {
+		t.Fatalf("shutdownTimeout = %v, want the documented 10s; changing it is a chart-contract decision, not a tuning knob", shutdownTimeout)
+	}
+}
+
 // TestServePropagatesStartupFailure pins that a server that cannot listen
 // reports its error unchanged and is never asked to shut down: the process
 // must exit loudly so Kubernetes restarts it, not drain a listener that never

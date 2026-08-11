@@ -278,11 +278,13 @@ func TestMediaBoundaryFaultsOnRealFilesystem(t *testing.T) {
 	site, root := mediaFixture(t)
 
 	t.Run("unreadable leaf is indistinguishable from missing", func(t *testing.T) {
-		// Requires a non-root test user: euid 0 would bypass the permission bit
-		// and legitimately serve the file. CI runners and developer machines run
-		// tests unprivileged, matching the production container.
+		// euid 0 bypasses permission bits entirely, so this fault class is
+		// unobservable as root — and the container image build runs this suite
+		// as root by design. Skip there, exactly like the symlink and
+		// hard-link capability gates in media_test.go; the unprivileged CI
+		// runner and developer machines still exercise it on every run.
 		if os.Geteuid() == 0 {
-			t.Fatal("media permission faults cannot be exercised as root")
+			t.Skip("permission faults are unobservable with euid 0")
 		}
 		sealed := filepath.Join(root, "mutable", "sealed.mp4")
 		if err := os.WriteFile(sealed, []byte("sealed bytes"), 0o640); err != nil {
