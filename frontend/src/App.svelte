@@ -8,6 +8,7 @@
   import BossLog from './lib/components/BossLog.svelte';
   import SideRail from './lib/components/SideRail.svelte';
   import TokenUsagePanel from './lib/components/TokenUsagePanel.svelte';
+  import ActivityBar from './lib/components/ActivityBar.svelte';
   /* panels:imports:end */
 </script>
 
@@ -28,5 +29,6 @@
   <!-- panels:mount:begin -- exactly one line per panel, anywhere between the fences -->
   <SideRail><BossLog /></SideRail>
   <TokenUsagePanel />
+  <ActivityBar />
   <!-- panels:mount:end -->
 </div>
