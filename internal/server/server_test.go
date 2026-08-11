@@ -162,7 +162,7 @@ func TestHealthMethodsAndMissingPath(t *testing.T) {
 		t.Errorf(".gitkeep status = %d", placeholder.Code)
 	}
 	traversal := httptest.NewRecorder()
-	direct := &handler{assets: fstest.MapFS{}, index: []byte("index")}
+	direct := &handler{files: map[string]*staticFile{}, index: newStaticFile("index.html", []byte("index"))}
 	direct.ServeHTTP(traversal, httptest.NewRequest(http.MethodGet, "/../index.html", nil))
 	if traversal.Code != http.StatusNotFound {
 		t.Errorf("traversal status = %d", traversal.Code)
