@@ -100,6 +100,17 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
   for (const anchor of ['#f7f7f2', '#10131a']) {
     assert.equal(occurrences(styles, anchor), 2, `anchor ${anchor} fills exactly two palette slots`);
   }
+
+  // Structural closure of the dedup pin (review F2): the enumerated counts
+  // above cannot see a NEW hex duplicated elsewhere, so additionally no hex
+  // may exist outside the :root palette block at all.
+  const rootBlock = styles.match(/:root\s*\{[^}]*\}/)?.[0];
+  assert.ok(rootBlock, 'styles must open with the :root palette block');
+  assert.doesNotMatch(
+    styles.replace(rootBlock, ''),
+    /#[0-9a-fA-F]{3,8}(?![0-9a-zA-Z])/,
+    'every hex must live inside the :root palette block; elsewhere, reference tokens'
+  );
 });
 
 // The registry and toggle are the client half of the wiki mechanism: named
@@ -126,13 +137,16 @@ test('theme registry and toggle: named modes, exact cookie grammar, local only',
 // The toggle is the wiki's, minimally: a labeled moon button opening a
 // popover of one swatch per mode, each swatch's background being that
 // theme's OWN page-surface token, with an inline-SVG glyph — sun on light,
-// cratered moon on dark, plain moon on sepia. No icon assets, no hex copies,
-// no custom ARIA widgetry beyond the disclosure pattern.
-test('theme toggle: swatch popover, token-pure colors, keyboard-complete', () => {
-  // Trigger: a labeled disclosure button with an inline moon glyph.
+// cratered moon on dark, plain moon on sepia. No icon assets, no hex copies.
+// These pins cover DOM wiring only; the open/select/close/reopen behavior is
+// EXECUTED against src/lib/disclosure.ts in toggle.test.mjs.
+test('theme toggle: swatch popover, token-pure colors, machine-wired', () => {
+  // Trigger: a labeled plain-disclosure button with an inline moon glyph.
+  // Deliberately NO aria-haspopup: it would announce a menu, but the popover
+  // is a group of pressed-state buttons (review F4).
   assert.match(themeMenu, /aria-label="Reading mode"/);
-  assert.match(themeMenu, /aria-haspopup="true"/);
-  assert.match(themeMenu, /aria-expanded=\{open\}/);
+  assert.doesNotMatch(themeMenu, /aria-haspopup=/, 'plain disclosure only: no haspopup attribute');
+  assert.match(themeMenu, /aria-expanded=\{disclosure\.open\}/);
   assert.match(themeMenu, /aria-controls="reading-mode-menu"/);
   assert.match(themeMenu, /<svg[^>]*aria-hidden="true"/);
 
@@ -152,6 +166,9 @@ test('theme toggle: swatch popover, token-pure colors, keyboard-complete', () =>
       `the ${id} swatch background must be that theme's own surface token`
     );
   }
+  // The sepia glyph clears WCAG 1.4.11 with margin by mixing two sepia
+  // tokens — still no restated value (review F4).
+  assert.match(themeMenu, /color-mix\(in srgb, var\(--palette-sepia-border-strong\) 60%, var\(--palette-sepia-accent\)\)/);
   // ({#each …} starts with three hex-class letters, hence the full-token form.)
   assert.doesNotMatch(
     themeMenu,
@@ -159,12 +176,18 @@ test('theme toggle: swatch popover, token-pure colors, keyboard-complete', () =>
     'the toggle must reference tokens, never hex values'
   );
 
-  // Keyboard and touch: ESC closes with focus return, arrows move between
-  // swatches, targets meet the 44px minimum, motion respects the OS setting.
-  assert.match(themeMenu, /'Escape'/);
-  assert.match(themeMenu, /'ArrowRight'/);
-  assert.match(themeMenu, /'ArrowLeft'/);
-  assert.match(themeMenu, /trigger\?\.focus\(\)/);
+  // The component must delegate every open/close decision to the tested
+  // state machine — pointerdown latch included (the F1 fix) — and return
+  // focus to the trigger only when a dismissal reports it was open.
+  assert.match(themeMenu, /from '\.\/disclosure'/);
+  assert.match(themeMenu, /onpointerdown=\{onTriggerPointerdown\}/);
+  assert.match(themeMenu, /triggerPointerDown\(disclosure\)/);
+  assert.match(themeMenu, /triggerClick\(disclosure\)/);
+  assert.match(themeMenu, /if \(dismiss\(disclosure\)\) \{\n\s*trigger\?\.focus\(\)/);
+  assert.match(themeMenu, /hidden=\{!disclosure\.open\}/);
+
+  // Touch and motion: targets meet the 44px minimum, animation respects the
+  // OS setting.
   assert.match(themeMenu, /2\.75rem/);
   assert.match(themeMenu, /prefers-reduced-motion/);
 });

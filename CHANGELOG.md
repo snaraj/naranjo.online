@@ -19,12 +19,20 @@ SemVer and match image/chart tags exactly.
   no request-path templating — and selects by the `theme` cookie,
   failing closed to the unstamped default on anything unregistered; the
   document response now carries `Vary: Cookie` so storing caches key
-  copies per variant. A dependency-free accessible toggle (native
-  disclosure + radio group) sets the cookie (`path=/`, 365 days,
-  `SameSite=Lax`) and swaps `data-theme` instantly — same stylesheet,
-  no reload, no asset refetch. A bundle whose index.html cannot be
-  stamped now fails construction; parity pins hold the Go theme list,
-  the frontend registry, and the CSS blocks together.
+  copies per variant. The toggle is the wiki's, dependency-free: a
+  compact moon button opening a popover of three round swatches — each
+  swatch's background is its theme's own page surface with a sun,
+  cratered-moon, or plain dark-moon glyph (inline SVG) — that sets the
+  cookie (`path=/`, 365 days, `SameSite=Lax`) and swaps `data-theme`
+  instantly, same stylesheet, no reload, no asset refetch; fully
+  keyboard-driven (arrows/Home/End, Escape with focus return, focus-out
+  dismissal) with 44px targets and reduced-motion-aware animation, its
+  open/close logic an extracted, behavior-tested state machine that
+  closes-and-stays-closed across engine focus differences. `styles.css`
+  holds every palette value exactly once as `--palette-*` definitions
+  that theme blocks and swatches only reference. A bundle whose
+  index.html cannot be stamped now fails construction; parity pins hold
+  the Go theme list, the frontend registry, and the CSS blocks together.
 - Panel framework (#21): a versioned read-only JSON API under
   `/api/panels` (index) and `/api/panels/<id>` (full panel), served
   through the existing security wrappers in the site's revalidated

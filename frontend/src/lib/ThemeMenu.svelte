@@ -1,12 +1,23 @@
 <script lang="ts">
   import { tick } from 'svelte';
+  import {
+    createDisclosure,
+    dismiss,
+    focusLeft,
+    swatchKeyTarget,
+    triggerClick,
+    triggerPointerDown
+  } from './disclosure';
   import { applyTheme, documentTheme, themes, type ThemeId } from './themes';
 
   // The origin stamps the chosen mode on <html> before any script runs, so
   // the initial state reads the document itself — never a second source of
   // truth that could disagree with what the visitor already sees.
   let selected = $state<ThemeId | null>(documentTheme());
-  let open = $state(false);
+  // Every open/close decision lives in the extracted disclosure state
+  // machine (see disclosure.ts for the engine-order rationale); this
+  // component only renders it and moves focus.
+  const disclosure = $state(createDisclosure());
   let root = $state<HTMLDivElement>();
   let trigger = $state<HTMLButtonElement>();
   let popover = $state<HTMLDivElement>();
@@ -15,9 +26,12 @@
     return Array.from(popover?.querySelectorAll('button') ?? []);
   }
 
-  async function toggleOpen(): Promise<void> {
-    open = !open;
-    if (!open) {
+  function onTriggerPointerdown(): void {
+    triggerPointerDown(disclosure);
+  }
+
+  async function onTriggerClick(): Promise<void> {
+    if (triggerClick(disclosure) !== 'opened') {
       return;
     }
     // Move focus into the popover on the current choice (or the first swatch
@@ -30,15 +44,7 @@
   function choose(id: ThemeId): void {
     selected = id;
     applyTheme(id);
-    close(true);
-  }
-
-  function close(refocus: boolean): void {
-    if (!open) {
-      return;
-    }
-    open = false;
-    if (refocus) {
+    if (dismiss(disclosure)) {
       trigger?.focus();
     }
   }
@@ -47,46 +53,34 @@
   // elsewhere) dismisses the popover without stealing focus back.
   function onFocusOut(event: FocusEvent): void {
     const next = event.relatedTarget;
-    if (!(next instanceof Node && root?.contains(next))) {
-      close(false);
-    }
+    focusLeft(disclosure, next instanceof Node && (root?.contains(next) ?? false));
   }
 
   function onTriggerKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
+    if (event.key === 'Escape' && dismiss(disclosure)) {
       event.preventDefault();
-      close(true);
+      trigger?.focus();
     }
   }
 
   function onSwatchKeydown(event: KeyboardEvent): void {
     const buttons = swatches();
-    const current = buttons.indexOf(event.currentTarget as HTMLButtonElement);
-    let next = -1;
-    switch (event.key) {
-      case 'Escape':
-        event.preventDefault();
-        close(true);
-        return;
-      case 'ArrowRight':
-      case 'ArrowDown':
-        next = (current + 1) % buttons.length;
-        break;
-      case 'ArrowLeft':
-      case 'ArrowUp':
-        next = (current - 1 + buttons.length) % buttons.length;
-        break;
-      case 'Home':
-        next = 0;
-        break;
-      case 'End':
-        next = buttons.length - 1;
-        break;
-      default:
-        return;
+    const target = swatchKeyTarget(
+      event.key,
+      buttons.indexOf(event.currentTarget as HTMLButtonElement),
+      buttons.length
+    );
+    if (target === null) {
+      return;
     }
     event.preventDefault();
-    buttons[next]?.focus();
+    if (target === 'dismiss') {
+      if (dismiss(disclosure)) {
+        trigger?.focus();
+      }
+      return;
+    }
+    buttons[target]?.focus();
   }
 </script>
 
@@ -95,17 +89,20 @@
      theme's page surface — read from that theme's own palette tokens, never
      a second copy of the values — with a sun on the light surface, a
      cratered moon on the dark surface, and a plain dark moon on the sepia
-     surface. Native buttons only; the glyphs are inline SVG. -->
+     surface. Native buttons only; the glyphs are inline SVG. Plain
+     aria-expanded disclosure semantics on purpose: aria-haspopup would
+     announce a menu, but the popover is a group of pressed-state buttons
+     (review F4). -->
 <div class="theme-menu" bind:this={root} onfocusout={onFocusOut}>
   <button
     type="button"
     class="trigger"
     aria-label="Reading mode"
-    aria-haspopup="true"
-    aria-expanded={open}
+    aria-expanded={disclosure.open}
     aria-controls="reading-mode-menu"
     bind:this={trigger}
-    onclick={toggleOpen}
+    onpointerdown={onTriggerPointerdown}
+    onclick={onTriggerClick}
     onkeydown={onTriggerKeydown}
   >
     <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
@@ -118,7 +115,7 @@
     id="reading-mode-menu"
     role="group"
     aria-label="Reading mode"
-    hidden={!open}
+    hidden={!disclosure.open}
     bind:this={popover}
   >
     {#each themes as theme (theme.id)}
@@ -246,7 +243,10 @@
 
   .swatch-sepia {
     background: var(--palette-sepia-surface);
-    color: var(--palette-sepia-border-strong);
+    /* Still a dark-brown moon, but mixed one step toward the accent so the
+       glyph clears WCAG 1.4.11's 3:1 with real margin (≈4.4:1) on the sepia
+       surface — tokens only, no restated value (review F4). */
+    color: color-mix(in srgb, var(--palette-sepia-border-strong) 60%, var(--palette-sepia-accent));
   }
 
   .swatch[aria-pressed='true'] {
