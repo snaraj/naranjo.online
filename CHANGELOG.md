@@ -6,7 +6,34 @@ SemVer and match image/chart tags exactly.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- Production-readiness test sweep. A 28-row RFC 9110 precondition matrix
+  locks when an abusive `Range` header may be answered with the
+  application's `416` and when a standard `200`, `304`, or `412` must win;
+  `testing/synctest` lifecycle tests prove the exact 10-second shutdown
+  bound against a hand-written `httpRunner` fake; real-socket end-to-end
+  suites boot `run()` — media-disabled and media-enabled — wait for
+  readiness, exercise the public contracts over the wire (including
+  fail-closed saturation with recovery), and drain on a real SIGTERM;
+  deep-mock filesystem fault injection proves a broken embedded bundle can
+  never become a ready pod and that the request path never touches the
+  filesystem; and real-filesystem media-boundary faults (unreadable leaf,
+  named pipe, file-as-directory, post-Close straggler, name-limit
+  overflow) are pinned to opaque responses. Go statement coverage rises
+  from 71.4% to 93.7%.
+- The PR gate enforces a ratchet-only Go coverage floor (90.0%). Raising
+  it as coverage grows is expected; lowering it is out of policy.
+
+### Changed
+- Every embedded frontend response — body, digest ETag, content type,
+  cache policy — is prepared once at construction. Any unreadable embedded
+  file now fails startup before the pod reports ready instead of surfacing
+  as per-visitor errors, and the serving hot path performs no hashing and
+  no filesystem access.
+- `main()` now owns the process signal contract and passes `run()` its
+  lifecycle context plus an environment-lookup function, the same
+  entrypoint seam the lidersea.com sibling uses, so both repos test
+  configuration, bind, serve, and drain identically and hermetically.
 
 ## [0.1.7] - 2026-08-11
 
