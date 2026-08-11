@@ -1,6 +1,7 @@
-// Package testsupport holds the API-level test fixtures shared by this
-// module's Go suites: the canonical healthy frontend bundle and the on-disk
-// media delivery tree. Centralizing them keeps every suite exercising the
+// Package testsupport holds the API-level test fixtures and harnesses shared
+// by this module's Go suites: the canonical healthy frontend bundle, the
+// on-disk media delivery tree, and the Visitor mock-browser harness for
+// end-to-end scenarios. Centralizing them keeps every suite exercising the
 // same shapes instead of hand-copied near-duplicates that drift apart.
 //
 // Only fixtures that need public surface area live here. White-box fakes that
