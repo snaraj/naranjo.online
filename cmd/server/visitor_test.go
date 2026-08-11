@@ -355,6 +355,123 @@ func TestVisitorChecksTheBossLog(t *testing.T) {
 	drainScenario(t, runResult)
 }
 
+// The token-usage/v1 payload contract, pinned as independent expected shapes
+// exactly like the envelope above: sources are labeled by DATA the origin
+// serves, windows carry the /usage-shaped fields, and the two optional fields
+// stay pointers because absence is meaningful and must survive decoding.
+type visitorTokenUsageData struct {
+	Sources []visitorTokenUsageSource `json:"sources"`
+}
+
+type visitorTokenUsageSource struct {
+	Label   string                    `json:"label"`
+	Windows []visitorTokenUsageWindow `json:"windows"`
+}
+
+type visitorTokenUsageWindow struct {
+	Period         string   `json:"period"`
+	InputTokens    int64    `json:"inputTokens"`
+	OutputTokens   int64    `json:"outputTokens"`
+	UtilizationPct *float64 `json:"utilizationPct"`
+	ResetsAt       *string  `json:"resetsAt"`
+}
+
+// TestVisitorChecksTokenUsage is the dashboard reader glancing at model spend:
+// the served page ships the token-usage panel wired into its bundle, and the
+// panel answers with the /usage-shaped contract — both labeled sources, every
+// window structurally sound — honestly badged stale, because an egress-free
+// boot serves the embedded snapshot fallback and must say so. Labels are
+// asserted as distinct non-empty data, never as particular vendor spellings:
+// which tools report usage is the data's business, not this suite's.
+func TestVisitorChecksTokenUsage(t *testing.T) {
+	requireBuiltFrontend(t)
+	base, runResult := bootServer(t, nil)
+	session := testsupport.NewVisitor(t, base)
+
+	t.Run("opens the site: the page ships the token-usage panel wired in", func(t *testing.T) {
+		visitor := session.On(t)
+		shell := visitor.Navigate("/")
+		if shell.StatusCode != http.StatusOK {
+			t.Fatalf("GET / = %d", shell.StatusCode)
+		}
+		if !bytes.Contains(shell.Body, []byte("data-static-fallback")) {
+			t.Error("served document lacks the static application fallback marker")
+		}
+		// The mock browser does not execute scripts, so "the page renders the
+		// panel" is proven the transport way: some shipped asset must carry
+		// both the panel API root and this panel's id, or the mounted
+		// component never made it into the bundle the visitor downloads.
+		wired := false
+		for _, asset := range visitor.AssetReferences(shell.Body) {
+			response := visitor.Navigate(asset)
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("GET %s = %d", asset, response.StatusCode)
+			}
+			if bytes.Contains(response.Body, []byte("/api/panels")) && bytes.Contains(response.Body, []byte("token-usage")) {
+				wired = true
+			}
+		}
+		if !wired {
+			t.Error("no shipped asset wires the token-usage panel to the panel API")
+		}
+	})
+
+	t.Run("reads the usage panel: both sources /usage-shaped, snapshot fallback honestly stale", func(t *testing.T) {
+		response := session.On(t).Navigate("/api/panels/token-usage")
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("GET /api/panels/token-usage = %d", response.StatusCode)
+		}
+		var envelope visitorPanelEnvelope
+		decodeVisitorJSON(t, response.Body, &envelope)
+		if envelope.Schema != "panel/v1" || envelope.ID != "token-usage" || envelope.Kind != "token-usage/v1" {
+			t.Fatalf("envelope identity = %+v", envelope)
+		}
+		// The stale/fallback case: live refresh is never enabled on this
+		// boot, so the panel serves its embedded snapshot and the badge
+		// contract requires it to say stale — data present AND provenance
+		// honest, never fresh-looking numbers.
+		if envelope.Status != "stale" {
+			t.Errorf("status = %q, want %q for the egress-free snapshot fallback", envelope.Status, "stale")
+		}
+		if _, err := time.Parse(time.RFC3339, envelope.GeneratedAt); err != nil {
+			t.Errorf("generatedAt = %q: %v", envelope.GeneratedAt, err)
+		}
+		var usage visitorTokenUsageData
+		decodeVisitorJSON(t, envelope.Data, &usage)
+		if len(usage.Sources) != 2 {
+			t.Fatalf("payload carries %d sources, want both", len(usage.Sources))
+		}
+		seen := make(map[string]bool)
+		for _, source := range usage.Sources {
+			if source.Label == "" || seen[source.Label] {
+				t.Errorf("source labels must be distinct non-empty data, got %q twice or empty", source.Label)
+			}
+			seen[source.Label] = true
+			if len(source.Windows) == 0 {
+				t.Errorf("source %q ships no windows in the snapshot fallback", source.Label)
+			}
+			for _, window := range source.Windows {
+				if window.Period == "" {
+					t.Errorf("source %q has a window with no period", source.Label)
+				}
+				if window.InputTokens < 0 || window.OutputTokens < 0 {
+					t.Errorf("source %q window %q counts negative tokens", source.Label, window.Period)
+				}
+				if window.UtilizationPct != nil && *window.UtilizationPct < 0 {
+					t.Errorf("source %q window %q utilization is negative", source.Label, window.Period)
+				}
+				if window.ResetsAt != nil {
+					if _, err := time.Parse(time.RFC3339, *window.ResetsAt); err != nil {
+						t.Errorf("source %q window %q resetsAt = %q: %v", source.Label, window.Period, *window.ResetsAt, err)
+					}
+				}
+			}
+		}
+	})
+
+	drainScenario(t, runResult)
+}
+
 // TestVisitorPlaysMedia is the future music-and-video story on the
 // media-enabled boot: press play for a full 200 stream, scrub with a Range
 // request for a 206, and replay from cache as a 304 — the digest ETag doing
