@@ -5,6 +5,8 @@
      line inside the panels-mount fences below. Sibling changes insert their
      line anywhere between a fence pair so parallel additions merge cleanly. */
   /* panels:imports:begin -- exactly one import line per panel */
+  import BossLog from './lib/components/BossLog.svelte';
+  import SideRail from './lib/components/SideRail.svelte';
   /* panels:imports:end */
 </script>
 
@@ -23,5 +25,6 @@
 
 <div class="panels-mount">
   <!-- panels:mount:begin -- exactly one line per panel, anywhere between the fences -->
+  <SideRail><BossLog /></SideRail>
   <!-- panels:mount:end -->
 </div>

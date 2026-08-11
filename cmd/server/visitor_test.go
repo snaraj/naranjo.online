@@ -272,6 +272,89 @@ func TestVisitorReadsThePanels(t *testing.T) {
 	drainScenario(t, runResult)
 }
 
+// visitorBossLog pins the boss-log/v1 payload contract as an independent
+// expected shape. KC and Rank are pointers on purpose: the hiscores
+// legitimately carry null below the listing threshold, the frontend renders
+// null as "--", and this pin fails if an omitempty-style regression ever
+// erases a null on the round trip.
+type visitorBossLog struct {
+	Account string           `json:"account"`
+	Bosses  []visitorBossRow `json:"bosses"`
+}
+
+type visitorBossRow struct {
+	Name  string `json:"name"`
+	KC    *int64 `json:"kc"`
+	Rank  *int64 `json:"rank"`
+	Score *int64 `json:"score,omitempty"`
+}
+
+// TestVisitorChecksTheBossLog is the boss-log reader's story: open the page
+// the side rail lives on like any visitor, then read the panel the rail's
+// grid renders and hold its payload to the cell contract — a named account,
+// named bosses, tallies that are null or non-negative, and both tally
+// branches present in the served data so the "--" rendering path is always
+// exercised, not merely possible.
+func TestVisitorChecksTheBossLog(t *testing.T) {
+	requireBuiltFrontend(t)
+	base, runResult := bootServer(t, nil)
+	session := testsupport.NewVisitor(t, base)
+
+	t.Run("opens the page the rail lives on", func(t *testing.T) {
+		shell := session.On(t).Navigate("/")
+		if shell.StatusCode != http.StatusOK {
+			t.Fatalf("GET / = %d", shell.StatusCode)
+		}
+		// Structure, never copy: the document contract is the fallback
+		// marker; the rail itself hydrates client-side from the panel API.
+		if !bytes.Contains(shell.Body, []byte("data-static-fallback")) {
+			t.Error("served document lacks the static application fallback marker")
+		}
+	})
+
+	t.Run("reads the boss log: the grid's cell contract holds", func(t *testing.T) {
+		response := session.On(t).Navigate("/api/panels/boss-log")
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("GET /api/panels/boss-log = %d", response.StatusCode)
+		}
+		var envelope visitorPanelEnvelope
+		decodeVisitorJSON(t, response.Body, &envelope)
+		if envelope.Kind != "boss-log/v1" {
+			t.Fatalf("boss-log kind = %q, want boss-log/v1", envelope.Kind)
+		}
+		var payload visitorBossLog
+		decodeVisitorJSON(t, envelope.Data, &payload)
+		if payload.Account == "" {
+			t.Error("payload names no account")
+		}
+		if len(payload.Bosses) == 0 {
+			t.Fatal("payload lists no bosses; the grid would render empty")
+		}
+		var ranked, unranked bool
+		for _, boss := range payload.Bosses {
+			if boss.Name == "" {
+				t.Error("a boss row carries no name; cells and tooltips need one")
+			}
+			if boss.KC != nil && *boss.KC < 0 {
+				t.Errorf("boss %s kc = %d, want null or non-negative", boss.Name, *boss.KC)
+			}
+			if boss.Rank != nil && *boss.Rank < 0 {
+				t.Errorf("boss %s rank = %d, want null or non-negative", boss.Name, *boss.Rank)
+			}
+			if boss.KC == nil {
+				unranked = true
+			} else {
+				ranked = true
+			}
+		}
+		if !ranked || !unranked {
+			t.Error(`served data must exercise both tally branches: at least one ranked kc and one null kc (rendered as "--")`)
+		}
+	})
+
+	drainScenario(t, runResult)
+}
+
 // TestVisitorPlaysMedia is the future music-and-video story on the
 // media-enabled boot: press play for a full 200 stream, scrub with a Range
 // request for a 206, and replay from cache as a 304 — the digest ETag doing
