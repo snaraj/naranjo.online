@@ -112,6 +112,40 @@ func TestConstructionReadsEveryFileExactlyOnce(t *testing.T) {
 	}
 }
 
+// TestMediaConstructionReadsEveryFileExactlyOnce pins the single-construction
+// contract for the media-enabled boot: NewWithMedia must prepare the embedded
+// bundle in exactly one walk — every file read exactly once — and the request
+// path must never touch the embedded filesystem again. Together with run()'s
+// construct-once ordering in cmd/server (which resolves the media decision
+// before building any Site), this guarantees a media-enabled boot never pays
+// a second full walk plus SHA-256 of every embedded byte for a throwaway
+// handler.
+func TestMediaConstructionReadsEveryFileExactlyOnce(t *testing.T) {
+	t.Parallel()
+	fsys := &faultFS{files: healthyFrontend()}
+	site, err := NewWithMedia(fsys, MediaOptions{Root: t.TempDir(), MaxConcurrent: 1})
+	if err != nil {
+		t.Fatalf("NewWithMedia() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := site.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+	want := []string{"assets/app-abc123.js", "favicon.svg", "index.html"}
+	constructionReads := assertConstructionReads(t, fsys, want)
+
+	for _, target := range []string{"/", "/assets/app-abc123.js", "/media/mutable/album/missing.mp4", "/missing"} {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		request.URL.Path = target
+		site.ServeHTTP(response, request)
+	}
+	if got := fsys.recordedReads(); !equalStrings(got, constructionReads) {
+		t.Fatalf("request handling read from the embedded filesystem: reads grew from %v to %v", constructionReads, got)
+	}
+}
+
 // assertConstructionReads asserts the construction-time read set and returns
 // it for later growth comparison.
 func assertConstructionReads(t *testing.T, fsys *faultFS, want []string) []string {

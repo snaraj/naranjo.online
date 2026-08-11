@@ -19,6 +19,10 @@ func testHandler(t *testing.T) http.Handler {
 		"index.html":        &fstest.MapFile{Data: []byte("<!doctype html><h1>Hello World!</h1>")},
 		"assets/app-abc.js": &fstest.MapFile{Data: []byte("console.log('hello')")},
 		".gitkeep":          &fstest.MapFile{Data: []byte("build placeholder")},
+		// An extensionless name resolves to no registered MIME type on every
+		// platform, and its deliberately sniffable HTML body proves the pinned
+		// octet-stream policy — not content sniffing — decides the type.
+		"downloads/blob": &fstest.MapFile{Data: []byte("<!doctype html><script>sniffable</script>")},
 	}
 	var filesystem fs.FS = assets
 	siteHandler, err := New(filesystem)
@@ -132,6 +136,48 @@ func TestAssetRFCPreconditions(t *testing.T) {
 	siteHandler.ServeHTTP(response, request)
 	if response.Code != http.StatusPreconditionFailed {
 		t.Fatalf("status = %d for a failed If-Match", response.Code)
+	}
+}
+
+// TestEmbeddedContentTypePolicy locks the construction-time Content-Type
+// decision: registered extensions resolve through the MIME registry, and an
+// unknown embedded extension is pinned to application/octet-stream instead of
+// being left empty for ServeContent to sniff. The embedded bundle is
+// build-controlled, so an unknown extension is a packaging surprise and
+// sniffing it into a browser-active type is the only risk being closed; unlike
+// the operator-managed media tree, no attachment Content-Disposition is
+// needed for build artifacts.
+func TestEmbeddedContentTypePolicy(t *testing.T) {
+	siteHandler := testHandler(t)
+	for name, row := range map[string]struct {
+		target      string
+		contentType string
+	}{
+		// text/html is identical across the Go builtin table and every host
+		// registry, so the exact pin is portable; other registered extensions
+		// legitimately vary by host table and are covered by the non-sniffing
+		// guarantee rather than exact values.
+		"registered extension": {target: "/", contentType: "text/html; charset=utf-8"},
+		"unknown extension":    {target: "/downloads/blob", contentType: "application/octet-stream"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			siteHandler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, row.target, nil))
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d", response.Code)
+			}
+			if got := response.Header().Get("Content-Type"); got != row.contentType {
+				t.Errorf("Content-Type = %q, want %q", got, row.contentType)
+			}
+			if got := response.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+			}
+			// Embedded files are never download-forced: the bundle is reviewed at
+			// build time, so no Content-Disposition accompanies the pinned type.
+			if got := response.Header().Get("Content-Disposition"); got != "" {
+				t.Errorf("Content-Disposition = %q, want none for embedded files", got)
+			}
+		})
 	}
 }
 

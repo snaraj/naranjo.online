@@ -107,10 +107,19 @@ func newStaticFile(name string, data []byte) *staticFile {
 		// cache safe: changed bytes are always published under a new URL.
 		cacheControl = immutableCacheControl
 	}
+	contentType := mime.TypeByExtension(path.Ext(name))
+	if contentType == "" {
+		// The embedded bundle is build-controlled, so an extension outside the
+		// MIME registry is a packaging surprise, not a delivery feature. Pinning
+		// application/octet-stream keeps ServeContent from sniffing the body
+		// into a browser-active type — the same fail-inert policy the media
+		// path applies to unknown operator files.
+		contentType = "application/octet-stream"
+	}
 	return &staticFile{
 		body:         data,
 		etag:         `"` + hex.EncodeToString(sum[:]) + `"`,
-		contentType:  mime.TypeByExtension(path.Ext(name)),
+		contentType:  contentType,
 		cacheControl: cacheControl,
 	}
 }
@@ -194,13 +203,12 @@ func rejectAmbiguousPath(next http.Handler) http.Handler {
 // serveTo applies the prepared cache metadata and delegates byte-range,
 // conditional, and HEAD behavior to net/http. Every part of the response
 // identity was derived at construction time, keeping this hot path free of
-// hashing, filesystem access, and error branches.
+// hashing, filesystem access, and error branches. contentType is non-empty by
+// construction, so ServeContent never falls back to sniffing the body.
 func (f *staticFile) serveTo(w http.ResponseWriter, r *http.Request, name string) {
 	w.Header().Set("Cache-Control", f.cacheControl)
 	w.Header().Set("ETag", f.etag)
-	if f.contentType != "" {
-		w.Header().Set("Content-Type", f.contentType)
-	}
+	w.Header().Set("Content-Type", f.contentType)
 	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(f.body))
 }
 

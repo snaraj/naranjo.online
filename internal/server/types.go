@@ -33,7 +33,8 @@ type staticFile struct {
 	// identical across replicas and restarts serving the same build.
 	etag string
 	// contentType is resolved once from the file extension so the request
-	// path never consults MIME tables.
+	// path never consults MIME tables; extensions outside the registry are
+	// pinned to application/octet-stream so ServeContent never sniffs.
 	contentType string
 	// cacheControl is no-cache for the revalidated shell and document files,
 	// and the shared immutable policy for content-hashed assets.

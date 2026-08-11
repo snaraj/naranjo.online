@@ -36,7 +36,11 @@ func main() {
 // until the server fails or ctx requests a graceful shutdown. Configuration
 // arrives through lookupEnv — main passes os.Getenv — so tests can inject each
 // case's environment without mutating process state, which t.Setenv would
-// require at the cost of forbidding t.Parallel.
+// require at the cost of forbidding t.Parallel. Validation keeps its
+// documented order — listen port, embedded assets, media configuration — and
+// the site is constructed exactly once, only after the media decision is
+// known, so a media-enabled boot never pays a throwaway walk and SHA-256 of
+// every embedded file for a Site it immediately discards.
 func run(ctx context.Context, lookupEnv func(string) string) error {
 	port, err := listenPort(lookupEnv("PORT"))
 	if err != nil {
@@ -44,10 +48,6 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 	}
 
 	assets, err := website.FileSystem()
-	if err != nil {
-		return err
-	}
-	handler, err := server.New(assets)
 	if err != nil {
 		return err
 	}
@@ -59,8 +59,11 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	var handler *server.Site
 	if mediaEnabled {
 		handler, err = server.NewWithMedia(assets, mediaOptions)
+	} else {
+		handler, err = server.New(assets)
 	}
 	if err != nil {
 		return err
