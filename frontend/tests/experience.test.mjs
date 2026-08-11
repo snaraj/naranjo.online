@@ -41,6 +41,10 @@ test('initial source remains local and viewport-responsive', () => {
   assert.match(styles, /:root:not\(\[data-theme\]\)/);
 });
 
+// occurrences counts literal appearances of needle in source, for the
+// palette-deduplication pins below.
+const occurrences = (source, needle) => source.split(needle).length - 1;
+
 // Reading modes (issue #22): the stylesheet is a custom-property token layer.
 // Light is the default :root palette; each further mode is one override block
 // scoped by the data-theme attribute the origin stamps on <html>. The colors
@@ -60,7 +64,8 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
   assert.match(styles, /color:\s*var\(--color-text\)/);
   assert.match(styles, /background:\s*var\(--color-surface\)/);
 
-  // Each explicit mode is one attribute-scoped block with its color-scheme.
+  // Each explicit mode is one attribute-scoped block with its color-scheme,
+  // remapping the active tokens onto its palette by reference only.
   for (const theme of ['dark', 'sepia']) {
     assert.match(
       styles,
@@ -69,15 +74,31 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
     );
     assert.match(
       styles,
-      new RegExp(`\\[data-theme="${theme}"\\]\\s*\\{[^}]*--color-surface:`),
-      `theme block for ${theme} must redefine the tokens`
+      new RegExp(`\\[data-theme="${theme}"\\]\\s*\\{[^}]*--color-surface:\\s*var\\(--palette-${theme}-surface\\)`),
+      `theme block for ${theme} must remap tokens onto its palette, never restate values`
     );
   }
+  assert.match(
+    styles,
+    /prefers-color-scheme: dark\)\s*\{\s*:root:not\(\[data-theme\]\)\s*\{[^}]*var\(--palette-dark-/,
+    'the media query must remap onto the dark palette, never restate values'
+  );
 
-  // Sepia is seeded from the wiki's browntown values (issue #22) until the
-  // owner picks final palettes; every seed slot must be present.
-  for (const seed of ['#1b1612', '#28221d', '#312a25', '#3e362f', '#736559', '#b79d7e', '#f4eaea']) {
-    assert.match(styles, new RegExp(seed), `sepia is missing browntown seed ${seed}`);
+  // Palette deduplication (review finding): every palette value is written
+  // exactly once, as a --palette-* definition; theme blocks and components
+  // only reference. The two anchor hexes appear exactly twice because
+  // light's text is dark's surface and vice versa — one occurrence per
+  // palette slot, still zero per consumer.
+  const uniqueValues = [
+    '#efefe8', '#e6e6dd', '#d8d8cd', '#9a9a8e', '#3d434f', // light ramp
+    '#161a23', '#1d222d', '#2a3040', '#566078', '#b9c2d4', // dark ramp
+    '#1b1612', '#28221d', '#312a25', '#3e362f', '#736559', '#b79d7e', '#f4eaea', // browntown seeds
+  ];
+  for (const value of uniqueValues) {
+    assert.equal(occurrences(styles, value), 1, `${value} must be defined exactly once`);
+  }
+  for (const anchor of ['#f7f7f2', '#10131a']) {
+    assert.equal(occurrences(styles, anchor), 2, `anchor ${anchor} fills exactly two palette slots`);
   }
 });
 
@@ -100,11 +121,50 @@ test('theme registry and toggle: named modes, exact cookie grammar, local only',
   // the origin parses: whole-site path, 365 days, SameSite=Lax.
   assert.match(themeRegistry, /setAttribute\('data-theme', id\)/);
   assert.match(themeRegistry, /'theme=' \+ id \+ '; path=\/; max-age=31536000; samesite=lax'/);
+});
 
-  // The menu renders every registry entry as a native, accessible control —
-  // no custom ARIA widgetry, no inline script handlers in the shell.
+// The toggle is the wiki's, minimally: a labeled moon button opening a
+// popover of one swatch per mode, each swatch's background being that
+// theme's OWN page-surface token, with an inline-SVG glyph — sun on light,
+// cratered moon on dark, plain moon on sepia. No icon assets, no hex copies,
+// no custom ARIA widgetry beyond the disclosure pattern.
+test('theme toggle: swatch popover, token-pure colors, keyboard-complete', () => {
+  // Trigger: a labeled disclosure button with an inline moon glyph.
+  assert.match(themeMenu, /aria-label="Reading mode"/);
+  assert.match(themeMenu, /aria-haspopup="true"/);
+  assert.match(themeMenu, /aria-expanded=\{open\}/);
+  assert.match(themeMenu, /aria-controls="reading-mode-menu"/);
+  assert.match(themeMenu, /<svg[^>]*aria-hidden="true"/);
+
+  // Popover: every registry entry becomes a named swatch button carrying
+  // pressed semantics for the current choice.
   assert.match(themeMenu, /\{#each themes as theme \(theme\.id\)\}/);
-  assert.match(themeMenu, /type="radio"/);
-  assert.match(themeMenu, /<summary>[^<]+<\/summary>/);
-  assert.match(themeMenu, /<legend>[^<]+<\/legend>/);
+  assert.match(themeMenu, /aria-label=\{theme\.label\}/);
+  assert.match(themeMenu, /aria-pressed=\{selected === theme\.id\}/);
+
+  // Swatch colors are references into each theme's own palette tokens —
+  // never a third copy of the values (see the dedup pins above) and never a
+  // hex anywhere in the component.
+  for (const id of ['light', 'dark', 'sepia']) {
+    assert.match(
+      themeMenu,
+      new RegExp(`background:\\s*var\\(--palette-${id}-surface\\)`),
+      `the ${id} swatch background must be that theme's own surface token`
+    );
+  }
+  // ({#each …} starts with three hex-class letters, hence the full-token form.)
+  assert.doesNotMatch(
+    themeMenu,
+    /#[0-9a-fA-F]{3,8}(?![0-9a-zA-Z])/,
+    'the toggle must reference tokens, never hex values'
+  );
+
+  // Keyboard and touch: ESC closes with focus return, arrows move between
+  // swatches, targets meet the 44px minimum, motion respects the OS setting.
+  assert.match(themeMenu, /'Escape'/);
+  assert.match(themeMenu, /'ArrowRight'/);
+  assert.match(themeMenu, /'ArrowLeft'/);
+  assert.match(themeMenu, /trigger\?\.focus\(\)/);
+  assert.match(themeMenu, /2\.75rem/);
+  assert.match(themeMenu, /prefers-reduced-motion/);
 });
