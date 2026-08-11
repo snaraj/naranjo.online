@@ -16,19 +16,34 @@ SemVer and match image/chart tags exactly.
   windows; source labels are data, never Go identifiers),
   `vcs-activity/v1` (contribution weeks, totals, streak, recent
   commits), and `boss-log/v1` (account plus bosses with nullable
-  kc/rank rendered as "--"). Panels are fed by embedded snapshot files
-  strictly validated (unknown fields, trailing bytes, bad timestamps
-  all refused) exactly once at construction; invalid or missing data
-  degrades that panel to `unavailable` instead of failing the process.
-  The live `FetchSource` contract (hosts allowlist, TTL background
-  refresh off the request path, timeout/max-bytes/backoff bounds,
-  last-good served as `stale`) is fully defined but deliberately not
-  registrable, and a doctrine test pins zero egress capability in the
-  package. Owner performance budgets are enforced as tests: index
-  responses at or under 4 KiB, panel envelopes at or under 32 KiB, and
-  a read-counting filesystem proving the request path never leaves
-  memory. Visitor scenarios cover the index, every panel, revalidation
-  to 304s, and the opaque 404 over real transport.
+  kc/rank rendered as "--"). Panels are FETCH-FIRST per owner review:
+  boss-log refreshes from the official hiscores JSON endpoint (mapped
+  data-driven onto a configured boss list) and token-usage from the
+  two vendors' official usage-report APIs, with every vendor string —
+  endpoints, labels, credential env-var names, the outbound host
+  allowlist — living in embedded config DATA, never Go source.
+  Refresh runs ONLY in background loops (TTL cadence with exponential
+  backoff), enabled by an explicit `PANELS_REFRESH=true` opt-in at the
+  composition root following the media-enablement precedent; fetched
+  documents pass the same strict decoders as snapshots, bodies are
+  size- and time-bounded, credentials are read from named env vars at
+  fetch time only (unset means that source serves its snapshot section
+  as `stale`), and every failure keeps the last good payload serving
+  with an honest `stale` signal. Embedded snapshots remain the
+  cold-start/failure default: fresh = `ok`, fallback or last-good =
+  `stale`, nothing = `unavailable`. The zero-egress pin evolved into a
+  confinement pin (a conscious narrowing, documented in the PR): all
+  egress machinery lives in one file, the production host allowlist is
+  test-pinned to exactly the three approved hosts with off-list hosts
+  refused at construction AND at request time, and an instrumented
+  transport proves requests never trigger fetches. Owner performance
+  budgets are structural: index responses at or under 4 KiB and panel
+  envelopes at or under 32 KiB are enforced at build/refresh time and
+  as tests, panel JSON deliberately serves whole documents (no byte
+  ranges), and a read-counting filesystem proves the request path
+  never leaves memory. Visitor scenarios cover the index, every panel
+  with honest cold-start statuses, revalidation to 304s, and the
+  opaque 404 over real transport.
 - Visitor-scenario end-to-end suites: a hand-written stdlib mock-browser
   harness (`internal/testsupport.Visitor`) remembers and replays ETags
   like a browser cache, follows the document's asset references, seeks

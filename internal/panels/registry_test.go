@@ -9,20 +9,28 @@ import (
 	"time"
 )
 
-// TestNewPreparesEveryBuiltinPanel walks the production registry end to end:
-// the index lists every builtin panel as ok, and each envelope carries the
-// stable schema, its registry identity, a valid timestamp, and real data.
+// TestNewPreparesEveryBuiltinPanel walks the production registry end to end
+// at cold start (no refresh started): snapshot-only panels list as ok,
+// fetch-backed panels honestly list their snapshot fallback as stale, and
+// each envelope carries the stable schema, its registry identity, a valid
+// timestamp, and real data.
 func TestNewPreparesEveryBuiltinPanel(t *testing.T) {
 	t.Parallel()
+	coldStatus := map[string]Status{
+		"token-usage":  StatusStale,
+		"vcs-activity": StatusOK,
+		"boss-log":     StatusStale,
+	}
 	registry := New()
 	index := decodeIndex(t, registry)
 	if len(index.Panels) != len(builtinPanels) {
 		t.Fatalf("index lists %d panels, want %d", len(index.Panels), len(builtinPanels))
 	}
 	for i, definition := range builtinPanels {
+		want := coldStatus[definition.id]
 		row := index.Panels[i]
-		if row.ID != definition.id || row.Kind != definition.kind || row.Title != definition.title || row.Status != StatusOK {
-			t.Errorf("index row %d = %+v, want identity of %q with status ok", i, row, definition.id)
+		if row.ID != definition.id || row.Kind != definition.kind || row.Title != definition.title || row.Status != want {
+			t.Errorf("index row %d = %+v, want identity of %q with status %q", i, row, definition.id, want)
 		}
 		envelope := decodePanelEnvelope(t, registry, definition.id)
 		if envelope.Schema != EnvelopeSchema {
@@ -31,8 +39,8 @@ func TestNewPreparesEveryBuiltinPanel(t *testing.T) {
 		if envelope.ID != definition.id || envelope.Kind != definition.kind || envelope.Title != definition.title {
 			t.Errorf("%s envelope identity = %+v", definition.id, envelope)
 		}
-		if envelope.Status != StatusOK {
-			t.Errorf("%s status = %q, want ok", definition.id, envelope.Status)
+		if envelope.Status != want {
+			t.Errorf("%s status = %q, want %q", definition.id, envelope.Status, want)
 		}
 		if _, err := time.Parse(time.RFC3339, envelope.GeneratedAt); err != nil {
 			t.Errorf("%s generatedAt = %q: %v", definition.id, envelope.GeneratedAt, err)

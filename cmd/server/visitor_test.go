@@ -116,6 +116,16 @@ func TestVisitorBrowsesTheSite(t *testing.T) {
 // Panel API shapes are pinned here as independent expected values — never
 // imported from internal/panels, or the assertions would become tautologies.
 // A schema change must consciously edit both sides.
+
+// visitorColdStatus pins each panel's expected status on an egress-free
+// boot: fetch-backed panels serve their snapshot fallback as stale until
+// live refresh is explicitly enabled; the snapshot-only panel is ok.
+var visitorColdStatus = map[string]string{
+	"token-usage":  "stale",
+	"vcs-activity": "ok",
+	"boss-log":     "stale",
+}
+
 type visitorPanelIndex struct {
 	Panels []visitorPanelRow `json:"panels"`
 }
@@ -160,7 +170,7 @@ func TestVisitorReadsThePanels(t *testing.T) {
 	session := testsupport.NewVisitor(t, base)
 	var panelPaths []string
 
-	t.Run("opens the index: every panel listed ok, JSON, revalidated class", func(t *testing.T) {
+	t.Run("opens the index: every panel listed honestly, JSON, revalidated class", func(t *testing.T) {
 		visitor := session.On(t)
 		response := visitor.Navigate("/api/panels")
 		if response.StatusCode != http.StatusOK {
@@ -189,8 +199,12 @@ func TestVisitorReadsThePanels(t *testing.T) {
 			if row.ID == "" || row.Title == "" || !strings.HasSuffix(row.Kind, "/v1") {
 				t.Errorf("index row incomplete: %+v", row)
 			}
-			if row.Status != "ok" {
-				t.Errorf("panel %s status = %q, want ok from shipped snapshots", row.ID, row.Status)
+			// Live refresh is opt-in and this boot never enables it, so
+			// fetch-backed panels honestly report their snapshot fallback as
+			// stale while the snapshot-only panel is ok — an independent pin
+			// of the expected cold-start statuses.
+			if want := visitorColdStatus[row.ID]; row.Status != want {
+				t.Errorf("panel %s status = %q, want %q on an egress-free boot", row.ID, row.Status, want)
 			}
 			panelPaths = append(panelPaths, "/api/panels/"+row.ID)
 		}
@@ -217,8 +231,11 @@ func TestVisitorReadsThePanels(t *testing.T) {
 			if "/api/panels/"+envelope.ID != path || envelope.Title == "" {
 				t.Errorf("%s envelope identity = %+v", path, envelope)
 			}
-			if envelope.Status != "ok" || len(envelope.Data) == 0 || string(envelope.Data) == "null" {
-				t.Errorf("%s status = %q with data %q, want ok with data", path, envelope.Status, envelope.Data)
+			if want := visitorColdStatus[envelope.ID]; envelope.Status != want {
+				t.Errorf("%s status = %q, want %q on an egress-free boot", path, envelope.Status, want)
+			}
+			if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+				t.Errorf("%s serves no data", path)
 			}
 			if _, err := time.Parse(time.RFC3339, envelope.GeneratedAt); err != nil {
 				t.Errorf("%s generatedAt = %q: %v", path, envelope.GeneratedAt, err)

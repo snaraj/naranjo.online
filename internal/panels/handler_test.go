@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 // panelsGet performs one recorded GET against the production registry.
@@ -53,7 +54,8 @@ func TestPanelResponsesJoinTheRevalidatedCacheClass(t *testing.T) {
 }
 
 // TestPanelHeadRequestsCarryNoBody pins HEAD support on both routes: the
-// metadata a browser preflight needs, zero payload bytes.
+// metadata a browser preflight needs — Content-Length included — with zero
+// payload bytes.
 func TestPanelHeadRequestsCarryNoBody(t *testing.T) {
 	t.Parallel()
 	registry := New()
@@ -63,6 +65,87 @@ func TestPanelHeadRequestsCarryNoBody(t *testing.T) {
 		if response.Code != http.StatusOK || response.Body.Len() != 0 {
 			t.Errorf("HEAD %s = %d with %d body bytes", target, response.Code, response.Body.Len())
 		}
+		if response.Header().Get("Content-Length") == "" {
+			t.Errorf("HEAD %s carries no Content-Length", target)
+		}
+	}
+}
+
+// TestRangeRequestsServeTheWholeDocument pins the reviewer-flagged decision
+// as behavior: panel JSON does not participate in byte-range serving. A
+// Range request is answered like any other GET — 200, the complete body, no
+// Accept-Ranges offer, no Content-Range — because these are small whole
+// documents and 206 semantics have been deliberately removed from this API.
+func TestRangeRequestsServeTheWholeDocument(t *testing.T) {
+	t.Parallel()
+	registry := New()
+	full := panelsGet(t, registry, PanelPathPrefix+"boss-log")
+	ranged := httptest.NewRequest(http.MethodGet, PanelPathPrefix+"boss-log", nil)
+	ranged.Header.Set("Range", "bytes=0-3")
+	response := httptest.NewRecorder()
+	registry.ServeHTTP(response, ranged)
+	if response.Code != http.StatusOK {
+		t.Fatalf("ranged GET = %d, want a plain 200", response.Code)
+	}
+	if response.Body.Len() != full.Body.Len() {
+		t.Errorf("ranged GET served %d bytes, want the full %d-byte document", response.Body.Len(), full.Body.Len())
+	}
+	for _, header := range []string{"Accept-Ranges", "Content-Range"} {
+		if got := response.Header().Get(header); got != "" {
+			t.Errorf("%s = %q, want no byte-range participation", header, got)
+		}
+	}
+}
+
+// TestConditionalVariantsRevalidate pins the manual validator compare
+// against the RFC shapes browsers and caches actually send: exact, list,
+// weak-prefixed, and wildcard all answer 304; a stale validator misses.
+func TestConditionalVariantsRevalidate(t *testing.T) {
+	t.Parallel()
+	registry := New()
+	etag := panelsGet(t, registry, IndexPath).Header().Get("ETag")
+	for name, value := range map[string]string{
+		"exact validator":    etag,
+		"validator list":     `"stale", ` + etag,
+		"weak validator":     "W/" + etag,
+		"any representation": "*",
+	} {
+		request := httptest.NewRequest(http.MethodGet, IndexPath, nil)
+		request.Header.Set("If-None-Match", value)
+		response := httptest.NewRecorder()
+		registry.ServeHTTP(response, request)
+		if response.Code != http.StatusNotModified || response.Body.Len() != 0 {
+			t.Errorf("%s: got %d with %d body bytes, want an empty 304", name, response.Code, response.Body.Len())
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, IndexPath, nil)
+	request.Header.Set("If-None-Match", `"different"`)
+	response := httptest.NewRecorder()
+	registry.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Errorf("stale validator answered %d, want a fresh 200", response.Code)
+	}
+}
+
+// TestOversizedIndexDegradesToEmpty pins the structural index budget the
+// adversarial review asked for: a listing that cannot fit the owner's 4 KiB
+// budget serves as an empty — loudly wrong, instantly caught — index rather
+// than an oversized response.
+func TestOversizedIndexDegradesToEmpty(t *testing.T) {
+	t.Parallel()
+	fsys := fstest.MapFS{"snapshots/broken.json": {Data: validSnapshot(t)}}
+	registry := newRegistry(fsys, []panelDefinition{{
+		id:     "giant",
+		kind:   KindBossLog,
+		title:  strings.Repeat("t", MaxIndexResponseBytes),
+		source: SnapshotSource{Name: "snapshots/broken.json"},
+	}})
+	response := panelsGet(t, registry, IndexPath)
+	if response.Body.Len() > MaxIndexResponseBytes {
+		t.Fatalf("degraded index is %d bytes, still over budget", response.Body.Len())
+	}
+	if got := strings.TrimSpace(response.Body.String()); got != `{"panels":[]}` {
+		t.Errorf("degraded index = %s, want the empty listing", got)
 	}
 }
 

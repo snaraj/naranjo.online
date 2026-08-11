@@ -5,6 +5,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -65,12 +66,22 @@ func newSite(assets fs.FS, media *mediaHandler) (*Site, error) {
 	// The panel API serves prepared JSON envelopes from memory. Both route
 	// forms are registered explicitly so /api/panels/<id> can never fall
 	// through to the frontend handler's file table, and the shared security
-	// wrappers below apply to panel responses unchanged.
+	// wrappers below apply to panel responses unchanged. Construction never
+	// performs network activity: fetch-backed panels serve their embedded
+	// snapshots as stale until StartPanelRefresh is explicitly invoked by
+	// the composition root.
 	panelAPI := panels.New()
 	mux.Handle(panels.IndexPath, panelAPI)
 	mux.Handle(panels.PanelPathPrefix, panelAPI)
 	mux.Handle("/", h)
-	return &Site{handler: securityHeaders(rejectAmbiguousPath(mux)), media: media}, nil
+	return &Site{handler: securityHeaders(rejectAmbiguousPath(mux)), media: media, panels: panelAPI}, nil
+}
+
+// StartPanelRefresh starts the panel API's background live refresh. It is an
+// explicit capability enablement — construction and tests stay egress-free —
+// and the loops stop when ctx cancels, before any in-flight attempt begins.
+func (s *Site) StartPanelRefresh(ctx context.Context) {
+	s.panels.StartRefresh(ctx)
 }
 
 // newHandler reads and prepares every embedded file exactly once. Any

@@ -59,6 +59,10 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	panelsRefresh, err := panelsRefreshConfiguration(lookupEnv("PANELS_REFRESH"))
+	if err != nil {
+		return err
+	}
 	var handler *server.Site
 	if mediaEnabled {
 		handler, err = server.NewWithMedia(assets, mediaOptions)
@@ -69,6 +73,14 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 		return err
 	}
 	defer handler.Close()
+	if panelsRefresh {
+		// Explicit opt-in (the chart supplies it in production) following the
+		// media-enablement precedent: capabilities that reach beyond the
+		// process are configuration decisions, and every test boot stays
+		// egress-free by default. Cancellation of ctx on shutdown stops the
+		// refresh loops before any further attempt.
+		handler.StartPanelRefresh(ctx)
+	}
 
 	httpServer := &http.Server{
 		// Explicit limits protect the small Pi-hosted origin from slow or oversized
@@ -136,6 +148,20 @@ func mediaConfiguration(enabled, root, maxConcurrent string) (bool, server.Media
 		return false, server.MediaOptions{}, errors.New("MEDIA_MAX_CONCURRENT is outside the safe implementation range")
 	}
 	return true, server.MediaOptions{Root: root, MaxConcurrent: concurrency}, nil
+}
+
+// panelsRefreshConfiguration keeps the panel API's live refresh disabled
+// unless the operator explicitly enables it, mirroring mediaConfiguration:
+// egress is a deployment decision, never a default, and an unrecognized
+// value fails the boot instead of guessing.
+func panelsRefreshConfiguration(value string) (bool, error) {
+	switch value {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	}
+	return false, errors.New("PANELS_REFRESH must be true or false")
 }
 
 // listenPort validates the only runtime listener setting. The stable 8080

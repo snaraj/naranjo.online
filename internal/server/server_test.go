@@ -3,6 +3,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -114,6 +115,54 @@ func TestPanelAPIIsWiredIntoTheSite(t *testing.T) {
 		if response.Code != http.StatusNotFound {
 			t.Errorf("GET %s = %d, want a terminal 404", target, response.Code)
 		}
+	}
+
+	// The refused-method path must carry the full shared security baseline:
+	// the 405 is written inside the securityHeaders wrapper, and this pin
+	// keeps that ordering from ever regressing (adversarial review nit).
+	refused := httptest.NewRecorder()
+	siteHandler.ServeHTTP(refused, httptest.NewRequest(http.MethodPost, "/api/panels", nil))
+	if refused.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/panels = %d, want 405", refused.Code)
+	}
+	if got := refused.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Errorf("405 Allow = %q", got)
+	}
+	for header, want := range map[string]string{
+		"Content-Security-Policy":      "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+		"Cross-Origin-Resource-Policy": "same-origin",
+		"Referrer-Policy":              "no-referrer",
+		"Strict-Transport-Security":    "max-age=31536000",
+		"X-Content-Type-Options":       "nosniff",
+		"X-Frame-Options":              "DENY",
+	} {
+		if got := refused.Header().Get(header); got != want {
+			t.Errorf("405 %s = %q, want %q", header, got, want)
+		}
+	}
+}
+
+// TestStartPanelRefreshUnderCanceledContextIsInert covers the composition
+// seam without egress: starting the panel refresh with an already-canceled
+// context exits every loop before an attempt (the deterministic guard is
+// pinned in internal/panels), so the site remains a pure snapshot server.
+func TestStartPanelRefreshUnderCanceledContextIsInert(t *testing.T) {
+	site, err := New(testsupport.FrontendFS())
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := site.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	site.StartPanelRefresh(ctx)
+	response := httptest.NewRecorder()
+	site.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/panels", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /api/panels = %d after inert refresh start", response.Code)
 	}
 }
 

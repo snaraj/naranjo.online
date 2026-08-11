@@ -1,15 +1,17 @@
 // handler.go serves the prepared registry over HTTP. Both public routes —
-// the index and each panel envelope — answer from memory: a map lookup and a
-// prepared byte slice, with conditional-request and HEAD semantics delegated
-// to net/http exactly as the embedded frontend does.
+// the index and each panel envelope — answer from memory: an atomic load and
+// a prepared byte slice. Conditional requests are answered with a manual
+// validator compare and a PLAIN WRITE: panel JSON deliberately does not
+// participate in byte-range serving (a pinned decision — these are small
+// whole documents, and dropping ServeContent removes 206 semantics from the
+// API surface and keeps the hot path a single memory copy).
 
 package panels
 
 import (
-	"bytes"
 	"net/http"
+	"strconv"
 	"strings"
-	"time"
 )
 
 // ServeHTTP answers GET /api/panels with the prepared index and
@@ -27,24 +29,50 @@ func (reg *Registry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == IndexPath {
-		reg.index.serveTo(w, r)
+		reg.index.Load().serveTo(w, r)
 		return
 	}
-	prepared, ok := reg.panels[strings.TrimPrefix(r.URL.Path, PanelPathPrefix)]
+	state, ok := reg.byID[strings.TrimPrefix(r.URL.Path, PanelPathPrefix)]
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	prepared.serveTo(w, r)
+	state.current.Load().response.serveTo(w, r)
 }
 
-// serveTo applies the prepared cache metadata and delegates conditional and
-// HEAD behavior to net/http. Panel data changes with each shipped snapshot,
-// so it joins the site's revalidated no-cache class: storable, but every use
-// must revalidate — an unchanged panel answers with a small 304.
-func (p preparedResponse) serveTo(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("ETag", p.etag)
-	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(p.body))
+// serveTo writes the prepared response in the site's revalidated no-cache
+// class. A replayed validator answers an empty 304; everything else gets the
+// complete body in one write. Range headers are deliberately ignored — the
+// response is always the whole document, and no Accept-Ranges is offered.
+func (p *preparedResponse) serveTo(w http.ResponseWriter, r *http.Request) {
+	header := w.Header()
+	header.Set("Cache-Control", "no-cache")
+	header.Set("Content-Type", "application/json")
+	header.Set("ETag", p.etag)
+	if etagMatches(r.Header.Get("If-None-Match"), p.etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	header.Set("Content-Length", strconv.Itoa(len(p.body)))
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(p.body)
+	}
+}
+
+// etagMatches implements the If-None-Match compare for the strong digest
+// validators this package serves: any listed entry — weak-prefixed or not —
+// whose opaque value equals the current ETag matches, as does "*".
+func etagMatches(headerValue, etag string) bool {
+	if headerValue == "" {
+		return false
+	}
+	for _, candidate := range strings.Split(headerValue, ",") {
+		candidate = strings.TrimSpace(candidate)
+		candidate = strings.TrimPrefix(candidate, "W/")
+		if candidate == etag || candidate == "*" {
+			return true
+		}
+	}
+	return false
 }

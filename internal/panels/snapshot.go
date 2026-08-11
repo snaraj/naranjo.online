@@ -31,5 +31,18 @@ func (s SnapshotSource) load(fsys fs.FS, kind string) (loadedPayload, error) {
 	if err != nil {
 		return loadedPayload{}, fmt.Errorf("snapshot %s payload: %w", s.Name, err)
 	}
-	return loadedPayload{generatedAt: document.GeneratedAt, data: data}, nil
+	return loadedPayload{generatedAt: document.GeneratedAt, data: data, status: StatusOK}, nil
+}
+
+// load on a FetchSource serves the cold-start state: the embedded fallback
+// snapshot, explicitly marked stale — it is real data, but not fresh — until
+// the background refresher replaces it. Live fetching NEVER happens here:
+// construction stays I/O-bounded to the embedded filesystem.
+func (s *FetchSource) load(fsys fs.FS, kind string) (loadedPayload, error) {
+	loaded, err := s.fallback.load(fsys, kind)
+	if err != nil {
+		return loadedPayload{}, err
+	}
+	loaded.status = StatusStale
+	return loaded, nil
 }

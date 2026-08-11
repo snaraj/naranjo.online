@@ -11,6 +11,8 @@ import (
 	"os"
 	"regexp"
 	"time"
+
+	"github.com/snaraj/naranjo.online/internal/panels"
 )
 
 // immutableCacheControl is the one-year immutable cache policy shared by every
@@ -56,13 +58,17 @@ type handler struct {
 
 // Site is the complete naranjo.online HTTP application. It owns an optional
 // directory-limited media root so shutdown can close that capability after all
-// active requests have drained.
+// active requests have drained, and the panel registry so the composition
+// root can explicitly enable background live refresh.
 type Site struct {
 	// handler is the fully wrapped router, never the unprotected internal mux.
 	handler http.Handler
 	// media owns the optional root capability and is nil in the production
 	// scaffold while storage and delivery remain blocked.
 	media *mediaHandler
+	// panels is the prepared panel registry; its background refresh starts
+	// only through StartPanelRefresh, never as a construction side effect.
+	panels *panels.Registry
 }
 
 const (

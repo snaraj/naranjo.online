@@ -53,25 +53,36 @@ func validSnapshot(t *testing.T) []byte {
 }
 
 // TestEveryShippedSnapshotParsesStrictly is the contract for shipping data:
-// each builtin panel's snapshot must load through the strict gate, and every
-// embedded snapshot file must be claimed by exactly one builtin panel so a
-// stray file cannot ride in the binary unvalidated.
+// each builtin panel's snapshot — its own for snapshot panels, the embedded
+// fallback for fetch-backed panels — must load through the strict gate with
+// the status its provenance deserves, and every embedded snapshot file must
+// be claimed by exactly one builtin panel so a stray file cannot ride in the
+// binary unvalidated.
 func TestEveryShippedSnapshotParsesStrictly(t *testing.T) {
 	t.Parallel()
 	claimed := map[string]bool{}
 	for _, definition := range builtinPanels {
-		snapshot, ok := definition.source.(SnapshotSource)
-		if !ok {
-			t.Fatalf("panel %s uses %T; every builtin source must be a SnapshotSource", definition.id, definition.source)
+		var snapshotName string
+		var wantStatus Status
+		switch source := definition.source.(type) {
+		case SnapshotSource:
+			snapshotName, wantStatus = source.Name, StatusOK
+		case *FetchSource:
+			snapshotName, wantStatus = source.fallback.Name, StatusStale
+		default:
+			t.Fatalf("panel %s uses %T; only SnapshotSource and *FetchSource may serve builtins", definition.id, definition.source)
 		}
-		if claimed[snapshot.Name] {
-			t.Fatalf("snapshot %s is claimed by more than one panel", snapshot.Name)
+		if claimed[snapshotName] {
+			t.Fatalf("snapshot %s is claimed by more than one panel", snapshotName)
 		}
-		claimed[snapshot.Name] = true
-		loaded, err := snapshot.load(snapshotFiles, definition.kind)
+		claimed[snapshotName] = true
+		loaded, err := definition.source.load(snapshotFiles, definition.kind)
 		if err != nil {
 			t.Errorf("panel %s: shipped snapshot fails the strict gate: %v", definition.id, err)
 			continue
+		}
+		if loaded.status != wantStatus {
+			t.Errorf("panel %s: cold-start status = %q, want %q", definition.id, loaded.status, wantStatus)
 		}
 		if _, err := time.Parse(time.RFC3339, loaded.generatedAt); err != nil {
 			t.Errorf("panel %s: generatedAt %q is not RFC 3339: %v", definition.id, loaded.generatedAt, err)
