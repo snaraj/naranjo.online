@@ -158,7 +158,7 @@ func TestRefreshHonorsTheConfiguredTimeout(t *testing.T) {
 	config.Timeout = 40 * time.Millisecond
 	registry, state := bossFetchRegistry(t, server.URL+"/scores.json", config)
 	_ = host
-	if err := registry.refreshPanel(t.Context(), state, &http.Client{}, func(string) string { return "" }); err == nil {
+	if err := registry.refreshPanel(t.Context(), state, newProductionDoer(), func(string) string { return "" }); err == nil {
 		t.Fatal("refresh succeeded against a server slower than its timeout")
 	}
 	if got := decodePanelEnvelope(t, registry, "boss-log").Status; got != StatusStale {
@@ -204,7 +204,7 @@ func TestRefreshLoopDrivesThePanel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	registry.startRefresh(ctx, &http.Client{}, func(string) string { return "" })
+	registry.startRefresh(ctx, newProductionDoer(), func(string) string { return "" })
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if decodePanelEnvelope(t, registry, "boss-log").Status == StatusOK {
@@ -221,23 +221,100 @@ func TestRefreshLoopDrivesThePanel(t *testing.T) {
 	cancel()
 }
 
-// statusDoer answers every request with a fixed non-200 status.
-type statusDoer struct{ code int }
-
-func (d statusDoer) Do(r *http.Request) (*http.Response, error) {
-	return &http.Response{StatusCode: d.code, Body: io.NopCloser(strings.NewReader("upstream error"))}, nil
+// statusDoer answers every request with a fixed status and body.
+type statusDoer struct {
+	code int
+	body string
 }
 
-// TestUpstreamErrorStatusIsRefused pins the status gate: anything but 200
-// is a failed attempt, and the snapshot fallback keeps serving as stale.
+func (d statusDoer) Do(r *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: d.code, Body: io.NopCloser(strings.NewReader(d.body))}, nil
+}
+
+// TestUpstreamErrorStatusIsRefused pins the 200-status gate INDEPENDENTLY
+// of the decode gate (the adversarial review's surviving mutant): every
+// non-200 answer carries a grammar-conforming JSON body that the strict
+// decoder would happily accept, so only the status check itself can refuse
+// it — and the previously fetched payload must keep serving.
 func TestUpstreamErrorStatusIsRefused(t *testing.T) {
 	t.Parallel()
 	registry, state := bossFetchRegistry(t, "https://api.example.test/scores.json", validFetchConfig())
-	if err := registry.refreshPanel(t.Context(), state, statusDoer{code: http.StatusInternalServerError}, func(string) string { return "" }); err == nil {
-		t.Fatal("refresh accepted a non-200 upstream answer")
+	env := func(string) string { return "" }
+	if err := registry.refreshPanel(t.Context(), state, &scriptedDoer{bodies: []string{fixtureHiscores}}, env); err != nil {
+		t.Fatalf("seed refresh error = %v", err)
 	}
-	if got := decodePanelEnvelope(t, registry, "boss-log").Status; got != StatusStale {
-		t.Fatalf("status = %q, want the stale fallback", got)
+	goodData := decodePanelEnvelope(t, registry, "boss-log").Data
+
+	for _, code := range []int{http.StatusInternalServerError, http.StatusFound} {
+		err := registry.refreshPanel(t.Context(), state, statusDoer{code: code, body: fixtureHiscores}, env)
+		if err == nil {
+			t.Fatalf("status %d with a valid JSON body was accepted; the status gate is gone", code)
+		}
+		if !strings.Contains(err.Error(), "status") {
+			t.Errorf("status %d refusal = %v, want the status gate's error", code, err)
+		}
+		envelope := decodePanelEnvelope(t, registry, "boss-log")
+		if envelope.Status != StatusStale || !bytes.Equal(envelope.Data, goodData) {
+			t.Errorf("status %d: got %q with retained=%v, want stale with the last good payload", code, envelope.Status, bytes.Equal(envelope.Data, goodData))
+		}
+	}
+}
+
+// TestRedirectsAreRefusedAndCredentialStaysHome pins the redirect policy
+// the re-review demanded, over two loopback servers: an allowlisted host
+// answering 302 toward a second server is a FAILED attempt — the follow-up
+// request is never issued, so neither a plain probe nor a custom credential
+// header ever reaches the redirect target — and the previously fetched
+// payload keeps serving as stale.
+func TestRedirectsAreRefusedAndCredentialStaysHome(t *testing.T) {
+	t.Parallel()
+	var targetHits atomic.Int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHits.Add(1)
+	}))
+	t.Cleanup(target.Close)
+
+	var redirecting atomic.Bool
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if redirecting.Load() {
+			http.Redirect(w, r, target.URL+"/exfil", http.StatusFound)
+			return
+		}
+		_, _ = w.Write([]byte(fixtureHiscores))
+	}))
+	t.Cleanup(origin.Close)
+
+	_, config := loopbackConfig(t, origin.URL)
+	registry, state := bossFetchRegistry(t, origin.URL+"/scores.json", config)
+	doer := newProductionDoer()
+	env := func(string) string { return "" }
+
+	if err := registry.refreshPanel(t.Context(), state, doer, env); err != nil {
+		t.Fatalf("seed refresh error = %v", err)
+	}
+	goodData := decodePanelEnvelope(t, registry, "boss-log").Data
+
+	redirecting.Store(true)
+	if err := registry.refreshPanel(t.Context(), state, doer, env); err == nil {
+		t.Fatal("a redirecting upstream was accepted")
+	} else if !strings.Contains(err.Error(), "redirect refused") {
+		t.Fatalf("refusal error = %v, want the redirect refusal", err)
+	}
+	envelope := decodePanelEnvelope(t, registry, "boss-log")
+	if envelope.Status != StatusStale || !bytes.Equal(envelope.Data, goodData) {
+		t.Fatalf("after refused redirect: status %q, retained=%v; want stale with the last good payload", envelope.Status, bytes.Equal(envelope.Data, goodData))
+	}
+
+	// The credential variant: even with a custom key header attached — the
+	// class Go's client does NOT strip on cross-domain hops — the refusal
+	// happens before the follow-up request exists, so the redirect target
+	// must never observe a single request.
+	source := state.fetch
+	if _, err := source.fetchDocument(t.Context(), doer, origin.URL+"/scores.json", "x-test-key", "fixture-sentinel-13579", nil); err == nil {
+		t.Fatal("credentialed fetch followed a redirect")
+	}
+	if got := targetHits.Load(); got != 0 {
+		t.Fatalf("redirect target observed %d request(s); neither probe nor credential may ever reach it", got)
 	}
 }
 

@@ -28,7 +28,9 @@ SemVer and match image/chart tags exactly.
   documents pass the same strict decoders as snapshots, bodies are
   size- and time-bounded, credentials are read from named env vars at
   fetch time only (unset means that source serves its snapshot section
-  as `stale`), and every failure keeps the last good payload serving
+  as `stale`), HTTP redirects are refused outright so neither the
+  client nor a credential header can ever be steered off the
+  allowlist, and every failure keeps the last good payload serving
   with an honest `stale` signal. Embedded snapshots remain the
   cold-start/failure default: fresh = `ok`, fallback or last-good =
   `stale`, nothing = `unavailable`. The zero-egress pin evolved into a

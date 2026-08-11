@@ -115,11 +115,22 @@ func (reg *Registry) StartRefresh(ctx context.Context) {
 	reg.startRefresh(ctx, newProductionDoer(), os.Getenv)
 }
 
-// newProductionDoer builds the one production HTTP client. Each source's
-// per-attempt context carries the configured timeout, so the client itself
-// stays a plain transport.
+// newProductionDoer builds the one production HTTP client. Redirects are
+// REFUSED outright: CheckRedirect errors before the follow-up request is
+// ever issued, so a redirecting upstream can never steer the client — or a
+// custom credential header, which Go does not strip on cross-domain hops —
+// off the host allowlist. None of the allowlisted APIs legitimately
+// redirects, so refusal is the narrowest correct behavior; per-hop
+// re-validation would be needless surface. A refused redirect surfaces as a
+// failed attempt, keeping the last good payload serving as stale. Each
+// source's per-attempt context carries the configured timeout, so the
+// client itself stays a plain transport.
 func newProductionDoer() fetchDoer {
-	return &http.Client{}
+	return &http.Client{
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			return errors.New("redirect refused: panel fetches never leave their requested host")
+		},
+	}
 }
 
 // refresh performs one complete live refresh for this source: fetch,
