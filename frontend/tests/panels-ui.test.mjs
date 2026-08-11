@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
 
@@ -6,17 +7,28 @@ import { bossInitials, bossSlug } from '../src/lib/bossIcons.ts';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
-const [app, shell, rail, bossLog, panelsSource, iconsSource, viteConfig, attribution] =
-  await Promise.all([
-    read('../src/App.svelte'),
-    read('../src/lib/components/PanelShell.svelte'),
-    read('../src/lib/components/SideRail.svelte'),
-    read('../src/lib/components/BossLog.svelte'),
-    read('../src/lib/panels.ts'),
-    read('../src/lib/bossIcons.ts'),
-    read('../vite.config.ts'),
-    read('../../ATTRIBUTION.md'),
-  ]);
+// The container image builds the frontend from a stage that holds ONLY the
+// frontend tree (Dockerfile: COPY frontend/ ./), so repo-level files do not
+// exist there. The two cross-tree pins below are therefore capability-gated
+// exactly like the provider-neutrality pin: in a full checkout — the PR
+// gate's application job, every local run — they are mandatory and a missing
+// file fails loudly; in the reduced build context they skip by name. The
+// gate condition probes the tree, never the files under pin, so deleting a
+// pinned file can never turn into a silent skip.
+const fullCheckout = existsSync(new URL('../../internal/panels', import.meta.url));
+const reducedContextNote = fullCheckout
+  ? false
+  : 'reduced build context ships only frontend/; the full-checkout gate enforces this pin';
+
+const [app, shell, rail, bossLog, panelsSource, iconsSource, viteConfig] = await Promise.all([
+  read('../src/App.svelte'),
+  read('../src/lib/components/PanelShell.svelte'),
+  read('../src/lib/components/SideRail.svelte'),
+  read('../src/lib/components/BossLog.svelte'),
+  read('../src/lib/panels.ts'),
+  read('../src/lib/bossIcons.ts'),
+  read('../vite.config.ts'),
+]);
 
 // Like the experience suite, these are structural regex pins over source:
 // they hold the shapes the owner specified — chrome values, grid density,
@@ -88,40 +100,52 @@ test('boss log renders the dense fixed-cell grid with tooltips and -- tallies', 
   assert.match(bossLog, /bossInitials/);
 });
 
-test('every boss the origin serves has a shipped icon under its slug', async () => {
-  const [snapshot, fetchConfig, files] = await Promise.all([
-    read('../../internal/panels/snapshots/boss-log.json').then(JSON.parse),
-    read('../../internal/panels/config/fetch.json').then(JSON.parse),
-    readdir(new URL('../src/assets/icons/bosses', import.meta.url)),
-  ]);
-  const names = new Set([
-    ...snapshot.data.bosses.map((boss) => boss.name),
-    ...fetchConfig.bossLog.bosses,
-  ]);
-  assert.ok(names.size > 0, 'the origin data names no bosses; the pin has nothing to protect');
-  for (const name of names) {
-    assert.ok(
-      files.includes(`${bossSlug(name)}.png`),
-      `boss "${name}" has no icon file ${bossSlug(name)}.png under assets/icons/bosses — ship the icon (and its ATTRIBUTION entry) with the data`
-    );
+test(
+  'every boss the origin serves has a shipped icon under its slug',
+  { skip: reducedContextNote },
+  async () => {
+    const [snapshot, fetchConfig, files] = await Promise.all([
+      read('../../internal/panels/snapshots/boss-log.json').then(JSON.parse),
+      read('../../internal/panels/config/fetch.json').then(JSON.parse),
+      readdir(new URL('../src/assets/icons/bosses', import.meta.url)),
+    ]);
+    const names = new Set([
+      ...snapshot.data.bosses.map((boss) => boss.name),
+      ...fetchConfig.bossLog.bosses,
+    ]);
+    assert.ok(names.size > 0, 'the origin data names no bosses; the pin has nothing to protect');
+    for (const name of names) {
+      assert.ok(
+        files.includes(`${bossSlug(name)}.png`),
+        `boss "${name}" has no icon file ${bossSlug(name)}.png under assets/icons/bosses — ship the icon (and its ATTRIBUTION entry) with the data`
+      );
+    }
   }
-});
+);
 
-test('vendored icons stay CSP-servable and attributed', () => {
+test('vendored icons stay CSP-servable, never inlined', () => {
   assert.match(
     viteConfig,
     /assetsInlineLimit:\s*0/,
     "CSP default-src 'self' forbids data: URIs — assets must never inline"
   );
-  // The exact Jagex Fan Content Policy notice, word for word, plus the
-  // wiki credit and the trademark boundary.
-  assert.match(
-    attribution,
-    /Created using intellectual property belonging to Jagex Limited under the[\s>]+terms of Jagex's Fan Content Policy\. This content is not endorsed by or[\s>]+affiliated with Jagex\./
-  );
-  assert.match(attribution, /Old School RuneScape Wiki/);
-  assert.match(attribution, /no RuneLite artwork,[\s]+sprites, or logo/);
 });
+
+test(
+  'icon sourcing carries the exact fan-content notice and credits',
+  { skip: reducedContextNote },
+  async () => {
+    // The exact Jagex Fan Content Policy notice, word for word, plus the
+    // wiki credit and the trademark boundary.
+    const attribution = await read('../../ATTRIBUTION.md');
+    assert.match(
+      attribution,
+      /Created using intellectual property belonging to Jagex Limited under the[\s>]+terms of Jagex's Fan Content Policy\. This content is not endorsed by or[\s>]+affiliated with Jagex\./
+    );
+    assert.match(attribution, /Old School RuneScape Wiki/);
+    assert.match(attribution, /no RuneLite artwork,[\s]+sprites, or logo/);
+  }
+);
 
 test('panel sources stay local-origin', () => {
   for (const [name, source] of Object.entries({ shell, rail, bossLog, panelsSource, iconsSource })) {
