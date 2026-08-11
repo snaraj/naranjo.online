@@ -3,6 +3,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -62,7 +63,7 @@ func TestNoRequestMethodCanEverMutate(t *testing.T) {
 		http.MethodPatch,
 		http.MethodDelete,
 	}
-	routes := []string{"/", "/livez", "/readyz", "/assets/app-abc123.js", "/missing"}
+	routes := []string{"/", "/livez", "/readyz", "/assets/app-abc123.js", "/missing", "/api/panels", "/api/panels/boss-log"}
 	for _, route := range routes {
 		for _, method := range mutating {
 			response := httptest.NewRecorder()
@@ -71,6 +72,97 @@ func TestNoRequestMethodCanEverMutate(t *testing.T) {
 				t.Errorf("%s %s was accepted; 0-RTT requires every route to be read-only", method, route)
 			}
 		}
+	}
+}
+
+// TestPanelAPIIsWiredIntoTheSite pins the panel routes' place inside the
+// composed site: both route forms answer through the shared security wrappers
+// with the revalidated no-cache class, the non-canonical trailing-slash form
+// stays a terminal 404 (never a redirect), and an unknown id is opaque. The
+// panel API's own behavior is proven in internal/panels; this test guards the
+// wiring in newSite.
+func TestPanelAPIIsWiredIntoTheSite(t *testing.T) {
+	siteHandler := testHandler(t)
+
+	index := httptest.NewRecorder()
+	siteHandler.ServeHTTP(index, httptest.NewRequest(http.MethodGet, "/api/panels", nil))
+	if index.Code != http.StatusOK {
+		t.Fatalf("GET /api/panels = %d", index.Code)
+	}
+	if got := index.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("index Content-Type = %q", got)
+	}
+	if got := index.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Errorf("index Cache-Control = %q, want the revalidated class", got)
+	}
+	for _, header := range []string{"Content-Security-Policy", "Strict-Transport-Security", "X-Content-Type-Options"} {
+		if index.Header().Get(header) == "" {
+			t.Errorf("panel response is missing the shared security header %s", header)
+		}
+	}
+
+	panel := httptest.NewRecorder()
+	siteHandler.ServeHTTP(panel, httptest.NewRequest(http.MethodGet, "/api/panels/boss-log", nil))
+	if panel.Code != http.StatusOK || !strings.Contains(panel.Body.String(), `"schema":"panel/v1"`) {
+		t.Errorf("GET /api/panels/boss-log = %d, body %q; want the versioned envelope", panel.Code, panel.Body.String())
+	}
+
+	for _, target := range []string{"/api/panels/", "/api/panels/missing", "/api/panels/boss-log/extra"} {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		request.URL.Path = target
+		siteHandler.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want a terminal 404", target, response.Code)
+		}
+	}
+
+	// The refused-method path must carry the full shared security baseline:
+	// the 405 is written inside the securityHeaders wrapper, and this pin
+	// keeps that ordering from ever regressing (adversarial review nit).
+	refused := httptest.NewRecorder()
+	siteHandler.ServeHTTP(refused, httptest.NewRequest(http.MethodPost, "/api/panels", nil))
+	if refused.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/panels = %d, want 405", refused.Code)
+	}
+	if got := refused.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Errorf("405 Allow = %q", got)
+	}
+	for header, want := range map[string]string{
+		"Content-Security-Policy":      "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+		"Cross-Origin-Resource-Policy": "same-origin",
+		"Referrer-Policy":              "no-referrer",
+		"Strict-Transport-Security":    "max-age=31536000",
+		"X-Content-Type-Options":       "nosniff",
+		"X-Frame-Options":              "DENY",
+	} {
+		if got := refused.Header().Get(header); got != want {
+			t.Errorf("405 %s = %q, want %q", header, got, want)
+		}
+	}
+}
+
+// TestStartPanelRefreshUnderCanceledContextIsInert covers the composition
+// seam without egress: starting the panel refresh with an already-canceled
+// context exits every loop before an attempt (the deterministic guard is
+// pinned in internal/panels), so the site remains a pure snapshot server.
+func TestStartPanelRefreshUnderCanceledContextIsInert(t *testing.T) {
+	site, err := New(testsupport.FrontendFS())
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := site.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	site.StartPanelRefresh(ctx)
+	response := httptest.NewRecorder()
+	site.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/panels", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /api/panels = %d after inert refresh start", response.Code)
 	}
 }
 

@@ -1,0 +1,44 @@
+{
+  "hosts": ["secure.runescape.com", "api.anthropic.com", "api.openai.com"],
+  "ttlMinutes": 45,
+  "timeoutSeconds": 10,
+  "maxBytes": 262144,
+  "initialBackoffSeconds": 60,
+  "maxBackoffMinutes": 15,
+  "bossLog": {
+    "endpoint": "https://secure.runescape.com/m=hiscore_oldschool/index_lite.json?player=Roll+The+J",
+    "account": "Roll The J",
+    "bosses": [
+      "Zulrah",
+      "Vorkath",
+      "Chambers of Xeric",
+      "Theatre of Blood",
+      "The Whisperer",
+      "TzKal-Zuk"
+    ]
+  },
+  "tokenUsage": {
+    "sources": [
+      {
+        "label": "anthropic",
+        "endpoint": "https://api.anthropic.com/v1/organizations/usage_report/messages?bucket_width=1d&limit=7",
+        "shape": "usage-report/v1",
+        "keyEnvName": "ANTHROPIC_ADMIN_KEY",
+        "keyHeader": "x-api-key",
+        "keyPrefix": "",
+        "headers": { "anthropic-version": "2023-06-01" },
+        "window": { "param": "starting_at", "format": "rfc3339", "lookbackDays": 7 }
+      },
+      {
+        "label": "codex",
+        "endpoint": "https://api.openai.com/v1/organization/usage/completions?bucket_width=1d&limit=7",
+        "shape": "usage-page/v1",
+        "keyEnvName": "OPENAI_ADMIN_KEY",
+        "keyHeader": "Authorization",
+        "keyPrefix": "Bearer ",
+        "headers": {},
+        "window": { "param": "start_time", "format": "unix", "lookbackDays": 7 }
+      }
+    ]
+  }
+}

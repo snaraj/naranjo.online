@@ -150,6 +150,7 @@ func TestRunFailsClosedOnBadConfiguration(t *testing.T) {
 		"media root while disabled":    {"MEDIA_ROOT": "/never/used"},
 		"unknown media switch":         {"MEDIA_ENABLED": "maybe"},
 		"media enabled but incomplete": {"MEDIA_ENABLED": "true", "MEDIA_ROOT": "/reviewed"},
+		"unknown panels refresh":       {"PANELS_REFRESH": "maybe"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

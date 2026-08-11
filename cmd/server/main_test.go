@@ -26,6 +26,24 @@ func TestMediaConfigurationRejectsPartialEnablement(t *testing.T) {
 // TestListenPort locks the single runtime listener setting: the chart-aligned
 // 8080 default, the full valid range, and loud rejection of anything a broken
 // pod specification could supply.
+// TestPanelsRefreshConfigurationFailsClosed pins the egress opt-in gate:
+// live panel refresh stays off by default, enables only on an explicit
+// "true", and any other value refuses the boot instead of guessing.
+func TestPanelsRefreshConfigurationFailsClosed(t *testing.T) {
+	t.Parallel()
+	for value, want := range map[string]bool{"": false, "false": false, "true": true} {
+		enabled, err := panelsRefreshConfiguration(value)
+		if err != nil || enabled != want {
+			t.Errorf("panelsRefreshConfiguration(%q) = %v, %v; want %v, nil", value, enabled, err, want)
+		}
+	}
+	for _, value := range []string{"maybe", "TRUE", "1", "yes"} {
+		if _, err := panelsRefreshConfiguration(value); err == nil {
+			t.Errorf("panelsRefreshConfiguration(%q) accepted an unrecognized value", value)
+		}
+	}
+}
+
 func TestListenPort(t *testing.T) {
 	t.Parallel()
 	for name, testCase := range map[string]struct {

@@ -1,0 +1,11 @@
+# Narrow, commit-scoped false-positive exceptions for the secret gate.
+# Each line is one gitleaks fingerprint (commit:file:rule:line); nothing
+# here relaxes a rule for current or future content — the working tree
+# must always scan clean without these entries.
+#
+# d82a7ce introduced a redirect-refusal test whose fixture header name
+# ("x-test-key") plus a high-entropy sentinel matched generic-api-key.
+# The value is an obvious test sentinel, not a credential; the line was
+# reworded in the immediate follow-up commit so only the historical blob
+# needs this exception. (Rewriting the pushed branch is out of policy.)
+d82a7ce3f5235cd05b0662be40d1b324146bebf2:internal/panels/refresh_test.go:generic-api-key:313
