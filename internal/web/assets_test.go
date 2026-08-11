@@ -114,8 +114,12 @@ func TestBuiltFrontendIsEmbeddedAndServed(t *testing.T) {
 		}
 	}
 	body := root.Body.String()
-	if !strings.Contains(body, "data-static-fallback") || !strings.Contains(body, "Hello World!") {
-		t.Fatalf("built root lacks the static application fallback: %q", body)
+	// The data-static-fallback attribute is the structural contract for a
+	// no-JavaScript first response. The fallback's copy is deliberately not
+	// pinned: the temporary hello-world shell will become the real media-rich
+	// site, and content is not an HTTP-boundary contract.
+	if !strings.Contains(body, "data-static-fallback") {
+		t.Fatalf("built root lacks the static application fallback marker: %q", body)
 	}
 	if strings.Contains(body, "/src/main.ts") {
 		t.Fatalf("built root still references a development entrypoint: %q", body)

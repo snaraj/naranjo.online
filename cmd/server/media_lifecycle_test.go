@@ -11,8 +11,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,12 +18,14 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/snaraj/naranjo.online/internal/testsupport"
 )
 
-// lifecycleMediaBytes is the tiny immutable fixture; its digest names its
-// directory so the fixture never models a URL whose bytes violate the
-// content-addressed publication contract.
-var lifecycleMediaBytes = []byte("0123456789")
+// lifecycleMediaBytes is the canonical tiny immutable fixture; its digest
+// names its directory so the fixture never models a URL whose bytes violate
+// the content-addressed publication contract.
+var lifecycleMediaBytes = []byte(testsupport.MediaFileContent)
 
 // largeMediaSize must exceed every buffer between the server's file copy and
 // the paused client — kernel socket buffers on both sides plus the transport's
@@ -34,27 +34,17 @@ var lifecycleMediaBytes = []byte("0123456789")
 // the CI runners and the Pi, while still trivial to create in a fixture.
 const largeMediaSize = 8 << 20
 
-// mediaLifecycleRoot builds the on-disk delivery tree run() will serve:
-// one immutable content-addressed clip and one large mutable file whose
-// unread body can hold the single transfer slot open.
+// mediaLifecycleRoot builds the on-disk delivery tree run() will serve: the
+// canonical shared tree, plus one large mutable file — a saturation-scenario
+// concern owned by this suite, not the shared fixture — whose unread body can
+// hold the single transfer slot open.
 func mediaLifecycleRoot(t *testing.T) (root, immutableURL, largeURL string) {
 	t.Helper()
-	root = t.TempDir()
-	digest := fmt.Sprintf("%x", sha256.Sum256(lifecycleMediaBytes))
-	immutableDirectory := filepath.Join(root, "immutable", digest)
-	if err := os.MkdirAll(immutableDirectory, 0o750); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "mutable"), 0o750); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(immutableDirectory, "clip.mp4"), lifecycleMediaBytes, 0o640); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
+	root = testsupport.MediaRoot(t)
 	if err := os.WriteFile(filepath.Join(root, "mutable", "large.webm"), bytes.Repeat([]byte{'v'}, largeMediaSize), 0o640); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	return root, "/media/immutable/" + digest + "/clip.mp4", "/media/mutable/large.webm"
+	return root, testsupport.ImmutableClipPath(), "/media/mutable/large.webm"
 }
 
 // TestRunServesMediaLifecycleEndToEnd is sequential by design: it owns a live

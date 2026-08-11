@@ -22,6 +22,8 @@ import (
 	"syscall"
 	"testing"
 	"testing/fstest"
+
+	"github.com/snaraj/naranjo.online/internal/testsupport"
 )
 
 // faultFS wraps a healthy fstest.MapFS but intercepts ReadFile to record every
@@ -72,15 +74,10 @@ func (f *failingDirFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	return f.MapFS.ReadDir(name)
 }
 
-// healthyFrontend is the minimal realistic bundle: the entrypoint, one hashed
-// asset, and one root-level file.
-func healthyFrontend() fstest.MapFS {
-	return fstest.MapFS{
-		"index.html":           &fstest.MapFile{Data: []byte("<!doctype html><h1>naranjo</h1>")},
-		"assets/app-abc123.js": &fstest.MapFile{Data: []byte("console.log('app')")},
-		"favicon.svg":          &fstest.MapFile{Data: []byte("<svg/>")},
-	}
-}
+// constructionReadSet is every file New must read from the canonical bundle:
+// all of testsupport.FrontendFS except the .gitkeep placeholder, which the
+// walk skips by design and must therefore never appear in the read log.
+var constructionReadSet = []string{"assets/app-abc123.js", "downloads/blob", "favicon.svg", "index.html"}
 
 // TestConstructionReadsEveryFileExactlyOnce verifies the prepared-table
 // contract by observed calls, not implementation trust: New reads each
@@ -88,7 +85,7 @@ func healthyFrontend() fstest.MapFS {
 // reaches the filesystem again.
 func TestConstructionReadsEveryFileExactlyOnce(t *testing.T) {
 	t.Parallel()
-	fsys := &faultFS{files: healthyFrontend()}
+	fsys := &faultFS{files: testsupport.FrontendFS()}
 	site, err := New(fsys)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -98,8 +95,7 @@ func TestConstructionReadsEveryFileExactlyOnce(t *testing.T) {
 			t.Errorf("Close() error = %v", err)
 		}
 	})
-	want := []string{"assets/app-abc123.js", "favicon.svg", "index.html"}
-	constructionReads := assertConstructionReads(t, fsys, want)
+	constructionReads := assertConstructionReads(t, fsys, constructionReadSet)
 
 	for _, target := range []string{"/", "/assets/app-abc123.js", "/favicon.svg", "/missing", "/index.html/../favicon.svg"} {
 		response := httptest.NewRecorder()
@@ -122,7 +118,7 @@ func TestConstructionReadsEveryFileExactlyOnce(t *testing.T) {
 // handler.
 func TestMediaConstructionReadsEveryFileExactlyOnce(t *testing.T) {
 	t.Parallel()
-	fsys := &faultFS{files: healthyFrontend()}
+	fsys := &faultFS{files: testsupport.FrontendFS()}
 	site, err := NewWithMedia(fsys, MediaOptions{Root: t.TempDir(), MaxConcurrent: 1})
 	if err != nil {
 		t.Fatalf("NewWithMedia() error = %v", err)
@@ -132,8 +128,7 @@ func TestMediaConstructionReadsEveryFileExactlyOnce(t *testing.T) {
 			t.Errorf("Close() error = %v", err)
 		}
 	})
-	want := []string{"assets/app-abc123.js", "favicon.svg", "index.html"}
-	constructionReads := assertConstructionReads(t, fsys, want)
+	constructionReads := assertConstructionReads(t, fsys, constructionReadSet)
 
 	for _, target := range []string{"/", "/assets/app-abc123.js", "/media/mutable/album/missing.mp4", "/missing"} {
 		response := httptest.NewRecorder()
@@ -180,7 +175,7 @@ func TestConstructionFailsClosedOnBrokenBundle(t *testing.T) {
 
 	t.Run("unreadable entrypoint", func(t *testing.T) {
 		t.Parallel()
-		fsys := &faultFS{files: healthyFrontend(), readErrs: map[string]error{"index.html": injected}}
+		fsys := &faultFS{files: testsupport.FrontendFS(), readErrs: map[string]error{"index.html": injected}}
 		if site, err := New(fsys); err == nil || !errors.Is(err, injected) {
 			t.Fatalf("New() = %v, %v; want the injected fault", site, err)
 		}
@@ -188,7 +183,7 @@ func TestConstructionFailsClosedOnBrokenBundle(t *testing.T) {
 
 	t.Run("unreadable asset fails without retry", func(t *testing.T) {
 		t.Parallel()
-		fsys := &faultFS{files: healthyFrontend(), readErrs: map[string]error{"assets/app-abc123.js": injected}}
+		fsys := &faultFS{files: testsupport.FrontendFS(), readErrs: map[string]error{"assets/app-abc123.js": injected}}
 		site, err := New(fsys)
 		if err == nil || !errors.Is(err, injected) {
 			t.Fatalf("New() = %v, %v; want the injected fault", site, err)
@@ -206,7 +201,7 @@ func TestConstructionFailsClosedOnBrokenBundle(t *testing.T) {
 
 	t.Run("missing entrypoint", func(t *testing.T) {
 		t.Parallel()
-		bundle := healthyFrontend()
+		bundle := testsupport.FrontendFS()
 		delete(bundle, "index.html")
 		if site, err := New(&faultFS{files: bundle}); err == nil || !errors.Is(err, fs.ErrNotExist) {
 			t.Fatalf("New() = %v, %v; want fs.ErrNotExist", site, err)
@@ -215,7 +210,7 @@ func TestConstructionFailsClosedOnBrokenBundle(t *testing.T) {
 
 	t.Run("unlistable directory", func(t *testing.T) {
 		t.Parallel()
-		fsys := &failingDirFS{MapFS: healthyFrontend(), failDir: "assets", err: injected}
+		fsys := &failingDirFS{MapFS: testsupport.FrontendFS(), failDir: "assets", err: injected}
 		if site, err := New(fsys); err == nil || !errors.Is(err, injected) {
 			t.Fatalf("New() = %v, %v; want the injected walk fault", site, err)
 		}
@@ -223,7 +218,7 @@ func TestConstructionFailsClosedOnBrokenBundle(t *testing.T) {
 
 	t.Run("valid media root is closed again when the bundle is broken", func(t *testing.T) {
 		t.Parallel()
-		fsys := &faultFS{files: healthyFrontend(), readErrs: map[string]error{"favicon.svg": injected}}
+		fsys := &faultFS{files: testsupport.FrontendFS(), readErrs: map[string]error{"favicon.svg": injected}}
 		site, err := NewWithMedia(fsys, MediaOptions{Root: t.TempDir(), MaxConcurrent: 1})
 		if err == nil || !errors.Is(err, injected) {
 			t.Fatalf("NewWithMedia() = %v, %v; want the injected fault", site, err)
@@ -290,7 +285,7 @@ func TestMediaRootCloseLifecycle(t *testing.T) {
 		t.Fatalf("post-Close body = %q; it must stay opaque", body)
 	}
 
-	site, err := New(&faultFS{files: healthyFrontend()})
+	site, err := New(&faultFS{files: testsupport.FrontendFS()})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}

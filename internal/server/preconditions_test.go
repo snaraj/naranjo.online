@@ -10,48 +10,25 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
+
+	"github.com/snaraj/naranjo.online/internal/testsupport"
 )
 
 // abusiveRange exceeds maxRangeParts so rangeHeaderIsAbusive always fires,
 // letting each matrix row observe whether preconditions neutralize it.
 var abusiveRange = "bytes=" + strings.Repeat("0-0,", maxRangeParts) + "0-0"
 
-// preconditionFixture builds a media-enabled site with one immutable file
-// (digest ETag plus a fixed modification time) and one mutable file (no
-// validator at all). Concurrency is deliberately generous so parallel matrix
-// rows can never exhaust transfer slots and observe a 503 instead of the
-// conditional outcome under test.
+// preconditionFixture builds a media-enabled site over the canonical delivery
+// tree: one immutable file (digest ETag plus the fixed fixture modification
+// time) and one mutable file (no validator at all). Concurrency is
+// deliberately generous so parallel matrix rows can never exhaust transfer
+// slots and observe a 503 instead of the conditional outcome under test.
 func preconditionFixture(t *testing.T) *Site {
 	t.Helper()
-	root := t.TempDir()
-	for _, directory := range []string{
-		filepath.Join(root, "immutable", testMediaDigest),
-		filepath.Join(root, "mutable"),
-	} {
-		if err := os.MkdirAll(directory, 0o750); err != nil {
-			t.Fatalf("MkdirAll() error = %v", err)
-		}
-	}
-	modified := time.Unix(1_700_000_000, 0).UTC()
-	for name, content := range map[string]string{
-		filepath.Join(root, "immutable", testMediaDigest, "clip.mp4"): "0123456789",
-		filepath.Join(root, "mutable", "song.flac"):                   "fLaCdata",
-	} {
-		if err := os.WriteFile(name, []byte(content), 0o640); err != nil {
-			t.Fatalf("WriteFile() error = %v", err)
-		}
-		if err := os.Chtimes(name, modified, modified); err != nil {
-			t.Fatalf("Chtimes() error = %v", err)
-		}
-	}
-	assets := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<!doctype html><h1>Hello World!</h1>")}}
-	site, err := NewWithMedia(assets, MediaOptions{Root: root, MaxConcurrent: 64})
+	site, err := NewWithMedia(testsupport.FrontendFS(), MediaOptions{Root: testsupport.MediaRoot(t), MaxConcurrent: 64})
 	if err != nil {
 		t.Fatalf("NewWithMedia() error = %v", err)
 	}
@@ -72,10 +49,10 @@ func preconditionFixture(t *testing.T) *Site {
 func TestMediaPreconditionsGovernAbusiveRanges(t *testing.T) {
 	t.Parallel()
 	site := preconditionFixture(t)
-	immutableURL := "/media/immutable/" + testMediaDigest + "/clip.mp4"
+	immutableURL := "/media/immutable/" + testsupport.MediaDigest + "/clip.mp4"
 	mutableURL := "/media/mutable/song.flac"
-	etag := `"` + testMediaDigest + `"`
-	modified := time.Unix(1_700_000_000, 0).UTC()
+	etag := `"` + testsupport.MediaDigest + `"`
+	modified := testsupport.MediaModTime
 
 	for name, row := range map[string]struct {
 		url     string
@@ -150,7 +127,7 @@ func TestMediaPreconditionsGovernAbusiveRanges(t *testing.T) {
 // indistinguishable from a missing file.
 func TestClassifyMediaPath(t *testing.T) {
 	t.Parallel()
-	digest := testMediaDigest
+	digest := testsupport.MediaDigest
 	for name, row := range map[string]struct {
 		path      string
 		wantOK    bool
@@ -207,7 +184,7 @@ func TestClassifyMediaPath(t *testing.T) {
 // matches nothing but the wildcard.
 func TestETagListMatches(t *testing.T) {
 	t.Parallel()
-	current := `"` + testMediaDigest + `"`
+	current := `"` + testsupport.MediaDigest + `"`
 	for name, row := range map[string]struct {
 		value   string
 		current string

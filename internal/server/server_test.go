@@ -3,29 +3,19 @@
 package server
 
 import (
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"testing/fstest"
+
+	"github.com/snaraj/naranjo.online/internal/testsupport"
 )
 
-// testHandler builds the production handler around deterministic in-memory
-// files, isolating HTTP policy tests from frontend compilation details.
+// testHandler builds the production handler around the canonical in-memory
+// bundle, isolating HTTP policy tests from frontend compilation details.
 func testHandler(t *testing.T) http.Handler {
 	t.Helper()
-	assets := fstest.MapFS{
-		"index.html":        &fstest.MapFile{Data: []byte("<!doctype html><h1>Hello World!</h1>")},
-		"assets/app-abc.js": &fstest.MapFile{Data: []byte("console.log('hello')")},
-		".gitkeep":          &fstest.MapFile{Data: []byte("build placeholder")},
-		// An extensionless name resolves to no registered MIME type on every
-		// platform, and its deliberately sniffable HTML body proves the pinned
-		// octet-stream policy — not content sniffing — decides the type.
-		"downloads/blob": &fstest.MapFile{Data: []byte("<!doctype html><script>sniffable</script>")},
-	}
-	var filesystem fs.FS = assets
-	siteHandler, err := New(filesystem)
+	siteHandler, err := New(testsupport.FrontendFS())
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -41,8 +31,10 @@ func TestRootAndSecurityHeaders(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
-	if !strings.Contains(response.Body.String(), "Hello World!") {
-		t.Fatalf("body does not contain Hello World!: %q", response.Body.String())
+	// The sentinel decouples the assertion from real site copy: the document
+	// body is fixture-owned structure, not a content contract.
+	if !strings.Contains(response.Body.String(), testsupport.FrontendShellSentinel) {
+		t.Fatalf("body does not contain the fixture sentinel: %q", response.Body.String())
 	}
 	for _, header := range []string{"Content-Security-Policy", "Strict-Transport-Security", "X-Content-Type-Options"} {
 		if response.Header().Get(header) == "" {
@@ -70,7 +62,7 @@ func TestNoRequestMethodCanEverMutate(t *testing.T) {
 		http.MethodPatch,
 		http.MethodDelete,
 	}
-	routes := []string{"/", "/livez", "/readyz", "/assets/app-abc.js", "/missing"}
+	routes := []string{"/", "/livez", "/readyz", "/assets/app-abc123.js", "/missing"}
 	for _, route := range routes {
 		for _, method := range mutating {
 			response := httptest.NewRecorder()
@@ -87,14 +79,14 @@ func TestNoRequestMethodCanEverMutate(t *testing.T) {
 func TestAssetCachingAndConditionalRequest(t *testing.T) {
 	siteHandler := testHandler(t)
 	first := httptest.NewRecorder()
-	siteHandler.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/assets/app-abc.js", nil))
+	siteHandler.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/assets/app-abc123.js", nil))
 	if first.Code != http.StatusOK {
 		t.Fatalf("first status = %d", first.Code)
 	}
 	if got := first.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
 		t.Errorf("Cache-Control = %q", got)
 	}
-	secondRequest := httptest.NewRequest(http.MethodGet, "/assets/app-abc.js", nil)
+	secondRequest := httptest.NewRequest(http.MethodGet, "/assets/app-abc123.js", nil)
 	secondRequest.Header.Set("If-None-Match", first.Header().Get("ETag"))
 	second := httptest.NewRecorder()
 	siteHandler.ServeHTTP(second, secondRequest)
@@ -108,7 +100,7 @@ func TestAssetCachingAndConditionalRequest(t *testing.T) {
 func TestAssetRFCPreconditions(t *testing.T) {
 	siteHandler := testHandler(t)
 	initial := httptest.NewRecorder()
-	siteHandler.ServeHTTP(initial, httptest.NewRequest(http.MethodGet, "/assets/app-abc.js", nil))
+	siteHandler.ServeHTTP(initial, httptest.NewRequest(http.MethodGet, "/assets/app-abc123.js", nil))
 	etag := initial.Header().Get("ETag")
 	if etag == "" {
 		t.Fatal("initial response has no ETag")
@@ -120,7 +112,7 @@ func TestAssetRFCPreconditions(t *testing.T) {
 		"any representation": "*",
 	} {
 		t.Run(name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodGet, "/assets/app-abc.js", nil)
+			request := httptest.NewRequest(http.MethodGet, "/assets/app-abc123.js", nil)
 			request.Header.Set("If-None-Match", value)
 			response := httptest.NewRecorder()
 			siteHandler.ServeHTTP(response, request)
@@ -130,7 +122,7 @@ func TestAssetRFCPreconditions(t *testing.T) {
 		})
 	}
 
-	request := httptest.NewRequest(http.MethodGet, "/assets/app-abc.js", nil)
+	request := httptest.NewRequest(http.MethodGet, "/assets/app-abc123.js", nil)
 	request.Header.Set("If-Match", `"stale"`)
 	response := httptest.NewRecorder()
 	siteHandler.ServeHTTP(response, request)
