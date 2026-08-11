@@ -24,6 +24,15 @@ SemVer and match image/chart tags exactly.
   whose internals they observe.
 
 ### Changed
+- Provider neutrality (owner requirement R9): the NetworkPolicy's ingress
+  peer is now values-driven (`ingress.peerNamespace`,
+  `ingress.peerAppName`, defaulting to the current Cloudflare Tunnel
+  connector) and the policy resource is renamed
+  `cloudflared-to-naranjo-online` to `ingress-to-naranjo-online`; a
+  provider swap is a values override, never a template or code edit.
+  A fail-closed pin test asserts zero provider names in application
+  code, frontend source, and chart templates — chart values defaults
+  are the only sanctioned location.
 - Package layout convention: each Go package keeps its types and
   package-level const/var declarations in `types.go` (genuine shared
   utilities in `utils.go`); the one-year immutable cache policy is one
