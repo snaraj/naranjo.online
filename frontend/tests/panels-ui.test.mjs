@@ -50,7 +50,7 @@ test('panel mount region keeps its fences and mounts exactly one panel line', ()
     .filter((line) => line.length > 0);
   assert.deepEqual(
     mounted,
-    ['<SideRail><BossLog /></SideRail>'],
+    ['<SideRail><BossLog /></SideRail>', '<TokenUsagePanel />'],
     'the mount fence must hold exactly one line per panel'
   );
 });
