@@ -99,3 +99,10 @@ h1 {
   letter-spacing: -0.05em;
   line-height: 1;
 }
+
+/* The panel mount region is layout-neutral on purpose: each mounted panel
+   places itself (the side rail floats over the page; inline panels flow), so
+   adding or removing a panel never reflows the hello shell. */
+.panels-mount {
+  display: contents;
+}
