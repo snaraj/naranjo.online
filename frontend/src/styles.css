@@ -1,8 +1,17 @@
 /* Reading-mode token layer (issue #22, the OSRS-wiki mechanism adapted):
- * every color lives in a :root custom property, and each reading mode is one
+ * every color lives in a custom property, and each reading mode is one
  * override block scoped by the data-theme attribute the origin stamps on
- * <html>. Adding a theme = one block here + one registry entry in
- * src/lib/themes.ts + one id in readingThemes (internal/server/types.go).
+ * <html>. Adding a theme = one palette group + one block here + one registry
+ * entry in src/lib/themes.ts + one id in readingThemes
+ * (internal/server/types.go).
+ *
+ * Two layers on purpose. The --palette-* definitions below hold every
+ * theme's values with each hex written exactly once — the dark palette is
+ * needed by both the media query and its [data-theme] block, and the toggle's
+ * swatches preview every palette at once, so values are defined here and only
+ * referenced everywhere else. The active --color-* tokens are what components
+ * consume; theme blocks remap them onto a palette without restating a single
+ * value.
  *
  * Light is the default :root palette. With no explicit choice (no data-theme
  * stamped), prefers-color-scheme maps the dark tokens in; an explicit choice
@@ -14,16 +23,43 @@
  * current shell (visual parity with the previous light/dark pair); the
  * intermediate light/dark values are placeholder ramps between those two
  * anchors, and sepia is seeded from the wiki's browntown values — all
- * swappable by design when the owner picks final palettes. */
+ * swappable by design when the owner picks final palettes. The two anchor
+ * hexes each appear twice below because light's text is dark's surface and
+ * vice versa — one occurrence per palette slot, never per consumer. */
 :root {
+  --palette-light-surface: #f7f7f2;
+  --palette-light-surface-raised: #efefe8;
+  --palette-light-surface-overlay: #e6e6dd;
+  --palette-light-border: #d8d8cd;
+  --palette-light-border-strong: #9a9a8e;
+  --palette-light-accent: #3d434f;
+  --palette-light-text: #10131a;
+
+  --palette-dark-surface: #10131a;
+  --palette-dark-surface-raised: #161a23;
+  --palette-dark-surface-overlay: #1d222d;
+  --palette-dark-border: #2a3040;
+  --palette-dark-border-strong: #566078;
+  --palette-dark-accent: #b9c2d4;
+  --palette-dark-text: #f7f7f2;
+
+  /* Sepia: placeholder palette seeded from the wiki's browntown values. */
+  --palette-sepia-surface: #1b1612;
+  --palette-sepia-surface-raised: #28221d;
+  --palette-sepia-surface-overlay: #312a25;
+  --palette-sepia-border: #3e362f;
+  --palette-sepia-border-strong: #736559;
+  --palette-sepia-accent: #b79d7e;
+  --palette-sepia-text: #f4eaea;
+
   color-scheme: light;
-  --color-surface: #f7f7f2;
-  --color-surface-raised: #efefe8;
-  --color-surface-overlay: #e6e6dd;
-  --color-border: #d8d8cd;
-  --color-border-strong: #9a9a8e;
-  --color-accent: #3d434f;
-  --color-text: #10131a;
+  --color-surface: var(--palette-light-surface);
+  --color-surface-raised: var(--palette-light-surface-raised);
+  --color-surface-overlay: var(--palette-light-surface-overlay);
+  --color-border: var(--palette-light-border);
+  --color-border-strong: var(--palette-light-border-strong);
+  --color-accent: var(--palette-light-accent);
+  --color-text: var(--palette-light-text);
   color: var(--color-text);
   background: var(--color-surface);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -33,41 +69,42 @@
 
 /* No explicit choice: the visitor's OS preference selects the dark tokens.
  * :not([data-theme]) keeps an explicit light choice authoritative even when
- * the OS prefers dark. */
+ * the OS prefers dark. The remap is repeated in the block below because CSS
+ * cannot share one declaration block between a media query and an attribute
+ * selector — but only these var() references repeat, never the values. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     color-scheme: dark;
-    --color-surface: #10131a;
-    --color-surface-raised: #161a23;
-    --color-surface-overlay: #1d222d;
-    --color-border: #2a3040;
-    --color-border-strong: #566078;
-    --color-accent: #b9c2d4;
-    --color-text: #f7f7f2;
+    --color-surface: var(--palette-dark-surface);
+    --color-surface-raised: var(--palette-dark-surface-raised);
+    --color-surface-overlay: var(--palette-dark-surface-overlay);
+    --color-border: var(--palette-dark-border);
+    --color-border-strong: var(--palette-dark-border-strong);
+    --color-accent: var(--palette-dark-accent);
+    --color-text: var(--palette-dark-text);
   }
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
-  --color-surface: #10131a;
-  --color-surface-raised: #161a23;
-  --color-surface-overlay: #1d222d;
-  --color-border: #2a3040;
-  --color-border-strong: #566078;
-  --color-accent: #b9c2d4;
-  --color-text: #f7f7f2;
+  --color-surface: var(--palette-dark-surface);
+  --color-surface-raised: var(--palette-dark-surface-raised);
+  --color-surface-overlay: var(--palette-dark-surface-overlay);
+  --color-border: var(--palette-dark-border);
+  --color-border-strong: var(--palette-dark-border-strong);
+  --color-accent: var(--palette-dark-accent);
+  --color-text: var(--palette-dark-text);
 }
 
-/* Sepia: placeholder palette seeded from the wiki's browntown values. */
 [data-theme="sepia"] {
   color-scheme: dark;
-  --color-surface: #1b1612;
-  --color-surface-raised: #28221d;
-  --color-surface-overlay: #312a25;
-  --color-border: #3e362f;
-  --color-border-strong: #736559;
-  --color-accent: #b79d7e;
-  --color-text: #f4eaea;
+  --color-surface: var(--palette-sepia-surface);
+  --color-surface-raised: var(--palette-sepia-surface-raised);
+  --color-surface-overlay: var(--palette-sepia-surface-overlay);
+  --color-border: var(--palette-sepia-border);
+  --color-border-strong: var(--palette-sepia-border-strong);
+  --color-accent: var(--palette-sepia-accent);
+  --color-text: var(--palette-sepia-text);
 }
 
 * {
