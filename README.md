@@ -39,9 +39,12 @@ cd frontend
 npm ci --ignore-scripts
 npm run check && npm test && npm run build
 
-# Backend
+# Backend — the same gate CI enforces
 cd ..
-go vet ./... && go test ./...
+test -z "$(gofmt -l .)"
+go vet ./...
+CGO_ENABLED=0 go test ./...
+go test -race ./...
 
 # Container (both production architectures)
 docker build .

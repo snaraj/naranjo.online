@@ -6,7 +6,40 @@ SemVer and match image/chart tags exactly.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- Visitor-scenario end-to-end suites: a hand-written stdlib mock-browser
+  harness (`internal/testsupport.Visitor`) remembers and replays ETags
+  like a browser cache, follows the document's asset references, seeks
+  media by Range like a player, and asserts the security-header baseline
+  on every navigation; scenarios cover first visit, repeat visit,
+  missing deep links, media playback, and hostile probing (including
+  all seven reserved namespaces) over real transport.
+- Reserved-namespace parity pins: exact-seven-list tests on both the Go
+  side (`TestReservedMediaSegmentsParity`) and the frontend side
+  (`media.test.mjs`), each naming the other file, so the hand-duplicated
+  Go and TypeScript lists cannot drift silently.
+- `internal/testsupport`: shared API-level fixtures — the canonical
+  frontend bundle and on-disk media tree — excluded from the coverage
+  denominator as test scaffolding; white-box fakes stay in the packages
+  whose internals they observe.
+
+### Changed
+- Package layout convention: each Go package keeps its types and
+  package-level const/var declarations in `types.go` (genuine shared
+  utilities in `utils.go`); the one-year immutable cache policy is one
+  named constant shared by hashed assets and immutable media.
+- A media-enabled boot constructs the site exactly once; previously it
+  built and discarded a throwaway media-less `Site` first — a full walk
+  plus SHA-256 of every embedded file.
+- Embedded files with unregistered extensions now serve pinned
+  `application/octet-stream` instead of leaving `http.ServeContent` to
+  sniff the body; the media path already pinned unknown types.
+- Tests assert structure and sentinel fixtures, never placeholder copy,
+  so the temporary hello-world shell can become the real media-rich site
+  without breaking behavior tests; AGENTS.md documents this and the
+  other sanctioned-evolution paths.
+- Go coverage floor raised 90.0% to 91.1% (ratchet-only; measured 94.1%
+  on the scaffolding-excluded production denominator).
 
 ## [0.1.8] - 2026-08-11
 

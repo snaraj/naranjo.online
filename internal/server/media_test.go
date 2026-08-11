@@ -303,6 +303,26 @@ func TestMediaCapacityRejectsImmediately(t *testing.T) {
 	<-media.slots
 }
 
+// TestReservedMediaSegmentsParity pins the reserved-namespace list to exactly
+// the seven operator roles, because the same list is hand-duplicated in the
+// frontend (frontend/src/lib/media.ts, reservedSegments) and the two must
+// never drift apart silently: a segment on only one side would let a
+// component build URLs the origin hides, or let the origin expose what the
+// frontend refuses to build. The frontend test pins the identical list from
+// its side.
+func TestReservedMediaSegmentsParity(t *testing.T) {
+	t.Parallel()
+	want := []string{"checksums", "internal", "lost+found", "manifests", "metadata", "originals", "staging"}
+	if len(reservedMediaSegments) != len(want) {
+		t.Fatalf("reservedMediaSegments has %d entries, want exactly %d; update reservedSegments in frontend/src/lib/media.ts in the same change", len(reservedMediaSegments), len(want))
+	}
+	for _, segment := range want {
+		if _, ok := reservedMediaSegments[segment]; !ok {
+			t.Errorf("reservedMediaSegments is missing %q; it must mirror reservedSegments in frontend/src/lib/media.ts exactly", segment)
+		}
+	}
+}
+
 // TestMediaRemainsAbsentByDefault proves the ordinary application constructor
 // reserves the media namespace even if a build accidentally embeds matching
 // files, preventing fallthrough around the bounded media handler.
