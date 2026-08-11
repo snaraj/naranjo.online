@@ -14,6 +14,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/snaraj/naranjo.online/internal/panels"
 )
 
 // New constructs the complete naranjo.online HTTP handler from built frontend
@@ -60,6 +62,13 @@ func newSite(assets fs.FS, media *mediaHandler) (*Site, error) {
 	}
 	mux.Handle("/media", http.NotFoundHandler())
 	mux.Handle("/media/", mediaRoute)
+	// The panel API serves prepared JSON envelopes from memory. Both route
+	// forms are registered explicitly so /api/panels/<id> can never fall
+	// through to the frontend handler's file table, and the shared security
+	// wrappers below apply to panel responses unchanged.
+	panelAPI := panels.New()
+	mux.Handle(panels.IndexPath, panelAPI)
+	mux.Handle(panels.PanelPathPrefix, panelAPI)
 	mux.Handle("/", h)
 	return &Site{handler: securityHeaders(rejectAmbiguousPath(mux)), media: media}, nil
 }

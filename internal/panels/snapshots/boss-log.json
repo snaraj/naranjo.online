@@ -1,0 +1,14 @@
+{
+  "generatedAt": "2026-08-10T21:15:00Z",
+  "data": {
+    "account": "Roll The J",
+    "bosses": [
+      { "name": "Zulrah", "kc": 1408, "rank": 152340 },
+      { "name": "Vorkath", "kc": 732, "rank": 289113 },
+      { "name": "Chambers of Xeric", "kc": 118, "rank": 201558 },
+      { "name": "Theatre of Blood", "kc": 46, "rank": 174092 },
+      { "name": "The Whisperer", "kc": null, "rank": null },
+      { "name": "TzKal-Zuk", "kc": 3, "rank": 98801, "score": 3 }
+    ]
+  }
+}

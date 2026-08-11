@@ -7,6 +7,28 @@ SemVer and match image/chart tags exactly.
 ## [Unreleased]
 
 ### Added
+- Panel framework (#21): a versioned read-only JSON API under
+  `/api/panels` (index) and `/api/panels/<id>` (full panel), served
+  through the existing security wrappers in the site's revalidated
+  no-cache class with digest ETags. One stable `panel/v1` envelope —
+  `{schema, id, kind, title, generatedAt, status: ok|stale|unavailable,
+  data}` — over kind-versioned payloads: `token-usage/v1` (per-source
+  windows; source labels are data, never Go identifiers),
+  `vcs-activity/v1` (contribution weeks, totals, streak, recent
+  commits), and `boss-log/v1` (account plus bosses with nullable
+  kc/rank rendered as "--"). Panels are fed by embedded snapshot files
+  strictly validated (unknown fields, trailing bytes, bad timestamps
+  all refused) exactly once at construction; invalid or missing data
+  degrades that panel to `unavailable` instead of failing the process.
+  The live `FetchSource` contract (hosts allowlist, TTL background
+  refresh off the request path, timeout/max-bytes/backoff bounds,
+  last-good served as `stale`) is fully defined but deliberately not
+  registrable, and a doctrine test pins zero egress capability in the
+  package. Owner performance budgets are enforced as tests: index
+  responses at or under 4 KiB, panel envelopes at or under 32 KiB, and
+  a read-counting filesystem proving the request path never leaves
+  memory. Visitor scenarios cover the index, every panel, revalidation
+  to 304s, and the opaque 404 over real transport.
 - Visitor-scenario end-to-end suites: a hand-written stdlib mock-browser
   harness (`internal/testsupport.Visitor`) remembers and replays ETags
   like a browser cache, follows the document's asset references, seeks

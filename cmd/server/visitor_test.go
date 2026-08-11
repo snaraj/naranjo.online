@@ -12,6 +12,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"os"
 	"strings"
@@ -103,6 +104,148 @@ func TestVisitorBrowsesTheSite(t *testing.T) {
 		missing := session.On(t).Navigate("/blog/first-post")
 		if missing.StatusCode != http.StatusNotFound {
 			t.Fatalf("GET /blog/first-post = %d, want 404", missing.StatusCode)
+		}
+		if got := strings.TrimSpace(string(missing.Body)); got != "404 page not found" {
+			t.Errorf("404 body = %q; it must stay the opaque default", got)
+		}
+	})
+
+	drainScenario(t, runResult)
+}
+
+// Panel API shapes are pinned here as independent expected values — never
+// imported from internal/panels, or the assertions would become tautologies.
+// A schema change must consciously edit both sides.
+type visitorPanelIndex struct {
+	Panels []visitorPanelRow `json:"panels"`
+}
+
+type visitorPanelRow struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
+}
+
+type visitorPanelEnvelope struct {
+	Schema      string          `json:"schema"`
+	ID          string          `json:"id"`
+	Kind        string          `json:"kind"`
+	Title       string          `json:"title"`
+	GeneratedAt string          `json:"generatedAt"`
+	Status      string          `json:"status"`
+	Data        json.RawMessage `json:"data"`
+}
+
+// decodeVisitorJSON strictly decodes one API body into v, so a served field
+// the pinned shape does not know fails the scenario instead of hiding.
+func decodeVisitorJSON(t *testing.T, body []byte, v any) {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(v); err != nil {
+		t.Fatalf("decode API body %q: %v", body, err)
+	}
+}
+
+// TestVisitorReadsThePanels is the dashboard reader's story over real
+// transport: the index names every panel, each panel answers with the stable
+// versioned envelope inside the owner's byte budgets, a later visit
+// revalidates everything down to cheap 304s, and a mistyped id stays an
+// opaque 404 — with the security-header and CSP baseline asserted by the
+// harness on every single navigation.
+func TestVisitorReadsThePanels(t *testing.T) {
+	requireBuiltFrontend(t)
+	base, runResult := bootServer(t, nil)
+	session := testsupport.NewVisitor(t, base)
+	var panelPaths []string
+
+	t.Run("opens the index: every panel listed ok, JSON, revalidated class", func(t *testing.T) {
+		visitor := session.On(t)
+		response := visitor.Navigate("/api/panels")
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("GET /api/panels = %d", response.StatusCode)
+		}
+		if got := response.Header.Get("Content-Type"); got != "application/json" {
+			t.Errorf("index Content-Type = %q", got)
+		}
+		if got := response.Header.Get("Cache-Control"); got != "no-cache" {
+			t.Errorf("index Cache-Control = %q, want no-cache", got)
+		}
+		// The harness already requires one of the two documented CSPs on
+		// every navigation; API responses must carry the site policy exactly.
+		if got := response.Header.Get("Content-Security-Policy"); got != testsupport.SiteContentSecurityPolicy {
+			t.Errorf("index Content-Security-Policy = %q, want the site policy", got)
+		}
+		if size := len(response.Body); size > 4096 {
+			t.Errorf("index response is %d bytes, over the owner's 4 KiB budget", size)
+		}
+		var index visitorPanelIndex
+		decodeVisitorJSON(t, response.Body, &index)
+		if len(index.Panels) != 3 {
+			t.Fatalf("index lists %d panels, want 3", len(index.Panels))
+		}
+		for _, row := range index.Panels {
+			if row.ID == "" || row.Title == "" || !strings.HasSuffix(row.Kind, "/v1") {
+				t.Errorf("index row incomplete: %+v", row)
+			}
+			if row.Status != "ok" {
+				t.Errorf("panel %s status = %q, want ok from shipped snapshots", row.ID, row.Status)
+			}
+			panelPaths = append(panelPaths, "/api/panels/"+row.ID)
+		}
+	})
+
+	t.Run("reads each panel: the versioned envelope within budget", func(t *testing.T) {
+		visitor := session.On(t)
+		if len(panelPaths) == 0 {
+			t.Skip("index chapter failed; no panels to read")
+		}
+		for _, path := range panelPaths {
+			response := visitor.Navigate(path)
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("GET %s = %d", path, response.StatusCode)
+			}
+			if size := len(response.Body); size > 32768 {
+				t.Errorf("%s response is %d bytes, over the owner's 32 KiB budget", path, size)
+			}
+			var envelope visitorPanelEnvelope
+			decodeVisitorJSON(t, response.Body, &envelope)
+			if envelope.Schema != "panel/v1" {
+				t.Errorf("%s schema = %q, want panel/v1", path, envelope.Schema)
+			}
+			if "/api/panels/"+envelope.ID != path || envelope.Title == "" {
+				t.Errorf("%s envelope identity = %+v", path, envelope)
+			}
+			if envelope.Status != "ok" || len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+				t.Errorf("%s status = %q with data %q, want ok with data", path, envelope.Status, envelope.Data)
+			}
+			if _, err := time.Parse(time.RFC3339, envelope.GeneratedAt); err != nil {
+				t.Errorf("%s generatedAt = %q: %v", path, envelope.GeneratedAt, err)
+			}
+		}
+	})
+
+	t.Run("returns later: remembered validators answer 304", func(t *testing.T) {
+		visitor := session.On(t)
+		if len(panelPaths) == 0 {
+			t.Skip("index chapter failed; nothing cached to revalidate")
+		}
+		for _, path := range append([]string{"/api/panels"}, panelPaths...) {
+			response := visitor.Navigate(path)
+			if response.StatusCode != http.StatusNotModified {
+				t.Errorf("revisit %s = %d, want 304 from the replayed validator", path, response.StatusCode)
+			}
+			if len(response.Body) != 0 {
+				t.Errorf("revisit %s carried %d body bytes, want an empty 304", path, len(response.Body))
+			}
+		}
+	})
+
+	t.Run("mistypes a panel id: opaque 404, headers intact", func(t *testing.T) {
+		missing := session.On(t).Navigate("/api/panels/listening-stats")
+		if missing.StatusCode != http.StatusNotFound {
+			t.Fatalf("GET /api/panels/listening-stats = %d, want 404", missing.StatusCode)
 		}
 		if got := strings.TrimSpace(string(missing.Body)); got != "404 page not found" {
 			t.Errorf("404 body = %q; it must stay the opaque default", got)
