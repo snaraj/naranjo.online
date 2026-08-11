@@ -5,15 +5,22 @@
 // real SIGTERM and require a clean drain. Deterministic lifecycle ordering is
 // covered by serve_test.go; this file proves the wiring between environment,
 // listener, handler, and signals end to end.
+//
+// These tests deliberately do not use testing/synctest: a synctest bubble
+// requires every goroutine to block on bubble-visible operations, and genuine
+// network I/O is not one, so readiness is polled with bounded real-time
+// deadlines generous enough for CI.
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
 	"io/fs"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
@@ -28,6 +35,16 @@ import (
 // served document, mirroring the embed test so both suites hunt the same way.
 var builtAssetReference = regexp.MustCompile(`(?:src|href)="(/assets/[^"]+)"`)
 
+// fakeEnv returns an environment lookup covering only the given variables.
+// Injecting the lookup instead of mutating the process environment with
+// t.Setenv keeps every value local to its subtest — which is what allows
+// t.Parallel here, since t.Setenv and t.Parallel are mutually exclusive —
+// and makes each boot hermetic: ambient developer variables cannot change
+// what this suite runs.
+func fakeEnv(values map[string]string) func(string) string {
+	return func(key string) string { return values[key] }
+}
+
 // requireBuiltFrontend fails fast — never skips — when the embedded bundle is
 // missing, matching the repository doctrine that CI must always test the real
 // artifact. The message mirrors internal/web's guidance.
@@ -39,16 +56,6 @@ func requireBuiltFrontend(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatalf("embedded frontend unavailable: %v; run the pinned frontend build before Go tests", err)
-	}
-}
-
-// resetServerEnv pins every configuration input read by run to its disabled
-// default so ambient developer environments cannot change what this suite
-// boots. t.Setenv also restores prior values on cleanup.
-func resetServerEnv(t *testing.T) {
-	t.Helper()
-	for _, name := range []string{"PORT", "MEDIA_ENABLED", "MEDIA_ROOT", "MEDIA_MAX_CONCURRENT"} {
-		t.Setenv(name, "")
 	}
 }
 
@@ -67,17 +74,25 @@ func reserveLoopbackPort(t *testing.T) int {
 	return port
 }
 
-// bootServer starts run in a goroutine and waits until the readiness probe
-// answers, retrying with a fresh port if another process wins the bind race.
+// bootServer starts run in a goroutine with the exact NotifyContext
+// composition main uses — so a later real SIGTERM drives the same drain path
+// production takes — and waits until the readiness probe answers, retrying
+// with a fresh port if another process wins the bind race. extraEnv joins the
+// injected environment so media-enabled scenarios reuse the same boot path.
 // It returns the base URL and the channel that will carry run's final error.
-func bootServer(t *testing.T) (string, <-chan error) {
+func bootServer(t *testing.T, extraEnv map[string]string) (string, <-chan error) {
 	t.Helper()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	t.Cleanup(stop)
 	client := &http.Client{Timeout: 2 * time.Second}
 	for attempt := 1; ; attempt++ {
 		port := reserveLoopbackPort(t)
-		t.Setenv("PORT", strconv.Itoa(port))
+		environment := map[string]string{"PORT": strconv.Itoa(port)}
+		for key, value := range extraEnv {
+			environment[key] = value
+		}
 		runResult := make(chan error, 1)
-		go func() { runResult <- run() }()
+		go func() { runResult <- run(ctx, fakeEnv(environment)) }()
 
 		base := "http://127.0.0.1:" + strconv.Itoa(port)
 		deadline := time.Now().Add(15 * time.Second)
@@ -126,8 +141,9 @@ func mustGet(t *testing.T, client *http.Client, url string) (*http.Response, []b
 // TestRunFailsClosedOnBadConfiguration proves the entrypoint refuses to start
 // — before any socket exists — for each class of broken pod configuration, so
 // Kubernetes surfaces a crash loop instead of routing traffic to a miswired
-// process.
+// process. Injected environments keep the rows parallel and hermetic.
 func TestRunFailsClosedOnBadConfiguration(t *testing.T) {
+	t.Parallel()
 	requireBuiltFrontend(t)
 	for name, environment := range map[string]map[string]string{
 		"invalid PORT":                 {"PORT": "not-a-port"},
@@ -136,11 +152,8 @@ func TestRunFailsClosedOnBadConfiguration(t *testing.T) {
 		"media enabled but incomplete": {"MEDIA_ENABLED": "true", "MEDIA_ROOT": "/reviewed"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			resetServerEnv(t)
-			for key, value := range environment {
-				t.Setenv(key, value)
-			}
-			if err := run(); err == nil {
+			t.Parallel()
+			if err := run(t.Context(), fakeEnv(environment)); err == nil {
 				t.Fatal("run() accepted invalid configuration and would have served traffic")
 			}
 		})
@@ -150,12 +163,11 @@ func TestRunFailsClosedOnBadConfiguration(t *testing.T) {
 // TestRunServesTheSiteAndDrainsOnSIGTERM is the complete production lifecycle
 // in one scenario: boot the real binary path, verify every public contract
 // over a real connection, then deliver the same signal Kubernetes sends and
-// require a clean, prompt drain. Subtests run in order against the one live
-// process; they must not be parallel.
+// require a clean, prompt drain. Sequential — signal delivery is
+// process-global, and the subtests run in order against the one live process.
 func TestRunServesTheSiteAndDrainsOnSIGTERM(t *testing.T) {
 	requireBuiltFrontend(t)
-	resetServerEnv(t)
-	base, runResult := bootServer(t)
+	base, runResult := bootServer(t, nil)
 	client := &http.Client{Timeout: 5 * time.Second}
 	var document string
 

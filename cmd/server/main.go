@@ -38,19 +38,27 @@ type httpRunner interface {
 	Shutdown(ctx context.Context) error
 }
 
-// main owns process termination, leaving run able to return startup and serving
-// failures through one structured log path.
+// main owns process termination and the process-global signal contract:
+// Kubernetes sends SIGTERM before a pod's grace period expires, and handling
+// both SIGTERM and local interrupts here gives every shutdown the same orderly
+// path. run stays free to report startup and serving failures through one
+// structured log statement.
 func main() {
-	if err := run(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, os.Getenv); err != nil {
 		slog.Error("server stopped", "error", err)
 		os.Exit(1)
 	}
 }
 
 // run assembles the immutable site, starts its hardened HTTP server, and blocks
-// until the server fails or the operating system requests a graceful shutdown.
-func run() error {
-	port, err := listenPort(os.Getenv("PORT"))
+// until the server fails or ctx requests a graceful shutdown. Configuration
+// arrives through lookupEnv — main passes os.Getenv — so tests can inject each
+// case's environment without mutating process state, which t.Setenv would
+// require at the cost of forbidding t.Parallel.
+func run(ctx context.Context, lookupEnv func(string) string) error {
+	port, err := listenPort(lookupEnv("PORT"))
 	if err != nil {
 		return err
 	}
@@ -64,9 +72,9 @@ func run() error {
 		return err
 	}
 	mediaEnabled, mediaOptions, err := mediaConfiguration(
-		os.Getenv("MEDIA_ENABLED"),
-		os.Getenv("MEDIA_ROOT"),
-		os.Getenv("MEDIA_MAX_CONCURRENT"),
+		lookupEnv("MEDIA_ENABLED"),
+		lookupEnv("MEDIA_ROOT"),
+		lookupEnv("MEDIA_MAX_CONCURRENT"),
 	)
 	if err != nil {
 		return err
@@ -93,10 +101,6 @@ func run() error {
 		MaxHeaderBytes: maxRequestHeaderBytes,
 	}
 
-	// Kubernetes sends SIGTERM before a pod's grace period expires; handling both
-	// SIGTERM and local interrupts uses the same orderly shutdown path everywhere.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	slog.Info("naranjo.online listening", "port", port)
 	return serve(ctx, httpServer)
 }
