@@ -18,26 +18,6 @@ import (
 	website "github.com/snaraj/naranjo.online/internal/web"
 )
 
-const (
-	// maxRequestHeaderBytes bounds all request metadata, including conditional
-	// Range headers that net/http must evaluate before the media-specific limit.
-	maxRequestHeaderBytes = 32 * 1024
-	// shutdownTimeout bounds graceful shutdown so a stuck connection cannot
-	// hold a rollout open indefinitely. Kubernetes can still terminate the
-	// process after this window.
-	shutdownTimeout = 10 * time.Second
-)
-
-// httpRunner is the narrow serving surface the lifecycle orchestration in
-// serve controls. *http.Server satisfies it directly; tests substitute a
-// hand-written fake so early serve failures, signal-driven draining, and the
-// bounded shutdown window can be verified deterministically under
-// testing/synctest without binding sockets or waiting real time.
-type httpRunner interface {
-	ListenAndServe() error
-	Shutdown(ctx context.Context) error
-}
-
 // main owns process termination and the process-global signal contract:
 // Kubernetes sends SIGTERM before a pod's grace period expires, and handling
 // both SIGTERM and local interrupts here gives every shutdown the same orderly
@@ -56,7 +36,11 @@ func main() {
 // until the server fails or ctx requests a graceful shutdown. Configuration
 // arrives through lookupEnv — main passes os.Getenv — so tests can inject each
 // case's environment without mutating process state, which t.Setenv would
-// require at the cost of forbidding t.Parallel.
+// require at the cost of forbidding t.Parallel. Validation keeps its
+// documented order — listen port, embedded assets, media configuration — and
+// the site is constructed exactly once, only after the media decision is
+// known, so a media-enabled boot never pays a throwaway walk and SHA-256 of
+// every embedded file for a Site it immediately discards.
 func run(ctx context.Context, lookupEnv func(string) string) error {
 	port, err := listenPort(lookupEnv("PORT"))
 	if err != nil {
@@ -64,10 +48,6 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 	}
 
 	assets, err := website.FileSystem()
-	if err != nil {
-		return err
-	}
-	handler, err := server.New(assets)
 	if err != nil {
 		return err
 	}
@@ -79,8 +59,11 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	var handler *server.Site
 	if mediaEnabled {
 		handler, err = server.NewWithMedia(assets, mediaOptions)
+	} else {
+		handler, err = server.New(assets)
 	}
 	if err != nil {
 		return err

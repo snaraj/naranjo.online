@@ -9,82 +9,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 )
-
-const (
-	// mediaPrefix is the stable public contract consumed by the frontend helper;
-	// it never reveals the independently managed filesystem location.
-	mediaPrefix = "/media/"
-	// maxRangeHeaderBytes bounds parsing work before net/http applies the full
-	// RFC range semantics. Normal single and multi-range requests are far smaller.
-	maxRangeHeaderBytes = 4096
-	// maxRangeParts prevents a client from turning one static transfer into an
-	// unbounded multipart response while preserving practical seeking behavior.
-	maxRangeParts = 16
-	// MaxMediaConcurrency is an implementation safety bound that prevents a bad
-	// environment value from creating an effectively unbounded semaphore. Live
-	// discovery still chooses a much smaller measured value; this is not a default.
-	MaxMediaConcurrency = 4096
-	// mediaWriteIdleTimeout limits a stalled downstream write, not total transfer
-	// duration, so multi-gigabyte responses can continue as long as bytes flow.
-	mediaWriteIdleTimeout = 30 * time.Second
-)
-
-var (
-	// errUnsafeMediaPath intentionally collapses traversal, hidden files,
-	// symlinks, directories, and reserved internals into the same public 404.
-	errUnsafeMediaPath = errors.New("unsafe media path")
-	// immutableDigest binds a cache-immutable URL to one canonical SHA-256
-	// namespace without hashing a multi-gigabyte file during every request.
-	immutableDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	// mediaTypes avoids host registry differences and never lets content sniffing
-	// turn an unknown operator file into active browser content.
-	mediaTypes = map[string]string{
-		".avif": "image/avif",
-		".flac": "audio/flac",
-		".gif":  "image/gif",
-		".jpeg": "image/jpeg",
-		".jpg":  "image/jpeg",
-		".mp4":  "video/mp4",
-		".png":  "image/png",
-		".webm": "video/webm",
-		".webp": "image/webp",
-	}
-	// reservedMediaSegments prevents a future mount-layout mistake from exposing
-	// operator-only roles even if they appear below the delivery root.
-	reservedMediaSegments = map[string]struct{}{
-		"checksums":  {},
-		"internal":   {},
-		"lost+found": {},
-		"manifests":  {},
-		"metadata":   {},
-		"originals":  {},
-		"staging":    {},
-	}
-)
-
-// MediaOptions names the future read-only delivery root and its measured
-// concurrency budget. There are no production defaults because both values
-// depend on Pi discovery and administration-path saturation tests.
-type MediaOptions struct {
-	// Root is the absolute container-visible derivative boundary; the chart does
-	// not supply it until the storage profile is reviewed.
-	Root string
-	// MaxConcurrent comes from measured saturation acceptance and bounds open
-	// files plus active response goroutines without an invented default.
-	MaxConcurrent int
-}
-
-// mediaHandler owns the traversal-resistant filesystem capability and a fixed
-// transfer semaphore so large public responses cannot create unbounded open
-// files, buffers, or goroutines inside the application.
-type mediaHandler struct {
-	root  *os.Root
-	slots chan struct{}
-}
 
 // openMediaHandler validates every capability before the site becomes ready.
 // Raw filesystem errors are intentionally not returned because production logs
@@ -272,7 +199,7 @@ func classifyMediaPath(requestPath string) (name, cacheControl, etag string, ok 
 		if len(segments) < 3 || !immutableDigest.MatchString(segments[1]) {
 			return "", "", "", false
 		}
-		return name, "public, max-age=31536000, immutable", `"` + segments[1] + `"`, true
+		return name, immutableCacheControl, `"` + segments[1] + `"`, true
 	case "mutable":
 		return name, "no-store", "", true
 	default:
@@ -325,14 +252,6 @@ func (h *mediaHandler) openRegular(name string) (*os.File, fs.FileInfo, error) {
 		return nil, nil, errUnsafeMediaPath
 	}
 	return file, opened, nil
-}
-
-// idleDeadlineWriter refreshes a network write deadline for each streamed
-// chunk. Unwrap lets net/http reach the original connection through this narrow
-// wrapper, while test recorders may safely report the operation unsupported.
-type idleDeadlineWriter struct {
-	http.ResponseWriter
-	timeout time.Duration
 }
 
 // Unwrap exposes the underlying writer to http.ResponseController.

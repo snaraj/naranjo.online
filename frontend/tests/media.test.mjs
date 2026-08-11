@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { mediaUrl } from '../src/lib/media.ts';
+import { mediaUrl, reservedSegments } from '../src/lib/media.ts';
 
 const digest = 'a'.repeat(64);
 
@@ -36,6 +36,24 @@ describe('mediaUrl', () => {
       assert.throws(
         () => mediaUrl({ kind: 'immutable', sha256, path: 'gallery/photo.webp' }),
         /lowercase SHA-256 digest/
+      );
+    }
+  });
+
+  it('mirrors the Go origin reserved namespaces exactly', () => {
+    // The same seven-name list is hand-duplicated on the Go side; this pin and
+    // its Go twin (TestReservedMediaSegmentsParity) fail loudly if either side
+    // drifts, naming the file to update.
+    assert.deepEqual(
+      [...reservedSegments].sort(),
+      ['checksums', 'internal', 'lost+found', 'manifests', 'metadata', 'originals', 'staging'],
+      'reservedSegments must mirror reservedMediaSegments in internal/server/types.go exactly — update both lists in the same change'
+    );
+    for (const segment of reservedSegments) {
+      assert.throws(
+        () => mediaUrl({ kind: 'mutable', path: `album/${segment}/file.mp4` }),
+        /canonical public segments/,
+        `reserved segment ${segment} must never form a public URL`
       );
     }
   });

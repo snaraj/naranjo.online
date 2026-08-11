@@ -1,7 +1,6 @@
 package server
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,45 +10,18 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
-	"time"
+
+	"github.com/snaraj/naranjo.online/internal/testsupport"
 )
 
-// testMediaDigest matches the tiny immutable fixture so the test never models
-// a content-addressed path whose bytes violate its publication checksum.
-var testMediaDigest = fmt.Sprintf("%x", sha256.Sum256([]byte("0123456789")))
-
-// mediaFixture creates only tiny protocol fixtures; it never approximates
-// production media size because streaming behavior comes from an open os.File,
-// not from loading test data into the application.
+// mediaFixture assembles a media-enabled site over the canonical fixtures:
+// the shared on-disk delivery tree (tiny protocol files only — streaming
+// behavior comes from an open os.File, not from loading test data into the
+// application) and the shared in-memory frontend bundle.
 func mediaFixture(t *testing.T) (*Site, string) {
 	t.Helper()
-	root := t.TempDir()
-	for _, directory := range []string{
-		filepath.Join(root, "immutable", testMediaDigest),
-		filepath.Join(root, "mutable"),
-		filepath.Join(root, "mutable", "album"),
-	} {
-		if err := os.MkdirAll(directory, 0o750); err != nil {
-			t.Fatalf("MkdirAll() error = %v", err)
-		}
-	}
-	files := map[string]string{
-		filepath.Join(root, "immutable", testMediaDigest, "clip.mp4"): "0123456789",
-		filepath.Join(root, "mutable", "song.flac"):                   "fLaCdata",
-		filepath.Join(root, "mutable", "unknown.bin"):                 "opaque",
-	}
-	modified := time.Unix(1_700_000_000, 0).UTC()
-	for name, content := range files {
-		if err := os.WriteFile(name, []byte(content), 0o640); err != nil {
-			t.Fatalf("WriteFile() error = %v", err)
-		}
-		if err := os.Chtimes(name, modified, modified); err != nil {
-			t.Fatalf("Chtimes() error = %v", err)
-		}
-	}
-
-	assets := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<!doctype html><h1>Hello World!</h1>")}}
-	site, err := NewWithMedia(assets, MediaOptions{Root: root, MaxConcurrent: 2})
+	root := testsupport.MediaRoot(t)
+	site, err := NewWithMedia(testsupport.FrontendFS(), MediaOptions{Root: root, MaxConcurrent: 2})
 	if err != nil {
 		t.Fatalf("NewWithMedia() error = %v", err)
 	}
@@ -78,7 +50,7 @@ func mediaRequest(t *testing.T, site http.Handler, method, target string, header
 // complete downloads, metadata-only probes, and video/audio seeking.
 func TestMediaFullHeadAndRange(t *testing.T) {
 	site, _ := mediaFixture(t)
-	target := "/media/immutable/" + testMediaDigest + "/clip.mp4"
+	target := "/media/immutable/" + testsupport.MediaDigest + "/clip.mp4"
 
 	full := mediaRequest(t, site, http.MethodGet, target, nil)
 	if full.Code != http.StatusOK || full.Body.String() != "0123456789" {
@@ -89,7 +61,7 @@ func TestMediaFullHeadAndRange(t *testing.T) {
 		"Cache-Control":  "public, max-age=31536000, immutable",
 		"Content-Length": "10",
 		"Content-Type":   "video/mp4",
-		"ETag":           `"` + testMediaDigest + `"`,
+		"ETag":           `"` + testsupport.MediaDigest + `"`,
 	} {
 		if got := full.Header().Get(name); got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
@@ -117,7 +89,7 @@ func TestMediaFullHeadAndRange(t *testing.T) {
 // If-Range handling, and collision-free no-store behavior for mutable aliases.
 func TestMediaConditionalRequests(t *testing.T) {
 	site, root := mediaFixture(t)
-	immutableTarget := "/media/immutable/" + testMediaDigest + "/clip.mp4"
+	immutableTarget := "/media/immutable/" + testsupport.MediaDigest + "/clip.mp4"
 	immutable := mediaRequest(t, site, http.MethodGet, immutableTarget, nil)
 	notModified := mediaRequest(t, site, http.MethodGet, immutableTarget, map[string]string{"If-None-Match": immutable.Header().Get("ETag")})
 	if notModified.Code != http.StatusNotModified || notModified.Body.Len() != 0 {
@@ -163,7 +135,7 @@ func TestMediaConditionalRequests(t *testing.T) {
 // requests at one deterministic status without allocating media-sized buffers.
 func TestMediaRangeFailures(t *testing.T) {
 	site, _ := mediaFixture(t)
-	target := "/media/immutable/" + testMediaDigest + "/clip.mp4"
+	target := "/media/immutable/" + testsupport.MediaDigest + "/clip.mp4"
 	manyParts := "bytes=" + strings.Repeat("0-0,", maxRangeParts) + "0-0"
 	oversized := "bytes=" + strings.Repeat("0", maxRangeHeaderBytes)
 	for name, value := range map[string]string{
@@ -324,11 +296,31 @@ func TestMediaCapacityRejectsImmediately(t *testing.T) {
 	t.Cleanup(func() { _ = media.Close() })
 	media.slots <- struct{}{}
 	response := httptest.NewRecorder()
-	media.ServeHTTP(response, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/media/immutable/%s/missing.mp4", testMediaDigest), nil))
+	media.ServeHTTP(response, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/media/immutable/%s/missing.mp4", testsupport.MediaDigest), nil))
 	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") == "" {
 		t.Fatalf("capacity response = %d Retry-After=%q", response.Code, response.Header().Get("Retry-After"))
 	}
 	<-media.slots
+}
+
+// TestReservedMediaSegmentsParity pins the reserved-namespace list to exactly
+// the seven operator roles, because the same list is hand-duplicated in the
+// frontend (frontend/src/lib/media.ts, reservedSegments) and the two must
+// never drift apart silently: a segment on only one side would let a
+// component build URLs the origin hides, or let the origin expose what the
+// frontend refuses to build. The frontend test pins the identical list from
+// its side.
+func TestReservedMediaSegmentsParity(t *testing.T) {
+	t.Parallel()
+	want := []string{"checksums", "internal", "lost+found", "manifests", "metadata", "originals", "staging"}
+	if len(reservedMediaSegments) != len(want) {
+		t.Fatalf("reservedMediaSegments has %d entries, want exactly %d; update reservedSegments in frontend/src/lib/media.ts in the same change", len(reservedMediaSegments), len(want))
+	}
+	for _, segment := range want {
+		if _, ok := reservedMediaSegments[segment]; !ok {
+			t.Errorf("reservedMediaSegments is missing %q; it must mirror reservedSegments in frontend/src/lib/media.ts exactly", segment)
+		}
+	}
 }
 
 // TestMediaRemainsAbsentByDefault proves the ordinary application constructor

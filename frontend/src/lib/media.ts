@@ -10,9 +10,11 @@ const safeDigest = /^[0-9a-f]{64}$/;
 // safeSegment intentionally narrows operator filenames to URL-stable ASCII;
 // dots may occur inside names but hidden, empty, and traversal segments cannot.
 const safeSegment = /^[A-Za-z0-9][A-Za-z0-9._~-]*$/;
-// reservedSegments mirrors the Go origin's operator-only namespaces. Keeping
-// the list here prevents a component from producing a URL the server must hide.
-const reservedSegments = new Set([
+// reservedSegments mirrors the Go origin's operator-only namespaces
+// (reservedMediaSegments in internal/server/types.go). Keeping the list here
+// prevents a component from producing a URL the server must hide. Exported so
+// the parity test can pin both hand-duplicated lists against each other.
+export const reservedSegments = new Set([
   'checksums',
   'internal',
   'lost+found',
