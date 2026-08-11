@@ -6,7 +6,36 @@ SemVer and match image/chart tags exactly.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.9] - 2026-08-11
+
 ### Added
+- Boss-log side rail (#20): the first visible panel — a collapsible
+  fixed right rail recreating RuneLite's chrome purely in CSS from its
+  published palette values as component-scoped, theme-overridable
+  custom properties, collapsed by default on narrow viewports and
+  overlaid so it can never shift layout. Inside, the boss log renders a
+  dense three-column grid of fixed-height cells: a lazy-loaded boss
+  icon beside a right-aligned KC, null KC rendered as `--`, and a
+  hover/focus tooltip with full boss name, rank, and KC. The shared
+  panel-UI foundation lands with it: `src/lib/panels.ts`, a same-origin
+  typed data layer over `/api/panels` pinning the `panel/v1` envelope
+  against the Go types (strict admission, exactly one request with no
+  retries, every transport/status/shape fault degraded to an honest
+  `unavailable` envelope); `PanelShell.svelte`, the one shared chrome —
+  title plus status badge (ok/stale/unavailable dot and coarse
+  `generatedAt` age) — reading `--panel-*` custom properties so the
+  theme layer overrides variables, never components; and a
+  comment-fenced one-line-per-panel mount region in `App.svelte` so
+  parallel panel PRs merge cleanly. Six OSRS Wiki boss thumbnails ship
+  as content-hashed same-origin assets (`assetsInlineLimit: 0` keeps
+  the CSP free of `data:` URIs) with the Jagex Fan Content Policy
+  notice and wiki credit in `ATTRIBUTION.md`; boss names stay API data
+  — the only name-shaped code is the icon slug lookup with an
+  initials-glyph fallback. A `TestVisitorChecksTheBossLog` visitor
+  chapter pins the page render and boss-log payload contract over real
+  transport, including both branches of the null-KC `--` path.
 - Reading modes (#22): named color schemes like the OSRS wiki — light,
   dark, and a sepia placeholder seeded from the wiki's browntown values
   — instead of a binary toggle. `styles.css` becomes a custom-property
