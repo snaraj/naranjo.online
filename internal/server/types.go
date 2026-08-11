@@ -53,7 +53,15 @@ type handler struct {
 	files map[string]*staticFile
 	// index is prepared during construction so a broken image fails before the
 	// process becomes ready rather than failing on the first visitor request.
+	// It is the unstamped default document served when no valid theme cookie
+	// accompanies a request; its tokens follow prefers-color-scheme.
 	index *staticFile
+	// themed maps each reading-mode id to the prepared index.html variant
+	// whose <html> element carries that data-theme stamp. Variants are
+	// precomputed at construction exactly like every other embedded response
+	// — own bytes and digest ETag each — so per-request selection is one
+	// cookie parse and one map lookup, never templating.
+	themed map[string]*staticFile
 }
 
 // Site is the complete naranjo.online HTTP application. It owns an optional
@@ -72,6 +80,12 @@ type Site struct {
 }
 
 const (
+	// themeCookie names the visitor's reading-mode choice (issue #22). Only
+	// the frontend toggle ever writes it — the origin never issues Set-Cookie
+	// — and the document handler reads it to select the matching precomputed
+	// index.html variant, so the chosen theme ships inside the HTML with zero
+	// flash and no inline script.
+	themeCookie = "theme"
 	// mediaPrefix is the stable public contract consumed by the frontend helper;
 	// it never reveals the independently managed filesystem location.
 	mediaPrefix = "/media/"
@@ -91,6 +105,13 @@ const (
 )
 
 var (
+	// readingThemes lists every reading mode the document is precomputed for.
+	// The identical id set is hand-duplicated in the frontend registry
+	// (frontend/src/lib/themes.ts) plus its [data-theme] blocks in styles.css
+	// — no shared code crosses the Go/TypeScript boundary — and the parity
+	// tests on both sides pin the lists against each other. Any cookie value
+	// outside this set fails closed to the unstamped default document.
+	readingThemes = []string{"dark", "light", "sepia"}
 	// errUnsafeMediaPath intentionally collapses traversal, hidden files,
 	// symlinks, directories, and reserved internals into the same public 404.
 	errUnsafeMediaPath = errors.New("unsafe media path")

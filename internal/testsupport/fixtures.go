@@ -22,8 +22,10 @@ const FrontendShellSentinel = "naranjo-fixture-shell"
 // FrontendFS returns the canonical healthy frontend bundle every suite builds
 // handlers from:
 //
-//	index.html            the entrypoint, carrying the data-static-fallback
-//	                      structural marker and the FrontendShellSentinel text
+//	index.html            the entrypoint, carrying the <html> element the
+//	                      reading-mode variants are stamped onto, the
+//	                      data-static-fallback structural marker, and the
+//	                      FrontendShellSentinel text
 //	assets/app-abc123.js  one content-hashed asset (immutable cache class)
 //	favicon.svg           one root-level file (revalidated cache class)
 //	downloads/blob        one extensionless file whose deliberately sniffable
@@ -35,7 +37,7 @@ const FrontendShellSentinel = "naranjo-fixture-shell"
 func FrontendFS() fstest.MapFS {
 	return fstest.MapFS{
 		"index.html": &fstest.MapFile{
-			Data: []byte("<!doctype html><main data-static-fallback><h1>" + FrontendShellSentinel + "</h1></main>"),
+			Data: []byte(`<!doctype html><html lang="en"><main data-static-fallback><h1>` + FrontendShellSentinel + `</h1></main></html>`),
 		},
 		"assets/app-abc123.js": &fstest.MapFile{Data: []byte("console.log('app')")},
 		"favicon.svg":          &fstest.MapFile{Data: []byte("<svg/>")},

@@ -53,10 +53,11 @@ type VisitorResponse struct {
 }
 
 // Visitor is a mock browser over real transport. It remembers ETags per URL
-// and replays them as If-None-Match the way a browser cache revalidates, can
-// follow a document's asset references, can seek media with Range requests
-// like a video player, and asserts the security-header baseline on every
-// navigation so no scenario can forget it.
+// and replays them as If-None-Match the way a browser cache revalidates,
+// carries client-set cookies the way a browser does after the site's own
+// JavaScript writes them, can follow a document's asset references, can seek
+// media with Range requests like a video player, and asserts the
+// security-header baseline on every navigation so no scenario can forget it.
 type Visitor struct {
 	// t owns failure reporting; every navigation asserts through it.
 	t *testing.T
@@ -67,26 +68,43 @@ type Visitor struct {
 	// cache maps a visited path to the ETag a 200 response carried, exactly
 	// the validator a browser would replay on its next navigation.
 	cache map[string]string
+	// cookies holds the client-set cookie pairs every navigation carries. The
+	// origin never issues Set-Cookie — the site's JavaScript writes cookies
+	// (the reading-mode choice) — so scenarios populate this jar directly,
+	// exactly the way document.cookie would.
+	cookies map[string]string
 }
 
-// NewVisitor opens a fresh browsing session — an empty cache — against base.
+// NewVisitor opens a fresh browsing session — an empty cache and an empty
+// cookie jar — against base.
 func NewVisitor(t *testing.T, base string) *Visitor {
 	t.Helper()
 	return &Visitor{
-		t:      t,
-		client: &http.Client{Timeout: 5 * time.Second},
-		base:   base,
-		cache:  make(map[string]string),
+		t:       t,
+		client:  &http.Client{Timeout: 5 * time.Second},
+		base:    base,
+		cache:   make(map[string]string),
+		cookies: make(map[string]string),
 	}
 }
 
-// On returns a view of the same browsing session — shared connection pool and
-// shared browser cache — whose assertions report through t. Scenario chapters
-// running as subtests must each take their own view, because fatal assertions
-// have to stop the subtest goroutine that navigated, never the parent's.
+// On returns a view of the same browsing session — shared connection pool,
+// shared browser cache, shared cookie jar — whose assertions report through
+// t. Scenario chapters running as subtests must each take their own view,
+// because fatal assertions have to stop the subtest goroutine that navigated,
+// never the parent's.
 func (v *Visitor) On(t *testing.T) *Visitor {
 	t.Helper()
-	return &Visitor{t: t, client: v.client, base: v.base, cache: v.cache}
+	return &Visitor{t: t, client: v.client, base: v.base, cache: v.cache, cookies: v.cookies}
+}
+
+// SetCookie records a cookie in the session jar the way the site's own
+// JavaScript writes one — the origin never sets cookies — so every later
+// navigation in this session carries it, exactly like a browser after the
+// reading-mode toggle. Setting a name again replaces its value.
+func (v *Visitor) SetCookie(name, value string) {
+	v.t.Helper()
+	v.cookies[name] = value
 }
 
 // Navigate performs a browser-like GET of path: a validator remembered from a
@@ -127,10 +145,14 @@ func (v *Visitor) AssetReferences(document []byte) []string {
 	return references
 }
 
-// do executes one prepared request, reads the whole body, enforces the
-// security baseline, and files a 200's validator into the browser cache.
+// do executes one prepared request, attaches the session's cookie jar, reads
+// the whole body, enforces the security baseline, and files a 200's validator
+// into the browser cache.
 func (v *Visitor) do(path string, request *http.Request) VisitorResponse {
 	v.t.Helper()
+	for name, value := range v.cookies {
+		request.AddCookie(&http.Cookie{Name: name, Value: value})
+	}
 	response, err := v.client.Do(request)
 	if err != nil {
 		v.t.Fatalf("GET %s: %v", request.URL, err)
