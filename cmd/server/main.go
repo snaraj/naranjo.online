@@ -22,7 +22,21 @@ const (
 	// maxRequestHeaderBytes bounds all request metadata, including conditional
 	// Range headers that net/http must evaluate before the media-specific limit.
 	maxRequestHeaderBytes = 32 * 1024
+	// shutdownTimeout bounds graceful shutdown so a stuck connection cannot
+	// hold a rollout open indefinitely. Kubernetes can still terminate the
+	// process after this window.
+	shutdownTimeout = 10 * time.Second
 )
+
+// httpRunner is the narrow serving surface the lifecycle orchestration in
+// serve controls. *http.Server satisfies it directly; tests substitute a
+// hand-written fake so early serve failures, signal-driven draining, and the
+// bounded shutdown window can be verified deterministically under
+// testing/synctest without binding sockets or waiting real time.
+type httpRunner interface {
+	ListenAndServe() error
+	Shutdown(ctx context.Context) error
+}
 
 // main owns process termination, leaving run able to return startup and serving
 // failures through one structured log path.
@@ -83,12 +97,21 @@ func run() error {
 	// SIGTERM and local interrupts uses the same orderly shutdown path everywhere.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	slog.Info("naranjo.online listening", "port", port)
+	return serve(ctx, httpServer)
+}
+
+// serve blocks until the server fails on its own or ctx requests a graceful
+// shutdown, then bounds that shutdown with shutdownTimeout. It is separated
+// from run so this orchestration can be exercised against a fake httpRunner
+// while run keeps sole ownership of environment, signals, and the real
+// listener.
+func serve(ctx context.Context, server httpRunner) error {
 	// A one-result buffer lets the serving goroutine report an early failure even
 	// when signal cancellation wins the select and shutdown begins first.
 	errCh := make(chan error, 1)
 	go func() {
-		slog.Info("naranjo.online listening", "port", port)
-		errCh <- httpServer.ListenAndServe()
+		errCh <- server.ListenAndServe()
 	}()
 
 	select {
@@ -100,11 +123,9 @@ func run() error {
 	case <-ctx.Done():
 	}
 
-	// Bound graceful shutdown so a stuck connection cannot hold a rollout open
-	// indefinitely. Kubernetes can still terminate the process after this window.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	return httpServer.Shutdown(shutdownCtx)
+	return server.Shutdown(shutdownCtx)
 }
 
 // mediaConfiguration keeps production media disabled unless all discovery-

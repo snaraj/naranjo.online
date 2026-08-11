@@ -23,6 +23,42 @@ func TestMediaConfigurationRejectsPartialEnablement(t *testing.T) {
 	}
 }
 
+// TestListenPort locks the single runtime listener setting: the chart-aligned
+// 8080 default, the full valid range, and loud rejection of anything a broken
+// pod specification could supply.
+func TestListenPort(t *testing.T) {
+	t.Parallel()
+	for name, testCase := range map[string]struct {
+		value   string
+		want    int
+		wantErr bool
+	}{
+		"empty defaults to the chart port": {value: "", want: 8080},
+		"explicit port":                    {value: "9090", want: 9090},
+		"lowest valid port":                {value: "1", want: 1},
+		"highest valid port":               {value: "65535", want: 65535},
+		"zero is refused":                  {value: "0", wantErr: true},
+		"negative is refused":              {value: "-1", wantErr: true},
+		"above range is refused":           {value: "65536", wantErr: true},
+		"non-numeric is refused":           {value: "http", wantErr: true},
+		"trailing junk is refused":         {value: "8080x", wantErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := listenPort(testCase.value)
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatalf("listenPort(%q) = %d, want error", testCase.value, got)
+				}
+				return
+			}
+			if err != nil || got != testCase.want {
+				t.Fatalf("listenPort(%q) = %d, %v, want %d, nil", testCase.value, got, err, testCase.want)
+			}
+		})
+	}
+}
+
 // TestMediaConfigurationHasNoInventedDefaults verifies disabled startup and
 // exact operator-supplied enablement without choosing Pi values in code.
 func TestMediaConfigurationHasNoInventedDefaults(t *testing.T) {
