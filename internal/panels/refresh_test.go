@@ -310,7 +310,9 @@ func TestRedirectsAreRefusedAndCredentialStaysHome(t *testing.T) {
 	// happens before the follow-up request exists, so the redirect target
 	// must never observe a single request.
 	source := state.fetch
-	if _, err := source.fetchDocument(t.Context(), doer, origin.URL+"/scores.json", "x-test-key", "fixture-sentinel-13579", nil); err == nil {
+	// The header name and sentinel spelling deliberately avoid secret-scanner
+	// keywords and entropy so the repository's gitleaks gate stays meaningful.
+	if _, err := source.fetchDocument(t.Context(), doer, origin.URL+"/scores.json", "x-test-credential", "fixture-sentinel-aaaa", nil); err == nil {
 		t.Fatal("credentialed fetch followed a redirect")
 	}
 	if got := targetHits.Load(); got != 0 {
