@@ -18,26 +18,6 @@ import (
 	website "github.com/snaraj/naranjo.online/internal/web"
 )
 
-const (
-	// maxRequestHeaderBytes bounds all request metadata, including conditional
-	// Range headers that net/http must evaluate before the media-specific limit.
-	maxRequestHeaderBytes = 32 * 1024
-	// shutdownTimeout bounds graceful shutdown so a stuck connection cannot
-	// hold a rollout open indefinitely. Kubernetes can still terminate the
-	// process after this window.
-	shutdownTimeout = 10 * time.Second
-)
-
-// httpRunner is the narrow serving surface the lifecycle orchestration in
-// serve controls. *http.Server satisfies it directly; tests substitute a
-// hand-written fake so early serve failures, signal-driven draining, and the
-// bounded shutdown window can be verified deterministically under
-// testing/synctest without binding sockets or waiting real time.
-type httpRunner interface {
-	ListenAndServe() error
-	Shutdown(ctx context.Context) error
-}
-
 // main owns process termination and the process-global signal contract:
 // Kubernetes sends SIGTERM before a pod's grace period expires, and handling
 // both SIGTERM and local interrupts here gives every shutdown the same orderly

@@ -16,42 +16,6 @@ import (
 	"time"
 )
 
-// staticFile is one immutable embedded response, fully prepared during
-// construction. Precomputing the bytes, digest ETag, content type, and cache
-// policy once removes a filesystem read and a SHA-256 of the whole file from
-// every request — meaningful on the small Pi origin — and leaves the request
-// path with no failure mode at all.
-type staticFile struct {
-	body         []byte
-	etag         string
-	contentType  string
-	cacheControl string
-}
-
-// handler serves the immutable frontend files after New has validated and
-// prepared the complete bundle. It remains private so callers cannot bypass
-// the mux's health endpoints or the securityHeaders wrapper.
-type handler struct {
-	// files maps each clean root-relative name to its prepared response.
-	// Traversal, directory, and unknown names miss the table identically, so
-	// every invalid request shape collapses into the same 404.
-	files map[string]*staticFile
-	// index is prepared during construction so a broken image fails before the
-	// process becomes ready rather than failing on the first visitor request.
-	index *staticFile
-}
-
-// Site is the complete naranjo.online HTTP application. It owns an optional
-// directory-limited media root so shutdown can close that capability after all
-// active requests have drained.
-type Site struct {
-	// handler is the fully wrapped router, never the unprotected internal mux.
-	handler http.Handler
-	// media owns the optional root capability and is nil in the production
-	// scaffold while storage and delivery remain blocked.
-	media *mediaHandler
-}
-
 // New constructs the complete naranjo.online HTTP handler from built frontend
 // assets. Construction validates index.html up front, wires Kubernetes probe
 // endpoints, and applies one security-header policy to every response.
@@ -141,7 +105,7 @@ func newStaticFile(name string, data []byte) *staticFile {
 	if strings.HasPrefix(name, "assets/") {
 		// Vite filenames contain a content hash, making a year-long immutable
 		// cache safe: changed bytes are always published under a new URL.
-		cacheControl = "public, max-age=31536000, immutable"
+		cacheControl = immutableCacheControl
 	}
 	return &staticFile{
 		body:         data,
@@ -211,17 +175,6 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	file.serveTo(w, r, name)
-}
-
-// allowReadMethod enforces the read-only contract shared by site and probe
-// routes. Rejecting mutation methods closes an unnecessary attack surface.
-func allowReadMethod(w http.ResponseWriter, r *http.Request) bool {
-	if r.Method == http.MethodGet || r.Method == http.MethodHead {
-		return true
-	}
-	w.Header().Set("Allow", "GET, HEAD")
-	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	return false
 }
 
 // rejectAmbiguousPath runs before ServeMux so it returns a terminal 404 instead
