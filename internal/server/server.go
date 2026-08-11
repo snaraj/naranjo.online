@@ -16,15 +16,29 @@ import (
 	"time"
 )
 
-// handler serves the immutable frontend files after New has validated the
-// bundle's entrypoint. It remains private so callers cannot bypass the mux's
-// health endpoints or the securityHeaders wrapper.
+// staticFile is one immutable embedded response, fully prepared during
+// construction. Precomputing the bytes, digest ETag, content type, and cache
+// policy once removes a filesystem read and a SHA-256 of the whole file from
+// every request — meaningful on the small Pi origin — and leaves the request
+// path with no failure mode at all.
+type staticFile struct {
+	body         []byte
+	etag         string
+	contentType  string
+	cacheControl string
+}
+
+// handler serves the immutable frontend files after New has validated and
+// prepared the complete bundle. It remains private so callers cannot bypass
+// the mux's health endpoints or the securityHeaders wrapper.
 type handler struct {
-	// assets is the read-only, build-generated frontend filesystem.
-	assets fs.FS
-	// index is loaded during construction so a broken image fails before the
+	// files maps each clean root-relative name to its prepared response.
+	// Traversal, directory, and unknown names miss the table identically, so
+	// every invalid request shape collapses into the same 404.
+	files map[string]*staticFile
+	// index is prepared during construction so a broken image fails before the
 	// process becomes ready rather than failing on the first visitor request.
-	index []byte
+	index *staticFile
 }
 
 // Site is the complete naranjo.online HTTP application. It owns an optional
@@ -65,11 +79,10 @@ func NewWithMedia(assets fs.FS, options MediaOptions) (*Site, error) {
 // been validated, keeping the disabled and future media-enabled paths identical
 // for health probes and embedded frontend behavior.
 func newSite(assets fs.FS, media *mediaHandler) (*Site, error) {
-	index, err := fs.ReadFile(assets, "index.html")
+	h, err := newHandler(assets)
 	if err != nil {
-		return nil, fmt.Errorf("read embedded index: %w", err)
+		return nil, err
 	}
-	h := &handler{assets: assets, index: index}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/livez", health)
 	mux.HandleFunc("/readyz", health)
@@ -85,6 +98,57 @@ func newSite(assets fs.FS, media *mediaHandler) (*Site, error) {
 	mux.Handle("/media/", mediaRoute)
 	mux.Handle("/", h)
 	return &Site{handler: securityHeaders(rejectAmbiguousPath(mux)), media: media}, nil
+}
+
+// newHandler reads and prepares every embedded file exactly once. Any
+// unreadable file — not only index.html — fails construction, so a corrupt
+// bundle is discovered before the pod reports ready instead of surfacing as
+// per-visitor 500s, and the serving path afterwards cannot fail.
+func newHandler(assets fs.FS) (*handler, error) {
+	files := make(map[string]*staticFile)
+	err := fs.WalkDir(assets, ".", func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		// dist/.gitkeep exists only so a clean checkout can compile before the
+		// frontend build. It is build metadata, not public site content.
+		if entry.IsDir() || name == ".gitkeep" {
+			return nil
+		}
+		data, err := fs.ReadFile(assets, name)
+		if err != nil {
+			return fmt.Errorf("read embedded file %s: %w", name, err)
+		}
+		files[name] = newStaticFile(name, data)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("prepare embedded frontend: %w", err)
+	}
+	index, ok := files["index.html"]
+	if !ok {
+		return nil, fmt.Errorf("read embedded index: %w", fs.ErrNotExist)
+	}
+	return &handler{files: files, index: index}, nil
+}
+
+// newStaticFile derives the response identity for one embedded file. The
+// digest-based strong ETag remains stable across replicas and restarts, so
+// every pod presents the same cache identity for the same bytes.
+func newStaticFile(name string, data []byte) *staticFile {
+	sum := sha256.Sum256(data)
+	cacheControl := "no-cache"
+	if strings.HasPrefix(name, "assets/") {
+		// Vite filenames contain a content hash, making a year-long immutable
+		// cache safe: changed bytes are always published under a new URL.
+		cacheControl = "public, max-age=31536000, immutable"
+	}
+	return &staticFile{
+		body:         data,
+		etag:         `"` + hex.EncodeToString(sum[:]) + `"`,
+		contentType:  mime.TypeByExtension(path.Ext(name)),
+		cacheControl: cacheControl,
+	}
 }
 
 // ServeHTTP exposes the composed application while keeping the underlying mux
@@ -117,9 +181,10 @@ func health(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ServeHTTP maps a clean URL path to a built frontend file. Unknown paths return
-// 404 instead of falling back to index.html because this site has no client-side
-// router and silently rewriting mistakes would hide broken asset references.
+// ServeHTTP maps a clean URL path to a prepared frontend file. Unknown paths
+// return 404 instead of falling back to index.html because this site has no
+// client-side router and silently rewriting mistakes would hide broken asset
+// references.
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !allowReadMethod(w, r) {
 		return
@@ -135,36 +200,17 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// document from the origin again. "no-store" would forbid storage outright
 		// and make every navigation a full origin round trip for no safety gain:
 		// this document is public, holds no visitor data, and its ETag is a digest.
-		serveBytes(w, r, "index.html", h.index, "no-cache")
+		h.index.serveTo(w, r, "index.html")
 		return
 	}
-	if !fs.ValidPath(name) {
+	// Traversal, directory, placeholder, and unknown names all miss the
+	// prepared table, so every invalid shape shares one indistinguishable 404.
+	file, ok := h.files[name]
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	// dist/.gitkeep exists only so a clean checkout can compile before the
-	// frontend build. It is build metadata, not public site content.
-	if name == ".gitkeep" {
-		http.NotFound(w, r)
-		return
-	}
-	info, err := fs.Stat(h.assets, name)
-	if err != nil || info.IsDir() {
-		http.NotFound(w, r)
-		return
-	}
-	data, err := fs.ReadFile(h.assets, name)
-	if err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-	cacheControl := "no-cache"
-	if strings.HasPrefix(name, "assets/") {
-		// Vite filenames contain a content hash, making a year-long immutable
-		// cache safe: changed bytes are always published under a new URL.
-		cacheControl = "public, max-age=31536000, immutable"
-	}
-	serveBytes(w, r, name, data, cacheControl)
+	file.serveTo(w, r, name)
 }
 
 // allowReadMethod enforces the read-only contract shared by site and probe
@@ -192,18 +238,17 @@ func rejectAmbiguousPath(next http.Handler) http.Handler {
 	})
 }
 
-// serveBytes applies cache metadata and delegates byte-range, conditional, and
-// HEAD behavior to net/http. Its digest-based strong ETag remains stable across
-// replicas and restarts, so every pod presents the same cache identity.
-func serveBytes(w http.ResponseWriter, r *http.Request, name string, data []byte, cacheControl string) {
-	sum := sha256.Sum256(data)
-	etag := `"` + hex.EncodeToString(sum[:]) + `"`
-	w.Header().Set("Cache-Control", cacheControl)
-	w.Header().Set("ETag", etag)
-	if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
-		w.Header().Set("Content-Type", contentType)
+// serveTo applies the prepared cache metadata and delegates byte-range,
+// conditional, and HEAD behavior to net/http. Every part of the response
+// identity was derived at construction time, keeping this hot path free of
+// hashing, filesystem access, and error branches.
+func (f *staticFile) serveTo(w http.ResponseWriter, r *http.Request, name string) {
+	w.Header().Set("Cache-Control", f.cacheControl)
+	w.Header().Set("ETag", f.etag)
+	if f.contentType != "" {
+		w.Header().Set("Content-Type", f.contentType)
 	}
-	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(data))
+	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(f.body))
 }
 
 // securityHeaders enforces the browser-security baseline at the origin as
