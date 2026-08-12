@@ -7,6 +7,25 @@ SemVer and match image/chart tags exactly.
 ## [Unreleased]
 
 ### Added
+- Release publisher attaches the BuildKit SLSA v1 provenance as keyless
+  cosign attestations (`slsaprovenance1`) on the immutable image digest,
+  immediately after image signing — one per architecture, each read back
+  from the just-pushed index and re-asserted about the index digest the
+  deployment references, over a platform set derived from the index and
+  asserted to equal the build's exactly. Each predicate is bound to this
+  release before it is attached (this repository's source, this tag's
+  commit, an Actions run of this repository) and the two are required to
+  differ; the step then verifies its own attestations under this
+  workflow's identity, so a release whose attestations are not
+  discoverable or verifiable fails in the publisher rather than later at
+  promotion. Cosign normalizes the predicate on attach, dropping
+  BuildKit's `buildkit_metadata` and `buildkit_completeness` — the
+  attestation is a lossy copy, and the index-embedded provenance remains
+  the authoritative content evidence. No new permissions, actions, or
+  skip paths, and the job's unused `attestations: write` grant is
+  dropped; effective from the next tagged release. Completes this site's
+  precondition for the platform promotion ratchet
+  (website-infrastructure#58).
 - Version-control activity status bar (#19): a fixed strip rendering
   the `vcs-activity/v1` panel inside the shared PanelShell — a per-day
   contribution heatmap (five-level single-hue cell ramp shipped as

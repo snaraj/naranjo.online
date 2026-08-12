@@ -25,7 +25,6 @@ jobs:
       contents: write
       packages: write
       id-token: write
-      attestations: write
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,6 +86,146 @@ jobs:
           cosign-release: v3.1.3
       - name: Sign the immutable image digest
         run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
+      - name: Attach the BuildKit SLSA provenance as cosign attestations
+        # Buildx (provenance: mode=max above) embeds one SLSA v1 provenance
+        # statement per platform inside the pushed index. Read each predicate
+        # back from the immutable digest just signed and attach it as a
+        # keyless cosign attestation (slsaprovenance1) on that same digest,
+        # so verifiers that require cosign-attached attestations — the
+        # platform promotion ratchet, website-infrastructure#58 — can demand
+        # them from this release onward. Same identity and no-skip discipline
+        # as the signing step.
+        #
+        # What the attestation is, honestly: cosign v3.1.3 re-marshals the
+        # predicate through its typed SLSA v1 model on attach, which DROPS
+        # runDetails.metadata.buildkit_metadata and buildkit_completeness —
+        # including the vcs source/revision binding asserted below. The
+        # attached copy is therefore LOSSY: it carries the build's shape and
+        # this workflow's signing identity, not BuildKit's full record. The
+        # index-EMBEDDED provenance remains the authoritative content
+        # evidence, so the downstream promotion check must keep reading it
+        # and must never be "simplified" into reading the attestation
+        # instead.
+        #
+        # Subject rebinding: each per-architecture predicate is re-asserted
+        # about the INDEX digest, not the per-architecture manifest digest,
+        # because the ratchet verifies attestations on the index digest a
+        # deployment references — a per-architecture subject would fail that
+        # check. Both attestations therefore share one subject and are told
+        # apart only by predicate content, which the distinctness check below
+        # enforces; cosign v3.1.3's attest has no annotation flag.
+        #
+        # Failure surface: this step inserts GHCR reads plus Fulcio and Rekor
+        # round-trips between image signing and chart publishing, and any
+        # failure burns the version tag (tags are immutable and never
+        # reassigned, requirement 10). It therefore ends by checking its own
+        # output, so a release whose attestations are not discoverable,
+        # complete, or verifiable fails HERE — before the chart and the
+        # GitHub Release exist — instead of days later at promotion. The
+        # check has two halves because they settle different things. cosign
+        # v3.1.3 attaches new-format Sigstore bundles as OCI referrers, and
+        # GHCR exposes no Referrers API, so every bundle for this digest —
+        # the image signature and both attestations — lands in ONE
+        # sha256-<hex> fallback-tag index that each attach rewrites
+        # read-modify-write (this repository's own v0.1.9 has no .att or
+        # .sig tag at all: both 404, the fallback index holds everything).
+        # verify-attestation is satisfied by a single verifiable attestation
+        # and so cannot notice a second one clobbering the first, which is
+        # what the count assertion is for. The two halves read the evidence
+        # through different mechanisms — signed content for the count,
+        # cosign's own matching for the verification — so neither mechanism
+        # alone decides whether a release ships.
+        #
+        # Payload headroom: measured on the v0.1.9 index, each platform's
+        # predicate is ~31 KB compact (~54 KB pretty-printed) and its base64
+        # DSSE payload ~27 KB — normalization drops roughly a third of the
+        # predicate before signing — well inside Rekor's 100 KB attestation
+        # ceiling.
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          # The platform set is derived from the index itself and then
+          # asserted to be EXACTLY the build step's platform list above, in
+          # jq `keys` sort order: a third or missing platform fails the
+          # release. Update BOTH together.
+          expected_platforms='linux/amd64 linux/arm64'
+          provenance_platforms="$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" \
+            --format '{{ json .Provenance }}' | jq -r 'keys[]')"
+          mapfile -t platforms <<< "${provenance_platforms}"
+          test "${platforms[*]}" = "${expected_platforms}"
+          predicates=()
+          for platform in "${platforms[@]}"; do
+            predicate="${RUNNER_TEMP}/slsa-${platform//\//-}.json"
+            docker buildx imagetools inspect "${IMAGE}@${DIGEST}" \
+              --format "{{ json (index .Provenance \"${platform}\").SLSA }}" \
+              > "${predicate}"
+            # Bind the predicate to THIS release before attaching it: built
+            # from this repository's source at this tag's commit, by a run of
+            # this repository's Actions.
+            jq -e --arg rev "${GITHUB_SHA}" --arg src "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" '
+              (.buildDefinition|type=="object") and
+              (.runDetails.builder.id | startswith($src + "/actions/runs/")) and
+              (.runDetails.metadata.buildkit_metadata.vcs.source == $src) and
+              (.runDetails.metadata.buildkit_metadata.vcs.revision == $rev)' \
+              "${predicate}" >/dev/null
+            predicates+=("${predicate}")
+          done
+          # Defense in depth: every platform's evidence must be distinct.
+          # Real Buildx cannot repeat a platform — the index's provenance is
+          # a JSON object, so duplicate keys collapse before jq sees them —
+          # but a patched or replayed producer could hand back one predicate
+          # under two keys, and that must not become two attestations of the
+          # same build under one subject.
+          test "$(sha256sum "${predicates[@]}" | awk '{print $1}' | sort -u | wc -l)" \
+            -eq "${#predicates[@]}"
+          for predicate in "${predicates[@]}"; do
+            cosign attest --yes --type slsaprovenance1 \
+              --predicate "${predicate}" "${IMAGE}@${DIGEST}"
+          done
+          # Self-check, in two halves that use different mechanisms on
+          # purpose. The count reads the signed statements themselves and
+          # proves every attestation survived the fallback-tag rewrite and
+          # still coexists under one subject.
+          #
+          # The download returns EVERY bundle attached to this digest, not
+          # only attestations: cosign v3.1.3 emits newline-delimited
+          # Sigstore bundles carrying the statement at .dsseEnvelope.payload,
+          # and the image signature is one of them — a real bundle whose
+          # decoded predicateType is https://sigstore.dev/cosign/sign/v1,
+          # which the type filter below EXCLUDES. A release therefore streams
+          # three bundles (one signature, two attestations) and must count
+          # two. Absence cannot be read from the exit status: against a
+          # digest with no attestations at all the download still succeeds
+          # and prints that one signature bundle, so a missing attestation
+          # shows up here as a count of zero, never as a failed command.
+          #
+          # The select must also tolerate both shapes: new-format bundles
+          # and the legacy {payloadType,payload,signatures} envelope that
+          # older cosign wrote. `fromjson?` drops whatever does not decode
+          # to a statement — a legacy empty payload, a signature-only
+          # bundle, an unknown future wrapper — so a foreign shape counts
+          # zero and fails this assertion cleanly, rather than erroring the
+          # whole step after everything has already been pushed.
+          #
+          # `download attestation --predicate-type` is deliberately NOT used
+          # to filter: it keys off the layer's OCI annotation, and against
+          # the legacy in-toto layer form it returns nothing while the
+          # attestations are present and of the right type — a false red
+          # here would burn an immutable version tag. The verification below
+          # is then the exact command the promote-time ratchet runs, so a
+          # release that ratchet could not verify fails here instead.
+          attested="$(cosign download attestation "${IMAGE}@${DIGEST}" \
+            | jq -s --arg type 'https://slsa.dev/provenance/v1' '
+              [ .[]
+                | ((.dsseEnvelope.payload // .payload // empty) | @base64d | fromjson?)
+                | select(.predicateType == $type)
+              ] | length')"
+          test "${attested}" -eq "${#predicates[@]}"
+          cosign verify-attestation --type slsaprovenance1 \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-publisher.yml@${GITHUB_REF}" \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "${IMAGE}@${DIGEST}" >/dev/null
       - name: Refuse to reuse an existing chart version, then publish and sign the chart
         run: |
           set -euo pipefail
@@ -115,7 +254,9 @@ jobs:
             printf '| Artifact | Reference |\n| --- | --- |\n'
             printf "| Image | \`%s@%s\` |\n" "${IMAGE}" "${{ steps.build.outputs.digest }}"
             printf "| Chart | \`%s@%s\` |\n" "${CHART}" "${CHART_DIGEST}"
-            printf '\nSigned with keyless Cosign by this workflow identity; SBOM and SLSA provenance attached to the image. See CHANGELOG.md for human-readable changes.\n'
+            printf '\nSigned with keyless Cosign by this workflow identity; SBOM and SLSA provenance embedded in the image index.\n'
+            printf 'That provenance is additionally attached as keyless cosign attestations (slsaprovenance1), one per architecture, both about the image digest above. Cosign normalizes the predicate on attach and drops BuildKit metadata, so the attestation is a lossy copy: the index-embedded provenance remains the authoritative content evidence.\n'
+            printf '\nSee CHANGELOG.md for human-readable changes.\n'
           } > "${RUNNER_TEMP}/release-notes.md"
           gh release create "${tag}" --verify-tag \
             --title "naranjo.online ${tag}" \
