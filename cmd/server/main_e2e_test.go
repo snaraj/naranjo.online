@@ -335,8 +335,8 @@ func TestRunEnforcesTheForwardedProtoContract(t *testing.T) {
 
 	t.Run("plain-http GET bounces to TLS with the URL intact", func(t *testing.T) {
 		response := forwardedGet(t, client, http.MethodGet, base+"/blog/first-post?ref=feed&q=a%20b", "http")
-		if response.StatusCode != http.StatusMovedPermanently {
-			t.Fatalf("status = %d, want 301", response.StatusCode)
+		if response.StatusCode != http.StatusPermanentRedirect {
+			t.Fatalf("status = %d, want 308", response.StatusCode)
 		}
 		if got, want := response.Header.Get("Location"), "https://"+host+"/blog/first-post?ref=feed&q=a%20b"; got != want {
 			t.Errorf("Location = %q, want %q", got, want)
@@ -366,11 +366,43 @@ func TestRunEnforcesTheForwardedProtoContract(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read HEAD body: %v", err)
 		}
-		if response.StatusCode != http.StatusMovedPermanently || len(body) != 0 {
-			t.Fatalf("HEAD = %d with %d body bytes, want a bodiless 301", response.StatusCode, len(body))
+		if response.StatusCode != http.StatusPermanentRedirect || len(body) != 0 {
+			t.Fatalf("HEAD = %d with %d body bytes, want a bodiless 308", response.StatusCode, len(body))
 		}
 		if got, want := response.Header.Get("Location"), "https://"+host+"/blog/first-post?ref=feed"; got != want {
 			t.Errorf("Location = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("plain-http POST is bounced 308, method preserved, body not echoed", func(t *testing.T) {
+		// 308 is the method-preserving signal a 301 would not give: the client
+		// resends the POST to the TLS URL instead of rewriting it to GET. This
+		// origin is GET/HEAD-only, but pinning the backstop's status here keeps
+		// it byte-identical to the sibling's, where a gated POST route exists.
+		// The request carries a body; the bounce must not echo it back.
+		request, err := http.NewRequest(http.MethodPost, base+"/submit?x=1", strings.NewReader("payload-bytes"))
+		if err != nil {
+			t.Fatalf("build POST: %v", err)
+		}
+		request.Header.Set("X-Forwarded-Proto", "http")
+		request.Header.Set("Content-Type", "text/plain")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatalf("read POST body: %v", err)
+		}
+		if response.StatusCode != http.StatusPermanentRedirect {
+			t.Fatalf("POST status = %d, want 308 (method-preserving); a 301 would downgrade it to GET", response.StatusCode)
+		}
+		if got, want := response.Header.Get("Location"), "https://"+host+"/submit?x=1"; got != want {
+			t.Errorf("Location = %q, want %q", got, want)
+		}
+		if len(body) != 0 {
+			t.Errorf("308 bounce echoed %d body bytes, want none", len(body))
 		}
 	})
 
@@ -389,8 +421,8 @@ func TestRunEnforcesTheForwardedProtoContract(t *testing.T) {
 			t.Fatalf("GET with mixed-case header name: %v", err)
 		}
 		response.Body.Close()
-		if response.StatusCode != http.StatusMovedPermanently {
-			t.Errorf("status = %d, want 301: header-name case must not defeat the policy", response.StatusCode)
+		if response.StatusCode != http.StatusPermanentRedirect {
+			t.Errorf("status = %d, want 308: header-name case must not defeat the policy", response.StatusCode)
 		}
 	})
 

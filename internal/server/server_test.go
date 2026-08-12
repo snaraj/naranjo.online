@@ -85,7 +85,7 @@ func TestForwardedProtoPolicy(t *testing.T) {
 			method:       http.MethodGet,
 			target:       "http://naranjo.example/gallery?track=2",
 			proto:        "http",
-			wantStatus:   http.StatusMovedPermanently,
+			wantStatus:   http.StatusPermanentRedirect,
 			wantLocation: "https://naranjo.example/gallery?track=2",
 		},
 		{
@@ -93,7 +93,7 @@ func TestForwardedProtoPolicy(t *testing.T) {
 			method:       http.MethodHead,
 			target:       "http://naranjo.example/gallery?track=2",
 			proto:        "http",
-			wantStatus:   http.StatusMovedPermanently,
+			wantStatus:   http.StatusPermanentRedirect,
 			wantLocation: "https://naranjo.example/gallery?track=2",
 		},
 		{
@@ -101,7 +101,7 @@ func TestForwardedProtoPolicy(t *testing.T) {
 			method:       http.MethodGet,
 			target:       "http://naranjo.example/a%20b/deep?x=1&y=%2Fmedia&empty=",
 			proto:        "http",
-			wantStatus:   http.StatusMovedPermanently,
+			wantStatus:   http.StatusPermanentRedirect,
 			wantLocation: "https://naranjo.example/a%20b/deep?x=1&y=%2Fmedia&empty=",
 		},
 		{
@@ -109,7 +109,7 @@ func TestForwardedProtoPolicy(t *testing.T) {
 			method:       http.MethodGet,
 			target:       "http://naranjo.example/readyz",
 			proto:        "http",
-			wantStatus:   http.StatusMovedPermanently,
+			wantStatus:   http.StatusPermanentRedirect,
 			wantLocation: "https://naranjo.example/readyz",
 		},
 		{
@@ -163,6 +163,52 @@ func TestForwardedProtoPolicy(t *testing.T) {
 			proto:      "ws",
 			wantStatus: http.StatusOK,
 		},
+		{
+			// 308, not 301: a non-GET over the plain leg is bounced with its
+			// method preserved. This origin is GET/HEAD-only, so the visible
+			// effect is a bodiless 308 that never downgrades POST to GET;
+			// pinning it keeps the backstop byte-identical to the sibling's,
+			// where a gated POST route exists.
+			name:         "non-GET over plain http is bounced 308 with method preserved",
+			method:       http.MethodPost,
+			target:       "http://naranjo.example/gallery?track=2",
+			proto:        "http",
+			wantStatus:   http.StatusPermanentRedirect,
+			wantLocation: "https://naranjo.example/gallery?track=2",
+		},
+		// Exact-match fail-closed pins: the scheme decision is a byte-exact
+		// equality, never a trim/prefix/contains. A future regression to any
+		// looser parse would flip one of these red. Trailing/leading space and
+		// a comma list (some proxies append) are all "not our edge" and so
+		// neither redirect nor mint the promise.
+		{
+			name:       "trailing space defeats no redirect: exact match only",
+			method:     http.MethodGet,
+			target:     "http://naranjo.example/",
+			proto:      "http ",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "leading space defeats no redirect: exact match only",
+			method:     http.MethodGet,
+			target:     "http://naranjo.example/",
+			proto:      " http",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "comma list is not exact http: no redirect",
+			method:     http.MethodGet,
+			target:     "http://naranjo.example/",
+			proto:      "http, https",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "trailing space on https earns no promise: exact match only",
+			method:     http.MethodGet,
+			target:     "/",
+			proto:      "https ",
+			wantStatus: http.StatusOK,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -181,10 +227,13 @@ func TestForwardedProtoPolicy(t *testing.T) {
 			if got := response.Header().Get("Strict-Transport-Security"); got != test.wantHSTS {
 				t.Errorf("Strict-Transport-Security = %q, want %q (empty means absent)", got, test.wantHSTS)
 			}
-			if test.method == http.MethodHead && response.Body.Len() != 0 {
-				t.Errorf("HEAD carried %d body bytes, want none", response.Body.Len())
+			// http.Redirect writes the hyperlink stub only for GET, so every
+			// non-GET bounce — HEAD and the method-preserving POST alike — must
+			// come back bodiless, never echoing a method-carried payload.
+			if test.wantStatus == http.StatusPermanentRedirect && test.method != http.MethodGet && response.Body.Len() != 0 {
+				t.Errorf("%s redirect carried %d body bytes, want a bodiless bounce", test.method, response.Body.Len())
 			}
-			if test.wantStatus == http.StatusMovedPermanently {
+			if test.wantStatus == http.StatusPermanentRedirect {
 				// The bounce is written inside the securityHeaders wrapper, so
 				// even the redirect carries the baseline policy (HSTS excluded:
 				// the plain leg has not earned the promise).

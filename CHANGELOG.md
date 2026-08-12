@@ -21,11 +21,19 @@ SemVer and match image/chart tags exactly.
 
 ### Security
 - Origin-side HTTPS enforcement (#33): every request the edge declares
-  as plain HTTP (`X-Forwarded-Proto: http`) is answered with a
+  as plain HTTP (`X-Forwarded-Proto: http`) is answered with a `308`
   permanent redirect to the identical URL over TLS — host from the
   request's Host header, escaped path and query preserved byte for
-  byte, on every route, HEAD bodiless like GET — as defense in depth
-  behind the edge's own HTTPS enforcement. The HSTS header keeps its
+  byte, on every route, HEAD and POST bodiless like GET — as defense
+  in depth behind the edge's own HTTPS enforcement. `308` (not `301`)
+  preserves the request method and body, so the origin backstop keeps
+  this repository byte-identical to the sibling's, whose gated write
+  routes a `301` would silently rewrite to `GET`; the edge's own
+  Always-Use-HTTPS remains the primary redirect. Matching is a
+  byte-exact equality (pinned against any future trim/prefix/contains
+  regression): trailing/leading whitespace and comma-list proto values
+  are "not our edge" and neither redirect nor mint the promise. The
+  HSTS header keeps its
   exact value (`max-age=31536000`: the application is the sole HSTS
   owner, edge-managed HSTS stays off, and includeSubDomains/preload
   remain deferred owner decisions pending a subdomain inventory and a
