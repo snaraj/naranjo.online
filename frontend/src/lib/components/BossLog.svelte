@@ -1,16 +1,27 @@
-<!-- BossLog renders the boss-log/v1 panel the RuneLite way: a dense
-  three-column grid, each cell an icon beside a right-aligned kill count,
-  "--" wherever the hiscores carry null, and a hover/focus tooltip with the
-  full name, rank, and score. Every boss shown arrives as API data through
-  lib/panels.ts; the only name-shaped logic here is the slug lookup from a
-  data name into the shipped icon files, and an unknown name falls back to
-  an initials glyph. Cells have fixed dimensions and icons declare their box
-  and load lazily, so nothing shifts as data or images arrive. -->
+<!-- BossLog renders the boss-log/v1 panel as a dense three-column tile grid:
+  each tile is a small boss icon beside a right-aligned, thousands-separated
+  kill count, with a hover/focus detail carrying the full name, the rank, and
+  the score. The origin serves EVERY boss the hiscores report — dozens of
+  them — so the grid scrolls inside its own fixed-height box and never grows
+  the page.
+
+  Every boss shown arrives as API data through lib/panels.ts; the only
+  name-shaped logic here is the slug lookup from a data name into the shipped
+  icon files. Only icons already vendored under the Jagex Fan Content Policy
+  notice are used, and a boss without one renders a clean initials tile
+  rather than reaching for new art.
+
+  "Unranked" is real information, not a gap: the hiscores rank an account
+  only once it clears a threshold, so a null rank means unranked while the
+  count beside it may still be a genuine figure. Cells have fixed dimensions
+  and icons declare their box and load lazily, so nothing shifts as data or
+  images arrive. -->
 <script lang="ts">
   import PanelShell from './PanelShell.svelte';
   import { watchPanel } from '../panels';
   import type { BossLogData, BossLogEntry, PanelEnvelope } from '../panels';
   import { bossInitials, bossSlug } from '../bossIcons';
+  import { formatWhole } from '../grid';
 
   /* The icon files under assets/icons/bosses become content-hashed URLs at
      build time. Keyed by slug: the boss list stays data, adding an icon is
@@ -32,14 +43,22 @@
 
   const data = $derived(envelope?.data ?? undefined);
 
-  /* tally renders a nullable hiscore number the RuneLite way: null is real
-     data meaning unranked, shown as "--". */
+  /* tally renders a nullable hiscore figure: a real number is grouped for
+     readability, and null — the upstream's "no figure" sentinel — is an
+     explicit dash, never a zero. */
   function tally(value: number | null | undefined): string {
-    return value === null || value === undefined ? '--' : String(value);
+    return value === null || value === undefined ? '--' : formatWhole(value);
+  }
+
+  /* rankLabel says "Unranked" rather than dashing the rank away: below the
+     hiscores' listing threshold an account genuinely has no rank, and that
+     is information the reader wants. */
+  function rankLabel(rank: number | null | undefined): string {
+    return rank === null || rank === undefined ? 'Unranked' : formatWhole(rank);
   }
 
   function cellLabel(boss: BossLogEntry): string {
-    const parts = [`${boss.name}: ${tally(boss.kc)} KC`, `rank ${tally(boss.rank)}`];
+    const parts = [`${boss.name}: ${tally(boss.kc)} KC`, `rank ${rankLabel(boss.rank)}`];
     if (boss.score !== undefined && boss.score !== null) {
       parts.push(`score ${tally(boss.score)}`);
     }
@@ -53,14 +72,25 @@
   generatedAt={envelope?.generatedAt}
 >
   {#if data}
-    <p class="boss-account">{data.account}</p>
-    <ul class="boss-grid">
+    <p class="boss-account">
+      {data.account}<span class="boss-count"> · {formatWhole(data.bosses.length)} bosses</span>
+    </p>
+    <!-- The complete boss table is dozens of tiles, so the grid scrolls
+      inside its own box; a scrollable region is keyboard-reachable only when
+      focusable, so the tabindex is deliberate. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <ul class="boss-grid" tabindex="0" aria-label={`${data.account} boss tallies`}>
       {#each data.bosses as boss (boss.name)}
         <!-- Cells take keyboard focus solely so the tooltip's :focus-visible
           reveal matches its :hover reveal; there is no action to perform, so
           a button would be the wrong semantics. -->
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-        <li class="boss-cell" tabindex="0" aria-label={cellLabel(boss)}>
+        <li
+          class="boss-cell"
+          tabindex="0"
+          data-boss-unranked={boss.rank === null ? 'true' : 'false'}
+          aria-label={cellLabel(boss)}
+        >
           {#if icons.has(bossSlug(boss.name))}
             <img
               class="boss-icon"
@@ -78,7 +108,7 @@
           <span class="boss-tip" role="tooltip" aria-hidden="true">
             <span class="boss-tip-name">{boss.name}</span>
             <span>KC: {tally(boss.kc)}</span>
-            <span>Rank: {tally(boss.rank)}</span>
+            <span>Rank: {rankLabel(boss.rank)}</span>
             {#if boss.score !== undefined && boss.score !== null}
               <span>Score: {tally(boss.score)}</span>
             {/if}
@@ -100,6 +130,9 @@
     color: var(--panel-muted, rgb(158, 158, 158));
   }
 
+  /* Fixed height plus internal scrolling: the complete boss table is dozens
+     of tiles, and the rail must stay a rail. 12 rows of 2.125rem plus their
+     hairline separators is the visible window. */
   .boss-grid {
     margin: 0;
     padding: 0;
@@ -107,8 +140,16 @@
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 1px;
+    max-block-size: var(--boss-grid-max-block, 26rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
     background: var(--panel-border, rgb(23, 23, 23));
     border: 1px solid var(--panel-border, rgb(23, 23, 23));
+  }
+
+  .boss-grid:focus-visible {
+    outline: 1px solid var(--panel-accent, rgb(220, 138, 0));
+    outline-offset: 1px;
   }
 
   .boss-cell {
@@ -142,6 +183,16 @@
     color: var(--panel-accent, rgb(220, 138, 0));
     border: 1px solid var(--panel-border, rgb(23, 23, 23));
     border-radius: 3px;
+  }
+
+  /* An unranked tile is muted rather than hidden: the figure beside it can
+     still be real, and the detail says "Unranked" in words. */
+  .boss-cell[data-boss-unranked='true'] .boss-kc {
+    color: var(--panel-muted, rgb(158, 158, 158));
+  }
+
+  .boss-count {
+    font-variant-numeric: tabular-nums;
   }
 
   .boss-kc {

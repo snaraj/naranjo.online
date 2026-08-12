@@ -1,21 +1,41 @@
 {
-  "hosts": ["secure.runescape.com", "api.anthropic.com", "api.openai.com"],
+  "hosts": ["secure.runescape.com", "github.com", "api.anthropic.com", "api.openai.com"],
   "ttlMinutes": 45,
   "timeoutSeconds": 10,
-  "maxBytes": 262144,
+  "maxBytes": 524288,
   "initialBackoffSeconds": 60,
   "maxBackoffMinutes": 15,
   "bossLog": {
     "endpoint": "https://secure.runescape.com/m=hiscore_oldschool/index_lite.json?player=Roll+The+J",
     "account": "Roll The J",
-    "bosses": [
-      "Zulrah",
-      "Vorkath",
-      "Chambers of Xeric",
-      "Theatre of Blood",
-      "The Whisperer",
-      "TzKal-Zuk"
+    "maxBytes": 65536,
+    "excludeActivities": [
+      "Grid Points",
+      "League Points",
+      "Deadman Points",
+      "Bounty Hunter - Hunter",
+      "Bounty Hunter - Rogue",
+      "Bounty Hunter (Legacy) - Hunter",
+      "Bounty Hunter (Legacy) - Rogue",
+      "Clue Scrolls (all)",
+      "Clue Scrolls (beginner)",
+      "Clue Scrolls (easy)",
+      "Clue Scrolls (medium)",
+      "Clue Scrolls (hard)",
+      "Clue Scrolls (elite)",
+      "Clue Scrolls (master)",
+      "LMS - Rank",
+      "PvP Arena - Rank",
+      "Soul Wars Zeal",
+      "Rifts closed",
+      "Colosseum Glory",
+      "Collections Logged"
     ]
+  },
+  "vcsActivity": {
+    "endpoint": "https://github.com/users/snaraj/contributions",
+    "headers": { "Accept": "text/html" },
+    "maxBytes": 524288
   },
   "tokenUsage": {
     "sources": [
@@ -27,6 +47,7 @@
         "keyHeader": "x-api-key",
         "keyPrefix": "",
         "headers": { "anthropic-version": "2023-06-01" },
+        "maxBytes": 262144,
         "window": { "param": "starting_at", "format": "rfc3339", "lookbackDays": 30 }
       },
       {
@@ -37,6 +58,7 @@
         "keyHeader": "Authorization",
         "keyPrefix": "Bearer ",
         "headers": {},
+        "maxBytes": 262144,
         "window": { "param": "start_time", "format": "unix", "lookbackDays": 30 }
       }
     ]

@@ -102,6 +102,11 @@ export interface VCSActivityData {
   totalContributions: number;
   weeks: number[][];
   streak: number;
+  /* The calendar date (YYYY-MM-DD) of the last day the window covers. The
+   * final week is padded to seven days like every other, so without this the
+   * padding is indistinguishable from real quiet days. Optional: added after
+   * the kind shipped, so a payload without it still renders. */
+  endDate?: string;
   recentCommits: VCSCommit[];
 }
 

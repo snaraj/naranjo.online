@@ -7,41 +7,241 @@ package panels
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
-// mapHiscores maps a hiscores/v1 document onto the configured boss list,
-// data-driven and order-preserving: each configured boss serves its ranked
-// values, or null kc and rank when the upstream does not rank it — the same
-// "--" semantics the snapshot models.
+// mapHiscores maps a hiscores/v1 document onto EVERY boss the upstream
+// reports, in upstream order, minus the activities configuration names as
+// non-bosses. The direction matters: the upstream activity table grows
+// whenever new content ships, so enumerating bosses would silently drop
+// every boss added since the last edit. Enumerating the non-bosses instead
+// means an unrecognized entry is PRESERVED — the fail-soft direction — and
+// only genuinely new non-boss activities need a data edit.
+//
+// A rank of -1 is the upstream's "not ranked" sentinel and becomes a null
+// rank the frontend renders as "Unranked"; a score of -1 becomes a null
+// count rendered as "--". A score of 0 is a real zero and stays one.
 func mapHiscores(raw []byte, spec *bossLogFetchSpec) (json.RawMessage, error) {
 	var document hiscoresDocument
 	if err := decodeStrict(raw, &document); err != nil {
 		return nil, fmt.Errorf("hiscores document: %w", err)
 	}
-	ranked := make(map[string]hiscoresActivity, len(document.Activities))
-	for _, activity := range document.Activities {
-		ranked[activity.Name] = activity
+	excluded := make(map[string]bool, len(spec.ExcludeActivities))
+	for _, name := range spec.ExcludeActivities {
+		excluded[name] = true
 	}
-	payload := BossLogData{Account: spec.Account, Bosses: make([]BossLogEntry, 0, len(spec.Bosses))}
-	for _, name := range spec.Bosses {
-		entry := BossLogEntry{Name: name}
-		if activity, ok := ranked[name]; ok {
-			if activity.Score >= 0 {
-				score := activity.Score
-				entry.KC = &score
-			}
-			if activity.Rank >= 0 {
-				rank := activity.Rank
-				entry.Rank = &rank
-			}
+	payload := BossLogData{Account: spec.Account, Bosses: make([]BossLogEntry, 0, len(document.Activities))}
+	seen := make(map[string]bool, len(document.Activities))
+	for _, activity := range document.Activities {
+		if activity.Name == "" || excluded[activity.Name] || seen[activity.Name] {
+			continue
+		}
+		seen[activity.Name] = true
+		entry := BossLogEntry{Name: activity.Name}
+		if activity.Score >= 0 {
+			score := activity.Score
+			entry.KC = &score
+		}
+		if activity.Rank >= 0 {
+			rank := activity.Rank
+			entry.Rank = &rank
 		}
 		payload.Bosses = append(payload.Bosses, entry)
+	}
+	if len(payload.Bosses) == 0 {
+		return nil, errors.New("hiscores document names no bosses after exclusions")
 	}
 	// Marshaling the package-owned payload cannot fail.
 	data, _ := json.Marshal(payload)
 	return data, nil
+}
+
+// mapContributions maps the PUBLIC contribution-calendar document onto the
+// vcs-activity/v1 payload. The upstream is markup, not JSON, so it gets a
+// scanner rather than a decoder — but the same fail-closed contract: every
+// dated cell must carry a level and a matching label with a readable count,
+// the covered span must be plausible, and anything else is an error that
+// keeps the last good payload serving as stale. Nothing is inferred, and a
+// cell whose count cannot be read is never quietly counted as zero.
+//
+// The document also contains cells that are NOT calendar days — the ramp
+// legend — and those carry no date. Undated cells are skipped rather than
+// refused, and minCalendarDays is what catches a markup change that leaves
+// the scanner finding nothing real.
+func mapContributions(raw []byte) (json.RawMessage, error) {
+	document := string(raw)
+	counts := make(map[string]int, maxCalendarDays)
+	var first, last time.Time
+	dated := 0
+	for _, tag := range scanTags(document, calendarCellMark) {
+		date, ok := attributeValue(tag, "data-date")
+		if !ok {
+			continue
+		}
+		day, err := time.Parse(dayLayout, date)
+		if err != nil {
+			return nil, fmt.Errorf("contribution calendar: cell date %q: %w", date, err)
+		}
+		id, ok := attributeValue(tag, "id")
+		if !ok {
+			return nil, errors.New("contribution calendar: a dated cell carries no identity")
+		}
+		count, err := labelledCount(document, id)
+		if err != nil {
+			return nil, err
+		}
+		if _, repeated := counts[date]; repeated {
+			return nil, fmt.Errorf("contribution calendar: %s appears twice", date)
+		}
+		counts[date] = count
+		if dated == 0 || day.Before(first) {
+			first = day
+		}
+		if dated == 0 || day.After(last) {
+			last = day
+		}
+		dated++
+	}
+	if dated < minCalendarDays {
+		return nil, fmt.Errorf("contribution calendar: only %d dated cells found, want at least %d", dated, minCalendarDays)
+	}
+	span := int(last.Sub(first)/(24*time.Hour)) + 1
+	if span > maxCalendarDays {
+		return nil, fmt.Errorf("contribution calendar spans %d days, over the %d day bound", span, maxCalendarDays)
+	}
+	daily := make([]int, span)
+	total := 0
+	for offset := range daily {
+		daily[offset] = counts[first.AddDate(0, 0, offset).Format(dayLayout)]
+		total += daily[offset]
+	}
+	payload := VCSActivityData{
+		TotalContributions: total,
+		Weeks:              chunkWeeks(daily),
+		EndDate:            last.Format(dayLayout),
+		Streak:             int(contributionStreak(daily)),
+		// The calendar document carries no commit rows, and inventing them
+		// from a snapshot would attach recorded data to a live payload. An
+		// empty list is the honest answer until a commit producer exists.
+		RecentCommits: []VCSCommit{},
+	}
+	// Marshaling the package-owned payload cannot fail.
+	data, _ := json.Marshal(payload)
+	return data, nil
+}
+
+// calendarCellMark is the class the upstream marks a calendar day cell with.
+// It lives here as the one piece of upstream markup vocabulary the scanner
+// needs; a change to it is upstream drift, and the minCalendarDays floor
+// turns that drift into a refused document rather than an empty calendar.
+const calendarCellMark = `class="ContributionCalendar-day"`
+
+// chunkWeeks slices contiguous daily counts into seven-day columns, padding
+// the final column with zeros. Padding is indistinguishable from a real
+// quiet day on its own, which is exactly why the payload also carries
+// EndDate: the frontend draws days past it as holes.
+func chunkWeeks(daily []int) [][]int {
+	weeks := make([][]int, 0, (len(daily)+daysPerWeek-1)/daysPerWeek)
+	for start := 0; start < len(daily); start += daysPerWeek {
+		week := make([]int, daysPerWeek)
+		copy(week, daily[start:min(start+daysPerWeek, len(daily))])
+		weeks = append(weeks, week)
+	}
+	return weeks
+}
+
+// contributionStreak reuses the token panel's streak rule so both surfaces
+// answer "how many days in a row" identically: one quiet trailing day is
+// tolerated because the newest day is still in progress, two end the run.
+func contributionStreak(daily []int) int64 {
+	totals := make([]int64, len(daily))
+	for index, count := range daily {
+		totals[index] = int64(count)
+	}
+	current, _ := dailyStreaks(totals)
+	return current
+}
+
+// scanTags returns every complete "<... mark ...>" tag body in document.
+// Deliberately minimal: this is not an HTML parser and must never grow into
+// one — it locates attribute-bearing tags by an exact marker and hands each
+// tag's raw text to attributeValue.
+func scanTags(document, mark string) []string {
+	tags := make([]string, 0, maxCalendarDays)
+	for offset := 0; ; {
+		found := strings.Index(document[offset:], mark)
+		if found < 0 {
+			return tags
+		}
+		at := offset + found
+		start := strings.LastIndex(document[:at], "<")
+		end := strings.Index(document[at:], ">")
+		offset = at + len(mark)
+		if start < 0 || end < 0 {
+			continue
+		}
+		tags = append(tags, document[start:at+end])
+	}
+}
+
+// attributeValue reads one double-quoted attribute out of a tag body.
+func attributeValue(tag, name string) (string, bool) {
+	marker := name + `="`
+	at := strings.Index(tag, marker)
+	if at < 0 {
+		return "", false
+	}
+	rest := tag[at+len(marker):]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		return "", false
+	}
+	return rest[:end], true
+}
+
+// labelledCount reads the count out of the label element bound to one cell.
+// The label is the ONLY place the exact number appears — the cell itself
+// carries a coarse level — so a cell whose label is missing or unreadable is
+// an error, never a zero.
+func labelledCount(document, id string) (int, error) {
+	marker := `for="` + id + `"`
+	at := strings.Index(document, marker)
+	if at < 0 {
+		return 0, fmt.Errorf("contribution calendar: cell %s has no label", id)
+	}
+	open := strings.Index(document[at:], ">")
+	if open < 0 {
+		return 0, fmt.Errorf("contribution calendar: cell %s has an unterminated label", id)
+	}
+	text := document[at+open+1:]
+	close := strings.Index(text, "<")
+	if close < 0 {
+		return 0, fmt.Errorf("contribution calendar: cell %s has an unterminated label", id)
+	}
+	return countFromLabel(strings.TrimSpace(text[:close]), id)
+}
+
+// countFromLabel reads the leading count out of a cell label. The upstream
+// writes either a word for "none" or a grouped number, both followed by the
+// counted noun; anything else is drift and is refused.
+func countFromLabel(label, id string) (int, error) {
+	head, _, found := strings.Cut(label, " ")
+	if !found || head == "" {
+		return 0, fmt.Errorf("contribution calendar: cell %s label %q is not a count", id, label)
+	}
+	if strings.EqualFold(head, "no") {
+		return 0, nil
+	}
+	digits := strings.ReplaceAll(head, ",", "")
+	count, err := strconv.Atoi(digits)
+	if err != nil || count < 0 {
+		return 0, fmt.Errorf("contribution calendar: cell %s label %q is not a count", id, label)
+	}
+	return count, nil
 }
 
 // mapUsage maps one source's upstream usage document into everything the

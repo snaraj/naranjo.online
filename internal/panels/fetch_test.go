@@ -29,9 +29,9 @@ func validFetchConfig() FetchConfig {
 // validBossSpec is a baseline boss-log spec on the baseline config's host.
 func validBossSpec() *bossLogFetchSpec {
 	return &bossLogFetchSpec{
-		Endpoint: "https://api.example.test/scores.json",
-		Account:  "fixture",
-		Bosses:   []string{"Fixture Boss"},
+		Endpoint:          "https://api.example.test/scores.json",
+		Account:           "fixture",
+		ExcludeActivities: []string{"Fixture Activity"},
 	}
 }
 
@@ -89,7 +89,7 @@ func TestFetchConfigValidateFailsClosed(t *testing.T) {
 func TestNewFetchSourceFailsClosed(t *testing.T) {
 	t.Parallel()
 	fallback := SnapshotSource{Name: "snapshots/boss-log.json"}
-	if _, err := NewFetchSource(fallback, validFetchConfig(), validBossSpec(), nil); err != nil {
+	if _, err := NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{bossLog: validBossSpec()}); err != nil {
 		t.Fatalf("baseline fetch source refused: %v", err)
 	}
 
@@ -108,74 +108,109 @@ func TestNewFetchSourceFailsClosed(t *testing.T) {
 		}
 		return &tokenUsageFetchSpec{Sources: []usageSourceSpec{source}}
 	}
-	if _, err := NewFetchSource(fallback, validFetchConfig(), nil, usageSpec(nil)); err != nil {
+	if _, err := NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{usage: usageSpec(nil)}); err != nil {
 		t.Fatalf("baseline usage source refused: %v", err)
+	}
+	if _, err := NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{
+		vcs: &vcsActivityFetchSpec{Endpoint: "https://api.example.test/contributions"},
+	}); err != nil {
+		t.Fatalf("baseline activity source refused: %v", err)
 	}
 
 	for name, build := range map[string]func() (*FetchSource, error){
 		"invalid config": func() (*FetchSource, error) {
 			config := validFetchConfig()
 			config.TTL = 0
-			return NewFetchSource(fallback, config, validBossSpec(), nil)
+			return NewFetchSource(fallback, config, panelFetchSpecs{bossLog: validBossSpec()})
 		},
 		"no spec at all": func() (*FetchSource, error) {
-			return NewFetchSource(fallback, validFetchConfig(), nil, nil)
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{})
 		},
 		"both specs at once": func() (*FetchSource, error) {
-			return NewFetchSource(fallback, validFetchConfig(), validBossSpec(), usageSpec(nil))
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{bossLog: validBossSpec(), usage: usageSpec(nil)})
 		},
 		"boss endpoint off the allowlist": func() (*FetchSource, error) {
 			spec := validBossSpec()
 			spec.Endpoint = "https://evil.example.test/scores.json"
-			return NewFetchSource(fallback, validFetchConfig(), spec, nil)
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{bossLog: spec})
 		},
 		"boss endpoint with bad scheme": func() (*FetchSource, error) {
 			spec := validBossSpec()
 			spec.Endpoint = "ftp://api.example.test/scores.json"
-			return NewFetchSource(fallback, validFetchConfig(), spec, nil)
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{bossLog: spec})
 		},
 		"boss endpoint that cannot parse": func() (*FetchSource, error) {
 			spec := validBossSpec()
 			spec.Endpoint = "https://bad host/scores.json"
-			return NewFetchSource(fallback, validFetchConfig(), spec, nil)
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{bossLog: spec})
 		},
 		"boss spec missing account": func() (*FetchSource, error) {
 			spec := validBossSpec()
 			spec.Account = ""
-			return NewFetchSource(fallback, validFetchConfig(), spec, nil)
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{bossLog: spec})
 		},
-		"boss spec with empty boss name": func() (*FetchSource, error) {
+		"boss spec with an empty excluded activity": func() (*FetchSource, error) {
 			spec := validBossSpec()
-			spec.Bosses = []string{""}
-			return NewFetchSource(fallback, validFetchConfig(), spec, nil)
+			spec.ExcludeActivities = []string{""}
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{bossLog: spec})
+		},
+		"boss spec with no exclusions at all": func() (*FetchSource, error) {
+			spec := validBossSpec()
+			spec.ExcludeActivities = nil
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{bossLog: spec})
+		},
+		"boss spec whose body cap widens the shared bound": func() (*FetchSource, error) {
+			spec := validBossSpec()
+			spec.MaxBytes = validFetchConfig().MaxBytes + 1
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{bossLog: spec})
+		},
+		"usage source whose body cap widens the shared bound": func() (*FetchSource, error) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{usage: usageSpec(func(s *usageSourceSpec) {
+				s.MaxBytes = validFetchConfig().MaxBytes + 1
+			})})
+		},
+		"activity spec without an endpoint": func() (*FetchSource, error) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{vcs: &vcsActivityFetchSpec{}})
+		},
+		"activity endpoint off the allowlist": func() (*FetchSource, error) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{
+				vcs: &vcsActivityFetchSpec{Endpoint: "https://evil.example.test/contributions"},
+			})
+		},
+		"all three specs at once": func() (*FetchSource, error) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{
+				bossLog: validBossSpec(),
+				usage:   usageSpec(nil),
+				vcs:     &vcsActivityFetchSpec{Endpoint: "https://api.example.test/contributions"},
+			})
 		},
 		"usage source off the allowlist": func() (*FetchSource, error) {
-			return NewFetchSource(fallback, validFetchConfig(), nil, usageSpec(func(s *usageSourceSpec) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{usage: usageSpec(func(s *usageSourceSpec) {
 				s.Endpoint = "https://evil.example.test/usage"
-			}))
+			})})
 		},
 		"usage source without key env": func() (*FetchSource, error) {
-			return NewFetchSource(fallback, validFetchConfig(), nil, usageSpec(func(s *usageSourceSpec) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{usage: usageSpec(func(s *usageSourceSpec) {
 				s.KeyEnvName = ""
-			}))
+			})})
 		},
 		"usage source with unknown shape": func() (*FetchSource, error) {
-			return NewFetchSource(fallback, validFetchConfig(), nil, usageSpec(func(s *usageSourceSpec) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{usage: usageSpec(func(s *usageSourceSpec) {
 				s.Shape = "mystery/v1"
-			}))
+			})})
 		},
 		"usage source with unknown window format": func() (*FetchSource, error) {
-			return NewFetchSource(fallback, validFetchConfig(), nil, usageSpec(func(s *usageSourceSpec) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{usage: usageSpec(func(s *usageSourceSpec) {
 				s.Window.Format = "sundial"
-			}))
+			})})
 		},
 		"usage source without lookback": func() (*FetchSource, error) {
-			return NewFetchSource(fallback, validFetchConfig(), nil, usageSpec(func(s *usageSourceSpec) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{usage: usageSpec(func(s *usageSourceSpec) {
 				s.Window.LookbackDays = 0
-			}))
+			})})
 		},
 		"empty usage sources": func() (*FetchSource, error) {
-			return NewFetchSource(fallback, validFetchConfig(), nil, &tokenUsageFetchSpec{})
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{usage: &tokenUsageFetchSpec{}})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -201,6 +236,7 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 	}
 	pinned := []string{
 		"secure.runescape.com",
+		"git" + "hub.com",
 		"api." + "anthro" + "pic" + ".com",
 		"api." + "open" + "ai" + ".com",
 	}
@@ -212,10 +248,10 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 			t.Errorf("allowlist[%d] = %q, want %q", i, bounds.Hosts[i], host)
 		}
 	}
-	if document.BossLog == nil || document.TokenUsage == nil {
-		t.Fatal("embedded config must configure both fetch-backed panels")
+	if document.BossLog == nil || document.TokenUsage == nil || document.VCSActivity == nil {
+		t.Fatal("embedded config must configure every fetch-backed panel")
 	}
-	endpoints := []string{document.BossLog.Endpoint}
+	endpoints := []string{document.BossLog.Endpoint, document.VCSActivity.Endpoint}
 	for _, source := range document.TokenUsage.Sources {
 		endpoints = append(endpoints, source.Endpoint)
 	}
@@ -226,6 +262,38 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 	}
 	if len(document.TokenUsage.Sources) != 2 {
 		t.Errorf("token-usage config ships %d sources, want 2", len(document.TokenUsage.Sources))
+	}
+	// The other direction: a host that is NOT on the list is refused, so the
+	// pin proves an allowlist rather than describing one.
+	for _, rogue := range []string{
+		"evil.example.test",
+		"raw." + "git" + "hubusercontent.com",
+		"git" + "hub.com.evil.example.test",
+		"api." + "git" + "hub.com",
+	} {
+		if hostAllowed(bounds.Hosts, rogue) {
+			t.Errorf("host %q is allowed; the allowlist must be exact-match only", rogue)
+		}
+		if err := validateEndpoint("https://"+rogue+"/anything", bounds.Hosts); err == nil {
+			t.Errorf("endpoint on %q was admitted", rogue)
+		}
+	}
+	// The version-control producer is deliberately credential-free: it reads
+	// a PUBLIC document, and a spec that grew a credential field would be a
+	// different security review.
+	if len(document.VCSActivity.Headers) == 0 {
+		t.Error("the activity spec declares no document type; the upstream refuses a JSON Accept header")
+	}
+	// Every endpoint's body cap must be at or below the shared bound, so a
+	// per-endpoint cap can only ever tighten.
+	caps := map[string]int64{"boss-log": document.BossLog.MaxBytes, "vcs-activity": document.VCSActivity.MaxBytes}
+	for _, source := range document.TokenUsage.Sources {
+		caps["usage:"+source.Label] = source.MaxBytes
+	}
+	for name, cap := range caps {
+		if cap <= 0 || cap > bounds.MaxBytes {
+			t.Errorf("%s body cap = %d, want a positive value at or below the shared %d", name, cap, bounds.MaxBytes)
+		}
 	}
 	if bounds.TTL < 30*time.Minute || bounds.TTL > time.Hour {
 		t.Errorf("ttl = %v, want the owner's 30-60 minute band", bounds.TTL)
@@ -241,11 +309,11 @@ func TestRuntimeRefusesOffAllowlistHosts(t *testing.T) {
 	tampered := &FetchSource{
 		fallback: SnapshotSource{Name: "snapshots/boss-log.json"},
 		config:   validFetchConfig(),
-		bossLog: &bossLogFetchSpec{
-			Endpoint: "https://exfiltrate.example.test/scores.json",
-			Account:  "fixture",
-			Bosses:   []string{"Fixture Boss"},
-		},
+		specs: panelFetchSpecs{bossLog: &bossLogFetchSpec{
+			Endpoint:          "https://exfiltrate.example.test/scores.json",
+			Account:           "fixture",
+			ExcludeActivities: []string{"Fixture Activity"},
+		}},
 	}
 	if _, err := tampered.refresh(t.Context(), poisonedDoer{t: t}, func(string) string { return "" }); err == nil {
 		t.Fatal("refresh accepted an off-allowlist host")
@@ -260,7 +328,7 @@ func TestRuntimeRefusesOffAllowlistHosts(t *testing.T) {
 // not, and every fetch-backed panel still has its embedded fallback.
 func TestBuiltinFetchPanelsComeFromTheConstructor(t *testing.T) {
 	t.Parallel()
-	fetchBacked := map[string]bool{"boss-log": true, "token-usage": true}
+	fetchBacked := map[string]bool{"boss-log": true, "token-usage": true, "vcs-activity": true}
 	for _, definition := range builtinPanels {
 		switch source := definition.source.(type) {
 		case *FetchSource:

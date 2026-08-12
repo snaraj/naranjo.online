@@ -19,24 +19,30 @@ import (
 // stale is impossible to confuse with fresh), never a missing panel.
 func buildBuiltinPanels() []panelDefinition {
 	tokenUsageSnapshot := SnapshotSource{Name: "snapshots/token-usage.json"}
+	vcsActivitySnapshot := SnapshotSource{Name: "snapshots/vcs-activity.json"}
 	bossLogSnapshot := SnapshotSource{Name: "snapshots/boss-log.json"}
 	definitions := []panelDefinition{
 		{id: "token-usage", kind: KindTokenUsage, title: "Token usage", source: tokenUsageSnapshot},
-		{id: "vcs-activity", kind: KindVCSActivity, title: "Version-control activity", source: SnapshotSource{Name: "snapshots/vcs-activity.json"}},
+		{id: "vcs-activity", kind: KindVCSActivity, title: "Version-control activity", source: vcsActivitySnapshot},
 		{id: "boss-log", kind: KindBossLog, title: "Boss log", source: bossLogSnapshot},
 	}
 	document, bounds, err := loadFetchConfig(fetchConfigBytes)
 	if err != nil {
 		return definitions
 	}
-	if document.TokenUsage != nil {
-		if source, err := NewFetchSource(tokenUsageSnapshot, bounds, nil, document.TokenUsage); err == nil {
-			definitions[0].source = source
+	for index, upgrade := range []struct {
+		fallback SnapshotSource
+		specs    panelFetchSpecs
+	}{
+		{tokenUsageSnapshot, panelFetchSpecs{usage: document.TokenUsage}},
+		{vcsActivitySnapshot, panelFetchSpecs{vcs: document.VCSActivity}},
+		{bossLogSnapshot, panelFetchSpecs{bossLog: document.BossLog}},
+	} {
+		if upgrade.specs.usage == nil && upgrade.specs.vcs == nil && upgrade.specs.bossLog == nil {
+			continue
 		}
-	}
-	if document.BossLog != nil {
-		if source, err := NewFetchSource(bossLogSnapshot, bounds, document.BossLog, nil); err == nil {
-			definitions[2].source = source
+		if source, err := NewFetchSource(upgrade.fallback, bounds, upgrade.specs); err == nil {
+			definitions[index].source = source
 		}
 	}
 	return definitions
@@ -64,15 +70,29 @@ func loadFetchConfig(raw []byte) (fetchConfigDocument, FetchConfig, error) {
 }
 
 // validateBossLogSpec rejects a boss-log fetch spec missing any load-bearing
-// field; endpoint and host admissibility are checked by NewFetchSource.
+// field; endpoint and host admissibility are checked by NewFetchSource. The
+// exclusion list may not be empty: the upstream activity table always mixes
+// non-bosses in, so an empty list means the list was lost, and serving clue
+// tiers as bosses is a silent wrong answer rather than a loud one.
 func validateBossLogSpec(spec *bossLogFetchSpec) error {
-	if spec.Endpoint == "" || spec.Account == "" || len(spec.Bosses) == 0 {
-		return errors.New("boss-log fetch spec: endpoint, account, and bosses are all required")
+	if spec.Endpoint == "" || spec.Account == "" || len(spec.ExcludeActivities) == 0 {
+		return errors.New("boss-log fetch spec: endpoint, account, and excluded activities are all required")
 	}
-	for _, boss := range spec.Bosses {
-		if boss == "" {
-			return errors.New("boss-log fetch spec: empty boss name")
+	for _, activity := range spec.ExcludeActivities {
+		if activity == "" {
+			return errors.New("boss-log fetch spec: empty excluded activity name")
 		}
+	}
+	return nil
+}
+
+// validateVCSActivitySpec rejects a version-control fetch spec missing its
+// endpoint. It deliberately requires NO credential field: this producer is
+// public and unauthenticated by design, and a spec that grew a credential
+// would be a different security review.
+func validateVCSActivitySpec(spec *vcsActivityFetchSpec) error {
+	if spec.Endpoint == "" {
+		return errors.New("vcs-activity fetch spec: endpoint is required")
 	}
 	return nil
 }

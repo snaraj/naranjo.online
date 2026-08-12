@@ -1,20 +1,19 @@
 /* Pure helpers behind ActivityBar.svelte, kept out of the component so the
- * strip's admission, quantization, and date arithmetic are plain functions a
- * node test can drive directly. Everything here mirrors the vcs-activity/v1
- * contract in internal/panels/types.go: week columns of seven non-negative
- * daily counts, totals, the current streak, and recent commits. */
+ * strip's admission and date arithmetic are plain functions a node test can
+ * drive directly. Everything here mirrors the vcs-activity/v1 contract in
+ * internal/panels/types.go: week columns of seven non-negative daily counts,
+ * totals, the current streak, an optional end date, and recent commits.
+ *
+ * The bucketing, ramp, month axis, and cell text live in lib/grid.ts — one
+ * heatmap implementation shared with the token-activity grid, so the two
+ * cannot drift. */
 
+import { addDays, type GridCell } from './grid.ts';
 import type { VCSActivityData } from './panels';
 
 /* The registry identifier the activity strip loads; the one place the id is
  * spelled on the frontend. */
 export const activityPanelId = 'vcs-activity';
-
-/* activityLevels is the number of magnitude buckets the strip renders: level
- * 0 is "no contributions" and levels 1..4 are quartiles of the window's peak
- * day. The sequential cell ramp in ActivityBar.svelte has exactly one color
- * custom property per level. */
-export const activityLevels = 5;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -26,14 +25,15 @@ function isCount(value: unknown): value is number {
 
 /* parseVCSActivity admits only payloads carrying the exact shape the strip
  * renders: non-negative totals and streak, week columns of exactly seven
- * non-negative counts, and commit rows of repo/message/at strings. Anything
- * else returns null and the panel renders its honest empty state — a data
- * fault degrades one panel, never the page. */
+ * non-negative counts, commit rows of repo/message/at strings, and — when
+ * present — an endDate that is a plain calendar date. Anything else returns
+ * null and the panel renders its honest empty state; a data fault degrades
+ * one panel, never the page. */
 export function parseVCSActivity(document: unknown): VCSActivityData | null {
   if (!isRecord(document)) {
     return null;
   }
-  const { totalContributions, weeks, streak, recentCommits } = document;
+  const { totalContributions, weeks, streak, recentCommits, endDate } = document;
   if (!isCount(totalContributions) || !isCount(streak)) {
     return null;
   }
@@ -44,6 +44,9 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
     if (!Array.isArray(week) || week.length !== 7 || !week.every(isCount)) {
       return null;
     }
+  }
+  if (endDate !== undefined && (typeof endDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(endDate))) {
+    return null;
   }
   for (const commit of recentCommits) {
     if (
@@ -56,7 +59,7 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
       return null;
     }
   }
-  return {
+  const activity: VCSActivityData = {
     totalContributions,
     weeks: weeks as number[][],
     streak,
@@ -66,60 +69,38 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
       at: (commit as { at: string }).at
     }))
   };
+  if (typeof endDate === 'string') {
+    activity.endDate = endDate;
+  }
+  return activity;
 }
 
-/* maxDailyCount is the window's peak day, the anchor the level buckets are
- * quantized against. */
-export function maxDailyCount(weeks: number[][]): number {
-  let max = 0;
-  for (const week of weeks) {
-    for (const count of week) {
-      if (count > max) {
-        max = count;
-      }
-    }
+/* activityCells turns the payload's week columns into dated grid cells.
+ *
+ * The final week is padded to seven days like every other, so on its own the
+ * padding is indistinguishable from genuine quiet days. endDate is the anchor
+ * that resolves it: days after it are days the window does not cover, and
+ * they are marked absent so the grid draws them as holes rather than as
+ * zero-contribution days that have not happened yet.
+ *
+ * Without an endDate the counts still render — they are real — but undated
+ * and unpadded, because guessing the anchor would date every cell wrongly. */
+export function activityCells(activity: VCSActivityData): GridCell[] {
+  const days = activity.weeks.flat();
+  if (days.length === 0) {
+    return [];
   }
-  return max;
-}
-
-/* activityLevel buckets one day into levels 0..4: zero days stay level 0,
- * and any non-zero day lands in the quartile of the window's peak — so a
- * single contribution is always visible and the peak day is always level 4. */
-export function activityLevel(count: number, max: number): number {
-  if (count <= 0 || max <= 0) {
-    return 0;
+  const end = activity.endDate ? new Date(`${activity.endDate}T00:00:00Z`) : null;
+  if (!end || Number.isNaN(end.getTime())) {
+    return days.map((value) => ({ value, date: '' }));
   }
-  return Math.min(activityLevels - 1, Math.ceil((count / max) * (activityLevels - 1)));
-}
-
-/* cellDate derives one cell's UTC calendar date from the envelope's
- * generatedAt instant. The payload carries counts only, so the anchor is the
- * contract's shape itself: weeks are whole, oldest first, and the last day of
- * the last week is the capture day. An absent or malformed instant yields ''
- * and the cell label carries the count alone. */
-export function cellDate(
-  generatedAt: string | undefined,
-  weekCount: number,
-  week: number,
-  day: number
-): string {
-  if (!generatedAt) {
-    return '';
-  }
-  const at = new Date(generatedAt);
-  if (Number.isNaN(at.getTime())) {
-    return '';
-  }
-  const offsetDays = (weekCount - 1 - week) * 7 + (6 - day);
-  const cell = new Date(
-    Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate() - offsetDays)
-  );
-  return cell.toISOString().slice(0, 10);
-}
-
-/* cellLabel is the one accessible text a cell carries — tooltip and
- * aria-label alike — so the count is never encoded by color alone. */
-export function cellLabel(count: number, date: string): string {
-  const noun = count === 1 ? 'contribution' : 'contributions';
-  return date ? `${count} ${noun} on ${date}` : `${count} ${noun}`;
+  /* Columns run Sunday..Saturday, so the padded tail is however much of the
+   * final column sits after the end date's weekday. */
+  const padded = 6 - end.getUTCDay();
+  const lastReal = days.length - 1 - padded;
+  return days.map((value, index) => {
+    const offset = index - lastReal;
+    const date = addDays(activity.endDate as string, offset);
+    return offset > 0 ? { value: 0, date, absent: true } : { value, date };
+  });
 }

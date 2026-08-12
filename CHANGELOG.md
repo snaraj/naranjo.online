@@ -6,6 +6,66 @@ SemVer and match image/chart tags exactly.
 
 ## [Unreleased]
 
+### Fixed
+- The boss log serves EVERY boss the hiscores report — 71 for the configured
+  account — instead of the six that were enumerated in config (#41). The
+  direction is inverted on purpose: config now names the NON-boss activities
+  (clue tiers, minigame ranks, point totals) and everything else the upstream
+  reports is served in upstream order, so a boss Jagex ships tomorrow appears
+  on its own instead of being silently dropped until somebody edits a list.
+- The boss log's live refresh could never have worked. The upstream document
+  is `{name, skills, activities}` and the shipped grammar declared only two
+  of those three, so the strict decoder rejected every response on the
+  unknown `name` field and the panel could only ever serve its snapshot. The
+  grammar is completed and pinned against a REAL captured response.
+- The shipped boss figures were invented and wrong (Zulrah 1408 against a
+  real 1192, Chambers of Xeric 118 against a real 10, and so on). The
+  snapshot is now generated from the captured upstream response, and a test
+  fails if the two ever disagree.
+
+### Added
+- A zero-secret GitHub contribution producer for the version-control panel
+  (#41): the public, unauthenticated contributions document is fetched and
+  scanned into the calendar the panel already rendered. Exact daily counts
+  come from the document's own label elements, not from its coarse level
+  attribute, and the scanner fails closed on markup drift — a refused
+  document keeps the last good payload serving as stale.
+- `vcs-activity/v1` gains `endDate` additively: the final week is padded to
+  seven days like every other, so without an anchor the padding is
+  indistinguishable from genuine quiet days. The frontend now draws days past
+  it as labelled holes.
+- Per-endpoint request byte caps. Each spec may declare a `maxBytes` that can
+  only ever TIGHTEN the shared bound, so the calendar document's larger cap
+  does not loosen anything else — the JSON endpoints end up bounded more
+  tightly than before.
+- The version-control calendar renders through `ContributionGrid`, the same
+  component the token panel's activity heatmap uses.
+
+### Changed
+- **Host allowlist: `github.com` added** (now four hosts). Security-sensitive
+  by definition, so: exact host match, https only, checked at construction
+  AND again at request time, bounded by its own byte cap and the shared
+  timeout, redirects refused outright, and no credential is read on this path
+  at all. Tests pin the list in both directions, including that
+  `api.github.com`, `raw.githubusercontent.com`, and
+  `github.com.evil.example.test` are all refused.
+- The boss grid renders the complete table: thousands-separated counts,
+  `Unranked` where the hiscores return rank `-1`, muted unranked tiles, and
+  its own internal scroll so a rail stays a rail.
+- The vendor-name doctrine pin now also covers the version-control host, so
+  the compiled binary stays uncoupled from where the calendar comes from.
+- `frontend/tsconfig.json` enables `allowImportingTsExtensions`: Node's
+  type-stripping test runner resolves specifiers literally, so a value import
+  between two `src` modules must carry its extension to be testable at all.
+
+### Removed
+- The fabricated version-control payload — five weeks of invented counts, an
+  invented streak, and three invented commit rows. The calendar is now real;
+  the commit rows are an empty list, because the contributions document
+  carries none and inventing them is exactly the defect being removed. A
+  commit producer is a separate piece of work with its own allowlist
+  question.
+
 ### Added
 
 - Panels refresh themselves while a visitor watches (#40). `watchPanel` in

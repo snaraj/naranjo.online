@@ -1,6 +1,11 @@
 {
   "compilerOptions": {
     "allowJs": true,
+    // Node's type-stripping test runner resolves import specifiers literally,
+    // so a value import between two src modules must carry its extension for
+    // `node --test` to load it at all. noEmit is on and the bundler resolves
+    // the same specifier, so the extension is free everywhere else.
+    "allowImportingTsExtensions": true,
     "checkJs": true,
     "isolatedModules": true,
     "lib": ["ES2023", "DOM", "DOM.Iterable"],

@@ -216,13 +216,21 @@ type TokenUsageWindow struct {
 }
 
 // VCSActivityData is the vcs-activity/v1 payload: contribution-graph weeks,
-// totals, the current streak, and the latest commits.
+// totals, the current streak, and the latest commits. EndDate was added
+// later and is optional, so a payload written before it existed still
+// decodes — an additive extension inside the same kind version.
 type VCSActivityData struct {
 	// TotalContributions is the count across the covered weeks.
 	TotalContributions int `json:"totalContributions"`
 	// Weeks holds per-week daily contribution counts, oldest week first,
 	// seven days per week.
 	Weeks [][]int `json:"weeks"`
+	// EndDate is the calendar date (YYYY-MM-DD) of the last day the window
+	// actually covers. The final week is padded to seven days like every
+	// other, so without this the trailing padding is indistinguishable from
+	// genuine zero-contribution days; with it the frontend draws days after
+	// EndDate as holes. Empty when the producer cannot date the window.
+	EndDate string `json:"endDate,omitempty"`
 	// Streak is the current consecutive-day contribution streak.
 	Streak int `json:"streak"`
 	// RecentCommits lists the latest commits, newest first.
@@ -365,10 +373,21 @@ type FetchSource struct {
 	fallback SnapshotSource
 	// config carries the validated refresh bounds.
 	config FetchConfig
+	// specs carries the one panel spec this source feeds.
+	specs panelFetchSpecs
+}
+
+// panelFetchSpecs carries the per-kind fetch descriptions. EXACTLY ONE field
+// may be set: a source feeds one panel, and NewFetchSource refuses any other
+// arrangement, so "which upstream grammar does this source speak" is never
+// ambiguous at refresh time.
+type panelFetchSpecs struct {
 	// bossLog is set when this source feeds a boss-log/v1 panel.
 	bossLog *bossLogFetchSpec
 	// usage is set when this source feeds a token-usage/v1 panel.
 	usage *tokenUsageFetchSpec
+	// vcs is set when this source feeds a vcs-activity/v1 panel.
+	vcs *vcsActivityFetchSpec
 }
 
 // fetchConfigDocument is the on-disk shape of config/fetch.json: shared
@@ -392,18 +411,50 @@ type fetchConfigDocument struct {
 	BossLog *bossLogFetchSpec `json:"bossLog"`
 	// TokenUsage configures the token-usage panel's live fetch, if any.
 	TokenUsage *tokenUsageFetchSpec `json:"tokenUsage"`
+	// VCSActivity configures the version-control panel's live fetch, if any.
+	VCSActivity *vcsActivityFetchSpec `json:"vcsActivity"`
 }
 
 // bossLogFetchSpec configures the boss-log live fetch: one public endpoint
-// returning the hiscores/v1 grammar, mapped data-driven onto the boss list.
+// returning the hiscores/v1 grammar, mapped onto EVERY boss the upstream
+// reports.
+//
+// The boss list is deliberately NOT enumerated here. The upstream activity
+// table mixes bosses with things that are not bosses — clue-scroll tiers,
+// minigame ranks, point totals — and it grows whenever new content ships.
+// Enumerating bosses would mean silently dropping every boss added after the
+// last edit; enumerating the NON-bosses means a new boss appears on its own
+// and only a new non-boss activity needs an edit. Preserving an unknown
+// entry is the fail-soft direction, and it is the one chosen here.
 type bossLogFetchSpec struct {
 	// Endpoint is the full request URL, account included as data.
 	Endpoint string `json:"endpoint"`
 	// Account is the public account name served in the payload.
 	Account string `json:"account"`
-	// Bosses lists the activity names to serve, in display order; an
-	// activity the upstream does not rank serves null kc and rank.
-	Bosses []string `json:"bosses"`
+	// ExcludeActivities lists the upstream activity names that are not
+	// bosses. Everything else the upstream reports is served, in upstream
+	// order, including entries this list has never heard of.
+	ExcludeActivities []string `json:"excludeActivities"`
+	// MaxBytes optionally tightens the shared body cap for this endpoint.
+	MaxBytes int64 `json:"maxBytes"`
+}
+
+// vcsActivityFetchSpec configures the version-control activity fetch: one
+// PUBLIC, UNAUTHENTICATED document carrying a contribution calendar. It
+// names no credential because it needs none — the zero-secret producer the
+// panel was always meant to have.
+type vcsActivityFetchSpec struct {
+	// Endpoint is the full request URL, account included as data.
+	Endpoint string `json:"endpoint"`
+	// Headers holds static request headers. The calendar endpoint answers
+	// 406 to a JSON Accept header, so the document type it serves is
+	// declared here as data rather than assumed in code.
+	Headers map[string]string `json:"headers"`
+	// MaxBytes optionally tightens the shared body cap for this endpoint.
+	// The calendar document is markup around a small amount of data, so its
+	// cap is necessarily larger than the JSON endpoints' — which is exactly
+	// why the cap is per endpoint instead of one loose shared number.
+	MaxBytes int64 `json:"maxBytes"`
 }
 
 // tokenUsageFetchSpec configures the token-usage live fetch: one entry per
@@ -435,6 +486,8 @@ type usageSourceSpec struct {
 	Headers map[string]string `json:"headers"`
 	// Window describes the lookback query parameter.
 	Window windowParamSpec `json:"window"`
+	// MaxBytes optionally tightens the shared body cap for this endpoint.
+	MaxBytes int64 `json:"maxBytes"`
 }
 
 // windowParamSpec describes the time-range query parameter a usage endpoint
@@ -466,6 +519,21 @@ const (
 // dayLayout is the calendar-date form the activity series indexes by.
 const dayLayout = "2006-01-02"
 
+// daysPerWeek is the contribution calendar's column height.
+const daysPerWeek = 7
+
+// maxCalendarDays bounds a parsed contribution calendar. The upstream
+// document covers one year; anything past a little over that is markup drift
+// or a hostile response, refused before it can inflate a payload against the
+// owner's panel budget.
+const maxCalendarDays = 400
+
+// minCalendarDays is the smallest calendar worth serving. A document that
+// yields fewer dated cells than this has not been parsed — its markup
+// changed — and refusing keeps the last good payload instead of serving a
+// four-cell "calendar" that looks like data.
+const minCalendarDays = 28
+
 // maxSeriesDays bounds a mapped activity series. The configured endpoints
 // return at most a month of daily buckets, so any span beyond two years is
 // upstream nonsense — refused before it can inflate a payload against the
@@ -490,6 +558,11 @@ const (
 // endpoint. Upstream drift fails the strict gate and the panel keeps serving
 // its last good data as stale — fail-closed, never fail-wrong.
 type hiscoresDocument struct {
+	// Name is the account name the upstream echoes back. The boss log serves
+	// the configured account name, not this one, but the strict decoder must
+	// know every field the document carries — and it did not, which is why
+	// every live refresh of this panel failed before it could map a row.
+	Name string `json:"name"`
 	// Skills holds the skill table; unused by the boss log but part of the
 	// document, so the strict decoder must know it.
 	Skills []hiscoresSkill `json:"skills"`

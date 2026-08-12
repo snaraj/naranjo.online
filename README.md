@@ -85,6 +85,12 @@ once at startup. The second is a **background live fetch**, which is opt-in,
 disabled by default, and the only reason this process would ever make an
 outbound request.
 
+Two of the live producers need no credential at all — the game hiscores and
+the version-control contribution calendar are public documents — so they are
+gated by `PANELS_REFRESH` and an egress allowance alone. The token-usage
+producers additionally need credentials, and a source whose credential is
+absent is simply skipped.
+
 Mounted panels re-read their envelope roughly once a minute and stop entirely
 while the tab is hidden. Because each response carries a digest ETag, an
 unchanged panel costs a conditional request and a bodyless `304`.
