@@ -118,26 +118,30 @@ jobs:
         # Failure surface: this step inserts GHCR reads plus Fulcio and Rekor
         # round-trips between image signing and chart publishing, and any
         # failure burns the version tag (tags are immutable and never
-        # reassigned, requirement 10). It therefore ends by verifying its own
-        # output under this workflow's identity: a release whose attestations
-        # are not discoverable or verifiable fails HERE, before the chart and
-        # the GitHub Release exist, instead of days later at promotion. GHCR
-        # exposes no Referrers API, so discovery rides cosign's
-        # sha256-<hex>.att fallback tag; the self-check settles that per
-        # release.
+        # reassigned, requirement 10). It therefore ends by checking its own
+        # output, so a release whose attestations are not discoverable,
+        # complete, or verifiable fails HERE — before the chart and the
+        # GitHub Release exist — instead of days later at promotion. The
+        # check has two halves because they settle different things. GHCR
+        # exposes no Referrers API, so both attestations land under one
+        # sha256-<hex>.att fallback tag that cosign rewrites read-modify-
+        # write; verify-attestation is satisfied by a single verifiable
+        # attestation and so cannot notice the second clobbering the first,
+        # which is what the count assertion is for.
         #
         # Payload headroom: measured on the v0.1.9 index, each platform's
-        # predicate is ~30 KB compact (~54 KB pretty-printed) and its base64
-        # DSSE payload ~41 KB — well inside Rekor's 100 KB attestation
-        # ceiling, and cosign's normalization only shrinks it.
+        # predicate is ~31 KB compact (~54 KB pretty-printed) and its base64
+        # DSSE payload ~27 KB — normalization drops roughly a third of the
+        # predicate before signing — well inside Rekor's 100 KB attestation
+        # ceiling.
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
           # The platform set is derived from the index itself and then
-          # asserted to be EXACTLY the build step's platform list above:
-          # a third, missing, or duplicated platform fails the release.
-          # Update BOTH together.
+          # asserted to be EXACTLY the build step's platform list above, in
+          # jq `keys` sort order: a third or missing platform fails the
+          # release. Update BOTH together.
           expected_platforms='linux/amd64 linux/arm64'
           provenance_platforms="$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" \
             --format '{{ json .Provenance }}' | jq -r 'keys[]')"
@@ -160,18 +164,25 @@ jobs:
               "${predicate}" >/dev/null
             predicates+=("${predicate}")
           done
-          # Distinct evidence per platform: a duplicated read would attach
-          # the same predicate twice under one subject. Exit 1 is cmp's
-          # "files differ"; a cmp error (2) fails the release too.
-          differ=0
-          cmp -s "${predicates[0]}" "${predicates[1]}" || differ=$?
-          test "${differ}" -eq 1
+          # Defense in depth: every platform's evidence must be distinct.
+          # Real Buildx cannot repeat a platform — the index's provenance is
+          # a JSON object, so duplicate keys collapse before jq sees them —
+          # but a patched or replayed producer could hand back one predicate
+          # under two keys, and that must not become two attestations of the
+          # same build under one subject.
+          test "$(sha256sum "${predicates[@]}" | awk '{print $1}' | sort -u | wc -l)" \
+            -eq "${#predicates[@]}"
           for predicate in "${predicates[@]}"; do
             cosign attest --yes --type slsaprovenance1 \
               --predicate "${predicate}" "${IMAGE}@${DIGEST}"
           done
-          # Self-verification: prove the attestations just attached are
-          # discoverable and verifiable as this workflow's identity.
+          # Self-check, both halves. The count proves every attestation
+          # survived the fallback-tag rewrite and coexists under one subject;
+          # the verification proves what is there carries this workflow's
+          # keyless identity and issuer.
+          attested="$(cosign download attestation --predicate-type slsaprovenance1 \
+            "${IMAGE}@${DIGEST}" | jq -s 'length')"
+          test "${attested}" -eq "${#predicates[@]}"
           cosign verify-attestation --type slsaprovenance1 \
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-publisher.yml@${GITHUB_REF}" \
             --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
