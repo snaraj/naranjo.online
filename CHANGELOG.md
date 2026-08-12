@@ -6,7 +6,18 @@ SemVer and match image/chart tags exactly.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- Version-control activity status bar (#19): a fixed strip rendering
+  the `vcs-activity/v1` panel inside the shared PanelShell — a per-day
+  contribution heatmap (five-level single-hue cell ramp shipped as
+  themeable custom properties with validated dark-native defaults),
+  contribution total and current streak, and the latest commits — fed
+  exclusively through the same-origin panel data layer. Geometry is
+  fixed per region so data arriving never shifts layout, a wide window
+  scrolls inside the strip rather than the page, an admission-refused
+  or absent payload renders an explicit empty state, and the data's
+  origin is never named in frontend source (pinned by test alongside
+  the strip's local-origin scan).
 
 ## [0.1.9] - 2026-08-11
 

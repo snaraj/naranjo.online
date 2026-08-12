@@ -472,6 +472,113 @@ func TestVisitorChecksTokenUsage(t *testing.T) {
 	drainScenario(t, runResult)
 }
 
+// visitorActivityPayload pins the vcs-activity/v1 payload contract the
+// activity strip renders, as an independent expected shape — never imported
+// from internal/panels, or the assertion would become a tautology.
+type visitorActivityPayload struct {
+	TotalContributions int                     `json:"totalContributions"`
+	Weeks              [][]int                 `json:"weeks"`
+	Streak             int                     `json:"streak"`
+	RecentCommits      []visitorActivityCommit `json:"recentCommits"`
+}
+
+type visitorActivityCommit struct {
+	Repo    string `json:"repo"`
+	Message string `json:"message"`
+	At      string `json:"at"`
+}
+
+// TestVisitorSeesTheActivityStrip is the activity reader's story: the served
+// page ships the contribution-strip UI (its cell markers and panel id ride in
+// the built assets a browser would execute), and the payload behind it honors
+// the exact contract the strip renders — week columns of exactly seven
+// non-negative daily counts, non-negative totals and streak, dated recent
+// commits, and a generatedAt instant the strip can anchor cell dates on.
+func TestVisitorSeesTheActivityStrip(t *testing.T) {
+	requireBuiltFrontend(t)
+	base, runResult := bootServer(t, nil)
+	session := testsupport.NewVisitor(t, base)
+
+	t.Run("loads the page: the built assets carry the activity strip", func(t *testing.T) {
+		visitor := session.On(t)
+		shell := visitor.Navigate("/")
+		if shell.StatusCode != http.StatusOK {
+			t.Fatalf("GET / = %d", shell.StatusCode)
+		}
+		assets := visitor.AssetReferences(shell.Body)
+		if len(assets) == 0 {
+			t.Fatal("document references no built assets to follow")
+		}
+		var bundled []byte
+		for _, asset := range assets {
+			response := visitor.Navigate(asset)
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("GET %s = %d", asset, response.StatusCode)
+			}
+			bundled = append(bundled, response.Body...)
+		}
+		// Structure, never copy: the markers are the component's stable DOM
+		// contract (cell marker, level attribute, panel id), not site text.
+		for _, marker := range []string{"data-activity-cell", "data-activity-level", "vcs-activity"} {
+			if !bytes.Contains(bundled, []byte(marker)) {
+				t.Errorf("built assets lack the activity-strip marker %q", marker)
+			}
+		}
+	})
+
+	t.Run("reads the panel: the payload honors the strip's contract", func(t *testing.T) {
+		visitor := session.On(t)
+		response := visitor.Navigate("/api/panels/vcs-activity")
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("GET /api/panels/vcs-activity = %d", response.StatusCode)
+		}
+		var envelope visitorPanelEnvelope
+		decodeVisitorJSON(t, response.Body, &envelope)
+		if envelope.Kind != "vcs-activity/v1" {
+			t.Fatalf("kind = %q, want vcs-activity/v1", envelope.Kind)
+		}
+		if want := visitorColdStatus[envelope.ID]; envelope.Status != want {
+			t.Errorf("status = %q, want %q on an egress-free boot", envelope.Status, want)
+		}
+		// The strip derives every cell date from generatedAt, so the instant
+		// must parse — a payload without it could only render dateless cells.
+		if _, err := time.Parse(time.RFC3339, envelope.GeneratedAt); err != nil {
+			t.Errorf("generatedAt = %q: %v", envelope.GeneratedAt, err)
+		}
+		var payload visitorActivityPayload
+		decodeVisitorJSON(t, envelope.Data, &payload)
+		if payload.TotalContributions < 0 || payload.Streak < 0 {
+			t.Errorf("negative totals: %d contributions, streak %d", payload.TotalContributions, payload.Streak)
+		}
+		if len(payload.Weeks) == 0 {
+			t.Error("payload carries no weeks; the strip would be empty")
+		}
+		for i, week := range payload.Weeks {
+			if len(week) != 7 {
+				t.Errorf("week %d has %d days, want exactly 7", i, len(week))
+			}
+			for j, count := range week {
+				if count < 0 {
+					t.Errorf("week %d day %d count = %d, want >= 0", i, j, count)
+				}
+			}
+		}
+		if len(payload.RecentCommits) == 0 {
+			t.Error("payload carries no recent commits")
+		}
+		for i, commit := range payload.RecentCommits {
+			if commit.Repo == "" || commit.Message == "" {
+				t.Errorf("commit %d incomplete: %+v", i, commit)
+			}
+			if _, err := time.Parse(time.RFC3339, commit.At); err != nil {
+				t.Errorf("commit %d at = %q: %v", i, commit.At, err)
+			}
+		}
+	})
+
+	drainScenario(t, runResult)
+}
+
 // TestVisitorPlaysMedia is the future music-and-video story on the
 // media-enabled boot: press play for a full 200 stream, scrub with a Range
 // request for a 206, and replay from cache as a 304 — the digest ETag doing
