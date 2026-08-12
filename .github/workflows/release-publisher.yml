@@ -127,7 +127,10 @@ jobs:
         # sha256-<hex>.att fallback tag that cosign rewrites read-modify-
         # write; verify-attestation is satisfied by a single verifiable
         # attestation and so cannot notice the second clobbering the first,
-        # which is what the count assertion is for.
+        # which is what the count assertion is for. The two halves read the
+        # evidence through different mechanisms — signed content for the
+        # count, cosign's own matching for the verification — so neither
+        # mechanism alone decides whether a release ships.
         #
         # Payload headroom: measured on the v0.1.9 index, each platform's
         # predicate is ~31 KB compact (~54 KB pretty-printed) and its base64
@@ -176,12 +179,23 @@ jobs:
             cosign attest --yes --type slsaprovenance1 \
               --predicate "${predicate}" "${IMAGE}@${DIGEST}"
           done
-          # Self-check, both halves. The count proves every attestation
-          # survived the fallback-tag rewrite and coexists under one subject;
-          # the verification proves what is there carries this workflow's
-          # keyless identity and issuer.
-          attested="$(cosign download attestation --predicate-type slsaprovenance1 \
-            "${IMAGE}@${DIGEST}" | jq -s 'length')"
+          # Self-check, in two halves that use different mechanisms on
+          # purpose. The count reads the signed statements themselves and
+          # proves every attestation survived the fallback-tag rewrite and
+          # still coexists under one subject. It deliberately does NOT filter
+          # with `download attestation --predicate-type`: that filter keys
+          # off the layer's OCI annotation rather than the signed content,
+          # and against a legacy in-toto layer form it returns nothing while
+          # the attestations are present and of the right type — a false red
+          # here would burn an immutable version tag. Selecting on the
+          # decoded predicateType is also what makes the count meaningful:
+          # an unparsable layer yields an empty envelope that a bare
+          # `jq -s length` would happily count. The verification below is
+          # then the exact command the promote-time ratchet runs, so a
+          # release that ratchet could not verify fails here instead.
+          attested="$(cosign download attestation "${IMAGE}@${DIGEST}" \
+            | jq -s --arg type 'https://slsa.dev/provenance/v1' \
+              '[.[] | select((.payload | @base64d | fromjson).predicateType == $type)] | length')"
           test "${attested}" -eq "${#predicates[@]}"
           cosign verify-attestation --type slsaprovenance1 \
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-publisher.yml@${GITHUB_REF}" \
