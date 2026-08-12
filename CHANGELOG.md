@@ -7,6 +7,13 @@ SemVer and match image/chart tags exactly.
 ## [Unreleased]
 
 ### Added
+- Release publisher attaches the BuildKit SLSA v1 provenance as keyless
+  cosign attestations (`slsaprovenance1`) on the immutable image digest,
+  immediately after image signing — read back per platform from the
+  just-pushed index, with no new permissions, actions, or skip paths;
+  effective from the next tagged release. Completes this site's
+  precondition for the platform promotion ratchet
+  (website-infrastructure#58).
 - Version-control activity status bar (#19): a fixed strip rendering
   the `vcs-activity/v1` panel inside the shared PanelShell — a per-day
   contribution heatmap (five-level single-hue cell ramp shipped as
