@@ -96,6 +96,46 @@ func TestMapUsageSumsBothGrammars(t *testing.T) {
 		t.Errorf("usage-page series = %+v, want one day totalling 165", page.series)
 	}
 
+	// Bucket ORDER is an upstream choice, and a chart must not depend on one:
+	// a document whose buckets arrive newest-first maps to the same series,
+	// with the oldest day still at index 0 and the newest still last.
+	descending := `{"data":[` +
+		`{"starting_at":"2026-08-10T00:00:00Z","ending_at":"2026-08-11T00:00:00Z","results":[` +
+		`{"uncached_input_tokens":10,"cache_read_input_tokens":0,` +
+		`"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"output_tokens":4}]},` +
+		`{"starting_at":"2026-08-09T00:00:00Z","ending_at":"2026-08-10T00:00:00Z","results":[` +
+		`{"uncached_input_tokens":100,"cache_read_input_tokens":20,` +
+		`"cache_creation":{"ephemeral_1h_input_tokens":3,"ephemeral_5m_input_tokens":7},"output_tokens":40}]}` +
+		`],"has_more":false,"next_page":null}`
+	reversed, err := mapUsage(shapeUsageReport, []byte(descending))
+	if err != nil {
+		t.Fatalf("a newest-first document was refused: %v", err)
+	}
+	if reversed.series == nil || reversed.series.StartDate != "2026-08-09" {
+		t.Fatalf("newest-first series = %+v, want it anchored on the OLDEST day", reversed.series)
+	}
+	if want := []int64{170, 14}; len(reversed.series.Totals) != 2 ||
+		reversed.series.Totals[0] != want[0] || reversed.series.Totals[1] != want[1] {
+		t.Errorf("newest-first series totals = %v, want %v — the same series either way", reversed.series.Totals, want)
+	}
+	// A day the upstream splits across two buckets is summed, not refused and
+	// not overwritten, whichever order the two halves arrive in.
+	split := `{"data":[` +
+		`{"starting_at":"2026-08-09T12:00:00Z","ending_at":"2026-08-09T18:00:00Z","results":[` +
+		`{"uncached_input_tokens":5,"cache_read_input_tokens":0,` +
+		`"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"output_tokens":1}]},` +
+		`{"starting_at":"2026-08-09T00:00:00Z","ending_at":"2026-08-09T12:00:00Z","results":[` +
+		`{"uncached_input_tokens":2,"cache_read_input_tokens":0,` +
+		`"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"output_tokens":3}]}` +
+		`],"has_more":false,"next_page":null}`
+	merged, err := mapUsage(shapeUsageReport, []byte(split))
+	if err != nil {
+		t.Fatalf("a day split across buckets was refused: %v", err)
+	}
+	if merged.series == nil || len(merged.series.Totals) != 1 || merged.series.Totals[0] != 11 {
+		t.Errorf("split-day series = %+v, want one day totalling 11", merged.series)
+	}
+
 	for name, run := range map[string]func() error{
 		"unknown shape": func() error { _, err := mapUsage("mystery/v1", []byte(fixtureUsagePage)); return err },
 		"empty buckets": func() error {
