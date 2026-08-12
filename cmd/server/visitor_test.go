@@ -118,11 +118,11 @@ func TestVisitorBrowsesTheSite(t *testing.T) {
 // A schema change must consciously edit both sides.
 
 // visitorColdStatus pins each panel's expected status on an egress-free
-// boot: fetch-backed panels serve their snapshot fallback as stale until
-// live refresh is explicitly enabled; the snapshot-only panel is ok.
+// boot: every panel is now fetch-backed, so every panel serves its embedded
+// snapshot fallback as stale until live refresh is explicitly enabled.
 var visitorColdStatus = map[string]string{
 	"token-usage":  "stale",
-	"vcs-activity": "ok",
+	"vcs-activity": "stale",
 	"boss-log":     "stale",
 }
 
@@ -341,14 +341,18 @@ func TestVisitorChecksTheBossLog(t *testing.T) {
 			if boss.Rank != nil && *boss.Rank < 0 {
 				t.Errorf("boss %s rank = %d, want null or non-negative", boss.Name, *boss.Rank)
 			}
-			if boss.KC == nil {
+			// The rendering branches the grid actually has: a numeric rank, and
+			// a null rank the tile prints as "Unranked". A null count is a
+			// third, rarer branch the upstream may or may not produce for this
+			// account, so it is not required here.
+			if boss.Rank == nil {
 				unranked = true
 			} else {
 				ranked = true
 			}
 		}
 		if !ranked || !unranked {
-			t.Error(`served data must exercise both tally branches: at least one ranked kc and one null kc (rendered as "--")`)
+			t.Error(`served data must exercise both rank branches: at least one ranked boss and one unranked (rendered as "Unranked")`)
 		}
 	})
 
@@ -521,10 +525,14 @@ func TestVisitorChecksTokenUsage(t *testing.T) {
 // activity strip renders, as an independent expected shape — never imported
 // from internal/panels, or the assertion would become a tautology.
 type visitorActivityPayload struct {
-	TotalContributions int                     `json:"totalContributions"`
-	Weeks              [][]int                 `json:"weeks"`
-	Streak             int                     `json:"streak"`
-	RecentCommits      []visitorActivityCommit `json:"recentCommits"`
+	TotalContributions int     `json:"totalContributions"`
+	Weeks              [][]int `json:"weeks"`
+	Streak             int     `json:"streak"`
+	// EndDate anchors the calendar: the final week is padded to seven days
+	// like every other, so without it the padding is indistinguishable from
+	// genuine quiet days.
+	EndDate       string                  `json:"endDate"`
+	RecentCommits []visitorActivityCommit `json:"recentCommits"`
 }
 
 type visitorActivityCommit struct {
@@ -564,7 +572,7 @@ func TestVisitorSeesTheActivityStrip(t *testing.T) {
 		}
 		// Structure, never copy: the markers are the component's stable DOM
 		// contract (cell marker, level attribute, panel id), not site text.
-		for _, marker := range []string{"data-activity-cell", "data-activity-level", "vcs-activity"} {
+		for _, marker := range []string{"data-grid-cell", "data-grid-level", "vcs-activity"} {
 			if !bytes.Contains(bundled, []byte(marker)) {
 				t.Errorf("built assets lack the activity-strip marker %q", marker)
 			}
@@ -585,8 +593,6 @@ func TestVisitorSeesTheActivityStrip(t *testing.T) {
 		if want := visitorColdStatus[envelope.ID]; envelope.Status != want {
 			t.Errorf("status = %q, want %q on an egress-free boot", envelope.Status, want)
 		}
-		// The strip derives every cell date from generatedAt, so the instant
-		// must parse — a payload without it could only render dateless cells.
 		if _, err := time.Parse(time.RFC3339, envelope.GeneratedAt); err != nil {
 			t.Errorf("generatedAt = %q: %v", envelope.GeneratedAt, err)
 		}
@@ -595,8 +601,15 @@ func TestVisitorSeesTheActivityStrip(t *testing.T) {
 		if payload.TotalContributions < 0 || payload.Streak < 0 {
 			t.Errorf("negative totals: %d contributions, streak %d", payload.TotalContributions, payload.Streak)
 		}
-		if len(payload.Weeks) == 0 {
-			t.Error("payload carries no weeks; the strip would be empty")
+		// A real calendar is a year of columns. A handful of weeks would mean
+		// the panel is back to the hand-made sample this work removed.
+		if len(payload.Weeks) < 50 {
+			t.Errorf("payload carries %d weeks; the calendar covers a year", len(payload.Weeks))
+		}
+		// The strip dates every cell from this anchor, so without it the
+		// calendar could only render dateless, unpadded cells.
+		if _, err := time.Parse("2006-01-02", payload.EndDate); err != nil {
+			t.Errorf("endDate = %q: %v", payload.EndDate, err)
 		}
 		for i, week := range payload.Weeks {
 			if len(week) != 7 {
@@ -608,9 +621,8 @@ func TestVisitorSeesTheActivityStrip(t *testing.T) {
 				}
 			}
 		}
-		if len(payload.RecentCommits) == 0 {
-			t.Error("payload carries no recent commits")
-		}
+		// The contribution calendar carries no commit rows, so an empty list
+		// is the honest state; rows that DO appear must be complete and dated.
 		for i, commit := range payload.RecentCommits {
 			if commit.Repo == "" || commit.Message == "" {
 				t.Errorf("commit %d incomplete: %+v", i, commit)

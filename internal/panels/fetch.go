@@ -53,32 +53,66 @@ func (c FetchConfig) Validate() error {
 // NewFetchSource is the ONLY way to build a registrable live source, and it
 // fails closed: valid bounds, exactly one panel spec, a complete spec, and
 // every endpoint an https URL whose host is on the allowlist — or no source.
-func NewFetchSource(fallback SnapshotSource, config FetchConfig, bossLog *bossLogFetchSpec, usage *tokenUsageFetchSpec) (*FetchSource, error) {
+func NewFetchSource(fallback SnapshotSource, config FetchConfig, specs panelFetchSpecs) (*FetchSource, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	if (bossLog == nil) == (usage == nil) {
+	declared := 0
+	for _, present := range []bool{specs.bossLog != nil, specs.usage != nil, specs.vcs != nil} {
+		if present {
+			declared++
+		}
+	}
+	if declared != 1 {
 		return nil, errors.New("fetch source: exactly one panel spec is required")
 	}
-	if bossLog != nil {
-		if err := validateBossLogSpec(bossLog); err != nil {
+	if specs.bossLog != nil {
+		if err := validateBossLogSpec(specs.bossLog); err != nil {
 			return nil, err
 		}
-		if err := validateEndpoint(bossLog.Endpoint, config.Hosts); err != nil {
+		if err := validateEndpoint(specs.bossLog.Endpoint, config.Hosts); err != nil {
+			return nil, err
+		}
+		if err := validateBodyCap(specs.bossLog.MaxBytes, config.MaxBytes); err != nil {
 			return nil, err
 		}
 	}
-	if usage != nil {
-		if err := validateUsageSpec(usage); err != nil {
+	if specs.usage != nil {
+		if err := validateUsageSpec(specs.usage); err != nil {
 			return nil, err
 		}
-		for _, source := range usage.Sources {
+		for _, source := range specs.usage.Sources {
 			if err := validateEndpoint(source.Endpoint, config.Hosts); err != nil {
+				return nil, err
+			}
+			if err := validateBodyCap(source.MaxBytes, config.MaxBytes); err != nil {
 				return nil, err
 			}
 		}
 	}
-	return &FetchSource{fallback: fallback, config: config, bossLog: bossLog, usage: usage}, nil
+	if specs.vcs != nil {
+		if err := validateVCSActivitySpec(specs.vcs); err != nil {
+			return nil, err
+		}
+		if err := validateEndpoint(specs.vcs.Endpoint, config.Hosts); err != nil {
+			return nil, err
+		}
+		if err := validateBodyCap(specs.vcs.MaxBytes, config.MaxBytes); err != nil {
+			return nil, err
+		}
+	}
+	return &FetchSource{fallback: fallback, config: config, specs: specs}, nil
+}
+
+// validateBodyCap admits a per-endpoint byte cap. Zero means "use the shared
+// cap"; anything else may only TIGHTEN it. A per-endpoint value can never
+// widen the shared bound, so adding an endpoint with its own cap cannot
+// loosen any other endpoint's limit.
+func validateBodyCap(specMax, sharedMax int64) error {
+	if specMax < 0 || specMax > sharedMax {
+		return fmt.Errorf("fetch spec: max bytes must be within [0, %d]", sharedMax)
+	}
+	return nil
 }
 
 // validateEndpoint admits only absolute https URLs on the host allowlist.
@@ -139,12 +173,23 @@ func newProductionDoer() fetchDoer {
 // that keeps the last good payload serving as stale.
 func (s *FetchSource) refresh(ctx context.Context, doer fetchDoer, env func(string) string) (loadedPayload, error) {
 	now := time.Now().UTC()
-	if s.bossLog != nil {
-		body, err := s.fetchDocument(ctx, doer, s.bossLog.Endpoint, "", "", nil)
+	if s.specs.bossLog != nil {
+		body, err := s.fetchDocument(ctx, doer, s.specs.bossLog.Endpoint, "", "", nil, s.specs.bossLog.MaxBytes)
 		if err != nil {
 			return loadedPayload{}, err
 		}
-		data, err := mapHiscores(body, s.bossLog)
+		data, err := mapHiscores(body, s.specs.bossLog)
+		if err != nil {
+			return loadedPayload{}, err
+		}
+		return loadedPayload{generatedAt: now.Format(time.RFC3339), data: data, status: StatusOK}, nil
+	}
+	if s.specs.vcs != nil {
+		body, err := s.fetchDocument(ctx, doer, s.specs.vcs.Endpoint, "", "", s.specs.vcs.Headers, s.specs.vcs.MaxBytes)
+		if err != nil {
+			return loadedPayload{}, err
+		}
+		data, err := mapContributions(body)
 		if err != nil {
 			return loadedPayload{}, err
 		}
@@ -158,8 +203,8 @@ func (s *FetchSource) refresh(ctx context.Context, doer fetchDoer, env func(stri
 // reports ok only when every source fetched. Nothing fresh at all is an
 // error so the caller keeps serving the current payload.
 func (s *FetchSource) refreshUsage(ctx context.Context, doer fetchDoer, env func(string) string, now time.Time) (loadedPayload, error) {
-	fetched := make(map[string]usageMapping, len(s.usage.Sources))
-	for _, source := range s.usage.Sources {
+	fetched := make(map[string]usageMapping, len(s.specs.usage.Sources))
+	for _, source := range s.specs.usage.Sources {
 		key := env(source.KeyEnvName)
 		if key == "" {
 			continue
@@ -168,7 +213,7 @@ func (s *FetchSource) refreshUsage(ctx context.Context, doer fetchDoer, env func
 		if err != nil {
 			continue
 		}
-		body, err := s.fetchDocument(ctx, doer, endpoint, source.KeyHeader, source.KeyPrefix+key, source.Headers)
+		body, err := s.fetchDocument(ctx, doer, endpoint, source.KeyHeader, source.KeyPrefix+key, source.Headers, source.MaxBytes)
 		if err != nil {
 			continue
 		}
@@ -187,7 +232,7 @@ func (s *FetchSource) refreshUsage(ctx context.Context, doer fetchDoer, env func
 		// The fallback snapshot already passed the strict gate at load.
 		_ = decodeStrict(fallbackLoaded.data, &fallback)
 	}
-	merged, allFresh := mergeUsagePayload(s.usage, fetched, fallback)
+	merged, allFresh := mergeUsagePayload(s.specs.usage, fetched, fallback)
 	status := StatusOK
 	if !allFresh {
 		status = StatusStale
@@ -211,10 +256,13 @@ func withWindowParam(endpoint string, window windowParamSpec, now time.Time) (st
 
 // fetchDocument performs one bounded GET: allowlist re-checked at request
 // time (defense in depth against any future spec tampering), per-attempt
-// timeout, status pinned to 200, and the body read to MaxBytes with one
-// extra byte to detect overrun. The credential value goes into the request
-// header and nowhere else.
-func (s *FetchSource) fetchDocument(ctx context.Context, doer fetchDoer, endpoint, keyHeader, keyValue string, headers map[string]string) ([]byte, error) {
+// timeout, status pinned to 200, and the body read to the endpoint's byte
+// cap with one extra byte to detect overrun. The credential value goes into
+// the request header and nowhere else.
+//
+// specMax is the endpoint's own cap; zero falls back to the shared one, and
+// a validated spec can only ever tighten it.
+func (s *FetchSource) fetchDocument(ctx context.Context, doer fetchDoer, endpoint, keyHeader, keyValue string, headers map[string]string, specMax int64) ([]byte, error) {
 	parsed, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("fetch: parse endpoint: %w", err)
@@ -227,6 +275,10 @@ func (s *FetchSource) fetchDocument(ctx context.Context, doer fetchDoer, endpoin
 	request, err := http.NewRequestWithContext(attemptCtx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("fetch: build request: %w", err)
+	}
+	limit := s.config.MaxBytes
+	if specMax > 0 && specMax < limit {
+		limit = specMax
 	}
 	request.Header.Set("Accept", "application/json")
 	for name, value := range headers {
@@ -243,12 +295,12 @@ func (s *FetchSource) fetchDocument(ctx context.Context, doer fetchDoer, endpoin
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetch %s: status %d", parsed.Hostname(), response.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, s.config.MaxBytes+1))
+	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: read body: %w", parsed.Hostname(), err)
 	}
-	if int64(len(body)) > s.config.MaxBytes {
-		return nil, fmt.Errorf("fetch %s: body exceeds the %d byte bound", parsed.Hostname(), s.config.MaxBytes)
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("fetch %s: body exceeds the %d byte bound", parsed.Hostname(), limit)
 	}
 	return body, nil
 }

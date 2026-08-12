@@ -2,15 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { describe, it, test } from 'node:test';
 
-import {
-  activityLevel,
-  activityLevels,
-  activityPanelId,
-  cellDate,
-  cellLabel,
-  maxDailyCount,
-  parseVCSActivity
-} from '../src/lib/activity.ts';
+import { activityCells, activityPanelId, parseVCSActivity } from '../src/lib/activity.ts';
+import { toColumns } from '../src/lib/grid.ts';
 
 // A well-formed vcs-activity/v1 payload in the exact shape internal/panels
 // serves; tests clone and break one field at a time so every admission rule
@@ -70,6 +63,9 @@ describe('parseVCSActivity', () => {
       { ...goodActivity, recentCommits: [{ repo: 'r', at: 't' }] },
       { ...goodActivity, recentCommits: [{ repo: 'r', message: 7, at: 't' }] },
       { ...goodActivity, recentCommits: [{ repo: 'r', message: 'm', at: 12 }] },
+      { ...goodActivity, endDate: 7 },
+      { ...goodActivity, endDate: '2026-08-11T00:00:00Z' },
+      { ...goodActivity, endDate: '11/08/2026' },
       (() => {
         const { streak: _dropped, ...rest } = goodActivity;
         return rest;
@@ -81,58 +77,65 @@ describe('parseVCSActivity', () => {
   });
 });
 
-describe('activity levels', () => {
-  it('keeps zero days at level 0 and buckets the rest against the peak', () => {
-    assert.equal(activityLevels, 5);
-    assert.equal(activityLevel(0, 8), 0);
-    assert.equal(activityLevel(0, 0), 0);
-    assert.equal(activityLevel(3, 0), 0);
-    assert.equal(activityLevel(1, 100), 1);
-    assert.equal(activityLevel(2, 8), 1);
-    assert.equal(activityLevel(4, 8), 2);
-    assert.equal(activityLevel(5, 8), 3);
-    assert.equal(activityLevel(8, 8), 4);
-    assert.equal(activityLevel(80, 8), 4);
-  });
+describe('activityCells', () => {
+  // The final week is padded to seven days like every other, so on its own
+  // the padding is indistinguishable from genuine quiet days. endDate is what
+  // resolves it, and these tests are the reason it exists.
+  const window = {
+    totalContributions: 10,
+    weeks: [
+      [1, 2, 3, 4, 5, 6, 7],
+      [8, 9, 0, 0, 0, 0, 0]
+    ],
+    streak: 2,
+    // 2026-08-11 is a Tuesday: Sunday and Monday are real, the remaining
+    // five days of that column have not happened yet.
+    endDate: '2026-08-11',
+    recentCommits: []
+  };
 
-  it('never decreases as the count grows', () => {
-    let previous = 0;
-    for (let count = 0; count <= 12; count += 1) {
-      const level = activityLevel(count, 12);
-      assert.ok(level >= previous, `level regressed at count ${count}`);
-      previous = level;
+  it('dates every cell from the end date and marks the uncovered tail absent', () => {
+    const cells = activityCells(parseVCSActivity(window));
+    assert.equal(cells.length, 14);
+    assert.equal(cells[0].date, '2026-08-02', 'the first cell is a whole calendar week back');
+    assert.equal(cells[7].date, '2026-08-09');
+    assert.equal(cells[8].date, '2026-08-10');
+    assert.equal(cells[9].date, '2026-08-11');
+    assert.equal(cells[9].value, 0);
+    assert.notEqual(cells[9].absent, true, 'the end date itself is covered, however quiet');
+    for (const index of [10, 11, 12, 13]) {
+      assert.equal(cells[index].absent, true, `cell ${index} is a day the window does not cover`);
+      assert.equal(cells[index].value, 0);
     }
-    assert.equal(previous, 4);
+    assert.equal(cells[13].date, '2026-08-15', 'absent cells are still dated, so the axis stays honest');
   });
 
-  it('finds the window peak', () => {
-    assert.equal(maxDailyCount(goodActivity.weeks), 6);
-    assert.equal(maxDailyCount([]), 0);
-    assert.equal(maxDailyCount([[0, 0, 0, 0, 0, 0, 0]]), 0);
-  });
-});
-
-describe('cell dates and labels', () => {
-  it('anchors the last cell of the last week on the capture day', () => {
-    assert.equal(cellDate('2026-08-11T01:00:00Z', 5, 4, 6), '2026-08-11');
-    assert.equal(cellDate('2026-08-11T01:00:00Z', 5, 4, 5), '2026-08-10');
-    assert.equal(cellDate('2026-08-11T01:00:00Z', 5, 3, 6), '2026-08-04');
-    assert.equal(cellDate('2026-08-11T01:00:00Z', 5, 0, 0), '2026-07-08');
-    // Month and year boundaries roll over through real calendar arithmetic.
-    assert.equal(cellDate('2026-01-03T12:00:00Z', 1, 0, 0), '2025-12-28');
+  it('renders undated counts rather than guessing when no end date is served', () => {
+    const { endDate: _dropped, ...anchorless } = window;
+    const cells = activityCells(parseVCSActivity(anchorless));
+    assert.equal(cells.length, 14);
+    for (const cell of cells) {
+      assert.equal(cell.date, '', 'an unanchored window must not invent dates');
+      assert.notEqual(cell.absent, true, 'nothing can be known absent without an anchor');
+    }
+    assert.equal(cells[8].value, 9, 'the counts themselves are real and still render');
   });
 
-  it('yields no date for absent or malformed instants', () => {
-    assert.equal(cellDate(undefined, 5, 0, 0), '');
-    assert.equal(cellDate('', 5, 0, 0), '');
-    assert.equal(cellDate('yesterday-ish', 5, 0, 0), '');
+  it('survives a malformed anchor and an empty window', () => {
+    const activity = parseVCSActivity(window);
+    assert.deepEqual(
+      activityCells({ ...activity, endDate: '2026-13-45' }).map((cell) => cell.date),
+      new Array(14).fill('')
+    );
+    assert.deepEqual(activityCells({ ...activity, weeks: [] }), []);
   });
 
-  it('always carries the count in the accessible label', () => {
-    assert.equal(cellLabel(1, '2026-08-11'), '1 contribution on 2026-08-11');
-    assert.equal(cellLabel(4, '2026-08-10'), '4 contributions on 2026-08-10');
-    assert.equal(cellLabel(0, '2026-08-09'), '0 contributions on 2026-08-09');
-    assert.equal(cellLabel(3, ''), '3 contributions');
+  it('feeds whole columns to the shared grid', () => {
+    const columns = toColumns(activityCells(parseVCSActivity(window)));
+    assert.equal(columns.length, 2);
+    for (const column of columns) {
+      assert.equal(column.length, 7);
+    }
   });
 
   it('pins the panel id the strip loads', () => {
@@ -140,30 +143,40 @@ describe('cell dates and labels', () => {
   });
 });
 
-const [component, appShell, helpers] = await Promise.all([
+const [component, appShell, helpers, grid] = await Promise.all([
   readFile(new URL('../src/lib/components/ActivityBar.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
-  readFile(new URL('../src/lib/activity.ts', import.meta.url), 'utf8')
+  readFile(new URL('../src/lib/activity.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../src/lib/components/ContributionGrid.svelte', import.meta.url), 'utf8')
 ]);
 
 // Browser execution is deliberately outside this dependency-free test; these
 // assertions pin the component source's structural contracts the same way
 // experience.test.mjs pins the shells.
-test('the strip never encodes a count by color alone', () => {
-  // Each day cell carries its date+count as tooltip and accessible label.
-  assert.match(component, /data-activity-cell/);
-  assert.match(component, /aria-label=\{label\}/);
-  assert.match(component, /title=\{label\}/);
-  assert.match(component, /role="img"/);
-  // Totals and streak ride beside the strip as plain text.
+test('the calendar renders through the one shared grid component', () => {
+  // The ramp, the cell labels, the month axis, and the absent-day rendering
+  // live in ContributionGrid — the same component the token-activity heatmap
+  // uses — so the two grids cannot drift apart.
+  assert.match(component, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
+  assert.match(component, /<ContributionGrid/);
+  assert.match(component, /noun="contribution"/);
+  // Totals and streak ride beside the grid as plain text, so a count is
+  // never encoded by color alone.
   assert.match(component, /contributions</);
   assert.match(component, /-day streak</);
+  assert.match(component, /formatWhole\(activity\.totalContributions\)/);
+});
+
+test('an empty commit list says so instead of showing invented history', () => {
+  assert.match(component, /\{#if commits\.length === 0\}/);
+  assert.match(component, /no recent commits reported/);
 });
 
 test('the cell ramp is themeable custom properties with the validated dark defaults', () => {
   // One custom property per level; the defaults are the validated sequential
   // ramp (single hue, monotone lightness, dark-surface anchored). A hex
-  // change here must re-run the ramp validation — that is the point of the pin.
+  // change here must re-run the ramp validation — that is the point of the
+  // pin. The ramp now lives in the shared grid component.
   for (const [level, hex] of [
     [0, '#383835'],
     [1, '#1c5cab'],
@@ -172,8 +185,8 @@ test('the cell ramp is themeable custom properties with the validated dark defau
     [4, '#86b6ef']
   ]) {
     assert.match(
-      component,
-      new RegExp(`var\\(--activity-cell-${level}, ${hex}\\)`),
+      grid,
+      new RegExp(`var\\(--grid-cell-${level}, ${hex}\\)`),
       `level ${level} must default to the validated ${hex}`
     );
   }
@@ -185,7 +198,7 @@ test('the cell ramp is themeable custom properties with the validated dark defau
   // never distort the pattern it is checked with (CodeQL
   // js/incomplete-sanitization).
   const escapeRegExp = (text) => text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
-  const styles = component.slice(component.indexOf('<style>'));
+  const styles = grid.slice(grid.indexOf('<style>'));
   for (const literal of styles.match(/(?:#[0-9a-f]{3,8}|rgba?\([^)]*\))/gi) ?? []) {
     assert.match(
       styles,
@@ -197,18 +210,18 @@ test('the cell ramp is themeable custom properties with the validated dark defau
 
 test('the strip owns fixed geometry and its own overflow', () => {
   // Fixed block sizes per region: data arriving never shifts layout.
-  assert.match(component, /\.activity-strip \{[^}]*block-size: 6\.25rem/);
+  assert.match(grid, /\.grid-strip \{[^}]*block-size: 7rem/);
   assert.match(component, /\.activity-totals \{[^}]*block-size: 1\.25rem/);
   assert.match(component, /\.activity-commits \{[^}]*block-size: 5\.625rem/);
   // A wide window scrolls inside the strip, never the page.
-  assert.match(component, /\.activity-strip \{[^}]*overflow-x: auto/);
+  assert.match(grid, /\.grid-strip \{[^}]*overflow-x: auto/);
   // The bar is out of the document flow and bounded against the viewport.
   assert.match(component, /position: fixed/);
   assert.match(component, /calc\(100vw - 1\.5rem\)/);
 });
 
 test('activity sources stay local-origin and provider-neutral', () => {
-  for (const [name, source] of Object.entries({ component, helpers })) {
+  for (const [name, source] of Object.entries({ component, helpers, grid })) {
     assert.doesNotMatch(source, /(?:https?:)?\/\//, `${name} introduces a remote origin`);
     // The panel is provider-neutral: the data's origin never names itself in
     // frontend source (mirrors the vcs-activity naming in internal/panels).

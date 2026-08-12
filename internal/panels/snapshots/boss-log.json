@@ -1,14 +1,363 @@
 {
-  "generatedAt": "2026-08-10T21:15:00Z",
+  "generatedAt": "2026-08-12T07:05:00Z",
   "data": {
     "account": "Roll The J",
     "bosses": [
-      { "name": "Zulrah", "kc": 1408, "rank": 152340 },
-      { "name": "Vorkath", "kc": 732, "rank": 289113 },
-      { "name": "Chambers of Xeric", "kc": 118, "rank": 201558 },
-      { "name": "Theatre of Blood", "kc": 46, "rank": 174092 },
-      { "name": "The Whisperer", "kc": null, "rank": null },
-      { "name": "TzKal-Zuk", "kc": 3, "rank": 98801, "score": 3 }
+      {
+        "name": "Abyssal Sire",
+        "kc": 652,
+        "rank": 69650
+      },
+      {
+        "name": "Alchemical Hydra",
+        "kc": 563,
+        "rank": 143113
+      },
+      {
+        "name": "Amoxliatl",
+        "kc": 193,
+        "rank": 20322
+      },
+      {
+        "name": "Araxxor",
+        "kc": 441,
+        "rank": 120622
+      },
+      {
+        "name": "Artio",
+        "kc": 0,
+        "rank": null
+      },
+      {
+        "name": "Barrows Chests",
+        "kc": 28,
+        "rank": 943345
+      },
+      {
+        "name": "Brutus",
+        "kc": 524,
+        "rank": 101530
+      },
+      {
+        "name": "Bryophyta",
+        "kc": 20,
+        "rank": 95136
+      },
+      {
+        "name": "Callisto",
+        "kc": 39,
+        "rank": 208857
+      },
+      {
+        "name": "Calvar'ion",
+        "kc": 0,
+        "rank": null
+      },
+      {
+        "name": "Cerberus",
+        "kc": 585,
+        "rank": 154052
+      },
+      {
+        "name": "Chambers of Xeric",
+        "kc": 10,
+        "rank": 334057
+      },
+      {
+        "name": "Chambers of Xeric: Challenge Mode",
+        "kc": 13,
+        "rank": 83368
+      },
+      {
+        "name": "Chaos Elemental",
+        "kc": 901,
+        "rank": 1523
+      },
+      {
+        "name": "Chaos Fanatic",
+        "kc": 243,
+        "rank": 28233
+      },
+      {
+        "name": "Commander Zilyana",
+        "kc": 116,
+        "rank": 150552
+      },
+      {
+        "name": "Corporeal Beast",
+        "kc": 64,
+        "rank": 112659
+      },
+      {
+        "name": "Crazy Archaeologist",
+        "kc": 218,
+        "rank": 31854
+      },
+      {
+        "name": "Dagannoth Prime",
+        "kc": 813,
+        "rank": 35039
+      },
+      {
+        "name": "Dagannoth Rex",
+        "kc": 1007,
+        "rank": 32299
+      },
+      {
+        "name": "Dagannoth Supreme",
+        "kc": 889,
+        "rank": 30973
+      },
+      {
+        "name": "Deranged Archaeologist",
+        "kc": 64,
+        "rank": 40549
+      },
+      {
+        "name": "Doom of Mokhaiotl",
+        "kc": 468,
+        "rank": 11127
+      },
+      {
+        "name": "Duke Sucellus",
+        "kc": 416,
+        "rank": 70370
+      },
+      {
+        "name": "General Graardor",
+        "kc": 508,
+        "rank": 98370
+      },
+      {
+        "name": "Giant Mole",
+        "kc": 1428,
+        "rank": 33243
+      },
+      {
+        "name": "Grotesque Guardians",
+        "kc": 1103,
+        "rank": 15921
+      },
+      {
+        "name": "Hespori",
+        "kc": 98,
+        "rank": 109609
+      },
+      {
+        "name": "Kalphite Queen",
+        "kc": 614,
+        "rank": 20707
+      },
+      {
+        "name": "King Black Dragon",
+        "kc": 3711,
+        "rank": 4268
+      },
+      {
+        "name": "Kraken",
+        "kc": 3995,
+        "rank": 38526
+      },
+      {
+        "name": "Kree'Arra",
+        "kc": 477,
+        "rank": 42067
+      },
+      {
+        "name": "K'ril Tsutsaroth",
+        "kc": 523,
+        "rank": 27043
+      },
+      {
+        "name": "Lunar Chests",
+        "kc": 37,
+        "rank": 343259
+      },
+      {
+        "name": "Mad Angel",
+        "kc": 80,
+        "rank": 31514
+      },
+      {
+        "name": "Maggot King",
+        "kc": 776,
+        "rank": 3787
+      },
+      {
+        "name": "Mimic",
+        "kc": 0,
+        "rank": null
+      },
+      {
+        "name": "Nex",
+        "kc": 32,
+        "rank": 177604
+      },
+      {
+        "name": "Nightmare",
+        "kc": 13,
+        "rank": 106271
+      },
+      {
+        "name": "Phosani's Nightmare",
+        "kc": 121,
+        "rank": 28855
+      },
+      {
+        "name": "Obor",
+        "kc": 11,
+        "rank": 170198
+      },
+      {
+        "name": "Phantom Muspah",
+        "kc": 593,
+        "rank": 20533
+      },
+      {
+        "name": "Sarachnis",
+        "kc": 1005,
+        "rank": 25343
+      },
+      {
+        "name": "Scorpia",
+        "kc": 757,
+        "rank": 8126
+      },
+      {
+        "name": "Scurrius",
+        "kc": 158,
+        "rank": 102278
+      },
+      {
+        "name": "Shellbane Gryphon",
+        "kc": 643,
+        "rank": 13120
+      },
+      {
+        "name": "Skotizo",
+        "kc": 53,
+        "rank": 68782
+      },
+      {
+        "name": "Sol Heredit",
+        "kc": 2,
+        "rank": null
+      },
+      {
+        "name": "Spindel",
+        "kc": 0,
+        "rank": null
+      },
+      {
+        "name": "Tempoross",
+        "kc": 56,
+        "rank": 539963
+      },
+      {
+        "name": "The Gauntlet",
+        "kc": 62,
+        "rank": 56565
+      },
+      {
+        "name": "The Corrupted Gauntlet",
+        "kc": 17,
+        "rank": 309041
+      },
+      {
+        "name": "The Hueycoatl",
+        "kc": 196,
+        "rank": 43684
+      },
+      {
+        "name": "The Leviathan",
+        "kc": 97,
+        "rank": 61314
+      },
+      {
+        "name": "The Royal Titans",
+        "kc": 293,
+        "rank": 90845
+      },
+      {
+        "name": "The Whisperer",
+        "kc": 180,
+        "rank": 42395
+      },
+      {
+        "name": "Theatre of Blood",
+        "kc": 1,
+        "rank": null
+      },
+      {
+        "name": "Theatre of Blood: Hard Mode",
+        "kc": 0,
+        "rank": null
+      },
+      {
+        "name": "Thermonuclear Smoke Devil",
+        "kc": 304,
+        "rank": 196311
+      },
+      {
+        "name": "Tombs of Amascut",
+        "kc": 23,
+        "rank": 229600
+      },
+      {
+        "name": "Tombs of Amascut: Expert Mode",
+        "kc": 70,
+        "rank": 104905
+      },
+      {
+        "name": "TzKal-Zuk",
+        "kc": 2,
+        "rank": 32622
+      },
+      {
+        "name": "TzTok-Jad",
+        "kc": 24,
+        "rank": 39513
+      },
+      {
+        "name": "Vardorvis",
+        "kc": 1169,
+        "rank": 34476
+      },
+      {
+        "name": "Venenatis",
+        "kc": 256,
+        "rank": 51684
+      },
+      {
+        "name": "Vet'ion",
+        "kc": 71,
+        "rank": 105491
+      },
+      {
+        "name": "Vorkath",
+        "kc": 715,
+        "rank": 139355
+      },
+      {
+        "name": "Wintertodt",
+        "kc": 360,
+        "rank": 411059
+      },
+      {
+        "name": "Yama",
+        "kc": 467,
+        "rank": 40914
+      },
+      {
+        "name": "Zalcano",
+        "kc": 203,
+        "rank": 83109
+      },
+      {
+        "name": "Zulrah",
+        "kc": 1192,
+        "rank": 111737
+      }
     ]
   }
 }

@@ -18,7 +18,7 @@ func TestNewPreparesEveryBuiltinPanel(t *testing.T) {
 	t.Parallel()
 	coldStatus := map[string]Status{
 		"token-usage":  StatusStale,
-		"vcs-activity": StatusOK,
+		"vcs-activity": StatusStale,
 		"boss-log":     StatusStale,
 	}
 	registry := New()
@@ -65,28 +65,42 @@ func TestBossLogPanelModelsMissingKC(t *testing.T) {
 	if payload.Account == "" {
 		t.Error("boss-log account is empty")
 	}
-	if len(payload.Bosses) < 6 {
-		t.Errorf("boss-log ships %d bosses, want at least 6", len(payload.Bosses))
+	// The panel serves the COMPLETE boss table, not a curated handful: the
+	// upstream reports dozens, and a shipped snapshot that dropped back to a
+	// short list would be the exact defect this pin exists to catch.
+	if len(payload.Bosses) < 50 {
+		t.Errorf("boss-log ships %d bosses, want the complete upstream list", len(payload.Bosses))
 	}
-	var sawNullKC, sawRankedKC bool
+	seen := make(map[string]bool, len(payload.Bosses))
+	var sawUnranked, sawRanked bool
 	for _, boss := range payload.Bosses {
 		if boss.Name == "" {
 			t.Error("a boss row has no name")
 		}
-		if boss.KC == nil {
-			sawNullKC = true
-			if boss.Rank != nil {
-				t.Errorf("%s is unranked by kc but carries rank %d", boss.Name, *boss.Rank)
-			}
+		if seen[boss.Name] {
+			t.Errorf("boss %q appears twice", boss.Name)
+		}
+		seen[boss.Name] = true
+		if boss.KC != nil && *boss.KC < 0 {
+			t.Errorf("%s has a negative kill count", boss.Name)
+		}
+		// The unranked rendering path: rank is null (the frontend prints
+		// "Unranked") while the count may still be a real figure, because the
+		// hiscores only rank an account once it clears a threshold.
+		if boss.Rank == nil {
+			sawUnranked = true
 		} else {
-			sawRankedKC = true
+			sawRanked = true
+			if *boss.Rank < 1 {
+				t.Errorf("%s carries rank %d; the -1 sentinel must become null", boss.Name, *boss.Rank)
+			}
 		}
 	}
-	if !sawNullKC {
-		t.Error("no boss ships a null kc; the \"--\" rendering path would go untested")
+	if !sawUnranked {
+		t.Error("no boss ships a null rank; the \"Unranked\" rendering path would go untested")
 	}
-	if !sawRankedKC {
-		t.Error("no boss ships a numeric kc")
+	if !sawRanked {
+		t.Error("no boss ships a numeric rank")
 	}
 }
 
@@ -167,8 +181,13 @@ func TestVCSActivityPanelShipsARenderableGraph(t *testing.T) {
 	if err := decodeStrict(envelope.Data, &payload); err != nil {
 		t.Fatalf("decode vcs-activity payload: %v", err)
 	}
-	if len(payload.Weeks) < 4 {
-		t.Errorf("graph ships %d weeks, want at least 4", len(payload.Weeks))
+	// A real calendar covers a year of columns; a handful of weeks means the
+	// panel is back to a hand-made sample.
+	if len(payload.Weeks) < 50 {
+		t.Errorf("graph ships %d weeks, want a full year of columns", len(payload.Weeks))
+	}
+	if _, err := time.Parse("2006-01-02", payload.EndDate); err != nil {
+		t.Errorf("endDate = %q: %v; without it the padded trailing week is indistinguishable from real quiet days", payload.EndDate, err)
 	}
 	for i, week := range payload.Weeks {
 		if len(week) != 7 {
@@ -183,9 +202,9 @@ func TestVCSActivityPanelShipsARenderableGraph(t *testing.T) {
 	if payload.TotalContributions <= 0 || payload.Streak <= 0 {
 		t.Errorf("totals = %d, streak = %d; both must be positive in the sample", payload.TotalContributions, payload.Streak)
 	}
-	if len(payload.RecentCommits) != 3 {
-		t.Errorf("sample ships %d recent commits, want 3", len(payload.RecentCommits))
-	}
+	// The contribution calendar carries no commit rows, and the previous
+	// sample's rows were invented. An empty list is the honest answer until a
+	// commit producer exists; rows that DO appear must be complete and dated.
 	for _, commit := range payload.RecentCommits {
 		if commit.Repo == "" || commit.Message == "" {
 			t.Errorf("commit row incomplete: %+v", commit)

@@ -92,6 +92,10 @@ test('boss log renders the dense fixed-cell grid with tooltips and -- tallies', 
   assert.match(bossLog, /loading="lazy"/, 'icons must lazy-load');
   assert.match(bossLog, /decoding="async"/);
   assert.match(bossLog, /'--'/, 'null tallies must render as --');
+  assert.match(bossLog, /'Unranked'/, 'a null rank is unranked, and says so');
+  assert.match(bossLog, /formatWhole/, 'counts must be thousands-separated');
+  assert.match(bossLog, /max-block-size:/, 'the complete table must scroll inside the panel');
+  assert.match(bossLog, /overflow-y:\s*auto/);
   assert.match(bossLog, /role="tooltip"/);
   assert.match(bossLog, /:hover\s+\.boss-tip/);
   assert.match(bossLog, /:focus-visible\s+\.boss-tip/);
@@ -105,28 +109,57 @@ test('boss log renders the dense fixed-cell grid with tooltips and -- tallies', 
   assert.match(bossLog, /bossInitials/);
 });
 
+// The origin now serves EVERY boss the hiscores report — dozens — and only a
+// handful have vendored icons, so the old "every boss has an icon" pin would
+// demand an icon batch nobody has reviewed. The obligation runs the other way
+// now, and it is the one that actually protects the repository: every icon
+// that ships must belong to a boss the origin really serves (so no unused
+// third-party art accumulates), and the grid must have a real fallback for
+// the rest (so a missing icon is a designed state, not a hole).
 test(
-  'every boss the origin serves has a shipped icon under its slug',
+  'every shipped icon belongs to a boss the origin serves',
   { skip: reducedContextNote },
   async () => {
-    const [snapshot, fetchConfig, files] = await Promise.all([
+    const [snapshot, files] = await Promise.all([
       read('../../internal/panels/snapshots/boss-log.json').then(JSON.parse),
-      read('../../internal/panels/config/fetch.json').then(JSON.parse),
       readdir(new URL('../src/assets/icons/bosses', import.meta.url)),
     ]);
-    const names = new Set([
-      ...snapshot.data.bosses.map((boss) => boss.name),
-      ...fetchConfig.bossLog.bosses,
-    ]);
-    assert.ok(names.size > 0, 'the origin data names no bosses; the pin has nothing to protect');
-    for (const name of names) {
+    const slugs = new Set(snapshot.data.bosses.map((boss) => bossSlug(boss.name)));
+    assert.ok(slugs.size > 0, 'the origin data names no bosses; the pin has nothing to protect');
+    const icons = files.filter((file) => file.endsWith('.png'));
+    assert.ok(icons.length > 0, 'no icons ship; the pin has nothing to protect');
+    for (const icon of icons) {
       assert.ok(
-        files.includes(`${bossSlug(name)}.png`),
-        `boss "${name}" has no icon file ${bossSlug(name)}.png under assets/icons/bosses — ship the icon (and its ATTRIBUTION entry) with the data`
+        slugs.has(icon.replace(/\.png$/, '')),
+        `icon ${icon} matches no boss the origin serves — third-party art must never outlive the data that justifies it`
       );
     }
   }
 );
+
+test('the boss list is derived from the upstream, never enumerated in config', {
+  skip: reducedContextNote,
+}, async () => {
+  const fetchConfig = await read('../../internal/panels/config/fetch.json').then(JSON.parse);
+  assert.equal(
+    fetchConfig.bossLog.bosses,
+    undefined,
+    'an enumerated boss list silently drops every boss added upstream since the last edit'
+  );
+  assert.ok(
+    Array.isArray(fetchConfig.bossLog.excludeActivities) &&
+      fetchConfig.bossLog.excludeActivities.length > 0,
+    'config must name the NON-bosses, so an unrecognized upstream entry is preserved'
+  );
+});
+
+test('the origin serves the complete boss table', { skip: reducedContextNote }, async () => {
+  const snapshot = await read('../../internal/panels/snapshots/boss-log.json').then(JSON.parse);
+  assert.ok(
+    snapshot.data.bosses.length >= 50,
+    `the snapshot ships ${snapshot.data.bosses.length} bosses; the panel exists to show them all`
+  );
+});
 
 test('vendored icons stay CSP-servable, never inlined', () => {
   assert.match(

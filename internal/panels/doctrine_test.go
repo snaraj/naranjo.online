@@ -83,6 +83,11 @@ var vendorMarks = []string{
 	"anthro" + "pic",
 	"co" + "dex",
 	"open" + "ai",
+	// The version-control host the contribution calendar is fetched from.
+	// It is a vendor exactly like the others: the panel kind is named for
+	// what it reports, not for where it comes from, so the host belongs in
+	// config data and the compiled binary carries no coupling to it.
+	"git" + "hub",
 }
 
 // productionSources parses every non-test Go file of this package.

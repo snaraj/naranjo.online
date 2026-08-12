@@ -9,10 +9,13 @@ package panels
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -55,8 +58,9 @@ func bossFetchRegistry(t *testing.T, endpoint string, config FetchConfig) (*Regi
 	source, err := NewFetchSource(
 		SnapshotSource{Name: "snapshots/boss.json"},
 		config,
-		&bossLogFetchSpec{Endpoint: endpoint, Account: "fixture", Bosses: []string{"Fixture Boss", "Shy Boss"}},
-		nil,
+		panelFetchSpecs{bossLog: &bossLogFetchSpec{
+			Endpoint: endpoint, Account: "fixture", ExcludeActivities: []string{"Fixture Activity"},
+		}},
 	)
 	if err != nil {
 		t.Fatalf("NewFetchSource() error = %v", err)
@@ -312,7 +316,7 @@ func TestRedirectsAreRefusedAndCredentialStaysHome(t *testing.T) {
 	source := state.fetch
 	// The header name and sentinel spelling deliberately avoid secret-scanner
 	// keywords and entropy so the repository's gitleaks gate stays meaningful.
-	if _, err := source.fetchDocument(t.Context(), doer, origin.URL+"/scores.json", "x-test-credential", "fixture-sentinel-aaaa", nil); err == nil {
+	if _, err := source.fetchDocument(t.Context(), doer, origin.URL+"/scores.json", "x-test-credential", "fixture-sentinel-aaaa", nil, 0); err == nil {
 		t.Fatal("credentialed fetch followed a redirect")
 	}
 	if got := targetHits.Load(); got != 0 {
@@ -325,23 +329,30 @@ func TestRedirectsAreRefusedAndCredentialStaysHome(t *testing.T) {
 // response serving instead of busting the owner's 32 KiB bound.
 func TestOversizedLivePayloadIsRefused(t *testing.T) {
 	t.Parallel()
-	giantBosses := make([]string, 40)
-	for i := range giantBosses {
-		giantBosses[i] = strings.Repeat("b", 1024) + string(rune('a'+i))
+	// The boss list now comes from the UPSTREAM, so the over-budget case is
+	// an upstream that reports an absurd number of absurdly named bosses —
+	// which is exactly the shape a compromised or drifting upstream would
+	// take, and exactly what the budget refusal exists to stop.
+	rows := make([]string, 0, 40)
+	for i := 0; i < 40; i++ {
+		rows = append(rows, fmt.Sprintf(`{"id":%d,"name":%q,"rank":1,"score":1}`, i, strings.Repeat("b", 1024)+string(rune('a'+i))))
 	}
+	giantHiscores := `{"name":"fixture","skills":[],"activities":[` + strings.Join(rows, ",") + `]}`
 	fsys := fstest.MapFS{"snapshots/boss.json": {Data: validSnapshot(t)}}
 	source, err := NewFetchSource(
 		SnapshotSource{Name: "snapshots/boss.json"},
 		validFetchConfig(),
-		&bossLogFetchSpec{Endpoint: "https://api.example.test/scores.json", Account: "fixture", Bosses: giantBosses},
-		nil,
+		panelFetchSpecs{bossLog: &bossLogFetchSpec{
+			Endpoint: "https://api.example.test/scores.json", Account: "fixture",
+			ExcludeActivities: []string{"Fixture Activity"},
+		}},
 	)
 	if err != nil {
 		t.Fatalf("NewFetchSource() error = %v", err)
 	}
 	registry := newRegistry(fsys, []panelDefinition{{id: "boss-log", kind: KindBossLog, title: "Boss log", source: source}})
 	state := registry.byID["boss-log"]
-	if err := registry.refreshPanel(t.Context(), state, &scriptedDoer{bodies: []string{fixtureHiscores}}, func(string) string { return "" }); err == nil {
+	if err := registry.refreshPanel(t.Context(), state, &scriptedDoer{bodies: []string{giantHiscores}}, func(string) string { return "" }); err == nil {
 		t.Fatal("refresh accepted a payload over the panel budget")
 	}
 	envelope := decodePanelEnvelope(t, registry, "boss-log")
@@ -358,7 +369,7 @@ func TestOversizedLivePayloadIsRefused(t *testing.T) {
 // unavailable envelope instead of failing the boot.
 func TestFetchPanelWithBrokenFallbackIsUnavailable(t *testing.T) {
 	t.Parallel()
-	source, err := NewFetchSource(SnapshotSource{Name: "snapshots/never-shipped.json"}, validFetchConfig(), validBossSpec(), nil)
+	source, err := NewFetchSource(SnapshotSource{Name: "snapshots/never-shipped.json"}, validFetchConfig(), panelFetchSpecs{bossLog: validBossSpec()})
 	if err != nil {
 		t.Fatalf("NewFetchSource() error = %v", err)
 	}
@@ -434,8 +445,7 @@ func usageFetchSource(t *testing.T) *FetchSource {
 	source, err := NewFetchSource(
 		SnapshotSource{Name: "snapshots/token-usage.json"},
 		validFetchConfig(),
-		nil,
-		&tokenUsageFetchSpec{Sources: []usageSourceSpec{
+		panelFetchSpecs{usage: &tokenUsageFetchSpec{Sources: []usageSourceSpec{
 			{
 				Label: "anthropic", Endpoint: "https://api.example.test/usage-a", Shape: shapeUsagePage,
 				KeyEnvName: "PANEL_TEST_KEY_A", KeyHeader: "x-api-key",
@@ -446,7 +456,7 @@ func usageFetchSource(t *testing.T) *FetchSource {
 				KeyEnvName: "PANEL_TEST_KEY_B", KeyHeader: "Authorization", KeyPrefix: "Bearer ",
 				Window: windowParamSpec{Param: "start_time", Format: windowFormatUnix, LookbackDays: 7},
 			},
-		}},
+		}}},
 	)
 	if err != nil {
 		t.Fatalf("NewFetchSource() error = %v", err)
@@ -537,4 +547,85 @@ func TestUsageRefreshSkipsUnkeyedSourcesAndMerges(t *testing.T) {
 // fakeLookup returns an environment lookup over the given map only.
 func fakeLookup(values map[string]string) func(string) string {
 	return func(key string) string { return values[key] }
+}
+
+// TestActivityRefreshServesTheLiveCalendar drives the version-control panel's
+// whole live path with a scripted transport: the request goes out with the
+// document type the upstream demands, the captured response maps, and the
+// panel flips from its stale snapshot to fresh data. No credential is read
+// anywhere on this path — the producer is public by design — and a refusal
+// keeps the snapshot serving.
+func TestActivityRefreshServesTheLiveCalendar(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("testdata", "contributions-fragment.html"))
+	if err != nil {
+		t.Fatalf("read the captured contribution calendar: %v", err)
+	}
+	snapshot := []byte(`{"generatedAt":"2026-08-01T00:00:00Z","data":{"totalContributions":1,` +
+		`"weeks":[[0,0,0,0,0,0,1]],"streak":1,"endDate":"2026-08-01","recentCommits":[]}}`)
+	fsys := fstest.MapFS{"snapshots/activity.json": {Data: snapshot}}
+	source, err := NewFetchSource(
+		SnapshotSource{Name: "snapshots/activity.json"},
+		validFetchConfig(),
+		panelFetchSpecs{vcs: &vcsActivityFetchSpec{
+			Endpoint: "https://api.example.test/contributions",
+			Headers:  map[string]string{"Accept": "text/html"},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("NewFetchSource() error = %v", err)
+	}
+	registry := newRegistry(fsys, []panelDefinition{
+		{id: "vcs-activity", kind: KindVCSActivity, title: "Version-control activity", source: source},
+	})
+	state := registry.byID["vcs-activity"]
+	if got := decodePanelEnvelope(t, registry, "vcs-activity").Status; got != StatusStale {
+		t.Fatalf("cold status = %q, want the stale snapshot fallback", got)
+	}
+
+	doer := &recordingDoer{body: string(raw)}
+	// The environment lookup is poisoned: this producer must never read one.
+	env := func(key string) string {
+		t.Errorf("the public activity producer read the environment for %q", key)
+		return ""
+	}
+	if err := registry.refreshPanel(t.Context(), state, doer, env); err != nil {
+		t.Fatalf("refreshPanel() error = %v", err)
+	}
+	if doer.accept != "text/html" {
+		t.Errorf("request Accept = %q, want the document type the spec declares", doer.accept)
+	}
+	envelope := decodePanelEnvelope(t, registry, "vcs-activity")
+	if envelope.Status != StatusOK {
+		t.Fatalf("refreshed status = %q, want ok", envelope.Status)
+	}
+	var payload VCSActivityData
+	if err := decodeStrict(envelope.Data, &payload); err != nil {
+		t.Fatalf("decode refreshed payload: %v", err)
+	}
+	if len(payload.Weeks) != 12 || payload.TotalContributions != 303 || payload.EndDate != "2026-08-12" {
+		t.Errorf("refreshed payload = %d weeks, total %d, end %q", len(payload.Weeks), payload.TotalContributions, payload.EndDate)
+	}
+
+	// A drifted document is refused and the last good payload keeps serving,
+	// now honestly marked stale.
+	broken := &recordingDoer{body: "<html><body>signed out</body></html>"}
+	if err := registry.refreshPanel(t.Context(), state, broken, env); err == nil {
+		t.Fatal("refresh accepted a document with no calendar in it")
+	}
+	if got := decodePanelEnvelope(t, registry, "vcs-activity").Status; got != StatusStale {
+		t.Errorf("status after a failed refresh = %q, want stale", got)
+	}
+}
+
+// recordingDoer answers every request with one body and remembers the Accept
+// header the request carried.
+type recordingDoer struct {
+	body   string
+	accept string
+}
+
+func (d *recordingDoer) Do(r *http.Request) (*http.Response, error) {
+	d.accept = r.Header.Get("Accept")
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(d.body))}, nil
 }

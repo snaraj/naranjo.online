@@ -13,6 +13,14 @@ fan content:
 > terms of Jagex's Fan Content Policy. This content is not endorsed by or
 > affiliated with Jagex.
 
+The panel serves every boss the hiscores report, and only a handful of them
+have a vendored icon here. That is deliberate: no art is fetched to fill the
+gap, and a boss without an icon renders a plain initials tile instead. A
+frontend test enforces the direction that matters — every icon that ships
+must belong to a boss the origin actually serves, so third-party art can
+never outlive the data that justified vendoring it. Widening the icon set is
+an owner decision, taken one reviewed batch at a time.
+
 ## RuneLite-style panel chrome
 
 The site's side rail recreates the look of the RuneLite client's side panel
