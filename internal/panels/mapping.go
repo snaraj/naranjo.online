@@ -256,7 +256,10 @@ func mergeStats(recorded, live []TokenUsageStat) []TokenUsageStat {
 	for _, stat := range live {
 		byKey[stat.Key] = stat
 	}
-	merged := make([]TokenUsageStat, 0, len(recorded)+len(live))
+	// Capacity is a hint, not a bound: sizing it from one slice keeps the
+	// hint useful while keeping the arithmetic obviously non-overflowing
+	// (CodeQL go/allocation-size-overflow), and append covers the rest.
+	merged := make([]TokenUsageStat, 0, len(recorded))
 	replaced := make(map[string]bool, len(live))
 	for _, stat := range recorded {
 		if fresh, ok := byKey[stat.Key]; ok {
