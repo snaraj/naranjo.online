@@ -25,7 +25,6 @@ jobs:
       contents: write
       packages: write
       id-token: write
-      attestations: write
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -94,22 +93,89 @@ jobs:
         # keyless cosign attestation (slsaprovenance1) on that same digest,
         # so verifiers that require cosign-attached attestations — the
         # platform promotion ratchet, website-infrastructure#58 — can demand
-        # them from this release onward. Same identity, permissions, and
-        # no-skip discipline as the signing step: a missing or empty
-        # predicate fails the release.
+        # them from this release onward. Same identity and no-skip discipline
+        # as the signing step.
+        #
+        # What the attestation is, honestly: cosign v3.1.3 re-marshals the
+        # predicate through its typed SLSA v1 model on attach, which DROPS
+        # runDetails.metadata.buildkit_metadata and buildkit_completeness —
+        # including the vcs source/revision binding asserted below. The
+        # attached copy is therefore LOSSY: it carries the build's shape and
+        # this workflow's signing identity, not BuildKit's full record. The
+        # index-EMBEDDED provenance remains the authoritative content
+        # evidence, so the downstream promotion check must keep reading it
+        # and must never be "simplified" into reading the attestation
+        # instead.
+        #
+        # Subject rebinding: each per-architecture predicate is re-asserted
+        # about the INDEX digest, not the per-architecture manifest digest,
+        # because the ratchet verifies attestations on the index digest a
+        # deployment references — a per-architecture subject would fail that
+        # check. Both attestations therefore share one subject and are told
+        # apart only by predicate content, which the distinctness check below
+        # enforces; cosign v3.1.3's attest has no annotation flag.
+        #
+        # Failure surface: this step inserts GHCR reads plus Fulcio and Rekor
+        # round-trips between image signing and chart publishing, and any
+        # failure burns the version tag (tags are immutable and never
+        # reassigned, requirement 10). It therefore ends by verifying its own
+        # output under this workflow's identity: a release whose attestations
+        # are not discoverable or verifiable fails HERE, before the chart and
+        # the GitHub Release exist, instead of days later at promotion. GHCR
+        # exposes no Referrers API, so discovery rides cosign's
+        # sha256-<hex>.att fallback tag; the self-check settles that per
+        # release.
+        #
+        # Payload headroom: measured on the v0.1.9 index, each platform's
+        # predicate is ~30 KB compact (~54 KB pretty-printed) and its base64
+        # DSSE payload ~41 KB — well inside Rekor's 100 KB attestation
+        # ceiling, and cosign's normalization only shrinks it.
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          digest="${{ steps.build.outputs.digest }}"
-          for platform in linux/amd64 linux/arm64; do
+          # The platform set is derived from the index itself and then
+          # asserted to be EXACTLY the build step's platform list above:
+          # a third, missing, or duplicated platform fails the release.
+          # Update BOTH together.
+          expected_platforms='linux/amd64 linux/arm64'
+          provenance_platforms="$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" \
+            --format '{{ json .Provenance }}' | jq -r 'keys[]')"
+          mapfile -t platforms <<< "${provenance_platforms}"
+          test "${platforms[*]}" = "${expected_platforms}"
+          predicates=()
+          for platform in "${platforms[@]}"; do
             predicate="${RUNNER_TEMP}/slsa-${platform//\//-}.json"
-            docker buildx imagetools inspect "${IMAGE}@${digest}" \
+            docker buildx imagetools inspect "${IMAGE}@${DIGEST}" \
               --format "{{ json (index .Provenance \"${platform}\").SLSA }}" \
               > "${predicate}"
-            test -s "${predicate}"
-            grep -q '"buildDefinition"' "${predicate}"
-            cosign attest --yes --type slsaprovenance1 \
-              --predicate "${predicate}" "${IMAGE}@${digest}"
+            # Bind the predicate to THIS release before attaching it: built
+            # from this repository's source at this tag's commit, by a run of
+            # this repository's Actions.
+            jq -e --arg rev "${GITHUB_SHA}" --arg src "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" '
+              (.buildDefinition|type=="object") and
+              (.runDetails.builder.id | startswith($src + "/actions/runs/")) and
+              (.runDetails.metadata.buildkit_metadata.vcs.source == $src) and
+              (.runDetails.metadata.buildkit_metadata.vcs.revision == $rev)' \
+              "${predicate}" >/dev/null
+            predicates+=("${predicate}")
           done
+          # Distinct evidence per platform: a duplicated read would attach
+          # the same predicate twice under one subject. Exit 1 is cmp's
+          # "files differ"; a cmp error (2) fails the release too.
+          differ=0
+          cmp -s "${predicates[0]}" "${predicates[1]}" || differ=$?
+          test "${differ}" -eq 1
+          for predicate in "${predicates[@]}"; do
+            cosign attest --yes --type slsaprovenance1 \
+              --predicate "${predicate}" "${IMAGE}@${DIGEST}"
+          done
+          # Self-verification: prove the attestations just attached are
+          # discoverable and verifiable as this workflow's identity.
+          cosign verify-attestation --type slsaprovenance1 \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-publisher.yml@${GITHUB_REF}" \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "${IMAGE}@${DIGEST}" >/dev/null
       - name: Refuse to reuse an existing chart version, then publish and sign the chart
         run: |
           set -euo pipefail
@@ -138,7 +204,9 @@ jobs:
             printf '| Artifact | Reference |\n| --- | --- |\n'
             printf "| Image | \`%s@%s\` |\n" "${IMAGE}" "${{ steps.build.outputs.digest }}"
             printf "| Chart | \`%s@%s\` |\n" "${CHART}" "${CHART_DIGEST}"
-            printf '\nSigned with keyless Cosign by this workflow identity; SBOM and SLSA provenance attached to the image, and the SLSA provenance is additionally attached as keyless cosign attestations (slsaprovenance1) on the image digest. See CHANGELOG.md for human-readable changes.\n'
+            printf '\nSigned with keyless Cosign by this workflow identity; SBOM and SLSA provenance embedded in the image index.\n'
+            printf 'That provenance is additionally attached as keyless cosign attestations (slsaprovenance1), one per architecture, both about the image digest above. Cosign normalizes the predicate on attach and drops BuildKit metadata, so the attestation is a lossy copy: the index-embedded provenance remains the authoritative content evidence.\n'
+            printf '\nSee CHANGELOG.md for human-readable changes.\n'
           } > "${RUNNER_TEMP}/release-notes.md"
           gh release create "${tag}" --verify-tag \
             --title "naranjo.online ${tag}" \
