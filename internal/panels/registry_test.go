@@ -104,10 +104,37 @@ func TestTokenUsagePanelKeepsSourceLabelsAsData(t *testing.T) {
 		t.Fatalf("token-usage ships %d sources, want 2", len(payload.Sources))
 	}
 	labels := map[string]bool{}
+	units := map[string]bool{UnitTokens: true, UnitDays: true, UnitSeconds: true}
 	for _, source := range payload.Sources {
 		labels[source.Label] = true
-		if len(source.Windows) == 0 {
-			t.Errorf("source %q ships no usage windows", source.Label)
+		// Windows, stats, and insights are all optional and all honest: the
+		// shipped snapshot carries figures that were actually recorded and
+		// leaves the rest empty rather than inventing numbers. What every
+		// section that IS present must satisfy is pinned below.
+		for _, stat := range source.Stats {
+			if stat.Key == "" || stat.Label == "" {
+				t.Errorf("source %q ships a stat without a key or label: %+v", source.Label, stat)
+			}
+			if !units[stat.Unit] {
+				t.Errorf("source %q stat %q has unknown unit %q", source.Label, stat.Key, stat.Unit)
+			}
+			if stat.Value != nil && *stat.Value < 0 {
+				t.Errorf("source %q stat %q is negative", source.Label, stat.Key)
+			}
+			if !stat.Recorded {
+				t.Errorf("source %q stat %q is served from a snapshot yet claims live provenance", source.Label, stat.Key)
+			}
+		}
+		for _, insight := range source.Insights {
+			if insight.Label == "" {
+				t.Errorf("source %q ships an insight without a label", source.Label)
+			}
+			if insight.Pct != nil && (*insight.Pct < 0 || *insight.Pct > 100) {
+				t.Errorf("source %q insight %q is outside 0-100", source.Label, insight.Label)
+			}
+		}
+		if source.Series != nil {
+			t.Errorf("source %q ships a snapshot activity series; the series is live-only data and must stay absent until a refresh produces one", source.Label)
 		}
 		for _, window := range source.Windows {
 			if window.Period == "" {

@@ -8,7 +8,7 @@
   and load lazily, so nothing shifts as data or images arrive. -->
 <script lang="ts">
   import PanelShell from './PanelShell.svelte';
-  import { loadPanel } from '../panels';
+  import { watchPanel } from '../panels';
   import type { BossLogData, BossLogEntry, PanelEnvelope } from '../panels';
   import { bossInitials, bossSlug } from '../bossIcons';
 
@@ -28,17 +28,7 @@
 
   let envelope = $state<PanelEnvelope<BossLogData> | undefined>();
 
-  $effect(() => {
-    let cancelled = false;
-    void loadPanel<BossLogData>('boss-log').then((loaded) => {
-      if (!cancelled) {
-        envelope = loaded;
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  });
+  $effect(() => watchPanel<BossLogData>('boss-log', (loaded) => (envelope = loaded)));
 
   const data = $derived(envelope?.data ?? undefined);
 

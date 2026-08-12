@@ -20,15 +20,20 @@ const reducedContextNote = fullCheckout
   ? false
   : 'reduced build context ships only frontend/; the full-checkout gate enforces this pin';
 
-const [app, shell, rail, bossLog, panelsSource, iconsSource, viteConfig] = await Promise.all([
-  read('../src/App.svelte'),
-  read('../src/lib/components/PanelShell.svelte'),
-  read('../src/lib/components/SideRail.svelte'),
-  read('../src/lib/components/BossLog.svelte'),
-  read('../src/lib/panels.ts'),
-  read('../src/lib/bossIcons.ts'),
-  read('../vite.config.ts'),
-]);
+const [app, shell, rail, bossLog, panelsSource, iconsSource, viteConfig, grid, gridSource, activityBar, tokenUsage] =
+  await Promise.all([
+    read('../src/App.svelte'),
+    read('../src/lib/components/PanelShell.svelte'),
+    read('../src/lib/components/SideRail.svelte'),
+    read('../src/lib/components/BossLog.svelte'),
+    read('../src/lib/panels.ts'),
+    read('../src/lib/bossIcons.ts'),
+    read('../vite.config.ts'),
+    read('../src/lib/components/ContributionGrid.svelte'),
+    read('../src/lib/grid.ts'),
+    read('../src/lib/components/ActivityBar.svelte'),
+    read('../src/lib/components/TokenUsagePanel.svelte'),
+  ]);
 
 // Like the experience suite, these are structural regex pins over source:
 // they hold the shapes the owner specified — chrome values, grid density,
@@ -94,7 +99,7 @@ test('boss log renders the dense fixed-cell grid with tooltips and -- tallies', 
   assert.match(bossLog, /aria-label=\{cellLabel\(boss\)\}/);
   // Data flows only through the shared layer and shell; the sole
   // name-shaped logic is the slug lookup with the initials fallback.
-  assert.match(bossLog, /loadPanel<BossLogData>\('boss-log'\)/);
+  assert.match(bossLog, /watchPanel<BossLogData>\('boss-log'/);
   assert.match(bossLog, /import PanelShell from '\.\/PanelShell\.svelte'/);
   assert.match(bossLog, /bossSlug/);
   assert.match(bossLog, /bossInitials/);
@@ -147,8 +152,49 @@ test(
   }
 );
 
+test('every mounted panel stays current instead of painting once', () => {
+  // The defect this pins: each panel used to read its envelope exactly once,
+  // so a backend refresh was invisible until the visitor reloaded the page.
+  for (const [name, source] of Object.entries({ bossLog, activityBar, tokenUsage })) {
+    assert.match(source, /watchPanel/, `${name} no longer keeps itself current`);
+    assert.doesNotMatch(
+      source,
+      /\bloadPanel\b/,
+      `${name} reads its envelope directly again; the one-shot read is the bug`
+    );
+  }
+  // And the freshness badge reads a ticking clock, not the mount instant.
+  assert.match(shell, /watchClock/);
+  assert.match(shell, /panelAge\(generatedAt, now\)/);
+});
+
+test('the contribution grid is one component both panels render', () => {
+  assert.match(tokenUsage, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
+  // Fixed geometry: data arriving must never move the page.
+  assert.match(grid, /block-size:\s*7rem/);
+  assert.match(grid, /overflow-x:\s*auto/);
+  // The full ramp is themable, one custom property per level.
+  for (const level of [0, 1, 2, 3, 4]) {
+    assert.match(grid, new RegExp(`--grid-cell-${level}`), `the ramp lost level ${level}`);
+  }
+  // Never color alone, and a day outside the window is a hole, not a zero.
+  assert.match(grid, /aria-label=\{text\}/);
+  assert.match(grid, /title=\{text\}/);
+  assert.match(grid, /data-grid-absent=\{cell\.absent \? 'true' : 'false'\}/);
+});
+
 test('panel sources stay local-origin', () => {
-  for (const [name, source] of Object.entries({ shell, rail, bossLog, panelsSource, iconsSource })) {
+  for (const [name, source] of Object.entries({
+    shell,
+    rail,
+    bossLog,
+    panelsSource,
+    iconsSource,
+    grid,
+    gridSource,
+    activityBar,
+    tokenUsage,
+  })) {
     assert.doesNotMatch(source, /https?:\/\//, `${name} introduces a remote origin`);
   }
 });

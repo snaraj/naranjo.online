@@ -107,7 +107,7 @@ jobs:
           # when last raised, with test scaffolding excluded — see the filter
           # below). Raise it as coverage grows; lowering it weakens an
           # enforced check and is out of policy.
-          GO_COVERAGE_FLOOR: '91.1'
+          GO_COVERAGE_FLOOR: '93.2'
         run: |
           CGO_ENABLED=0 go test -covermode=atomic \
             -coverprofile="${RUNNER_TEMP}/site.cover.out" ./...

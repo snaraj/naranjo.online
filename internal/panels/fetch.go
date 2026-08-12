@@ -158,7 +158,7 @@ func (s *FetchSource) refresh(ctx context.Context, doer fetchDoer, env func(stri
 // reports ok only when every source fetched. Nothing fresh at all is an
 // error so the caller keeps serving the current payload.
 func (s *FetchSource) refreshUsage(ctx context.Context, doer fetchDoer, env func(string) string, now time.Time) (loadedPayload, error) {
-	fetched := make(map[string][]TokenUsageWindow, len(s.usage.Sources))
+	fetched := make(map[string]usageMapping, len(s.usage.Sources))
 	for _, source := range s.usage.Sources {
 		key := env(source.KeyEnvName)
 		if key == "" {
@@ -172,11 +172,11 @@ func (s *FetchSource) refreshUsage(ctx context.Context, doer fetchDoer, env func
 		if err != nil {
 			continue
 		}
-		windows, err := mapUsageWindows(source.Shape, body)
+		mapped, err := mapUsage(source.Shape, body)
 		if err != nil {
 			continue
 		}
-		fetched[source.Label] = windows
+		fetched[source.Label] = mapped
 	}
 	if len(fetched) == 0 {
 		return loadedPayload{}, errors.New("token usage: no source could be fetched")

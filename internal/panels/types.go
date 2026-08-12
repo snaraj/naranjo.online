@@ -126,12 +126,78 @@ type TokenUsageData struct {
 	Sources []TokenUsageSource `json:"sources"`
 }
 
-// TokenUsageSource is one labeled origin of token-usage windows.
+// TokenUsageSource is one labeled origin of token-usage windows. Label and
+// Windows are the original v1 fields; Account, Stats, Series, and Insights
+// were added later and are all optional, so a payload written before they
+// existed still decodes and still renders — an additive extension inside the
+// same kind version, never a breaking reshape.
 type TokenUsageSource struct {
 	// Label is the display name of the source, supplied as data.
 	Label string `json:"label"`
+	// Account is the public account handle the figures belong to, when the
+	// source reports one. Data, like every other vendor-specific string.
+	Account string `json:"account,omitempty"`
 	// Windows holds the source's usage windows, e.g. today and week.
 	Windows []TokenUsageWindow `json:"windows"`
+	// Stats holds headline figures rendered as tiles above the windows.
+	Stats []TokenUsageStat `json:"stats,omitempty"`
+	// Series is the daily consumption series the activity grid renders.
+	Series *TokenUsageSeries `json:"series,omitempty"`
+	// Insights holds the labeled proportions rendered under the grid.
+	Insights []TokenUsageInsight `json:"insights,omitempty"`
+}
+
+// TokenUsageStat is one headline tile: a stable key, a display label, a
+// magnitude, and the unit that magnitude is measured in. Value is a pointer
+// because "the source does not report this figure" is real information the
+// tile renders as an explicit dash — omitempty would erase the distinction
+// between an unreported figure and a genuine zero.
+type TokenUsageStat struct {
+	// Key is the stable identifier, e.g. "lifetime" or "longest-streak".
+	Key string `json:"key"`
+	// Label is the human tile caption, supplied as data.
+	Label string `json:"label"`
+	// Value is the magnitude in Unit; null means the source reports none.
+	Value *int64 `json:"value"`
+	// Unit names how Value is measured: UnitTokens, UnitDays, or UnitSeconds.
+	Unit string `json:"unit"`
+	// Recorded marks a figure that came from a dated out-of-band capture
+	// rather than the live feed, so the tile can say so instead of implying
+	// a freshness it does not have.
+	Recorded bool `json:"recorded,omitempty"`
+}
+
+// Stat units. The frontend formats by unit — compact digits for token
+// counts, whole days for streaks, and an hours-and-minutes duration for
+// elapsed seconds — so a new unit is a conscious edit on both sides.
+const (
+	// UnitTokens measures a token count.
+	UnitTokens = "tokens"
+	// UnitDays measures a whole number of days.
+	UnitDays = "days"
+	// UnitSeconds measures an elapsed duration in seconds.
+	UnitSeconds = "seconds"
+)
+
+// TokenUsageSeries is the daily consumption series behind the activity grid,
+// held as a start date plus one total per day so a year of dailies stays a
+// few kilobytes. Day n is StartDate plus n days; the series is contiguous by
+// construction, with zeros for days the source reported nothing.
+type TokenUsageSeries struct {
+	// StartDate is the calendar date of Totals[0], as YYYY-MM-DD.
+	StartDate string `json:"startDate"`
+	// Totals holds one combined input-plus-output token count per day.
+	Totals []int64 `json:"totals"`
+}
+
+// TokenUsageInsight is one labeled proportion under the activity grid.
+type TokenUsageInsight struct {
+	// Label names the measured behavior, supplied as data.
+	Label string `json:"label"`
+	// Pct is the proportion in percent; null means unreported.
+	Pct *float64 `json:"pct"`
+	// Recorded carries the same provenance meaning as on a stat tile.
+	Recorded bool `json:"recorded,omitempty"`
 }
 
 // TokenUsageWindow is one accounting window of token consumption.
@@ -381,6 +447,30 @@ type windowParamSpec struct {
 	// LookbackDays is how far back the window starts.
 	LookbackDays int `json:"lookbackDays"`
 }
+
+// Stat keys the live mapping can compute from a daily series alone. A
+// recorded snapshot tile carrying the same key is replaced by the live one;
+// keys the live feed cannot produce — a lifetime total, a longest single
+// task — stay recorded, because no usage API reports them.
+const (
+	// statCurrentStreak is the current run of consecutive active days.
+	statCurrentStreak = "current-streak"
+	// statLongestStreak is the longest such run inside the series.
+	statLongestStreak = "longest-streak"
+	// statPeakDay is the busiest single day inside the series.
+	statPeakDay = "peak-day"
+	// statWindowTotal is every token counted inside the fetched window.
+	statWindowTotal = "window-total"
+)
+
+// dayLayout is the calendar-date form the activity series indexes by.
+const dayLayout = "2006-01-02"
+
+// maxSeriesDays bounds a mapped activity series. The configured endpoints
+// return at most a month of daily buckets, so any span beyond two years is
+// upstream nonsense — refused before it can inflate a payload against the
+// owner's panel budget.
+const maxSeriesDays = 732
 
 // Response grammar and window format names used by config data.
 const (

@@ -47,54 +47,176 @@ func TestMapHiscoresIsDataDrivenAndNullSafe(t *testing.T) {
 	}
 }
 
-// TestMapUsageWindowsSumsBothGrammars pins the token arithmetic per
-// grammar: the usage-report grammar sums uncached, cache-read, and both
-// cache-creation classes into input, while the usage-page grammar uses its
-// aggregate input_tokens; both serve a today window from the newest bucket
-// and a week window over all buckets.
-func TestMapUsageWindowsSumsBothGrammars(t *testing.T) {
+// fixtureUsageReport is a valid usage-report/v1 document with two
+// consecutive daily buckets, the newest last.
+const fixtureUsageReport = `{"data":[` +
+	`{"starting_at":"2026-08-09T00:00:00Z","ending_at":"2026-08-10T00:00:00Z","results":[` +
+	`{"uncached_input_tokens":100,"cache_read_input_tokens":20,` +
+	`"cache_creation":{"ephemeral_1h_input_tokens":3,"ephemeral_5m_input_tokens":7},"output_tokens":40}]},` +
+	`{"starting_at":"2026-08-10T00:00:00Z","ending_at":"2026-08-11T00:00:00Z","results":[` +
+	`{"uncached_input_tokens":10,"cache_read_input_tokens":0,` +
+	`"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"output_tokens":4}]}` +
+	`],"has_more":false,"next_page":null}`
+
+// TestMapUsageSumsBothGrammars pins the token arithmetic per grammar: the
+// usage-report grammar sums uncached, cache-read, and both cache-creation
+// classes into input, while the usage-page grammar uses its aggregate
+// input_tokens; both serve a today window from the newest bucket, a week
+// window over all buckets, and the dated daily series the grid renders.
+func TestMapUsageSumsBothGrammars(t *testing.T) {
 	t.Parallel()
-	report := `{"data":[` +
-		`{"starting_at":"2026-08-09T00:00:00Z","ending_at":"2026-08-10T00:00:00Z","results":[` +
-		`{"uncached_input_tokens":100,"cache_read_input_tokens":20,` +
-		`"cache_creation":{"ephemeral_1h_input_tokens":3,"ephemeral_5m_input_tokens":7},"output_tokens":40}]},` +
-		`{"starting_at":"2026-08-10T00:00:00Z","ending_at":"2026-08-11T00:00:00Z","results":[` +
-		`{"uncached_input_tokens":10,"cache_read_input_tokens":0,` +
-		`"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"output_tokens":4}]}` +
-		`],"has_more":false,"next_page":null}`
-	windows, err := mapUsageWindows(shapeUsageReport, []byte(report))
+	report, err := mapUsage(shapeUsageReport, []byte(fixtureUsageReport))
 	if err != nil {
 		t.Fatalf("usage-report mapping error = %v", err)
 	}
-	if windows[0].Period != "today" || windows[0].InputTokens != 10 || windows[0].OutputTokens != 4 {
-		t.Errorf("usage-report today window = %+v", windows[0])
+	if report.windows[0].Period != "today" || report.windows[0].InputTokens != 10 || report.windows[0].OutputTokens != 4 {
+		t.Errorf("usage-report today window = %+v", report.windows[0])
 	}
-	if windows[1].Period != "week" || windows[1].InputTokens != 140 || windows[1].OutputTokens != 44 {
-		t.Errorf("usage-report week window = %+v", windows[1])
+	if report.windows[1].Period != "week" || report.windows[1].InputTokens != 140 || report.windows[1].OutputTokens != 44 {
+		t.Errorf("usage-report week window = %+v", report.windows[1])
+	}
+	if report.series == nil || report.series.StartDate != "2026-08-09" {
+		t.Fatalf("usage-report series = %+v, want a series starting on the oldest bucket day", report.series)
+	}
+	if want := []int64{170, 14}; len(report.series.Totals) != 2 ||
+		report.series.Totals[0] != want[0] || report.series.Totals[1] != want[1] {
+		t.Errorf("usage-report series totals = %v, want %v", report.series.Totals, want)
 	}
 
-	pageWindows, err := mapUsageWindows(shapeUsagePage, []byte(fixtureUsagePage))
+	page, err := mapUsage(shapeUsagePage, []byte(fixtureUsagePage))
 	if err != nil {
 		t.Fatalf("usage-page mapping error = %v", err)
 	}
-	if pageWindows[0].InputTokens != 50 || pageWindows[1].InputTokens != 150 || pageWindows[1].OutputTokens != 15 {
-		t.Errorf("usage-page windows = %+v", pageWindows)
+	if page.windows[0].InputTokens != 50 || page.windows[1].InputTokens != 150 || page.windows[1].OutputTokens != 15 {
+		t.Errorf("usage-page windows = %+v", page.windows)
+	}
+	// Both fixture buckets sit inside the same Unix day, so the series must
+	// SUM them into one dated day rather than refusing the document.
+	if page.series == nil || len(page.series.Totals) != 1 || page.series.Totals[0] != 165 {
+		t.Errorf("usage-page series = %+v, want one day totalling 165", page.series)
 	}
 
 	for name, run := range map[string]func() error{
-		"unknown shape": func() error { _, err := mapUsageWindows("mystery/v1", []byte(fixtureUsagePage)); return err },
+		"unknown shape": func() error { _, err := mapUsage("mystery/v1", []byte(fixtureUsagePage)); return err },
 		"empty buckets": func() error {
-			_, err := mapUsageWindows(shapeUsagePage, []byte(`{"object":"page","data":[],"has_more":false,"next_page":null}`))
+			_, err := mapUsage(shapeUsagePage, []byte(`{"object":"page","data":[],"has_more":false,"next_page":null}`))
 			return err
 		},
 		"unknown result field": func() error {
-			_, err := mapUsageWindows(shapeUsagePage, []byte(strings.Replace(fixtureUsagePage, `"input_tokens"`, `"surprise_tokens"`, 1)))
+			_, err := mapUsage(shapeUsagePage, []byte(strings.Replace(fixtureUsagePage, `"input_tokens"`, `"surprise_tokens"`, 1)))
+			return err
+		},
+		"unparsable bucket start": func() error {
+			_, err := mapUsage(shapeUsageReport, []byte(strings.Replace(fixtureUsageReport, `"2026-08-09T00:00:00Z"`, `"yesterday"`, 1)))
+			return err
+		},
+		"series beyond the day bound": func() error {
+			_, err := mapUsage(shapeUsageReport, []byte(strings.Replace(fixtureUsageReport, `"2026-08-09T00:00:00Z"`, `"2000-01-01T00:00:00Z"`, 1)))
 			return err
 		},
 	} {
 		if err := run(); err == nil {
 			t.Errorf("%s: mapping accepted a bad document", name)
 		}
+	}
+}
+
+// TestMapUsageDerivesOnlyWhatASeriesSupports pins the provenance boundary the
+// panel depends on: the live mapping emits the four figures a daily series
+// can prove and NOTHING else, so the lifetime total, the longest task, and
+// the behavioral insights stay recorded snapshot data instead of quietly
+// acquiring a live-looking freshness they never had.
+func TestMapUsageDerivesOnlyWhatASeriesSupports(t *testing.T) {
+	t.Parallel()
+	mapped, err := mapUsage(shapeUsageReport, []byte(fixtureUsageReport))
+	if err != nil {
+		t.Fatalf("mapUsage() error = %v", err)
+	}
+	keys := make([]string, 0, len(mapped.stats))
+	for _, stat := range mapped.stats {
+		keys = append(keys, stat.Key)
+		if stat.Value == nil {
+			t.Errorf("live stat %q carries no value", stat.Key)
+		}
+		if stat.Recorded {
+			t.Errorf("live stat %q claims recorded provenance", stat.Key)
+		}
+		if stat.Unit != UnitTokens && stat.Unit != UnitDays {
+			t.Errorf("live stat %q has unit %q", stat.Key, stat.Unit)
+		}
+	}
+	want := []string{statCurrentStreak, statLongestStreak, statPeakDay, statWindowTotal}
+	if len(keys) != len(want) {
+		t.Fatalf("live stat keys = %v, want exactly %v", keys, want)
+	}
+	for index, key := range want {
+		if keys[index] != key {
+			t.Errorf("live stat[%d] = %q, want %q", index, keys[index], key)
+		}
+	}
+	if *mapped.stats[2].Value != 170 {
+		t.Errorf("peak day = %d, want the busiest day in the series", *mapped.stats[2].Value)
+	}
+	if *mapped.stats[3].Value != 184 {
+		t.Errorf("window total = %d, want every token in the window", *mapped.stats[3].Value)
+	}
+}
+
+// TestDailyStreaksToleratesExactlyOneQuietTrailingDay pins the streak rule:
+// the newest bucket is the day in progress, so one empty trailing day does
+// not break the current run and two do; the longest run is measured across
+// the whole series regardless of where it sits.
+func TestDailyStreaksToleratesExactlyOneQuietTrailingDay(t *testing.T) {
+	t.Parallel()
+	for name, row := range map[string]struct {
+		totals           []int64
+		current, longest int64
+	}{
+		"empty series":            {nil, 0, 0},
+		"all quiet":               {[]int64{0, 0, 0}, 0, 0},
+		"active through today":    {[]int64{0, 1, 1, 1}, 3, 3},
+		"one quiet trailing day":  {[]int64{1, 1, 0}, 2, 2},
+		"two quiet trailing days": {[]int64{1, 1, 0, 0}, 0, 2},
+		"longest sits earlier":    {[]int64{1, 1, 1, 0, 1}, 1, 3},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			current, longest := dailyStreaks(row.totals)
+			if current != row.current || longest != row.longest {
+				t.Errorf("dailyStreaks(%v) = (%d, %d), want (%d, %d)", row.totals, current, longest, row.current, row.longest)
+			}
+		})
+	}
+}
+
+// TestMergeStatsKeepsRecordedOrderAndProvenance pins the tile merge: a
+// recorded figure the live feed can compute is replaced IN PLACE so the
+// owner's tile order survives a refresh, a recorded figure the feed cannot
+// compute stays recorded, and a live-only figure is appended after them.
+func TestMergeStatsKeepsRecordedOrderAndProvenance(t *testing.T) {
+	t.Parallel()
+	lifetime, recordedStreak, liveStreak, peak := int64(9), int64(2), int64(7), int64(5)
+	merged := mergeStats(
+		[]TokenUsageStat{
+			{Key: "lifetime", Label: "Lifetime", Value: &lifetime, Unit: UnitTokens, Recorded: true},
+			{Key: statCurrentStreak, Label: "Current streak", Value: &recordedStreak, Unit: UnitDays, Recorded: true},
+		},
+		[]TokenUsageStat{
+			{Key: statCurrentStreak, Label: "Current streak", Value: &liveStreak, Unit: UnitDays},
+			{Key: statPeakDay, Label: "Peak day", Value: &peak, Unit: UnitTokens},
+		},
+	)
+	if len(merged) != 3 {
+		t.Fatalf("merged stats = %+v, want three tiles", merged)
+	}
+	if merged[0].Key != "lifetime" || !merged[0].Recorded {
+		t.Errorf("tile 0 = %+v, want the untouched recorded lifetime", merged[0])
+	}
+	if merged[1].Key != statCurrentStreak || merged[1].Recorded || *merged[1].Value != liveStreak {
+		t.Errorf("tile 1 = %+v, want the live streak in the recorded tile's slot", merged[1])
+	}
+	if merged[2].Key != statPeakDay {
+		t.Errorf("tile 2 = %+v, want the live-only tile appended", merged[2])
 	}
 }
 
@@ -106,9 +228,10 @@ func TestMergeUsagePayloadHonorsConfigOrderAndFreshness(t *testing.T) {
 	spec := &tokenUsageFetchSpec{Sources: []usageSourceSpec{{Label: "alpha"}, {Label: "beta"}}}
 	fallback := TokenUsageData{Sources: []TokenUsageSource{
 		{Label: "beta", Windows: []TokenUsageWindow{{Period: "session", InputTokens: 1}}},
-		{Label: "alpha", Windows: []TokenUsageWindow{{Period: "session", InputTokens: 2}}},
+		{Label: "alpha", Account: "handle", Windows: []TokenUsageWindow{{Period: "session", InputTokens: 2}},
+			Insights: []TokenUsageInsight{{Label: "recorded only"}}},
 	}}
-	fetched := map[string][]TokenUsageWindow{"alpha": {{Period: "week", InputTokens: 9}}}
+	fetched := map[string]usageMapping{"alpha": {windows: []TokenUsageWindow{{Period: "week", InputTokens: 9}}}}
 
 	merged, allFresh := mergeUsagePayload(spec, fetched, fallback)
 	if allFresh {
@@ -120,8 +243,12 @@ func TestMergeUsagePayloadHonorsConfigOrderAndFreshness(t *testing.T) {
 	if merged.Sources[1].Label != "beta" || merged.Sources[1].Windows[0].InputTokens != 1 {
 		t.Errorf("fallback source row = %+v", merged.Sources[1])
 	}
+	// A fetched source keeps the recorded figures no usage API reports.
+	if merged.Sources[0].Account != "handle" || len(merged.Sources[0].Insights) != 1 {
+		t.Errorf("fetched source lost its recorded account or insights: %+v", merged.Sources[0])
+	}
 
-	fetched["beta"] = []TokenUsageWindow{{Period: "week", InputTokens: 8}}
+	fetched["beta"] = usageMapping{windows: []TokenUsageWindow{{Period: "week", InputTokens: 8}}}
 	if _, allFresh := mergeUsagePayload(spec, fetched, fallback); !allFresh {
 		t.Error("merge denied freshness with every source fetched")
 	}

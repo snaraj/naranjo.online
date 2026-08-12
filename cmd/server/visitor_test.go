@@ -364,8 +364,36 @@ type visitorTokenUsageData struct {
 }
 
 type visitorTokenUsageSource struct {
-	Label   string                    `json:"label"`
-	Windows []visitorTokenUsageWindow `json:"windows"`
+	Label    string                     `json:"label"`
+	Account  string                     `json:"account"`
+	Windows  []visitorTokenUsageWindow  `json:"windows"`
+	Stats    []visitorTokenUsageStat    `json:"stats"`
+	Series   *visitorTokenUsageSeries   `json:"series"`
+	Insights []visitorTokenUsageInsight `json:"insights"`
+}
+
+// visitorTokenUsageStat, -Series, and -Insight are the additive token-usage/v1
+// sections: headline tiles, the daily activity series behind the grid, and
+// the labeled proportions under it. Value and Pct are pointers because "the
+// source does not report this figure" is real information the panel renders
+// as a dash, and a non-pointer would silently turn it into a zero.
+type visitorTokenUsageStat struct {
+	Key      string `json:"key"`
+	Label    string `json:"label"`
+	Value    *int64 `json:"value"`
+	Unit     string `json:"unit"`
+	Recorded bool   `json:"recorded"`
+}
+
+type visitorTokenUsageSeries struct {
+	StartDate string  `json:"startDate"`
+	Totals    []int64 `json:"totals"`
+}
+
+type visitorTokenUsageInsight struct {
+	Label    string   `json:"label"`
+	Pct      *float64 `json:"pct"`
+	Recorded bool     `json:"recorded"`
 }
 
 type visitorTokenUsageWindow struct {
@@ -447,8 +475,25 @@ func TestVisitorChecksTokenUsage(t *testing.T) {
 				t.Errorf("source labels must be distinct non-empty data, got %q twice or empty", source.Label)
 			}
 			seen[source.Label] = true
-			if len(source.Windows) == 0 {
-				t.Errorf("source %q ships no windows in the snapshot fallback", source.Label)
+			// Sections are optional and absence is honest: the shipped
+			// snapshot carries the figures that were actually recorded and
+			// leaves the rest empty rather than inventing numbers. What a
+			// present section must satisfy is pinned below.
+			if source.Series != nil {
+				t.Errorf("source %q ships a snapshot activity series; the series is live-only data", source.Label)
+			}
+			for _, stat := range source.Stats {
+				if stat.Key == "" || stat.Label == "" || stat.Unit == "" {
+					t.Errorf("source %q ships an incomplete stat tile: %+v", source.Label, stat)
+				}
+				if !stat.Recorded {
+					t.Errorf("source %q stat %q is snapshot data yet claims live provenance", source.Label, stat.Key)
+				}
+			}
+			for _, insight := range source.Insights {
+				if insight.Label == "" {
+					t.Errorf("source %q ships an insight with no label", source.Label)
+				}
 			}
 			for _, window := range source.Windows {
 				if window.Period == "" {

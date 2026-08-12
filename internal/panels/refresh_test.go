@@ -495,8 +495,18 @@ func TestUsageRefreshSkipsUnkeyedSourcesAndMerges(t *testing.T) {
 		if len(fetched) != 2 || fetched[0].Period != "today" || fetched[1].Period != "week" || fetched[1].InputTokens != 150 {
 			t.Errorf("fetched windows = %+v, want today plus a summed week", fetched)
 		}
-		if len(payload.Sources[1].Windows) == 0 || payload.Sources[1].Windows[0].Period != "session" {
-			t.Errorf("unkeyed source lost its snapshot fallback windows: %+v", payload.Sources[1].Windows)
+		if payload.Sources[0].Series == nil || len(payload.Sources[0].Series.Totals) == 0 {
+			t.Errorf("fetched source carries no activity series: %+v", payload.Sources[0].Series)
+		}
+		// The unkeyed source keeps its recorded snapshot section verbatim —
+		// the account handle and the figures no usage API reports — and gains
+		// no live series it never fetched.
+		unkeyed := payload.Sources[1]
+		if unkeyed.Account == "" || len(unkeyed.Stats) == 0 || len(unkeyed.Insights) == 0 {
+			t.Errorf("unkeyed source lost its recorded snapshot section: %+v", unkeyed)
+		}
+		if unkeyed.Series != nil {
+			t.Errorf("unkeyed source acquired a series it never fetched: %+v", unkeyed.Series)
 		}
 	})
 
