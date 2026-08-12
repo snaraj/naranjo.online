@@ -80,6 +80,25 @@ type Site struct {
 }
 
 const (
+	// forwardedProtoHeader names the TLS-terminating edge's declaration of
+	// the scheme the visitor used on the public leg of the connection. The
+	// origin reads it for exactly one decision — the scheme policy in
+	// securityHeaders and redirectForwardedHTTP — and must never trust it
+	// for anything else: it is client-controlled bytes on any connection
+	// that did not come through the edge.
+	forwardedProtoHeader = "X-Forwarded-Proto"
+	// forwardedProtoHTTP is the only declaration that triggers the permanent
+	// redirect to TLS. Matching is exact and case-sensitive on purpose: the
+	// edge sends lowercase tokens, so a case variant or unknown value is not
+	// our edge speaking and fails closed to normal serving. Absence — probe
+	// and port-forward traffic that never crossed the edge — serves normally
+	// for the same reason.
+	forwardedProtoHTTP = "http"
+	// forwardedProtoHTTPS is the only declaration that earns the HSTS
+	// policy. Exact matching keeps the promise fail-closed: no spoofed or
+	// malformed proto value can mint a transport-security pin for a
+	// connection the edge never declared as TLS.
+	forwardedProtoHTTPS = "https"
 	// themeCookie names the visitor's reading-mode choice (issue #22). Only
 	// the frontend toggle ever writes it — the origin never issues Set-Cookie
 	// — and the document handler reads it to select the matching precomputed

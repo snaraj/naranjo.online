@@ -184,15 +184,23 @@ func TestRunServesTheSiteAndDrainsOnSIGTERM(t *testing.T) {
 			t.Errorf("Cache-Control = %q", got)
 		}
 		for header, want := range map[string]string{
-			"Content-Security-Policy":   "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
-			"Strict-Transport-Security": "max-age=31536000",
-			"X-Content-Type-Options":    "nosniff",
-			"X-Frame-Options":           "DENY",
-			"Referrer-Policy":           "no-referrer",
+			"Content-Security-Policy": "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+			"X-Content-Type-Options":  "nosniff",
+			"X-Frame-Options":         "DENY",
+			"Referrer-Policy":         "no-referrer",
 		} {
 			if got := response.Header.Get(header); got != want {
 				t.Errorf("%s = %q, want %q", header, got, want)
 			}
+		}
+		// This fetch is direct — no edge, no X-Forwarded-Proto — exactly how
+		// kubelet probes and port-forward validation reach the pod. The HSTS
+		// promise must not answer it: an HSTS pin teaches a client to refuse
+		// plain HTTP for a year, and an undeclared leg has demonstrated no
+		// such transport. TLS-declared traffic is pinned to carry it in
+		// TestRunEnforcesTheForwardedProtoContract.
+		if got := response.Header.Get("Strict-Transport-Security"); got != "" {
+			t.Errorf("Strict-Transport-Security = %q on a direct fetch, want absent", got)
 		}
 		document = string(body)
 		if !strings.Contains(document, "data-static-fallback") {
@@ -281,4 +289,154 @@ func TestRunServesTheSiteAndDrainsOnSIGTERM(t *testing.T) {
 	} else if !errors.Is(err, syscall.ECONNREFUSED) && !strings.Contains(err.Error(), "connection refused") {
 		t.Logf("post-shutdown probe failed as expected: %v", err)
 	}
+}
+
+// forwardedGet performs one request with an explicit X-Forwarded-Proto state
+// over real transport and returns the raw response. protoValue "" sends no
+// header at all — the direct, never-crossed-the-edge shape.
+func forwardedGet(t *testing.T, client *http.Client, method, url, protoValue string) *http.Response {
+	t.Helper()
+	request, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		t.Fatalf("build %s %s: %v", method, url, err)
+	}
+	if protoValue != "" {
+		request.Header.Set("X-Forwarded-Proto", protoValue)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	response.Body.Close()
+	return response
+}
+
+// TestRunEnforcesTheForwardedProtoContract proves the origin's whole
+// X-Forwarded-Proto contract over real transport: the exact declaration
+// "http" is answered with a permanent redirect to the identical URL over TLS
+// (host, escaped path, and query byte for byte; HEAD bodiless like GET), the
+// exact declaration "https" earns the exact HSTS promise, and every other
+// state — no header, case variants, unknown protos — fails closed to normal
+// serving with no redirect and no promise. Wire transport is the point:
+// header-NAME canonicalization only exists where a real parser reads real
+// bytes, so the mixed-case-name row lives here and not in the unit matrix.
+func TestRunEnforcesTheForwardedProtoContract(t *testing.T) {
+	requireBuiltFrontend(t)
+	base, runResult := bootServer(t, nil)
+	host := strings.TrimPrefix(base, "http://")
+	// The redirect's https target is terminated at the edge, outside this
+	// origin; chasing it would test the dialer, not the site. Surface it.
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	t.Run("plain-http GET bounces to TLS with the URL intact", func(t *testing.T) {
+		response := forwardedGet(t, client, http.MethodGet, base+"/blog/first-post?ref=feed&q=a%20b", "http")
+		if response.StatusCode != http.StatusMovedPermanently {
+			t.Fatalf("status = %d, want 301", response.StatusCode)
+		}
+		if got, want := response.Header.Get("Location"), "https://"+host+"/blog/first-post?ref=feed&q=a%20b"; got != want {
+			t.Errorf("Location = %q, want %q", got, want)
+		}
+		if got := response.Header.Get("Strict-Transport-Security"); got != "" {
+			t.Errorf("redirect carries HSTS %q; the plain leg has earned no promise", got)
+		}
+		// The bounce still carries the security baseline: it is written
+		// inside the securityHeaders wrapper.
+		if got := response.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("redirect X-Content-Type-Options = %q, want nosniff", got)
+		}
+	})
+
+	t.Run("plain-http HEAD bounces identically with no body", func(t *testing.T) {
+		request, err := http.NewRequest(http.MethodHead, base+"/blog/first-post?ref=feed", nil)
+		if err != nil {
+			t.Fatalf("build HEAD: %v", err)
+		}
+		request.Header.Set("X-Forwarded-Proto", "http")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatalf("HEAD: %v", err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatalf("read HEAD body: %v", err)
+		}
+		if response.StatusCode != http.StatusMovedPermanently || len(body) != 0 {
+			t.Fatalf("HEAD = %d with %d body bytes, want a bodiless 301", response.StatusCode, len(body))
+		}
+		if got, want := response.Header.Get("Location"), "https://"+host+"/blog/first-post?ref=feed"; got != want {
+			t.Errorf("Location = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("any header-name casing reaches the same policy over the wire", func(t *testing.T) {
+		request, err := http.NewRequest(http.MethodGet, base+"/", nil)
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+		// Assigning the map key directly bypasses the client's Set-side
+		// canonicalization, so these exact bytes go on the wire; the server's
+		// parser canonicalizes the NAME on read (RFC 9110 field names are
+		// case-insensitive). The VALUE stays exact-match by design.
+		request.Header["x-fOrWaRdEd-pRoTo"] = []string{"http"}
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatalf("GET with mixed-case header name: %v", err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusMovedPermanently {
+			t.Errorf("status = %d, want 301: header-name case must not defeat the policy", response.StatusCode)
+		}
+	})
+
+	t.Run("TLS-declared GET serves with the exact promise", func(t *testing.T) {
+		response := forwardedGet(t, client, http.MethodGet, base+"/", "https")
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", response.StatusCode)
+		}
+		if got := response.Header.Get("Strict-Transport-Security"); got != "max-age=31536000" {
+			t.Errorf("Strict-Transport-Security = %q, want %q", got, "max-age=31536000")
+		}
+	})
+
+	t.Run("TLS-declared HEAD carries the same promise", func(t *testing.T) {
+		response := forwardedGet(t, client, http.MethodHead, base+"/", "https")
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", response.StatusCode)
+		}
+		if got := response.Header.Get("Strict-Transport-Security"); got != "max-age=31536000" {
+			t.Errorf("Strict-Transport-Security = %q, want %q", got, "max-age=31536000")
+		}
+	})
+
+	t.Run("undeclared probes and port-forwards serve with no promise", func(t *testing.T) {
+		for _, path := range []string{"/readyz", "/livez", "/"} {
+			response := forwardedGet(t, client, http.MethodGet, base+path, "")
+			if response.StatusCode != http.StatusOK {
+				t.Errorf("GET %s = %d, want 200 with no forwarded proto", path, response.StatusCode)
+			}
+			if got := response.Header.Get("Strict-Transport-Security"); got != "" {
+				t.Errorf("GET %s carries HSTS %q on an undeclared leg, want absent", path, got)
+			}
+		}
+	})
+
+	t.Run("case-variant and unknown declarations fail closed", func(t *testing.T) {
+		for _, proto := range []string{"HTTPS", "HTTP", "ws"} {
+			response := forwardedGet(t, client, http.MethodGet, base+"/", proto)
+			if response.StatusCode != http.StatusOK {
+				t.Errorf("GET / with proto %q = %d, want 200: only the exact lowercase tokens act", proto, response.StatusCode)
+			}
+			if got := response.Header.Get("Strict-Transport-Security"); got != "" {
+				t.Errorf("proto %q minted HSTS %q; only the exact %q declaration may", proto, got, "https")
+			}
+		}
+	})
+
+	drainScenario(t, runResult)
 }

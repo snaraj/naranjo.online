@@ -21,16 +21,26 @@ const (
 	// MediaContentSecurityPolicy is the stricter sandbox policy every media
 	// response pins in place of the site policy.
 	MediaContentSecurityPolicy = "default-src 'none'; sandbox"
+	// StrictTransportSecurityPolicy is the exact HSTS promise the origin
+	// sends with — and only with — responses whose request the edge declared
+	// as TLS. Pinned independently like the CSP above, never imported from
+	// the server package.
+	StrictTransportSecurityPolicy = "max-age=31536000"
+	// forwardedProtoHeader is the edge's scheme declaration the harness
+	// stamps on every navigation, exactly as the TLS-terminating edge does
+	// when it forwards a visitor's request to the origin.
+	forwardedProtoHeader = "X-Forwarded-Proto"
 )
 
 // exactSecurityHeaders is the browser-security baseline that must accompany
-// every navigation result — success, redirect-free 404, or conditional 304 —
-// with these exact values.
+// every navigation result — success, redirect, redirect-free 404, or
+// conditional 304 — with these exact values. HSTS is asserted separately in
+// assertSecurityBaseline because it is proto-conditional: required on
+// TLS-declared sessions, forbidden on every other.
 var exactSecurityHeaders = map[string]string{
 	"Cross-Origin-Resource-Policy": "same-origin",
 	"Permissions-Policy":           "camera=(), geolocation=(), microphone=()",
 	"Referrer-Policy":              "no-referrer",
-	"Strict-Transport-Security":    "max-age=31536000",
 	"X-Content-Type-Options":       "nosniff",
 	"X-Frame-Options":              "DENY",
 }
@@ -58,13 +68,25 @@ type VisitorResponse struct {
 // JavaScript writes them, can follow a document's asset references, can seek
 // media with Range requests like a video player, and asserts the
 // security-header baseline on every navigation so no scenario can forget it.
+// Real visitors reach the origin through the TLS-terminating edge, so the
+// session carries the edge's scheme declaration on every request; the
+// baseline requires the HSTS promise exactly on TLS-declared sessions and
+// forbids it on every other.
 type Visitor struct {
 	// t owns failure reporting; every navigation asserts through it.
 	t *testing.T
-	// client is a plain http.Client — real sockets, no test transport.
+	// client is a plain http.Client — real sockets, no test transport. It
+	// surfaces redirects to the scenario instead of chasing them: the one
+	// redirect this origin ever issues points at the TLS edge, which stands
+	// outside the process under test, so the response itself is the story.
 	client *http.Client
 	// base is the scheme://host:port prefix of the site under visit.
 	base string
+	// proto is the X-Forwarded-Proto declaration stamped on every request —
+	// what the edge states about the visitor's public leg. Empty means no
+	// header at all: a connection that never crossed the edge, like a
+	// cluster probe or an operator's port-forward.
+	proto string
 	// cache maps a visited path to the ETag a 200 response carried, exactly
 	// the validator a browser would replay on its next navigation.
 	cache map[string]string
@@ -76,26 +98,55 @@ type Visitor struct {
 }
 
 // NewVisitor opens a fresh browsing session — an empty cache and an empty
-// cookie jar — against base.
+// cookie jar — against base, arriving the way every real visitor does: over
+// TLS through the edge, which declares https for them.
 func NewVisitor(t *testing.T, base string) *Visitor {
 	t.Helper()
+	return newSession(t, base, "https")
+}
+
+// NewInsecureVisitor opens a session for the visitor who typed http://: the
+// edge forwards their plain-HTTP request with an http declaration, and every
+// navigation should be bounced to TLS before any content is served.
+func NewInsecureVisitor(t *testing.T, base string) *Visitor {
+	t.Helper()
+	return newSession(t, base, "http")
+}
+
+// NewDirectVisitor opens a session that never crossed the edge — a cluster
+// probe or an operator port-forwarding straight to the pod — so no forwarded
+// proto accompanies its requests and no HSTS promise may answer them.
+func NewDirectVisitor(t *testing.T, base string) *Visitor {
+	t.Helper()
+	return newSession(t, base, "")
+}
+
+// newSession is the shared constructor behind the three arrival stories.
+func newSession(t *testing.T, base, proto string) *Visitor {
+	t.Helper()
 	return &Visitor{
-		t:       t,
-		client:  &http.Client{Timeout: 5 * time.Second},
+		t: t,
+		client: &http.Client{
+			Timeout: 5 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 		base:    base,
+		proto:   proto,
 		cache:   make(map[string]string),
 		cookies: make(map[string]string),
 	}
 }
 
 // On returns a view of the same browsing session — shared connection pool,
-// shared browser cache, shared cookie jar — whose assertions report through
-// t. Scenario chapters running as subtests must each take their own view,
-// because fatal assertions have to stop the subtest goroutine that navigated,
-// never the parent's.
+// shared browser cache, shared cookie jar, same arrival proto — whose
+// assertions report through t. Scenario chapters running as subtests must
+// each take their own view, because fatal assertions have to stop the
+// subtest goroutine that navigated, never the parent's.
 func (v *Visitor) On(t *testing.T) *Visitor {
 	t.Helper()
-	return &Visitor{t: t, client: v.client, base: v.base, cache: v.cache, cookies: v.cookies}
+	return &Visitor{t: t, client: v.client, base: v.base, proto: v.proto, cache: v.cache, cookies: v.cookies}
 }
 
 // SetCookie records a cookie in the session jar the way the site's own
@@ -145,11 +196,14 @@ func (v *Visitor) AssetReferences(document []byte) []string {
 	return references
 }
 
-// do executes one prepared request, attaches the session's cookie jar, reads
-// the whole body, enforces the security baseline, and files a 200's validator
-// into the browser cache.
+// do executes one prepared request, stamps the session's edge declaration and
+// cookie jar onto it, reads the whole body, enforces the security baseline,
+// and files a 200's validator into the browser cache.
 func (v *Visitor) do(path string, request *http.Request) VisitorResponse {
 	v.t.Helper()
+	if v.proto != "" {
+		request.Header.Set(forwardedProtoHeader, v.proto)
+	}
 	for name, value := range v.cookies {
 		request.AddCookie(&http.Cookie{Name: name, Value: value})
 	}
@@ -171,13 +225,24 @@ func (v *Visitor) do(path string, request *http.Request) VisitorResponse {
 
 // assertSecurityBaseline fails the scenario if any navigation — any path, any
 // status — is missing the exact origin security headers or carries a
-// Content-Security-Policy other than the two documented forms.
+// Content-Security-Policy other than the two documented forms. HSTS is held
+// to the proto contract: a TLS-declared session must carry the exact promise
+// on every navigation, and any other session must never see one — an HSTS
+// pin on an undeclared or plain leg would teach a browser a transport
+// guarantee the connection never demonstrated.
 func (v *Visitor) assertSecurityBaseline(path string, header http.Header) {
 	v.t.Helper()
 	for name, want := range exactSecurityHeaders {
 		if got := header.Get(name); got != want {
 			v.t.Errorf("%s: %s = %q, want %q on every navigation", path, name, got, want)
 		}
+	}
+	if hsts := header.Get("Strict-Transport-Security"); v.proto == "https" {
+		if hsts != StrictTransportSecurityPolicy {
+			v.t.Errorf("%s: Strict-Transport-Security = %q, want %q on every TLS-declared navigation", path, hsts, StrictTransportSecurityPolicy)
+		}
+	} else if hsts != "" {
+		v.t.Errorf("%s: Strict-Transport-Security = %q on a session the edge never declared as TLS; the promise must be absent", path, hsts)
 	}
 	if got := header.Get("Content-Security-Policy"); got != SiteContentSecurityPolicy && got != MediaContentSecurityPolicy {
 		v.t.Errorf("%s: Content-Security-Policy = %q, want the site or media policy", path, got)
