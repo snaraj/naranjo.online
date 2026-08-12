@@ -113,6 +113,23 @@ func mapContributions(raw []byte) (json.RawMessage, error) {
 	if span > maxCalendarDays {
 		return nil, fmt.Errorf("contribution calendar spans %d days, over the %d day bound", span, maxCalendarDays)
 	}
+	// CONTIGUITY. The count floor and the span ceiling together still admit a
+	// partially-parsed document: lose one cell to a markup change and the
+	// remaining cells still number in the dozens and still span under a year,
+	// so the day would be zero-filled and the panel would serve a plausible,
+	// FRESH, WRONG total. Every day inside the covered span must therefore be
+	// accounted for by a cell of its own — a hole is drift, not a quiet day.
+	if dated != span {
+		return nil, fmt.Errorf("contribution calendar: %d dated cells cover a %d day span; the document is missing days", dated, span)
+	}
+	// SUNDAY ALIGNMENT. Week columns are sliced seven days at a time from the
+	// first covered day, and the frontend derives the trailing padding from
+	// the end date's weekday. The two agree only if a column IS a calendar
+	// week, so an upstream that ever starts its grid on another weekday is
+	// refused rather than silently shifting every cell's date.
+	if first.Weekday() != time.Sunday {
+		return nil, fmt.Errorf("contribution calendar starts on %s, not Sunday; week columns would not line up", first.Weekday())
+	}
 	daily := make([]int, span)
 	total := 0
 	for offset := range daily {

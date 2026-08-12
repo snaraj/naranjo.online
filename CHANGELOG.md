@@ -6,24 +6,8 @@ SemVer and match image/chart tags exactly.
 
 ## [Unreleased]
 
-### Fixed
-- The boss log serves EVERY boss the hiscores report — 71 for the configured
-  account — instead of the six that were enumerated in config (#41). The
-  direction is inverted on purpose: config now names the NON-boss activities
-  (clue tiers, minigame ranks, point totals) and everything else the upstream
-  reports is served in upstream order, so a boss Jagex ships tomorrow appears
-  on its own instead of being silently dropped until somebody edits a list.
-- The boss log's live refresh could never have worked. The upstream document
-  is `{name, skills, activities}` and the shipped grammar declared only two
-  of those three, so the strict decoder rejected every response on the
-  unknown `name` field and the panel could only ever serve its snapshot. The
-  grammar is completed and pinned against a REAL captured response.
-- The shipped boss figures were invented and wrong (Zulrah 1408 against a
-  real 1192, Chambers of Xeric 118 against a real 10, and so on). The
-  snapshot is now generated from the captured upstream response, and a test
-  fails if the two ever disagree.
-
 ### Added
+
 - A zero-secret GitHub contribution producer for the version-control panel
   (#41): the public, unauthenticated contributions document is fetched and
   scanned into the calendar the panel already rendered. Exact daily counts
@@ -34,40 +18,11 @@ SemVer and match image/chart tags exactly.
   seven days like every other, so without an anchor the padding is
   indistinguishable from genuine quiet days. The frontend now draws days past
   it as labelled holes.
-- Per-endpoint request byte caps. Each spec may declare a `maxBytes` that can
-  only ever TIGHTEN the shared bound, so the calendar document's larger cap
-  does not loosen anything else — the JSON endpoints end up bounded more
-  tightly than before.
+- Per-endpoint request byte caps. Each spec may declare a `maxBytes`, which is
+  validated to be at or below the shared bound, so a per-endpoint value can
+  only ever tighten and never widen.
 - The version-control calendar renders through `ContributionGrid`, the same
   component the token panel's activity heatmap uses.
-
-### Changed
-- **Host allowlist: `github.com` added** (now four hosts). Security-sensitive
-  by definition, so: exact host match, https only, checked at construction
-  AND again at request time, bounded by its own byte cap and the shared
-  timeout, redirects refused outright, and no credential is read on this path
-  at all. Tests pin the list in both directions, including that
-  `api.github.com`, `raw.githubusercontent.com`, and
-  `github.com.evil.example.test` are all refused.
-- The boss grid renders the complete table: thousands-separated counts,
-  `Unranked` where the hiscores return rank `-1`, muted unranked tiles, and
-  its own internal scroll so a rail stays a rail.
-- The vendor-name doctrine pin now also covers the version-control host, so
-  the compiled binary stays uncoupled from where the calendar comes from.
-- `frontend/tsconfig.json` enables `allowImportingTsExtensions`: Node's
-  type-stripping test runner resolves specifiers literally, so a value import
-  between two `src` modules must carry its extension to be testable at all.
-
-### Removed
-- The fabricated version-control payload — five weeks of invented counts, an
-  invented streak, and three invented commit rows. The calendar is now real;
-  the commit rows are an empty list, because the contributions document
-  carries none and inventing them is exactly the defect being removed. A
-  commit producer is a separate piece of work with its own allowlist
-  question.
-
-### Added
-
 - Panels refresh themselves while a visitor watches (#40). `watchPanel` in
   `frontend/src/lib/panels.ts` re-reads each panel envelope on a 60s cadence
   and every panel now mounts through it; `watchClock` ticks the freshness
@@ -128,14 +83,63 @@ SemVer and match image/chart tags exactly.
 
 ### Changed
 
+- **The shared per-request read bound is RAISED, 262144 -> 524288 bytes.** The
+  contribution document is markup around a small amount of data and does not
+  fit under the old bound. Stated plainly because an earlier draft of these
+  notes described this change as tightening, which was wrong: the shared
+  ceiling went up. What each endpoint may actually read is now
+  hiscores 65536 (down from 262144), version-control 524288 (new), and each
+  usage endpoint 262144 (unchanged) — so the aggregate a hostile set of
+  upstreams could make this process hold at once moves
+  **768 KiB -> 1088 KiB**. The bound is now pinned by a ratchet-style test at
+  or below 524288, so raising it again is a conscious edit with a reason.
+- **Host allowlist: `github.com` added** (now four hosts). Security-sensitive
+  by definition, so: exact host match, https only, checked at construction
+  AND again at request time, bounded by its own byte cap and the shared
+  timeout, redirects refused outright, and no credential is read on this path
+  at all. Tests pin the list in both directions, including that
+  `api.github.com`, `raw.githubusercontent.com`, and
+  `github.com.evil.example.test` are all refused.
+- The boss grid renders the complete table: thousands-separated counts,
+  `Unranked` where the hiscores return rank `-1`, muted unranked tiles, and
+  its own internal scroll so a rail stays a rail.
+- The vendor-name doctrine pin now also covers the version-control host, so
+  the compiled binary stays uncoupled from where the calendar comes from.
+- `frontend/tsconfig.json` enables `allowImportingTsExtensions`: Node's
+  type-stripping test runner resolves specifiers literally, so a value import
+  between two `src` modules must carry its extension to be testable at all.
 - The live usage window widens from 7 to 30 daily buckets (`limit=31`,
   `lookbackDays=30` in `internal/panels/config/fetch.json`) so the activity
   grid has a month to draw. Pagination is still not implemented, so a month
   is the ceiling one request can deliver.
 - `GO_COVERAGE_FLOOR` ratchets 91.1 -> 93.2 (measured 96.2 on this branch).
 
+### Fixed
+
+- The boss log serves EVERY boss the hiscores report — 71 for the configured
+  account — instead of the six that were enumerated in config (#41). The
+  direction is inverted on purpose: config now names the NON-boss activities
+  (clue tiers, minigame ranks, point totals) and everything else the upstream
+  reports is served in upstream order, so a boss Jagex ships tomorrow appears
+  on its own instead of being silently dropped until somebody edits a list.
+- The boss log's live refresh could never have worked. The upstream document
+  is `{name, skills, activities}` and the shipped grammar declared only two
+  of those three, so the strict decoder rejected every response on the
+  unknown `name` field and the panel could only ever serve its snapshot. The
+  grammar is completed and pinned against a REAL captured response.
+- The shipped boss figures were invented and wrong (Zulrah 1408 against a
+  real 1192, Chambers of Xeric 118 against a real 10, and so on). The
+  snapshot is now generated from the captured upstream response, and a test
+  fails if the two ever disagree.
+
 ### Removed
 
+- The fabricated version-control payload — five weeks of invented counts, an
+  invented streak, and three invented commit rows. The calendar is now real;
+  the commit rows are an empty list, because the contributions document
+  carries none and inventing them is exactly the defect being removed. A
+  commit producer is a separate piece of work with its own allowlist
+  question.
 - The invented figures in `snapshots/token-usage.json`. Nothing in the
   repository could support them, and the "honest states" floor forbids
   fabricated data outright. The snapshot now carries only recorded, dated
@@ -144,6 +148,27 @@ SemVer and match image/chart tags exactly.
   export. This is a deliberate, visible loss of fake content.
 
 ### Security
+
+- Outbound endpoints are **https only**. Plain `http` was previously tolerated
+  by endpoint validation; the same allowlist governs the credential-bearing
+  usage endpoints, so a cleartext hop would have put a credential on the wire.
+- Outbound endpoints may carry **no userinfo**. `https://user:secret@host/x`
+  is a credential in a URL — the same class of exposure — and config data is
+  not where one belongs. Scheme, userinfo, and host are now one admission
+  rule, applied at construction AND again at request time.
+- The public version-control producer may send **only an `Accept` header**. It
+  carries no credential field, but a free-form header map was a general escape
+  hatch: config data could have attached an `Authorization` header to a
+  producer this repository documents as unauthenticated. That is now
+  unrepresentable rather than merely undocumented.
+- The contribution scanner refuses a **partially parsed** document. The count
+  floor and the span ceiling together still admitted one dropped cell, whose
+  day would have been zero-filled — a plausible, fresh, WRONG total. Every day
+  inside the covered span must now be accounted for by its own cell.
+- The scanner also requires the calendar to **start on a Sunday**, because week
+  columns and the frontend's trailing padding line up only if a column is a
+  calendar week. A grid starting on any other weekday is refused rather than
+  shifting every rendered date.
 
 - The panel refresh loop's stop contract is pinned on the delivery side, not
   only the dispatch side: a watcher stopped WHILE a read is outstanding

@@ -58,6 +58,13 @@ func TestMapHiscoresServesEveryBossTheUpstreamReports(t *testing.T) {
 	if payload.Bosses[1].KC != nil || payload.Bosses[1].Rank != nil {
 		t.Errorf("fully unranked row = %+v, want both nulls", payload.Bosses[1])
 	}
+	// The SERVED BYTES, not just the decoded struct: the frontend's "--" and
+	// "Unranked" renderings key off literal nulls on the wire, and an
+	// omitempty-style regression would erase them while leaving the decode
+	// above green.
+	if !bytes.Contains(data, []byte(`"kc":null`)) || !bytes.Contains(data, []byte(`"rank":null`)) {
+		t.Errorf("served payload carries no literal nulls; the \"--\" and \"Unranked\" renderings would never be reached:\n%s", data)
+	}
 	// A zero score with an unranked rank is a REAL zero, not a null: the
 	// account has no kills but the upstream did report a figure.
 	if payload.Bosses[2].KC == nil || *payload.Bosses[2].KC != 0 || payload.Bosses[2].Rank != nil {
@@ -460,11 +467,17 @@ func TestLoadFetchConfigFailsClosed(t *testing.T) {
 //     They are third-party tracking payloads the scanner never reads, one of
 //     them a high-entropy signature, and neither belongs in this history.
 //
-// Everything the parser touches is untouched: the ramp legend (whose cells
-// carry no date and must be skipped), the dated cells, the label elements
-// holding the exact counts, and a partial trailing week are all present
-// exactly as the upstream served them. A hand-written fixture would only
-// prove the parser agrees with its author.
+// Everything the parser touches is untouched: the dated cells, the label
+// elements holding the exact counts, and a partial trailing week are all
+// present exactly as the upstream served them. A hand-written fixture would
+// only prove the parser agrees with its author.
+//
+// ONE addition is synthetic and marked as such in the file: two undated
+// cells. The captured region contains no undated day cell — the upstream's
+// ramp legend there uses a different class — so without them the scanner's
+// skip-the-undated branch would never execute. They change no parsed figure,
+// which TestMapContributionsReadsTheRealCalendar verifies by pinning the
+// totals the CAPTURED cells alone produce.
 func contributionsFixture(t *testing.T) []byte {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "contributions-fragment.html"))
@@ -519,6 +532,13 @@ func TestMapContributionsReadsTheRealCalendar(t *testing.T) {
 	if peak != 151 {
 		t.Errorf("peak day = %d, want the label's 151 (a level-derived parser would read 4)", peak)
 	}
+	// The fixture's two synthetic undated cells exercise the skip branch and
+	// must influence nothing: 12 columns of 7 is 84 cell slots, the capture
+	// supplies 81 dated days, and the totals above are the captured days'
+	// own. A skip branch that counted them would move one of these numbers.
+	if len(payload.Weeks)*daysPerWeek != 84 {
+		t.Errorf("grid holds %d cells, want 84", len(payload.Weeks)*daysPerWeek)
+	}
 	// The calendar document carries no commit rows; an empty list is the
 	// honest answer, and null would fail the frontend's admission.
 	if payload.RecentCommits == nil || len(payload.RecentCommits) != 0 {
@@ -554,6 +574,19 @@ func TestMapContributionsFailsClosedOnDrift(t *testing.T) {
 		},
 		"the span runs past a year and a half": func(in string) string {
 			return strings.Replace(in, `data-date="2026-05-24"`, `data-date="2019-05-24"`, 1)
+		},
+		// The partial-drift case the count floor and the span ceiling both
+		// miss: lose ONE cell and dozens remain, spanning under a year, so
+		// the missing day would be zero-filled and the panel would serve a
+		// plausible, fresh, WRONG total. Contiguity is what catches it.
+		"a single cell stops being a day cell": func(in string) string {
+			return strings.Replace(in, `data-level="4" role="gridcell" data-view-component="true" class="ContributionCalendar-day"`,
+				`data-level="4" role="gridcell" data-view-component="true" class="ContributionCalendar-other"`, 1)
+		},
+		"the grid stops starting on a Sunday": func(in string) string {
+			// Move the first covered day forward one, so the span still
+			// parses but week columns would no longer be calendar weeks.
+			return strings.Replace(in, `data-date="2026-05-24"`, `data-date="2026-08-13"`, 1)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -646,5 +679,82 @@ func TestContributionScannerHandlesMalformedMarkup(t *testing.T) {
 	}
 	if _, err := labelledCount(`<tool-tip for="cell">-3 contributions</tool-tip>`, "cell"); err == nil {
 		t.Error("labelledCount accepted a negative count")
+	}
+}
+
+// TestMapContributionsRefusesAPartiallyParsedDocument is the contiguity guard
+// stated as its own scenario, because the failure it prevents is the worst
+// kind this package can have: not a refusal, but a confidently WRONG number
+// served as fresh. Dropping one day from a real document must be an error,
+// never a zero.
+func TestMapContributionsRefusesAPartiallyParsedDocument(t *testing.T) {
+	t.Parallel()
+	document := string(contributionsFixture(t))
+	truth, err := mapContributions([]byte(document))
+	if err != nil {
+		t.Fatalf("the unmutated document was refused: %v", err)
+	}
+	var whole VCSActivityData
+	if err := decodeStrict(truth, &whole); err != nil {
+		t.Fatalf("decode the whole calendar: %v", err)
+	}
+	// Drop the busiest day's cell — the one whose absence moves the total
+	// most — while leaving its neighbours, so the remaining cells still clear
+	// the count floor and still sit inside the span ceiling.
+	dropped := strings.Replace(document, `data-date="2026-08-10"`, `data-undated="2026-08-10"`, 1)
+	data, err := mapContributions([]byte(dropped))
+	if err == nil {
+		var partial VCSActivityData
+		_ = decodeStrict(data, &partial)
+		t.Fatalf("a document missing one day was accepted: served total %d against the truth %d, and it would have been served as fresh",
+			partial.TotalContributions, whole.TotalContributions)
+	}
+	if !strings.Contains(err.Error(), "missing days") {
+		t.Errorf("refusal error = %v, want the contiguity refusal", err)
+	}
+}
+
+// TestMapContributionsRequiresSundayColumns pins the week-alignment contract
+// both sides depend on: the mapper slices columns seven days from the first
+// covered day and the frontend derives the trailing padding from the end
+// date's weekday, so a grid that started on any other weekday would shift
+// every rendered date. It fails closed instead.
+func TestMapContributionsRequiresSundayColumns(t *testing.T) {
+	t.Parallel()
+	data, err := mapContributions(contributionsFixture(t))
+	if err != nil {
+		t.Fatalf("mapContributions() error = %v", err)
+	}
+	var payload VCSActivityData
+	if err := decodeStrict(data, &payload); err != nil {
+		t.Fatalf("decode mapped payload: %v", err)
+	}
+	end, err := time.Parse(dayLayout, payload.EndDate)
+	if err != nil {
+		t.Fatalf("endDate = %q: %v", payload.EndDate, err)
+	}
+	// The first covered day is the end date minus the days the payload's own
+	// shape says precede it, and it must be a Sunday.
+	covered := len(payload.Weeks)*daysPerWeek - (daysPerWeek - 1 - int(end.Weekday()))
+	first := end.AddDate(0, 0, -(covered - 1))
+	if first.Weekday() != time.Sunday {
+		t.Errorf("the served calendar starts on %s; week columns must be calendar weeks", first.Weekday())
+	}
+	// And the shipped snapshot honors the same contract.
+	loaded, err := SnapshotSource{Name: "snapshots/vcs-activity.json"}.load(snapshotFiles, KindVCSActivity)
+	if err != nil {
+		t.Fatalf("load the shipped snapshot: %v", err)
+	}
+	var shipped VCSActivityData
+	if err := decodeStrict(loaded.data, &shipped); err != nil {
+		t.Fatalf("decode the shipped snapshot: %v", err)
+	}
+	shippedEnd, err := time.Parse(dayLayout, shipped.EndDate)
+	if err != nil {
+		t.Fatalf("snapshot endDate = %q: %v", shipped.EndDate, err)
+	}
+	shippedCovered := len(shipped.Weeks)*daysPerWeek - (daysPerWeek - 1 - int(shippedEnd.Weekday()))
+	if got := shippedEnd.AddDate(0, 0, -(shippedCovered - 1)).Weekday(); got != time.Sunday {
+		t.Errorf("the shipped snapshot starts on %s, not Sunday", got)
 	}
 }

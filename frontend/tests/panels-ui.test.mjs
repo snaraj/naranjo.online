@@ -4,6 +4,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { bossInitials, bossSlug } from '../src/lib/bossIcons.ts';
+import { cellLabel, noTally, rankLabel, tally, unrankedLabel } from '../src/lib/bossLog.ts';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
@@ -91,9 +92,8 @@ test('boss log renders the dense fixed-cell grid with tooltips and -- tallies', 
   assert.match(bossLog, /width="26"\s+height="26"/, 'icons must declare their box (no CLS)');
   assert.match(bossLog, /loading="lazy"/, 'icons must lazy-load');
   assert.match(bossLog, /decoding="async"/);
-  assert.match(bossLog, /'--'/, 'null tallies must render as --');
-  assert.match(bossLog, /'Unranked'/, 'a null rank is unranked, and says so');
-  assert.match(bossLog, /formatWhole/, 'counts must be thousands-separated');
+  assert.match(bossLog, /tally\(boss\.kc\)/, 'tallies must go through the tested renderer');
+  assert.match(bossLog, /rankLabel\(boss\.rank\)/, 'ranks must go through the tested renderer');
   assert.match(bossLog, /max-block-size:/, 'the complete table must scroll inside the panel');
   assert.match(bossLog, /overflow-y:\s*auto/);
   assert.match(bossLog, /role="tooltip"/);
@@ -241,4 +241,38 @@ test('boss identity helpers bridge data names to asset slugs', () => {
   assert.equal(bossInitials('The Whisperer'), 'TW');
   assert.equal(bossInitials('Chambers of Xeric'), 'CX');
   assert.equal(bossInitials(''), '?');
+});
+
+// The two renderings that carry real meaning in this panel, EXECUTED rather
+// than pattern-matched: a hiscore figure the upstream does not report, and an
+// account below the listing threshold. Both are served as null by the origin
+// (boss-log/v1 keeps kc and rank nullable precisely so they survive the round
+// trip), and both have a rendering the reader is meant to understand.
+test('a null tally renders as the no-figure marker, never as a zero', () => {
+  assert.equal(noTally, '--');
+  assert.equal(tally(null), '--');
+  assert.equal(tally(undefined), '--');
+  // Zero kills and no reported figure are different claims.
+  assert.equal(tally(0), '0');
+  assert.equal(tally(1192), '1,192');
+});
+
+test('a null rank says unranked in words', () => {
+  assert.equal(unrankedLabel, 'Unranked');
+  assert.equal(rankLabel(null), 'Unranked');
+  assert.equal(rankLabel(undefined), 'Unranked');
+  assert.equal(rankLabel(111737), '111,737');
+});
+
+test('a tile label carries the whole row, including its nulls', () => {
+  // The exact served shape for an unranked boss with no reported figure.
+  assert.equal(cellLabel({ name: 'Artio', kc: null, rank: null }), 'Artio: -- KC, rank Unranked');
+  // And for a boss ranked and counted.
+  assert.equal(cellLabel({ name: 'Zulrah', kc: 1192, rank: 111737 }), 'Zulrah: 1,192 KC, rank 111,737');
+  // A score only renders when the row carries one.
+  assert.equal(
+    cellLabel({ name: 'TzKal-Zuk', kc: 2, rank: 32622, score: 2 }),
+    'TzKal-Zuk: 2 KC, rank 32,622, score 2'
+  );
+  assert.equal(cellLabel({ name: 'Sol Heredit', kc: 2, rank: null, score: null }), 'Sol Heredit: 2 KC, rank Unranked');
 });
