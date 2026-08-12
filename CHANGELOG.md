@@ -19,6 +19,25 @@ SemVer and match image/chart tags exactly.
   origin is never named in frontend source (pinned by test alongside
   the strip's local-origin scan).
 
+### Security
+- Origin-side HTTPS enforcement (#33): every request the edge declares
+  as plain HTTP (`X-Forwarded-Proto: http`) is answered with a
+  permanent redirect to the identical URL over TLS — host from the
+  request's Host header, escaped path and query preserved byte for
+  byte, on every route, HEAD bodiless like GET — as defense in depth
+  behind the edge's own HTTPS enforcement. The HSTS header keeps its
+  exact value (`max-age=31536000`: the application is the sole HSTS
+  owner, edge-managed HSTS stays off, and includeSubDomains/preload
+  remain deferred owner decisions pending a subdomain inventory and a
+  rollback path) but now rides only responses the edge declares as TLS
+  (`X-Forwarded-Proto: https`). Behavior change for undeclared
+  traffic: probe, port-forward, and local-dev responses — which
+  previously carried HSTS on connections that never demonstrated TLS —
+  now serve without it; nothing else about undeclared serving changes.
+  Matching is exact and fail-closed: case variants and unknown proto
+  values neither redirect nor mint the promise, and the forwarded
+  header is trusted for this scheme decision only.
+
 ## [0.1.9] - 2026-08-11
 
 ### Added

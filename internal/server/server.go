@@ -74,7 +74,7 @@ func newSite(assets fs.FS, media *mediaHandler) (*Site, error) {
 	mux.Handle(panels.IndexPath, panelAPI)
 	mux.Handle(panels.PanelPathPrefix, panelAPI)
 	mux.Handle("/", h)
-	return &Site{handler: securityHeaders(rejectAmbiguousPath(mux)), media: media, panels: panelAPI}, nil
+	return &Site{handler: securityHeaders(redirectForwardedHTTP(rejectAmbiguousPath(mux))), media: media, panels: panelAPI}, nil
 }
 
 // StartPanelRefresh starts the panel API's background live refresh. It is an
@@ -299,17 +299,48 @@ func (f *staticFile) serveTo(w http.ResponseWriter, r *http.Request, name string
 }
 
 // securityHeaders enforces the browser-security baseline at the origin as
-// defense in depth if an edge rule is later changed. HSTS is deliberately scoped
-// to this hostname rather than making a promise for every subdomain.
+// defense in depth if an edge rule is later changed. HSTS is deliberately
+// scoped to this hostname rather than making a promise for every subdomain —
+// the application is the sole HSTS owner, and widening the promise
+// (includeSubDomains, preload) is an explicit owner decision deferred until a
+// subdomain inventory and a rollback path exist. The header accompanies only
+// requests the edge declares as TLS: an HSTS pin teaches a browser to refuse
+// plain HTTP for a year, so it must never ride a response whose public leg
+// was not demonstrably secure — and probe or port-forward traffic that never
+// crossed the edge states no proto and correctly earns no promise.
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'")
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		if r.Header.Get(forwardedProtoHeader) == forwardedProtoHTTPS {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// redirectForwardedHTTP answers every request the edge declares as plain HTTP
+// with a permanent redirect to the identical URL over TLS — origin-side
+// defense in depth behind the edge's own HTTPS enforcement, closing the
+// window where a plain http:// navigation would otherwise receive 200
+// content. The host comes from the request's Host header (the edge binds it
+// to the site hostname), and RequestURI preserves the escaped path and query
+// byte for byte. Only the exact lowercase declaration redirects (see
+// forwardedProtoHTTP); http.Redirect keeps HEAD bodiless and gives GET the
+// standard hyperlink stub. The redirect runs inside securityHeaders — so
+// even the bounce carries the baseline policy, minus the HSTS promise the
+// plain leg has not earned — and ahead of routing, so every path, including
+// probes and 404s, is bounced before any content decision is made.
+func redirectForwardedHTTP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(forwardedProtoHeader) == forwardedProtoHTTP {
+			http.Redirect(w, r, "https://"+r.Host+r.URL.RequestURI(), http.StatusMovedPermanently)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
