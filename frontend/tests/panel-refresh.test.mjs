@@ -97,10 +97,25 @@ test('watchPanel leaves a hidden page alone and catches up when it returns', asy
   await flush();
   assert.equal(host.requests.length, 1, 'a hidden page must produce no requests at all');
 
-  host.isHidden = false;
+  // The catch-up read is fired with the page STILL reporting hidden, so the
+  // only thing that can carry it past the hidden check is the force flag.
+  // Letting the host go visible first would make this assertion pass even if
+  // the catch-up were an ordinary unforced read — it would be testing the
+  // interval's own condition, not the catch-up at all.
   host.visibleListener();
   await flush();
-  assert.equal(host.requests.length, 2, 'returning to the page must read immediately, not wait out the interval');
+  assert.equal(
+    host.requests.length,
+    2,
+    'the catch-up read must be forced past the hidden check, not merely permitted by it'
+  );
+
+  // And once the page is genuinely visible again the ordinary cadence
+  // resumes, so the hidden branch releases rather than latching.
+  host.isHidden = false;
+  host.scheduled[0].callback();
+  await flush();
+  assert.equal(host.requests.length, 3, 'a visible page must resume its ordinary cadence');
   stop();
 });
 
@@ -153,6 +168,35 @@ test('watchPanel stops for good: no delivery, no timer, no subscription', async 
   await flush();
   assert.equal(host.requests.length, 1, 'a stopped watcher must issue no further reads');
   assert.equal(seen.length, 1, 'a stopped watcher must deliver nothing further');
+});
+
+test('watchPanel delivers nothing from a read that was in flight when it stopped', async () => {
+  // The delivery-side guard, isolated. The scenario above stops the watcher
+  // AFTER its read has settled, which a watcher missing the guard survives —
+  // there is nothing left in flight to deliver. This one stops the watcher
+  // WHILE a read is outstanding and only then lets it finish, which is the
+  // real hazard: an unmounted component being written to by a request that
+  // outlived it.
+  const host = fakeHost();
+  let release;
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  host.respond = () => pending.then(() => ({ ok: true, json: async () => envelopeBody('token-usage') }));
+
+  const seen = [];
+  const stop = watchPanel('token-usage', (envelope) => seen.push(envelope), { host });
+  await flush();
+  assert.equal(host.requests.length, 1, 'the read must be in flight before the watcher stops');
+  assert.equal(seen.length, 0, 'nothing can have been delivered yet');
+
+  stop();
+  release();
+  // Twice: once for the transport promise, once for the parse that follows.
+  await flush();
+  await flush();
+
+  assert.deepEqual(seen, [], 'a stopped watcher must deliver nothing, even from a read it started');
 });
 
 test('watchPanel delivers an unavailable envelope when the read itself fails', async () => {

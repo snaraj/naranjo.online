@@ -71,9 +71,11 @@ Numbered for citation, repo-scoped, none negotiable in code:
    in chart values defaults; `TestProviderNeutrality` enforces zero
    occurrences anywhere else. See the deployment-provider contract below.
 7. **Ratchet-only coverage floor.** The PR gate enforces
-   `GO_COVERAGE_FLOOR` (currently 93.2%, measured 96.2%). Raise it as
-   coverage grows; lowering it weakens an enforced check and is out of
-   policy.
+   `GO_COVERAGE_FLOOR` (currently 93.2%, measured 96.2% when last raised).
+   Raise it as coverage grows; lowering it weakens an enforced check and is
+   out of policy. That measured figure is ONE fact recorded in three places —
+   here, the Quality-gates section, and `pr-gate.yml` — so the three move
+   together or they become three claims that can disagree.
 8. **Truthful serving contract.** Port 8080; `/livez` and `/readyz` stay
    truthful — readiness reflects real serving ability, never a hardcoded
    yes.

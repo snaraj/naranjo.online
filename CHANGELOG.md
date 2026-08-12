@@ -7,6 +7,7 @@ SemVer and match image/chart tags exactly.
 ## [Unreleased]
 
 ### Added
+
 - Panels refresh themselves while a visitor watches (#40). `watchPanel` in
   `frontend/src/lib/panels.ts` re-reads each panel envelope on a 60s cadence
   and every panel now mounts through it; `watchClock` ticks the freshness
@@ -34,23 +35,6 @@ SemVer and match image/chart tags exactly.
 - README and AGENTS.md document the reviewed prerequisites for enabling live
   panel refresh in a cluster, and state that the enablement itself is a
   separate owner-reviewed step.
-
-### Changed
-- The live usage window widens from 7 to 30 daily buckets (`limit=31`,
-  `lookbackDays=30` in `internal/panels/config/fetch.json`) so the activity
-  grid has a month to draw. Pagination is still not implemented, so a month
-  is the ceiling one request can deliver.
-- `GO_COVERAGE_FLOOR` ratchets 91.1 -> 93.2 (measured 96.2 on this branch).
-
-### Removed
-- The invented figures in `snapshots/token-usage.json`. Nothing in the
-  repository could support them, and the "honest states" floor forbids
-  fabricated data outright. The snapshot now carries only recorded, dated
-  values for the source that has them, and the other source renders its
-  explicit empty state until live refresh is enabled or the owner records an
-  export. This is a deliberate, visible loss of fake content.
-
-### Added
 - Release publisher attaches the BuildKit SLSA v1 provenance as keyless
   cosign attestations (`slsaprovenance1`) on the immutable image digest,
   immediately after image signing — one per architecture, each read back
@@ -82,7 +66,31 @@ SemVer and match image/chart tags exactly.
   origin is never named in frontend source (pinned by test alongside
   the strip's local-origin scan).
 
+### Changed
+
+- The live usage window widens from 7 to 30 daily buckets (`limit=31`,
+  `lookbackDays=30` in `internal/panels/config/fetch.json`) so the activity
+  grid has a month to draw. Pagination is still not implemented, so a month
+  is the ceiling one request can deliver.
+- `GO_COVERAGE_FLOOR` ratchets 91.1 -> 93.2 (measured 96.2 on this branch).
+
+### Removed
+
+- The invented figures in `snapshots/token-usage.json`. Nothing in the
+  repository could support them, and the "honest states" floor forbids
+  fabricated data outright. The snapshot now carries only recorded, dated
+  values for the source that has them, and the other source renders its
+  explicit empty state until live refresh is enabled or the owner records an
+  export. This is a deliberate, visible loss of fake content.
+
 ### Security
+
+- The panel refresh loop's stop contract is pinned on the delivery side, not
+  only the dispatch side: a watcher stopped WHILE a read is outstanding
+  delivers nothing when that read finally settles. The previous test stopped
+  the watcher after its read had already settled, which a watcher missing the
+  guard survives — there was nothing left in flight to deliver.
+
 - Origin-side HTTPS enforcement (#33): every request the edge declares
   as plain HTTP (`X-Forwarded-Proto: http`) is answered with a `308`
   permanent redirect to the identical URL over TLS — host from the
