@@ -439,6 +439,15 @@ type bossLogFetchSpec struct {
 	MaxBytes int64 `json:"maxBytes"`
 }
 
+// vcsActivityHeaderAllowlist is the COMPLETE set of request headers the
+// public activity producer may send. It exists because a header map is
+// otherwise a general escape hatch: without this list, config data could
+// attach an Authorization header to a producer documented as public and
+// unauthenticated. One entry, because one is all the endpoint needs — it
+// answers 406 to a JSON Accept header — and adding another is a conscious
+// edit with its own security review.
+var vcsActivityHeaderAllowlist = []string{"Accept"}
+
 // vcsActivityFetchSpec configures the version-control activity fetch: one
 // PUBLIC, UNAUTHENTICATED document carrying a contribution calendar. It
 // names no credential because it needs none — the zero-secret producer the

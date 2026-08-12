@@ -9,6 +9,8 @@ package panels
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net/http"
@@ -151,7 +153,7 @@ func TestRefreshFailuresKeepLastGoodAsStale(t *testing.T) {
 // the attempt and the snapshot fallback keeps serving.
 func TestRefreshHonorsTheConfiguredTimeout(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Stall until the abandoned request's context cancels, so the
 		// handler returns as soon as the client times out and Close never
 		// waits on a stuck handler.
@@ -162,11 +164,31 @@ func TestRefreshHonorsTheConfiguredTimeout(t *testing.T) {
 	config.Timeout = 40 * time.Millisecond
 	registry, state := bossFetchRegistry(t, server.URL+"/scores.json", config)
 	_ = host
-	if err := registry.refreshPanel(t.Context(), state, newProductionDoer(), func(string) string { return "" }); err == nil {
+	if err := registry.refreshPanel(t.Context(), state, loopbackDoer(server), func(string) string { return "" }); err == nil {
 		t.Fatal("refresh succeeded against a server slower than its timeout")
 	}
 	if got := decodePanelEnvelope(t, registry, "boss-log").Status; got != StatusStale {
 		t.Fatalf("status after timeout = %q, want the stale fallback", got)
+	}
+}
+
+// loopbackDoer builds a transport that trusts the given loopback servers'
+// certificates and installs the PRODUCTION redirect policy — the same
+// refuseRedirect function newProductionDoer installs, not a lookalike — so
+// these scenarios test the shipped behavior over TLS.
+//
+// Every server the scenario runs is passed in, INCLUDING one a request must
+// never reach: if the redirect refusal ever regressed, the follow-up request
+// would succeed and be counted, rather than failing on an untrusted
+// certificate and passing the test for the wrong reason.
+func loopbackDoer(servers ...*httptest.Server) fetchDoer {
+	pool := x509.NewCertPool()
+	for _, server := range servers {
+		pool.AddCert(server.Certificate())
+	}
+	return &http.Client{
+		Transport:     &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}},
+		CheckRedirect: refuseRedirect,
 	}
 }
 
@@ -191,7 +213,7 @@ func loopbackConfig(t *testing.T, serverURL string) (string, FetchConfig) {
 func TestRefreshLoopDrivesThePanel(t *testing.T) {
 	t.Parallel()
 	var hits atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hits.Add(1) <= 2 {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -208,7 +230,7 @@ func TestRefreshLoopDrivesThePanel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	registry.startRefresh(ctx, newProductionDoer(), func(string) string { return "" })
+	registry.startRefresh(ctx, loopbackDoer(server), func(string) string { return "" })
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if decodePanelEnvelope(t, registry, "boss-log").Status == StatusOK {
@@ -273,13 +295,13 @@ func TestUpstreamErrorStatusIsRefused(t *testing.T) {
 func TestRedirectsAreRefusedAndCredentialStaysHome(t *testing.T) {
 	t.Parallel()
 	var targetHits atomic.Int64
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		targetHits.Add(1)
 	}))
 	t.Cleanup(target.Close)
 
 	var redirecting atomic.Bool
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if redirecting.Load() {
 			http.Redirect(w, r, target.URL+"/exfil", http.StatusFound)
 			return
@@ -290,7 +312,7 @@ func TestRedirectsAreRefusedAndCredentialStaysHome(t *testing.T) {
 
 	_, config := loopbackConfig(t, origin.URL)
 	registry, state := bossFetchRegistry(t, origin.URL+"/scores.json", config)
-	doer := newProductionDoer()
+	doer := loopbackDoer(origin, target)
 	env := func(string) string { return "" }
 
 	if err := registry.refreshPanel(t.Context(), state, doer, env); err != nil {

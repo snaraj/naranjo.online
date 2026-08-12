@@ -121,6 +121,32 @@ describe('activityCells', () => {
     assert.equal(cells[8].value, 9, 'the counts themselves are real and still render');
   });
 
+  // The padding derives from the end date's WEEKDAY, so the two extremes of
+  // that arithmetic are the cases worth pinning: a Saturday end date covers
+  // its whole column and pads nothing, a Sunday end date pads six.
+  it('pads nothing when the window ends on a Saturday', () => {
+    const saturday = parseVCSActivity({ ...window, endDate: '2026-08-15' });
+    const cells = activityCells(saturday);
+    assert.equal(cells.length, 14);
+    for (const cell of cells) {
+      assert.notEqual(cell.absent, true, 'a full final column has no uncovered days');
+    }
+    assert.equal(cells[13].date, '2026-08-15', 'the last cell IS the end date');
+    assert.equal(cells[0].date, '2026-08-02');
+  });
+
+  it('pads six when the window ends on a Sunday', () => {
+    const sunday = parseVCSActivity({ ...window, endDate: '2026-08-09' });
+    const cells = activityCells(sunday);
+    assert.equal(cells.length, 14);
+    assert.equal(cells[7].date, '2026-08-09');
+    assert.notEqual(cells[7].absent, true, 'the end date itself is covered');
+    for (const index of [8, 9, 10, 11, 12, 13]) {
+      assert.equal(cells[index].absent, true, `cell ${index} follows the end date`);
+    }
+    assert.equal(cells[8].date, '2026-08-10');
+  });
+
   it('survives a malformed anchor and an empty window', () => {
     const activity = parseVCSActivity(window);
     assert.deepEqual(

@@ -19,9 +19,10 @@
 <script lang="ts">
   import PanelShell from './PanelShell.svelte';
   import { watchPanel } from '../panels';
-  import type { BossLogData, BossLogEntry, PanelEnvelope } from '../panels';
+  import type { BossLogData, PanelEnvelope } from '../panels';
   import { bossInitials, bossSlug } from '../bossIcons';
-  import { formatWhole } from '../grid';
+  import { formatWhole } from '../grid.ts';
+  import { cellLabel, rankLabel, tally } from '../bossLog.ts';
 
   /* The icon files under assets/icons/bosses become content-hashed URLs at
      build time. Keyed by slug: the boss list stays data, adding an icon is
@@ -43,27 +44,10 @@
 
   const data = $derived(envelope?.data ?? undefined);
 
-  /* tally renders a nullable hiscore figure: a real number is grouped for
-     readability, and null — the upstream's "no figure" sentinel — is an
-     explicit dash, never a zero. */
-  function tally(value: number | null | undefined): string {
-    return value === null || value === undefined ? '--' : formatWhole(value);
-  }
-
-  /* rankLabel says "Unranked" rather than dashing the rank away: below the
-     hiscores' listing threshold an account genuinely has no rank, and that
-     is information the reader wants. */
-  function rankLabel(rank: number | null | undefined): string {
-    return rank === null || rank === undefined ? 'Unranked' : formatWhole(rank);
-  }
-
-  function cellLabel(boss: BossLogEntry): string {
-    const parts = [`${boss.name}: ${tally(boss.kc)} KC`, `rank ${rankLabel(boss.rank)}`];
-    if (boss.score !== undefined && boss.score !== null) {
-      parts.push(`score ${tally(boss.score)}`);
-    }
-    return parts.join(', ');
-  }
+  /* tally, rankLabel, and cellLabel live in lib/bossLog.ts: a null tally and
+     an unranked row are the two renderings that carry real meaning here, and
+     they are executed by tests there rather than pattern-matched in this
+     file's source. */
 </script>
 
 <PanelShell

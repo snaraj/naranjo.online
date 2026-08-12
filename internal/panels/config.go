@@ -9,6 +9,8 @@ package panels
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -87,14 +89,37 @@ func validateBossLogSpec(spec *bossLogFetchSpec) error {
 }
 
 // validateVCSActivitySpec rejects a version-control fetch spec missing its
-// endpoint. It deliberately requires NO credential field: this producer is
-// public and unauthenticated by design, and a spec that grew a credential
-// would be a different security review.
+// endpoint, and — the load-bearing part — refuses any request header outside
+// vcsActivityHeaderAllowlist.
+//
+// The spec carries no credential FIELD, but that alone proved nothing: a
+// header map is a general escape hatch, and "Authorization: Bearer ..." in
+// config data would have sent a credential from a producer this repository
+// documents as public and unauthenticated. Restricting the header names to
+// the one this producer actually needs makes that unrepresentable instead of
+// merely undocumented; widening the list is a conscious edit here and a
+// different security review.
 func validateVCSActivitySpec(spec *vcsActivityFetchSpec) error {
 	if spec.Endpoint == "" {
 		return errors.New("vcs-activity fetch spec: endpoint is required")
 	}
+	for name := range spec.Headers {
+		if !vcsActivityHeaderAllowed(name) {
+			return fmt.Errorf("vcs-activity fetch spec: header %q is not permitted; this producer is public and sends no credential", name)
+		}
+	}
 	return nil
+}
+
+// vcsActivityHeaderAllowed reports whether a configured header name is on the
+// producer's allowlist, matched case-insensitively because header names are.
+func vcsActivityHeaderAllowed(name string) bool {
+	for _, allowed := range vcsActivityHeaderAllowlist {
+		if strings.EqualFold(name, allowed) {
+			return true
+		}
+	}
+	return false
 }
 
 // validateUsageSpec rejects a token-usage fetch spec whose sources are not

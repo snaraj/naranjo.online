@@ -112,7 +112,10 @@ func TestNewFetchSourceFailsClosed(t *testing.T) {
 		t.Fatalf("baseline usage source refused: %v", err)
 	}
 	if _, err := NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{
-		vcs: &vcsActivityFetchSpec{Endpoint: "https://api.example.test/contributions"},
+		vcs: &vcsActivityFetchSpec{
+			Endpoint: "https://api.example.test/contributions",
+			Headers:  map[string]string{"accept": "text/html"},
+		},
 	}); err != nil {
 		t.Fatalf("baseline activity source refused: %v", err)
 	}
@@ -138,6 +141,60 @@ func TestNewFetchSourceFailsClosed(t *testing.T) {
 			spec := validBossSpec()
 			spec.Endpoint = "ftp://api.example.test/scores.json"
 			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{bossLog: spec})
+		},
+		// Plain http was previously tolerated. It is not: the same allowlist
+		// governs credential-bearing endpoints, so a cleartext hop would put
+		// a credential on the wire.
+		"boss endpoint over plain http": func() (*FetchSource, error) {
+			spec := validBossSpec()
+			spec.Endpoint = "http://api.example.test/scores.json"
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{bossLog: spec})
+		},
+		"usage endpoint over plain http": func() (*FetchSource, error) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{usage: usageSpec(func(s *usageSourceSpec) {
+				s.Endpoint = "http://api.example.test/usage"
+			})})
+		},
+		"activity endpoint over plain http": func() (*FetchSource, error) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{
+				vcs: &vcsActivityFetchSpec{Endpoint: "http://api.example.test/contributions"},
+			})
+		},
+		// A credential in a URL is a credential on the wire, and config data
+		// is not where one belongs — on any of the three producers.
+		"boss endpoint carrying userinfo": func() (*FetchSource, error) {
+			spec := validBossSpec()
+			spec.Endpoint = "https://user:fixture-sentinel-bbbb@api.example.test/scores.json"
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{bossLog: spec})
+		},
+		"usage endpoint carrying userinfo": func() (*FetchSource, error) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{usage: usageSpec(func(s *usageSourceSpec) {
+				s.Endpoint = "https://user:fixture-sentinel-bbbb@api.example.test/usage"
+			})})
+		},
+		"activity endpoint carrying userinfo": func() (*FetchSource, error) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{
+				vcs: &vcsActivityFetchSpec{Endpoint: "https://user@api.example.test/contributions"},
+			})
+		},
+		// The public producer's header map is not a general escape hatch: a
+		// credential header on it would contradict everything this
+		// repository documents about that path.
+		"activity spec carrying an authorization header": func() (*FetchSource, error) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{
+				vcs: &vcsActivityFetchSpec{
+					Endpoint: "https://api.example.test/contributions",
+					Headers:  map[string]string{"Authorization": "Bearer fixture-sentinel-cccc"},
+				},
+			})
+		},
+		"activity spec carrying a credential header in odd casing": func() (*FetchSource, error) {
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{
+				vcs: &vcsActivityFetchSpec{
+					Endpoint: "https://api.example.test/contributions",
+					Headers:  map[string]string{"x-API-key": "fixture-sentinel-cccc"},
+				},
+			})
 		},
 		"boss endpoint that cannot parse": func() (*FetchSource, error) {
 			spec := validBossSpec()
@@ -277,6 +334,23 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 		if err := validateEndpoint("https://"+rogue+"/anything", bounds.Hosts); err == nil {
 			t.Errorf("endpoint on %q was admitted", rogue)
 		}
+	}
+	// An ALLOWLISTED host is still refused over plain http or with userinfo:
+	// the host check is one of three conditions, not the only one.
+	for name, endpoint := range map[string]string{
+		"plain http on an allowlisted host": "http://" + bounds.Hosts[0] + "/anything",
+		"userinfo on an allowlisted host":   "https://user:fixture-sentinel-bbbb@" + bounds.Hosts[0] + "/anything",
+	} {
+		if err := validateEndpoint(endpoint, bounds.Hosts); err == nil {
+			t.Errorf("%s was admitted", name)
+		}
+	}
+	// The shared read bound is a ratchet in the tightening direction only:
+	// every fetched document is working data that never reaches a response,
+	// and a looser bound is more memory a hostile upstream can make this
+	// process hold. Raising it is a conscious edit HERE, with a reason.
+	if bounds.MaxBytes > 524288 {
+		t.Errorf("shared body bound = %d, over the reviewed 524288 ceiling", bounds.MaxBytes)
 	}
 	// The version-control producer is deliberately credential-free: it reads
 	// a PUBLIC document, and a spec that grew a credential field would be a

@@ -349,4 +349,13 @@
               <td></td>
         </tr>
     </tbody>
+
+<!-- SYNTHETIC, hand-added, not part of the capture. The upstream's ramp
+  legend in this region uses a different CSS class, so the captured document
+  contains no undated day cell at all and the scanner's skip-the-undated
+  branch would never execute against it. These two cells carry a level but no
+  date, exactly as an undated cell does, so that branch is exercised. They
+  must NOT change any parsed figure: an undated cell is skipped. -->
+<td data-level="0" class="ContributionCalendar-day"></td>
+<td data-level="3" class="ContributionCalendar-day"></td>
 </table>

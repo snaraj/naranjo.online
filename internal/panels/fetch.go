@@ -121,11 +121,31 @@ func validateEndpoint(endpoint string, hosts []string) error {
 	if err != nil {
 		return fmt.Errorf("fetch endpoint %q: %w", endpoint, err)
 	}
-	if parsed.Scheme != "https" && parsed.Scheme != "http" {
-		return fmt.Errorf("fetch endpoint %q: scheme must be http(s)", endpoint)
+	if err := admitURL(parsed, hosts); err != nil {
+		return fmt.Errorf("fetch endpoint %q: %w", endpoint, err)
+	}
+	return nil
+}
+
+// admitURL is the ONE admission rule every outbound URL passes, applied both
+// at construction and again at request time. Three conditions, each of which
+// has to hold for a request to be safe to make at all:
+//
+//   - https ONLY. Plain http was previously tolerated; it is not, because the
+//     same allowlist governs the credential-bearing usage endpoints and a
+//     cleartext hop would put a credential on the wire.
+//   - NO userinfo. https://user:secret@host/path is a credential in a URL —
+//     the same class of exposure — and config data is not where one belongs.
+//   - The host is an exact allowlist match.
+func admitURL(parsed *url.URL, hosts []string) error {
+	if parsed.Scheme != "https" {
+		return errors.New("scheme must be https")
+	}
+	if parsed.User != nil {
+		return errors.New("userinfo in a fetch URL would put a credential on the wire")
 	}
 	if !hostAllowed(hosts, parsed.Hostname()) {
-		return fmt.Errorf("fetch endpoint host %q is not on the allowlist", parsed.Hostname())
+		return fmt.Errorf("host %q is not on the allowlist", parsed.Hostname())
 	}
 	return nil
 }
@@ -149,6 +169,12 @@ func (reg *Registry) StartRefresh(ctx context.Context) {
 	reg.startRefresh(ctx, newProductionDoer(), os.Getenv)
 }
 
+// refuseRedirect is the production client's redirect policy, named so tests
+// can install the EXACT policy production installs rather than a lookalike.
+func refuseRedirect(*http.Request, []*http.Request) error {
+	return errors.New("redirect refused: panel fetches never leave their requested host")
+}
+
 // newProductionDoer builds the one production HTTP client. Redirects are
 // REFUSED outright: CheckRedirect errors before the follow-up request is
 // ever issued, so a redirecting upstream can never steer the client — or a
@@ -160,11 +186,7 @@ func (reg *Registry) StartRefresh(ctx context.Context) {
 // source's per-attempt context carries the configured timeout, so the
 // client itself stays a plain transport.
 func newProductionDoer() fetchDoer {
-	return &http.Client{
-		CheckRedirect: func(r *http.Request, via []*http.Request) error {
-			return errors.New("redirect refused: panel fetches never leave their requested host")
-		},
-	}
+	return &http.Client{CheckRedirect: refuseRedirect}
 }
 
 // refresh performs one complete live refresh for this source: fetch,
@@ -267,8 +289,10 @@ func (s *FetchSource) fetchDocument(ctx context.Context, doer fetchDoer, endpoin
 	if err != nil {
 		return nil, fmt.Errorf("fetch: parse endpoint: %w", err)
 	}
-	if !hostAllowed(s.config.Hosts, parsed.Hostname()) {
-		return nil, fmt.Errorf("fetch refused: host %q is not on the allowlist", parsed.Hostname())
+	// Re-admitted at request time, defense in depth against any future spec
+	// tampering: scheme, userinfo, and host are all checked again here.
+	if err := admitURL(parsed, s.config.Hosts); err != nil {
+		return nil, fmt.Errorf("fetch refused: %w", err)
 	}
 	attemptCtx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	defer cancel()
