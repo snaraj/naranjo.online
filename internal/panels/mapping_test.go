@@ -449,12 +449,22 @@ func TestLoadFetchConfigFailsClosed(t *testing.T) {
 }
 
 // contributionsFixture is a REAL captured contribution-calendar document,
-// trimmed to its final twelve week columns so the fixture stays small while
-// staying genuine markup: the surrounding page chrome, the ramp legend (whose
-// cells carry no date and must be skipped), the label elements that hold the
-// exact counts, and a partial trailing week are all present exactly as the
-// upstream served them. A hand-written fixture would only prove the parser
-// agrees with its author.
+// reduced twice and in exactly two ways, both stated here because a fixture
+// nobody can audit is worth nothing:
+//
+//  1. Sliced to the region the scanner reads — the totals heading through the
+//     end of the calendar table. Everything after it is profile chrome the
+//     scanner never looks at, and it named other repositories, which no
+//     artifact in THIS repository may reference.
+//  2. The upstream's click-telemetry attributes are replaced by a marker.
+//     They are third-party tracking payloads the scanner never reads, one of
+//     them a high-entropy signature, and neither belongs in this history.
+//
+// Everything the parser touches is untouched: the ramp legend (whose cells
+// carry no date and must be skipped), the dated cells, the label elements
+// holding the exact counts, and a partial trailing week are all present
+// exactly as the upstream served them. A hand-written fixture would only
+// prove the parser agrees with its author.
 func contributionsFixture(t *testing.T) []byte {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "contributions-fragment.html"))
