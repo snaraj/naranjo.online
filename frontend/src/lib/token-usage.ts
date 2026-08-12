@@ -3,7 +3,14 @@
  * whatever these helpers return; it never computes, so a formatting or
  * admission bug is a one-file fix with a failing test beside it. */
 
-import type { TokenUsageSource, TokenUsageWindow } from './panels';
+import type {
+  TokenStatUnit,
+  TokenUsageInsight,
+  TokenUsageSeries,
+  TokenUsageSource,
+  TokenUsageStat,
+  TokenUsageWindow
+} from './panels';
 
 /* Meter severity thresholds, in utilization percent. Below warning the fill
  * wears the calm default; at or above each threshold it steps up. The numeric
@@ -123,12 +130,50 @@ function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
+/* The units a stat tile may declare. A unit the frontend cannot format is a
+ * contract break, not a rendering choice, so admission refuses it. */
+const statUnits: ReadonlySet<string> = new Set(['tokens', 'days', 'seconds']);
+
+/* formatDuration renders elapsed seconds the way a task length reads: hours
+ * and minutes above an hour, minutes above a minute, seconds below that. */
+export function formatDuration(seconds: number): string {
+  if (seconds < 60) {
+    return `${Math.round(seconds)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+/* formatStatValue renders one tile's figure by unit: compact digits for token
+ * counts, whole days for streaks, an hours-and-minutes duration for elapsed
+ * seconds. A null value is an unreported figure and renders as an explicit
+ * dash — never as a zero, which would be a different claim. */
+export function formatStatValue(value: number | null, unit: TokenStatUnit): string {
+  if (value === null) {
+    return '--';
+  }
+  if (unit === 'days') {
+    return `${value} ${value === 1 ? 'day' : 'days'}`;
+  }
+  if (unit === 'seconds') {
+    return formatDuration(value);
+  }
+  return formatTokenCount(value);
+}
+
 /* tokenUsageSources is the component's admission gate, mirroring the strict
  * decode doctrine the origin applies before serving: only the exact
  * token-usage/v1 payload shape is rendered, and any malformed corner — a
- * non-string label, a negative count, a numberless window — refuses the whole
- * payload so the panel shows its honest empty state instead of fake numbers.
- * Source labels pass through as data; nothing here knows a vendor. */
+ * non-string label, a negative count, a numberless window, a stat in a unit
+ * this file cannot format — refuses the whole payload so the panel shows its
+ * honest empty state instead of fake numbers. Source labels pass through as
+ * data; nothing here knows a vendor. The stat, series, and insight sections
+ * are optional: a payload written before they existed is still admitted, an
+ * absent section simply does not render. */
 export function tokenUsageSources(data: unknown): TokenUsageSource[] {
   if (!isRecord(data) || !Array.isArray(data.sources)) {
     return [];
@@ -139,6 +184,21 @@ export function tokenUsageSources(data: unknown): TokenUsageSource[] {
       return [];
     }
     if (!Array.isArray(candidate.windows)) {
+      return [];
+    }
+    if (candidate.account !== undefined && typeof candidate.account !== 'string') {
+      return [];
+    }
+    const stats = admitStats(candidate.stats);
+    if (stats === null) {
+      return [];
+    }
+    const insights = admitInsights(candidate.insights);
+    if (insights === null) {
+      return [];
+    }
+    const series = admitSeries(candidate.series);
+    if (series === null) {
       return [];
     }
     const windows: TokenUsageWindow[] = [];
@@ -168,7 +228,106 @@ export function tokenUsageSources(data: unknown): TokenUsageSource[] {
       }
       windows.push(window);
     }
-    sources.push({ label: candidate.label, windows });
+    const source: TokenUsageSource = { label: candidate.label, windows };
+    if (typeof candidate.account === 'string' && candidate.account !== '') {
+      source.account = candidate.account;
+    }
+    if (stats.length > 0) {
+      source.stats = stats;
+    }
+    if (insights.length > 0) {
+      source.insights = insights;
+    }
+    if (series !== undefined) {
+      source.series = series;
+    }
+    sources.push(source);
   }
   return sources;
+}
+
+/* admitStats returns the admitted tiles, or null when the section exists but
+ * is malformed — the signal the caller turns into a refused payload. An
+ * absent section is an empty list, never a refusal. */
+function admitStats(value: unknown): TokenUsageStat[] | null {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const stats: TokenUsageStat[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.key !== 'string' || entry.key === '') {
+      return null;
+    }
+    if (typeof entry.label !== 'string' || entry.label === '') {
+      return null;
+    }
+    if (typeof entry.unit !== 'string' || !statUnits.has(entry.unit)) {
+      return null;
+    }
+    if (entry.value !== null && !isCount(entry.value)) {
+      return null;
+    }
+    if (entry.recorded !== undefined && typeof entry.recorded !== 'boolean') {
+      return null;
+    }
+    stats.push({
+      key: entry.key,
+      label: entry.label,
+      value: entry.value === null ? null : (entry.value as number),
+      unit: entry.unit as TokenStatUnit,
+      recorded: entry.recorded === true
+    });
+  }
+  return stats;
+}
+
+/* admitInsights follows the same three-state contract as admitStats. */
+function admitInsights(value: unknown): TokenUsageInsight[] | null {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const insights: TokenUsageInsight[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.label !== 'string' || entry.label === '') {
+      return null;
+    }
+    if (entry.pct !== null && !isCount(entry.pct)) {
+      return null;
+    }
+    if (entry.recorded !== undefined && typeof entry.recorded !== 'boolean') {
+      return null;
+    }
+    insights.push({
+      label: entry.label,
+      pct: entry.pct === null ? null : (entry.pct as number),
+      recorded: entry.recorded === true
+    });
+  }
+  return insights;
+}
+
+/* admitSeries returns the admitted series, undefined when the section is
+ * absent, or null when it exists and is malformed. The start date must be a
+ * plain calendar date: the grid does day arithmetic on it, and an instant or
+ * a locale string would silently shift every cell. */
+function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!isRecord(value) || typeof value.startDate !== 'string') {
+    return null;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value.startDate)) {
+    return null;
+  }
+  if (!Array.isArray(value.totals) || !value.totals.every(isCount)) {
+    return null;
+  }
+  return { startDate: value.startDate, totals: value.totals as number[] };
 }

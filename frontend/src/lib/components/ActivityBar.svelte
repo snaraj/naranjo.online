@@ -14,7 +14,7 @@
   and a wide window scrolls inside the strip, never the page. -->
 <script lang="ts">
   import PanelShell from './PanelShell.svelte';
-  import { loadPanel, panelAge, panelKinds, type PanelEnvelope } from '../panels';
+  import { panelAge, panelKinds, watchPanel, type PanelEnvelope } from '../panels';
   import {
     activityLevel,
     activityLevels,
@@ -33,17 +33,7 @@
 
   let envelope = $state<PanelEnvelope | null>(null);
 
-  $effect(() => {
-    let live = true;
-    void loadPanel(activityPanelId).then((loaded) => {
-      if (live) {
-        envelope = loaded;
-      }
-    });
-    return () => {
-      live = false;
-    };
-  });
+  $effect(() => watchPanel(activityPanelId, (loaded) => (envelope = loaded)));
 
   /* A payload renders only when the envelope carries the pinned kind AND the
      data passes strict admission; anything else is the honest empty state. */

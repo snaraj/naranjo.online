@@ -7,7 +7,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import type { PanelStatus } from '../panels';
-  import { panelAge } from '../panels';
+  import { panelAge, watchClock } from '../panels';
 
   let {
     title,
@@ -21,7 +21,13 @@
     children?: Snippet;
   } = $props();
 
-  const age = $derived(panelAge(generatedAt));
+  /* The badge reads a ticking clock, not the mount instant: an age computed
+     once would read "just now" for the life of the tab, which is worse than
+     no badge — a freshness claim that quietly becomes false. */
+  let now = $state(new Date());
+  $effect(() => watchClock((tick) => (now = tick)));
+
+  const age = $derived(panelAge(generatedAt, now));
 </script>
 
 <section class="panel-shell" data-panel-status={status}>

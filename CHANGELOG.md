@@ -7,6 +7,50 @@ SemVer and match image/chart tags exactly.
 ## [Unreleased]
 
 ### Added
+- Panels refresh themselves while a visitor watches (#40). `watchPanel` in
+  `frontend/src/lib/panels.ts` re-reads each panel envelope on a 60s cadence
+  and every panel now mounts through it; `watchClock` ticks the freshness
+  badge so a rendered age keeps telling the truth instead of freezing at the
+  mount instant. A hidden tab is not polled at all and catches up the moment
+  it is shown, at most one read per panel is ever in flight, and stopping a
+  watcher ends delivery even from a read already in flight. Every timer,
+  transport, and visibility read is injected through one host seam, so the
+  loop is executed by tests rather than described by them.
+- Token-usage panel rebuilt to the owner's referenced surface (#40): a
+  headline tile grid (a final odd tile spans the row), the usage windows with
+  their meters, a "Token activity" section whose Daily / Weekly / Cumulative
+  segmented toggle re-reads ONE daily series through three lenses with no
+  extra payload, and an "Activity insights" list.
+- `token-usage/v1` gains `account`, `stats`, `series`, and `insights` —
+  additively, inside the same kind version: every field is optional, and a
+  payload written before they existed still decodes and still renders. Stats
+  and insights carry a `recorded` flag, so a figure captured out of band
+  says so instead of borrowing the panel's live freshness.
+- `ContributionGrid.svelte` plus `lib/grid.ts`: one contribution-heatmap
+  implementation, a month axis, a five-level ramp shipped as themeable custom
+  properties, and days outside the window rendered as labelled holes rather
+  than as zeros. The token-activity grid renders through it today and the
+  version-control calendar follows, so the two can never drift.
+- README and AGENTS.md document the reviewed prerequisites for enabling live
+  panel refresh in a cluster, and state that the enablement itself is a
+  separate owner-reviewed step.
+
+### Changed
+- The live usage window widens from 7 to 30 daily buckets (`limit=31`,
+  `lookbackDays=30` in `internal/panels/config/fetch.json`) so the activity
+  grid has a month to draw. Pagination is still not implemented, so a month
+  is the ceiling one request can deliver.
+- `GO_COVERAGE_FLOOR` ratchets 91.1 -> 93.2 (measured 96.2 on this branch).
+
+### Removed
+- The invented figures in `snapshots/token-usage.json`. Nothing in the
+  repository could support them, and the "honest states" floor forbids
+  fabricated data outright. The snapshot now carries only recorded, dated
+  values for the source that has them, and the other source renders its
+  explicit empty state until live refresh is enabled or the owner records an
+  export. This is a deliberate, visible loss of fake content.
+
+### Added
 - Release publisher attaches the BuildKit SLSA v1 provenance as keyless
   cosign attestations (`slsaprovenance1`) on the immutable image digest,
   immediately after image signing — one per architecture, each read back

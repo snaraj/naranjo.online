@@ -51,9 +51,40 @@ export interface TokenUsageWindow {
   resetsAt?: string;
 }
 
+/* Stat tiles, the activity series, and insights were added to token-usage/v1
+ * after it shipped. Every one of them is optional, so a payload written before
+ * they existed still renders — an additive extension inside the same kind
+ * version, exactly as the envelope contract requires. `recorded` marks a
+ * figure captured out of band rather than fetched live, so a tile can say
+ * where it came from instead of implying a freshness it does not have. */
+export type TokenStatUnit = 'tokens' | 'days' | 'seconds';
+
+export interface TokenUsageStat {
+  key: string;
+  label: string;
+  value: number | null;
+  unit: TokenStatUnit;
+  recorded?: boolean;
+}
+
+export interface TokenUsageSeries {
+  startDate: string;
+  totals: number[];
+}
+
+export interface TokenUsageInsight {
+  label: string;
+  pct: number | null;
+  recorded?: boolean;
+}
+
 export interface TokenUsageSource {
   label: string;
+  account?: string;
   windows: TokenUsageWindow[];
+  stats?: TokenUsageStat[];
+  series?: TokenUsageSeries;
+  insights?: TokenUsageInsight[];
 }
 
 export interface TokenUsageData {
@@ -230,9 +261,122 @@ export async function loadPanelIndex(fetcher: PanelFetcher = defaultFetcher): Pr
   }
 }
 
+/* panelRefreshIntervalMs is how often a mounted panel re-reads its envelope.
+ * One minute is the deliberate compromise: the origin refreshes fetch-backed
+ * panels on a 45-minute TTL, so a visitor sees new data within a minute of it
+ * existing while a long-open tab costs the origin one conditional GET a
+ * minute per panel — and every one of those is a 304 with no body while the
+ * data is unchanged, because the panel API serves digest ETags. */
+export const panelRefreshIntervalMs = 60_000;
+
+/* panelClockIntervalMs is how often the freshness badge re-reads the clock.
+ * The age it prints is coarse (minutes, then hours), so half a minute keeps
+ * "just now" from lingering without waking anything meaningful. */
+export const panelClockIntervalMs = 30_000;
+
+/* PanelWatchHost is the seam between the polling loop and the browser: the
+ * transport, the timer, and the page's visibility state. Production binds it
+ * to the globals; tests inject fakes and drive the loop by hand, so nothing
+ * in this file's behavior depends on a real timer or a real document. */
+export interface PanelWatchHost {
+  fetcher: PanelFetcher;
+  schedule(callback: () => void, ms: number): unknown;
+  cancel(handle: unknown): void;
+  hidden(): boolean;
+  onVisible(callback: () => void): () => void;
+}
+
+/* The default host degrades cleanly outside a browser: with no document there
+ * is no visibility to honor, so the page counts as visible and the
+ * subscription is a no-op. */
+export const defaultWatchHost: PanelWatchHost = {
+  fetcher: defaultFetcher,
+  schedule: (callback, ms) => globalThis.setInterval(callback, ms),
+  cancel: (handle) => globalThis.clearInterval(handle as ReturnType<typeof setInterval>),
+  hidden: () => (typeof document === 'undefined' ? false : document.hidden),
+  onVisible: (callback) => {
+    if (typeof document === 'undefined') {
+      return () => {};
+    }
+    const listener = () => {
+      if (!document.hidden) {
+        callback();
+      }
+    };
+    document.addEventListener('visibilitychange', listener);
+    return () => document.removeEventListener('visibilitychange', listener);
+  }
+};
+
+export interface PanelWatchOptions {
+  intervalMs?: number;
+  host?: Partial<PanelWatchHost>;
+}
+
+/* watchPanel keeps one panel current: an immediate first read, then one read
+ * per interval, then a stop function that ends the loop for good. Three rules
+ * make it cheap and safe to leave running:
+ *
+ *   - A hidden page is not polled. A background tab produces no requests at
+ *     all, and becoming visible again triggers an immediate catch-up read
+ *     rather than waiting out the remaining interval.
+ *   - At most one request is in flight per panel. A slow origin can never
+ *     stack requests behind itself.
+ *   - After stop() nothing is delivered, even from a read already in flight,
+ *     so an unmounted component can never write to a dead state. */
+export function watchPanel<Data = unknown>(
+  id: string,
+  onEnvelope: (envelope: PanelEnvelope<Data>) => void,
+  options: PanelWatchOptions = {}
+): () => void {
+  const host = { ...defaultWatchHost, ...options.host };
+  let stopped = false;
+  let inFlight = false;
+  const read = (force: boolean) => {
+    if (stopped || inFlight || (!force && host.hidden())) {
+      return;
+    }
+    inFlight = true;
+    loadPanel<Data>(id, host.fetcher)
+      .catch(() => unavailablePanel(id) as PanelEnvelope<Data>)
+      .then((envelope) => {
+        inFlight = false;
+        if (!stopped) {
+          onEnvelope(envelope);
+        }
+      });
+  };
+  read(true);
+  const handle = host.schedule(() => read(false), options.intervalMs ?? panelRefreshIntervalMs);
+  const unsubscribe = host.onVisible(() => read(true));
+  return () => {
+    stopped = true;
+    host.cancel(handle);
+    unsubscribe();
+  };
+}
+
+/* watchClock ticks a shared wall clock so a rendered age keeps telling the
+ * truth. Without it a badge computed once at mount reads "just now" forever,
+ * which is worse than no badge: it is a freshness claim that quietly becomes
+ * false. Same host seam, same stop contract. */
+export function watchClock(onTick: (now: Date) => void, options: PanelWatchOptions = {}): () => void {
+  const host = { ...defaultWatchHost, ...options.host };
+  let stopped = false;
+  const handle = host.schedule(() => {
+    if (!stopped) {
+      onTick(new Date());
+    }
+  }, options.intervalMs ?? panelClockIntervalMs);
+  return () => {
+    stopped = true;
+    host.cancel(handle);
+  };
+}
+
 /* panelAge renders generatedAt as the coarse human age the status badge
- * shows. Coarse on purpose: freshness is a glance, not a clock, so there is
- * no ticking timer to schedule or clean up. */
+ * shows. Coarse on purpose: freshness is a glance, not a clock — the ticking
+ * happens in watchClock, which re-invokes this with a fresh instant. */
 export function panelAge(generatedAt: string | undefined, now: Date = new Date()): string {
   if (!generatedAt) {
     return '';

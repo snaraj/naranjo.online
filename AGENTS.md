@@ -71,7 +71,7 @@ Numbered for citation, repo-scoped, none negotiable in code:
    in chart values defaults; `TestProviderNeutrality` enforces zero
    occurrences anywhere else. See the deployment-provider contract below.
 7. **Ratchet-only coverage floor.** The PR gate enforces
-   `GO_COVERAGE_FLOOR` (currently 91.1%, measured 94.1%). Raise it as
+   `GO_COVERAGE_FLOOR` (currently 93.2%, measured 96.2%). Raise it as
    coverage grows; lowering it weakens an enforced check and is out of
    policy.
 8. **Truthful serving contract.** Port 8080; `/livez` and `/readyz` stay
@@ -411,7 +411,7 @@ included; it is the same battery CI enforces:
     gitleaks git --no-banner --redact --max-target-megabytes=2 .
     gitleaks dir --no-banner --redact .
 
-- **Coverage floor.** `GO_COVERAGE_FLOOR` is 91.1 (measured 94.1 when
+- **Coverage floor.** `GO_COVERAGE_FLOOR` is 93.2 (measured 96.2 when
   last raised), enforced in `.github/workflows/pr-gate.yml` on total
   production statements with `internal/testsupport` filtered from the
   profile — the ONLY exclusion, and it may never grow to cover
@@ -523,6 +523,25 @@ Structural promises of the panels subsystem, pinned by
   stable forever by design. Evolution happens inside the kind-versioned
   payloads: a breaking payload change mints a NEW kind version, never
   mutates an existing one, never bends the outer shape.
+- **Live refresh is opt-in, and enabling it is an operational decision.**
+  `PANELS_REFRESH` gates every background refresh loop; unset or `false`
+  launches no loop at all, so egress is impossible rather than merely
+  unattempted, and any other value fails the boot. Enabling it in a cluster
+  needs three things together — `PANELS_REFRESH=true`, the credential
+  variables named by `keyEnvName` in `internal/panels/config/fetch.json`
+  supplied as Secrets, and an egress allowance for that file's `hosts`
+  list — and that enablement is a SEPARATE owner-reviewed step (standing
+  audit item S2). No key, and no reference to a key, ever lands here
+  (requirement 12); a source whose variable is unset is skipped, never
+  faked. README's "Enabling live refresh" section is the operator-facing
+  copy of this, and both must move together.
+- **Panels tell the truth about where a number came from.** The envelope's
+  `status` carries provenance for the whole payload, and inside
+  `token-usage/v1` each stat tile and insight carries `recorded` for its
+  own. A figure captured out of band says so rather than borrowing the
+  panel's freshness, an unreported figure serves `null` and renders as a
+  dash rather than a zero, and an invented figure is a doctrine violation
+  no matter how good the panel looks with it.
 - **Vendor names are data, never code.** Tool and vendor names appear
   only as data labels inside snapshots and the embedded fetch config
   (see `vendorMarks` in `internal/panels/doctrine_test.go`); the pin

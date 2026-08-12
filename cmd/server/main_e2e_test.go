@@ -161,6 +161,42 @@ func TestRunFailsClosedOnBadConfiguration(t *testing.T) {
 	}
 }
 
+// TestRunAcceptsBothPanelRefreshModes proves the live-refresh switch is real
+// wiring in BOTH positions, and does it without a single outbound packet.
+//
+// The egress-free guarantee is structural, not incidental: run() hands the
+// SAME context to StartPanelRefresh that governs the server's lifetime, and
+// every refresh loop re-checks that context after each wake and returns
+// before any attempt. Handing run() an already-canceled context therefore
+// exercises the enabled path — configuration parsed, loops launched, wiring
+// proven — while guaranteeing the loops exit before touching the network, so
+// this suite stays hermetic on a runner with no egress at all.
+//
+// The disabled path is the deployed default: no loop is launched, so egress
+// is impossible rather than merely unattempted.
+func TestRunAcceptsBothPanelRefreshModes(t *testing.T) {
+	t.Parallel()
+	requireBuiltFrontend(t)
+	for name, environment := range map[string]map[string]string{
+		"refresh unset (the deployed default)": {},
+		"refresh explicitly disabled":          {"PANELS_REFRESH": "false"},
+		"refresh enabled":                      {"PANELS_REFRESH": "true"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			values := map[string]string{"PORT": strconv.Itoa(reserveLoopbackPort(t))}
+			for key, value := range environment {
+				values[key] = value
+			}
+			if err := run(ctx, fakeEnv(values)); err != nil {
+				t.Fatalf("run() with %v = %v, want a clean drain", environment, err)
+			}
+		})
+	}
+}
+
 // TestRunServesTheSiteAndDrainsOnSIGTERM is the complete production lifecycle
 // in one scenario: boot the real binary path, verify every public contract
 // over a real connection, then deliver the same signal Kubernetes sends and

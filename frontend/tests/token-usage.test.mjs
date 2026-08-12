@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 
 import {
+  formatDuration,
+  formatStatValue,
   formatTokenCount,
   formatUtilization,
   meterFillPct,
@@ -168,7 +170,7 @@ describe('TokenUsagePanel source contract', () => {
   });
 
   it('iterates payload sources and takes every label from the data', () => {
-    assert.match(component, /\{#each sources as source\}/);
+    assert.match(component, /\{#each sources as source \(source\.label\)\}/);
     assert.match(component, /\{source\.label\}/);
     // Vendor and tool names are payload data, never component or helper
     // logic. The needles are assembled from fragments so this test file's
@@ -234,5 +236,132 @@ describe('panel mount region', () => {
       1,
       'token-usage mount line must appear exactly once in its fence'
     );
+  });
+});
+
+describe('stat tiles', () => {
+  it('formats each unit the way that figure reads', () => {
+    assert.equal(formatStatValue(22_700_000_000, 'tokens'), '22.7B');
+    assert.equal(formatStatValue(2_900_000_000, 'tokens'), '2.9B');
+    assert.equal(formatStatValue(4, 'days'), '4 days');
+    assert.equal(formatStatValue(1, 'days'), '1 day');
+    assert.equal(formatStatValue(80_880, 'seconds'), '22h 28m');
+  });
+
+  it('renders an unreported figure as a dash, never as a zero', () => {
+    // Zero and "not reported" are different claims, and a tile that
+    // conflates them invents data.
+    assert.equal(formatStatValue(null, 'tokens'), '--');
+    assert.equal(formatStatValue(null, 'days'), '--');
+    assert.equal(formatStatValue(0, 'tokens'), '0');
+  });
+
+  it('formats durations across every step', () => {
+    assert.equal(formatDuration(0), '0s');
+    assert.equal(formatDuration(59), '59s');
+    assert.equal(formatDuration(60), '1m');
+    assert.equal(formatDuration(3599), '59m');
+    assert.equal(formatDuration(3600), '1h 0m');
+    assert.equal(formatDuration(3660), '1h 1m');
+  });
+});
+
+describe('extended payload admission', () => {
+  const base = {
+    sources: [
+      {
+        label: 'fixture',
+        account: 'handle',
+        windows: [],
+        stats: [{ key: 'lifetime', label: 'Lifetime tokens', value: 10, unit: 'tokens', recorded: true }],
+        series: { startDate: '2026-08-01', totals: [1, 2, 3] },
+        insights: [{ label: 'Fast mode', pct: 4, recorded: true }]
+      }
+    ]
+  };
+
+  it('admits the full extended shape and preserves provenance', () => {
+    const [source] = tokenUsageSources(structuredClone(base));
+    assert.equal(source.account, 'handle');
+    assert.equal(source.stats[0].recorded, true);
+    assert.deepEqual(source.series.totals, [1, 2, 3]);
+    assert.equal(source.insights[0].pct, 4);
+  });
+
+  it('still admits a payload written before the sections existed', () => {
+    // The extension is additive inside token-usage/v1: an older payload must
+    // render unchanged, with the new sections simply absent.
+    const [source] = tokenUsageSources({ sources: [{ label: 'fixture', windows: [] }] });
+    assert.equal(source.label, 'fixture');
+    assert.equal(source.account, undefined);
+    assert.equal(source.stats, undefined);
+    assert.equal(source.series, undefined);
+    assert.equal(source.insights, undefined);
+  });
+
+  it('refuses every malformed corner rather than rendering part of it', () => {
+    const mutations = {
+      'non-string account': (payload) => (payload.sources[0].account = 7),
+      'stat without a key': (payload) => delete payload.sources[0].stats[0].key,
+      'stat without a label': (payload) => (payload.sources[0].stats[0].label = ''),
+      'stat in an unformattable unit': (payload) => (payload.sources[0].stats[0].unit = 'furlongs'),
+      'negative stat value': (payload) => (payload.sources[0].stats[0].value = -1),
+      'non-boolean provenance': (payload) => (payload.sources[0].stats[0].recorded = 'yes'),
+      'stats that are not a list': (payload) => (payload.sources[0].stats = { key: 'x' }),
+      'series with an instant instead of a date': (payload) =>
+        (payload.sources[0].series.startDate = '2026-08-01T00:00:00Z'),
+      'series with a negative total': (payload) => (payload.sources[0].series.totals = [1, -2]),
+      'series without totals': (payload) => delete payload.sources[0].series.totals,
+      'insight without a label': (payload) => (payload.sources[0].insights[0].label = ''),
+      'insight above the scale': (payload) => (payload.sources[0].insights[0].pct = 'lots')
+    };
+    for (const [name, mutate] of Object.entries(mutations)) {
+      const payload = structuredClone(base);
+      mutate(payload);
+      assert.deepEqual(tokenUsageSources(payload), [], `${name} must refuse the whole payload`);
+    }
+  });
+
+  it('treats a null figure as real information, not a refusal', () => {
+    const payload = structuredClone(base);
+    payload.sources[0].stats[0].value = null;
+    payload.sources[0].insights[0].pct = null;
+    const [source] = tokenUsageSources(payload);
+    assert.equal(source.stats[0].value, null);
+    assert.equal(source.insights[0].pct, null);
+  });
+});
+
+describe('TokenUsagePanel live surface', () => {
+  it('keeps itself current instead of painting once at mount', () => {
+    assert.match(component, /watchPanel<TokenUsageData>\('token-usage'/);
+    assert.doesNotMatch(component, /onMount/, 'a one-shot mount read is the bug this panel had');
+  });
+
+  it('renders the owner\'s tile grid: two columns, a final odd tile spanning the row', () => {
+    assert.match(component, /grid-template-columns:\s*repeat\(2,/);
+    assert.match(component, /\.usage-tile:last-child:nth-child\(odd\)\s*\{\s*grid-column:\s*1 \/ -1/);
+    assert.match(component, /class="usage-tile-value">\{formatStatValue\(stat\.value, stat\.unit\)\}/);
+  });
+
+  it('marks recorded figures instead of letting them borrow live freshness', () => {
+    assert.match(component, /\{#if stat\.recorded\}/);
+    assert.match(component, /\{#if insight\.recorded\}/);
+    assert.match(component, /class="usage-recorded"/);
+  });
+
+  it('switches the activity view client-side over one series', () => {
+    assert.match(component, /role="radiogroup"/);
+    assert.match(component, /\{#each seriesViews as candidate\}/);
+    assert.match(component, /aria-checked=\{view === candidate\}/);
+    assert.match(component, /viewValues\(source\.series\.totals, view\)/);
+    // Touch target floor for the segmented control.
+    assert.match(component, /min-block-size:\s*2\.75rem/);
+  });
+
+  it('renders the activity heatmap through the shared grid component', () => {
+    assert.match(component, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
+    assert.match(component, /<ContributionGrid/);
+    assert.match(component, /emptyNote="no activity series/);
   });
 });

@@ -1,42 +1,25 @@
 {
-  "generatedAt": "2026-08-11T02:30:00Z",
+  "generatedAt": "2026-08-12T00:00:00Z",
   "data": {
     "sources": [
       {
         "label": "anthropic",
-        "windows": [
-          {
-            "period": "session",
-            "inputTokens": 182340,
-            "outputTokens": 45120,
-            "utilizationPct": 36.4,
-            "resetsAt": "2026-08-11T07:00:00Z"
-          },
-          {
-            "period": "week",
-            "inputTokens": 9421770,
-            "outputTokens": 2103980,
-            "utilizationPct": 61.2,
-            "resetsAt": "2026-08-14T00:00:00Z"
-          }
-        ]
+        "windows": [],
+        "stats": [],
+        "insights": []
       },
       {
         "label": "codex",
-        "windows": [
-          {
-            "period": "session",
-            "inputTokens": 96110,
-            "outputTokens": 28450,
-            "utilizationPct": 21.9,
-            "resetsAt": "2026-08-11T05:30:00Z"
-          },
-          {
-            "period": "week",
-            "inputTokens": 4180230,
-            "outputTokens": 1250770
-          }
-        ]
+        "account": "thealienmessiah",
+        "windows": [],
+        "stats": [
+          { "key": "lifetime", "label": "Lifetime tokens", "value": 22700000000, "unit": "tokens", "recorded": true },
+          { "key": "peak", "label": "Peak tokens", "value": 2900000000, "unit": "tokens", "recorded": true },
+          { "key": "current-streak", "label": "Current streak", "value": 4, "unit": "days", "recorded": true },
+          { "key": "longest-streak", "label": "Longest streak", "value": 11, "unit": "days", "recorded": true },
+          { "key": "longest-task", "label": "Longest task", "value": 80880, "unit": "seconds", "recorded": true }
+        ],
+        "insights": [{ "label": "Fast mode", "pct": 4, "recorded": true }]
       }
     ]
   }
