@@ -161,12 +161,15 @@ Build and test, in this order (the same gate CI enforces):
    target; plain `helm template` defaults to older capabilities).
 4. `docker build .` when the Dockerfile or build inputs change.
 
-Releases: `VERSION`, `chart/Chart.yaml` (`version` + `appVersion`), and
-the git tag move together (CI enforces the three-way lock). SemVer per the
-platform's ADR 0014: releases are strict bumps; history is append-only.
-Update `CHANGELOG.md` in the same PR as the change it describes. Pushing
-`vX.Y.Z` publishes the signed multi-arch image, the signed OCI chart, and
-a GitHub Release; deployment consumes digests, never tags.
+Releases: `VERSION`, `chart/Chart.yaml` (`version` + `appVersion`), the
+chart's `image.tag`, and the git tag all move together (CI enforces the
+four-way lock). SemVer per the platform's ADR 0014: releases are strict bumps;
+history is append-only. Update `CHANGELOG.md` in the same PR as the change it
+describes. Pushing `vX.Y.Z` publishes the signed multi-arch image, the signed
+OCI chart, and a GitHub Release; deployment RESOLVES digests, never tags. The
+rendered reference carries both — `repository:vX.Y.Z@sha256:<hex>` — so a Pod
+says which release it is, but only the digest selects bytes, and only the
+digest is signed, attested and verified at admission (requirement 10).
 
 ## Sanctioned evolution
 
@@ -456,7 +459,9 @@ included; it is the same battery CI enforces:
   Go 1.26.5; frontend check/test/build; gofmt/vet/tests/race; the
   coverage floor), `chart` (helm lint + render at
   `--kube-version v1.36.0`; the VERSION ↔ chart `version` ↔
-  `appVersion` three-way lock), `container` (both production
+  `appVersion` ↔ chart `image.tag` four-way lock, plus a render
+  assertion that the emitted reference still carries a full digest),
+  `container` (both production
   architectures built, never published).
 - **coverage-badges** — `main` pushes only: recomputes both coverages
   with the gate's own recipe and force-updates the generated
