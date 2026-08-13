@@ -167,6 +167,25 @@ SemVer and match image/chart tags exactly.
 
 ### Security
 
+- The chart's ingress NetworkPolicy can finally express the **whole peer
+  identity**. It admitted a peer by namespace and `app.kubernetes.io/name`,
+  which are the only peer facts the values exposed — but the peer namespace is
+  shared by several per-site connectors that carry the same app name and
+  differ only by `app.kubernetes.io/instance`. A name-only selector therefore
+  admitted every connector in that namespace, not just this site's. The
+  deployed policy was hand-tightened with the instance pin (dated observation,
+  2026-08-11; revalidate read-only before relying on it), so applying the
+  chart as it stood would have WIDENED what is running — a security regression
+  delivered by a routine release rather than by a bad edit. `ingress` now
+  carries `peerInstance`, defaulting to this site's own connector so the safe
+  policy is the out-of-the-box render, and `values.schema.json` requires it
+  non-empty: a blank or absent instance fails validation instead of rendering
+  an unpinned policy. `scripts/ci/chart-ingress-pin.sh` renders the chart in
+  the PR gate and proves all three properties — the default pins
+  namespace + app name + instance byte for byte against the values, blank and
+  absent are both refused, and moving the instance moves the pin while the app
+  name stays put, which is exactly why the app name alone cannot tell two
+  connectors apart.
 - Outbound endpoints are **https only**. Plain `http` was previously tolerated
   by endpoint validation; the same allowlist governs the credential-bearing
   usage endpoints, so a cleartext hop would have put a credential on the wire.

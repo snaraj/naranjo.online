@@ -15,7 +15,11 @@ spec:
   ingress:
     {{- /* Only the configured ingress peer may reach the origin. The peer
     identity is injected from values — the deployment-provider binding point —
-    so the template stays provider-neutral by doctrine. */}}
+    so the template stays provider-neutral by doctrine. That identity is the
+    full triple, namespace + app name + instance: the peer namespace is shared
+    by several connectors that carry the SAME app name and differ only by
+    instance, so dropping the instance line would admit all of them. The
+    schema requires the instance, so this selector cannot render unpinned. */}}
     - from:
         - namespaceSelector:
             matchLabels:
@@ -23,6 +27,7 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: {{ .Values.ingress.peerAppName }}
+              app.kubernetes.io/instance: {{ .Values.ingress.peerInstance }}
       ports:
         - port: {{ .Values.service.port }}
           protocol: TCP
