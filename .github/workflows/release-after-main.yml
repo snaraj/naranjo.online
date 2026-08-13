@@ -2,8 +2,9 @@ name: Release after main CI
 
 # GitHub does not recursively trigger a push workflow for a tag created with
 # GITHUB_TOKEN.  This success-only workflow_run verifies the completed main
-# SHA, creates its immutable annotated tag, and explicitly dispatches the
-# publisher ON that tag.  Distinct main SHAs share no concurrency group: every
+# SHA, creates its annotated tag for the server-locked Release, and explicitly
+# dispatches the publisher ON that tag. Distinct main SHAs share no concurrency
+# group: every
 # merge intent has an independent release path and a rapid later merge cannot
 # replace an earlier pending run. Squash produces one commit; an allowed rebase
 # may produce several. The contract validates the complete push base -> final

@@ -72,11 +72,17 @@ final source tree. The publisher builds or verifies:
   the registry tag to equal valid chart SemVer, and `vX.Y.Z` is not SemVerV2.
 - A GitHub Release with the immutable digests and human notes.
 
-Version tags are immutable and never reassigned. A retry reuses only exact,
-complete, correctly signed source state; partial or conflicting immutable
-state is reported as burned and requires a new patch. Release publication is
-separate from deployment or promotion. See [CHANGELOG.md](CHANGELOG.md) for
-history and [SECURITY.md](SECURITY.md) for the security posture.
+This automatic path may not leave Draft until the repository owner's read-only
+receipt proves that GitHub immutable releases are enabled and `main` requires
+the exact GitHub Actions checks against the current base with no bypass actor.
+The publisher also requires every created or reused Release's authoritative
+REST record to report `immutable: true`; metadata, publication flags, and the
+zero-asset inventory must still be exact. Version tags are then locked by the
+GitHub control and never reassigned. A retry reuses only exact, complete,
+correctly signed source state; partial or conflicting state is reported as
+burned and requires a new patch. Release publication is separate from
+deployment or promotion. See [the release governance runbook](docs/release-governance.md),
+[CHANGELOG.md](CHANGELOG.md), and [SECURITY.md](SECURITY.md).
 
 An OCI reference such as `image:vX.Y.Z@sha256:<digest>` or
 `chart:X.Y.Z@sha256:<digest>` contains a tag plus immutable digest; the complete

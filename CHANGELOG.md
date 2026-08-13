@@ -22,6 +22,11 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   Both enabled owner merge modes are executable release paths: one-commit
   squashes and multi-commit linear rebases validate the exact base-to-final-tree
   patch transition without dropping the final source SHA.
+  The change must remain Draft until a GET-only owner preflight proves GitHub
+  immutable releases enabled plus exact GitHub-Actions-bound, strict
+  current-base required checks with no ruleset bypass or update restriction.
+  Created and reused Releases must report `immutable: true` through the
+  authoritative REST record in addition to exact metadata and zero assets.
   Git/image/Release tags use one plain `vX.Y.Z`. Helm's documented exception
   stays numeric `X.Y.Z` because its OCI tag must equal valid chart SemVer.
   `tag@sha256:digest` is a deploy reference, never a tag.
@@ -447,7 +452,8 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - Release pipeline: capture helm push's stderr so the chart digest is
   read for signing and the Release notes. v0.1.5 published a signed
   image and an unsigned chart artifact before the digest parse refused;
-  tags are immutable, so v0.1.6 is the first complete signed release
+  the release process did not reuse or move that published tag, so v0.1.6 is
+  the first complete signed release
   (image + signed OCI chart + GitHub Release).
 
 ## [0.1.5] - 2026-08-10
@@ -456,8 +462,8 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - Release pipeline: removed the invalid GitHub attestation step (buildx
   SLSA provenance + SBOM and the Cosign signature remain the integrity
   evidence). v0.1.4 published a valid signed image but no chart or
-  GitHub Release; tags are immutable, so v0.1.5 is the first complete
-  release.
+  GitHub Release; the release process did not reuse or move that published
+  tag, so v0.1.5 is the first complete release.
 
 ## [0.1.4] - 2026-08-10
 

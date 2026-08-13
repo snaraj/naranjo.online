@@ -31,6 +31,7 @@ Closes #<!-- same-repository issue number -->
 ## Exact-head review
 
 - `requires-review` applied only after author completion: pending/yes
+- Immutable-release + strict required-checks/no-bypass settings receipt: pending/exact
 - Independent normal-comment verdict bound to exact head: pending
 - Main Worker bounded architecture sanity review: pending
 - Base freshness and successful required checks re-verified before Ready: pending

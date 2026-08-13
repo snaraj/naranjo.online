@@ -83,16 +83,21 @@ Numbered for citation, repo-scoped, none negotiable in code:
    yes.
 9. **Dependency-free Go.** The Go module stays standard-library only.
    Adding a dependency is an owner decision, not a convenience.
-10. **Every merge releases; deploy remains separate.** Every PR, including
+10. **Every merge releases after the server gate; deploy remains separate.** Every PR, including
     docs and Dependabot, advances exactly one patch from its current protected
     base: numeric `VERSION`, chart `version`, `appVersion`, and changelog
     `X.Y.Z`, plus plain `vX.Y.Z` image tag. Successful main CI publishes that exact SHA as one
-    immutable plain `vX.Y.Z` release. The machine-only workflow dispatch is
+    server-locked plain `vX.Y.Z` release. The machine-only workflow dispatch is
     the explicit handoff required after a token-created tag; it is not an
     operator bypass. Squash and rebase are both supported: the protected-main
     push must be one merge-free linear base-to-head range whose final snapshot
     is the exact next patch, and that complete final SHA gets one release.
-    There is no skip or force path. Images deploy by digest;
+    There is no skip or force path. The automatic-release PR remains Draft
+    until the repository owner's GET-only receipt proves GitHub immutable
+    releases enabled and exact GitHub-Actions-bound required checks enforced
+    against the current base with no bypass actor or update restriction; see
+    `docs/release-governance.md`. Every created or reused GitHub Release must
+    also report authoritative `immutable: true`. Images deploy by digest;
     `vX.Y.Z@sha256:<digest>` is a reference, never a tag, and publication is
     never deployment or promotion.
 11. **Media stays out of the control plane.** Heavy media never enters
@@ -194,6 +199,10 @@ and take the new next patch. Deployment RESOLVES digests, never tags. The
 Helm chart/OCI tag is the documented numeric `X.Y.Z` exception because Helm
 requires its registry tag to equal valid chart SemVer; Git/image/Release tags
 remain plain `vX.Y.Z`.
+Before the first Release governed by this path, the repository owner must make
+the release-control settings receipt exact. The receipt is a required Ready
+gate, never permission for an agent to change settings or merge. A failed or
+unknown preflight leaves the PR Draft.
 The rendered image reference carries both —
 `repository:vX.Y.Z@sha256:<hex>` — so a Pod
 says which release it is, but only the digest selects bytes, and only the
@@ -356,8 +365,10 @@ authority: the owner alone merges.
 - **Merge readiness.** Draft remains Draft until every check is successful at
   the exact head, the base equals current protected `main`, all discussions and
   findings are resolved, a fresh exact-head APPROVE receipt exists, the next
-  patch still follows that base, and the automatic release consequence is
-  proven. Only the coordinator flips Ready. The author and reviewer never do.
+  patch still follows that base, the automatic release consequence is proven,
+  and the owner-observed release-control receipt proves immutable releases plus
+  strict exact required checks with no bypass. Only the coordinator flips
+  Ready. The author and reviewer never do.
 
 ## Working a change end to end
 
@@ -388,8 +399,12 @@ The complete delivery loop, each step gated by the sections around it:
 6. **Adversarial review** per the protocol above; findings are fixed on
    the same branch by the same writer and delta re-reviewed before the
    flip to ready.
-7. **Owner comments** are handled per the owner review protocol below.
-8. **The owner merges.** Nothing you can do — approval, green checks,
+7. **Prove server release controls.** For an automatic-release change, the
+   repository owner runs the GET-only preflight in
+   `docs/release-governance.md`; immutable releases, strict current-base
+   required checks, and the no-bypass ruleset must be exact before Ready.
+8. **Owner comments** are handled per the owner review protocol below.
+9. **The owner merges.** Nothing you can do — approval, green checks,
    ready state — substitutes for that.
 
 ## Commit identity mechanics
@@ -455,6 +470,11 @@ included; it is the same battery CI enforces:
     gitleaks git --no-banner --redact --max-target-megabytes=2 .
     gitleaks dir --no-banner --redact .
 
+The full local gate does not substitute for the server boundary. Automatic
+release work additionally requires the owner-observed, value-only receipt in
+`docs/release-governance.md`; because the current branch has no authority to
+repair its own protection, an inexact receipt is an intentional Ready blocker.
+
 - **Coverage floor.** `GO_COVERAGE_FLOOR` is 93.2 (measured 96.2 when
   last raised), enforced in `.github/workflows/pr-gate.yml` on total
   production statements with `internal/testsupport` filtered from the
@@ -513,9 +533,9 @@ included; it is the same battery CI enforces:
   creates or verifies the annotated tag and explicitly dispatches the
   publisher on that tag. The release boundary is recovered for both squash
   and multi-commit rebase pushes. Distinct main SHAs share no cancellation group.
-- **release-publisher.yml** — machine-dispatch on an immutable version-tag
-  ref only; exact source/tag/lock checks, no operator bypass, skip flag, or
-  force path (requirement 10).
+- **release-publisher.yml** — machine-dispatch on a server-lockable version-tag
+  ref only; exact source/tag/lock checks, authoritative immutable Release
+  state, no operator bypass, skip flag, or force path (requirement 10).
 - **GitHub event basis.** GitHub documents that `GITHUB_TOKEN`-created refs
   suppress recursive workflow events except explicit dispatch, that
   `workflow_run` fires regardless of conclusion and uses default-branch

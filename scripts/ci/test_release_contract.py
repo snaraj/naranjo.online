@@ -8,10 +8,13 @@ import copy
 import importlib.util
 import io
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -86,6 +89,96 @@ def exact_tag_records(tag: str, source: str, message: str, date: str) -> tuple[d
     )
 
 
+REQUIRED_CHECKS = (
+    "analyze (go, manual)",
+    "analyze (javascript-typescript, none)",
+    "application",
+    "chart",
+    "container",
+    "dependency-review",
+    "security",
+)
+
+
+def settings_receipt() -> dict[str, object]:
+    return {
+        "repository": "owner/site",
+        "branch": "main",
+        "merge_methods": ["rebase", "squash"],
+        "required_status_checks": [
+            {"context": context, "integration_id": 15368} for context in REQUIRED_CHECKS
+        ],
+        "strict_status_checks": True,
+        "require_pull_request": True,
+        "require_linear_history": True,
+        "allow_force_pushes": False,
+        "allow_deletions": False,
+        "restrict_updates": False,
+        "bypass_actors": [],
+        "immutable_releases": True,
+    }
+
+
+def settings_api() -> dict[str, object]:
+    ruleset_id = 42
+    checks = [
+        {"context": context, "integration_id": 15368} for context in REQUIRED_CHECKS
+    ]
+    return {
+        "repos/owner/site": {
+            "full_name": "owner/site",
+            "default_branch": "main",
+            "allow_merge_commit": False,
+            "allow_rebase_merge": True,
+            "allow_squash_merge": True,
+        },
+        "repos/owner/site/immutable-releases": {
+            "enabled": True,
+            "enforced_by_owner": False,
+        },
+        "repos/owner/site/rulesets": [
+            {
+                "id": ruleset_id,
+                "name": "Protect-Main",
+                "target": "branch",
+                "source_type": "Repository",
+                "source": "owner/site",
+                "enforcement": "active",
+            }
+        ],
+        f"repos/owner/site/rulesets/{ruleset_id}": {
+            "id": ruleset_id,
+            "name": "Protect-Main",
+            "target": "branch",
+            "source_type": "Repository",
+            "source": "owner/site",
+            "enforcement": "active",
+            "conditions": {
+                "ref_name": {"exclude": [], "include": ["refs/heads/main"]},
+            },
+            "bypass_actors": [],
+            "rules": [
+                {"type": "deletion"},
+                {"type": "non_fast_forward"},
+                {"type": "required_linear_history"},
+                {
+                    "type": "pull_request",
+                    "parameters": {"allowed_merge_methods": ["rebase", "squash"]},
+                },
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "do_not_enforce_on_create": False,
+                        "required_status_checks": checks,
+                        "strict_required_status_checks_policy": True,
+                    },
+                },
+                {"type": "code_scanning", "parameters": {}},
+            ],
+        },
+    }
+
+
 class VersionTests(unittest.TestCase):
     def test_next_patch_is_arithmetic_not_decimal_concatenation(self):
         RC.require_next_patch(RC.Version.parse("0.1.9"), RC.Version.parse("0.1.10"))
@@ -152,6 +245,279 @@ class EventTests(unittest.TestCase):
         self.assertEqual({intent.tag for intent in completion_order}, {"v0.1.10", "v0.1.11", "v0.1.12"})
         self.assertEqual(len({intent.source_sha for intent in completion_order}), 3)
         self.assertEqual(RC.ReleaseIntent(shas[0], versions[0]), RC.ReleaseIntent(shas[0], versions[0]))
+
+
+class SettingsReceiptTests(unittest.TestCase):
+    @staticmethod
+    def require_documented_contract(text: str) -> None:
+        for token in (
+            "Release-control readiness receipt",
+            '"immutable_releases": true',
+            '"merge_methods": ["rebase", "squash"]',
+            '"context": "security", "integration_id": 15368',
+            '"context": "dependency-review", "integration_id": 15368',
+            '"strict_status_checks": true',
+            '"require_pull_request": true',
+            '"require_linear_history": true',
+            '"allow_force_pushes": false',
+            '"allow_deletions": false',
+            '"restrict_updates": false',
+            '"bypass_actors": []',
+            "settings-preflight",
+            "settings-receipt",
+            "must remain Draft",
+        ):
+            if token not in text:
+                raise ValueError(f"release settings contract lost: {token}")
+
+    def test_only_the_exact_immutable_no_bypass_receipt_is_ready(self):
+        exact = settings_receipt()
+        RC.validate_settings_receipt(exact, "owner/site")
+        mutations: list[dict[str, object]] = []
+        for key, value in (
+            ("repository", "other/site"),
+            ("branch", "release"),
+            ("merge_methods", ["squash"]),
+            ("merge_methods", ["merge", "rebase", "squash"]),
+            ("merge_methods", ["rebase", "rebase", "squash"]),
+            ("strict_status_checks", False),
+            ("require_pull_request", False),
+            ("require_linear_history", False),
+            ("allow_force_pushes", True),
+            ("allow_deletions", True),
+            ("restrict_updates", True),
+            ("bypass_actors", ["present"]),
+            ("immutable_releases", False),
+        ):
+            changed = copy.deepcopy(exact)
+            changed[key] = value
+            mutations.append(changed)
+        checks = copy.deepcopy(exact["required_status_checks"])
+        for replacement in (
+            checks[:-1],
+            [*checks, {"context": "foreign", "integration_id": 15368}],
+            [*checks, copy.deepcopy(checks[0])],
+            [{**check, "integration_id": 1} for check in checks],
+            [{"context": check["context"]} for check in checks],
+        ):
+            changed = copy.deepcopy(exact)
+            changed["required_status_checks"] = replacement
+            mutations.append(changed)
+        for index, changed in enumerate(mutations):
+            with self.subTest(mutation=index), self.assertRaises(RC.ContractError):
+                RC.validate_settings_receipt(changed, "owner/site")
+        for key in exact:
+            changed = copy.deepcopy(exact)
+            del changed[key]
+            with self.subTest(missing=key), self.assertRaises(RC.ContractError):
+                RC.validate_settings_receipt(changed, "owner/site")
+        changed = copy.deepcopy(exact)
+        changed["ruleset_id"] = 42
+        with self.assertRaises(RC.ContractError):
+            RC.validate_settings_receipt(changed, "owner/site")
+
+    @staticmethod
+    def observe(records: dict[str, object]) -> dict[str, object]:
+        with mock.patch.object(
+            RC,
+            "_github_api_get",
+            side_effect=lambda endpoint, **_options: records[endpoint],
+        ) as getter:
+            receipt = RC.observe_live_settings("owner/site")
+        self_calls = [call.args[0] for call in getter.call_args_list]
+        if self_calls != [
+            "repos/owner/site",
+            "repos/owner/site/immutable-releases",
+            "repos/owner/site/rulesets",
+            "repos/owner/site/rulesets/42",
+        ]:
+            raise AssertionError(f"unexpected settings endpoints: {self_calls}")
+        if getter.call_args_list[2].kwargs != {"paginate": True}:
+            raise AssertionError("ruleset inventory must use exhaustive pagination")
+        if any(call.kwargs for index, call in enumerate(getter.call_args_list) if index != 2):
+            raise AssertionError("only the list endpoint should paginate")
+        return receipt
+
+    def test_authoritative_raw_preflight_rejects_every_control_mutant(self):
+        exact = settings_api()
+        self.assertEqual(self.observe(copy.deepcopy(exact)), settings_receipt())
+
+        mutations: list[dict[str, object]] = []
+        for endpoint, path, value in (
+            ("repos/owner/site", ("allow_merge_commit",), True),
+            ("repos/owner/site", ("allow_rebase_merge",), False),
+            ("repos/owner/site", ("default_branch",), "release"),
+            ("repos/owner/site/immutable-releases", ("enabled",), False),
+            ("repos/owner/site/rulesets/42", ("enforcement",), "disabled"),
+            ("repos/owner/site/rulesets/42", ("conditions", "ref_name", "include"), ["~ALL"]),
+            ("repos/owner/site/rulesets/42", ("bypass_actors",), [{"actor_type": "RepositoryRole"}]),
+        ):
+            changed = copy.deepcopy(exact)
+            parent = changed[endpoint]
+            for key in path[:-1]:
+                parent = parent[key]
+            parent[path[-1]] = value
+            mutations.append(changed)
+
+        detail = exact["repos/owner/site/rulesets/42"]
+        rules = detail["rules"]
+        for rule_type in (
+            "deletion",
+            "non_fast_forward",
+            "required_linear_history",
+            "pull_request",
+            "required_status_checks",
+        ):
+            changed = copy.deepcopy(exact)
+            changed["repos/owner/site/rulesets/42"]["rules"] = [
+                rule for rule in rules if rule["type"] != rule_type
+            ]
+            mutations.append(changed)
+        changed = copy.deepcopy(exact)
+        changed["repos/owner/site/rulesets/42"]["rules"].append({"type": "update"})
+        mutations.append(changed)
+
+        for field, value in (
+            ("allowed_merge_methods", ["merge", "rebase", "squash"]),
+            ("allowed_merge_methods", ["squash"]),
+        ):
+            changed = copy.deepcopy(exact)
+            pull = next(
+                rule
+                for rule in changed["repos/owner/site/rulesets/42"]["rules"]
+                if rule["type"] == "pull_request"
+            )
+            pull["parameters"][field] = value
+            mutations.append(changed)
+        for field, value in (
+            ("strict_required_status_checks_policy", False),
+            ("do_not_enforce_on_create", True),
+        ):
+            changed = copy.deepcopy(exact)
+            status = next(
+                rule
+                for rule in changed["repos/owner/site/rulesets/42"]["rules"]
+                if rule["type"] == "required_status_checks"
+            )
+            status["parameters"][field] = value
+            mutations.append(changed)
+        for replacement in (
+            [{"context": context, "integration_id": 15368} for context in REQUIRED_CHECKS[:-1]],
+            [
+                *[{"context": context, "integration_id": 15368} for context in REQUIRED_CHECKS],
+                {"context": "foreign", "integration_id": 15368},
+            ],
+            [{"context": context, "integration_id": 1} for context in REQUIRED_CHECKS],
+        ):
+            changed = copy.deepcopy(exact)
+            status = next(
+                rule
+                for rule in changed["repos/owner/site/rulesets/42"]["rules"]
+                if rule["type"] == "required_status_checks"
+            )
+            status["parameters"]["required_status_checks"] = replacement
+            mutations.append(changed)
+        changed = copy.deepcopy(exact)
+        changed["repos/owner/site/rulesets"].append(copy.deepcopy(changed["repos/owner/site/rulesets"][0]))
+        mutations.append(changed)
+
+        for index, changed in enumerate(mutations):
+            with self.subTest(raw_mutation=index), self.assertRaises(RC.ContractError):
+                self.observe(changed)
+
+    def test_github_settings_reader_is_get_only_and_fails_closed(self):
+        completed = subprocess.CompletedProcess([], 0, stdout='{"enabled": true}', stderr="")
+        with mock.patch.object(RC.subprocess, "run", return_value=completed) as run:
+            self.assertEqual(RC._github_api_get("repos/owner/site/immutable-releases"), {"enabled": True})
+        command = run.call_args.args[0]
+        self.assertEqual(command[:4], ["gh", "api", "--method", "GET"])
+        self.assertIn("X-GitHub-Api-Version: 2026-03-10", command)
+        self.assertNotIn("POST", command)
+        self.assertNotIn("PUT", command)
+        self.assertNotIn("PATCH", command)
+        self.assertNotIn("DELETE", command)
+        pages = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout='[[{"id": 1}], [{"id": 2}]]',
+            stderr="",
+        )
+        with mock.patch.object(RC.subprocess, "run", return_value=pages) as run:
+            self.assertEqual(RC._github_api_get("repos/owner/site/rulesets", paginate=True), [{"id": 1}, {"id": 2}])
+        paginated_command = run.call_args.args[0]
+        self.assertIn("--paginate", paginated_command)
+        self.assertIn("--slurp", paginated_command)
+        for result in (
+            subprocess.CompletedProcess([], 1, stdout="", stderr="denied"),
+            subprocess.CompletedProcess([], 0, stdout="not-json", stderr=""),
+        ):
+            with mock.patch.object(RC.subprocess, "run", return_value=result), self.assertRaises(
+                RC.ContractError
+            ):
+                RC._github_api_get("repos/owner/site/immutable-releases")
+
+    def test_settings_cli_and_runbook_are_load_bearing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = Path(temporary) / "settings.json"
+            receipt.write_text(json.dumps(settings_receipt()), encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(
+                    RC.main(
+                        [
+                            "settings-receipt",
+                            "--receipt",
+                            str(receipt),
+                            "--repository",
+                            "owner/site",
+                        ]
+                    ),
+                    0,
+                )
+            self.assertEqual(output.getvalue().strip(), "exact")
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(
+                    RC.main(
+                        [
+                            "settings-receipt",
+                            "--receipt",
+                            str(receipt),
+                            "--repository",
+                            "other/site",
+                        ]
+                    ),
+                    1,
+                )
+
+        runbook = (ROOT / "docs" / "release-governance.md").read_text(encoding="utf-8")
+        self.require_documented_contract(runbook)
+        tokens = (
+            "Release-control readiness receipt",
+            '"immutable_releases": true',
+            '"merge_methods": ["rebase", "squash"]',
+            '"context": "security", "integration_id": 15368',
+            '"strict_status_checks": true',
+            '"require_pull_request": true',
+            '"require_linear_history": true',
+            '"allow_force_pushes": false',
+            '"allow_deletions": false',
+            '"restrict_updates": false',
+            '"bypass_actors": []',
+            "settings-preflight",
+            "settings-receipt",
+            "must remain Draft",
+        )
+        for token in tokens:
+            with self.subTest(deletion=token), self.assertRaises(ValueError):
+                self.require_documented_contract(runbook.replace(token, "", 1))
+        for old, new in (
+            ('"immutable_releases": true', '"immutable_releases": false'),
+            ('"strict_status_checks": true', '"strict_status_checks": false'),
+            ('"allow_force_pushes": false', '"allow_force_pushes": true'),
+            ('"allow_deletions": false', '"allow_deletions": true'),
+            ('"restrict_updates": false', '"restrict_updates": true'),
+        ):
+            with self.subTest(inversion=old), self.assertRaises(ValueError):
+                self.require_documented_contract(runbook.replace(old, new, 1))
 
 
 class ArtifactStateTests(unittest.TestCase):
@@ -252,6 +618,7 @@ class ImmutableMetadataTests(unittest.TestCase):
             "body": "exact notes\n",
             "draft": False,
             "prerelease": False,
+            "immutable": True,
             "assets": [],
         }
         RC.validate_release_record(exact, tag=self.TAG, title=f"naranjo.online {self.TAG}", body="exact notes")
@@ -262,6 +629,8 @@ class ImmutableMetadataTests(unittest.TestCase):
             ("body", None),
             ("draft", True),
             ("prerelease", True),
+            ("immutable", False),
+            ("immutable", None),
             ("assets", [{"name": "foreign.bin"}]),
             ("assets", None),
         ):
@@ -294,6 +663,7 @@ class PublicationTransactionTests(unittest.TestCase):
             "body": "exact notes\n",
             "draft": False,
             "prerelease": False,
+            "immutable": True,
             "assets": [],
         }
 
@@ -543,6 +913,216 @@ class GitTransitionTests(unittest.TestCase):
             with self.assertRaises(RC.ContractError):
                 RC.validate_transition(root, commits[2], stale_head, first_parent=False)
 
+    def test_real_two_parent_commit_is_denied_in_pr_and_main_modes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.git(root, "init", "-q")
+            self.git(root, "branch", "-m", "main")
+            base = self.commit(root, "0.1.9")
+            self.git(root, "checkout", "-q", "-b", "topic", base)
+            self.commit(root, "0.1.10")
+            self.git(root, "checkout", "-q", "main")
+            self.metadata_commit(root, "independent main change")
+            self.git(
+                root,
+                "-c",
+                "user.name=Release Test",
+                "-c",
+                "user.email=release@example.invalid",
+                "merge",
+                "--no-ff",
+                "topic",
+                "-m",
+                "two-parent mutant",
+            )
+            merge_head = self.git(root, "rev-parse", "HEAD")
+            self.assertEqual(
+                len(self.git(root, "rev-list", "--parents", "-n", "1", merge_head).split()),
+                3,
+            )
+            for first_parent in (False, True):
+                with self.subTest(first_parent=first_parent), self.assertRaises(RC.ContractError):
+                    RC.validate_transition(root, base, merge_head, first_parent=first_parent)
+
+
+class ExistingImageShellPathTests(unittest.TestCase):
+    @staticmethod
+    def workflow_run_block(step_name: str) -> str:
+        lines = (ROOT / ".github" / "workflows" / "release-publisher.yml").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        marker = f"      - name: {step_name}"
+        try:
+            start = lines.index(marker)
+            run = lines.index("        run: |", start)
+        except ValueError as exc:
+            raise AssertionError(f"workflow step is missing: {step_name}") from exc
+        body: list[str] = []
+        for line in lines[run + 1 :]:
+            if line.startswith("      - name:"):
+                break
+            if line.startswith("          "):
+                body.append(line[10:])
+            elif not line:
+                body.append("")
+            else:
+                break
+        if not body:
+            raise AssertionError(f"workflow step has no executable run block: {step_name}")
+        return "\n".join(body) + "\n"
+
+    @staticmethod
+    def bash_executable() -> str:
+        discovered = shutil.which("bash")
+        if discovered:
+            return discovered
+        if os.name == "nt":
+            candidate = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git" / "bin" / "bash.exe"
+            if candidate.is_file():
+                return str(candidate)
+        raise AssertionError("bash is required to execute the release workflow shell path")
+
+    @staticmethod
+    def bash_path(path: str) -> str:
+        normalized = Path(path).resolve().as_posix()
+        if len(normalized) >= 3 and normalized[1:3] == ":/":
+            return f"/{normalized[0].lower()}/{normalized[3:]}"
+        return normalized
+
+    def execute(self, block: str) -> tuple[subprocess.CompletedProcess[str], str]:
+        source = "https://github.com/owner/site"
+        revision = "a" * 40
+        with tempfile.TemporaryDirectory(dir=ROOT, prefix=".release-shell-") as temporary:
+            runner = Path(temporary)
+            runner_relative = runner.relative_to(ROOT).as_posix()
+            for architecture in ("amd64", "arm64"):
+                predicate = embedded_predicate(source, revision, f"linux/{architecture}")
+                (runner / f"fixture-{architecture}.json").write_text(
+                    json.dumps(predicate), encoding="utf-8"
+                )
+            output = runner / "github-output.txt"
+            prelude = r'''
+python3() {
+  "${TEST_PYTHON}" "$@"
+}
+
+jq() {
+  local expression='' input=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -*) shift ;;
+      *)
+        if [ -z "${expression}" ]; then
+          expression="$1"
+        else
+          input="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+  case "${expression}" in
+    '.token // .access_token')
+      "${TEST_PYTHON}" -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")); print(value.get("token") or value["access_token"])' "${input}"
+      ;;
+    'keys[]')
+      "${TEST_PYTHON}" -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")); sys.stdout.buffer.write(("\n".join(value.keys())+"\n").encode("utf-8"))' "${input}"
+      ;;
+    *) return 2 ;;
+  esac
+}
+
+curl() {
+  local all="$*" output='' headers=''
+  if [[ "${all}" == *'https://ghcr.io/token'* ]]; then
+    printf '{"token":"fixture-token"}'
+    return 0
+  fi
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --output) output="$2"; shift 2 ;;
+      --dump-header) headers="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  printf '{"schemaVersion":2}' > "${output}"
+  local digest
+  digest="$(sha256sum "${output}" | awk '{print $1}')"
+  printf 'docker-content-digest: sha256:%s\r\n' "${digest}" > "${headers}"
+  printf '200'
+}
+
+docker() {
+  case "$*" in
+    *linux/amd64*) cat "${RUNNER_TEMP}/fixture-amd64.json" ;;
+    *linux/arm64*) cat "${RUNNER_TEMP}/fixture-arm64.json" ;;
+    *'.Provenance'*) printf '{"linux/amd64":{},"linux/arm64":{}}' ;;
+    *'.SBOM'*) printf '{"linux/amd64":{},"linux/arm64":{}}' ;;
+    *) return 2 ;;
+  esac
+}
+
+cosign() {
+  case "$1" in
+    verify) return 0 ;;
+    verify-attestation)
+      "${TEST_PYTHON}" -c 'import base64,json,sys; [print(json.dumps({"payload":base64.b64encode(open(path,"rb").read()).decode("ascii")})) for path in sys.argv[1:]]' \
+        "${RUNNER_TEMP}/existing-linux-amd64.statement.json" \
+        "${RUNNER_TEMP}/existing-linux-arm64.statement.json"
+      ;;
+    *) return 2 ;;
+  esac
+}
+'''
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "TEST_PYTHON": self.bash_path(sys.executable),
+                    "RUNNER_TEMP": runner_relative,
+                    "GITHUB_OUTPUT": f"{runner_relative}/github-output.txt",
+                    "GITHUB_ACTOR": "release-fixture",
+                    "GHCR_PASSWORD": "fixture-password",
+                    "GITHUB_SERVER_URL": "https://github.com",
+                    "GITHUB_REPOSITORY": "owner/site",
+                    "GITHUB_SHA": revision,
+                    "GITHUB_REF": "refs/tags/v0.1.10",
+                    "IMAGE": "ghcr.io/owner/site",
+                    "TAG": "v0.1.10",
+                }
+            )
+            completed = subprocess.run(
+                [self.bash_executable(), "-c", prelude + "\n" + block],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                timeout=30,
+            )
+            return completed, output.read_text(encoding="utf-8") if output.exists() else ""
+
+    def test_actual_complete_image_retry_path_uses_validated_logical_count(self):
+        block = self.workflow_run_block("Classify an absent, complete, or burned image tag")
+        completed, output = self.execute(block)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("existing image state: complete", completed.stdout)
+        self.assertIn("state=complete\n", output)
+        self.assertRegex(output, r"digest=sha256:[0-9a-f]{64}\n")
+
+        assignment = 'verified_count="${validated_count}"'
+        self.assertIn(assignment, block)
+        mutants = (
+            block.replace(assignment, "", 1),
+            block.replace(assignment, 'verified_count="${#expected_attestations[@]}"', 1),
+        )
+        for index, mutant in enumerate(mutants):
+            with self.subTest(count_mutant=index):
+                killed, _output = self.execute(mutant)
+                self.assertNotEqual(killed.returncode, 0, killed.stdout + killed.stderr)
+                self.assertIn("existing image state: burned", killed.stdout)
+
 
 class WorkflowStructureTests(unittest.TestCase):
     @staticmethod
@@ -578,6 +1158,7 @@ class WorkflowStructureTests(unittest.TestCase):
             "classify_release exact >/dev/null",
             "classify_release absent >/dev/null",
             "/releases/tags/${tag}",
+            "X-GitHub-Api-Version: 2026-03-10",
             "for attempt in 1 2 3 4 5",
             'test "${race_verified}" = true',
         ):
@@ -644,6 +1225,7 @@ class WorkflowStructureTests(unittest.TestCase):
             ("publisher", "classify_release exact >/dev/null"),
             ("publisher", "classify_release absent >/dev/null"),
             ("publisher", "/releases/tags/${tag}"),
+            ("publisher", "X-GitHub-Api-Version: 2026-03-10"),
             ("publisher", "for attempt in 1 2 3 4 5"),
             ("publisher", 'test "${race_verified}" = true'),
             ("publisher", "attestation-statement"),

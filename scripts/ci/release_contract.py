@@ -29,6 +29,18 @@ EXPECTED_WORKFLOW_PATH = ".github/workflows/pr-gate.yml"
 INTOTO_STATEMENT_TYPE = "https://in-toto.io/Statement/v1"
 SLSA_PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
 DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
+GITHUB_API_VERSION = "2026-03-10"
+EXPECTED_MAIN_RULESET = "Protect-Main"
+GITHUB_ACTIONS_INTEGRATION_ID = 15368
+REQUIRED_STATUS_CHECKS = (
+    "analyze (go, manual)",
+    "analyze (javascript-typescript, none)",
+    "application",
+    "chart",
+    "container",
+    "dependency-review",
+    "security",
+)
 
 
 class ContractError(ValueError):
@@ -271,6 +283,257 @@ def _object(value: object, field: str) -> Mapping[str, object]:
     return value
 
 
+def _array(value: object, field: str) -> list[object]:
+    if not isinstance(value, list):
+        raise ContractError(f"{field} must be a JSON array")
+    return value
+
+
+def _string_set(value: object, field: str) -> set[str]:
+    values = _array(value, field)
+    if any(not isinstance(item, str) or not item for item in values):
+        raise ContractError(f"{field} must contain only non-empty strings")
+    result = set(values)
+    if len(result) != len(values):
+        raise ContractError(f"{field} must not contain duplicates")
+    return result
+
+
+def _status_check_set(value: object) -> set[tuple[str, int]]:
+    checks: set[tuple[str, int]] = set()
+    values = _array(value, "required status checks")
+    for item in values:
+        record = _object(item, "required status check")
+        if set(record) != {"context", "integration_id"}:
+            raise ContractError("required status check fields are missing or foreign")
+        context = record.get("context")
+        integration_id = record.get("integration_id")
+        if not isinstance(context, str) or not context:
+            raise ContractError("required status check context must be non-empty")
+        if isinstance(integration_id, bool) or not isinstance(integration_id, int):
+            raise ContractError("required status check integration_id must be an integer")
+        check = (context, integration_id)
+        if check in checks:
+            raise ContractError("required status checks must not contain duplicates")
+        checks.add(check)
+    return checks
+
+
+def validate_settings_receipt(receipt: Mapping[str, object], repository: str) -> None:
+    """Validate the closed, value-only release-readiness receipt."""
+    fields = {
+        "allow_deletions",
+        "allow_force_pushes",
+        "branch",
+        "bypass_actors",
+        "immutable_releases",
+        "merge_methods",
+        "repository",
+        "require_linear_history",
+        "require_pull_request",
+        "required_status_checks",
+        "restrict_updates",
+        "strict_status_checks",
+    }
+    if set(receipt) != fields:
+        raise ContractError("settings receipt fields are missing or foreign")
+    if receipt.get("repository") != repository or receipt.get("branch") != "main":
+        raise ContractError("settings receipt repository or branch is not exact")
+    if _string_set(receipt.get("merge_methods"), "merge methods") != {"rebase", "squash"}:
+        raise ContractError("only squash and rebase merge methods may be enabled")
+    expected_checks = {
+        (context, GITHUB_ACTIONS_INTEGRATION_ID) for context in REQUIRED_STATUS_CHECKS
+    }
+    if _status_check_set(receipt.get("required_status_checks")) != expected_checks:
+        raise ContractError("required GitHub Actions checks are missing, foreign, or unbound")
+    for field, expected in (
+        ("immutable_releases", True),
+        ("strict_status_checks", True),
+        ("require_pull_request", True),
+        ("require_linear_history", True),
+        ("allow_force_pushes", False),
+        ("allow_deletions", False),
+        ("restrict_updates", False),
+    ):
+        if receipt.get(field) is not expected:
+            raise ContractError(f"settings receipt {field} must be {expected}")
+    if receipt.get("bypass_actors") != []:
+        raise ContractError("protected-main rules must have no bypass actors")
+
+
+def _select_main_ruleset_id(summaries: object, repository: str) -> int:
+    candidates: list[Mapping[str, object]] = []
+    for value in _array(summaries, "repository rulesets"):
+        summary = _object(value, "repository ruleset summary")
+        if (
+            summary.get("target") == "branch"
+            and summary.get("enforcement") == "active"
+            and summary.get("source_type") == "Repository"
+            and summary.get("source") == repository
+        ):
+            candidates.append(summary)
+    if len(candidates) != 1 or candidates[0].get("name") != EXPECTED_MAIN_RULESET:
+        raise ContractError("expected exactly one active repository-owned Protect-Main ruleset")
+    ruleset_id = candidates[0].get("id")
+    if isinstance(ruleset_id, bool) or not isinstance(ruleset_id, int) or ruleset_id <= 0:
+        raise ContractError("Protect-Main ruleset has no authoritative numeric ID")
+    return ruleset_id
+
+
+def build_settings_receipt(
+    repository: str,
+    repository_record: Mapping[str, object],
+    immutable_record: Mapping[str, object],
+    ruleset_id: int,
+    ruleset_record: Mapping[str, object],
+) -> dict[str, object]:
+    """Derive and validate a privacy-bounded receipt from authoritative REST."""
+    if repository_record.get("full_name") != repository or repository_record.get("default_branch") != "main":
+        raise ContractError("repository settings identity or default branch is not exact")
+    merge_methods: list[str] = []
+    for field, method in (
+        ("allow_merge_commit", "merge"),
+        ("allow_rebase_merge", "rebase"),
+        ("allow_squash_merge", "squash"),
+    ):
+        enabled = repository_record.get(field)
+        if not isinstance(enabled, bool):
+            raise ContractError(f"repository setting {field} is not boolean")
+        if enabled:
+            merge_methods.append(method)
+    if not isinstance(immutable_record.get("enabled"), bool) or not isinstance(
+        immutable_record.get("enforced_by_owner"), bool
+    ):
+        raise ContractError("immutable-release settings response is malformed")
+
+    if (
+        ruleset_record.get("id") != ruleset_id
+        or ruleset_record.get("name") != EXPECTED_MAIN_RULESET
+        or ruleset_record.get("target") != "branch"
+        or ruleset_record.get("source_type") != "Repository"
+        or ruleset_record.get("source") != repository
+        or ruleset_record.get("enforcement") != "active"
+    ):
+        raise ContractError("Protect-Main ruleset identity or enforcement is not exact")
+    conditions = _object(ruleset_record.get("conditions"), "Protect-Main conditions")
+    if set(conditions) != {"ref_name"}:
+        raise ContractError("Protect-Main conditions are missing or foreign")
+    ref_name = _object(conditions.get("ref_name"), "Protect-Main ref condition")
+    if set(ref_name) != {"exclude", "include"} or ref_name.get("exclude") != [] or ref_name.get(
+        "include"
+    ) != ["refs/heads/main"]:
+        raise ContractError("Protect-Main must target only refs/heads/main")
+
+    bypass = _array(ruleset_record.get("bypass_actors"), "Protect-Main bypass actors")
+    rules_by_type: dict[str, Mapping[str, object]] = {}
+    for value in _array(ruleset_record.get("rules"), "Protect-Main rules"):
+        rule = _object(value, "Protect-Main rule")
+        rule_type = rule.get("type")
+        if not isinstance(rule_type, str) or not rule_type or rule_type in rules_by_type:
+            raise ContractError("Protect-Main rule types must be non-empty and unique")
+        rules_by_type[rule_type] = rule
+
+    pull_request = rules_by_type.get("pull_request")
+    if pull_request is None:
+        raise ContractError("Protect-Main must require pull requests")
+    pull_parameters = _object(pull_request.get("parameters"), "pull-request rule parameters")
+    allowed_merge_methods = _string_set(
+        pull_parameters.get("allowed_merge_methods"), "ruleset merge methods"
+    )
+    if allowed_merge_methods != set(merge_methods):
+        raise ContractError("repository and ruleset merge methods do not match")
+
+    status_rule = rules_by_type.get("required_status_checks")
+    if status_rule is None:
+        raise ContractError("Protect-Main must require exact status checks")
+    status_parameters = _object(status_rule.get("parameters"), "status-check rule parameters")
+    if status_parameters.get("do_not_enforce_on_create") is not False:
+        raise ContractError("required checks must also apply when the ref is created")
+    status_checks = _status_check_set(status_parameters.get("required_status_checks"))
+
+    receipt: dict[str, object] = {
+        "repository": repository,
+        "branch": "main",
+        "merge_methods": sorted(merge_methods),
+        "required_status_checks": [
+            {"context": context, "integration_id": integration_id}
+            for context, integration_id in sorted(status_checks)
+        ],
+        "strict_status_checks": status_parameters.get("strict_required_status_checks_policy"),
+        "require_pull_request": True,
+        "require_linear_history": "required_linear_history" in rules_by_type,
+        "allow_force_pushes": "non_fast_forward" not in rules_by_type,
+        "allow_deletions": "deletion" not in rules_by_type,
+        "restrict_updates": "update" in rules_by_type,
+        # Do not serialize actor details or ruleset IDs. Presence alone is the
+        # safety fact, and the only acceptable value is the empty set.
+        "bypass_actors": [] if not bypass else ["present"],
+        "immutable_releases": immutable_record.get("enabled"),
+    }
+    validate_settings_receipt(receipt, repository)
+    return receipt
+
+
+def _github_api_get(endpoint: str, *, paginate: bool = False) -> object:
+    command = [
+        "gh",
+        "api",
+        "--method",
+        "GET",
+        "--header",
+        "Accept: application/vnd.github+json",
+        "--header",
+        f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
+    ]
+    if paginate:
+        command.extend(("--paginate", "--slurp"))
+    command.append(endpoint)
+    completed = subprocess.run(
+        command,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+    )
+    if completed.returncode != 0:
+        raise ContractError("read-only GitHub settings query failed")
+    try:
+        value = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ContractError("read-only GitHub settings query returned malformed JSON") from exc
+    if not paginate:
+        return value
+    flattened: list[object] = []
+    for page in _array(value, "paginated GitHub settings response"):
+        flattened.extend(_array(page, "paginated GitHub settings page"))
+    return flattened
+
+
+def observe_live_settings(repository: str) -> dict[str, object]:
+    """Query only GET endpoints and emit a receipt only for exact live state."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise ContractError("repository must be an exact owner/name pair")
+    repository_record = _object(_github_api_get(f"repos/{repository}"), "repository settings")
+    immutable_record = _object(
+        _github_api_get(f"repos/{repository}/immutable-releases"),
+        "immutable-release settings",
+    )
+    summaries = _github_api_get(f"repos/{repository}/rulesets", paginate=True)
+    ruleset_id = _select_main_ruleset_id(summaries, repository)
+    ruleset_record = _object(
+        _github_api_get(f"repos/{repository}/rulesets/{ruleset_id}"),
+        "Protect-Main ruleset",
+    )
+    return build_settings_receipt(
+        repository,
+        repository_record,
+        immutable_record,
+        ruleset_id,
+        ruleset_record,
+    )
+
+
 def _same_instant(actual: object, expected: str, field: str) -> None:
     if not isinstance(actual, str):
         raise ContractError(f"{field} must be an ISO-8601 timestamp")
@@ -324,6 +587,8 @@ def validate_release_record(
         raise ContractError("GitHub Release notes are not exact")
     if release_record.get("draft") is not False or release_record.get("prerelease") is not False:
         raise ContractError("GitHub Release must be published and non-prerelease")
+    if release_record.get("immutable") is not True:
+        raise ContractError("GitHub Release must report authoritative immutable state")
     if release_record.get("assets") != []:
         raise ContractError("GitHub Release asset inventory must be exactly empty")
 
@@ -530,6 +795,11 @@ def _parser() -> argparse.ArgumentParser:
     publisher.add_argument("--github-sha", required=True)
     publisher.add_argument("--ref", required=True)
     publisher.add_argument("--event-name", required=True)
+    settings_receipt = commands.add_parser("settings-receipt")
+    settings_receipt.add_argument("--receipt", type=Path, required=True)
+    settings_receipt.add_argument("--repository", required=True)
+    settings_preflight = commands.add_parser("settings-preflight")
+    settings_preflight.add_argument("--repository", required=True)
     tag_record = commands.add_parser("tag-record")
     tag_record.add_argument("--ref-json", type=Path, required=True)
     tag_record.add_argument("--tag-json", type=Path, required=True)
@@ -607,6 +877,11 @@ def main(argv: list[str] | None = None) -> int:
             print(plan_workflow_run(event, args.repository))
         elif args.command == "publisher":
             _emit(validate_publisher(args.root, args.source_sha, args.github_sha, args.ref, args.event_name))
+        elif args.command == "settings-receipt":
+            validate_settings_receipt(_read_object(args.receipt), args.repository)
+            print("exact")
+        elif args.command == "settings-preflight":
+            print(json.dumps(observe_live_settings(args.repository), indent=2, sort_keys=True))
         elif args.command == "tag-record":
             validate_tag_record(
                 _read_object(args.ref_json),

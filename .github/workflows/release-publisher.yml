@@ -1,8 +1,9 @@
 name: Release publisher
 
 # Publishes ONLY when the successful-main orchestrator explicitly dispatches
-# this workflow ON the immutable semantic-version tag with its exact source
-# SHA.  A token-created tag does not recursively trigger push workflows, so
+# this workflow ON the semantic-version tag that GitHub locks when the Release
+# is published, with its exact source SHA. A token-created tag does not
+# recursively trigger push workflows, so
 # workflow_dispatch is the required machine-to-machine event, not an operator
 # bypass.  There is no skip flag, force path, or way to reassign a tag.
 on:
@@ -110,6 +111,8 @@ jobs:
           repository="${IMAGE#ghcr.io/}"
           token_file="${RUNNER_TEMP}/image-registry-token.json"
           credentials="${RUNNER_TEMP}/ghcr.netrc"
+          required_platforms=(linux/amd64 linux/arm64)
+          expected_evidence="${#required_platforms[@]}"
           trap 'rm -f -- "${token_file}" "${credentials}"' EXIT
           umask 077
           printf 'machine ghcr.io\nlogin %s\npassword %s\n' \
@@ -132,7 +135,7 @@ jobs:
           if [ "${registry_state}" = absent ]; then
             state="$(python3 -I -B scripts/ci/release_contract.py artifact-state \
               --present false --source-match false --signature-match false \
-              --evidence-count 0 --expected-evidence 2)"
+              --evidence-count 0 --expected-evidence "${expected_evidence}")"
             printf 'state=%s\ndigest=\n' "${state}" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
@@ -142,7 +145,7 @@ jobs:
           computed="sha256:$(sha256sum "${manifest}" | awk '{print $1}')"
           test "${computed}" = "${digest}"
           source_match=true
-          expected_platforms='linux/amd64 linux/arm64'
+          expected_platforms="${required_platforms[*]}"
           source="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
           provenance="${RUNNER_TEMP}/existing-image-provenance.json"
           sbom="${RUNNER_TEMP}/existing-image-sbom.json"
@@ -161,7 +164,7 @@ jobs:
             source_match=false
           fi
           expected_attestations=()
-          for platform in linux/amd64 linux/arm64; do
+          for platform in "${required_platforms[@]}"; do
             predicate="${RUNNER_TEMP}/existing-${platform//\//-}.json"
             statement="${RUNNER_TEMP}/existing-${platform//\//-}.statement.json"
             if ! docker buildx imagetools inspect "${IMAGE}@${digest}" \
@@ -193,15 +196,17 @@ jobs:
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
               "${IMAGE}@${digest}" > "${verified}" 2>/dev/null && \
              python3 -I -B scripts/ci/release_contract.py attestation-set \
-              --verified "${verified}" "${expected_attestations[@]}" >/dev/null; then
+              --verified "${verified}" "${expected_attestations[@]}" > "${RUNNER_TEMP}/verified-attestation-count.txt"; then
+            validated_count="$(<"${RUNNER_TEMP}/verified-attestation-count.txt")"
             signature_match=true
-            verified_count="${#expected_attestations[@]}"
+            verified_count="${validated_count}"
           fi
           set +e
           state="$(python3 -I -B scripts/ci/release_contract.py artifact-state \
             --present true --source-match "${source_match}" \
             --signature-match "${signature_match}" \
-            --evidence-count "${verified_count}" --expected-evidence 2)"
+            --evidence-count "${verified_count}" \
+            --expected-evidence "${expected_evidence}")"
           classifier_status=$?
           set -e
           printf 'existing image state: %s\n' "${state}"
@@ -437,6 +442,7 @@ jobs:
             status="$(curl --silent --show-error --location \
               --proto '=https' --tlsv1.2 --output "${existing}" --write-out '%{http_code}' \
               --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2026-03-10' \
               --header "Authorization: Bearer ${GH_TOKEN}" \
               "${api}")"
             if [ "${status}" = 200 ]; then
