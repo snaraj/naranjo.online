@@ -55,19 +55,30 @@ newer local versions generally work, CI is authoritative.
 
 ## Releases
 
-One tag does everything: pushing `vX.Y.Z` (matching `VERSION` and the chart
-version — CI enforces the three-way lock) builds and publishes:
+Every protected-main merge publishes exactly one patch release after the
+merged SHA's PR gate succeeds. The merged source carries numeric `X.Y.Z` in
+`VERSION`, chart `version`, `appVersion`, and the dated changelog heading, and
+exact plain `vX.Y.Z` in the image tag. Automation creates that plain tag at the
+exact SHA and explicitly dispatches the tag-bound publisher, which builds or
+verifies:
 
 - `ghcr.io/snaraj/naranjo-online:vX.Y.Z` — multi-arch image, keyless-signed
   (Cosign), with SBOM and SLSA provenance; deployment consumes the digest,
   never the tag.
-- `ghcr.io/snaraj/charts/naranjo-online` — the Helm chart as an OCI
-  artifact, same version, also signed.
+- `ghcr.io/snaraj/charts/naranjo-online:X.Y.Z` — the Helm chart as an OCI
+  artifact, also signed. This is the one narrow tag exception: Helm requires
+  the registry tag to equal valid chart SemVer, and `vX.Y.Z` is not SemVerV2.
 - A GitHub Release with the immutable digests and human notes.
 
-Version tags are immutable: the publisher refuses to reuse one, on purpose,
-with no override. See [CHANGELOG.md](CHANGELOG.md) for history and
-[SECURITY.md](SECURITY.md) for the security posture.
+Version tags are immutable and never reassigned. A retry reuses only exact,
+complete, correctly signed source state; partial or conflicting immutable
+state is reported as burned and requires a new patch. Release publication is
+separate from deployment or promotion. See [CHANGELOG.md](CHANGELOG.md) for
+history and [SECURITY.md](SECURITY.md) for the security posture.
+
+An OCI reference such as `image:vX.Y.Z@sha256:<digest>` or
+`chart:X.Y.Z@sha256:<digest>` contains a tag plus immutable digest; the complete
+string is a reference, never a tag.
 
 ## Panels
 
