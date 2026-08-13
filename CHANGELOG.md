@@ -8,6 +8,24 @@ SemVer and match image/chart tags exactly.
 
 ### Added
 
+- The chart now says which release is running. Every rendered object carries
+  `app.kubernetes.io/version`, derived from the chart's own `appVersion` so no
+  override can make the label disagree with the chart that emitted it, and the
+  workload reference renders as
+  `ghcr.io/snaraj/naranjo-online:vMAJOR.MINOR.PATCH@sha256:<hex>`. Before this,
+  `kubectl describe pod` answered "what is running" with a bare digest and the
+  Pod carried no version at all.
+
+  The digest did not move and is not optional: Kubernetes still resolves it,
+  cosign and the platform's admission policies still verify it, and the values
+  schema requires it alongside the tag (requirement 10). The tag is legibility
+  only. The gate's version lock gains a fourth leg — VERSION, chart `version`,
+  `appVersion`, and the image tag now move together — plus a render assertion
+  that the emitted reference still carries a full digest. New doctrine pins in
+  `internal/doctrine/release_identity_test.go` hold all of it, including that
+  no selector ever matches on the version label, because selectors are
+  immutable and a version-scoped selector stops matching one release later.
+
 - A zero-secret GitHub contribution producer for the version-control panel
   (#41): the public, unauthenticated contributions document is fetched and
   scanned into the calendar the panel already rendered. Exact daily counts
