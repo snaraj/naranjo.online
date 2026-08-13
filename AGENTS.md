@@ -89,7 +89,10 @@ Numbered for citation, repo-scoped, none negotiable in code:
     `X.Y.Z`, plus plain `vX.Y.Z` image tag. Successful main CI publishes that exact SHA as one
     immutable plain `vX.Y.Z` release. The machine-only workflow dispatch is
     the explicit handoff required after a token-created tag; it is not an
-    operator bypass. There is no skip or force path. Images deploy by digest;
+    operator bypass. Squash and rebase are both supported: the protected-main
+    push must be one merge-free linear base-to-head range whose final snapshot
+    is the exact next patch, and that complete final SHA gets one release.
+    There is no skip or force path. Images deploy by digest;
     `vX.Y.Z@sha256:<digest>` is a reference, never a tag, and publication is
     never deployment or promotion.
 11. **Media stays out of the control plane.** Heavy media never enters
@@ -339,9 +342,10 @@ authority: the owner alone merges.
 - **Assignee.** The owner is assignee on every PR and issue (authorship is
   already the owner's account by token identity).
 - **Linear history.** Merge commits are disabled in repository settings;
-  the owner merges by squash (or rebase). Branches auto-delete on merge;
-  stale local branches are pruned as work lands. History is append-only
-  and never rewritten.
+  the owner merges by squash or rebase. The release contract accepts either
+  the one-commit squash range or a multi-commit rebase range and binds one
+  release to its exact final tree. Branches auto-delete on merge; stale local
+  branches are pruned as work lands. History is append-only and never rewritten.
 - **Commits.** Detailed bodies to the review protocol's evidence standard —
   problem, mechanism, enumerated changes, evidence — signed per lane.
 - **Dependabot.** Dependency PRs obey the same issue/milestone/assignee,
@@ -507,7 +511,8 @@ included; it is the same battery CI enforces:
 - **codeql.yml** — pull requests, `main` pushes, weekly cron.
 - **release-after-main.yml** — success-only exact-SHA main-CI completion;
   creates or verifies the annotated tag and explicitly dispatches the
-  publisher on that tag. Distinct main SHAs share no cancellation group.
+  publisher on that tag. The release boundary is recovered for both squash
+  and multi-commit rebase pushes. Distinct main SHAs share no cancellation group.
 - **release-publisher.yml** — machine-dispatch on an immutable version-tag
   ref only; exact source/tag/lock checks, no operator bypass, skip flag, or
   force path (requirement 10).

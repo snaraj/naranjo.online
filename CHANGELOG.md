@@ -19,6 +19,9 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   publisher without relying on recursive tag-push events. Rapid merges have
   independent release paths; exact complete artifact state is retryable, while
   partial, foreign, or conflicting immutable state fails closed as burned.
+  Both enabled owner merge modes are executable release paths: one-commit
+  squashes and multi-commit linear rebases validate the exact base-to-final-tree
+  patch transition without dropping the final source SHA.
   Git/image/Release tags use one plain `vX.Y.Z`. Helm's documented exception
   stays numeric `X.Y.Z` because its OCI tag must equal valid chart SemVer.
   `tag@sha256:digest` is a deploy reference, never a tag.

@@ -62,6 +62,36 @@ jobs:
           test "${app_version}" = "${version}"
           printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
           printf 'tag=%s\n' "${tag}" >> "${GITHUB_OUTPUT}"
+      - name: Verify the complete annotated tag identity
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          ref_json="${RUNNER_TEMP}/publisher-tag-ref.json"
+          tag_json="${RUNNER_TEMP}/publisher-tag-object.json"
+          api="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
+          status="$(curl --silent --show-error --location \
+            --proto '=https' --tlsv1.2 --output "${ref_json}" --write-out '%{http_code}' \
+            --header 'Accept: application/vnd.github+json' \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            "${api}/git/ref/tags/${TAG}")"
+          test "${status}" = 200
+          tag_object="$(jq -er '.object.sha' "${ref_json}")"
+          status="$(curl --silent --show-error --location \
+            --proto '=https' --tlsv1.2 --output "${tag_json}" --write-out '%{http_code}' \
+            --header 'Accept: application/vnd.github+json' \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            "${api}/git/tags/${tag_object}")"
+          test "${status}" = 200
+          python3 -I -B scripts/ci/release_contract.py tag-record \
+            --ref-json "${ref_json}" --tag-json "${tag_json}" \
+            --tag "${TAG}" --source-sha "${SOURCE_SHA}" \
+            --message "Release ${TAG} from ${SOURCE_SHA}" \
+            --tagger-name 'github-actions[bot]' \
+            --tagger-email '41898282+github-actions[bot]@users.noreply.github.com' \
+            --tagger-date "$(git show -s --format=%cI "${SOURCE_SHA}")"
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
       - name: Set up Buildx
@@ -113,6 +143,7 @@ jobs:
           test "${computed}" = "${digest}"
           source_match=true
           expected_platforms='linux/amd64 linux/arm64'
+          source="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
           provenance="${RUNNER_TEMP}/existing-image-provenance.json"
           sbom="${RUNNER_TEMP}/existing-image-sbom.json"
           if ! docker buildx imagetools inspect "${IMAGE}@${digest}" \
@@ -129,44 +160,48 @@ jobs:
              [ "${sbom_platforms}" != "${expected_platforms}" ]; then
             source_match=false
           fi
+          expected_attestations=()
           for platform in linux/amd64 linux/arm64; do
             predicate="${RUNNER_TEMP}/existing-${platform//\//-}.json"
+            statement="${RUNNER_TEMP}/existing-${platform//\//-}.statement.json"
             if ! docker buildx imagetools inspect "${IMAGE}@${digest}" \
               --format "{{ json (index .Provenance \"${platform}\").SLSA }}" > "${predicate}"; then
               source_match=false
               continue
             fi
-            if ! jq -e --arg src "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" --arg rev "${GITHUB_SHA}" '
-              (.buildDefinition | type == "object") and
-              (.runDetails.builder.id | startswith($src + "/actions/runs/")) and
-              (.runDetails.metadata.buildkit_metadata.vcs.source == $src) and
-              (.runDetails.metadata.buildkit_metadata.vcs.revision == $rev)
-            ' "${predicate}" >/dev/null; then
+            if ! python3 -I -B scripts/ci/release_contract.py attestation-statement \
+              --predicate "${predicate}" --output "${statement}" \
+              --image "${IMAGE}" --digest "${digest}" --source "${source}" \
+              --revision "${GITHUB_SHA}" --platform "${platform}"; then
               source_match=false
+              continue
             fi
+            expected_attestations+=(--expected "${platform}=${statement}")
           done
 
           signature_match=false
+          verified_count=0
+          verified="${RUNNER_TEMP}/verified-existing-attestations.json"
           identity="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/release-publisher.yml@${GITHUB_REF}"
-          if cosign verify \
+          if [ "${source_match}" = true ] && \
+             cosign verify \
               --certificate-identity "${identity}" \
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
               "${IMAGE}@${digest}" >/dev/null 2>&1 && \
-             cosign verify-attestation --type slsaprovenance1 \
+             cosign verify-attestation --type slsaprovenance1 --output json \
               --certificate-identity "${identity}" \
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-              "${IMAGE}@${digest}" >/dev/null 2>&1; then
+              "${IMAGE}@${digest}" > "${verified}" 2>/dev/null && \
+             python3 -I -B scripts/ci/release_contract.py attestation-set \
+              --verified "${verified}" "${expected_attestations[@]}" >/dev/null; then
             signature_match=true
+            verified_count="${#expected_attestations[@]}"
           fi
-          attached="$(cosign download attestation "${IMAGE}@${digest}" 2>/dev/null \
-            | jq -s --arg type 'https://slsa.dev/provenance/v1' \
-              '[.[] | ((.dsseEnvelope.payload // .payload // empty) | @base64d | fromjson?) | select(.predicateType == $type)] | length' \
-            || printf '0')"
           set +e
           state="$(python3 -I -B scripts/ci/release_contract.py artifact-state \
             --present true --source-match "${source_match}" \
             --signature-match "${signature_match}" \
-            --evidence-count "${attached}" --expected-evidence 2)"
+            --evidence-count "${verified_count}" --expected-evidence 2)"
           classifier_status=$?
           set -e
           printf 'existing image state: %s\n' "${state}"
@@ -218,60 +253,12 @@ jobs:
         if: steps.image_state.outputs.state == 'absent'
         run: cosign sign --yes "${IMAGE}@${{ steps.image.outputs.digest }}"
       - name: Attach the BuildKit SLSA provenance as cosign attestations
-        # Buildx (provenance: mode=max above) embeds one SLSA v1 provenance
-        # statement per platform inside the pushed index. Read each predicate
-        # back from the immutable digest just signed and attach it as a
-        # keyless cosign attestation (slsaprovenance1) on that same digest,
-        # so verifiers that require cosign-attached attestations — the
-        # platform promotion ratchet, website-infrastructure#58 — can demand
-        # them from this release onward. Same identity and no-skip discipline
-        # as the signing step.
-        #
-        # What the attestation is, honestly: cosign v3.1.3 re-marshals the
-        # predicate through its typed SLSA v1 model on attach, which DROPS
-        # runDetails.metadata.buildkit_metadata and buildkit_completeness —
-        # including the vcs source/revision binding asserted below. The
-        # attached copy is therefore LOSSY: it carries the build's shape and
-        # this workflow's signing identity, not BuildKit's full record. The
-        # index-EMBEDDED provenance remains the authoritative content
-        # evidence, so the downstream promotion check must keep reading it
-        # and must never be "simplified" into reading the attestation
-        # instead.
-        #
-        # Subject rebinding: each per-architecture predicate is re-asserted
-        # about the INDEX digest, not the per-architecture manifest digest,
-        # because the ratchet verifies attestations on the index digest a
-        # deployment references — a per-architecture subject would fail that
-        # check. Both attestations therefore share one subject and are told
-        # apart only by predicate content, which the distinctness check below
-        # enforces; cosign v3.1.3's attest has no annotation flag.
-        #
-        # Failure surface: this step inserts GHCR reads plus Fulcio and Rekor
-        # round-trips between image signing and chart publishing, and any
-        # failure burns the version tag (tags are immutable and never
-        # reassigned, requirement 10). It therefore ends by checking its own
-        # output, so a release whose attestations are not discoverable,
-        # complete, or verifiable fails HERE — before the chart and the
-        # GitHub Release exist — instead of days later at promotion. The
-        # check has two halves because they settle different things. cosign
-        # v3.1.3 attaches new-format Sigstore bundles as OCI referrers, and
-        # GHCR exposes no Referrers API, so every bundle for this digest —
-        # the image signature and both attestations — lands in ONE
-        # sha256-<hex> fallback-tag index that each attach rewrites
-        # read-modify-write (this repository's own v0.1.9 has no .att or
-        # .sig tag at all: both 404, the fallback index holds everything).
-        # verify-attestation is satisfied by a single verifiable attestation
-        # and so cannot notice a second one clobbering the first, which is
-        # what the count assertion is for. The two halves read the evidence
-        # through different mechanisms — signed content for the count,
-        # cosign's own matching for the verification — so neither mechanism
-        # alone decides whether a release ships.
-        #
-        # Payload headroom: measured on the v0.1.9 index, each platform's
-        # predicate is ~31 KB compact (~54 KB pretty-printed) and its base64
-        # DSSE payload ~27 KB — normalization drops roughly a third of the
-        # predicate before signing — well inside Rekor's 100 KB attestation
-        # ceiling.
+        # Buildx embeds one SLSA v1 predicate per platform. Preserve each
+        # complete predicate inside an exact in-toto statement, add a
+        # release binding that cosign's --statement path retains verbatim,
+        # and sign both statements about the immutable index digest. The
+        # final decision is made only from cosign's cryptographically
+        # verified output, never from an unauthenticated download count.
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
         if: steps.image_state.outputs.state == 'absent'
@@ -286,78 +273,39 @@ jobs:
             --format '{{ json .Provenance }}' | jq -r 'keys[]')"
           mapfile -t platforms <<< "${provenance_platforms}"
           test "${platforms[*]}" = "${expected_platforms}"
-          predicates=()
+          source="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+          statements=()
+          expected_attestations=()
           for platform in "${platforms[@]}"; do
             predicate="${RUNNER_TEMP}/slsa-${platform//\//-}.json"
+            statement="${RUNNER_TEMP}/slsa-${platform//\//-}.statement.json"
             docker buildx imagetools inspect "${IMAGE}@${DIGEST}" \
               --format "{{ json (index .Provenance \"${platform}\").SLSA }}" \
               > "${predicate}"
-            # Bind the predicate to THIS release before attaching it: built
-            # from this repository's source at this tag's commit, by a run of
-            # this repository's Actions.
-            jq -e --arg rev "${GITHUB_SHA}" --arg src "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" '
-              (.buildDefinition|type=="object") and
-              (.runDetails.builder.id | startswith($src + "/actions/runs/")) and
-              (.runDetails.metadata.buildkit_metadata.vcs.source == $src) and
-              (.runDetails.metadata.buildkit_metadata.vcs.revision == $rev)' \
-              "${predicate}" >/dev/null
-            predicates+=("${predicate}")
+            python3 -I -B scripts/ci/release_contract.py attestation-statement \
+              --predicate "${predicate}" --output "${statement}" \
+              --image "${IMAGE}" --digest "${DIGEST}" --source "${source}" \
+              --revision "${GITHUB_SHA}" --platform "${platform}"
+            statements+=("${statement}")
+            expected_attestations+=(--expected "${platform}=${statement}")
           done
-          # Defense in depth: every platform's evidence must be distinct.
-          # Real Buildx cannot repeat a platform — the index's provenance is
-          # a JSON object, so duplicate keys collapse before jq sees them —
-          # but a patched or replayed producer could hand back one predicate
-          # under two keys, and that must not become two attestations of the
-          # same build under one subject.
-          test "$(sha256sum "${predicates[@]}" | awk '{print $1}' | sort -u | wc -l)" \
-            -eq "${#predicates[@]}"
-          for predicate in "${predicates[@]}"; do
-            cosign attest --yes --type slsaprovenance1 \
-              --predicate "${predicate}" "${IMAGE}@${DIGEST}"
+          test "$(sha256sum "${statements[@]}" | awk '{print $1}' | sort -u | wc -l)" \
+            -eq "${#statements[@]}"
+          for statement in "${statements[@]}"; do
+            cosign attest --yes --statement "${statement}" "${IMAGE}@${DIGEST}"
           done
-          # Self-check, in two halves that use different mechanisms on
-          # purpose. The count reads the signed statements themselves and
-          # proves every attestation survived the fallback-tag rewrite and
-          # still coexists under one subject.
-          #
-          # The download returns EVERY bundle attached to this digest, not
-          # only attestations: cosign v3.1.3 emits newline-delimited
-          # Sigstore bundles carrying the statement at .dsseEnvelope.payload,
-          # and the image signature is one of them — a real bundle whose
-          # decoded predicateType is https://sigstore.dev/cosign/sign/v1,
-          # which the type filter below EXCLUDES. A release therefore streams
-          # three bundles (one signature, two attestations) and must count
-          # two. Absence cannot be read from the exit status: against a
-          # digest with no attestations at all the download still succeeds
-          # and prints that one signature bundle, so a missing attestation
-          # shows up here as a count of zero, never as a failed command.
-          #
-          # The select must also tolerate both shapes: new-format bundles
-          # and the legacy {payloadType,payload,signatures} envelope that
-          # older cosign wrote. `fromjson?` drops whatever does not decode
-          # to a statement — a legacy empty payload, a signature-only
-          # bundle, an unknown future wrapper — so a foreign shape counts
-          # zero and fails this assertion cleanly, rather than erroring the
-          # whole step after everything has already been pushed.
-          #
-          # `download attestation --predicate-type` is deliberately NOT used
-          # to filter: it keys off the layer's OCI annotation, and against
-          # the legacy in-toto layer form it returns nothing while the
-          # attestations are present and of the right type — a false red
-          # here would burn an immutable version tag. The verification below
-          # is then the exact command the promote-time ratchet runs, so a
-          # release that ratchet could not verify fails here instead.
-          attested="$(cosign download attestation "${IMAGE}@${DIGEST}" \
-            | jq -s --arg type 'https://slsa.dev/provenance/v1' '
-              [ .[]
-                | ((.dsseEnvelope.payload // .payload // empty) | @base64d | fromjson?)
-                | select(.predicateType == $type)
-              ] | length')"
-          test "${attested}" -eq "${#predicates[@]}"
-          cosign verify-attestation --type slsaprovenance1 \
-            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-publisher.yml@${GITHUB_REF}" \
+          identity="${source}/.github/workflows/release-publisher.yml@${GITHUB_REF}"
+          verified="${RUNNER_TEMP}/verified-new-attestations.json"
+          cosign verify \
+            --certificate-identity "${identity}" \
             --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
             "${IMAGE}@${DIGEST}" >/dev/null
+          cosign verify-attestation --type slsaprovenance1 --output json \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "${IMAGE}@${DIGEST}" > "${verified}"
+          python3 -I -B scripts/ci/release_contract.py attestation-set \
+            --verified "${verified}" "${expected_attestations[@]}"
       - name: Classify an absent, complete, or burned chart version
         id: chart_state
         env:
@@ -478,36 +426,47 @@ jobs:
             printf "| Image | \`%s:%s@%s\` |\n" "${IMAGE}" "${tag}" "${{ steps.image.outputs.digest }}"
             printf "| Chart | \`%s:%s@%s\` |\n" "${CHART}" "${{ steps.release.outputs.version }}" "${{ steps.chart.outputs.digest }}"
             printf '\nSigned with keyless Cosign by this workflow identity; SBOM and SLSA provenance embedded in the image index.\n'
-            printf 'That provenance is additionally attached as keyless cosign attestations (slsaprovenance1), one per architecture, both about the image digest above. Cosign normalizes the predicate on attach and drops BuildKit metadata, so the attestation is a lossy copy: the index-embedded provenance remains the authoritative content evidence.\n'
+            printf 'That complete provenance is additionally attached as two keyless cosign attestations (slsaprovenance1), one per architecture, with exact source, revision, platform, image, and digest bindings.\n'
             printf '\nSee CHANGELOG.md for human-readable changes.\n'
           } > "${RUNNER_TEMP}/release-notes.md"
           existing="${RUNNER_TEMP}/existing-release.json"
-          verify_release() {
-            test "$(git rev-list -n 1 "${tag}")" = "${GITHUB_SHA}"
-            gh release view "${tag}" --json tagName,name,body,isDraft,isPrerelease > "${existing}"
-            jq -e --arg tag "${tag}" --arg title "naranjo.online ${tag}" \
-              '.tagName == $tag and .name == $title and (.isDraft | not) and (.isPrerelease | not)' \
-              "${existing}" >/dev/null
-            python3 -I -B - "${existing}" "${RUNNER_TEMP}/release-notes.md" <<'PY'
-          import json
-          import pathlib
-          import sys
-
-          actual = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["body"].rstrip("\\r\\n")
-          expected = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8").rstrip("\\r\\n")
-          if actual != expected:
-              raise SystemExit("existing GitHub Release notes conflict with exact artifact digests")
-          PY
+          api="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"
+          classify_release() {
+            local required="$1" status
+            local -a record_args=()
+            status="$(curl --silent --show-error --location \
+              --proto '=https' --tlsv1.2 --output "${existing}" --write-out '%{http_code}' \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              "${api}")"
+            if [ "${status}" = 200 ]; then
+              record_args=(--release-json "${existing}")
+            fi
+            python3 -I -B scripts/ci/release_contract.py release-state \
+              --http-status "${status}" --require "${required}" \
+              "${record_args[@]}" --tag "${tag}" \
+              --title "naranjo.online ${tag}" \
+              --body "${RUNNER_TEMP}/release-notes.md"
           }
-          if verify_release 2>/dev/null; then
+          if classify_release exact >/dev/null 2>&1; then
             printf 'verified complete existing GitHub Release %s\n' "${tag}"
           else
-            if gh release view "${tag}" >/dev/null 2>&1; then
-              printf 'existing GitHub Release %s conflicts with this exact source state\n' "${tag}" >&2
-              exit 1
-            fi
-            gh release create "${tag}" --verify-tag \
+            classify_release absent >/dev/null
+            if ! gh release create "${tag}" --verify-tag \
               --title "naranjo.online ${tag}" \
-              --notes-file "${RUNNER_TEMP}/release-notes.md"
-            verify_release
+              --notes-file "${RUNNER_TEMP}/release-notes.md"; then
+              printf 'release create did not succeed; checking for an exact concurrent winner\n' >&2
+            fi
+            # Creation and a concurrent 422 winner share the same bounded,
+            # authoritative verification path. No local tag ref participates.
+            race_verified=false
+            for attempt in 1 2 3 4 5; do
+              if classify_release exact >/dev/null 2>&1; then
+                race_verified=true
+                break
+              fi
+              sleep "${attempt}"
+            done
+            test "${race_verified}" = true
+            classify_release exact >/dev/null
           fi

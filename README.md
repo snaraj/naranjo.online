@@ -59,8 +59,10 @@ Every protected-main merge publishes exactly one patch release after the
 merged SHA's PR gate succeeds. The merged source carries numeric `X.Y.Z` in
 `VERSION`, chart `version`, `appVersion`, and the dated changelog heading, and
 exact plain `vX.Y.Z` in the image tag. Automation creates that plain tag at the
-exact SHA and explicitly dispatches the tag-bound publisher, which builds or
-verifies:
+exact SHA and explicitly dispatches the tag-bound publisher. Both enabled
+merge modes are covered: a squash is one linear commit, while a rebase may
+install several commits in one push; either produces one release for the exact
+final source tree. The publisher builds or verifies:
 
 - `ghcr.io/snaraj/naranjo-online:vX.Y.Z` — multi-arch image, keyless-signed
   (Cosign), with SBOM and SLSA provenance; deployment consumes the digest,
