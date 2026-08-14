@@ -55,19 +55,60 @@ newer local versions generally work, CI is authoritative.
 
 ## Releases
 
-One tag does everything: pushing `vX.Y.Z` (matching `VERSION` and the chart
-version — CI enforces the three-way lock) builds and publishes:
+Every protected-main merge publishes exactly one patch release after the
+merged SHA's PR gate succeeds. The merged source carries numeric `X.Y.Z` in
+`VERSION`, chart `version`, `appVersion`, and the dated changelog heading, and
+exact plain `vX.Y.Z` in the image tag. Automation creates that plain tag at the
+exact SHA and explicitly dispatches the publisher definition from protected
+`main` with the authoritative successful-run ID. A separate read-only job
+validates that exact PR-gate push run before the write/packages/OIDC job can
+start; a manual dispatch for an unmerged branch fails before publication.
+Both enabled merge modes are covered: a squash is one linear commit, while a rebase may
+install several commits in one push; either produces one release for the exact
+final source tree. The publisher builds or verifies:
 
 - `ghcr.io/snaraj/naranjo-online:vX.Y.Z` — multi-arch image, keyless-signed
   (Cosign), with SBOM and SLSA provenance; deployment consumes the digest,
   never the tag.
-- `ghcr.io/snaraj/charts/naranjo-online` — the Helm chart as an OCI
-  artifact, same version, also signed.
-- A GitHub Release with the immutable digests and human notes.
+- `ghcr.io/snaraj/charts/naranjo-online:X.Y.Z` — the Helm chart as an OCI
+  artifact, also signed. This is the one narrow tag exception: Helm requires
+  the registry tag to equal valid chart SemVer, and `vX.Y.Z` is not SemVerV2.
+- A GitHub Release with the immutable digests, human notes, and exactly one
+  canonical JSON evidence manifest binding the source SHA, successful-main run,
+  image/chart digests and aliases, signer identity, platforms, provenance, and
+  vulnerability-scan policy/results.
 
-Version tags are immutable: the publisher refuses to reuse one, on purpose,
-with no override. See [CHANGELOG.md](CHANGELOG.md) for history and
-[SECURITY.md](SECURITY.md) for the security posture.
+This automatic path may not leave Draft until the repository owner's read-only
+receipt proves that GitHub immutable releases are enabled and `main` requires
+the exact GitHub Actions checks against the current base with no bypass actor.
+The publisher first validates the exact successful PR-gate job inventory and
+the separate exact-SHA successful CodeQL `main` run and job inventory. It scans
+source dependencies, including frontend development dependencies, and the final
+image digest with the checksum-pinned Trivy binary, rejecting every fixed or
+unfixed high/critical finding. Immediately before building the manifest it
+re-resolves both public aliases to the exact produced image/chart digests and
+validates the strict raw SBOM schema, platform, and subject digest for both
+platforms. It uploads the manifest to a draft Release, verifies the closed
+one-asset REST inventory and downloaded bytes, and only then publishes. An
+exact zero-asset draft may resume a response-lost upload without clobber; every
+other partial/foreign state fails closed. Every
+created or reused Release must report exact immutable metadata and that exact
+manifest. Its terminal check re-fetches the immutable Release, downloads and
+compares the manifest again, then re-fetches the live tag ref and annotated
+object and binds the server-locked tag back to the exact signed source. No
+mutation follows. A weekly read-only audit repeats the Release/manifest/run/tag,
+semantic-alias/digest, signature, SLSA/SBOM, chart-source, and vulnerability
+bindings as later detection; it never substitutes for the pre-manifest alias
+and SBOM proof. Version tags are locked by the GitHub control and never reassigned. A
+retry reuses only exact, complete,
+correctly signed source state; partial or conflicting state is reported as
+burned and requires a new patch. Release publication is separate from
+deployment or promotion. See [the release governance runbook](docs/release-governance.md),
+[CHANGELOG.md](CHANGELOG.md), and [SECURITY.md](SECURITY.md).
+
+An OCI reference such as `image:vX.Y.Z@sha256:<digest>` or
+`chart:X.Y.Z@sha256:<digest>` contains a tag plus immutable digest; the complete
+string is a reference, never a tag.
 
 ## Panels
 
