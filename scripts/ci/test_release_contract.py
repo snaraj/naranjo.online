@@ -278,13 +278,13 @@ def exact_release_manifest(
     *, source: str = "a" * 40, main_run_id: int = 123, version: str = "0.1.10"
 ) -> dict[str, object]:
     return RC.build_release_manifest(
-        repository="owner/site",
+        repository=RC.EXPECTED_REPOSITORY,
         source_sha=source,
         main_run_id=main_run_id,
         version=version,
-        image="ghcr.io/owner/site",
+        image=RC.EXPECTED_IMAGE,
         image_digest="sha256:" + "c" * 64,
-        chart="ghcr.io/owner/charts/site",
+        chart=RC.EXPECTED_CHART,
         chart_digest="sha256:" + "d" * 64,
     )
 
@@ -303,6 +303,10 @@ def exact_release_record(
         "size": len(manifest),
         "digest": "sha256:" + hashlib.sha256(manifest).hexdigest(),
         "url": "https://api.github.test/assets/1",
+        "uploader": {
+            "login": RC.GITHUB_ACTIONS_BOT_LOGIN,
+            "id": RC.GITHUB_ACTIONS_BOT_ID,
+        },
     }
     return {
         "tag_name": tag,
@@ -311,6 +315,10 @@ def exact_release_record(
         "draft": state in {"prepared", "staged"},
         "prerelease": False,
         "immutable": state == "exact",
+        "author": {
+            "login": RC.GITHUB_ACTIONS_BOT_LOGIN,
+            "id": RC.GITHUB_ACTIONS_BOT_ID,
+        },
         "assets": [] if state == "prepared" else [asset],
     }
 
@@ -1407,32 +1415,53 @@ class PublisherBindingTests(unittest.TestCase):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(contents, encoding="utf-8")
-            workflow_ref = "owner/site/.github/workflows/release-publisher.yml@refs/heads/main"
+            workflow_ref = (
+                f"{RC.EXPECTED_REPOSITORY}/.github/workflows/"
+                "release-publisher.yml@refs/heads/main"
+            )
             intent = RC.validate_publisher(
                 root,
                 self.SHA,
                 self.SHA,
                 "refs/heads/main",
                 "workflow_dispatch",
-                "owner/site",
+                RC.EXPECTED_REPOSITORY,
                 workflow_ref,
+                RC.EXPECTED_IMAGE,
+                RC.EXPECTED_CHART,
             )
             self.assertEqual(intent, RC.ReleaseIntent(self.SHA, RC.Version.parse("0.1.10")))
-            for source, checkout, ref, event_name, repository, selected_workflow in (
-                ("b" * 40, self.SHA, "refs/heads/main", "workflow_dispatch", "owner/site", workflow_ref),
-                (self.SHA, "b" * 40, "refs/heads/main", "workflow_dispatch", "owner/site", workflow_ref),
-                (self.SHA, self.SHA, "refs/tags/v0.1.10", "workflow_dispatch", "owner/site", workflow_ref),
-                (self.SHA, self.SHA, "refs/heads/main", "push", "owner/site", workflow_ref),
-                (self.SHA, self.SHA, "refs/heads/main", "workflow_dispatch", "other/site", workflow_ref),
+            valid = (
+                self.SHA,
+                self.SHA,
+                "refs/heads/main",
+                "workflow_dispatch",
+                RC.EXPECTED_REPOSITORY,
+                workflow_ref,
+                RC.EXPECTED_IMAGE,
+                RC.EXPECTED_CHART,
+            )
+            mutants = (
+                ("b" * 40, *valid[1:]),
+                (valid[0], "b" * 40, *valid[2:]),
+                (*valid[:2], "refs/tags/v0.1.10", *valid[3:]),
+                (*valid[:3], "push", *valid[4:]),
+                (*valid[:4], "other/site", *valid[5:]),
                 (
                     self.SHA,
                     self.SHA,
                     "refs/heads/main",
                     "workflow_dispatch",
-                    "owner/site",
-                    "owner/site/.github/workflows/release-publisher.yml@refs/tags/v0.1.10",
+                    RC.EXPECTED_REPOSITORY,
+                    f"{RC.EXPECTED_REPOSITORY}/.github/workflows/"
+                    "release-publisher.yml@refs/tags/v0.1.10",
+                    RC.EXPECTED_IMAGE,
+                    RC.EXPECTED_CHART,
                 ),
-            ):
+                (*valid[:6], "ghcr.io/snaraj/naranjo.online", valid[7]),
+                (*valid[:7], "ghcr.io/snaraj/charts/naranjo.online"),
+            )
+            for source, checkout, ref, event_name, repository, selected_workflow, image, chart in mutants:
                 with self.subTest(
                     source=source,
                     checkout=checkout,
@@ -1440,6 +1469,8 @@ class PublisherBindingTests(unittest.TestCase):
                     event=event_name,
                     repository=repository,
                     workflow=selected_workflow,
+                    image=image,
+                    chart=chart,
                 ), self.assertRaises(RC.ContractError):
                     RC.validate_publisher(
                         root,
@@ -1449,7 +1480,33 @@ class PublisherBindingTests(unittest.TestCase):
                         event_name,
                         repository,
                         selected_workflow,
+                        image,
+                        chart,
                     )
+
+    def test_real_dotted_repository_maps_only_to_explicit_hyphenated_packages(self):
+        RC.validate_release_destinations(
+            "snaraj/naranjo.online",
+            "ghcr.io/snaraj/naranjo-online",
+            "ghcr.io/snaraj/charts/naranjo-online",
+        )
+        for repository, image, chart in (
+            (
+                "snaraj/naranjo.online",
+                "ghcr.io/snaraj/naranjo.online",
+                RC.EXPECTED_CHART,
+            ),
+            (
+                "snaraj/naranjo.online",
+                RC.EXPECTED_IMAGE,
+                "ghcr.io/snaraj/charts/naranjo.online",
+            ),
+            ("snaraj/naranjo-online", RC.EXPECTED_IMAGE, RC.EXPECTED_CHART),
+        ):
+            with self.subTest(repository=repository, image=image, chart=chart), self.assertRaises(
+                RC.ContractError
+            ):
+                RC.validate_release_destinations(repository, image, chart)
 
 
 class ImmutableMetadataTests(unittest.TestCase):
@@ -1522,6 +1579,46 @@ class ImmutableMetadataTests(unittest.TestCase):
             manifest=manifest,
             state="prepared",
         )
+        actor_mutants = (
+            None,
+            {},
+            {"login": RC.GITHUB_ACTIONS_BOT_LOGIN},
+            {"id": RC.GITHUB_ACTIONS_BOT_ID},
+            {"login": "foreign-writer", "id": RC.GITHUB_ACTIONS_BOT_ID},
+            {"login": RC.GITHUB_ACTIONS_BOT_LOGIN, "id": 1},
+            {"login": RC.GITHUB_ACTIONS_BOT_LOGIN, "id": True},
+            {"login": RC.GITHUB_ACTIONS_BOT_LOGIN, "id": float(RC.GITHUB_ACTIONS_BOT_ID)},
+        )
+        for state in ("prepared", "staged", "exact"):
+            for actor in actor_mutants:
+                changed = exact_release_record(manifest, tag=self.TAG, state=state)
+                changed["author"] = actor
+                with self.subTest(state=state, release_author=actor), self.assertRaises(
+                    RC.ContractError
+                ):
+                    RC.validate_release_record(
+                        changed,
+                        tag=self.TAG,
+                        title=f"naranjo.online {self.TAG}",
+                        body="exact notes",
+                        manifest=manifest,
+                        state=state,
+                    )
+        for state in ("staged", "exact"):
+            for uploader in actor_mutants:
+                changed = exact_release_record(manifest, tag=self.TAG, state=state)
+                changed["assets"][0]["uploader"] = uploader
+                with self.subTest(state=state, asset_uploader=uploader), self.assertRaises(
+                    RC.ContractError
+                ):
+                    RC.validate_release_record(
+                        changed,
+                        tag=self.TAG,
+                        title=f"naranjo.online {self.TAG}",
+                        body="exact notes",
+                        manifest=manifest,
+                        state=state,
+                    )
         for key, value in (
             ("tag_name", "v0.1.11"),
             ("name", "foreign"),
@@ -1574,13 +1671,13 @@ class ImmutableMetadataTests(unittest.TestCase):
     def test_manifest_binds_source_run_artifacts_scans_and_notes_exactly(self):
         exact = exact_release_manifest(source=self.SOURCE)
         expected = {
-            "repository": "owner/site",
+            "repository": RC.EXPECTED_REPOSITORY,
             "source_sha": self.SOURCE,
             "main_run_id": 123,
             "version": "0.1.10",
-            "image": "ghcr.io/owner/site",
+            "image": RC.EXPECTED_IMAGE,
             "image_digest": "sha256:" + "c" * 64,
-            "chart": "ghcr.io/owner/charts/site",
+            "chart": RC.EXPECTED_CHART,
             "chart_digest": "sha256:" + "d" * 64,
         }
         RC.validate_release_manifest_record(exact, **expected)
@@ -2713,7 +2810,7 @@ git() {
                     "RUNNER_TEMP": runner_relative,
                     "GH_TOKEN": "fixture-token",
                     "GITHUB_API_URL": "https://api.github.com",
-                    "GITHUB_REPOSITORY": "owner/site",
+                    "GITHUB_REPOSITORY": RC.EXPECTED_REPOSITORY,
                     "SOURCE_SHA": self.SOURCE,
                     "TAG_TARGET_SHA": target,
                     "TAG_OBJECT_SHA": self.TAG_OBJECT,
@@ -2749,13 +2846,13 @@ git() {
             runner = Path(temporary)
             runner_relative = runner.relative_to(ROOT).as_posix()
             manifest_record = RC.build_release_manifest(
-                repository="owner/site",
+                repository=RC.EXPECTED_REPOSITORY,
                 source_sha=self.SOURCE,
                 main_run_id=123,
                 version="0.1.10",
-                image="ghcr.io/owner/site",
+                image=RC.EXPECTED_IMAGE,
                 image_digest="sha256:" + "d" * 64,
-                chart="ghcr.io/owner/charts/site",
+                chart=RC.EXPECTED_CHART,
                 chart_digest="sha256:" + "e" * 64,
             )
             manifest = canonical_manifest_bytes(manifest_record)
@@ -2861,15 +2958,15 @@ git() {
                     "RUNNER_TEMP": runner_relative,
                     "GH_TOKEN": "fixture-token",
                     "GITHUB_API_URL": "https://api.github.com",
-                    "GITHUB_REPOSITORY": "owner/site",
+                    "GITHUB_REPOSITORY": RC.EXPECTED_REPOSITORY,
                     "SOURCE_SHA": self.SOURCE,
                     "MAIN_RUN_ID": "123",
                     "TERMINAL_TAG_TARGET_SHA": terminal_target,
                     "TAG_OBJECT_SHA": self.TAG_OBJECT,
                     "TAGGER_DATE": self.DATE,
                     "TAG": self.TAG,
-                    "IMAGE": "ghcr.io/owner/site",
-                    "CHART": "ghcr.io/owner/charts/site",
+                    "IMAGE": RC.EXPECTED_IMAGE,
+                    "CHART": RC.EXPECTED_CHART,
                 }
             )
             return subprocess.run(
@@ -2892,13 +2989,13 @@ git() {
             runner = Path(temporary)
             runner_relative = runner.relative_to(ROOT).as_posix()
             manifest_record = RC.build_release_manifest(
-                repository="owner/site",
+                repository=RC.EXPECTED_REPOSITORY,
                 source_sha=self.SOURCE,
                 main_run_id=123,
                 version="0.1.10",
-                image="ghcr.io/owner/site",
+                image=RC.EXPECTED_IMAGE,
                 image_digest="sha256:" + "d" * 64,
-                chart="ghcr.io/owner/charts/site",
+                chart=RC.EXPECTED_CHART,
                 chart_digest="sha256:" + "e" * 64,
             )
             manifest = canonical_manifest_bytes(manifest_record)
@@ -3003,11 +3100,11 @@ gh() {
                     "RUNNER_TEMP": runner_relative,
                     "GH_TOKEN": "fixture-token",
                     "GITHUB_API_URL": "https://api.github.com",
-                    "GITHUB_REPOSITORY": "owner/site",
+                    "GITHUB_REPOSITORY": RC.EXPECTED_REPOSITORY,
                     "SOURCE_SHA": self.SOURCE,
                     "MAIN_RUN_ID": "123",
-                    "IMAGE": "ghcr.io/owner/site",
-                    "CHART": "ghcr.io/owner/charts/site",
+                    "IMAGE": RC.EXPECTED_IMAGE,
+                    "CHART": RC.EXPECTED_CHART,
                     "CORRUPT_FIRST_DOWNLOAD": "true" if corrupt_first_download else "false",
                 }
             )
@@ -3677,7 +3774,151 @@ trivy() {
         self.assertEqual(suppressed.returncode, 0, suppressed.stdout + suppressed.stderr)
 
 
+class CoverageBadgeShellPathTests(unittest.TestCase):
+    @staticmethod
+    def run_block(step_name: str) -> str:
+        lines = (ROOT / ".github/workflows/pr-gate.yml").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        marker = f"      - name: {step_name}"
+        start = lines.index(marker)
+        run = lines.index("        run: |", start)
+        body: list[str] = []
+        for line in lines[run + 1 :]:
+            if line.startswith("      - name:"):
+                break
+            if line.startswith("          "):
+                body.append(line[10:])
+            elif line:
+                break
+        return "\n".join(body) + "\n"
+
+    @staticmethod
+    def execute(block: str, prelude: str, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory(dir=ROOT, prefix=".coverage-badge-shell-") as temporary:
+            fixture = Path(temporary)
+            output = fixture / "github-output.txt"
+            env = os.environ.copy()
+            env.update(environment)
+            env.update(
+                {
+                    "RUNNER_TEMP": ExistingImageShellPathTests.bash_path(fixture),
+                    "GITHUB_OUTPUT": ExistingImageShellPathTests.bash_path(output),
+                }
+            )
+            return subprocess.run(
+                [ExistingImageShellPathTests.bash_executable()],
+                cwd=fixture,
+                env=env,
+                check=False,
+                input=prelude + "\n" + block,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                timeout=30,
+            )
+
+    def test_compute_block_exits_on_the_first_failed_tool(self):
+        block = self.run_block("Compute coverage percentages")
+        prelude = r'''
+pushd() { return 0; }
+popd() { return 0; }
+npm() {
+  if [ "${1-}" = ci ]; then
+    return 47
+  fi
+  return 0
+}
+node() { printf 'all files|100|\n'; }
+go() {
+  if [ "${1-}" = tool ]; then
+    printf 'total: (statements) 100.0%%\n'
+  fi
+  return 0
+}
+grep() { printf 'mode: atomic\n'; }
+'''
+        strict = self.execute(block, prelude, {})
+        self.assertEqual(strict.returncode, 47, strict.stdout + strict.stderr)
+        fail_open = self.execute(block.replace("set -euo pipefail\n", "", 1), prelude, {})
+        self.assertEqual(fail_open.returncode, 0, fail_open.stdout + fail_open.stderr)
+
+    def test_publish_block_and_guarded_directory_transition_fail_closed(self):
+        block = self.run_block("Publish badge JSONs to the badges branch")
+        prelude = r'''
+mkdir() { return 48; }
+cd() { return 49; }
+git() { return 0; }
+'''
+        environment = {
+            "GH_TOKEN": "fixture-token",
+            "GO_PCT": "96.3",
+            "FRONT_PCT": "100",
+            "GITHUB_SHA": "a" * 40,
+            "GITHUB_REPOSITORY": "snaraj/naranjo.online",
+        }
+        strict = self.execute(block, prelude, environment)
+        self.assertEqual(strict.returncode, 48, strict.stdout + strict.stderr)
+        fail_open = self.execute(
+            block.replace("set -euo pipefail\n", "", 1).replace(
+                'cd "${work}" || exit 1', 'cd "${work}"', 1
+            ),
+            prelude,
+            environment,
+        )
+        self.assertEqual(fail_open.returncode, 0, fail_open.stdout + fail_open.stderr)
+
+
 class WorkflowStructureTests(unittest.TestCase):
+    @staticmethod
+    def require_publication_identity_oracles(contract: str, publisher: str) -> None:
+        contract_literals = (
+            'EXPECTED_REPOSITORY = "snaraj/naranjo.online"\n',
+            'EXPECTED_IMAGE = "ghcr.io/snaraj/naranjo-online"\n',
+            'EXPECTED_CHART = "ghcr.io/snaraj/charts/naranjo-online"\n',
+            'GITHUB_ACTIONS_BOT_LOGIN = "github-actions[bot]"\n',
+            "GITHUB_ACTIONS_BOT_ID = 41898282\n",
+        )
+        publisher_literals = (
+            "  IMAGE: ghcr.io/snaraj/naranjo-online\n",
+            "  CHART: ghcr.io/snaraj/charts/naranjo-online\n",
+        )
+        for literal in contract_literals:
+            if contract.count(literal) != 1:
+                raise ValueError(f"release identity oracle changed: {literal.strip()}")
+        for literal in publisher_literals:
+            if publisher.count(literal) != 1:
+                raise ValueError(f"publisher identity oracle changed: {literal.strip()}")
+
+    @staticmethod
+    def require_coverage_badge_fail_fast(gate: str) -> None:
+        marker = "\n  coverage-badges:\n"
+        if gate.count(marker) != 1:
+            raise ValueError("coverage-badges job identity is not exact")
+        coverage = gate.split(marker, 1)[1]
+        compute_heading = "      - name: Compute coverage percentages\n"
+        publish_heading = "      - name: Publish badge JSONs to the badges branch\n"
+        if coverage.count(compute_heading) != 1 or coverage.count(publish_heading) != 1:
+            raise ValueError("coverage-badges step inventory is not exact")
+        compute = coverage.split(compute_heading, 1)[1].split(publish_heading, 1)[0]
+        publish = coverage.split(publish_heading, 1)[1]
+        if compute.count("          set -euo pipefail\n") != 1:
+            raise ValueError("coverage computation must have one exact fail-fast boundary")
+        if publish.count("          set -euo pipefail\n") != 1:
+            raise ValueError("badge publication must have one exact fail-fast boundary")
+        for required in (
+            "          pushd frontend >/dev/null\n",
+            "          popd >/dev/null\n",
+        ):
+            if required not in compute:
+                raise ValueError(f"coverage computation directory guard lost: {required.strip()}")
+        guarded_cd = '          cd "${work}" || exit 1\n'
+        if publish.count(guarded_cd) != 1:
+            raise ValueError("badge publication directory transition is not fail closed")
+        if re.search(r'(?m)^          cd "\$\{work\}"\s*$', publish):
+            raise ValueError("badge publication retained an unguarded directory change")
+
     @staticmethod
     def require_vulnerability_and_alias_audit(
         gate: str, publisher: str, audit: str, installer: str
@@ -3877,6 +4118,9 @@ class WorkflowStructureTests(unittest.TestCase):
         exact_image_tag = "            ${{ env.IMAGE }}:${{ steps.release.outputs.tag }}\n"
         if tags is None or tags.group(1) != exact_image_tag:
             raise ValueError("Buildx must push only the intended semantic image alias")
+        sbom_values = re.findall(r"(?m)^          sbom:\s*(.*?)\s*$", build_step)
+        if sbom_values != ["true"]:
+            raise ValueError("Buildx must produce exactly one enabled SBOM source")
         chart_heading = "      - name: Publish and sign an absent chart version"
         chart_resolver_heading = "      - name: Resolve the one chart digest for release notes"
         if publisher.count(chart_heading) != 1 or publisher.count(chart_resolver_heading) != 1:
@@ -3968,6 +4212,12 @@ class WorkflowStructureTests(unittest.TestCase):
 
     @staticmethod
     def require_successful_main_privilege_boundary(orchestrator: str, publisher: str) -> None:
+        for expected in (
+            f"  IMAGE: {RC.EXPECTED_IMAGE}\n",
+            f"  CHART: {RC.EXPECTED_CHART}\n",
+        ):
+            if publisher.count(expected) != 1:
+                raise ValueError(f"publisher package destination is not exact: {expected.strip()}")
         if any(marker not in publisher for marker in (
             '\n  authorize:\n', '\n  immutable_settings:\n', '\n  publish:\n'
         )):
@@ -4059,10 +4309,28 @@ class WorkflowStructureTests(unittest.TestCase):
             "persist-credentials: false",
             "SOURCE_SHA: ${{ needs.authorize.outputs.source_sha }}",
             'workflow-ref "${GITHUB_WORKFLOW_REF}"',
+            '--image "${IMAGE}"',
+            '--chart "${CHART}"',
             "@refs/heads/main",
         ):
             if required not in publish:
                 raise ValueError(f"privileged publication lost main-run dependency: {required}")
+        bind_heading = "      - name: Bind protected workflow, authorized checkout, and committed locks"
+        install_heading = "      - name: Install checksum-verified tools"
+        tag_heading = "      - name: Create or verify the exact annotated tag"
+        if publish.count(bind_heading) != 1 or publish.count(install_heading) != 1:
+            raise ValueError("publisher pre-side-effect binding step is not exact")
+        binding = publish.split(bind_heading, 1)[1].split(install_heading, 1)[0]
+        for required in (
+            '--repository "${GITHUB_REPOSITORY}"',
+            '--workflow-ref "${GITHUB_WORKFLOW_REF}"',
+            '--image "${IMAGE}"',
+            '--chart "${CHART}"',
+        ):
+            if binding.count(required) != 1:
+                raise ValueError(f"pre-side-effect package identity binding lost: {required}")
+        if publish.index(bind_heading) >= publish.index(tag_heading):
+            raise ValueError("package identities must bind before the first publication side effect")
         for required in (
             "MAIN_RUN_ID: ${{ github.event.workflow_run.id }}",
             "--ref main",
@@ -4129,6 +4397,69 @@ class WorkflowStructureTests(unittest.TestCase):
         codeql = (ROOT / ".github/workflows/codeql.yml").read_text(encoding="utf-8")
         orchestrator = (ROOT / ".github/workflows/release-after-main.yml").read_text(encoding="utf-8")
         publisher = (ROOT / ".github/workflows/release-publisher.yml").read_text(encoding="utf-8")
+        contract = (ROOT / "scripts/ci/release_contract.py").read_text(encoding="utf-8")
+        self.require_publication_identity_oracles(contract, publisher)
+        tuple_contract_mutant = contract.replace(
+            'EXPECTED_IMAGE = "ghcr.io/snaraj/naranjo-online"',
+            'EXPECTED_IMAGE = "ghcr.io/snaraj/naranjo.online"',
+            1,
+        ).replace(
+            'EXPECTED_CHART = "ghcr.io/snaraj/charts/naranjo-online"',
+            'EXPECTED_CHART = "ghcr.io/snaraj/charts/naranjo.online"',
+            1,
+        )
+        tuple_publisher_mutant = publisher.replace(
+            "  IMAGE: ghcr.io/snaraj/naranjo-online",
+            "  IMAGE: ghcr.io/snaraj/naranjo.online",
+            1,
+        ).replace(
+            "  CHART: ghcr.io/snaraj/charts/naranjo-online",
+            "  CHART: ghcr.io/snaraj/charts/naranjo.online",
+            1,
+        )
+        bot_contract_mutant = contract.replace(
+            'GITHUB_ACTIONS_BOT_LOGIN = "github-actions[bot]"',
+            'GITHUB_ACTIONS_BOT_LOGIN = "foreign-writer"',
+            1,
+        ).replace(
+            "GITHUB_ACTIONS_BOT_ID = 41898282",
+            "GITHUB_ACTIONS_BOT_ID = 1",
+            1,
+        )
+        for name, changed_contract, changed_publisher in (
+            ("paired package config", tuple_contract_mutant, tuple_publisher_mutant),
+            ("paired bot login and ID", bot_contract_mutant, publisher),
+        ):
+            with self.subTest(identity_oracle_mutant=name), self.assertRaises(ValueError):
+                self.require_publication_identity_oracles(
+                    changed_contract, changed_publisher
+                )
+        self.require_coverage_badge_fail_fast(gate)
+        badge_mutants = (
+            gate.replace(
+                "        run: |\n          set -euo pipefail\n          pushd frontend",
+                "        run: |\n          pushd frontend",
+                1,
+            ),
+            gate.replace(
+                "        run: |\n          set -euo pipefail\n          color()",
+                "        run: |\n          color()",
+                1,
+            ),
+            gate.replace('          cd "${work}" || exit 1', '          cd "${work}"', 1),
+        )
+        combined_badge_mutant = gate.replace(
+            "        run: |\n          set -euo pipefail\n          pushd frontend",
+            "        run: |\n          pushd frontend",
+            1,
+        ).replace(
+            "        run: |\n          set -euo pipefail\n          color()",
+            "        run: |\n          color()",
+            1,
+        ).replace('          cd "${work}" || exit 1', '          cd "${work}"', 1)
+        for index, mutant in enumerate((*badge_mutants, combined_badge_mutant)):
+            with self.subTest(coverage_badge_mutant=index), self.assertRaises(ValueError):
+                self.require_coverage_badge_fail_fast(mutant)
         self.assertIn("github.event.pull_request.number || github.run_id", gate)
         self.assertNotIn("queue:", gate + orchestrator + publisher)
         self.assertIn("workflow_run:", orchestrator)
@@ -4138,6 +4469,23 @@ class WorkflowStructureTests(unittest.TestCase):
         self.assertIn("source_sha:", publisher)
         self.assertNotRegex(publisher, r"(?ms)^\s+push:\s*\n\s+tags:")
         self.require_successful_main_privilege_boundary(orchestrator, publisher)
+        package_mutants = (
+            publisher.replace(
+                f"  IMAGE: {RC.EXPECTED_IMAGE}",
+                "  IMAGE: ghcr.io/snaraj/naranjo.online",
+                1,
+            ),
+            publisher.replace(
+                f"  CHART: {RC.EXPECTED_CHART}",
+                "  CHART: ghcr.io/snaraj/charts/naranjo.online",
+                1,
+            ),
+            publisher.replace('--image "${IMAGE}"', "", 1),
+            publisher.replace('--chart "${CHART}"', "", 1),
+        )
+        for index, mutant in enumerate(package_mutants):
+            with self.subTest(package_identity_mutant=index), self.assertRaises(ValueError):
+                self.require_successful_main_privilege_boundary(orchestrator, mutant)
         self.require_deadlines_and_concurrency(gate, codeql, orchestrator, publisher)
         self.assertGreaterEqual(publisher.count("registry-state --http-status"), 2)
         self.assertGreaterEqual(publisher.count("--data-urlencode \"scope=repository:"), 2)
@@ -4156,6 +4504,16 @@ class WorkflowStructureTests(unittest.TestCase):
         self.assertNotIn("targetCommitish", publisher)
         self.assertIn('gh release create "${tag}" "${manifest}" --draft --verify-tag', publisher)
         self.require_exact_release_wiring(orchestrator, publisher)
+        for value in ("false", "null", "enabled", ""):
+            mutant = publisher.replace(
+                "          sbom: true",
+                f"          sbom: {value}" if value else "",
+                1,
+            )
+            with self.subTest(sbom_producer_mutant=value or "removed"), self.assertRaises(
+                ValueError
+            ):
+                self.require_exact_release_wiring(orchestrator, mutant)
         for owner, token in (
             ("orchestrator", "MAIN_RUN_ID: ${{ github.event.workflow_run.id }}"),
             ("orchestrator", "--ref main"),
@@ -4171,6 +4529,8 @@ class WorkflowStructureTests(unittest.TestCase):
             ("publisher", "needs.immutable_settings.result == 'success'"),
             ("publisher", "ref: ${{ needs.authorize.outputs.source_sha }}"),
             ("publisher", 'workflow-ref "${GITHUB_WORKFLOW_REF}"'),
+            ("publisher", '--image "${IMAGE}"'),
+            ("publisher", '--chart "${CHART}"'),
             ("publisher", "environment: platform-release"),
             ("publisher", "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0"),
             ("publisher", "app-id: ${{ vars.PLATFORM_RELEASE_APP_ID }}"),
@@ -4330,7 +4690,11 @@ class WorkflowStructureTests(unittest.TestCase):
             "Exact PR-gate jobs + exact-SHA CodeQL run/jobs and manual/unmerged dispatch denial",
             "Post-push image/chart alias rebind + strict raw platform SBOM hostile suite",
             "Deterministic manifest, dev-dependency vulnerability policy, and recurring alias-audit hostile suite",
-            "requires-review",
+            "Author applies `requires-review`",
+            "reviewer removes it with either verdict",
+            "VERDICT: APPROVE",
+            "mutation and claim-audit",
+            "(adversarial reviewer)",
             "Main Worker exact-head bounded receipt",
         ):
             self.assertIn(required, template)

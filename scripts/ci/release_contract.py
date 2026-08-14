@@ -31,6 +31,11 @@ EXPECTED_WORKFLOW_PATH = ".github/workflows/pr-gate.yml"
 EXPECTED_CODEQL_WORKFLOW = "CodeQL"
 EXPECTED_CODEQL_WORKFLOW_PATH = ".github/workflows/codeql.yml"
 EXPECTED_PUBLISHER_PATH = ".github/workflows/release-publisher.yml"
+EXPECTED_REPOSITORY = "snaraj/naranjo.online"
+EXPECTED_IMAGE = "ghcr.io/snaraj/naranjo-online"
+EXPECTED_CHART = "ghcr.io/snaraj/charts/naranjo-online"
+GITHUB_ACTIONS_BOT_LOGIN = "github-actions[bot]"
+GITHUB_ACTIONS_BOT_ID = 41898282
 INTOTO_STATEMENT_TYPE = "https://in-toto.io/Statement/v1"
 SLSA_PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
 DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
@@ -603,6 +608,16 @@ def validate_codeql_jobs_record(
     return source_sha
 
 
+def validate_release_destinations(repository: str, image: str, chart: str) -> None:
+    """Bind the dotted repository identity to explicit GHCR package names."""
+    if repository != EXPECTED_REPOSITORY:
+        raise ContractError("release repository identity is not exact")
+    if image != EXPECTED_IMAGE:
+        raise ContractError("release image package identity is not exact")
+    if chart != EXPECTED_CHART:
+        raise ContractError("release chart package identity is not exact")
+
+
 def validate_publisher(
     root: Path,
     source_sha: str,
@@ -611,6 +626,8 @@ def validate_publisher(
     event_name: str,
     repository: str,
     workflow_ref: str,
+    image: str,
+    chart: str,
 ) -> ReleaseIntent:
     source_sha = require_sha(source_sha, "publisher source SHA")
     checkout_sha = require_sha(checkout_sha, "publisher checkout SHA")
@@ -621,6 +638,7 @@ def validate_publisher(
     expected_workflow_ref = f"{repository}/{EXPECTED_PUBLISHER_PATH}@refs/heads/main"
     if workflow_ref != expected_workflow_ref:
         raise ContractError("publisher workflow identity is not protected main")
+    validate_release_destinations(repository, image, chart)
     if source_sha != checkout_sha:
         raise ContractError("publisher source SHA does not equal the authorized checkout")
     files = {path: (root / path).read_text(encoding="utf-8") for path in ("VERSION", "chart/Chart.yaml", "chart/values.yaml", "CHANGELOG.md")}
@@ -1366,17 +1384,11 @@ def build_release_manifest(
     chart_digest: str,
 ) -> dict[str, object]:
     """Build the one canonical, deterministic publication evidence asset."""
-    if not re.fullmatch(r"[a-z0-9_.-]+/[a-z0-9_.-]+", repository):
-        raise ContractError("release manifest repository is malformed")
+    validate_release_destinations(repository, image, chart)
     source_sha = require_sha(source_sha, "release manifest source SHA")
     if isinstance(main_run_id, bool) or main_run_id <= 0:
         raise ContractError("release manifest main run ID must be positive")
     parsed_version = Version.parse(version)
-    expected_image = f"ghcr.io/{repository}"
-    owner, name = repository.split("/", 1)
-    expected_chart = f"ghcr.io/{owner}/charts/{name}"
-    if image != expected_image or chart != expected_chart:
-        raise ContractError("release manifest artifact repositories are not canonical")
     image_digest = _require_digest(image_digest, "release manifest image digest")
     chart_digest = _require_digest(chart_digest, "release manifest chart digest")
     identity = (
@@ -1481,7 +1493,20 @@ def release_manifest_asset_name(tag: str) -> str:
     return f"naranjo-online-{tag}-release-manifest.json"
 
 
+def _validate_release_actor(value: object, field: str) -> None:
+    actor = _object(value, field)
+    actor_id = actor.get("id")
+    if (
+        actor.get("login") != GITHUB_ACTIONS_BOT_LOGIN
+        or isinstance(actor_id, bool)
+        or not isinstance(actor_id, int)
+        or actor_id != GITHUB_ACTIONS_BOT_ID
+    ):
+        raise ContractError(f"{field} is not the workflow bot")
+
+
 def _validate_release_asset(asset: Mapping[str, object], *, tag: str, manifest: bytes) -> None:
+    _validate_release_actor(asset.get("uploader"), "GitHub Release manifest asset uploader")
     digest = "sha256:" + hashlib.sha256(manifest).hexdigest()
     expected = {
         "name": release_manifest_asset_name(tag),
@@ -1505,6 +1530,7 @@ def validate_release_record(
     state: str = "exact",
 ) -> None:
     """Verify exact prepared, staged, or immutable Release metadata/evidence."""
+    _validate_release_actor(release_record.get("author"), "GitHub Release author")
     if release_record.get("tag_name") != tag or release_record.get("name") != title:
         raise ContractError("GitHub Release tag or title is not exact")
     actual_body = release_record.get("body")
@@ -1760,6 +1786,8 @@ def _parser() -> argparse.ArgumentParser:
     publisher.add_argument("--event-name", required=True)
     publisher.add_argument("--repository", required=True)
     publisher.add_argument("--workflow-ref", required=True)
+    publisher.add_argument("--image", required=True)
+    publisher.add_argument("--chart", required=True)
     settings_receipt = commands.add_parser("settings-receipt")
     settings_receipt.add_argument("--receipt", type=Path, required=True)
     settings_receipt.add_argument("--repository", required=True)
@@ -1915,6 +1943,8 @@ def main(argv: list[str] | None = None) -> int:
                     args.event_name,
                     args.repository,
                     args.workflow_ref,
+                    args.image,
+                    args.chart,
                 )
             )
         elif args.command == "settings-receipt":

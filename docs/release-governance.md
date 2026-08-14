@@ -71,6 +71,13 @@ read-only jobs, uses only its ordinary
 short-lived `GITHUB_TOKEN` for contents/packages/OIDC publication, and cannot
 start when the settings GET is denied, malformed, or disabled.
 
+That publisher's first source-bound check also requires the explicit production
+identity tuple `snaraj/naranjo.online`, `ghcr.io/snaraj/naranjo-online`, and
+`ghcr.io/snaraj/charts/naranjo-online`. The dotted GitHub repository name is
+never reused or heuristically rewritten as a registry package name. A missing,
+dotted, foreign, or otherwise changed package input fails before annotated-tag
+or registry publication begins.
+
 Owner-observed state on 2026-08-14 proves that `platform-release` exists with
 `protected_branches: false`, `custom_branch_policies: true`, and exactly one
 branch policy `{name: main, type: branch}`. It currently has zero variables and
@@ -116,7 +123,11 @@ and provenance contract, and both scan policies/results.
 
 New publication creates a draft Release with exactly that one manifest asset,
 requires the closed REST asset metadata/digest, downloads and compares the
-bytes, and only then publishes the draft. An exact zero-asset `prepared` draft
+bytes, and only then publishes the draft. Every observed draft, retry winner,
+and immutable Release must identify `github-actions[bot]` with numeric ID
+`41898282` as its author; every staged or published manifest asset must identify
+that same login and ID as its sole uploader. Missing, null, or foreign writers
+fail closed. An exact zero-asset `prepared` draft
 is the sole recoverable response-loss state: the publisher uploads without
 clobber, re-reads the one-asset `staged` state, and continues. Existing,
 response-lost, and concurrent-winner paths may resume only from those exact

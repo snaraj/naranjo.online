@@ -33,9 +33,12 @@ Closes #<!-- same-repository issue number -->
 
 ## Exact-head review
 
-- `requires-review` applied only after author completion: pending/yes
+- Author applies `requires-review` only after exact-head/body/evidence completion;
+  the independent reviewer removes it with either verdict: pending/yes
 - Immutable-release + strict required-checks/no-bypass settings receipt: pending/exact
-- Independent normal-comment verdict bound to exact head: pending
+- Independent normal-comment verdict has exactly one `HEAD: <exact reviewed 40-lowercase-hex>`,
+  one `VERDICT: APPROVE` or `VERDICT: REQUEST-CHANGES`, mutation and claim-audit
+  evidence, and final `- <distinct context> (adversarial reviewer)`: pending
 - Main Worker exact-head bounded receipt (normal comment with exact
   `HEAD: <40-lowercase-hex>`, `ROLE: MAIN-WORKER`, `VERDICT: PASS`,
   `SCOPE: architecture,merge-order,authority,settings,base-freshness,required-checks`,
