@@ -2,11 +2,11 @@ name: Release after main CI
 
 # GitHub does not recursively trigger a push workflow for a tag created with
 # GITHUB_TOKEN.  This success-only workflow_run verifies the completed main
-# SHA, creates its annotated tag for the server-locked Release, and explicitly
-# dispatches the protected-main publisher with the authoritative completed-run
-# ID. Distinct main SHAs share no concurrency
-# group: every
-# merge intent has an independent release path and a rapid later merge cannot
+# SHA and explicitly dispatches the protected-main publisher with the
+# authoritative completed-run ID. It has no tag, registry, package, or Release
+# mutation permission; those operations remain behind the publisher's
+# authoritative immutable-settings guard. Distinct main SHAs share no
+# concurrency group: every merge intent has an independent release path and a rapid later merge cannot
 # replace an earlier pending run. Squash produces one commit; an allowed rebase
 # may produce several. The contract validates the complete push base -> final
 # tree patch step and rediscovers that release boundary from the successful SHA.
@@ -17,6 +17,12 @@ on:
 
 permissions: {}
 
+# Deduplicate only an identical successful main SHA. A later merge has a
+# different group and can neither cancel nor suppress this dispatch.
+concurrency:
+  group: release-after-main-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
 jobs:
   release:
     if: >-
@@ -24,9 +30,10 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       actions: write
-      contents: write
+      contents: read
     steps:
       - name: Check out the exact completed main SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,11 +45,21 @@ jobs:
         id: release
         env:
           COMPLETED_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAIN_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
           event_sha="$(python3 -I -B scripts/ci/release_contract.py workflow-run \
             --event "${GITHUB_EVENT_PATH}" --repository "${GITHUB_REPOSITORY}")"
           test "${event_sha}" = "${COMPLETED_SHA}"
+          jobs_json="${RUNNER_TEMP}/orchestrator-main-jobs.json"
+          gh api --method GET \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${MAIN_RUN_ID}/jobs?filter=latest&per_page=100" > "${jobs_json}"
+          test "$(python3 -I -B scripts/ci/release_contract.py main-jobs-record \
+            --jobs-json "${jobs_json}" --run-id "${MAIN_RUN_ID}" \
+            --source-sha "${COMPLETED_SHA}")" = "${COMPLETED_SHA}"
           test "$(git rev-parse HEAD)" = "${COMPLETED_SHA}"
           intent="$(python3 -I -B scripts/ci/release_contract.py release-window \
             --repository . --head "${COMPLETED_SHA}")"
@@ -54,79 +71,6 @@ jobs:
           test "${tag}" = "v${version}"
           printf 'base_sha=%s\nsource_sha=%s\nversion=%s\ntag=%s\n' \
             "${base_sha}" "${source_sha}" "${version}" "${tag}" >> "${GITHUB_OUTPUT}"
-      - name: Create or verify the exact immutable annotated tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
-          TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          ref_json="${RUNNER_TEMP}/release-ref.json"
-          tag_json="${RUNNER_TEMP}/release-tag.json"
-          tagger_name='github-actions[bot]'
-          tagger_email='41898282+github-actions[bot]@users.noreply.github.com'
-          tagger_date="$(git show -s --format=%cI "${SOURCE_SHA}")"
-          message="Release ${TAG} from ${SOURCE_SHA}"
-          api="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
-
-          get_json() {
-            local url="$1"
-            local output="$2"
-            curl --silent --show-error --location \
-              --proto '=https' --tlsv1.2 \
-              --output "${output}" --write-out '%{http_code}' \
-              --header 'Accept: application/vnd.github+json' \
-              --header "Authorization: Bearer ${GH_TOKEN}" \
-              "${url}"
-          }
-
-          classify_tag() {
-            local object_status required="$1" status tag_object
-            local -a record_args=()
-            status="$(get_json "${api}/git/ref/tags/${TAG}" "${ref_json}")"
-            if [ "${status}" = 200 ]; then
-              tag_object="$(jq -er '.object.sha' "${ref_json}")"
-              object_status="$(get_json "${api}/git/tags/${tag_object}" "${tag_json}")"
-              test "${object_status}" = 200
-              record_args=(--ref-json "${ref_json}" --tag-json "${tag_json}")
-            fi
-            python3 -I -B scripts/ci/release_contract.py tag-state \
-              --http-status "${status}" --require "${required}" "${record_args[@]}" \
-              --tag "${TAG}" --source-sha "${SOURCE_SHA}" \
-              --message "${message}" --tagger-name "${tagger_name}" \
-              --tagger-email "${tagger_email}" --tagger-date "${tagger_date}"
-          }
-
-          if classify_tag exact >/dev/null 2>&1; then
-            printf 'verified existing %s at %s\n' "${TAG}" "${SOURCE_SHA}"
-            exit 0
-          fi
-          classify_tag absent >/dev/null
-
-          tag_object="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/git/tags" \
-            -f tag="${TAG}" \
-            -f message="${message}" \
-            -f object="${SOURCE_SHA}" \
-            -f type=commit \
-            -f "tagger[name]=${tagger_name}" \
-            -f "tagger[email]=${tagger_email}" \
-            -f "tagger[date]=${tagger_date}" \
-            --jq '.sha')"
-          if ! gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-            -f ref="refs/tags/${TAG}" -f sha="${tag_object}" >/dev/null; then
-            # A same-SHA rerun may race us.  Only exact state is idempotent;
-            # a lightweight, moved, or foreign-target tag stays fatal.
-            race_verified=false
-            for attempt in 1 2 3 4 5; do
-              if classify_tag exact >/dev/null 2>&1; then
-                race_verified=true
-                break
-              fi
-              sleep "${attempt}"
-            done
-            test "${race_verified}" = true
-          fi
-          classify_tag exact >/dev/null
       - name: Dispatch the successful-main-bound publisher explicitly
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

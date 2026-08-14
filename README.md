@@ -73,15 +73,34 @@ final source tree. The publisher builds or verifies:
 - `ghcr.io/snaraj/charts/naranjo-online:X.Y.Z` — the Helm chart as an OCI
   artifact, also signed. This is the one narrow tag exception: Helm requires
   the registry tag to equal valid chart SemVer, and `vX.Y.Z` is not SemVerV2.
-- A GitHub Release with the immutable digests and human notes.
+- A GitHub Release with the immutable digests, human notes, and exactly one
+  canonical JSON evidence manifest binding the source SHA, successful-main run,
+  image/chart digests and aliases, signer identity, platforms, provenance, and
+  vulnerability-scan policy/results.
 
 This automatic path may not leave Draft until the repository owner's read-only
 receipt proves that GitHub immutable releases are enabled and `main` requires
 the exact GitHub Actions checks against the current base with no bypass actor.
-The publisher also requires every created or reused Release's authoritative
-REST record to report `immutable: true`; metadata, publication flags, and the
-zero-asset inventory must still be exact. Version tags are then locked by the
-GitHub control and never reassigned. A retry reuses only exact, complete,
+The publisher first validates the exact successful PR-gate job inventory and
+the separate exact-SHA successful CodeQL `main` run and job inventory. It scans
+source dependencies, including frontend development dependencies, and the final
+image digest with the checksum-pinned Trivy binary, rejecting every fixed or
+unfixed high/critical finding. Immediately before building the manifest it
+re-resolves both public aliases to the exact produced image/chart digests and
+validates the strict raw SBOM schema, platform, and subject digest for both
+platforms. It uploads the manifest to a draft Release, verifies the closed
+one-asset REST inventory and downloaded bytes, and only then publishes. An
+exact zero-asset draft may resume a response-lost upload without clobber; every
+other partial/foreign state fails closed. Every
+created or reused Release must report exact immutable metadata and that exact
+manifest. Its terminal check re-fetches the immutable Release, downloads and
+compares the manifest again, then re-fetches the live tag ref and annotated
+object and binds the server-locked tag back to the exact signed source. No
+mutation follows. A weekly read-only audit repeats the Release/manifest/run/tag,
+semantic-alias/digest, signature, SLSA/SBOM, chart-source, and vulnerability
+bindings as later detection; it never substitutes for the pre-manifest alias
+and SBOM proof. Version tags are locked by the GitHub control and never reassigned. A
+retry reuses only exact, complete,
 correctly signed source state; partial or conflicting state is reported as
 burned and requires a new patch. Release publication is separate from
 deployment or promotion. See [the release governance runbook](docs/release-governance.md),

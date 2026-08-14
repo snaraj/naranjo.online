@@ -18,9 +18,10 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   SHA, creates the plain version tag, and explicitly dispatches the publisher
   definition from protected `main` without relying on recursive tag-push
   events. The dispatch carries the authoritative completed-run ID; a separate
-  read-only job validates the exact successful PR-gate push before the
-  write/packages/OIDC job can start, so a manual unmerged-source dispatch is
-  denied. Rapid merges have
+  read-only job validates the exact successful PR-gate push, its closed job
+  inventory, and the separate exact-SHA CodeQL main run/job inventory before
+  the write/packages/OIDC job can start, so manual unmerged source, aggregate
+  success with a skipped job, and stale CodeQL evidence are denied. Rapid merges have
   independent release paths; exact complete artifact state is retryable, while
   partial, foreign, or conflicting immutable state fails closed as burned.
   Both enabled owner merge modes are executable release paths: one-commit
@@ -29,8 +30,20 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   The change must remain Draft until a GET-only owner preflight proves GitHub
   immutable releases enabled plus exact GitHub-Actions-bound, strict
   current-base required checks with no ruleset bypass or update restriction.
-  Created and reused Releases must report `immutable: true` through the
-  authoritative REST record in addition to exact metadata and zero assets.
+  Source dependencies including frontend development dependencies and the final
+  image digest are scanned for high/critical vulnerabilities with a
+  checksum-pinned Trivy binary. Immediately before manifest construction, the
+  publisher re-resolves the actual image/chart aliases to the produced digests
+  and validates the strict raw two-platform SBOM schemas and subjects. Created and reused
+  Releases must bind exact metadata and one deterministic evidence manifest.
+  New publication stages a draft, verifies the manifest REST digest and bytes,
+  then publishes; a terminal REST/asset re-read binds the immutable Release,
+  manifest, and now-locked annotated tag to the exact signed source. A weekly
+  read-only audit rechecks aliases, signatures, provenance/SBOM, chart source,
+  and vulnerabilities as later detection rather than publication proof. A move between the initial tag check and Release
+  publication fails closed. Ready additionally requires the canonical
+  exact-head Main Worker bounded receipt,
+  independently of the adversarial implementation approval.
   Git/image/Release tags use one plain `vX.Y.Z`. Helm's documented exception
   stays numeric `X.Y.Z` because its OCI tag must equal valid chart SemVer.
   `tag@sha256:digest` is a deploy reference, never a tag.

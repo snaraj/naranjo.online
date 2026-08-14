@@ -13,10 +13,12 @@ import base64
 import binascii
 import copy
 import datetime as dt
+import hashlib
 import json
 import re
 import subprocess
 import sys
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -26,6 +28,8 @@ SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 EXPECTED_WORKFLOW = "PR gate"
 EXPECTED_WORKFLOW_PATH = ".github/workflows/pr-gate.yml"
+EXPECTED_CODEQL_WORKFLOW = "CodeQL"
+EXPECTED_CODEQL_WORKFLOW_PATH = ".github/workflows/codeql.yml"
 EXPECTED_PUBLISHER_PATH = ".github/workflows/release-publisher.yml"
 INTOTO_STATEMENT_TYPE = "https://in-toto.io/Statement/v1"
 SLSA_PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
@@ -42,6 +46,59 @@ REQUIRED_STATUS_CHECKS = (
     "dependency-review",
     "security",
 )
+EXPECTED_MAIN_RULE_TYPES = frozenset(
+    {
+        "creation",
+        "deletion",
+        "non_fast_forward",
+        "required_linear_history",
+        "pull_request",
+        "required_status_checks",
+        "required_signatures",
+        "code_scanning",
+        "code_quality",
+        "code_coverage",
+    }
+)
+EXPECTED_PULL_REQUEST_PARAMETERS = {
+    "required_approving_review_count": 0,
+    "dismiss_stale_reviews_on_push": False,
+    "required_reviewers": [],
+    "require_code_owner_review": False,
+    "require_last_push_approval": False,
+    "required_review_thread_resolution": True,
+    "allowed_merge_methods": ["squash", "rebase"],
+}
+EXPECTED_CODE_SCANNING_TOOLS = [
+    {
+        "tool": "CodeQL",
+        "security_alerts_threshold": "high_or_higher",
+        "alerts_threshold": "errors",
+    }
+]
+RELEASE_MANIFEST_SCHEMA = "https://naranjo.online/schemas/release-manifest/v1"
+RELEASE_MANIFEST_WORKFLOW = ".github/workflows/release-publisher.yml"
+RELEASE_MANIFEST_PLATFORMS = ["linux/amd64", "linux/arm64"]
+TRIVY_VERSION = "0.72.0"
+TRIVY_SEVERITIES = ["HIGH", "CRITICAL"]
+EXPECTED_MAIN_JOBS = {
+    "application": "success",
+    "chart": "success",
+    "container": "success",
+    "coverage-badges": "success",
+    "dependency-review": "skipped",
+    "security": "success",
+}
+EXPECTED_CODEQL_JOBS = {
+    "analyze (go, manual)": "success",
+    "analyze (javascript-typescript, none)": "success",
+}
+OCI_INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json"
+OCI_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
+OCI_EMPTY_CONFIG_MEDIA_TYPE = "application/vnd.oci.empty.v1+json"
+INTOTO_LAYER_MEDIA_TYPE = "application/vnd.in-toto+json"
+SBOM_STATEMENT_TYPE = "https://in-toto.io/Statement/v0.1"
+SBOM_PREDICATE_TYPE = "https://spdx.dev/Document"
 
 
 class ContractError(ValueError):
@@ -181,6 +238,25 @@ def _git_file(repository: Path, revision: str, path: str) -> str:
     return completed.stdout
 
 
+def _git_file_optional(repository: Path, revision: str, path: str) -> str | None:
+    completed = subprocess.run(
+        ["git", "-C", str(repository), "show", f"{revision}:{path}"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+    )
+    if completed.returncode != 0:
+        return None
+    return completed.stdout
+
+
+def _version_at(repository: Path, revision: str) -> Version | None:
+    raw = _git_file_optional(repository, revision, "VERSION")
+    return Version.parse(raw) if raw is not None else None
+
+
 def _linear_commits(repository: Path, base_sha: str, head_sha: str) -> list[str]:
     """Return every commit in one contiguous, merge-free base..head range."""
     _git(repository, "merge-base", "--is-ancestor", base_sha, head_sha)
@@ -197,6 +273,81 @@ def _linear_commits(repository: Path, base_sha: str, head_sha: str) -> list[str]
     return commits
 
 
+def _first_parent_history(repository: Path, head_sha: str) -> list[str]:
+    """Return the complete ordered mainline ending at one exact head.
+
+    The imported pre-policy history contains ordinary GitHub merge commits, so
+    the immutable historical ledger follows their first-parent mainline. New
+    release ranges remain merge-free through ``_linear_commits`` above.
+    """
+    raw = _git(repository, "rev-list", "--first-parent", "--reverse", head_sha)
+    commits = raw.splitlines() if raw else []
+    if not commits or commits[-1] != head_sha:
+        raise ContractError("release history is empty or does not end at the exact head")
+    previous: str | None = None
+    for commit in commits:
+        fields = _git(repository, "rev-list", "--parents", "-n", "1", commit).split()
+        if fields[0] != commit:
+            raise ContractError("release history commit identity is not exact")
+        if previous is None:
+            if len(fields) != 1:
+                raise ContractError("release history root must have no parent")
+        elif len(fields) < 2 or fields[1] != previous:
+            raise ContractError("release history first-parent chain is not contiguous")
+        previous = commit
+    return commits
+
+
+def _monotonic_transitions(
+    repository: Path, base_sha: str, commits: list[str]
+) -> list[tuple[str, str, Version]]:
+    """Classify every exact patch boundary and reject transient states."""
+    current = _version_at(repository, base_sha)
+    if current is None:
+        raise ContractError("release transition base must contain VERSION")
+    previous = base_sha
+    transitions: list[tuple[str, str, Version]] = []
+    for commit in commits:
+        observed = _version_at(repository, commit)
+        if observed == current:
+            previous = commit
+            continue
+        expected = Version(current.major, current.minor, current.patch + 1)
+        if observed != expected:
+            rendered = "absent" if observed is None else str(observed)
+            raise ContractError(
+                f"commit {commit} version {rendered} must remain at {current} "
+                f"or advance exactly once to {expected}"
+            )
+        transitions.append((previous, commit, expected))
+        current = expected
+        previous = commit
+    return transitions
+
+
+def _validated_history_transitions(
+    repository: Path, head_sha: str
+) -> list[tuple[str, str, Version]]:
+    """Prove every publisher-visible VERSION state on the mainline.
+
+    This standalone repository imported a trusted legacy history whose first
+    committed VERSION was 0.1.3, rather than initializing at 0.1.0. The first
+    present value is therefore the historical baseline; every later state is
+    still exhaustively constrained to retain it or advance one arithmetic
+    patch, with deletion, skip, reversion, and transient futures denied.
+    """
+    history = _first_parent_history(repository, head_sha)
+    baseline_index: int | None = None
+    for index, commit in enumerate(history):
+        if _version_at(repository, commit) is not None:
+            baseline_index = index
+            break
+    if baseline_index is None:
+        raise ContractError("release history contains no VERSION baseline")
+    baseline = history[baseline_index]
+    return _monotonic_transitions(repository, baseline, history[baseline_index + 1 :])
+
+
 def validate_transition(repository: Path, base_sha: str, head_sha: str, *, first_parent: bool) -> ReleaseIntent:
     base_sha = require_sha(base_sha, "base SHA")
     head_sha = require_sha(head_sha, "head SHA")
@@ -204,7 +355,15 @@ def validate_transition(repository: Path, base_sha: str, head_sha: str, *, first
         raise ContractError("base SHA did not resolve exactly")
     if _git(repository, "rev-parse", f"{head_sha}^{{commit}}") != head_sha:
         raise ContractError("head SHA did not resolve exactly")
-    _linear_commits(repository, base_sha, head_sha)
+    commits = _linear_commits(repository, base_sha, head_sha)
+    transitions = _monotonic_transitions(repository, base_sha, commits)
+    if len(transitions) != 1:
+        raise ContractError("release range must contain exactly one patch boundary")
+    history_transitions = _validated_history_transitions(repository, head_sha)
+    if not history_transitions or history_transitions[-1] != transitions[0]:
+        raise ContractError(
+            "release range boundary is not the exact publisher-visible boundary"
+        )
     base_version = Version.parse(_git_file(repository, base_sha, "VERSION"))
     head_files = {
         path: _git_file(repository, head_sha, path)
@@ -220,22 +379,25 @@ def validate_transition(repository: Path, base_sha: str, head_sha: str, *, first
 
 
 def discover_transition_window(repository: Path, head_sha: str) -> TransitionWindow:
-    """Recover the exact main-push range whose first commit advanced VERSION."""
+    """Recover the last boundary from the exhaustively validated mainline."""
     head_sha = require_sha(head_sha, "head SHA")
     if _git(repository, "rev-parse", f"{head_sha}^{{commit}}") != head_sha:
         raise ContractError("head SHA did not resolve exactly")
-    head_version = Version.parse(_git_file(repository, head_sha, "VERSION"))
-    cursor = head_sha
-    while True:
-        fields = _git(repository, "rev-list", "--parents", "-n", "1", cursor).split()
-        if len(fields) != 2 or fields[0] != cursor:
-            raise ContractError("could not recover one linear release boundary")
-        parent = fields[1]
-        parent_version = Version.parse(_git_file(repository, parent, "VERSION"))
-        if parent_version != head_version:
-            intent = validate_transition(repository, parent, head_sha, first_parent=True)
-            return TransitionWindow(base_sha=parent, intent=intent)
-        cursor = parent
+    transitions = _validated_history_transitions(repository, head_sha)
+    if not transitions:
+        raise ContractError("release history contains no patch boundary")
+    head_files = {
+        path: _git_file(repository, head_sha, path)
+        for path in ("VERSION", "chart/Chart.yaml", "chart/values.yaml", "CHANGELOG.md")
+    }
+    head = validate_snapshot(head_files)
+    base_sha, _transition_commit, transition_version = transitions[-1]
+    if transition_version != head.version:
+        raise ContractError("release head does not retain the last patch boundary")
+    return TransitionWindow(
+        base_sha=base_sha,
+        intent=ReleaseIntent(source_sha=head_sha, version=head.version),
+    )
 
 
 def plan_workflow_run(event: Mapping[str, object], expected_repository: str) -> str:
@@ -299,6 +461,145 @@ def validate_main_run_record(
     source_sha = require_sha(expected_source_sha, "publisher source SHA")
     if require_sha(run.get("head_sha"), "Actions run head SHA") != source_sha:
         raise ContractError("successful main run does not bind the requested source SHA")
+    return source_sha
+
+
+def validate_main_jobs_record(
+    record: Mapping[str, object],
+    *,
+    expected_run_id: int,
+    expected_source_sha: str,
+) -> str:
+    """Require the exact completed job set, not only a successful run summary."""
+    if isinstance(expected_run_id, bool) or expected_run_id <= 0:
+        raise ContractError("Actions jobs run ID must be positive")
+    source_sha = require_sha(expected_source_sha, "Actions jobs source SHA")
+    jobs = _array(record.get("jobs"), "Actions jobs")
+    total_count = record.get("total_count")
+    if isinstance(total_count, bool) or total_count != len(jobs):
+        raise ContractError("Actions jobs total_count does not equal the returned job count")
+    if len(jobs) != len(EXPECTED_MAIN_JOBS):
+        raise ContractError("successful main run does not contain the exact job count")
+
+    observed: dict[str, str] = {}
+    job_ids: set[int] = set()
+    for raw_job in jobs:
+        job = _object(raw_job, "Actions job")
+        job_id = job.get("id")
+        if isinstance(job_id, bool) or not isinstance(job_id, int) or job_id <= 0:
+            raise ContractError("Actions job ID must be a positive integer")
+        if job_id in job_ids:
+            raise ContractError("Actions jobs contain a duplicate job ID")
+        job_ids.add(job_id)
+        if job.get("run_id") != expected_run_id:
+            raise ContractError("Actions job belongs to a different run")
+        if require_sha(job.get("head_sha"), "Actions job head SHA") != source_sha:
+            raise ContractError("Actions job belongs to a different source SHA")
+        name = job.get("name")
+        if not isinstance(name, str) or name not in EXPECTED_MAIN_JOBS:
+            raise ContractError("Actions jobs contain a missing or foreign job name")
+        if name in observed:
+            raise ContractError("Actions jobs contain a duplicate job name")
+        if job.get("status") != "completed":
+            raise ContractError(f"Actions job {name!r} is not completed")
+        conclusion = job.get("conclusion")
+        if conclusion != EXPECTED_MAIN_JOBS[name]:
+            raise ContractError(
+                f"Actions job {name!r} conclusion must equal "
+                f"{EXPECTED_MAIN_JOBS[name]!r}"
+            )
+        observed[name] = conclusion
+    if observed != EXPECTED_MAIN_JOBS:
+        raise ContractError("successful main run job inventory is not exact")
+    return source_sha
+
+
+def classify_codeql_run_record(
+    record: Mapping[str, object],
+    *,
+    expected_repository: str,
+    expected_source_sha: str,
+) -> int | None:
+    """Resolve exactly one CodeQL push run for the authorized main SHA."""
+    source_sha = require_sha(expected_source_sha, "CodeQL source SHA")
+    runs = _array(record.get("workflow_runs"), "CodeQL workflow runs")
+    total_count = record.get("total_count")
+    if isinstance(total_count, bool) or total_count != len(runs):
+        raise ContractError("CodeQL run total_count does not equal the returned run count")
+    if not runs:
+        return None
+    if len(runs) != 1:
+        raise ContractError("CodeQL exact-SHA query returned duplicate or foreign runs")
+    run = _object(runs[0], "CodeQL workflow run")
+    run_id = run.get("id")
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+        raise ContractError("CodeQL run ID must be a positive integer")
+    repository = _object(run.get("repository"), "CodeQL run repository")
+    head_repository = _object(run.get("head_repository"), "CodeQL run head repository")
+    if repository.get("full_name") != expected_repository:
+        raise ContractError("CodeQL run repository identity mismatch")
+    if head_repository.get("full_name") != expected_repository:
+        raise ContractError("CodeQL run head repository identity mismatch")
+    exact = {
+        "name": EXPECTED_CODEQL_WORKFLOW,
+        "path": EXPECTED_CODEQL_WORKFLOW_PATH,
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": source_sha,
+    }
+    for key, expected in exact.items():
+        if run.get(key) != expected:
+            raise ContractError(f"CodeQL run {key} must equal {expected!r}")
+    status = run.get("status")
+    if status in {"queued", "in_progress", "waiting", "requested", "pending"}:
+        if run.get("conclusion") is not None:
+            raise ContractError("incomplete CodeQL run already has a conclusion")
+        return None
+    if status != "completed" or run.get("conclusion") != "success":
+        raise ContractError("exact-SHA CodeQL run is not completed successfully")
+    return run_id
+
+
+def validate_codeql_jobs_record(
+    record: Mapping[str, object],
+    *,
+    expected_run_id: int,
+    expected_source_sha: str,
+) -> str:
+    """Require both exact CodeQL matrix jobs to complete successfully."""
+    if isinstance(expected_run_id, bool) or expected_run_id <= 0:
+        raise ContractError("CodeQL jobs run ID must be positive")
+    source_sha = require_sha(expected_source_sha, "CodeQL jobs source SHA")
+    jobs = _array(record.get("jobs"), "CodeQL jobs")
+    total_count = record.get("total_count")
+    if isinstance(total_count, bool) or total_count != len(jobs):
+        raise ContractError("CodeQL jobs total_count does not equal the returned job count")
+    if len(jobs) != len(EXPECTED_CODEQL_JOBS):
+        raise ContractError("CodeQL run does not contain the exact job count")
+    observed: dict[str, str] = {}
+    job_ids: set[int] = set()
+    for raw_job in jobs:
+        job = _object(raw_job, "CodeQL job")
+        job_id = job.get("id")
+        if isinstance(job_id, bool) or not isinstance(job_id, int) or job_id <= 0:
+            raise ContractError("CodeQL job ID must be positive")
+        if job_id in job_ids:
+            raise ContractError("CodeQL jobs contain a duplicate job ID")
+        job_ids.add(job_id)
+        if job.get("run_id") != expected_run_id:
+            raise ContractError("CodeQL job belongs to a different run")
+        if require_sha(job.get("head_sha"), "CodeQL job head SHA") != source_sha:
+            raise ContractError("CodeQL job belongs to a different source SHA")
+        name = job.get("name")
+        if not isinstance(name, str) or name not in EXPECTED_CODEQL_JOBS:
+            raise ContractError("CodeQL jobs contain a missing or foreign matrix identity")
+        if name in observed:
+            raise ContractError("CodeQL jobs contain a duplicate matrix identity")
+        if job.get("status") != "completed" or job.get("conclusion") != "success":
+            raise ContractError(f"CodeQL job {name!r} is not completed successfully")
+        observed[name] = "success"
+    if observed != EXPECTED_CODEQL_JOBS:
+        raise ContractError("CodeQL job inventory is not exact")
     return source_sha
 
 
@@ -369,20 +670,62 @@ def _status_check_set(value: object) -> set[tuple[str, int]]:
     return checks
 
 
+def validate_immutable_settings(settings: Mapping[str, object]) -> None:
+    """Require the authoritative repository immutable-release control."""
+    if set(settings) != {"enabled", "enforced_by_owner"}:
+        raise ContractError("immutable-release settings fields are missing or foreign")
+    if settings.get("enabled") is not True:
+        raise ContractError("GitHub immutable releases must be enabled")
+    if not isinstance(settings.get("enforced_by_owner"), bool):
+        raise ContractError("immutable-release owner-enforcement state must be boolean")
+
+
+def validate_private_vulnerability_reporting(settings: Mapping[str, object]) -> None:
+    """Require the authoritative private vulnerability reporting control."""
+    if set(settings) != {"enabled"}:
+        raise ContractError(
+            "private-vulnerability-reporting settings fields are missing or foreign"
+        )
+    if settings.get("enabled") is not True:
+        raise ContractError("GitHub private vulnerability reporting must be enabled")
+
+
 def validate_settings_receipt(receipt: Mapping[str, object], repository: str) -> None:
     """Validate the closed, value-only release-readiness receipt."""
     fields = {
+        "actions_allowed_actions",
+        "actions_can_approve_pull_request_reviews",
+        "actions_enabled",
+        "actions_sha_pinning_required",
         "allow_deletions",
         "allow_force_pushes",
         "branch",
         "bypass_actors",
+        "code_quality_severity",
+        "code_scanning_tools",
+        "default_workflow_permissions",
+        "dismiss_stale_reviews_on_push",
         "immutable_releases",
+        "maximum_code_coverage_drop",
         "merge_methods",
+        "minimum_code_coverage",
+        "private_vulnerability_reporting",
         "repository",
+        "require_code_owner_review",
+        "require_last_push_approval",
         "require_linear_history",
         "require_pull_request",
+        "required_approving_review_count",
+        "required_review_thread_resolution",
+        "required_reviewers",
+        "require_signed_commits",
         "required_status_checks",
+        "restrict_creations",
         "restrict_updates",
+        "secret_scanning",
+        "secret_scanning_non_provider_patterns",
+        "secret_scanning_push_protection",
+        "secret_scanning_validity_checks",
         "strict_status_checks",
     }
     if set(receipt) != fields:
@@ -396,19 +739,53 @@ def validate_settings_receipt(receipt: Mapping[str, object], repository: str) ->
     }
     if _status_check_set(receipt.get("required_status_checks")) != expected_checks:
         raise ContractError("required GitHub Actions checks are missing, foreign, or unbound")
+    if receipt.get("actions_allowed_actions") not in {"all", "local_only", "selected"}:
+        raise ContractError("Actions allow policy is missing or foreign")
+    if receipt.get("default_workflow_permissions") != "read":
+        raise ContractError("default workflow token permissions must be read-only")
     for field, expected in (
+        ("actions_enabled", True),
+        ("actions_sha_pinning_required", True),
+        ("actions_can_approve_pull_request_reviews", False),
         ("immutable_releases", True),
+        ("private_vulnerability_reporting", True),
         ("strict_status_checks", True),
         ("require_pull_request", True),
         ("require_linear_history", True),
+        ("require_signed_commits", True),
+        ("restrict_creations", True),
         ("allow_force_pushes", False),
         ("allow_deletions", False),
         ("restrict_updates", False),
+        ("secret_scanning", True),
+        ("secret_scanning_push_protection", True),
     ):
         if receipt.get(field) is not expected:
             raise ContractError(f"settings receipt {field} must be {expected}")
+    expected_pull_receipt = {
+        key: value
+        for key, value in EXPECTED_PULL_REQUEST_PARAMETERS.items()
+        if key != "allowed_merge_methods"
+    }
+    for field, expected in expected_pull_receipt.items():
+        if receipt.get(field) != expected:
+            raise ContractError(f"settings receipt {field} is not exact")
+    if receipt.get("code_scanning_tools") != EXPECTED_CODE_SCANNING_TOOLS:
+        raise ContractError("settings receipt code-scanning tools are not exact")
+    if receipt.get("code_quality_severity") != "errors":
+        raise ContractError("settings receipt code-quality severity is not exact")
+    if receipt.get("minimum_code_coverage") != 80:
+        raise ContractError("settings receipt minimum code coverage is not exact")
+    if receipt.get("maximum_code_coverage_drop") is not None:
+        raise ContractError("settings receipt maximum code-coverage drop is not exact")
     if receipt.get("bypass_actors") != []:
         raise ContractError("protected-main rules must have no bypass actors")
+    for field in (
+        "secret_scanning_non_provider_patterns",
+        "secret_scanning_validity_checks",
+    ):
+        if not isinstance(receipt.get(field), bool):
+            raise ContractError(f"settings receipt {field} must be boolean")
 
 
 def _select_main_ruleset_id(summaries: object, repository: str) -> int:
@@ -434,6 +811,9 @@ def build_settings_receipt(
     repository: str,
     repository_record: Mapping[str, object],
     immutable_record: Mapping[str, object],
+    private_vulnerability_record: Mapping[str, object],
+    actions_record: Mapping[str, object],
+    workflow_permissions_record: Mapping[str, object],
     ruleset_id: int,
     ruleset_record: Mapping[str, object],
 ) -> dict[str, object]:
@@ -451,10 +831,34 @@ def build_settings_receipt(
             raise ContractError(f"repository setting {field} is not boolean")
         if enabled:
             merge_methods.append(method)
-    if not isinstance(immutable_record.get("enabled"), bool) or not isinstance(
-        immutable_record.get("enforced_by_owner"), bool
-    ):
-        raise ContractError("immutable-release settings response is malformed")
+    validate_immutable_settings(immutable_record)
+    validate_private_vulnerability_reporting(private_vulnerability_record)
+
+    actions_enabled = actions_record.get("enabled")
+    actions_allowed = actions_record.get("allowed_actions")
+    actions_sha_pinning = actions_record.get("sha_pinning_required")
+    if not isinstance(actions_enabled, bool):
+        raise ContractError("Actions enabled state must be boolean")
+    if actions_allowed not in {"all", "local_only", "selected"}:
+        raise ContractError("Actions allow policy is missing or foreign")
+    if not isinstance(actions_sha_pinning, bool):
+        raise ContractError("Actions SHA-pinning state must be boolean")
+    default_permissions = workflow_permissions_record.get("default_workflow_permissions")
+    can_approve = workflow_permissions_record.get("can_approve_pull_request_reviews")
+    if default_permissions not in {"read", "write"} or not isinstance(can_approve, bool):
+        raise ContractError("default workflow permission settings are malformed")
+
+    security = _object(
+        repository_record.get("security_and_analysis"),
+        "repository security-and-analysis settings",
+    )
+
+    def security_enabled(field: str) -> bool:
+        record = _object(security.get(field), f"repository {field} setting")
+        status = record.get("status")
+        if status not in {"enabled", "disabled"}:
+            raise ContractError(f"repository {field} status is missing or foreign")
+        return status == "enabled"
 
     if (
         ruleset_record.get("id") != ruleset_id
@@ -482,11 +886,26 @@ def build_settings_receipt(
         if not isinstance(rule_type, str) or not rule_type or rule_type in rules_by_type:
             raise ContractError("Protect-Main rule types must be non-empty and unique")
         rules_by_type[rule_type] = rule
+    if set(rules_by_type) != EXPECTED_MAIN_RULE_TYPES:
+        raise ContractError("Protect-Main rule types are missing or foreign")
+    for rule_type in (
+        "creation",
+        "deletion",
+        "non_fast_forward",
+        "required_linear_history",
+        "required_signatures",
+    ):
+        if set(rules_by_type[rule_type]) != {"type"}:
+            raise ContractError(f"Protect-Main {rule_type} rule is malformed")
 
     pull_request = rules_by_type.get("pull_request")
     if pull_request is None:
         raise ContractError("Protect-Main must require pull requests")
     pull_parameters = _object(pull_request.get("parameters"), "pull-request rule parameters")
+    if set(pull_request) != {"type", "parameters"}:
+        raise ContractError("pull-request rule fields are missing or foreign")
+    if pull_parameters != EXPECTED_PULL_REQUEST_PARAMETERS:
+        raise ContractError("pull-request rule parameters are not exact")
     allowed_merge_methods = _string_set(
         pull_parameters.get("allowed_merge_methods"), "ruleset merge methods"
     )
@@ -497,9 +916,44 @@ def build_settings_receipt(
     if status_rule is None:
         raise ContractError("Protect-Main must require exact status checks")
     status_parameters = _object(status_rule.get("parameters"), "status-check rule parameters")
+    if set(status_rule) != {"type", "parameters"} or set(status_parameters) != {
+        "do_not_enforce_on_create",
+        "required_status_checks",
+        "strict_required_status_checks_policy",
+    }:
+        raise ContractError("required-status-check rule fields are missing or foreign")
     if status_parameters.get("do_not_enforce_on_create") is not False:
         raise ContractError("required checks must also apply when the ref is created")
     status_checks = _status_check_set(status_parameters.get("required_status_checks"))
+
+    code_scanning = rules_by_type["code_scanning"]
+    code_scanning_parameters = _object(
+        code_scanning.get("parameters"), "code-scanning rule parameters"
+    )
+    if (
+        set(code_scanning) != {"type", "parameters"}
+        or set(code_scanning_parameters) != {"code_scanning_tools"}
+        or code_scanning_parameters.get("code_scanning_tools")
+        != EXPECTED_CODE_SCANNING_TOOLS
+    ):
+        raise ContractError("code-scanning rule is not exact")
+    code_quality = rules_by_type["code_quality"]
+    code_quality_parameters = _object(
+        code_quality.get("parameters"), "code-quality rule parameters"
+    )
+    if (
+        set(code_quality) != {"type", "parameters"}
+        or code_quality_parameters != {"severity": "errors"}
+    ):
+        raise ContractError("code-quality rule is not exact")
+    code_coverage = rules_by_type["code_coverage"]
+    code_coverage_parameters = _object(
+        code_coverage.get("parameters"), "code-coverage rule parameters"
+    )
+    if code_coverage_parameters != {"minimum_coverage": 80, "max_coverage_drop": None} or set(
+        code_coverage
+    ) != {"type", "parameters"}:
+        raise ContractError("code-coverage rule is not exact")
 
     receipt: dict[str, object] = {
         "repository": repository,
@@ -510,15 +964,51 @@ def build_settings_receipt(
             for context, integration_id in sorted(status_checks)
         ],
         "strict_status_checks": status_parameters.get("strict_required_status_checks_policy"),
+        "actions_enabled": actions_enabled,
+        "actions_allowed_actions": actions_allowed,
+        "actions_sha_pinning_required": actions_sha_pinning,
+        "default_workflow_permissions": default_permissions,
+        "actions_can_approve_pull_request_reviews": can_approve,
         "require_pull_request": True,
+        "required_approving_review_count": pull_parameters.get(
+            "required_approving_review_count"
+        ),
+        "dismiss_stale_reviews_on_push": pull_parameters.get(
+            "dismiss_stale_reviews_on_push"
+        ),
+        "required_reviewers": pull_parameters.get("required_reviewers"),
+        "require_code_owner_review": pull_parameters.get("require_code_owner_review"),
+        "require_last_push_approval": pull_parameters.get("require_last_push_approval"),
+        "required_review_thread_resolution": pull_parameters.get(
+            "required_review_thread_resolution"
+        ),
         "require_linear_history": "required_linear_history" in rules_by_type,
+        "require_signed_commits": "required_signatures" in rules_by_type,
         "allow_force_pushes": "non_fast_forward" not in rules_by_type,
         "allow_deletions": "deletion" not in rules_by_type,
+        "restrict_creations": "creation" in rules_by_type,
         "restrict_updates": "update" in rules_by_type,
+        "code_scanning_tools": code_scanning_parameters.get("code_scanning_tools"),
+        "code_quality_severity": code_quality_parameters.get("severity"),
+        "minimum_code_coverage": code_coverage_parameters.get("minimum_coverage"),
+        "maximum_code_coverage_drop": code_coverage_parameters.get(
+            "max_coverage_drop"
+        ),
         # Do not serialize actor details or ruleset IDs. Presence alone is the
         # safety fact, and the only acceptable value is the empty set.
         "bypass_actors": [] if not bypass else ["present"],
         "immutable_releases": immutable_record.get("enabled"),
+        "private_vulnerability_reporting": private_vulnerability_record.get("enabled"),
+        "secret_scanning": security_enabled("secret_scanning"),
+        "secret_scanning_push_protection": security_enabled(
+            "secret_scanning_push_protection"
+        ),
+        "secret_scanning_non_provider_patterns": security_enabled(
+            "secret_scanning_non_provider_patterns"
+        ),
+        "secret_scanning_validity_checks": security_enabled(
+            "secret_scanning_validity_checks"
+        ),
     }
     validate_settings_receipt(receipt, repository)
     return receipt
@@ -569,6 +1059,18 @@ def observe_live_settings(repository: str) -> dict[str, object]:
         _github_api_get(f"repos/{repository}/immutable-releases"),
         "immutable-release settings",
     )
+    private_vulnerability_record = _object(
+        _github_api_get(f"repos/{repository}/private-vulnerability-reporting"),
+        "private-vulnerability-reporting settings",
+    )
+    actions_record = _object(
+        _github_api_get(f"repos/{repository}/actions/permissions"),
+        "Actions policy settings",
+    )
+    workflow_permissions_record = _object(
+        _github_api_get(f"repos/{repository}/actions/permissions/workflow"),
+        "default workflow permission settings",
+    )
     summaries = _github_api_get(f"repos/{repository}/rulesets", paginate=True)
     ruleset_id = _select_main_ruleset_id(summaries, repository)
     ruleset_record = _object(
@@ -579,6 +1081,9 @@ def observe_live_settings(repository: str) -> dict[str, object]:
         repository,
         repository_record,
         immutable_record,
+        private_vulnerability_record,
+        actions_record,
+        workflow_permissions_record,
         ruleset_id,
         ruleset_record,
     )
@@ -626,21 +1131,403 @@ def validate_tag_record(
     _same_instant(tagger.get("date"), tagger_date, "annotated tagger date")
 
 
-def validate_release_record(
-    release_record: Mapping[str, object], *, tag: str, title: str, body: str
+def _canonical_json(record: Mapping[str, object]) -> bytes:
+    return (json.dumps(record, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _require_digest(raw: object, field: str) -> str:
+    if not isinstance(raw, str) or DIGEST_RE.fullmatch(raw) is None:
+        raise ContractError(f"{field} must be sha256:<64 lowercase hex>")
+    return raw
+
+
+def _require_blob_digest(data: bytes, expected: object, field: str) -> str:
+    digest = _require_digest(expected, field)
+    computed = "sha256:" + hashlib.sha256(data).hexdigest()
+    if computed != digest:
+        raise ContractError(f"{field} does not bind the exact downloaded bytes")
+    return digest
+
+
+def _descriptor(record: object, field: str) -> Mapping[str, object]:
+    descriptor = _object(record, field)
+    if descriptor.get("mediaType") != OCI_MANIFEST_MEDIA_TYPE:
+        raise ContractError(f"{field} media type is not an OCI image manifest")
+    _require_digest(descriptor.get("digest"), f"{field} digest")
+    size = descriptor.get("size")
+    if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+        raise ContractError(f"{field} size must be a positive integer")
+    return descriptor
+
+
+def validate_sbom_index(
+    index_bytes: bytes, *, expected_image_digest: str
+) -> dict[str, dict[str, str]]:
+    """Bind exactly two platform manifests to exactly two SBOM carriers."""
+    _require_blob_digest(index_bytes, expected_image_digest, "image index digest")
+    index = _object(json.loads(index_bytes), "image index")
+    if index.get("schemaVersion") != 2 or index.get("mediaType") != OCI_INDEX_MEDIA_TYPE:
+        raise ContractError("image SBOM carrier must be an OCI schema-2 index")
+    manifests = _array(index.get("manifests"), "image index manifests")
+    if len(manifests) != len(RELEASE_MANIFEST_PLATFORMS) * 2:
+        raise ContractError("image index must contain exactly two images and two attestations")
+
+    subjects: dict[str, str] = {}
+    attestations_by_subject: dict[str, str] = {}
+    descriptor_digests: set[str] = set()
+    for position, raw_descriptor in enumerate(manifests):
+        descriptor = _descriptor(raw_descriptor, f"image index descriptor {position}")
+        digest = _require_digest(descriptor.get("digest"), "image index descriptor digest")
+        if digest in descriptor_digests:
+            raise ContractError("image index contains a duplicate descriptor digest")
+        descriptor_digests.add(digest)
+        platform_record = _object(descriptor.get("platform"), "image index platform")
+        platform_keys = set(platform_record)
+        os_name = platform_record.get("os")
+        architecture = platform_record.get("architecture")
+        annotations = descriptor.get("annotations")
+        if os_name == "linux" and architecture in {"amd64", "arm64"}:
+            if platform_keys != {"os", "architecture"} or annotations is not None:
+                raise ContractError("image platform descriptor shape is not exact")
+            platform = f"linux/{architecture}"
+            if platform in subjects:
+                raise ContractError("image index contains a duplicate platform")
+            subjects[platform] = digest
+            continue
+        if platform_record != {"architecture": "unknown", "os": "unknown"}:
+            raise ContractError("image index contains a foreign platform")
+        annotation_record = _object(annotations, "attestation descriptor annotations")
+        if set(annotation_record) != {
+            "vnd.docker.reference.digest",
+            "vnd.docker.reference.type",
+        }:
+            raise ContractError("attestation descriptor annotation set is not exact")
+        if annotation_record.get("vnd.docker.reference.type") != "attestation-manifest":
+            raise ContractError("image index descriptor is not an attestation carrier")
+        subject = _require_digest(
+            annotation_record.get("vnd.docker.reference.digest"),
+            "attestation subject digest",
+        )
+        if subject in attestations_by_subject:
+            raise ContractError("image index contains a duplicate attestation carrier")
+        attestations_by_subject[subject] = digest
+
+    if set(subjects) != set(RELEASE_MANIFEST_PLATFORMS):
+        raise ContractError("image index platform set is not exact")
+    if set(attestations_by_subject) != set(subjects.values()):
+        raise ContractError("attestation carriers do not bind the exact platform subjects")
+    return {
+        platform: {
+            "subject_digest": subjects[platform],
+            "attestation_digest": attestations_by_subject[subjects[platform]],
+        }
+        for platform in RELEASE_MANIFEST_PLATFORMS
+    }
+
+
+def validate_sbom_attestation_manifest(
+    manifest_bytes: bytes,
+    *,
+    expected_attestation_digest: str,
+) -> str:
+    """Return the sole SPDX statement layer from one exact OCI carrier."""
+    _require_blob_digest(
+        manifest_bytes, expected_attestation_digest, "SBOM attestation manifest digest"
+    )
+    manifest = _object(json.loads(manifest_bytes), "SBOM attestation manifest")
+    if manifest.get("schemaVersion") != 2 or manifest.get("mediaType") != OCI_MANIFEST_MEDIA_TYPE:
+        raise ContractError("SBOM carrier must be an OCI schema-2 manifest")
+    config = _object(manifest.get("config"), "SBOM carrier config")
+    if config.get("mediaType") != OCI_EMPTY_CONFIG_MEDIA_TYPE:
+        raise ContractError("SBOM carrier config media type is not exact")
+    _require_digest(config.get("digest"), "SBOM carrier config digest")
+    config_size = config.get("size")
+    if isinstance(config_size, bool) or not isinstance(config_size, int) or config_size <= 0:
+        raise ContractError("SBOM carrier config size must be positive")
+
+    layers = _array(manifest.get("layers"), "SBOM carrier layers")
+    if len(layers) != 2:
+        raise ContractError("SBOM carrier must contain exactly one provenance and one SBOM layer")
+    expected_predicates = {SLSA_PREDICATE_TYPE, SBOM_PREDICATE_TYPE}
+    observed: dict[str, str] = {}
+    for position, raw_layer in enumerate(layers):
+        layer = _object(raw_layer, f"SBOM carrier layer {position}")
+        if layer.get("mediaType") != INTOTO_LAYER_MEDIA_TYPE:
+            raise ContractError("SBOM carrier layer media type is not in-toto JSON")
+        layer_digest = _require_digest(layer.get("digest"), "SBOM carrier layer digest")
+        layer_size = layer.get("size")
+        if isinstance(layer_size, bool) or not isinstance(layer_size, int) or layer_size <= 0:
+            raise ContractError("SBOM carrier layer size must be positive")
+        annotations = _object(layer.get("annotations"), "SBOM carrier layer annotations")
+        if set(annotations) != {"in-toto.io/predicate-type"}:
+            raise ContractError("SBOM carrier layer annotations are not exact")
+        predicate_type = annotations.get("in-toto.io/predicate-type")
+        if predicate_type not in expected_predicates or predicate_type in observed:
+            raise ContractError("SBOM carrier predicate set is duplicate or foreign")
+        observed[predicate_type] = layer_digest
+    if set(observed) != expected_predicates:
+        raise ContractError("SBOM carrier predicate set is incomplete")
+    return observed[SBOM_PREDICATE_TYPE]
+
+
+def validate_sbom_statement(
+    statement_bytes: bytes,
+    *,
+    expected_layer_digest: str,
+    image: str,
+    expected_subject_digest: str,
+    platform: str,
 ) -> None:
-    """Verify exact immutable GitHub Release metadata and a closed empty asset set."""
+    """Validate one raw BuildKit SPDX statement and its platform subject."""
+    _require_blob_digest(statement_bytes, expected_layer_digest, "SBOM statement layer digest")
+    if platform not in RELEASE_MANIFEST_PLATFORMS:
+        raise ContractError("SBOM statement platform is not required")
+    if not re.fullmatch(r"ghcr\.io/[a-z0-9_.-]+(?:/[a-z0-9_.-]+)+", image):
+        raise ContractError("SBOM statement image repository is malformed")
+    subject_digest = _require_digest(expected_subject_digest, "SBOM subject digest")
+    statement = _object(json.loads(statement_bytes), "SBOM statement")
+    if set(statement) != {"_type", "subject", "predicateType", "predicate"}:
+        raise ContractError("SBOM statement top-level schema is not exact")
+    if statement.get("_type") != SBOM_STATEMENT_TYPE:
+        raise ContractError("SBOM statement type is not exact")
+    if statement.get("predicateType") != SBOM_PREDICATE_TYPE:
+        raise ContractError("SBOM predicate type is not exact")
+    subjects = _array(statement.get("subject"), "SBOM statement subjects")
+    if len(subjects) != 1:
+        raise ContractError("SBOM statement must contain exactly one subject")
+    subject = _object(subjects[0], "SBOM statement subject")
+    if set(subject) != {"name", "digest"}:
+        raise ContractError("SBOM statement subject schema is not exact")
+    name = subject.get("name")
+    if not isinstance(name, str):
+        raise ContractError("SBOM statement subject name is absent")
+    parsed_name = urllib.parse.urlsplit(name)
+    expected_prefix = f"docker/{image}@"
+    if (
+        parsed_name.scheme != "pkg"
+        or not parsed_name.path.startswith(expected_prefix)
+        or len(parsed_name.path) <= len(expected_prefix)
+        or parsed_name.fragment
+        or urllib.parse.parse_qs(parsed_name.query, strict_parsing=True)
+        != {"platform": [platform]}
+    ):
+        raise ContractError("SBOM subject name does not bind the exact image and platform")
+    subject_digests = _object(subject.get("digest"), "SBOM statement subject digest set")
+    if subject_digests != {"sha256": subject_digest[len("sha256:") :]}:
+        raise ContractError("SBOM statement subject digest is not exact")
+
+    predicate = _object(statement.get("predicate"), "SPDX predicate")
+    for key, expected in (
+        ("SPDXID", "SPDXRef-DOCUMENT"),
+        ("dataLicense", "CC0-1.0"),
+        ("spdxVersion", "SPDX-2.3"),
+    ):
+        if predicate.get(key) != expected:
+            raise ContractError(f"SPDX predicate {key} is not exact")
+    for key in ("name", "documentNamespace"):
+        value = predicate.get(key)
+        if not isinstance(value, str) or not value:
+            raise ContractError(f"SPDX predicate {key} is absent")
+    if not str(predicate["documentNamespace"]).startswith("https://"):
+        raise ContractError("SPDX document namespace is not HTTPS")
+    creation = _object(predicate.get("creationInfo"), "SPDX creationInfo")
+    if not isinstance(creation.get("created"), str) or not creation.get("created"):
+        raise ContractError("SPDX creation time is absent")
+    creators = _array(creation.get("creators"), "SPDX creators")
+    if not creators or any(not isinstance(value, str) or not value for value in creators):
+        raise ContractError("SPDX creators are malformed")
+    packages = _array(predicate.get("packages"), "SPDX packages")
+    for raw_package in packages:
+        package = _object(raw_package, "SPDX package")
+        for key in ("SPDXID", "name", "downloadLocation"):
+            if not isinstance(package.get(key), str) or not package.get(key):
+                raise ContractError(f"SPDX package {key} is malformed")
+        if not isinstance(package.get("filesAnalyzed"), bool):
+            raise ContractError("SPDX package filesAnalyzed must be boolean")
+    relationships = _array(predicate.get("relationships"), "SPDX relationships")
+    for raw_relationship in relationships:
+        relationship = _object(raw_relationship, "SPDX relationship")
+        for key in ("spdxElementId", "relationshipType", "relatedSpdxElement"):
+            if not isinstance(relationship.get(key), str) or not relationship.get(key):
+                raise ContractError(f"SPDX relationship {key} is malformed")
+    if "files" in predicate:
+        _array(predicate.get("files"), "SPDX files")
+
+
+def build_release_manifest(
+    *,
+    repository: str,
+    source_sha: str,
+    main_run_id: int,
+    version: str,
+    image: str,
+    image_digest: str,
+    chart: str,
+    chart_digest: str,
+) -> dict[str, object]:
+    """Build the one canonical, deterministic publication evidence asset."""
+    if not re.fullmatch(r"[a-z0-9_.-]+/[a-z0-9_.-]+", repository):
+        raise ContractError("release manifest repository is malformed")
+    source_sha = require_sha(source_sha, "release manifest source SHA")
+    if isinstance(main_run_id, bool) or main_run_id <= 0:
+        raise ContractError("release manifest main run ID must be positive")
+    parsed_version = Version.parse(version)
+    expected_image = f"ghcr.io/{repository}"
+    owner, name = repository.split("/", 1)
+    expected_chart = f"ghcr.io/{owner}/charts/{name}"
+    if image != expected_image or chart != expected_chart:
+        raise ContractError("release manifest artifact repositories are not canonical")
+    image_digest = _require_digest(image_digest, "release manifest image digest")
+    chart_digest = _require_digest(chart_digest, "release manifest chart digest")
+    identity = (
+        f"https://github.com/{repository}/{RELEASE_MANIFEST_WORKFLOW}"
+        "@refs/heads/main"
+    )
+    policy = {
+        "scanner": "trivy",
+        "scanner_version": TRIVY_VERSION,
+        "severities": list(TRIVY_SEVERITIES),
+        "ignore_unfixed": False,
+        "result": "pass",
+    }
+    return {
+        "schema": RELEASE_MANIFEST_SCHEMA,
+        "repository": repository,
+        "source_sha": source_sha,
+        "main_run_id": main_run_id,
+        "release": {"version": str(parsed_version), "tag": parsed_version.tag},
+        "publisher": {
+            "workflow": RELEASE_MANIFEST_WORKFLOW,
+            "ref": "refs/heads/main",
+        },
+        "artifacts": {
+            "image": {
+                "repository": image,
+                "tag": parsed_version.tag,
+                "digest": image_digest,
+                "platforms": RELEASE_MANIFEST_PLATFORMS,
+                "signature_identity": identity,
+                "provenance": "slsa-v1-per-platform",
+            },
+            "chart": {
+                "repository": chart,
+                "tag": str(parsed_version),
+                "digest": chart_digest,
+                "signature_identity": identity,
+            },
+        },
+        "vulnerability_scans": {
+            "source": {**copy.deepcopy(policy), "target": source_sha, "main_run_id": main_run_id},
+            "image": {**copy.deepcopy(policy), "target": f"{image}@{image_digest}"},
+        },
+    }
+
+
+def validate_release_manifest_record(
+    manifest: Mapping[str, object],
+    *,
+    repository: str,
+    source_sha: str,
+    main_run_id: int,
+    version: str,
+    image: str,
+    image_digest: str,
+    chart: str,
+    chart_digest: str,
+) -> None:
+    expected = build_release_manifest(
+        repository=repository,
+        source_sha=source_sha,
+        main_run_id=main_run_id,
+        version=version,
+        image=image,
+        image_digest=image_digest,
+        chart=chart,
+        chart_digest=chart_digest,
+    )
+    if manifest != expected:
+        raise ContractError("release manifest is not the exact canonical evidence record")
+
+
+def build_release_notes(manifest: Mapping[str, object]) -> str:
+    """Render immutable Release notes from an already validated manifest."""
+    release = _object(manifest.get("release"), "release manifest release")
+    artifacts = _object(manifest.get("artifacts"), "release manifest artifacts")
+    image = _object(artifacts.get("image"), "release manifest image")
+    chart = _object(artifacts.get("chart"), "release manifest chart")
+    tag = release.get("tag")
+    manifest_bytes = _canonical_json(manifest)
+    asset_name = release_manifest_asset_name(str(tag))
+    asset_digest = "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
+    return (
+        f"## naranjo.online {tag}\n\n"
+        "Immutable artifacts (deploy by digest, never by tag):\n\n"
+        "| Artifact | Reference |\n| --- | --- |\n"
+        f"| Image | `{image.get('repository')}:{image.get('tag')}@{image.get('digest')}` |\n"
+        f"| Chart | `{chart.get('repository')}:{chart.get('tag')}@{chart.get('digest')}` |\n"
+        "\nSigned with keyless Cosign by this workflow identity; SBOM and SLSA provenance "
+        "embedded in the image index.\n"
+        "That complete provenance is additionally attached as two keyless cosign "
+        "attestations (slsaprovenance1), one per architecture, with exact source, "
+        "revision, platform, image, and digest bindings.\n"
+        f"\nPublication evidence: `{asset_name}` (`{asset_digest}`).\n"
+        "\nSee CHANGELOG.md for human-readable changes.\n"
+    )
+
+
+def release_manifest_asset_name(tag: str) -> str:
+    if not re.fullmatch(r"v" + SEMVER_RE.pattern[1:-1], tag):
+        raise ContractError("release manifest tag is malformed")
+    return f"naranjo-online-{tag}-release-manifest.json"
+
+
+def _validate_release_asset(asset: Mapping[str, object], *, tag: str, manifest: bytes) -> None:
+    digest = "sha256:" + hashlib.sha256(manifest).hexdigest()
+    expected = {
+        "name": release_manifest_asset_name(tag),
+        "content_type": "application/json",
+        "state": "uploaded",
+        "size": len(manifest),
+        "digest": digest,
+    }
+    for field, value in expected.items():
+        if asset.get(field) != value:
+            raise ContractError(f"GitHub Release manifest asset {field} is not exact")
+
+
+def validate_release_record(
+    release_record: Mapping[str, object],
+    *,
+    tag: str,
+    title: str,
+    body: str,
+    manifest: bytes,
+    state: str = "exact",
+) -> None:
+    """Verify exact prepared, staged, or immutable Release metadata/evidence."""
     if release_record.get("tag_name") != tag or release_record.get("name") != title:
         raise ContractError("GitHub Release tag or title is not exact")
     actual_body = release_record.get("body")
     if not isinstance(actual_body, str) or actual_body.rstrip("\r\n") != body.rstrip("\r\n"):
         raise ContractError("GitHub Release notes are not exact")
-    if release_record.get("draft") is not False or release_record.get("prerelease") is not False:
-        raise ContractError("GitHub Release must be published and non-prerelease")
-    if release_record.get("immutable") is not True:
-        raise ContractError("GitHub Release must report authoritative immutable state")
-    if release_record.get("assets") != []:
-        raise ContractError("GitHub Release asset inventory must be exactly empty")
+    if release_record.get("prerelease") is not False:
+        raise ContractError("GitHub Release must be non-prerelease")
+    if state in {"prepared", "staged"}:
+        if release_record.get("draft") is not True or release_record.get("immutable") is not False:
+            raise ContractError("prepared/staged GitHub Release must be mutable draft state")
+    elif state == "exact":
+        if release_record.get("draft") is not False or release_record.get("immutable") is not True:
+            raise ContractError("published GitHub Release must report authoritative immutable state")
+    else:
+        raise ContractError("unknown GitHub Release validation state")
+    assets = release_record.get("assets")
+    if state == "prepared":
+        if assets != []:
+            raise ContractError("prepared GitHub Release asset inventory must be exactly empty")
+        return
+    if not isinstance(assets, list) or len(assets) != 1:
+        raise ContractError("GitHub Release asset inventory must contain exactly one manifest")
+    _validate_release_asset(_object(assets[0], "GitHub Release manifest asset"), tag=tag, manifest=manifest)
 
 
 def classify_tag_state(
@@ -669,6 +1556,7 @@ def classify_release_state(
     tag: str,
     title: str,
     body: str,
+    manifest: bytes,
 ) -> str:
     """Classify authoritative REST Release state for create/retry transactions."""
     if http_status == 404:
@@ -679,13 +1567,21 @@ def classify_release_state(
         raise ContractError(f"GitHub Release probe returned unexpected HTTP {http_status}")
     if release_record is None:
         raise ContractError("present GitHub Release state requires its REST record")
-    validate_release_record(release_record, tag=tag, title=title, body=body)
-    return "exact"
+    if release_record.get("draft") is True and release_record.get("immutable") is False:
+        state = "prepared" if release_record.get("assets") == [] else "staged"
+    elif release_record.get("draft") is False and release_record.get("immutable") is True:
+        state = "exact"
+    else:
+        raise ContractError("present GitHub Release is neither exact staged nor immutable state")
+    validate_release_record(
+        release_record, tag=tag, title=title, body=body, manifest=manifest, state=state
+    )
+    return state
 
 
 def require_publication_state(actual: str, required: str) -> str:
     """Turn an API classification into a shell-safe exact-state assertion."""
-    if required not in {"absent", "exact"} or actual != required:
+    if required not in {"absent", "prepared", "staged", "exact"} or actual != required:
         raise ContractError(f"publication state {actual!r} does not equal required {required!r}")
     return actual
 
@@ -844,6 +1740,18 @@ def _parser() -> argparse.ArgumentParser:
     main_run.add_argument("--run-id", type=int, required=True)
     main_run.add_argument("--repository", required=True)
     main_run.add_argument("--source-sha", required=True)
+    main_jobs = commands.add_parser("main-jobs-record")
+    main_jobs.add_argument("--jobs-json", type=Path, required=True)
+    main_jobs.add_argument("--run-id", type=int, required=True)
+    main_jobs.add_argument("--source-sha", required=True)
+    codeql_run = commands.add_parser("codeql-run-record")
+    codeql_run.add_argument("--runs-json", type=Path, required=True)
+    codeql_run.add_argument("--repository", required=True)
+    codeql_run.add_argument("--source-sha", required=True)
+    codeql_jobs = commands.add_parser("codeql-jobs-record")
+    codeql_jobs.add_argument("--jobs-json", type=Path, required=True)
+    codeql_jobs.add_argument("--run-id", type=int, required=True)
+    codeql_jobs.add_argument("--source-sha", required=True)
     publisher = commands.add_parser("publisher")
     publisher.add_argument("--root", type=Path, required=True)
     publisher.add_argument("--source-sha", required=True)
@@ -857,6 +1765,8 @@ def _parser() -> argparse.ArgumentParser:
     settings_receipt.add_argument("--repository", required=True)
     settings_preflight = commands.add_parser("settings-preflight")
     settings_preflight.add_argument("--repository", required=True)
+    immutable_settings = commands.add_parser("immutable-settings")
+    immutable_settings.add_argument("--settings-json", type=Path, required=True)
     tag_record = commands.add_parser("tag-record")
     tag_record.add_argument("--ref-json", type=Path, required=True)
     tag_record.add_argument("--tag-json", type=Path, required=True)
@@ -882,13 +1792,31 @@ def _parser() -> argparse.ArgumentParser:
     release_record.add_argument("--tag", required=True)
     release_record.add_argument("--title", required=True)
     release_record.add_argument("--body", type=Path, required=True)
+    release_record.add_argument("--manifest", type=Path, required=True)
     release_state = commands.add_parser("release-state")
     release_state.add_argument("--http-status", type=int, required=True)
-    release_state.add_argument("--require", choices=("absent", "exact"))
+    release_state.add_argument("--require", choices=("absent", "prepared", "staged", "exact"))
     release_state.add_argument("--release-json", type=Path)
     release_state.add_argument("--tag", required=True)
     release_state.add_argument("--title", required=True)
     release_state.add_argument("--body", type=Path, required=True)
+    release_state.add_argument("--manifest", type=Path, required=True)
+    manifest = commands.add_parser("release-manifest")
+    manifest.add_argument("--output", type=Path, required=True)
+    manifest_record = commands.add_parser("manifest-record")
+    manifest_record.add_argument("--manifest", type=Path, required=True)
+    release_notes = commands.add_parser("release-notes")
+    release_notes.add_argument("--manifest", type=Path, required=True)
+    release_notes.add_argument("--output", type=Path, required=True)
+    for manifest_command in (manifest, manifest_record, release_notes):
+        manifest_command.add_argument("--repository", required=True)
+        manifest_command.add_argument("--source-sha", required=True)
+        manifest_command.add_argument("--main-run-id", type=int, required=True)
+        manifest_command.add_argument("--version", required=True)
+        manifest_command.add_argument("--image", required=True)
+        manifest_command.add_argument("--image-digest", required=True)
+        manifest_command.add_argument("--chart", required=True)
+        manifest_command.add_argument("--chart-digest", required=True)
     statement = commands.add_parser("attestation-statement")
     statement.add_argument("--predicate", type=Path, required=True)
     statement.add_argument("--output", type=Path, required=True)
@@ -908,6 +1836,19 @@ def _parser() -> argparse.ArgumentParser:
     artifact.add_argument("--expected-evidence", type=int, required=True)
     registry = commands.add_parser("registry-state")
     registry.add_argument("--http-status", type=int, required=True)
+    sbom_index = commands.add_parser("sbom-index-record")
+    sbom_index.add_argument("--index", type=Path, required=True)
+    sbom_index.add_argument("--image-digest", required=True)
+    sbom_index.add_argument("--output", type=Path, required=True)
+    sbom_layer = commands.add_parser("sbom-layer-record")
+    sbom_layer.add_argument("--manifest", type=Path, required=True)
+    sbom_layer.add_argument("--attestation-digest", required=True)
+    sbom_statement = commands.add_parser("sbom-statement")
+    sbom_statement.add_argument("--statement", type=Path, required=True)
+    sbom_statement.add_argument("--layer-digest", required=True)
+    sbom_statement.add_argument("--image", required=True)
+    sbom_statement.add_argument("--subject-digest", required=True)
+    sbom_statement.add_argument("--platform", required=True)
     return parser
 
 
@@ -941,6 +1882,29 @@ def main(argv: list[str] | None = None) -> int:
                     expected_source_sha=args.source_sha,
                 )
             )
+        elif args.command == "main-jobs-record":
+            print(
+                validate_main_jobs_record(
+                    _read_object(args.jobs_json),
+                    expected_run_id=args.run_id,
+                    expected_source_sha=args.source_sha,
+                )
+            )
+        elif args.command == "codeql-run-record":
+            run_id = classify_codeql_run_record(
+                _read_object(args.runs_json),
+                expected_repository=args.repository,
+                expected_source_sha=args.source_sha,
+            )
+            print("pending" if run_id is None else run_id)
+        elif args.command == "codeql-jobs-record":
+            print(
+                validate_codeql_jobs_record(
+                    _read_object(args.jobs_json),
+                    expected_run_id=args.run_id,
+                    expected_source_sha=args.source_sha,
+                )
+            )
         elif args.command == "publisher":
             _emit(
                 validate_publisher(
@@ -958,6 +1922,9 @@ def main(argv: list[str] | None = None) -> int:
             print("exact")
         elif args.command == "settings-preflight":
             print(json.dumps(observe_live_settings(args.repository), indent=2, sort_keys=True))
+        elif args.command == "immutable-settings":
+            validate_immutable_settings(_read_object(args.settings_json))
+            print("exact")
         elif args.command == "tag-record":
             validate_tag_record(
                 _read_object(args.ref_json),
@@ -989,6 +1956,7 @@ def main(argv: list[str] | None = None) -> int:
                 tag=args.tag,
                 title=args.title,
                 body=args.body.read_text(encoding="utf-8"),
+                manifest=args.manifest.read_bytes(),
             )
             print("exact")
         elif args.command == "release-state":
@@ -998,8 +1966,38 @@ def main(argv: list[str] | None = None) -> int:
                 tag=args.tag,
                 title=args.title,
                 body=args.body.read_text(encoding="utf-8"),
+                manifest=args.manifest.read_bytes(),
             )
             print(require_publication_state(state, args.require) if args.require else state)
+        elif args.command in {"release-manifest", "manifest-record", "release-notes"}:
+            expected = build_release_manifest(
+                repository=args.repository,
+                source_sha=args.source_sha,
+                main_run_id=args.main_run_id,
+                version=args.version,
+                image=args.image,
+                image_digest=args.image_digest,
+                chart=args.chart,
+                chart_digest=args.chart_digest,
+            )
+            if args.command == "release-manifest":
+                args.output.write_bytes(_canonical_json(expected))
+            else:
+                validate_release_manifest_record(
+                    _read_object(args.manifest),
+                    repository=args.repository,
+                    source_sha=args.source_sha,
+                    main_run_id=args.main_run_id,
+                    version=args.version,
+                    image=args.image,
+                    image_digest=args.image_digest,
+                    chart=args.chart,
+                    chart_digest=args.chart_digest,
+                )
+                if args.command == "release-notes":
+                    args.output.write_text(build_release_notes(expected), encoding="utf-8")
+                else:
+                    print("exact")
         elif args.command == "attestation-statement":
             statement = build_attestation_statement(
                 _read_object(args.predicate),
@@ -1031,6 +2029,27 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
         elif args.command == "registry-state":
             print(classify_registry_response(args.http_status))
+        elif args.command == "sbom-index-record":
+            plan = validate_sbom_index(
+                args.index.read_bytes(), expected_image_digest=args.image_digest
+            )
+            args.output.write_bytes(_canonical_json(plan))
+        elif args.command == "sbom-layer-record":
+            print(
+                validate_sbom_attestation_manifest(
+                    args.manifest.read_bytes(),
+                    expected_attestation_digest=args.attestation_digest,
+                )
+            )
+        elif args.command == "sbom-statement":
+            validate_sbom_statement(
+                args.statement.read_bytes(),
+                expected_layer_digest=args.layer_digest,
+                image=args.image,
+                expected_subject_digest=args.subject_digest,
+                platform=args.platform,
+            )
+            print("exact")
         else:  # pragma: no cover - argparse owns this path
             raise ContractError("unknown command")
     except (ContractError, OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:

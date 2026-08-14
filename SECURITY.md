@@ -23,13 +23,22 @@ and the repository owner's read-only settings receipt proves it.
 - Images and charts are published only after successful main CI by an
   exact-SHA orchestrator that creates the version tag and explicitly dispatches
   the protected-main publisher with that completed run's ID. A read-only job
-  validates the authoritative Actions record before the privileged publisher
-  can start, so a manual/unmerged dispatch cannot mint artifacts. Readiness
+  validates the authoritative PR-gate record and exact job inventory plus the
+  separate exact-SHA successful CodeQL main run and job inventory before the
+  privileged publisher can start, so a manual/unmerged dispatch or skipped
+  security job cannot mint artifacts. Readiness
   requires strict current-base checks, no ruleset bypass actor, and GitHub
-  immutable releases enabled; the publisher then refuses a Release unless
-  REST reports `immutable: true`. The publisher
-  remains multi-arch, keyless-signed (Cosign), with SBOM and SLSA provenance.
-  Deployment consumes immutable digests.
+  immutable releases enabled. The publisher checksum-pins Trivy, rejects
+  high/critical source findings including frontend development dependencies
+  and final-image findings, re-resolves both public aliases to the produced
+  digests, validates each strict raw platform SBOM subject, and stages exactly one canonical
+  evidence manifest, verifies its REST digest and downloaded bytes before
+  publication, and terminally re-reads the immutable Release, manifest bytes,
+  and annotated tag. The publisher remains multi-arch and keyless-signed
+  (Cosign), with SBOM and SLSA provenance. A weekly read-only audit later re-binds
+  public semantic aliases to those immutable records but is not publication
+  authorization. Deployment consumes
+  immutable digests.
 - CI is secretless on pull requests; all third-party actions are pinned to
   full commit SHAs; scanners are checksum-pinned; secret scanning covers
   full history on every PR.

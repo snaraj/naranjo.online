@@ -49,7 +49,8 @@ Numbered for citation, repo-scoped, none negotiable in code:
    and free CI. No paid API, SaaS, tracker, CDN, or third-party runtime
    dependency may be introduced — the frontend stays local-origin-only.
 2. **Owner-only merges; protected history.** Work lands through PRs into
-   `main`; Samuel alone merges. An agent must NEVER merge, auto-merge, squash,
+   `main`; the repository owner alone merges. An agent must NEVER merge,
+   auto-merge, squash,
    rebase into, or push `main`; must never force-push or delete refs; and must
    stop and question even a later request to do so. Tags exist only through
    the release workflow.
@@ -90,8 +91,11 @@ Numbered for citation, repo-scoped, none negotiable in code:
     server-locked plain `vX.Y.Z` release. The explicit workflow dispatch after
     a token-created tag selects the publisher definition from protected `main`
     and carries the completed main-run ID. A separate read-only job verifies
-    the authoritative Actions record before the privileged job can start, so
-    an ordinary manual dispatch cannot publish unmerged source. Squash and
+    the authoritative Actions record, the closed successful PR-gate job
+    inventory, and the closed successful CodeQL run/job inventory for that
+    exact `main` SHA before the privileged job can start, so an ordinary
+    manual dispatch, skipped job, or aggregate-only success cannot publish.
+    Squash and
     rebase are both supported: the protected-main
     push must be one merge-free linear base-to-head range whose final snapshot
     is the exact next patch, and that complete final SHA gets one release.
@@ -100,7 +104,11 @@ Numbered for citation, repo-scoped, none negotiable in code:
     releases enabled and exact GitHub-Actions-bound required checks enforced
     against the current base with no bypass actor or update restriction; see
     `docs/release-governance.md`. Every created or reused GitHub Release must
-    also report authoritative `immutable: true`. Images deploy by digest;
+    report authoritative `immutable: true` and exactly one canonical evidence
+    manifest whose digest and downloaded bytes are verified before and after
+    publication. Before manifest construction, both just-published semantic
+    aliases are re-resolved to the produced digests and each required raw
+    per-platform SBOM statement is schema- and subject-bound. Images deploy by digest;
     `vX.Y.Z@sha256:<digest>` is a reference, never a tag, and publication is
     never deployment or promotion.
 11. **Media stays out of the control plane.** Heavy media never enters
@@ -108,9 +116,12 @@ Numbered for citation, repo-scoped, none negotiable in code:
     assets respect the documented category and size ceilings. Frontend
     URLs come from `src/lib/media.ts`; components never know hosts,
     volumes, or origins.
-12. **No secrets, no personal data.** No credential, token, private host
-    fact, or personal data ever enters this repository — including in
-    tests, fixtures, and docs.
+12. **No secrets, no noncanonical personal data.** No credential, token,
+    private host fact, private contact detail, or new personal data enters this
+    repository — including tests, fixtures, and docs. The already-public owner
+    name/noreply commit identity and license/portfolio authorship are the narrow
+    canonical attribution exceptions; never expand them or use a personal name
+    as authorization. Access control is always expressed by role.
 
 ### Deployment-provider contract
 
@@ -198,9 +209,17 @@ exact merged SHA and explicitly dispatches the protected-main publisher with
 that successful run's ID; a token-created tag is never assumed to trigger
 another push workflow. The publisher's read-only authorization job verifies
 the exact run, repository, workflow path, push event, successful conclusion,
-main branch, and source SHA before its write/packages/OIDC job can start. The
-publisher emits the signed multi-arch image, signed OCI chart, and GitHub
-Release. Histories and tags are append-only; stale concurrent PRs must resync
+main branch, source SHA, exact PR-gate job inventory, and the separate exact-SHA
+CodeQL main run and job inventory before its write/packages/OIDC job can start.
+The publisher emits the signed multi-arch image, signed OCI chart, and GitHub
+Release only after checksum-pinned high/critical source and final-image scans;
+source scanning includes frontend development dependencies. It re-resolves the
+actual image and chart aliases to the exact produced digests and validates each
+raw platform SBOM subject before sealing the manifest.
+The Release carries one deterministic manifest binding source/run, artifacts,
+aliases, signer/provenance, and scan policy/results; a weekly read-only audit
+revalidates that complete chain. Histories and tags are append-only; stale
+concurrent PRs must resync
 and take the new next patch. Deployment RESOLVES digests, never tags. The
 Helm chart/OCI tag is the documented numeric `X.Y.Z` exception because Helm
 requires its registry tag to equal valid chart SemVer; Git/image/Release tags
@@ -309,6 +328,27 @@ and the evidence comment remains on the PR as the permanent record.
 A green check, a peer approval, or a ready state is evidence, never
 authority: the owner alone merges.
 
+### Main Worker receipt
+
+The independent adversarial verdict proves the implementation at one exact
+head. Before Ready, a distinct Main Worker must separately perform one bounded
+review and post a normal PR comment in this exact shape:
+
+    HEAD: <40-lowercase-hex>
+    ROLE: MAIN-WORKER
+    VERDICT: PASS
+    SCOPE: architecture,merge-order,authority,settings,base-freshness,required-checks
+
+    - <distinct context> (Main Worker)
+
+The scope is closed to architecture,
+merge order, authority, settings, base freshness, and required checks. It does
+not repeat the line-level adversarial review, operate live infrastructure,
+change settings, grant merge authority, or substitute for the independent
+exact-head APPROVE receipt. `BLOCKED`, missing/extra fields, a different head,
+a non-distinct context, or any later author push is not a receipt; the Main
+Worker must re-run the bounded check at the new exact head.
+
 ## GitHub conventions
 
 - **Issues first.** Substantive work is tracked as a labeled issue before or
@@ -370,9 +410,10 @@ authority: the owner alone merges.
   coverage floor.
 - **Merge readiness.** Draft remains Draft until every check is successful at
   the exact head, the base equals current protected `main`, all discussions and
-  findings are resolved, a fresh exact-head APPROVE receipt exists, the next
-  patch still follows that base, the automatic release consequence is proven,
-  and the owner-observed release-control receipt proves immutable releases plus
+  findings are resolved, a fresh exact-head APPROVE receipt exists, a fresh
+  exact-head canonical `ROLE: MAIN-WORKER` / `VERDICT: PASS` receipt exists, the next patch
+  still follows that base, the automatic release consequence is proven, and
+  the owner-observed release-control receipt proves immutable releases plus
   strict exact required checks with no bypass. Only the coordinator flips
   Ready. The author and reviewer never do.
 
@@ -405,12 +446,16 @@ The complete delivery loop, each step gated by the sections around it:
 6. **Adversarial review** per the protocol above; findings are fixed on
    the same branch by the same writer and delta re-reviewed before the
    flip to ready.
-7. **Prove server release controls.** For an automatic-release change, the
+7. **Obtain the Main Worker receipt.** After the author tree and exact-head
+   adversarial verdict are final, a distinct Main Worker runs the bounded
+   canonical check defined above and posts its exact-head PASS comment. A later
+   push invalidates both exact-head receipts.
+8. **Prove server release controls.** For an automatic-release change, the
    repository owner runs the GET-only preflight in
    `docs/release-governance.md`; immutable releases, strict current-base
    required checks, and the no-bypass ruleset must be exact before Ready.
-8. **Owner comments** are handled per the owner review protocol below.
-9. **The owner merges.** Nothing you can do — approval, green checks,
+9. **Owner comments** are handled per the owner review protocol below.
+10. **The owner merges.** Nothing you can do — approval, green checks,
    ready state — substitutes for that.
 
 ## Commit identity mechanics
@@ -536,16 +581,24 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   enforced.
 - **codeql.yml** — pull requests, `main` pushes, weekly cron.
 - **release-after-main.yml** — success-only exact-SHA main-CI completion;
-  creates or verifies the annotated tag and explicitly dispatches the
-  publisher definition on protected `main` with the exact completed-run ID.
+  performs no publication mutation and explicitly dispatches the publisher
+  definition on protected `main` with the exact completed-run ID.
   The release boundary is recovered for both squash and multi-commit rebase
   pushes. Distinct main SHAs share no cancellation group.
 - **release-publisher.yml** — explicit dispatch on protected `main`; a
   read-only authorization job GETs and validates the exact successful PR-gate
-  push run before the source checkout and privileged publication job. Exact
-  source/tag/lock checks and authoritative immutable Release state remain; an
-  ordinary manual/unmerged dispatch, skip flag, or force path cannot publish
-  (requirement 10).
+  push run, its exact required job inventory, and the separate exact-SHA
+  successful CodeQL main run/jobs before the source checkout and privileged
+  publication job. Exact source/tag/lock checks, checksum-pinned vulnerability
+  gates including development dependencies, post-push image/chart alias
+  resolution, raw per-platform SBOM binding, exact one-asset manifest staging,
+  and terminal immutable Release/manifest/tag state remain;
+  an ordinary manual/unmerged dispatch, skip flag, or force path cannot
+  publish (requirement 10).
+- **release-audit.yml** — weekly and manual, read-only audit of the latest
+  immutable Release. It re-binds the successful run, annotated tag, exact
+  manifest bytes, image/chart semantic aliases and digests, signatures,
+  per-platform provenance/SBOM, chart source tree, and final image scan.
 - **GitHub event basis.** GitHub documents that `GITHUB_TOKEN`-created refs
   suppress recursive workflow events except explicit dispatch, that
   `workflow_run` fires regardless of conclusion and uses default-branch

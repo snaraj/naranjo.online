@@ -15,27 +15,81 @@ has configured and observed all of these controls:
   already published.
 - Exactly squash and rebase enabled; merge commits disabled in both repository
   settings and the active `Protect-Main` ruleset.
-- Pull requests and linear history required on `main`.
+- Pull requests and linear history required on `main`; zero platform approvals,
+  no stale-review dismissal, no required reviewers/code-owner/latest-push
+  approval, resolved review threads required, and only squash/rebase allowed.
+- Signed commits required on `main`.
 - Every required PR and CodeQL job bound to the GitHub Actions integration,
   with strict current-branch testing enabled.
-- Force pushes and deletion denied.
+- Creation, force pushes, and deletion denied.
 - No ruleset bypass actor and no `update` restriction that would require the
   repository owner to bypass the rules merely to merge a passing pull request.
+- Actions enabled with full-SHA pinning required, default workflow-token
+  permissions read-only, and workflow tokens unable to approve pull requests.
+- Private Vulnerability Reporting, secret scanning, and push protection
+  enabled. Non-provider-pattern and validity scanning are recorded as booleans
+  rather than overstated as mandatory controls.
+- Exact CodeQL merge protection (`high_or_higher` security alerts and `errors`
+  analysis alerts), Code Quality `errors`, and Code Coverage minimum 80 with no
+  maximum-drop threshold. These preview rules are retained, not silently
+  discarded to fit a narrower API.
 
 The repository owner remains the only person who chooses squash or rebase and
 performs the merge. The settings receipt grants no merge authority.
 
 ## Publication authority
 
-The token-created annotated tag does not trigger a recursive push workflow.
-The successful-main orchestrator therefore dispatches `release-publisher.yml`
-on protected `main`, never on the new tag, and passes both the exact source SHA
-and the authoritative completed PR-gate run ID. The publisher first runs an
-unprivileged authorization job with only Actions/content read access. That job
+The successful-main orchestrator dispatches `release-publisher.yml` on
+protected `main` and passes both the exact source SHA and the authoritative
+completed PR-gate run ID. It creates no tag, registry object, Release, or other
+publication state. The publisher first runs an unprivileged authorization job
+with only Actions/content read access. That job
 GETs the run by ID and requires the exact repository and head repository,
 workflow name and path, `push` event, completed/success state, `main` branch,
-and source SHA. Only its exact output can unlock the separate
-contents-write/packages-write/OIDC publication job.
+and source SHA. It also GETs the exact run's complete job inventory and requires
+exactly successful `application`, `chart`, `container`, `coverage-badges`, and
+`security` jobs plus the context-appropriate skipped `dependency-review` job.
+Workflow-level success alone is insufficient. In the same bounded authorization
+window it resolves the separate `codeql.yml` `push` run for that exact source
+SHA, then requires exactly the two completed/success matrix jobs `analyze (go,
+manual)` and `analyze (javascript-typescript, none)`. Missing, duplicate,
+foreign, skipped, failed, cancelled, wrong-SHA, or still-pending records fail
+closed before publication authority exists.
+
+Before any tag, registry, or Release side effect, a separate
+`immutable_settings` job enters the `platform-release` environment. The
+environment must use custom selected-branch policy exactly `main`, never the
+broader protected-branches mode. The job mints one short-lived repository-only
+GitHub App token from environment variable `PLATFORM_RELEASE_APP_ID` and
+environment secret `PLATFORM_RELEASE_APP_PRIVATE_KEY`, with Administration
+read as its only requested permission. The action masks and revokes the token;
+only the one authoritative GET-only settings-preflight step receives it, named
+`IMMUTABLE_SETTINGS_TOKEN`. That step reads the repository, immutable/PVR,
+Actions/workflow, security, and complete ruleset endpoints below. No output
+carries it into the separate publisher job. That publisher depends on both
+read-only jobs, uses only its ordinary
+short-lived `GITHUB_TOKEN` for contents/packages/OIDC publication, and cannot
+start when the settings GET is denied, malformed, or disabled.
+
+Owner-observed state on 2026-08-14 proves that `platform-release` exists with
+`protected_branches: false`, `custom_branch_policies: true`, and exactly one
+branch policy `{name: main, type: branch}`. It currently has zero variables and
+zero secrets, so App-backed publication remains technically blocked until the
+owner provisions those two frozen names. This repository contains no
+credential value and grants no authority to provision one.
+
+The same owner-observed transaction proves immutable releases enabled, Actions
+full-SHA pinning enabled, Actions otherwise enabled/allowed-all unchanged, and
+Private Vulnerability Reporting enabled. Those closed controls do not override
+the missing App names or the inexact ruleset below; the PR remains Draft.
+
+The owner-observed `Protect-Main` ruleset is still inexact: it has a bypass,
+an update restriction, merge commits in its pull-request rule, unresolved
+threads allowed, and no required-status-check rule. GitHub's public REST and
+GraphQL mutation schemas cannot currently represent the existing preview Code
+Quality and Code Coverage inputs, so an API update was rejected before
+mutation. Preserving those controls while correcting the ruleset requires a
+signed-in owner UI transaction and remains an external Ready blocker.
 
 `workflow_dispatch` remains callable through GitHub's normal interfaces, but
 callability is not publication authority: an unmerged branch, pull-request
@@ -44,11 +98,54 @@ mismatched run ID all fail before a privileged job starts. The protected-main
 workflow identity signs the resulting artifacts; the annotated tag and every
 artifact statement independently bind the authorized source SHA.
 
+The publisher verifies the complete annotated-tag REST identity before
+artifact work, but GitHub does not lock that tag until its Release becomes
+immutable. PR/main CI scans source dependencies, explicitly including frontend
+development dependencies, and the publisher scans the final image digest with
+direct checksum-verified Trivy v0.72.0, severity set exactly `HIGH,CRITICAL`,
+`ignore-unfixed=false`. After registry publication or exact reuse and immediately
+before manifest construction, the publisher re-fetches image alias `vX.Y.Z` and
+chart alias `X.Y.Z`; each response body digest, registry digest header, and the
+produced/reused expected digest must be identical. It then reads the raw OCI
+attestation carriers and SPDX in-toto statements for exactly `linux/amd64` and
+`linux/arm64`, rejecting null, malformed, duplicate, extra, foreign-platform,
+or foreign-subject payloads. The deterministic JSON
+manifest binds the source SHA, successful-main run ID, version/tag, exact
+image/chart repositories, semantic aliases and digests, two-platform signer
+and provenance contract, and both scan policies/results.
+
+New publication creates a draft Release with exactly that one manifest asset,
+requires the closed REST asset metadata/digest, downloads and compares the
+bytes, and only then publishes the draft. An exact zero-asset `prepared` draft
+is the sole recoverable response-loss state: the publisher uploads without
+clobber, re-reads the one-asset `staged` state, and continues. Existing,
+response-lost, and concurrent-winner paths may resume only from those exact
+states. The terminal step
+re-fetches the authoritative `immutable: true` Release, revalidates the closed
+one-asset inventory, downloads and compares the manifest again, and then
+re-fetches both live tag records. It binds ref type/object SHA, tag, source
+commit, message, tagger identity, and tagger instant to the signed source one
+last time. No mutation follows. A moved, lightweight, missing, foreign,
+malformed, response-lost, or byte-mismatched record fails closed even if the
+immutable Release has already exposed the race.
+
+`release-audit.yml` runs weekly and manually with contents/packages read only.
+For the latest Release it repeats the exact Release/manifest/successful-run/tag
+bindings; resolves image `vX.Y.Z` and chart `X.Y.Z` aliases and requires the
+manifest digests; verifies both Cosign identities, the exact two-platform SLSA
+and strict raw SBOM set, the chart archive against the release source tree, and
+the final image vulnerability policy including development dependencies. This
+scheduled detection is defense in depth, never a substitute for the post-push
+pre-manifest alias/SBOM proof. It has no settings App token, OIDC, or publication
+method.
+
 ## Read-only authoritative preflight
 
 The preflight uses `gh api --method GET` only, with GitHub REST API version
-`2026-03-10`. It reads the repository settings, immutable-release setting,
-ruleset inventory, and the one active repository-owned `Protect-Main` ruleset.
+`2026-03-10`. It reads repository/security-analysis settings, immutable-release
+and `/private-vulnerability-reporting` settings, Actions policy, default
+workflow permissions, the exhaustive ruleset inventory, and the one active
+repository-owned `Protect-Main` ruleset.
 It does not create, update, or delete a setting, ref, Release, package, or other
 resource. An authentication or schema error is a denial.
 
@@ -75,15 +172,38 @@ The exact successful receipt is:
 
 ```json
 {
+  "actions_allowed_actions": "all",
+  "actions_can_approve_pull_request_reviews": false,
+  "actions_enabled": true,
+  "actions_sha_pinning_required": true,
   "allow_deletions": false,
   "allow_force_pushes": false,
   "branch": "main",
   "bypass_actors": [],
+  "code_quality_severity": "errors",
+  "code_scanning_tools": [
+    {
+      "alerts_threshold": "errors",
+      "security_alerts_threshold": "high_or_higher",
+      "tool": "CodeQL"
+    }
+  ],
+  "default_workflow_permissions": "read",
+  "dismiss_stale_reviews_on_push": false,
   "immutable_releases": true,
+  "maximum_code_coverage_drop": null,
   "merge_methods": ["rebase", "squash"],
+  "minimum_code_coverage": 80,
+  "private_vulnerability_reporting": true,
   "repository": "snaraj/naranjo.online",
+  "require_code_owner_review": false,
+  "require_last_push_approval": false,
   "require_linear_history": true,
   "require_pull_request": true,
+  "required_approving_review_count": 0,
+  "required_review_thread_resolution": true,
+  "required_reviewers": [],
+  "require_signed_commits": true,
   "required_status_checks": [
     {"context": "analyze (go, manual)", "integration_id": 15368},
     {"context": "analyze (javascript-typescript, none)", "integration_id": 15368},
@@ -93,7 +213,12 @@ The exact successful receipt is:
     {"context": "dependency-review", "integration_id": 15368},
     {"context": "security", "integration_id": 15368}
   ],
+  "restrict_creations": true,
   "restrict_updates": false,
+  "secret_scanning": true,
+  "secret_scanning_non_provider_patterns": false,
+  "secret_scanning_push_protection": true,
+  "secret_scanning_validity_checks": false,
   "strict_status_checks": true
 }
 ```
@@ -101,8 +226,27 @@ The exact successful receipt is:
 Missing, extra, duplicated, name-only, foreign-integration, inverted, stale, or
 bypass-bearing state fails closed. A successful receipt is necessary but not
 sufficient for Ready: exact-head CI, current base, resolved findings, and a
-fresh independent approval are still required. The coordinator alone changes
-the Draft/Ready state, and the repository owner alone merges.
+fresh independent approval are still required.
+
+The separate Main Worker gate in `AGENTS.md` is also load-bearing for Ready.
+After the final author push and exact-head adversarial approval, the distinct
+Main Worker posts one normal PR comment bound to the same head in this exact
+shape:
+
+```text
+HEAD: <40-lowercase-hex>
+ROLE: MAIN-WORKER
+VERDICT: PASS
+SCOPE: architecture,merge-order,authority,settings,base-freshness,required-checks
+
+- <distinct context> (Main Worker)
+```
+
+That bounded receipt covers architecture, merge order, authority, settings,
+base freshness, and required checks; it is not another implementation review
+or merge authorization. A later push invalidates both exact-head receipts.
+The coordinator alone changes the Draft/Ready state, and the repository owner
+alone merges.
 
 GitHub documents the immutable-release control and its protected tag/asset
 behavior in [Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases),
