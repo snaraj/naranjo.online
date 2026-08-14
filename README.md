@@ -59,8 +59,11 @@ Every protected-main merge publishes exactly one patch release after the
 merged SHA's PR gate succeeds. The merged source carries numeric `X.Y.Z` in
 `VERSION`, chart `version`, `appVersion`, and the dated changelog heading, and
 exact plain `vX.Y.Z` in the image tag. Automation creates that plain tag at the
-exact SHA and explicitly dispatches the tag-bound publisher. Both enabled
-merge modes are covered: a squash is one linear commit, while a rebase may
+exact SHA and explicitly dispatches the publisher definition from protected
+`main` with the authoritative successful-run ID. A separate read-only job
+validates that exact PR-gate push run before the write/packages/OIDC job can
+start; a manual dispatch for an unmerged branch fails before publication.
+Both enabled merge modes are covered: a squash is one linear commit, while a rebase may
 install several commits in one push; either produces one release for the exact
 final source tree. The publisher builds or verifies:
 

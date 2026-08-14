@@ -1,11 +1,11 @@
 name: Release publisher
 
 # Publishes ONLY when the successful-main orchestrator explicitly dispatches
-# this workflow ON the semantic-version tag that GitHub locks when the Release
-# is published, with its exact source SHA. A token-created tag does not
-# recursively trigger push workflows, so
-# workflow_dispatch is the required machine-to-machine event, not an operator
-# bypass.  There is no skip flag, force path, or way to reassign a tag.
+# the workflow definition on protected main with its exact source SHA and
+# completed PR-gate run ID. A token-created tag does not recursively trigger
+# push workflows, so workflow_dispatch is the explicit handoff, but an ordinary
+# manual dispatch cannot cross the read-only successful-main authorization job.
+# There is no skip flag, force path, or way to reassign a tag.
 on:
   workflow_dispatch:
     inputs:
@@ -13,11 +13,15 @@ on:
         description: Exact successful main-CI commit bound to this tag
         required: true
         type: string
+      main_run_id:
+        description: Authoritative successful PR-gate push run on main
+        required: true
+        type: string
 
 permissions: {}
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.source_sha }}
   cancel-in-progress: false
 
 env:
@@ -25,37 +29,78 @@ env:
   CHART: ghcr.io/snaraj/charts/naranjo-online
 
 jobs:
+  authorize:
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      source_sha: ${{ steps.main_run.outputs.source_sha }}
+    steps:
+      - name: Check out protected publisher authority
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: authority
+          persist-credentials: false
+      - name: Bind dispatch to one successful protected-main PR gate
+        id: main_run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAIN_RUN_ID: ${{ inputs.main_run_id }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "${MAIN_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+          run_json="${RUNNER_TEMP}/publisher-main-run.json"
+          gh api --method GET \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${MAIN_RUN_ID}" > "${run_json}"
+          authorized_sha="$(python3 -I -B authority/scripts/ci/release_contract.py \
+            main-run-record --run-json "${run_json}" \
+            --run-id "${MAIN_RUN_ID}" --repository "${GITHUB_REPOSITORY}" \
+            --source-sha "${SOURCE_SHA}")"
+          test "${authorized_sha}" = "${SOURCE_SHA}"
+          printf 'source_sha=%s\n' "${authorized_sha}" >> "${GITHUB_OUTPUT}"
+
   publish:
+    needs: authorize
+    if: needs.authorize.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       packages: write
       id-token: write
+    env:
+      SOURCE_SHA: ${{ needs.authorize.outputs.source_sha }}
     steps:
-      - name: Check out repository
+      - name: Check out the authorized successful-main source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.authorize.outputs.source_sha }}
           persist-credentials: false
           fetch-depth: 0
-      - name: Bind dispatch, tag ref, source SHA, and committed locks
-        env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
+      - name: Bind protected workflow, authorized checkout, and committed locks
         run: |
           set -euo pipefail
+          checkout_sha="$(git rev-parse HEAD)"
           python3 -I -B scripts/ci/release_contract.py publisher \
             --root . \
             --source-sha "${SOURCE_SHA}" \
-            --github-sha "${GITHUB_SHA}" \
+            --checkout-sha "${checkout_sha}" \
             --ref "${GITHUB_REF}" \
-            --event-name "${GITHUB_EVENT_NAME}"
+            --event-name "${GITHUB_EVENT_NAME}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --workflow-ref "${GITHUB_WORKFLOW_REF}"
       - name: Install checksum-verified tools
         run: ./scripts/ci/install-tools.sh
       - name: Enforce numeric VERSION and plain-v release locks
         id: release
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
           IFS= read -r version < VERSION
+          tag="v${version}"
           chart_version="$(awk '/^version:/{print $2; exit}' chart/Chart.yaml)"
           app_version="$(awk '/^appVersion:/{gsub(/"/,"",$2); print $2; exit}' chart/Chart.yaml)"
           test "${tag}" = "v${version}"
@@ -66,7 +111,6 @@ jobs:
       - name: Verify the complete annotated tag identity
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
@@ -175,7 +219,7 @@ jobs:
             if ! python3 -I -B scripts/ci/release_contract.py attestation-statement \
               --predicate "${predicate}" --output "${statement}" \
               --image "${IMAGE}" --digest "${digest}" --source "${source}" \
-              --revision "${GITHUB_SHA}" --platform "${platform}"; then
+              --revision "${SOURCE_SHA}" --platform "${platform}"; then
               source_match=false
               continue
             fi
@@ -185,7 +229,7 @@ jobs:
           signature_match=false
           verified_count=0
           verified="${RUNNER_TEMP}/verified-existing-attestations.json"
-          identity="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/release-publisher.yml@${GITHUB_REF}"
+          identity="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/release-publisher.yml@refs/heads/main"
           if [ "${source_match}" = true ] && \
              cosign verify \
               --certificate-identity "${identity}" \
@@ -232,7 +276,7 @@ jobs:
             org.opencontainers.image.description=Go service embedding the built Svelte frontend for naranjo.online
             org.opencontainers.image.source=https://github.com/snaraj/naranjo.online
             org.opencontainers.image.version=${{ steps.release.outputs.version }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ needs.authorize.outputs.source_sha }}
             org.opencontainers.image.licenses=MIT
           provenance: mode=max
           sbom: true
@@ -290,7 +334,7 @@ jobs:
             python3 -I -B scripts/ci/release_contract.py attestation-statement \
               --predicate "${predicate}" --output "${statement}" \
               --image "${IMAGE}" --digest "${DIGEST}" --source "${source}" \
-              --revision "${GITHUB_SHA}" --platform "${platform}"
+              --revision "${SOURCE_SHA}" --platform "${platform}"
             statements+=("${statement}")
             expected_attestations+=(--expected "${platform}=${statement}")
           done
@@ -299,7 +343,7 @@ jobs:
           for statement in "${statements[@]}"; do
             cosign attest --yes --statement "${statement}" "${IMAGE}@${DIGEST}"
           done
-          identity="${source}/.github/workflows/release-publisher.yml@${GITHUB_REF}"
+          identity="${source}/.github/workflows/release-publisher.yml@refs/heads/main"
           verified="${RUNNER_TEMP}/verified-new-attestations.json"
           cosign verify \
             --certificate-identity "${identity}" \
@@ -368,7 +412,7 @@ jobs:
           computed="sha256:$(sha256sum "${manifest}" | awk '{print $1}')"
           test "${computed}" = "${digest}"
           signature_match=false
-          identity="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/release-publisher.yml@${GITHUB_REF}"
+          identity="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/release-publisher.yml@refs/heads/main"
           if cosign verify \
               --certificate-identity "${identity}" \
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \

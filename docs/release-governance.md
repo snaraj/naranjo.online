@@ -25,6 +25,25 @@ has configured and observed all of these controls:
 The repository owner remains the only person who chooses squash or rebase and
 performs the merge. The settings receipt grants no merge authority.
 
+## Publication authority
+
+The token-created annotated tag does not trigger a recursive push workflow.
+The successful-main orchestrator therefore dispatches `release-publisher.yml`
+on protected `main`, never on the new tag, and passes both the exact source SHA
+and the authoritative completed PR-gate run ID. The publisher first runs an
+unprivileged authorization job with only Actions/content read access. That job
+GETs the run by ID and requires the exact repository and head repository,
+workflow name and path, `push` event, completed/success state, `main` branch,
+and source SHA. Only its exact output can unlock the separate
+contents-write/packages-write/OIDC publication job.
+
+`workflow_dispatch` remains callable through GitHub's normal interfaces, but
+callability is not publication authority: an unmerged branch, pull-request
+run, foreign workflow or repository, failed or incomplete run, stale SHA, and
+mismatched run ID all fail before a privileged job starts. The protected-main
+workflow identity signs the resulting artifacts; the annotated tag and every
+artifact statement independently bind the authorized source SHA.
+
 ## Read-only authoritative preflight
 
 The preflight uses `gh api --method GET` only, with GitHub REST API version

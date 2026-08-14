@@ -15,8 +15,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   semantic patch release. Pull requests (including docs and dependency
   updates) must advance the four committed source locks by exactly one patch
   from their protected base. Successful main CI is bound to its exact source
-  SHA, creates the plain version tag, and explicitly dispatches the tag-ref
-  publisher without relying on recursive tag-push events. Rapid merges have
+  SHA, creates the plain version tag, and explicitly dispatches the publisher
+  definition from protected `main` without relying on recursive tag-push
+  events. The dispatch carries the authoritative completed-run ID; a separate
+  read-only job validates the exact successful PR-gate push before the
+  write/packages/OIDC job can start, so a manual unmerged-source dispatch is
+  denied. Rapid merges have
   independent release paths; exact complete artifact state is retryable, while
   partial, foreign, or conflicting immutable state fails closed as burned.
   Both enabled owner merge modes are executable release paths: one-commit

@@ -52,6 +52,21 @@ def event(sha: str) -> dict[str, object]:
     }
 
 
+def main_run_record(sha: str, run_id: int = 123) -> dict[str, object]:
+    return {
+        "id": run_id,
+        "name": "PR gate",
+        "path": ".github/workflows/pr-gate.yml",
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "head_branch": "main",
+        "head_sha": sha,
+        "repository": {"full_name": "owner/site"},
+        "head_repository": {"full_name": "owner/site"},
+    }
+
+
 def embedded_predicate(source: str, revision: str, marker: str) -> dict[str, object]:
     return {
         "buildDefinition": {
@@ -245,6 +260,76 @@ class EventTests(unittest.TestCase):
         self.assertEqual({intent.tag for intent in completion_order}, {"v0.1.10", "v0.1.11", "v0.1.12"})
         self.assertEqual(len({intent.source_sha for intent in completion_order}), 3)
         self.assertEqual(RC.ReleaseIntent(shas[0], versions[0]), RC.ReleaseIntent(shas[0], versions[0]))
+
+
+class MainRunBindingTests(unittest.TestCase):
+    SHA = "a" * 40
+
+    @staticmethod
+    def invoke(record: dict[str, object], *, run_id: int = 123, source_sha: str | None = None) -> int:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_json = Path(temporary) / "main-run.json"
+            run_json.write_text(json.dumps(record), encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return RC.main(
+                    [
+                        "main-run-record",
+                        "--run-json",
+                        str(run_json),
+                        "--run-id",
+                        str(run_id),
+                        "--repository",
+                        "owner/site",
+                        "--source-sha",
+                        source_sha or MainRunBindingTests.SHA,
+                    ]
+                )
+
+    def test_exact_authoritative_successful_main_run_is_accepted(self):
+        exact = main_run_record(self.SHA)
+        self.assertEqual(
+            RC.validate_main_run_record(
+                exact,
+                expected_repository="owner/site",
+                expected_run_id=123,
+                expected_source_sha=self.SHA,
+            ),
+            self.SHA,
+        )
+        self.assertEqual(self.invoke(exact), 0)
+
+    def test_ordinary_manual_unmerged_dispatch_is_executable_denial(self):
+        unmerged = main_run_record(self.SHA)
+        unmerged["event"] = "pull_request"
+        unmerged["head_branch"] = "ci/unmerged-source"
+        self.assertEqual(self.invoke(unmerged), 1)
+
+    def test_foreign_failed_stale_path_identity_and_id_mutants_fail(self):
+        exact = main_run_record(self.SHA)
+        mutations: list[dict[str, object]] = []
+        for path, value in (
+            (("id",), 124),
+            (("name",), "PR Gate"),
+            (("path",), ".github/workflows/other.yml"),
+            (("event",), "pull_request"),
+            (("status",), "in_progress"),
+            (("conclusion",), "failure"),
+            (("head_branch",), "release"),
+            (("head_sha",), "b" * 40),
+            (("repository", "full_name"), "attacker/site"),
+            (("head_repository", "full_name"), "attacker/site"),
+        ):
+            changed = copy.deepcopy(exact)
+            parent = changed
+            for key in path[:-1]:
+                parent = parent[key]
+            parent[path[-1]] = value
+            mutations.append(changed)
+        for index, changed in enumerate(mutations):
+            with self.subTest(record_mutation=index):
+                self.assertEqual(self.invoke(changed), 1)
+        self.assertEqual(self.invoke(exact, run_id=124), 1)
+        self.assertEqual(self.invoke(exact, source_sha="b" * 40), 1)
 
 
 class SettingsReceiptTests(unittest.TestCase):
@@ -548,16 +633,49 @@ class PublisherBindingTests(unittest.TestCase):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(contents, encoding="utf-8")
-            intent = RC.validate_publisher(root, self.SHA, self.SHA, "refs/tags/v0.1.10", "workflow_dispatch")
+            workflow_ref = "owner/site/.github/workflows/release-publisher.yml@refs/heads/main"
+            intent = RC.validate_publisher(
+                root,
+                self.SHA,
+                self.SHA,
+                "refs/heads/main",
+                "workflow_dispatch",
+                "owner/site",
+                workflow_ref,
+            )
             self.assertEqual(intent, RC.ReleaseIntent(self.SHA, RC.Version.parse("0.1.10")))
-            for source, github, ref, event_name in (
-                ("b" * 40, self.SHA, "refs/tags/v0.1.10", "workflow_dispatch"),
-                (self.SHA, "b" * 40, "refs/tags/v0.1.10", "workflow_dispatch"),
-                (self.SHA, self.SHA, "refs/tags/0.1.10", "workflow_dispatch"),
-                (self.SHA, self.SHA, "refs/tags/v0.1.10", "push"),
+            for source, checkout, ref, event_name, repository, selected_workflow in (
+                ("b" * 40, self.SHA, "refs/heads/main", "workflow_dispatch", "owner/site", workflow_ref),
+                (self.SHA, "b" * 40, "refs/heads/main", "workflow_dispatch", "owner/site", workflow_ref),
+                (self.SHA, self.SHA, "refs/tags/v0.1.10", "workflow_dispatch", "owner/site", workflow_ref),
+                (self.SHA, self.SHA, "refs/heads/main", "push", "owner/site", workflow_ref),
+                (self.SHA, self.SHA, "refs/heads/main", "workflow_dispatch", "other/site", workflow_ref),
+                (
+                    self.SHA,
+                    self.SHA,
+                    "refs/heads/main",
+                    "workflow_dispatch",
+                    "owner/site",
+                    "owner/site/.github/workflows/release-publisher.yml@refs/tags/v0.1.10",
+                ),
             ):
-                with self.subTest(source=source, github=github, ref=ref, event=event_name), self.assertRaises(RC.ContractError):
-                    RC.validate_publisher(root, source, github, ref, event_name)
+                with self.subTest(
+                    source=source,
+                    checkout=checkout,
+                    ref=ref,
+                    event=event_name,
+                    repository=repository,
+                    workflow=selected_workflow,
+                ), self.assertRaises(RC.ContractError):
+                    RC.validate_publisher(
+                        root,
+                        source,
+                        checkout,
+                        ref,
+                        event_name,
+                        repository,
+                        selected_workflow,
+                    )
 
 
 class ImmutableMetadataTests(unittest.TestCase):
@@ -1084,7 +1202,7 @@ cosign() {
                     "GHCR_PASSWORD": "fixture-password",
                     "GITHUB_SERVER_URL": "https://github.com",
                     "GITHUB_REPOSITORY": "owner/site",
-                    "GITHUB_SHA": revision,
+                    "SOURCE_SHA": revision,
                     "GITHUB_REF": "refs/tags/v0.1.10",
                     "IMAGE": "ghcr.io/owner/site",
                     "TAG": "v0.1.10",
@@ -1175,9 +1293,64 @@ class WorkflowStructureTests(unittest.TestCase):
             raise ValueError("orchestrator must verify exact tag state before reuse, after a race, and after create")
         if publisher.count("classify_release exact >/dev/null") < 3:
             raise ValueError("publisher must verify exact Release state before reuse, after a race, and after create")
+        if publisher.count("X-GitHub-Api-Version: 2026-03-10") < 2:
+            raise ValueError("publisher must version both main-run and Release REST reads")
         for forbidden in ("cosign download attestation", 'git rev-list -n 1 "${tag}"'):
             if forbidden in publisher:
                 raise ValueError(f"publisher contains unauthenticated or local-ref verifier: {forbidden}")
+
+    @staticmethod
+    def require_successful_main_privilege_boundary(orchestrator: str, publisher: str) -> None:
+        if '\n  authorize:\n' not in publisher or '\n  publish:\n' not in publisher:
+            raise ValueError("publisher must separate read-only authorization from privileged publication")
+        authorize = publisher.split('\n  authorize:\n', 1)[1].split('\n  publish:\n', 1)[0]
+        publish = publisher.split('\n  publish:\n', 1)[1]
+        for required in (
+            "actions: read",
+            "contents: read",
+            "main-run-record",
+            'actions/runs/${MAIN_RUN_ID}',
+            "authority/scripts/ci/release_contract.py",
+            "ref: ${{ github.sha }}",
+            "path: authority",
+            '--run-id "${MAIN_RUN_ID}"',
+            '--repository "${GITHUB_REPOSITORY}"',
+            '--source-sha "${SOURCE_SHA}"',
+            'test "${authorized_sha}" = "${SOURCE_SHA}"',
+            'source_sha=%s\\n',
+        ):
+            if required not in authorize:
+                raise ValueError(f"read-only main-run authorization lost: {required}")
+        for forbidden in ("contents: write", "packages: write", "id-token: write"):
+            if forbidden in authorize:
+                raise ValueError(f"authorization job gained privilege: {forbidden}")
+        for required in (
+            "needs: authorize",
+            "if: needs.authorize.result == 'success'",
+            "ref: ${{ needs.authorize.outputs.source_sha }}",
+            "fetch-depth: 0",
+            "persist-credentials: false",
+            "SOURCE_SHA: ${{ needs.authorize.outputs.source_sha }}",
+            'workflow-ref "${GITHUB_WORKFLOW_REF}"',
+            "@refs/heads/main",
+        ):
+            if required not in publish:
+                raise ValueError(f"privileged publication lost main-run dependency: {required}")
+        for required in (
+            "MAIN_RUN_ID: ${{ github.event.workflow_run.id }}",
+            "--ref main",
+            '-f main_run_id="${MAIN_RUN_ID}"',
+        ):
+            if required not in orchestrator:
+                raise ValueError(f"orchestrator lost exact main-run dispatch binding: {required}")
+        if '--ref "${TAG}"' in orchestrator:
+            raise ValueError("publisher workflow must never be selected from a mutable tag ref")
+        for required in ("main_run_id:", "source_sha:", "release-${{ inputs.source_sha }}"):
+            if required not in publisher:
+                raise ValueError(f"publisher dispatch interface lost: {required}")
+        for forbidden in ("GITHUB_SHA", "GITHUB_REF_NAME", "@${GITHUB_REF}"):
+            if forbidden in publisher:
+                raise ValueError(f"publisher retained tag-selected or event-SHA authority: {forbidden}")
 
     def test_no_distinct_main_sha_can_be_canceled_or_share_release_identity(self):
         gate = (ROOT / ".github/workflows/pr-gate.yml").read_text(encoding="utf-8")
@@ -1191,7 +1364,7 @@ class WorkflowStructureTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", publisher)
         self.assertIn("source_sha:", publisher)
         self.assertNotRegex(publisher, r"(?ms)^\s+push:\s*\n\s+tags:")
-        self.assertIn("--ref \"${TAG}\"", orchestrator)
+        self.require_successful_main_privilege_boundary(orchestrator, publisher)
         self.assertGreaterEqual(publisher.count("registry-state --http-status"), 2)
         self.assertGreaterEqual(publisher.count("--data-urlencode \"scope=repository:"), 2)
         self.assertGreaterEqual(publisher.count("docker-content-digest:"), 2)
@@ -1209,6 +1382,31 @@ class WorkflowStructureTests(unittest.TestCase):
         self.assertNotIn("targetCommitish", publisher)
         self.assertIn('gh release create "${tag}" --verify-tag', publisher)
         self.require_exact_release_wiring(orchestrator, publisher)
+        for owner, token in (
+            ("orchestrator", "MAIN_RUN_ID: ${{ github.event.workflow_run.id }}"),
+            ("orchestrator", "--ref main"),
+            ("orchestrator", '-f main_run_id="${MAIN_RUN_ID}"'),
+            ("publisher", "actions: read"),
+            ("publisher", "main-run-record"),
+            ("publisher", 'actions/runs/${MAIN_RUN_ID}'),
+            ("publisher", '--run-id "${MAIN_RUN_ID}"'),
+            ("publisher", '--repository "${GITHUB_REPOSITORY}"'),
+            ("publisher", '--source-sha "${SOURCE_SHA}"'),
+            ("publisher", 'test "${authorized_sha}" = "${SOURCE_SHA}"'),
+            ("publisher", "needs: authorize"),
+            ("publisher", "if: needs.authorize.result == 'success'"),
+            ("publisher", "ref: ${{ needs.authorize.outputs.source_sha }}"),
+            ("publisher", 'workflow-ref "${GITHUB_WORKFLOW_REF}"'),
+        ):
+            changed_orchestrator = orchestrator.replace(token, "", 1) if owner == "orchestrator" else orchestrator
+            changed_publisher = publisher.replace(token, "", 1) if owner == "publisher" else publisher
+            with self.subTest(main_run_mutation=token), self.assertRaises(ValueError):
+                self.require_successful_main_privilege_boundary(changed_orchestrator, changed_publisher)
+        with self.assertRaises(ValueError):
+            self.require_successful_main_privilege_boundary(
+                orchestrator.replace("--ref main", '--ref "${TAG}"', 1),
+                publisher,
+            )
         for owner, token in (
             ("orchestrator", "fetch-depth: 0"),
             ("orchestrator", "release-window"),
@@ -1239,7 +1437,15 @@ class WorkflowStructureTests(unittest.TestCase):
             with self.subTest(forbidden_mutation=forbidden), self.assertRaises(ValueError):
                 self.require_exact_release_wiring(orchestrator, publisher + forbidden)
         template = (ROOT / ".github/PULL_REQUEST_TEMPLATE.md").read_text(encoding="utf-8")
-        for required in ("Closes #", "Protected base", "Exact head", "Next patch release", "requires-review", "architecture sanity review"):
+        for required in (
+            "Closes #",
+            "Protected base",
+            "Exact head",
+            "Next patch release",
+            "Successful-main run binding and manual/unmerged dispatch denial",
+            "requires-review",
+            "architecture sanity review",
+        ):
             self.assertIn(required, template)
 
 

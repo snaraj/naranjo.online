@@ -26,6 +26,7 @@ SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 EXPECTED_WORKFLOW = "PR gate"
 EXPECTED_WORKFLOW_PATH = ".github/workflows/pr-gate.yml"
+EXPECTED_PUBLISHER_PATH = ".github/workflows/release-publisher.yml"
 INTOTO_STATEMENT_TYPE = "https://in-toto.io/Statement/v1"
 SLSA_PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
 DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
@@ -263,17 +264,66 @@ def plan_workflow_run(event: Mapping[str, object], expected_repository: str) -> 
     return require_sha(run.get("head_sha"), "workflow_run head SHA")
 
 
-def validate_publisher(root: Path, source_sha: str, github_sha: str, ref: str, event_name: str) -> ReleaseIntent:
+def validate_main_run_record(
+    run: Mapping[str, object],
+    *,
+    expected_repository: str,
+    expected_run_id: int,
+    expected_source_sha: str,
+) -> str:
+    """Bind a publisher request to one authoritative successful main run."""
+    if (
+        isinstance(expected_run_id, bool)
+        or not isinstance(expected_run_id, int)
+        or expected_run_id <= 0
+        or run.get("id") != expected_run_id
+    ):
+        raise ContractError("Actions run ID is not the exact positive requested run ID")
+    repository = _object(run.get("repository"), "Actions run repository")
+    head_repository = _object(run.get("head_repository"), "Actions run head repository")
+    if repository.get("full_name") != expected_repository:
+        raise ContractError("Actions run repository identity mismatch")
+    if head_repository.get("full_name") != expected_repository:
+        raise ContractError("Actions run head repository identity mismatch")
+    exact = {
+        "name": EXPECTED_WORKFLOW,
+        "path": EXPECTED_WORKFLOW_PATH,
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "head_branch": "main",
+    }
+    for key, expected in exact.items():
+        if run.get(key) != expected:
+            raise ContractError(f"Actions run {key} must equal {expected!r}")
+    source_sha = require_sha(expected_source_sha, "publisher source SHA")
+    if require_sha(run.get("head_sha"), "Actions run head SHA") != source_sha:
+        raise ContractError("successful main run does not bind the requested source SHA")
+    return source_sha
+
+
+def validate_publisher(
+    root: Path,
+    source_sha: str,
+    checkout_sha: str,
+    ref: str,
+    event_name: str,
+    repository: str,
+    workflow_ref: str,
+) -> ReleaseIntent:
     source_sha = require_sha(source_sha, "publisher source SHA")
-    github_sha = require_sha(github_sha, "publisher GitHub SHA")
+    checkout_sha = require_sha(checkout_sha, "publisher checkout SHA")
     if event_name != "workflow_dispatch":
         raise ContractError("publisher accepts only explicit workflow_dispatch")
-    if source_sha != github_sha:
-        raise ContractError("publisher source SHA does not equal checked-out tag commit")
+    if ref != "refs/heads/main":
+        raise ContractError("publisher workflow must be selected from protected main")
+    expected_workflow_ref = f"{repository}/{EXPECTED_PUBLISHER_PATH}@refs/heads/main"
+    if workflow_ref != expected_workflow_ref:
+        raise ContractError("publisher workflow identity is not protected main")
+    if source_sha != checkout_sha:
+        raise ContractError("publisher source SHA does not equal the authorized checkout")
     files = {path: (root / path).read_text(encoding="utf-8") for path in ("VERSION", "chart/Chart.yaml", "chart/values.yaml", "CHANGELOG.md")}
     intent = validate_snapshot(files)
-    if ref != f"refs/tags/{intent.tag}":
-        raise ContractError("publisher ref is not the exact plain semantic version tag")
     return ReleaseIntent(source_sha=source_sha, version=intent.version)
 
 
@@ -789,12 +839,19 @@ def _parser() -> argparse.ArgumentParser:
     event = commands.add_parser("workflow-run")
     event.add_argument("--event", type=Path, required=True)
     event.add_argument("--repository", required=True)
+    main_run = commands.add_parser("main-run-record")
+    main_run.add_argument("--run-json", type=Path, required=True)
+    main_run.add_argument("--run-id", type=int, required=True)
+    main_run.add_argument("--repository", required=True)
+    main_run.add_argument("--source-sha", required=True)
     publisher = commands.add_parser("publisher")
     publisher.add_argument("--root", type=Path, required=True)
     publisher.add_argument("--source-sha", required=True)
-    publisher.add_argument("--github-sha", required=True)
+    publisher.add_argument("--checkout-sha", required=True)
     publisher.add_argument("--ref", required=True)
     publisher.add_argument("--event-name", required=True)
+    publisher.add_argument("--repository", required=True)
+    publisher.add_argument("--workflow-ref", required=True)
     settings_receipt = commands.add_parser("settings-receipt")
     settings_receipt.add_argument("--receipt", type=Path, required=True)
     settings_receipt.add_argument("--repository", required=True)
@@ -875,8 +932,27 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "workflow-run":
             event = json.loads(args.event.read_text(encoding="utf-8"))
             print(plan_workflow_run(event, args.repository))
+        elif args.command == "main-run-record":
+            print(
+                validate_main_run_record(
+                    _read_object(args.run_json),
+                    expected_repository=args.repository,
+                    expected_run_id=args.run_id,
+                    expected_source_sha=args.source_sha,
+                )
+            )
         elif args.command == "publisher":
-            _emit(validate_publisher(args.root, args.source_sha, args.github_sha, args.ref, args.event_name))
+            _emit(
+                validate_publisher(
+                    args.root,
+                    args.source_sha,
+                    args.checkout_sha,
+                    args.ref,
+                    args.event_name,
+                    args.repository,
+                    args.workflow_ref,
+                )
+            )
         elif args.command == "settings-receipt":
             validate_settings_receipt(_read_object(args.receipt), args.repository)
             print("exact")

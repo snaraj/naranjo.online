@@ -3,7 +3,8 @@ name: Release after main CI
 # GitHub does not recursively trigger a push workflow for a tag created with
 # GITHUB_TOKEN.  This success-only workflow_run verifies the completed main
 # SHA, creates its annotated tag for the server-locked Release, and explicitly
-# dispatches the publisher ON that tag. Distinct main SHAs share no concurrency
+# dispatches the protected-main publisher with the authoritative completed-run
+# ID. Distinct main SHAs share no concurrency
 # group: every
 # merge intent has an independent release path and a rapid later merge cannot
 # replace an earlier pending run. Squash produces one commit; an allowed rebase
@@ -126,14 +127,15 @@ jobs:
             test "${race_verified}" = true
           fi
           classify_tag exact >/dev/null
-      - name: Dispatch the tag-bound publisher explicitly
+      - name: Dispatch the successful-main-bound publisher explicitly
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
-          TAG: ${{ steps.release.outputs.tag }}
+          MAIN_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
           gh workflow run release-publisher.yml \
             --repo "${GITHUB_REPOSITORY}" \
-            --ref "${TAG}" \
-            -f source_sha="${SOURCE_SHA}"
+            --ref main \
+            -f source_sha="${SOURCE_SHA}" \
+            -f main_run_id="${MAIN_RUN_ID}"

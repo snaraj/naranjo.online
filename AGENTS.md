@@ -87,9 +87,12 @@ Numbered for citation, repo-scoped, none negotiable in code:
     docs and Dependabot, advances exactly one patch from its current protected
     base: numeric `VERSION`, chart `version`, `appVersion`, and changelog
     `X.Y.Z`, plus plain `vX.Y.Z` image tag. Successful main CI publishes that exact SHA as one
-    server-locked plain `vX.Y.Z` release. The machine-only workflow dispatch is
-    the explicit handoff required after a token-created tag; it is not an
-    operator bypass. Squash and rebase are both supported: the protected-main
+    server-locked plain `vX.Y.Z` release. The explicit workflow dispatch after
+    a token-created tag selects the publisher definition from protected `main`
+    and carries the completed main-run ID. A separate read-only job verifies
+    the authoritative Actions record before the privileged job can start, so
+    an ordinary manual dispatch cannot publish unmerged source. Squash and
+    rebase are both supported: the protected-main
     push must be one merge-free linear base-to-head range whose final snapshot
     is the exact next patch, and that complete final SHA gets one release.
     There is no skip or force path. The automatic-release PR remains Draft
@@ -191,8 +194,11 @@ Build and test, in this order (the same gate CI enforces):
 Releases: every PR advances numeric `VERSION`, chart `version`, `appVersion`,
 and changelog `X.Y.Z`, plus plain `vX.Y.Z` `image.tag`, by exactly one patch
 from its current protected base. Successful main CI creates the plain git tag at the
-exact merged SHA and explicitly dispatches the tag-bound publisher; a
-token-created tag is never assumed to trigger another push workflow. The
+exact merged SHA and explicitly dispatches the protected-main publisher with
+that successful run's ID; a token-created tag is never assumed to trigger
+another push workflow. The publisher's read-only authorization job verifies
+the exact run, repository, workflow path, push event, successful conclusion,
+main branch, and source SHA before its write/packages/OIDC job can start. The
 publisher emits the signed multi-arch image, signed OCI chart, and GitHub
 Release. Histories and tags are append-only; stale concurrent PRs must resync
 and take the new next patch. Deployment RESOLVES digests, never tags. The
@@ -531,11 +537,15 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
 - **codeql.yml** — pull requests, `main` pushes, weekly cron.
 - **release-after-main.yml** — success-only exact-SHA main-CI completion;
   creates or verifies the annotated tag and explicitly dispatches the
-  publisher on that tag. The release boundary is recovered for both squash
-  and multi-commit rebase pushes. Distinct main SHAs share no cancellation group.
-- **release-publisher.yml** — machine-dispatch on a server-lockable version-tag
-  ref only; exact source/tag/lock checks, authoritative immutable Release
-  state, no operator bypass, skip flag, or force path (requirement 10).
+  publisher definition on protected `main` with the exact completed-run ID.
+  The release boundary is recovered for both squash and multi-commit rebase
+  pushes. Distinct main SHAs share no cancellation group.
+- **release-publisher.yml** — explicit dispatch on protected `main`; a
+  read-only authorization job GETs and validates the exact successful PR-gate
+  push run before the source checkout and privileged publication job. Exact
+  source/tag/lock checks and authoritative immutable Release state remain; an
+  ordinary manual/unmerged dispatch, skip flag, or force path cannot publish
+  (requirement 10).
 - **GitHub event basis.** GitHub documents that `GITHUB_TOKEN`-created refs
   suppress recursive workflow events except explicit dispatch, that
   `workflow_run` fires regardless of conclusion and uses default-branch

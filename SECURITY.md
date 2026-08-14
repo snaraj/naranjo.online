@@ -22,9 +22,12 @@ and the repository owner's read-only settings receipt proves it.
   port 8080 with no runtime dependencies and no outbound calls.
 - Images and charts are published only after successful main CI by an
   exact-SHA orchestrator that creates the version tag and explicitly dispatches
-  the publisher on that tag. Readiness requires strict current-base checks,
-  no ruleset bypass actor, and GitHub immutable releases enabled; the publisher
-  then refuses a Release unless REST reports `immutable: true`. The publisher
+  the protected-main publisher with that completed run's ID. A read-only job
+  validates the authoritative Actions record before the privileged publisher
+  can start, so a manual/unmerged dispatch cannot mint artifacts. Readiness
+  requires strict current-base checks, no ruleset bypass actor, and GitHub
+  immutable releases enabled; the publisher then refuses a Release unless
+  REST reports `immutable: true`. The publisher
   remains multi-arch, keyless-signed (Cosign), with SBOM and SLSA provenance.
   Deployment consumes immutable digests.
 - CI is secretless on pull requests; all third-party actions are pinned to
