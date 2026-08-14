@@ -277,9 +277,24 @@ experiment, and removes the worktree afterward.
 
 **Exact-head receipt.** Review identity is textual because agents share the
 owner's GitHub account; it is not a claim of separate GitHub principals. The
-reviewer posts one normal PR comment containing a line exactly
-`HEAD: <40-lowercase-hex>` and a verdict exactly `APPROVE` or
-`REQUEST-CHANGES`, ending with `- <Agent> (adversarial reviewer)`. Any head
+reviewer posts one normal PR comment in this exact shape (replacing every
+placeholder):
+
+```text
+HEAD: <40-lowercase-hex>
+VERDICT: APPROVE
+
+1. <numbered finding, or explicit no-finding scope>
+
+Mutation audit: <hostile mutation results>
+Claim audit: <SUPPORTED and OVERSTATED results>
+Full-gate and flake evidence: <commands, results, and capability boundaries>
+Scratch cleanup: <disposable workspace and residue result>
+
+- <Agent> (adversarial reviewer)
+```
+
+The verdict line may instead be exactly `VERDICT: REQUEST-CHANGES`. Any head
 change invalidates the receipt. The author replies with reproduction and repair
 evidence; a fresh independent context re-reviews the new exact head. If the
 owner merges first, record a post-merge audit and classify—not erase—the gap.
@@ -311,8 +326,9 @@ owner merges first, record a post-merge audit and classify—not erase—the gap
    post-merge run as part of the change under review.
 
 **Verdict format** — posted as a normal PR comment, so every vendor and the
-owner see the identical record: exact head, APPROVE or REQUEST-CHANGES; numbered
-findings with severity and file:line; the mutation kill matrix; flake
+owner see the identical record: one exact `HEAD:` line and one exact
+`VERDICT: APPROVE` or `VERDICT: REQUEST-CHANGES` line; numbered findings with
+severity and file:line; the mutation kill matrix; flake
 results; a claim-audit table (SUPPORTED / OVERSTATED per claim); explicit
 "no finding — checked X, Y, Z" statements so silence is never ambiguous;
 confirmation the scratch workspace was removed; the reviewing agent's
@@ -361,20 +377,17 @@ Worker must re-run the bounded check at the new exact head.
   `tests`, `ci`, `docs`, `release`, `fix`, `provider-neutrality`,
   `delivery-lane`, `features`, `requires-review`. New labels are added to
   all three at once.
-- **`requires-review` — the review-readiness signal.** The author lane
-  applies `requires-review` the moment a PR or issue is
-  complete-from-author — every commit pushed, body and evidence final —
-  so review attention is productive. Its ABSENCE on an open
-  agent-authored PR or issue means the item is still in flight:
-  reviewers and other lanes must not spend review effort on it. The
-  reviewer removes it when posting the verdict; on REQUEST-CHANGES the
-  author re-applies it once the fix commits are pushed. On an issue it
-  carries the same meaning — complete enough to act on or decide — and
-  whoever then acts on it or records the decision removes the label;
-  opening a PR that claims the issue counts as acting. It is
-  a coordination signal only: never a substitute for draft/ready state,
-  for the APPROVE verdict that flips a PR ready, or for owner merge
-  authority.
+- **`requires-review` — the review-readiness signal.** `requires-review` is
+  PR-head-only. The author applies it only when the exact PR head, body,
+  commits, and evidence are author-complete. Its absence means the author PR is
+  in flight; its presence requests exact-head independent review. The reviewer
+  removes it when posting either verdict; after repairs, the author reapplies it
+  only for the complete replacement head. Never apply or interpret it on an
+  issue; an issue has no head and cannot satisfy a PR receipt or Ready gate. Use
+  an explicit normal comment for issue-spec review until a separately approved
+  issue-review label exists. It is a coordination signal only: never a
+  substitute for draft/ready state, for the APPROVE verdict that flips a PR
+  ready, or for owner merge authority.
 - **Agent labels.** Every agent-created PR and issue carries TWO further
   labels: the umbrella `agent-authored` AND the acting agent's own label —
   `fable5` (Claude Fable 5), `5.6-sol` (ChatGPT 5.6 SOL ULTRA), `opus5`
@@ -423,9 +436,8 @@ The complete delivery loop, each step gated by the sections around it:
 
 1. **Claim the work.** File (or take) the issue; state intent and
    constraints. Label it — including both agent labels — assign the
-   owner, set a milestone. Apply `requires-review` once the issue is
-   complete-from-author — the problem stated, the acceptance criteria
-   final; until it carries that label, the issue is still being drafted.
+   owner, set a milestone. Never apply or interpret `requires-review` on the
+   issue; use an explicit normal comment when its specification needs review.
 2. **Branch from `origin/main`** after `git fetch origin`; branch names
    are lane-prefixed (`fable5/<topic>`). One writer per branch, always —
    a branch that is not yours is a branch you never push to. Reserve the exact

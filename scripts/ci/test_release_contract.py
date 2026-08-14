@@ -3429,6 +3429,114 @@ python3() {
 
 class GovernanceParityTests(unittest.TestCase):
     @staticmethod
+    def adversarial_receipt_denial(
+        text: str,
+        expected_head: str,
+        *,
+        author_context: str,
+        resource_kind: str,
+    ) -> str | None:
+        if resource_kind != "pull-request":
+            return "exact-head review receipts apply only to pull requests"
+        if re.fullmatch(r"[0-9a-f]{40}", expected_head) is None:
+            return "expected head is not one lowercase 40-hex SHA"
+        lines = text.replace("\r\n", "\n").splitlines()
+        heads = [line[6:] for line in lines if line.startswith("HEAD: ")]
+        verdicts = [line[9:] for line in lines if line.startswith("VERDICT: ")]
+        if heads != [expected_head]:
+            return "receipt must bind exactly one expected HEAD line"
+        if len(verdicts) != 1 or verdicts[0] not in {"APPROVE", "REQUEST-CHANGES"}:
+            return "receipt must contain exactly one supported VERDICT line"
+        nonempty = [line for line in lines if line.strip()]
+        if not nonempty:
+            return "receipt is empty"
+        signature = re.fullmatch(r"- (.+?) \(adversarial reviewer\)", nonempty[-1])
+        if signature is None:
+            return "final non-empty line must be adversarial reviewer signature"
+        reviewer = signature.group(1).strip().casefold()
+        if not reviewer or reviewer == author_context.strip().casefold():
+            return "reviewer context must differ textually from author context"
+        if "mutation" not in text.casefold() or "claim" not in text.casefold():
+            return "receipt must report mutation and claim audit evidence"
+        return None
+
+    @classmethod
+    def require_adversarial_review_governance(cls, agents: str) -> str:
+        try:
+            receipt = agents.split("**Exact-head receipt.**", 1)[1].split(
+                "**The review must:**", 1
+            )[0]
+            label = agents.split(
+                "- **`requires-review` — the review-readiness signal.**", 1
+            )[1].split("- **Agent labels.**", 1)[0]
+            working = agents.split("## Working a change end to end", 1)[1].split(
+                "## Commit identity mechanics", 1
+            )[0]
+        except IndexError as exc:
+            raise ValueError("canonical adversarial-review governance is missing") from exc
+
+        for token in (
+            "one normal PR comment in this exact shape",
+            "HEAD: <40-lowercase-hex>",
+            "VERDICT: APPROVE",
+            "VERDICT: REQUEST-CHANGES",
+            "Mutation audit:",
+            "Claim audit:",
+            "Full-gate and flake evidence:",
+            "Scratch cleanup:",
+            "- <Agent> (adversarial reviewer)",
+        ):
+            if token not in receipt:
+                raise ValueError(f"canonical adversarial receipt lost: {token}")
+        label_flat = " ".join(label.split())
+        working_flat = " ".join(working.split())
+        for token in (
+            "`requires-review` is PR-head-only",
+            "The author applies it only when the exact PR head, body,",
+            "commits, and evidence are author-complete",
+            "Its absence means the author PR is in flight",
+            "The reviewer removes it when posting either verdict",
+            "after repairs, the author reapplies it",
+            "only for the complete replacement head",
+            "Never apply or interpret it on an issue",
+            "an issue has no head and cannot satisfy a PR receipt or Ready gate",
+            "an explicit normal comment for issue-spec review",
+        ):
+            if token not in label_flat:
+                raise ValueError(f"PR-head-only review handoff lost: {token}")
+        if "Never apply or interpret `requires-review` on the issue" not in working_flat:
+            raise ValueError("issue workflow regained requires-review semantics")
+
+        try:
+            sample = receipt.split("```text\n", 1)[1].split("\n```", 1)[0]
+        except IndexError as exc:
+            raise ValueError("canonical adversarial receipt sample is missing") from exc
+        rendered = (
+            sample.replace("<40-lowercase-hex>", "a" * 40)
+            .replace("<numbered finding, or explicit no-finding scope>", "No finding in scope.")
+            .replace("<hostile mutation results>", "all hostile mutants killed")
+            .replace("<SUPPORTED and OVERSTATED results>", "SUPPORTED: exact scope")
+            .replace(
+                "<commands, results, and capability boundaries>",
+                "focused and full gates passed",
+            )
+            .replace(
+                "<disposable workspace and residue result>",
+                "disposable workspace removed",
+            )
+            .replace("<Agent>", "Fable5")
+        )
+        denial = cls.adversarial_receipt_denial(
+            rendered,
+            "a" * 40,
+            author_context="5.6 Sol",
+            resource_kind="pull-request",
+        )
+        if denial is not None:
+            raise ValueError(f"documented adversarial receipt is invalid: {denial}")
+        return rendered
+
+    @staticmethod
     def require_manifest_scan_audit_docs(
         agents: str, readme: str, security: str, runbook: str, changelog: str
     ) -> None:
@@ -3595,6 +3703,93 @@ class GovernanceParityTests(unittest.TestCase):
                     1,
                 )
             )
+
+    def test_adversarial_review_governance_is_pr_head_only_and_load_bearing(self):
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.require_adversarial_review_governance(agents)
+        for token in (
+            "VERDICT: APPROVE",
+            "Mutation audit:",
+            "Claim audit:",
+            "`requires-review` is\n  PR-head-only",
+            "The author applies it only",
+            "The reviewer\n  removes it when posting either verdict",
+            "Never apply or interpret it on an\n  issue",
+            "Never apply or interpret `requires-review` on the\n   issue",
+        ):
+            self.assertIn(token, agents)
+            with self.subTest(deletion=token), self.assertRaises(ValueError):
+                self.require_adversarial_review_governance(agents.replace(token, "", 1))
+        for source, replacement in (
+            (
+                "The author applies it only",
+                "The reviewer applies it only",
+            ),
+            (
+                "The reviewer\n  removes it when posting either verdict",
+                "The author\n  removes it when posting either verdict",
+            ),
+            (
+                "Never apply or interpret it on an\n  issue",
+                "Apply and interpret it on an\n  issue",
+            ),
+            (
+                "Never apply or interpret `requires-review` on the\n   issue",
+                "Apply and interpret `requires-review` on the\n   issue",
+            ),
+        ):
+            self.assertIn(source, agents)
+            with self.subTest(inversion=source), self.assertRaises(ValueError):
+                self.require_adversarial_review_governance(
+                    agents.replace(source, replacement, 1)
+                )
+
+    def test_documented_adversarial_receipt_rejects_invalid_samples(self):
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        valid = self.require_adversarial_review_governance(agents)
+        head = "a" * 40
+        self.assertIsNone(
+            self.adversarial_receipt_denial(
+                valid,
+                head,
+                author_context="5.6 Sol",
+                resource_kind="pull-request",
+            )
+        )
+        self.assertIsNone(
+            self.adversarial_receipt_denial(
+                valid.replace("VERDICT: APPROVE", "VERDICT: REQUEST-CHANGES", 1),
+                head,
+                author_context="5.6 Sol",
+                resource_kind="pull-request",
+            )
+        )
+        invalid = {
+            "bare verdict": valid.replace("VERDICT: APPROVE", "APPROVE", 1),
+            "missing mutation evidence": valid.replace("Mutation audit:", "Evidence:", 1),
+            "missing claim evidence": valid.replace("Claim audit:", "Evidence:", 1),
+            "duplicate verdict": valid.replace(
+                "VERDICT: APPROVE", "VERDICT: APPROVE\nVERDICT: REQUEST-CHANGES", 1
+            ),
+        }
+        for name, sample in invalid.items():
+            with self.subTest(invalid_sample=name):
+                self.assertIsNotNone(
+                    self.adversarial_receipt_denial(
+                        sample,
+                        head,
+                        author_context="5.6 Sol",
+                        resource_kind="pull-request",
+                    )
+                )
+        self.assertIsNotNone(
+            self.adversarial_receipt_denial(
+                valid,
+                head,
+                author_context="5.6 Sol",
+                resource_kind="issue",
+            )
+        )
 
     def test_main_worker_actor_scope_evidence_and_exact_head_are_parity_pinned(self):
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
