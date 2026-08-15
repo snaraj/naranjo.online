@@ -9,12 +9,16 @@ on:
 permissions: {}
 
 concurrency:
-  group: pr-gate-${{ github.event.pull_request.number || github.ref }}
+  # PR synchronizations may cancel an older run for the same PR.  Every main
+  # push instead uses its unique run id, so a later merge can never erase the
+  # successful-CI event that publishes an earlier merge.
+  group: pr-gate-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   security:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -23,8 +27,41 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Test hostile release event and state transitions
+        run: python3 -I -B -m unittest discover -s scripts/ci -p 'test_release_contract.py' -v
+      - name: Enforce one exact patch from the protected base
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          PUSH_HEAD_SHA: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = pull_request ]; then
+            base_sha="${PR_BASE_SHA}"
+            head_sha="${PR_HEAD_SHA}"
+            first_parent=()
+          elif [ "${GITHUB_EVENT_NAME}" = push ] && [ "${GITHUB_REF}" = refs/heads/main ]; then
+            base_sha="${PUSH_BASE_SHA}"
+            head_sha="${PUSH_HEAD_SHA}"
+            test "${head_sha}" = "${GITHUB_SHA}"
+            first_parent=(--first-parent)
+          else
+            printf 'unsupported release-gate event %s on %s\n' "${GITHUB_EVENT_NAME}" "${GITHUB_REF}" >&2
+            exit 1
+          fi
+          python3 -I -B scripts/ci/release_contract.py transition \
+            --repository . --base "${base_sha}" --head "${head_sha}" \
+            "${first_parent[@]}"
       - name: Install checksum-verified tools
         run: ./scripts/ci/install-tools.sh
+      - name: Reject high or critical source dependency vulnerabilities
+        run: >-
+          trivy fs --scanners vuln --include-dev-deps
+          --severity HIGH,CRITICAL --exit-code 1
+          --ignore-unfixed=false --timeout 10m
+          --cache-dir "${RUNNER_TEMP}/trivy-source-cache" .
       - name: Validate workflows
         run: |
           curl --proto '=https' --tlsv1.2 -sSfL \
@@ -43,6 +80,7 @@ jobs:
   dependency-review:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -57,6 +95,7 @@ jobs:
 
   application:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -147,6 +186,7 @@ jobs:
 
   chart:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -188,6 +228,7 @@ jobs:
 
   container:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -213,6 +254,7 @@ jobs:
     # the no-force-push rule). Zero external services or accounts.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
@@ -236,12 +278,13 @@ jobs:
         env:
           GOTOOLCHAIN: local
         run: |
-          cd frontend
+          set -euo pipefail
+          pushd frontend >/dev/null
           npm ci --ignore-scripts --no-audit --no-fund
           npm run build
           front="$(node --test --experimental-test-coverage tests/*.test.mjs 2>&1 \
             | awk -F'|' '/all files/{gsub(/ /,"",$2); print $2; exit}')"
-          cd ..
+          popd >/dev/null
           CGO_ENABLED=0 go test -covermode=atomic -coverprofile="${RUNNER_TEMP}/cp.out" ./...
           # Same scaffolding exclusion as the enforcement step, so the badge
           # publishes the identical production-statement number the gate holds.
@@ -256,11 +299,13 @@ jobs:
           GO_PCT: ${{ steps.cov.outputs.go }}
           FRONT_PCT: ${{ steps.cov.outputs.front }}
         run: |
+          set -euo pipefail
           color() {
             awk -v p="$1" 'BEGIN{ if (p>=90) print "brightgreen"; else if (p>=75) print "green"; else if (p>=60) print "yellow"; else print "orange" }'
           }
           work="${RUNNER_TEMP}/badges"
-          mkdir -p "${work}" && cd "${work}"
+          mkdir -p "${work}"
+          cd "${work}" || exit 1
           git init -q -b badges .
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
