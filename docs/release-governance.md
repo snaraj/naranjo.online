@@ -13,8 +13,13 @@ has configured and observed all of these controls:
 - GitHub immutable releases enabled before the first affected Release is
   published. Enabling the control later does not retrofit a release that was
   already published.
-- Exactly squash and rebase enabled; merge commits disabled in both repository
-  settings and the active `Protect-Main` ruleset.
+- Exactly squash and rebase enabled and merge commits disabled in the active
+  `Protect-Main` ruleset. That ruleset is what enforces merge behaviour on
+  `refs/heads/main`, so it is the receipt's authoritative `merge_methods`
+  source. The repository-settings merge toggles stay an owner-configured
+  expectation the receipt deliberately does not read: GitHub returns them only
+  to credentials carrying Contents write, and the publisher's settings token
+  holds Administration read alone.
 - Pull requests and linear history required on `main`; zero platform approvals,
   no stale-review dismissal, no required reviewers/code-owner/latest-push
   approval, resolved review threads required, and only squash/rebase allowed.

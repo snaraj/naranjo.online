@@ -7,6 +7,30 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-08-18
+
+### Fixed
+
+- The release publisher's `immutable_settings` job could never pass, so no
+  release has been published since v0.1.9 even though `main` advanced to
+  0.1.13. `build_settings_receipt` in `scripts/ci/release_contract.py`
+  derived the receipt's `merge_methods` from the repository record's
+  `allow_merge_commit` / `allow_rebase_merge` / `allow_squash_merge`
+  booleans, but the job mints a GitHub App token holding only
+  `permission-administration: read`, and GitHub returns those booleans
+  only to credentials that also carry Contents write ("To view
+  merge-related settings, you must have the contents:read and
+  contents:write permissions"). Every run therefore denied with
+  `DENY: repository setting allow_merge_commit is not boolean` before any
+  publication side effect. The receipt now derives `merge_methods` from
+  the active `Protect-Main` ruleset's `allowed_merge_methods` — the
+  control that actually enforces merge behaviour on `refs/heads/main` and
+  one the least-privilege token can read. The receipt's external shape is
+  unchanged, the pull-request rule's parameters remain pinned exactly, and
+  the downstream receipt validator still requires exactly rebase and
+  squash, so the fix restores publication without relaxing any control or
+  widening the publisher's credential.
+
 ## [0.1.13] - 2026-08-18
 
 ### Changed

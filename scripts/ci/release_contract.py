@@ -838,17 +838,6 @@ def build_settings_receipt(
     """Derive and validate a privacy-bounded receipt from authoritative REST."""
     if repository_record.get("full_name") != repository or repository_record.get("default_branch") != "main":
         raise ContractError("repository settings identity or default branch is not exact")
-    merge_methods: list[str] = []
-    for field, method in (
-        ("allow_merge_commit", "merge"),
-        ("allow_rebase_merge", "rebase"),
-        ("allow_squash_merge", "squash"),
-    ):
-        enabled = repository_record.get(field)
-        if not isinstance(enabled, bool):
-            raise ContractError(f"repository setting {field} is not boolean")
-        if enabled:
-            merge_methods.append(method)
     validate_immutable_settings(immutable_record)
     validate_private_vulnerability_reporting(private_vulnerability_record)
 
@@ -924,11 +913,15 @@ def build_settings_receipt(
         raise ContractError("pull-request rule fields are missing or foreign")
     if pull_parameters != EXPECTED_PULL_REQUEST_PARAMETERS:
         raise ContractError("pull-request rule parameters are not exact")
-    allowed_merge_methods = _string_set(
+    # The ruleset is the authoritative merge-method source: it is what actually
+    # enforces merge behaviour on refs/heads/main, and unlike the repository
+    # record's allow_*_merge booleans it is readable by an Administration-read
+    # credential.  GitHub returns those booleans only to credentials carrying
+    # Contents write visibility, so deriving from them made this receipt
+    # unbuildable under the publisher's least-privilege App token.
+    merge_methods = _string_set(
         pull_parameters.get("allowed_merge_methods"), "ruleset merge methods"
     )
-    if allowed_merge_methods != set(merge_methods):
-        raise ContractError("repository and ruleset merge methods do not match")
 
     status_rule = rules_by_type.get("required_status_checks")
     if status_rule is None:
