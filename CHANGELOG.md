@@ -7,6 +7,22 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-08-18
+
+### Changed
+
+- `svelte` and `svelte-check` move together from 5.56.8 to 5.56.9 and from
+  4.7.5 to 4.7.6 respectively in `frontend/package.json` (and their lockfile
+  entries, including the transitive `@sveltejs/load-config` bump to 0.2.3
+  that `svelte-check` 4.7.6 requires). Dependabot had opened the two bumps
+  as separate PRs (#51, #52); `svelte` and `svelte-check` are a compatibility
+  pair released in lockstep, and this repository's practice is to bundle
+  such pairs into one PR rather than merge them independently. This release
+  lands both bumps in one commit. `.github/dependabot.yml` gains a `groups`
+  stanza on the `npm` ecosystem scoped to `svelte` and `svelte-check`, so
+  future coordinated releases of this pair arrive as one grouped PR instead
+  of two.
+
 ## [0.1.11] - 2026-08-18
 
 ### Changed
