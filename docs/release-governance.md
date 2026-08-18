@@ -29,6 +29,9 @@ has configured and observed all of these controls:
 - Creation, force pushes, and deletion denied.
 - No ruleset bypass actor and no `update` restriction that would require the
   repository owner to bypass the rules merely to merge a passing pull request.
+  The `update` half is CI-proven; the bypass half is owner-preflight-proven,
+  because GitHub returns `bypass_actors` only to a credential with write access
+  to the ruleset. See "Which side proves which invariant" below.
 - Actions enabled with full-SHA pinning required, default workflow-token
   permissions read-only, and workflow tokens unable to approve pull requests.
 - Private Vulnerability Reporting, secret scanning, and push protection
@@ -195,7 +198,6 @@ The exact successful receipt is:
   "allow_deletions": false,
   "allow_force_pushes": false,
   "branch": "main",
-  "bypass_actors": [],
   "code_quality_severity": "errors",
   "code_scanning_tools": [
     {
@@ -239,10 +241,45 @@ The exact successful receipt is:
 }
 ```
 
-Missing, extra, duplicated, name-only, foreign-integration, inverted, stale, or
-bypass-bearing state fails closed. A successful receipt is necessary but not
-sufficient for Ready: exact-head CI, current base, resolved findings, and a
-fresh independent approval are still required.
+Missing, extra, duplicated, name-only, foreign-integration, inverted, or stale
+state fails closed. A successful receipt is necessary but not sufficient for
+Ready: exact-head CI, current base, resolved findings, and a fresh independent
+approval are still required.
+
+### Which side proves which invariant
+
+The receipt above is built by the same code on both sides, but the two sides
+run it under different credentials, and GitHub does not show both credentials
+the same fields. The split is therefore recorded rather than blurred, and the
+preflight makes no conditional assertion: it asserts exactly what the enforcing
+surface exposes to the credential in hand.
+
+**CI-proven** (asserted by the release publisher's `settings-preflight` step on
+every dispatch, under an Administration-read App token): repository identity and
+default branch; immutable releases; private vulnerability reporting; secret
+scanning, push protection, non-provider-pattern and validity states; Actions
+enablement, allow policy and full-SHA pinning; default workflow permissions and
+workflow-token approval; the `Protect-Main` ruleset's identity, source,
+enforcement and `refs/heads/main`-only condition; and every field of its
+`rules[]` — required pull request and its exact parameters (including
+`allowed_merge_methods`, the authoritative merge-method source), required status
+checks and their GitHub-Actions integration binding, linear history, signatures,
+creation/deletion/non-fast-forward restrictions, and the CodeQL/code-quality/
+code-coverage rules.
+
+**Owner-preflight-proven** (asserted only when the repository owner runs the
+same GET-only preflight under their own credential): that `Protect-Main` has no
+bypass actor. GitHub's REST reference for "Get a repository ruleset" states that
+"to prevent leaking sensitive information, the bypass_actors property is only
+returned if the user making the API request has write access to the ruleset."
+The publisher's least-privilege token carries no such write access, so the
+property is absent from its response; asserting it in CI made the receipt
+unbuildable and denied every release before `rules[]` was read at all. The
+receipt therefore carries no bypass field, and the no-bypass requirement stays
+an owner-verified Ready gate under "Working a change end to end" step 8 — the
+same place the owner already runs this preflight by hand. An owner who observes
+any bypass actor must clear it before Ready; CI cannot see it and will not
+pretend to.
 
 The separate Main Worker gate in `AGENTS.md` is also load-bearing for Ready.
 After the final author push and exact-head adversarial approval, the distinct
