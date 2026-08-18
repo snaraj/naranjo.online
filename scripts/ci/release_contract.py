@@ -891,9 +891,11 @@ def build_settings_receipt(
     # "Protect-Main bypass actors must be a JSON array" before rules[] was ever
     # parsed.  CI asserts exactly what the enforcing surface exposes to the CI
     # credential, with no conditional assertion and no credential-dependent
-    # branch.  The no-bypass invariant is not abandoned: it is proven by the
-    # owner-run preflight, whose credential does see the property, and
-    # docs/release-governance.md records it in the owner-verified column.
+    # branch.  The no-bypass invariant is not abandoned: because this deletion
+    # is credential-independent, no preflight run reads the property, so it is
+    # discharged instead by the standalone GET-only bypass command the owner
+    # runs under a ruleset-write credential, which docs/release-governance.md
+    # records in the owner-verified column.
     rules_by_type: dict[str, Mapping[str, object]] = {}
     for value in _array(ruleset_record.get("rules"), "Protect-Main rules"):
         rule = _object(value, "Protect-Main rule")

@@ -29,9 +29,10 @@ has configured and observed all of these controls:
 - Creation, force pushes, and deletion denied.
 - No ruleset bypass actor and no `update` restriction that would require the
   repository owner to bypass the rules merely to merge a passing pull request.
-  The `update` half is CI-proven; the bypass half is owner-preflight-proven,
-  because GitHub returns `bypass_actors` only to a credential with write access
-  to the ruleset. See "Which side proves which invariant" below.
+  The `update` half is CI-proven; the bypass half is owner-verified with the
+  standalone command below, because GitHub returns `bypass_actors` only to a
+  credential with write access to the ruleset. See "Which side proves which
+  invariant" below.
 - Actions enabled with full-SHA pinning required, default workflow-token
   permissions read-only, and workflow tokens unable to approve pull requests.
 - Private Vulnerability Reporting, secret scanning, and push protection
@@ -96,15 +97,22 @@ credential value and grants no authority to provision one.
 The same owner-observed transaction proves immutable releases enabled, Actions
 full-SHA pinning enabled, Actions otherwise enabled/allowed-all unchanged, and
 Private Vulnerability Reporting enabled. Those closed controls do not override
-the missing App names or the inexact ruleset below; the PR remains Draft.
+the missing App names; the PR remains Draft.
 
-The owner-observed `Protect-Main` ruleset is still inexact: it has a bypass,
-an update restriction, merge commits in its pull-request rule, unresolved
-threads allowed, and no required-status-check rule. GitHub's public REST and
-GraphQL mutation schemas cannot currently represent the existing preview Code
-Quality and Code Coverage inputs, so an API update was rejected before
-mutation. Preserving those controls while correcting the ruleset requires a
-signed-in owner UI transaction and remains an external Ready blocker.
+That same 2026-08-14 transaction recorded the `Protect-Main` ruleset as
+inexact on five counts: a bypass actor, an update restriction, merge commits in
+its pull-request rule, unresolved threads allowed, and no required-status-check
+rule. GitHub's public REST and GraphQL mutation schemas cannot represent the
+existing preview Code Quality and Code Coverage inputs, so an API update was
+rejected before mutation and preserving those controls while correcting the
+ruleset took a signed-in owner UI transaction. That transaction has since
+happened. Owner-observed GET-only state on 2026-08-18 refutes all five clauses:
+the full preflight below returns `exact`, the bypass check below returns `[]`,
+and the live `rules[]` carries required status checks, pull request, linear
+history, signatures, code scanning, code quality, code coverage, creation,
+deletion, and non-fast-forward. The ruleset is no longer the open blocker; the
+`platform-release` variables and secrets above are still unprovisioned, and
+that gap remains an external Ready blocker.
 
 `workflow_dispatch` remains callable through GitHub's normal interfaces, but
 callability is not publication authority: an unmerged branch, pull-request
@@ -267,19 +275,42 @@ checks and their GitHub-Actions integration binding, linear history, signatures,
 creation/deletion/non-fast-forward restrictions, and the CodeQL/code-quality/
 code-coverage rules.
 
-**Owner-preflight-proven** (asserted only when the repository owner runs the
-same GET-only preflight under their own credential): that `Protect-Main` has no
-bypass actor. GitHub's REST reference for "Get a repository ruleset" states that
-"to prevent leaking sensitive information, the bypass_actors property is only
-returned if the user making the API request has write access to the ruleset."
-The publisher's least-privilege token carries no such write access, so the
-property is absent from its response; asserting it in CI made the receipt
-unbuildable and denied every release before `rules[]` was read at all. The
-receipt therefore carries no bypass field, and the no-bypass requirement stays
-an owner-verified Ready gate under "Working a change end to end" step 8 — the
-same place the owner already runs this preflight by hand. An owner who observes
-any bypass actor must clear it before Ready; CI cannot see it and will not
-pretend to.
+**Owner-verified** (asserted only by the repository owner, GET-only, under
+their own credential, with the standalone command below): that `Protect-Main`
+has no bypass actor. GitHub's REST reference for "Get a repository ruleset"
+states that "to prevent leaking sensitive information, the bypass_actors
+property is only returned if the user making the API request
+has write access to the ruleset." The publisher's least-privilege token
+carries no such write access, so the property is absent from its response;
+asserting it in CI made the receipt unbuildable and denied every release
+before `rules[]` was read at all.
+
+The receipt therefore carries no bypass field — and the deletion is
+credential-independent, so the preflight above reads the property for nobody.
+Re-running that preflight under the owner credential proves nothing about
+bypass actors. The owner runs this instead, resolving the ruleset id in the
+same block:
+
+```bash
+ruleset_id="$(gh api --method GET -H "X-GitHub-Api-Version: 2026-03-10" \
+  /repos/snaraj/naranjo.online/rulesets \
+  --jq '.[] | select(.name == "Protect-Main") | .id')"
+gh api --method GET -H "X-GitHub-Api-Version: 2026-03-10" \
+  "/repos/snaraj/naranjo.online/rulesets/${ruleset_id}" --jq '.bypass_actors'
+# must print: []
+```
+
+The property is returned only at ruleset write-access-level visibility, which
+the owner credential has and the publisher's does not, per the redaction rule
+quoted above. The command prints the value rather than a count because a
+redacted property reads as `null` here, and `length` would reduce that same
+`null` to the `0` an empty list gives — a count cannot tell "no bypass actor"
+from "you cannot see bypass actors". Exactly `[]` passes. `null` means the
+credential lacks that visibility and the check has not been performed. Any
+other output is a bypass actor: the owner clears it before Ready and posts only
+the `[]` result, never the actor entries, per the value-only rule above. This
+is the observation "Working a change end to end" step 8 requires; CI cannot
+make it and will not pretend to.
 
 The separate Main Worker gate in `AGENTS.md` is also load-bearing for Ready.
 After the final author push and exact-head adversarial approval, the distinct

@@ -34,11 +34,18 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 ### Changed
 
 - `docs/release-governance.md` now records which release-control invariants are
-  CI-proven and which are owner-preflight-proven, quoting GitHub's field
-  visibility rule verbatim. Bypass-actor emptiness moves to the owner-verified
-  column: the owner's own credential does return the property, and the
-  no-bypass requirement remains a Ready gate at step 8 of "Working a change end
-  to end". CI cannot see it and no longer pretends to.
+  CI-proven and which are owner-verified, quoting GitHub's field visibility
+  rule verbatim. Bypass-actor emptiness moves to the owner-verified column and
+  that column carries the standalone GET-only `gh api` command that discharges
+  it, star-witnessed like the rest of the runbook. The deleted read is
+  credential-independent, so the preflight itself reads the property for
+  nobody and re-running it proves nothing about bypass actors; the requirement
+  remains a Ready gate at step 8 of "Working a change end to end" and is now
+  performed by a command that can actually fail. `AGENTS.md` (requirement 10,
+  merge readiness, step 8) and `README.md` stop saying the receipt proves it.
+  The runbook's 2026-08-14 ruleset-inexactness note is corrected against
+  owner-observed 2026-08-18 state. CI cannot see the field and no longer
+  pretends to.
 
 ## [0.1.14] - 2026-08-18
 

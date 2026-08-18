@@ -928,8 +928,10 @@ class SettingsReceiptTests(unittest.TestCase):
             '"code_quality_severity": "errors"',
             '"minimum_code_coverage": 80',
             '"maximum_code_coverage_drop": null',
-            "Owner-preflight-proven",
+            "Owner-verified",
             "has write access to the ruleset",
+            "--jq '.bypass_actors'",
+            "# must print: []",
             '"secret_scanning": true',
             '"secret_scanning_push_protection": true',
             '"secret_scanning_non_provider_patterns": false',
@@ -1335,9 +1337,12 @@ class SettingsReceiptTests(unittest.TestCase):
         # re-anchored merge-method derivation had never once executed under the
         # CI credential.  CI now asserts exactly what the enforcing surface
         # exposes to the CI credential.  The no-bypass invariant is not
-        # abandoned; it moves to the owner-preflight column, whose credential
-        # does return the property (docs/release-governance.md records which
-        # invariants each side proves).
+        # abandoned; it moves to the owner-verified column, discharged by the
+        # standalone GET-only bypass command in docs/release-governance.md,
+        # whose ruleset-write credential does return the property.  This
+        # deletion is credential-independent, so no preflight run — CI's or the
+        # owner's — reads the property (that document records which invariants
+        # each side proves).
         expected = settings_receipt()
         credential_shape = settings_api()
         detail = credential_shape["repos/owner/site/rulesets/42"]
@@ -1508,8 +1513,10 @@ class SettingsReceiptTests(unittest.TestCase):
             '"allow_force_pushes": false',
             '"allow_deletions": false',
             '"restrict_updates": false',
-            "Owner-preflight-proven",
+            "Owner-verified",
             "has write access to the ruleset",
+            "--jq '.bypass_actors'",
+            "# must print: []",
             '"secret_scanning": true',
             '"secret_scanning_push_protection": true',
             '"secret_scanning_non_provider_patterns": false',
