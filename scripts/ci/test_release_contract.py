@@ -371,7 +371,6 @@ def settings_receipt() -> dict[str, object]:
         "code_quality_severity": "errors",
         "minimum_code_coverage": 80,
         "maximum_code_coverage_drop": None,
-        "bypass_actors": [],
         "immutable_releases": True,
         "private_vulnerability_reporting": True,
         "secret_scanning": True,
@@ -436,7 +435,10 @@ def settings_api() -> dict[str, object]:
             "conditions": {
                 "ref_name": {"exclude": [], "include": ["refs/heads/main"]},
             },
-            "bypass_actors": [],
+            # No bypass_actors: GitHub returns that property only to a
+            # credential with write access to the ruleset, and the publisher's
+            # token holds Administration read alone.  This is the exact shape
+            # CI sees, so the receipt must build from it.
             "rules": [
                 {"type": "creation"},
                 {"type": "deletion"},
@@ -926,7 +928,10 @@ class SettingsReceiptTests(unittest.TestCase):
             '"code_quality_severity": "errors"',
             '"minimum_code_coverage": 80',
             '"maximum_code_coverage_drop": null',
-            '"bypass_actors": []',
+            "Owner-verified",
+            "has write access to the ruleset",
+            "--jq '.bypass_actors'",
+            "# must print: []",
             '"secret_scanning": true',
             '"secret_scanning_push_protection": true',
             '"secret_scanning_non_provider_patterns": false',
@@ -986,7 +991,6 @@ class SettingsReceiptTests(unittest.TestCase):
             ("code_quality_severity", "warnings"),
             ("minimum_code_coverage", 79),
             ("maximum_code_coverage_drop", 1),
-            ("bypass_actors", ["present"]),
             ("immutable_releases", False),
             ("private_vulnerability_reporting", False),
             ("secret_scanning", False),
@@ -1087,7 +1091,6 @@ class SettingsReceiptTests(unittest.TestCase):
             ),
             ("repos/owner/site/rulesets/42", ("enforcement",), "disabled"),
             ("repos/owner/site/rulesets/42", ("conditions", "ref_name", "include"), ["~ALL"]),
-            ("repos/owner/site/rulesets/42", ("bypass_actors",), [{"actor_type": "RepositoryRole"}]),
         ):
             changed = copy.deepcopy(exact)
             parent = changed[endpoint]
@@ -1322,6 +1325,84 @@ class SettingsReceiptTests(unittest.TestCase):
             ):
                 RC.validate_settings_receipt(changed, "owner/site")
 
+    def test_bypass_actors_are_unreadable_by_the_ci_credential_and_not_asserted(self):
+        # GitHub's REST reference for "Get a repository ruleset" states: "To
+        # prevent leaking sensitive information, the bypass_actors property is
+        # only returned if the user making the API request has write access to
+        # the ruleset."  The publisher mints an Administration-read App token,
+        # which has no write access to the ruleset, so the property is absent
+        # from its response entirely.  Reading it denied the first run after the
+        # merge-method re-anchor with "Protect-Main bypass actors must be a JSON
+        # array" — and it denied there before rules[] was ever parsed, so the
+        # re-anchored merge-method derivation had never once executed under the
+        # CI credential.  CI now asserts exactly what the enforcing surface
+        # exposes to the CI credential.  The no-bypass invariant is not
+        # abandoned; it moves to the owner-verified column, discharged by the
+        # standalone GET-only bypass command in docs/release-governance.md,
+        # whose ruleset-write credential does return the property.  This
+        # deletion is credential-independent, so no preflight run — CI's or the
+        # owner's — reads the property (that document records which invariants
+        # each side proves).
+        expected = settings_receipt()
+        credential_shape = settings_api()
+        detail = credential_shape["repos/owner/site/rulesets/42"]
+        self.assertNotIn("bypass_actors", detail)
+        self.assertEqual(self.observe(copy.deepcopy(credential_shape)), expected)
+        self.assertNotIn("bypass_actors", expected)
+        RC.validate_settings_receipt(expected, "owner/site")
+
+        # A write-access credential additionally returns the property, in any
+        # shape.  The receipt must be byte-identical either way: no conditional
+        # assertion, no credential-dependent branch, and no field the CI
+        # credential cannot see may steer the outcome.
+        for actors in (
+            [],
+            [{"actor_type": "RepositoryRole", "actor_id": 5, "bypass_mode": "always"}],
+            [{"actor_type": "OrganizationAdmin"}, {"actor_type": "DeployKey"}],
+            "none",
+            None,
+            {},
+        ):
+            widened = copy.deepcopy(credential_shape)
+            widened["repos/owner/site/rulesets/42"]["bypass_actors"] = actors
+            with self.subTest(bypass_actors=actors):
+                self.assertEqual(self.observe(widened), expected)
+
+        # The receipt schema is closed and carries no bypass field at all, so a
+        # dangling one is foreign and fails rather than being quietly tolerated.
+        dangling = copy.deepcopy(expected)
+        dangling["bypass_actors"] = []
+        with self.assertRaises(RC.ContractError):
+            RC.validate_settings_receipt(dangling, "owner/site")
+
+        # rules[] parsing is now actually reachable under the CI-credential
+        # shape: a rules-layer defect must deny for its own reason, never for
+        # the bypass read that used to preempt it.
+        for mutate, expected_error in (
+            (lambda detail: detail.__setitem__("rules", None), "Protect-Main rules"),
+            (
+                lambda detail: detail["rules"].append({"type": "update"}),
+                "Protect-Main rule types",
+            ),
+        ):
+            changed = copy.deepcopy(credential_shape)
+            mutate(changed["repos/owner/site/rulesets/42"])
+            with self.subTest(rules_mutation=expected_error):
+                with self.assertRaises(RC.ContractError) as caught:
+                    self.observe(changed)
+                self.assertIn(expected_error, str(caught.exception))
+                self.assertNotIn("bypass", str(caught.exception))
+        broken_merge = copy.deepcopy(credential_shape)
+        pull = next(
+            rule
+            for rule in broken_merge["repos/owner/site/rulesets/42"]["rules"]
+            if rule["type"] == "pull_request"
+        )
+        del pull["parameters"]["allowed_merge_methods"]
+        with self.assertRaises(RC.ContractError) as caught:
+            self.observe(broken_merge)
+        self.assertNotIn("bypass", str(caught.exception))
+
     def test_github_settings_reader_is_get_only_and_fails_closed(self):
         completed = subprocess.CompletedProcess([], 0, stdout='{"enabled": true}', stderr="")
         with mock.patch.object(RC.subprocess, "run", return_value=completed) as run:
@@ -1432,7 +1513,10 @@ class SettingsReceiptTests(unittest.TestCase):
             '"allow_force_pushes": false',
             '"allow_deletions": false',
             '"restrict_updates": false',
-            '"bypass_actors": []',
+            "Owner-verified",
+            "has write access to the ruleset",
+            "--jq '.bypass_actors'",
+            "# must print: []",
             '"secret_scanning": true',
             '"secret_scanning_push_protection": true',
             '"secret_scanning_non_provider_patterns": false',

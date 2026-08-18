@@ -718,7 +718,6 @@ def validate_settings_receipt(receipt: Mapping[str, object], repository: str) ->
         "allow_deletions",
         "allow_force_pushes",
         "branch",
-        "bypass_actors",
         "code_quality_severity",
         "code_scanning_tools",
         "default_workflow_permissions",
@@ -796,8 +795,6 @@ def validate_settings_receipt(receipt: Mapping[str, object], repository: str) ->
         raise ContractError("settings receipt minimum code coverage is not exact")
     if receipt.get("maximum_code_coverage_drop") is not None:
         raise ContractError("settings receipt maximum code-coverage drop is not exact")
-    if receipt.get("bypass_actors") != []:
-        raise ContractError("protected-main rules must have no bypass actors")
     for field in (
         "secret_scanning_non_provider_patterns",
         "secret_scanning_validity_checks",
@@ -885,7 +882,20 @@ def build_settings_receipt(
     ) != ["refs/heads/main"]:
         raise ContractError("Protect-Main must target only refs/heads/main")
 
-    bypass = _array(ruleset_record.get("bypass_actors"), "Protect-Main bypass actors")
+    # bypass_actors is deliberately neither read nor asserted here.  GitHub's
+    # REST reference for "Get a repository ruleset" states: "To prevent leaking
+    # sensitive information, the bypass_actors property is only returned if the
+    # user making the API request has write access to the ruleset."  The
+    # publisher's App token holds Administration read alone, so the property is
+    # simply absent from its response and reading it denied every run with
+    # "Protect-Main bypass actors must be a JSON array" before rules[] was ever
+    # parsed.  CI asserts exactly what the enforcing surface exposes to the CI
+    # credential, with no conditional assertion and no credential-dependent
+    # branch.  The no-bypass invariant is not abandoned: because this deletion
+    # is credential-independent, no preflight run reads the property, so it is
+    # discharged instead by the standalone GET-only bypass command the owner
+    # runs under a ruleset-write credential, which docs/release-governance.md
+    # records in the owner-verified column.
     rules_by_type: dict[str, Mapping[str, object]] = {}
     for value in _array(ruleset_record.get("rules"), "Protect-Main rules"):
         rule = _object(value, "Protect-Main rule")
@@ -1005,9 +1015,6 @@ def build_settings_receipt(
         "maximum_code_coverage_drop": code_coverage_parameters.get(
             "max_coverage_drop"
         ),
-        # Do not serialize actor details or ruleset IDs. Presence alone is the
-        # safety fact, and the only acceptable value is the empty set.
-        "bypass_actors": [] if not bypass else ["present"],
         "immutable_releases": immutable_record.get("enabled"),
         "private_vulnerability_reporting": private_vulnerability_record.get("enabled"),
         "secret_scanning": security_enabled("secret_scanning"),

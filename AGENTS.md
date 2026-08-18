@@ -110,7 +110,10 @@ Numbered for citation, repo-scoped, none negotiable in code:
     There is no skip or force path. The automatic-release PR remains Draft
     until the repository owner's GET-only receipt proves GitHub immutable
     releases enabled and exact GitHub-Actions-bound required checks enforced
-    against the current base with no bypass actor or update restriction; see
+    against the current base with no update restriction, and the owner's
+    separate GET-only bypass check reports no bypass actor. The receipt cannot
+    prove that half: GitHub returns `bypass_actors` only to a ruleset-write
+    credential, so the preflight reads it for nobody; see
     `docs/release-governance.md`. Every created or reused GitHub Release must
     report authoritative `immutable: true` and exactly one canonical evidence
     manifest whose digest and downloaded bytes are verified before and after
@@ -441,8 +444,9 @@ Worker must re-run the bounded check at the new exact head.
   exact-head canonical `ROLE: MAIN-WORKER` / `VERDICT: PASS` receipt exists, the next patch
   still follows that base, the automatic release consequence is proven, and
   the owner-observed release-control receipt proves immutable releases plus
-  strict exact required checks with no bypass. Only the coordinator flips
-  Ready. The author and reviewer never do.
+  strict exact required checks, and the owner's separate bypass check reports
+  no bypass actor — the receipt carries no bypass field. Only the coordinator
+  flips Ready. The author and reviewer never do.
 
 ## Working a change end to end
 
@@ -479,8 +483,10 @@ The complete delivery loop, each step gated by the sections around it:
    push invalidates both exact-head receipts.
 8. **Prove server release controls.** For an automatic-release change, the
    repository owner runs the GET-only preflight in
-   `docs/release-governance.md`; immutable releases, strict current-base
-   required checks, and the no-bypass ruleset must be exact before Ready.
+   `docs/release-governance.md` AND, separately, that document's standalone
+   bypass command — the preflight reads no bypass field under any credential.
+   Immutable releases and strict current-base required checks must be exact,
+   and the bypass-actor list must be empty, before Ready.
 9. **Owner comments** are handled per the owner review protocol below.
 10. **The owner merges.** Nothing you can do — approval, green checks,
    ready state — substitutes for that.

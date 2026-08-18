@@ -7,6 +7,46 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-08-18
+
+### Fixed
+
+- The release publisher's `immutable_settings` job still could not pass after
+  0.1.14 re-anchored the merge-method proof: run 32188959219, dispatched at the
+  0.1.14 merge commit, advanced past every previously failing layer and then
+  denied with `DENY: Protect-Main bypass actors must be a JSON array`. The
+  sibling repository's identical code family denied the same way in run
+  32188071417. `build_settings_receipt` in `scripts/ci/release_contract.py`
+  read `bypass_actors` off the `Protect-Main` ruleset detail, but GitHub's REST
+  reference for "Get a repository ruleset" states that "to prevent leaking
+  sensitive information, the bypass_actors property is only returned if the user
+  making the API request has write access to the ruleset". The job's App token
+  holds `permission-administration: read` and no ruleset write access, so the
+  property is absent from its response and the read denied unconditionally —
+  and it denied before `rules[]` was parsed, so 0.1.14's re-anchored
+  merge-method derivation had never once executed under the CI credential.
+- The receipt no longer reads or carries `bypass_actors`, matching 0.1.14's
+  philosophy: CI asserts exactly what the enforcing surface exposes to the CI
+  credential, with no conditional assertion and no credential-dependent branch.
+  `validate_settings_receipt`'s closed field set drops the key with it, so a
+  dangling bypass field is foreign and fails closed.
+
+### Changed
+
+- `docs/release-governance.md` now records which release-control invariants are
+  CI-proven and which are owner-verified, quoting GitHub's field visibility
+  rule verbatim. Bypass-actor emptiness moves to the owner-verified column and
+  that column carries the standalone GET-only `gh api` command that discharges
+  it, star-witnessed like the rest of the runbook. The deleted read is
+  credential-independent, so the preflight itself reads the property for
+  nobody and re-running it proves nothing about bypass actors; the requirement
+  remains a Ready gate at step 8 of "Working a change end to end" and is now
+  performed by a command that can actually fail. `AGENTS.md` (requirement 10,
+  merge readiness, step 8) and `README.md` stop saying the receipt proves it.
+  The runbook's 2026-08-14 ruleset-inexactness note is corrected against
+  owner-observed 2026-08-18 state. CI cannot see the field and no longer
+  pretends to.
+
 ## [0.1.14] - 2026-08-18
 
 ### Fixed

@@ -80,7 +80,8 @@ final source tree. The publisher builds or verifies:
 
 This automatic path may not leave Draft until the repository owner's read-only
 receipt proves that GitHub immutable releases are enabled and `main` requires
-the exact GitHub Actions checks against the current base with no bypass actor.
+the exact GitHub Actions checks against the current base, and the owner's
+separate read-only bypass check reports no bypass actor.
 The publisher first validates the exact successful PR-gate job inventory and
 the separate exact-SHA successful CodeQL `main` run and job inventory. It scans
 source dependencies, including frontend development dependencies, and the final
