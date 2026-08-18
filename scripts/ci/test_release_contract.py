@@ -387,12 +387,14 @@ def settings_api() -> dict[str, object]:
         {"context": context, "integration_id": 15368} for context in REQUIRED_CHECKS
     ]
     return {
+        # The exact shape GitHub returns to the publisher's least-privilege App
+        # token: no allow_*_merge booleans, because those are only returned to
+        # credentials carrying Contents write.  The merge-method proof therefore
+        # binds to the Protect-Main ruleset below, which is the control that
+        # actually enforces merge behaviour on refs/heads/main.
         "repos/owner/site": {
             "full_name": "owner/site",
             "default_branch": "main",
-            "allow_merge_commit": False,
-            "allow_rebase_merge": True,
-            "allow_squash_merge": True,
             "security_and_analysis": {
                 "secret_scanning": {"status": "enabled"},
                 "secret_scanning_push_protection": {"status": "enabled"},
@@ -1050,8 +1052,6 @@ class SettingsReceiptTests(unittest.TestCase):
 
         mutations: list[dict[str, object]] = []
         for endpoint, path, value in (
-            ("repos/owner/site", ("allow_merge_commit",), True),
-            ("repos/owner/site", ("allow_rebase_merge",), False),
             ("repos/owner/site", ("default_branch",), "release"),
             ("repos/owner/site/immutable-releases", ("enabled",), False),
             ("repos/owner/site/private-vulnerability-reporting", ("enabled",), False),
@@ -1236,6 +1236,91 @@ class SettingsReceiptTests(unittest.TestCase):
         for index, changed in enumerate(mutations):
             with self.subTest(raw_mutation=index), self.assertRaises(RC.ContractError):
                 self.observe(changed)
+
+    def test_merge_methods_bind_to_the_enforcing_ruleset_under_the_ci_credential(self):
+        # The publisher mints an Administration-read App token, and GitHub
+        # documents that "to view merge-related settings, you must have the
+        # contents:read and contents:write permissions".  Deriving the receipt's
+        # merge methods from repos/{owner}/{repo}'s allow_*_merge booleans was
+        # therefore unsatisfiable in CI: every release-publisher run since
+        # 2026-08-14 denied with "repository setting allow_merge_commit is not
+        # boolean" before any release could be published.  The Protect-Main
+        # ruleset is both readable by that credential and the control that
+        # actually governs refs/heads/main, so it is the authoritative source.
+        expected = settings_receipt()
+        credential_shape = settings_api()
+        repository_record = credential_shape["repos/owner/site"]
+        for absent in ("allow_merge_commit", "allow_rebase_merge", "allow_squash_merge"):
+            self.assertNotIn(absent, repository_record)
+        self.assertEqual(self.observe(copy.deepcopy(credential_shape)), expected)
+        self.assertEqual(expected["merge_methods"], ["rebase", "squash"])
+        RC.validate_settings_receipt(expected, "owner/site")
+
+        # A contents-write credential additionally returns the booleans.  The
+        # receipt must be byte-identical either way, and must never be steered
+        # by a field the enforcing ruleset does not own.
+        for booleans in (
+            {
+                "allow_merge_commit": False,
+                "allow_rebase_merge": True,
+                "allow_squash_merge": True,
+            },
+            {
+                "allow_merge_commit": True,
+                "allow_rebase_merge": False,
+                "allow_squash_merge": False,
+            },
+            {"allow_merge_commit": "false", "allow_rebase_merge": None},
+        ):
+            widened = copy.deepcopy(credential_shape)
+            widened["repos/owner/site"].update(booleans)
+            with self.subTest(repository_booleans=sorted(booleans)):
+                self.assertEqual(self.observe(widened), expected)
+
+        # The ruleset half stays fail-closed: a merge-commit-capable, narrowed,
+        # duplicated, empty, missing, or non-list value can never build a
+        # receipt, so no credential shape can smuggle merge commits onto main.
+        for value in (
+            ["merge", "squash"],
+            ["merge", "rebase", "squash"],
+            ["squash"],
+            ["rebase"],
+            ["squash", "squash"],
+            [],
+            "squash",
+            None,
+            {"squash": True, "rebase": True},
+        ):
+            changed = copy.deepcopy(credential_shape)
+            pull = next(
+                rule
+                for rule in changed["repos/owner/site/rulesets/42"]["rules"]
+                if rule["type"] == "pull_request"
+            )
+            pull["parameters"]["allowed_merge_methods"] = value
+            with self.subTest(allowed_merge_methods=value), self.assertRaises(
+                RC.ContractError
+            ):
+                self.observe(changed)
+        missing = copy.deepcopy(credential_shape)
+        pull = next(
+            rule
+            for rule in missing["repos/owner/site/rulesets/42"]["rules"]
+            if rule["type"] == "pull_request"
+        )
+        del pull["parameters"]["allowed_merge_methods"]
+        with self.assertRaises(RC.ContractError):
+            self.observe(missing)
+
+        # And the downstream validator keeps demanding exactly rebase+squash of
+        # whatever the builder produced.
+        for wrong in (["merge", "rebase", "squash"], ["squash"], ["rebase"], []):
+            changed = copy.deepcopy(expected)
+            changed["merge_methods"] = wrong
+            with self.subTest(receipt_merge_methods=wrong), self.assertRaises(
+                RC.ContractError
+            ):
+                RC.validate_settings_receipt(changed, "owner/site")
 
     def test_github_settings_reader_is_get_only_and_fails_closed(self):
         completed = subprocess.CompletedProcess([], 0, stdout='{"enabled": true}', stderr="")
