@@ -7,6 +7,30 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-08-18
+
+### Security
+
+- Go toolchain bumped 1.26.5 -> 1.26.6, remediating 8 HIGH-severity (zero
+  CRITICAL) Go standard-library CVEs that lidersea.com's v0.1.15
+  release-publisher run surfaced via its Trivy vulnerability gate:
+  CVE-2026-33818 (`encoding/asn1` DoS), CVE-2026-39821 (`net/http` IDNA
+  punycode), CVE-2026-46600 (`dns/dnsmessage` DoS), CVE-2026-56853
+  (`net/http` h2c DoS), CVE-2026-56858 (`html/template` XSS), CVE-2026-56859
+  (`encoding/xml` DoS), CVE-2026-56860 (`net/url` DoS), and CVE-2026-56862
+  (`crypto/tls` KeyUpdate DoS). naranjo.online builds with the identical
+  pinned Go 1.26.5 toolchain as lidersea.com, so its own just-triggered
+  v0.1.15 publisher run was expected to fail the same gate; this bump is
+  the remediation either way.
+- The pin moves everywhere it is asserted, with no application code
+  changes: `go.mod`'s `toolchain` directive (`go 1.26.0`'s language-version
+  floor is unchanged), the Dockerfile's `golang:1.26.6-trixie` builder stage
+  (digest re-pinned to the new image), the `go-version` inputs in
+  `.github/workflows/codeql.yml` and `.github/workflows/pr-gate.yml`, and
+  `pr-gate.yml`'s `go env GOVERSION` verification step. `AGENTS.md` and
+  `README.md`'s toolchain callouts move with it so the documented pin never
+  lags the enforced one.
+
 ## [0.1.15] - 2026-08-18
 
 ### Fixed
