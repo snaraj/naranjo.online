@@ -7,6 +7,43 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-08-18
+
+### Changed
+
+- `AGENTS.md` catches up to owner directives its prose predated:
+  - Requirement 3 and the commit-identity-mechanics section no longer
+    hardcode a single fixed signature (`- Fable5`); the acting agent
+    signs its own commits, PR bodies, and issue bodies, exactly matching
+    its agent label in the roster (`- Fable5` ↔ `fable5`, `- Sonnet5` ↔
+    `sonnet5`, `- Opus5` ↔ `opus5`, `- 5.6 Sol` ↔ `5.6-sol`). This
+    supersedes the single-signature owner attribution decision of
+    2026-08-10, corrected by the re-tiering directive of 2026-08-18
+    (routes simple/dependabot work to lighter models) and evidenced by
+    merged precedent #56, the first PR signed under the corrected rule.
+  - The agent-labels roster gains `sonnet5` (Claude Sonnet 5, color
+    `0EA5E9`) — the label already existed server-side; the roster text
+    lagged it.
+  - Commit identity mechanics gains a new bullet documenting per-command
+    SSH commit signing with the owner-registered Mac key (`git -c
+    gpg.format=ssh -c user.signingkey="key::$(ssh-add -L | grep
+    ssh-ed25519)" commit -S`), never via `git config`; the owner
+    registered the key as a GitHub signing key on 2026-08-18, and
+    signature enforcement on `main` is a protected-branch setting so
+    non-Mac owner merges stay unblocked.
+  - The Dependabot bullet documents the lockstep-pair practice already
+    twice-proven in this repository: when Dependabot splits a
+    version-locked pair into separate PRs (precedents:
+    `github/codeql-action` `init`+`analyze`, #53/#54; `svelte`+
+    `svelte-check`, #51/#52), one agent PR supersedes both and fixes the
+    root cause in the same commit via a `dependabot.yml` `groups:`
+    stanza (merged precedents #56, #58).
+  - The branch-prefix example generalizes from the single hardcoded
+    `fable5/<topic>` to `<lane>/<topic>`, with live examples.
+  - No behavioral, requirement-numbering, or gate change; the prose now
+    matches what the roster, the label API, and two merged PRs already
+    do.
+
 ## [0.1.12] - 2026-08-18
 
 ### Changed
