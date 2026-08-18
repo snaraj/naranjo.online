@@ -36,7 +36,14 @@ EXPECTED_IMAGE = "ghcr.io/snaraj/naranjo-online"
 EXPECTED_CHART = "ghcr.io/snaraj/charts/naranjo-online"
 GITHUB_ACTIONS_BOT_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_BOT_ID = 41898282
-INTOTO_STATEMENT_TYPE = "https://in-toto.io/Statement/v1"
+# The in-toto Statement ENVELOPE version cosign actually emits for every
+# `cosign attest` predicate type -- alias or explicit URI alike. This is
+# independent of, and must not be confused with, the SLSA predicate's own
+# "v1" versioning carried by SLSA_PREDICATE_TYPE below: cosign v3.1.3's
+# GenerateStatement always sets Type: in_toto.StatementInTotoV01, whether it
+# routes through the typed slsaprovenance1 alias or the verbatim custom/URI
+# path used here.
+INTOTO_STATEMENT_TYPE = "https://in-toto.io/Statement/v0.1"
 SLSA_PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
 DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
 GITHUB_API_VERSION = "2026-03-10"
@@ -1848,6 +1855,7 @@ def _parser() -> argparse.ArgumentParser:
     statement = commands.add_parser("attestation-statement")
     statement.add_argument("--predicate", type=Path, required=True)
     statement.add_argument("--output", type=Path, required=True)
+    statement.add_argument("--predicate-output", type=Path, required=True)
     statement.add_argument("--image", required=True)
     statement.add_argument("--digest", required=True)
     statement.add_argument("--source", required=True)
@@ -2038,6 +2046,14 @@ def main(argv: list[str] | None = None) -> int:
                 platform=args.platform,
             )
             args.output.write_text(json.dumps(statement, sort_keys=True) + "\n", encoding="utf-8")
+            # cosign's `attest --predicate` consumes ONLY the bare predicate,
+            # never the in-toto statement wrapper written above: write the
+            # exact same release-bound predicate object cosign will embed
+            # verbatim, so the file the workflow signs and the statement this
+            # command later verifies against can never drift apart.
+            args.predicate_output.write_text(
+                json.dumps(statement["predicate"], sort_keys=True) + "\n", encoding="utf-8"
+            )
         elif args.command == "attestation-set":
             expected: dict[str, Mapping[str, object]] = {}
             for item in args.expected:

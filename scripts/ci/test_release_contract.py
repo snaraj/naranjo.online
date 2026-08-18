@@ -4423,7 +4423,8 @@ class WorkflowStructureTests(unittest.TestCase):
             'tagger[name]=${tagger_name}',
             'tagger[email]=${tagger_email}',
             'tagger[date]=${tagger_date}',
-            "cosign attest --yes --statement",
+            "cosign attest --yes --predicate",
+            '--type "https://slsa.dev/provenance/v1"',
             "cosign verify-attestation --type slsaprovenance1 --output json",
             "release-state",
             "release-manifest",
@@ -4455,6 +4456,7 @@ class WorkflowStructureTests(unittest.TestCase):
             "attestation-statement",
             "attestation-set",
             "cosign verify-attestation --type slsaprovenance1 --output json",
+            "--predicate-output",
         ):
             if publisher.count(repeated) < 2:
                 raise ValueError(f"publisher must use {repeated} for both existing and new images")
@@ -4970,7 +4972,8 @@ class WorkflowStructureTests(unittest.TestCase):
             ("publisher", "            ${{ env.IMAGE }}:${{ steps.release.outputs.tag }}"),
             ("publisher", 'helm push "${RUNNER_TEMP}/${chart_name}-${version}.tgz" "oci://${CHART%/*}"'),
             ("publisher", 'test "${observed}" = "${expected}"'),
-            ("publisher", "cosign attest --yes --statement"),
+            ("publisher", "cosign attest --yes --predicate"),
+            ("publisher", '--type "https://slsa.dev/provenance/v1"'),
             ("publisher", "cosign verify-attestation --type slsaprovenance1 --output json"),
             ("publisher", "release-state"),
             ("publisher", "release-manifest"),
@@ -4997,6 +5000,7 @@ class WorkflowStructureTests(unittest.TestCase):
             ("publisher", 'cmp --silent "${manifest}" "${observed_manifest}"'),
             ("publisher", "attestation-statement"),
             ("publisher", "attestation-set"),
+            ("publisher", "--predicate-output"),
         ):
             changed_orchestrator = orchestrator.replace(token, "") if owner == "orchestrator" else orchestrator
             changed_publisher = publisher.replace(token, "") if owner == "publisher" else publisher
