@@ -4690,6 +4690,7 @@ class WorkflowStructureTests(unittest.TestCase):
             '"${CHART}@${chart_digest}"',
             "cosign verify-attestation --type slsaprovenance1 --output json",
             "attestation-statement",
+            "--predicate-output",
             "attestation-set",
             'git archive "${source_sha}" chart | tar -x -C "${expected_source}"',
             'diff -ru --no-dereference "${expected_tree}/${chart_name}" "${published_tree}/${chart_name}"',
@@ -5462,6 +5463,14 @@ class WorkflowStructureTests(unittest.TestCase):
             (gate, publisher, audit.replace("main-run-record", "", 1), installer),
             (gate, publisher, audit.replace("tag-record", "", 1), installer),
             (gate, publisher, audit.replace("attestation-set", "", 1), installer),
+            # Issue #70: this pin used to require attestation-statement for
+            # the audit workflow but not the --predicate-output flag that
+            # makes it write the exact object cosign signs, so deleting the
+            # flag from release-audit.yml survived the full suite even
+            # though the identical deletion on the publisher side was
+            # already caught (see the "publisher" --predicate-output pin
+            # above). Proven closed: this mutant must now go red too.
+            (gate, publisher, audit.replace("--predicate-output", "", 1), installer),
             (gate, publisher, audit.replace("diff -ru --no-dereference", "true #", 1), installer),
             (gate, publisher, audit + "\n      contents: write\n", installer),
             (gate, publisher, audit + "\n      gh api --method POST foreign\n", installer),
