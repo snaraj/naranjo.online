@@ -109,7 +109,7 @@ OCI_INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json"
 OCI_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
 OCI_EMPTY_CONFIG_MEDIA_TYPE = "application/vnd.oci.empty.v1+json"
 INTOTO_LAYER_MEDIA_TYPE = "application/vnd.in-toto+json"
-SBOM_STATEMENT_TYPE = "https://in-toto.io/Statement/v0.1"
+SBOM_STATEMENT_TYPE = "https://in-toto.io/Statement/v1"
 SBOM_PREDICATE_TYPE = "https://spdx.dev/Document"
 
 

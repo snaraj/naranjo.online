@@ -7,6 +7,32 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.18] - 2026-08-19
+
+### Fixed
+
+- Raw SBOM statement binding pins the in-toto type BuildKit actually
+  emits: `SBOM_STATEMENT_TYPE` moves from
+  `https://in-toto.io/Statement/v0.1` to `https://in-toto.io/Statement/v1`.
+  Proven live by the first v0.1.17 publish attempt (run 32208827873): every
+  earlier release attempt died before the SBOM re-bind step, so this pin
+  had never met a real BuildKit statement — the fixture built its
+  statement FROM the module constant, a self-referential oracle that
+  passes under any value. The raw statement fetched from the registry for
+  the v0.1.17 image carries `_type: https://in-toto.io/Statement/v1`
+  (predicateType, subject purl, platform query, and digest binding all
+  already exact). This is the opposite polarity from the cosign-generated
+  attestation statement, which correctly remains pinned at v0.1
+  (`INTOTO_STATEMENT_TYPE`, the value cosign emits, proven live in the
+  same run): two generators, two separate constants, opposite correct
+  values. A new literal-pin test
+  (`test_sbom_statement_type_literal_is_the_pinned_in_toto_v1_uri`)
+  guards the constant against silent reversion — the vacuity the
+  self-referential fixture allowed — and the statement-mutant matrix now
+  rejects the old `v0.1` value, proving exactness in both directions.
+  The weekly release audit shares the same `sbom-statement` subcommand,
+  so both the publisher and the audit converge on the real emission.
+
 ## [0.1.17] - 2026-08-19
 
 ### Fixed
