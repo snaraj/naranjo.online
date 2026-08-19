@@ -248,7 +248,7 @@ jobs:
           tar -xzf "${published_archives}/${chart_name}-${version}.tgz" -C "${published_tree}"
           diff -ru --no-dereference "${expected_tree}/${chart_name}" "${published_tree}/${chart_name}"
 
-          trivy image --scanners vuln --include-dev-deps \
+          trivy image --scanners vuln \
             --severity HIGH,CRITICAL --exit-code 1 \
             --ignore-unfixed=false --timeout 10m \
             --cache-dir "${RUNNER_TEMP}/trivy-audit-cache" "${IMAGE}@${image_digest}"

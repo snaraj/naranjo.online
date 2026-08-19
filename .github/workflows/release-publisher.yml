@@ -539,8 +539,12 @@ jobs:
           python3 -I -B scripts/ci/release_contract.py attestation-set \
             --verified "${verified}" "${expected_attestations[@]}"
       - name: Reject high or critical vulnerabilities in the final image digest
+        # --include-dev-deps is a source/lockfile concept (npm, etc.) that
+        # `trivy fs` understands; the installed trivy rejects it as an
+        # unknown flag on `trivy image` (issue #73), so this step FATALed
+        # before scanning anything and the final digest was never gated.
         run: >-
-          trivy image --scanners vuln --include-dev-deps
+          trivy image --scanners vuln
           --severity HIGH,CRITICAL --exit-code 1
           --ignore-unfixed=false --timeout 10m
           --cache-dir "${RUNNER_TEMP}/trivy-image-cache"
@@ -792,9 +796,11 @@ jobs:
             --image "${IMAGE}" --image-digest "${{ steps.image.outputs.digest }}" \
             --chart "${CHART}" --chart-digest "${{ steps.chart.outputs.digest }}"
           existing="${RUNNER_TEMP}/existing-release.json"
+          releases_page="${RUNNER_TEMP}/existing-releases-page.json"
           api="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"
+          list_api="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases?per_page=100"
           classify_release() {
-            local status
+            local status list_status matches
             local -a record_args=()
             status="$(curl --silent --show-error --location \
               --proto '=https' --tlsv1.2 --output "${existing}" --write-out '%{http_code}' \
@@ -802,6 +808,39 @@ jobs:
               --header 'X-GitHub-Api-Version: 2026-03-10' \
               --header "Authorization: Bearer ${GH_TOKEN}" \
               "${api}")"
+            if [ "${status}" = 404 ]; then
+              # GitHub's by-tag endpoint documents that it returns a
+              # PUBLISHED release only: an unpublished draft under this
+              # exact tag (for example, our own draft-create below, retried
+              # after a lost response) 404s here even though it exists.
+              # Resolve the ambiguity from the authoritative list instead
+              # of trusting the by-tag 404 as proof nothing exists.
+              list_status="$(curl --silent --show-error --location \
+                --proto '=https' --tlsv1.2 --output "${releases_page}" --write-out '%{http_code}' \
+                --header 'Accept: application/vnd.github+json' \
+                --header 'X-GitHub-Api-Version: 2026-03-10' \
+                --header "Authorization: Bearer ${GH_TOKEN}" \
+                "${list_api}")"
+              # classify_release normally runs inside `$(...)`, where bash
+              # does not apply -e to a bare command's failure: an unguarded
+              # `test` here would silently fall through on a bad probe
+              # rather than stop, so the failure is an explicit exit.
+              if [ "${list_status}" != 200 ]; then
+                printf 'DENY: releases list probe returned HTTP %s\n' "${list_status}" >&2
+                exit 1
+              fi
+              matches="$(jq --arg tag "${tag}" \
+                '[.[] | select(.tag_name == $tag)] | length' "${releases_page}")"
+              if [ "${matches}" = 1 ]; then
+                jq -e --arg tag "${tag}" '.[] | select(.tag_name == $tag)' \
+                  "${releases_page}" > "${existing}"
+                status=200
+              elif [ "${matches}" != 0 ]; then
+                printf 'DENY: %s Releases share tag %s; a stranded draft needs operator resolution\n' \
+                  "${matches}" "${tag}" >&2
+                exit 1
+              fi
+            fi
             if [ "${status}" = 200 ]; then
               record_args=(--release-json "${existing}")
             fi

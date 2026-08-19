@@ -3145,6 +3145,11 @@ jq() {
   case "${all}" in
     *'.object.sha'*) printf '%s\n' "${TAG_OBJECT_SHA}" ;;
     *'.assets | select(length == 1)'*) printf '%s\n' 'https://api.github.test/assets/1' ;;
+    *'] | length'*)
+      # The list-probe fixture below always answers empty on the calls
+      # where by-tag still 404s, so nothing under this tag ever counts.
+      printf '0\n'
+      ;;
     *) return 2 ;;
   esac
 }
@@ -3172,6 +3177,14 @@ curl() {
         cp "${RUNNER_TEMP}/release-fixture.json" "${output}"
         printf '200'
       fi
+      ;;
+    *'releases?per_page=100'*)
+      # Nothing exists under this tag yet on the calls where by-tag still
+      # 404s (release_count <= 2 above); the classify_release list-probe
+      # correctly reads that as absent, same as before this fixture's
+      # by-tag endpoint eventually catches up on the third call.
+      printf '[]' > "${output}"
+      printf '200'
       ;;
     *'api.github.test/assets/1'*)
       cp "${RUNNER_TEMP}/naranjo-online-v0.1.10-release-manifest.json" "${output}"
@@ -3291,8 +3304,16 @@ python3() {
 }
 
 jq() {
-  case "$*" in
+  local all="$*" state='absent'
+  if [ -f "${RUNNER_TEMP}/release-state" ]; then
+    state="$(<"${RUNNER_TEMP}/release-state")"
+  fi
+  case "${all}" in
     *'.assets | select(length == 1)'*) printf '%s\n' 'https://api.github.test/assets/1' ;;
+    *'] | length'*)
+      if [ "${state}" = absent ]; then printf '0\n'; else printf '1\n'; fi
+      ;;
+    *'select(.tag_name == $tag)'*) cat "${RUNNER_TEMP}/${state}-release.json" ;;
     *) return 2 ;;
   esac
 }
@@ -3310,13 +3331,27 @@ curl() {
   fi
   case "${all}" in
     *'/releases/tags/'*)
-      if [ "${state}" = absent ]; then
+      # Real GitHub: by-tag finds a PUBLISHED release only. An unpublished
+      # draft (prepared/staged) 404s here exactly like a genuinely absent
+      # Release, so classify_release's list-probe fallback is exercised
+      # the same way it is against the real API.
+      if [ "${state}" = absent ] || [ "${state}" = prepared ] || [ "${state}" = staged ]; then
         printf '{}' > "${output}"
         printf '404'
       else
         cp "${RUNNER_TEMP}/${state}-release.json" "${output}"
         printf '200'
       fi
+      ;;
+    *'releases?per_page=100'*)
+      if [ "${state}" = absent ]; then
+        printf '[]' > "${output}"
+      else
+        printf '[' > "${output}"
+        cat "${RUNNER_TEMP}/${state}-release.json" >> "${output}"
+        printf ']' >> "${output}"
+      fi
+      printf '200'
       ;;
     *'api.github.test/assets/1'*)
       local count=0
@@ -3448,6 +3483,210 @@ gh() {
         )
         self.assertEqual(survived.returncode, 0, survived.stdout + survived.stderr)
         self.assertEqual(survived_calls, "create\nupload\nedit\n")
+
+    def test_actual_ambiguous_stray_drafts_are_denied_not_guessed(self):
+        # Real GitHub lets more than one draft Release share a tag_name
+        # (neither is the published owner of the ref, so by-tag 404s on all
+        # of them). classify_release's list-probe must refuse to guess
+        # which stray draft is "the" release rather than silently picking
+        # one — and must deny before ever attempting a create/upload/edit
+        # that could produce a THIRD stray draft under the same tag.
+        block = ExistingImageShellPathTests.workflow_run_block(
+            "Stage, verify, and publish the exact GitHub release"
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT, prefix=".ambiguous-draft-shell-") as temporary:
+            runner = Path(temporary)
+            runner_relative = runner.relative_to(ROOT).as_posix()
+            manifest_record = RC.build_release_manifest(
+                repository=RC.EXPECTED_REPOSITORY,
+                source_sha=self.SOURCE,
+                main_run_id=123,
+                version="0.1.10",
+                image=RC.EXPECTED_IMAGE,
+                image_digest="sha256:" + "d" * 64,
+                chart=RC.EXPECTED_CHART,
+                chart_digest="sha256:" + "e" * 64,
+            )
+            manifest = canonical_manifest_bytes(manifest_record)
+            manifest_name = f"naranjo-online-{self.TAG}-release-manifest.json"
+            (runner / manifest_name).write_bytes(manifest)
+            replacements = {
+                "${{ steps.release.outputs.tag }}": self.TAG,
+                "${{ steps.release.outputs.version }}": "0.1.10",
+                "${{ steps.image.outputs.digest }}": "sha256:" + "d" * 64,
+                "${{ steps.chart.outputs.digest }}": "sha256:" + "e" * 64,
+                "${{ steps.manifest.outputs.path }}": f"{runner_relative}/{manifest_name}",
+                "${{ steps.manifest.outputs.name }}": manifest_name,
+            }
+            for old, new in replacements.items():
+                block = block.replace(old, new)
+            prelude = r'''
+python3() {
+  "${TEST_PYTHON}" "$@"
+}
+
+jq() {
+  case "$*" in
+    *'] | length'*) printf '2\n' ;;
+    *) return 2 ;;
+  esac
+}
+
+curl() {
+  local all="$*" output=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --output) output="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  case "${all}" in
+    *'/releases/tags/'*)
+      printf '{}' > "${output}"
+      printf '404'
+      ;;
+    *'releases?per_page=100'*)
+      printf '[{"tag_name":"v0.1.10"},{"tag_name":"v0.1.10"}]' > "${output}"
+      printf '200'
+      ;;
+    *) return 2 ;;
+  esac
+}
+
+gh() {
+  printf 'unexpected gh call: %s\n' "$*" >&2
+  return 2
+}
+'''
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "TEST_PYTHON": ExistingImageShellPathTests.bash_path(sys.executable),
+                    "RUNNER_TEMP": runner_relative,
+                    "GH_TOKEN": "fixture-token",
+                    "GITHUB_API_URL": "https://api.github.com",
+                    "GITHUB_REPOSITORY": RC.EXPECTED_REPOSITORY,
+                    "SOURCE_SHA": self.SOURCE,
+                    "MAIN_RUN_ID": "123",
+                    "IMAGE": RC.EXPECTED_IMAGE,
+                    "CHART": RC.EXPECTED_CHART,
+                }
+            )
+            completed = subprocess.run(
+                [ExistingImageShellPathTests.bash_executable()],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                input=prelude + "\n" + block,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                timeout=30,
+            )
+        self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("DENY: 2 Releases share tag v0.1.10", completed.stderr)
+        self.assertIn("a stranded draft needs operator resolution", completed.stderr)
+
+    def test_actual_failed_list_probe_denies_rather_than_falls_through(self):
+        # classify_release normally runs inside `$(...)`, where bash does
+        # not apply -e to an intermediate command's failure. A bare `test`
+        # on a bad list-probe response would silently fall through to an
+        # empty match count rather than stop, so the guard must be an
+        # explicit exit — proven here by making the list probe itself fail.
+        block = ExistingImageShellPathTests.workflow_run_block(
+            "Stage, verify, and publish the exact GitHub release"
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT, prefix=".list-probe-shell-") as temporary:
+            runner = Path(temporary)
+            runner_relative = runner.relative_to(ROOT).as_posix()
+            manifest_record = RC.build_release_manifest(
+                repository=RC.EXPECTED_REPOSITORY,
+                source_sha=self.SOURCE,
+                main_run_id=123,
+                version="0.1.10",
+                image=RC.EXPECTED_IMAGE,
+                image_digest="sha256:" + "d" * 64,
+                chart=RC.EXPECTED_CHART,
+                chart_digest="sha256:" + "e" * 64,
+            )
+            manifest = canonical_manifest_bytes(manifest_record)
+            manifest_name = f"naranjo-online-{self.TAG}-release-manifest.json"
+            (runner / manifest_name).write_bytes(manifest)
+            replacements = {
+                "${{ steps.release.outputs.tag }}": self.TAG,
+                "${{ steps.release.outputs.version }}": "0.1.10",
+                "${{ steps.image.outputs.digest }}": "sha256:" + "d" * 64,
+                "${{ steps.chart.outputs.digest }}": "sha256:" + "e" * 64,
+                "${{ steps.manifest.outputs.path }}": f"{runner_relative}/{manifest_name}",
+                "${{ steps.manifest.outputs.name }}": manifest_name,
+            }
+            for old, new in replacements.items():
+                block = block.replace(old, new)
+            prelude = r'''
+python3() {
+  "${TEST_PYTHON}" "$@"
+}
+
+jq() {
+  printf 'unexpected jq call: %s\n' "$*" >&2
+  return 2
+}
+
+curl() {
+  local all="$*" output=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --output) output="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  case "${all}" in
+    *'/releases/tags/'*)
+      printf '{}' > "${output}"
+      printf '404'
+      ;;
+    *'releases?per_page=100'*)
+      printf 'rate limited\n' > "${output}"
+      printf '500'
+      ;;
+    *) return 2 ;;
+  esac
+}
+
+gh() {
+  printf 'unexpected gh call: %s\n' "$*" >&2
+  return 2
+}
+'''
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "TEST_PYTHON": ExistingImageShellPathTests.bash_path(sys.executable),
+                    "RUNNER_TEMP": runner_relative,
+                    "GH_TOKEN": "fixture-token",
+                    "GITHUB_API_URL": "https://api.github.com",
+                    "GITHUB_REPOSITORY": RC.EXPECTED_REPOSITORY,
+                    "SOURCE_SHA": self.SOURCE,
+                    "MAIN_RUN_ID": "123",
+                    "IMAGE": RC.EXPECTED_IMAGE,
+                    "CHART": RC.EXPECTED_CHART,
+                }
+            )
+            completed = subprocess.run(
+                [ExistingImageShellPathTests.bash_executable()],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                input=prelude + "\n" + block,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                timeout=30,
+            )
+        self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("DENY: releases list probe returned HTTP 500", completed.stderr)
 
 
 class ReleaseSettingsShellPathTests(unittest.TestCase):
@@ -4400,7 +4639,7 @@ class WorkflowStructureTests(unittest.TestCase):
             '          --cache-dir "${RUNNER_TEMP}/trivy-source-cache" .'
         )
         image_scan = (
-            "trivy image --scanners vuln --include-dev-deps\n"
+            "trivy image --scanners vuln\n"
             "          --severity HIGH,CRITICAL --exit-code 1\n"
             '          --ignore-unfixed=false --timeout 10m\n'
             '          --cache-dir "${RUNNER_TEMP}/trivy-image-cache"\n'
@@ -4408,6 +4647,16 @@ class WorkflowStructureTests(unittest.TestCase):
         )
         if source_scan not in gate or image_scan not in publisher:
             raise ValueError("source or final-digest vulnerability gate is not exact")
+        # --include-dev-deps is a source/lockfile concept: valid on `trivy
+        # fs` (the source_scan above), an unknown flag on `trivy image` in
+        # the installed version (issue #73 — FATAL before any scan ran, on
+        # both the publisher's final-digest gate and the recurring audit).
+        for surface, name in ((publisher, "publisher"), (audit, "audit")):
+            if "trivy image --scanners vuln --include-dev-deps" in surface:
+                raise ValueError(
+                    f"{name} final-image trivy invocation carries the unknown "
+                    "--include-dev-deps flag; that gate never executes"
+                )
 
         audit_requirements = (
             "schedule:",
@@ -4444,7 +4693,7 @@ class WorkflowStructureTests(unittest.TestCase):
             "attestation-set",
             'git archive "${source_sha}" chart | tar -x -C "${expected_source}"',
             'diff -ru --no-dereference "${expected_tree}/${chart_name}" "${published_tree}/${chart_name}"',
-            "trivy image --scanners vuln --include-dev-deps",
+            "trivy image --scanners vuln",
             "--severity HIGH,CRITICAL --exit-code 1",
             "sbom-index-record",
             "sbom-layer-record",
@@ -4533,6 +4782,11 @@ class WorkflowStructureTests(unittest.TestCase):
             "verify_asset_bytes",
             'cmp --silent "${manifest}" "${observed}"',
             "/releases/tags/${tag}",
+            "releases?per_page=100",
+            '[.[] | select(.tag_name == $tag)] | length',
+            '"${releases_page}" > "${existing}"',
+            "a stranded draft needs operator resolution",
+            "DENY: releases list probe returned HTTP",
             "X-GitHub-Api-Version: 2026-03-10",
             "for attempt in 1 2 3 4 5",
             'test "${race_verified}" = true',
@@ -4560,9 +4814,10 @@ class WorkflowStructureTests(unittest.TestCase):
             raise ValueError("publisher must verify manifest bytes before and after publication")
         if publisher.count("tag-state") < 1 or publisher.count("tag-record") < 1:
             raise ValueError("publisher must bind the tag both before artifacts and after immutable Release state")
-        if publisher.count("X-GitHub-Api-Version: 2026-03-10") < 4:
+        if publisher.count("X-GitHub-Api-Version: 2026-03-10") < 5:
             raise ValueError(
-                "publisher must version the main-run, Release, and both terminal tag REST reads"
+                "publisher must version the main-run, Release, the draft-visible "
+                "releases list, and both terminal tag REST reads"
             )
         build_heading = "      - name: Build and publish both production architectures"
         image_resolver_heading = "      - name: Resolve the one image digest for later stages"
@@ -5081,6 +5336,11 @@ class WorkflowStructureTests(unittest.TestCase):
             ("publisher", "verify_asset_bytes"),
             ("publisher", 'cmp --silent "${manifest}" "${observed}"'),
             ("publisher", "/releases/tags/${tag}"),
+            ("publisher", "releases?per_page=100"),
+            ("publisher", '[.[] | select(.tag_name == $tag)] | length'),
+            ("publisher", '"${releases_page}" > "${existing}"'),
+            ("publisher", "a stranded draft needs operator resolution"),
+            ("publisher", "DENY: releases list probe returned HTTP"),
             ("publisher", "X-GitHub-Api-Version: 2026-03-10"),
             ("publisher", "for attempt in 1 2 3 4 5"),
             ("publisher", 'test "${race_verified}" = true'),
@@ -5168,8 +5428,31 @@ class WorkflowStructureTests(unittest.TestCase):
         mutants = (
             (gate.replace("--severity HIGH,CRITICAL", "--severity CRITICAL", 1), publisher, audit, installer),
             (gate.replace(" --include-dev-deps", "", 1), publisher, audit, installer),
-            (gate, publisher.replace(" --include-dev-deps", "", 1), audit, installer),
-            (gate, publisher, audit.replace(" --include-dev-deps", "", 1), installer),
+            # Issue #73: --include-dev-deps is unknown to `trivy image` on the
+            # installed version and FATALs before any scan runs. The old pair
+            # of mutants here asserted the backwards claim (that REMOVING the
+            # flag was the regression); now that both real image-scan
+            # invocations are flag-free, prove REINTRODUCING it is caught.
+            (
+                gate,
+                publisher.replace(
+                    "trivy image --scanners vuln",
+                    "trivy image --scanners vuln --include-dev-deps",
+                    1,
+                ),
+                audit,
+                installer,
+            ),
+            (
+                gate,
+                publisher,
+                audit.replace(
+                    "trivy image --scanners vuln",
+                    "trivy image --scanners vuln --include-dev-deps",
+                    1,
+                ),
+                installer,
+            ),
             (gate, publisher.replace("--ignore-unfixed=false", "--ignore-unfixed=true", 1), audit, installer),
             (gate, publisher, audit.replace("cron: '17 8 * * 1'", "cron: '17 8 * * 0'", 1), installer),
             (gate, publisher, audit.replace("packages: read", "packages: write", 1), installer),

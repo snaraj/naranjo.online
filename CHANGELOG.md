@@ -7,6 +7,84 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-08-19
+
+### Fixed
+
+- The release publisher's draft-observe loop could never see its own draft
+  (#71): `classify_release`'s by-tag GET (`GET .../releases/tags/${tag}`) is
+  documented to return a PUBLISHED release only, so the retry loop after
+  `gh release create ... --draft` read a permanent 404 ("absent") and denied
+  when `test "${race_verified}" = true` failed — the resumable-draft design
+  was unreachable as written. lidersea.com proved this live (run
+  32201373323, v0.1.16): the draft's manifest, image, and chart were all
+  complete and correctly signed, but the Release object itself was
+  stranded `draft: true`. Fixed by keeping the by-tag GET as the first
+  probe and, only on its 404, adding a list probe
+  (`GET .../releases?per_page=100`) that selects `tag_name == TAG`: exactly
+  one match writes that object into the same `existing-release.json` file
+  `classify_release` and `verify_asset_bytes` already consume and
+  reclassifies through the unchanged `release-state` CLI; zero matches keep
+  the original absent classification; more than one is refused (`DENY: ...
+  a stranded draft needs operator resolution`, exit 1) rather than guessed
+  at, since GitHub only lets multiple Releases share a `tag_name` when none
+  of them is the published owner of that ref. `release_contract.py`'s
+  `classify_release_state` needed no change: it already classifies
+  correctly from either a by-tag or a list-selected object, since GitHub
+  returns the same Release shape either way. This repo's own v0.1.16
+  publish attempts never reached this step live — they died earlier, first
+  on the cosign predicate defect this changelog's 0.1.16 entry fixed, then
+  on the trivy defect below — so the fix lands from the shared code shape
+  and lidersea's live proof rather than a local reproduction.
+- Closes the mutant-proven gap in `WorkflowStructureTests` (#70):
+  `require_vulnerability_and_alias_audit`'s `audit_requirements` pinned
+  `attestation-statement` for `release-audit.yml` but not the
+  `--predicate-output` flag that makes it write the exact object cosign
+  signs, so deleting that flag from the audit workflow survived the full
+  suite while the identical deletion on the publisher side was already
+  caught. The flag is now a pinned literal for both surfaces, with a
+  hostile mutant proving the audit-side deletion goes red.
+- The release publisher's and recurring audit's final-image vulnerability
+  gate had never executed (#73): both `trivy image --scanners vuln
+  --include-dev-deps ...` invocations FATAL on the installed trivy
+  (`unknown flag: --include-dev-deps` — a source/lockfile concept `trivy
+  fs` understands, not one `trivy image` accepts), proven directly by this
+  repo's own v0.1.16 publish attempt (run 32203707053, step "Reject high or
+  critical vulnerabilities in the final image digest"). Because the step
+  ordering signs before scanning (#69), this left ghcr.io holding
+  signed-but-never-scanned images at v0.1.15 and v0.1.16. Fixed by dropping
+  the flag from both `trivy image` call sites (`release-publisher.yml`,
+  `release-audit.yml`); `pr-gate.yml`'s `trivy fs --include-dev-deps` source
+  scan is unaffected — the flag is valid there and unimplicated by the
+  failure. `WorkflowStructureTests` now pins the flag-free invocation on
+  both surfaces and explicitly forbids `--include-dev-deps` from
+  reappearing on either `trivy image` line; the two hostile mutants that
+  previously asserted the opposite (that removing the flag was the
+  regression) are replaced with mutants proving reintroducing it is
+  caught.
+- Chart rollout strategy swaps pods in place instead of surging (#72): the
+  namespace quota (`pods: 2`, `limits.memory: 256Mi`) leaves no room for a
+  third pod once `replicaCount` is at its default/maximum of 2, so
+  `maxSurge: 1` could never schedule its new pod — cluster-proven during
+  the lidersea.com v0.1.16 deploy, where the controller filled the quota by
+  scaling the OLD ReplicaSet to 2 first (holding the `maxUnavailable: 0`
+  floor) and wedged the rollout permanently. `maxSurge: 0` /
+  `maxUnavailable: 1` is now the only rolling path at 2 replicas, and works
+  cleanly at 1 too. No existing test or pin in this repository asserted
+  the old strategy values (verified by a full-repository grep for
+  `maxSurge`/`maxUnavailable`/`rollingUpdate`); `helm lint` and a rendered
+  `helm template` grep are this change's evidence.
+- `replicaCount` accepts 1..2 instead of a fixed `const: 2` (owner
+  directive 2026-08-19, mirroring lidersea.com commit `bab253b`):
+  workloads should not be scale-rigid, and the cluster doubles as the dev
+  environment, so the schema now expresses the namespace quota's real
+  budget (`minimum: 1`, `maximum: 2`) rather than a single fixed shape.
+  Default stays 2 for availability; `chart/values.yaml` carries the same
+  head comment as lidersea.com explaining the range. `maxSurge: 0` /
+  `maxUnavailable: 1` above roll cleanly at either value. Verified:
+  `helm template` renders at `replicaCount=1` and the unset default
+  (`2`); `replicaCount=3` is rejected by schema validation.
+
 ## [0.1.16] - 2026-08-18
 
 ### Fixed
