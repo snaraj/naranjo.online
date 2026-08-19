@@ -7,6 +7,82 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-08-18
+
+### Fixed
+
+- The release publisher's "Attach the BuildKit SLSA provenance as cosign
+  attestations" step could not pass either: run 32195803008 advanced past
+  0.1.15's settings fix, signed the image
+  (`sha256:2fe2171286418d0be4f0ad36ac792e9f0edc2dce5922442a8afdc5605fbc94f8`),
+  and then denied with `predicate cannot be empty`, burning tag v0.1.15.
+  The pinned cosign v3.1.3's `attest` (`cmd/cosign/cli/attest/attest.go`)
+  unconditionally requires `PredicatePath` before it looks at anything
+  else; `--statement` parses as a flag but is never read anywhere in
+  `attest`'s execution path, so `cosign attest --yes --statement
+  "${statement}" ...` could never have signed anything.
+- The fix signs the release-bound MODIFIED PREDICATE through the flag
+  cosign actually consumes, with the predicate-type URI passed literally
+  rather than through the `slsaprovenance1` alias: `cosign attest --yes
+  --predicate "${modified_predicate}" --type
+  "https://slsa.dev/provenance/v1" "${IMAGE}@${DIGEST}"`. The alias
+  resolves, via `cmd/cosign/cli/options/predicate.go`'s
+  `PredicateTypeMap`, to cosign's typed SLSA decoder
+  (`protojson.UnmarshalOptions{DiscardUnknown: true}`), which would have
+  silently dropped BuildKit's `runDetails.metadata.buildkit_metadata` and
+  `buildkit_completeness` before signing. Our injected
+  `buildDefinition.internalParameters.release` binding survives either
+  path — `internalParameters` is typed as a `google.protobuf.Struct`,
+  which protojson's unknown-field discarding never reaches — but the
+  literal URI is still the correct choice: losing the two BuildKit fields
+  alone already breaks this step's later exact-statement comparison, and
+  the literal URI instead takes cosign's generic/custom path, which embeds
+  the predicate verbatim rather than dropping anything. Both paths set the
+  signed statement's envelope `_type` to `https://in-toto.io/Statement/v0.1`
+  (`in_toto.StatementInTotoV01` upstream), never the `.../Statement/v1`
+  this repo previously expected and cosign never actually emitted, so
+  `INTOTO_STATEMENT_TYPE` in `scripts/ci/release_contract.py` now matches
+  reality. The existing `cosign verify-attestation --type slsaprovenance1`
+  calls are unchanged: that alias resolves through the identical
+  `PredicateTypeMap` to the same `https://slsa.dev/provenance/v1` URI used
+  for signing, and verification filters on `predicateType`, never the
+  envelope `_type` — confirmed directly against cosign's
+  `pkg/policy/attestation.go`.
+- `attestation-statement` now also writes the modified predicate to a
+  required `--predicate-output` path — the exact object cosign embeds —
+  threaded through both the existing-image classification loop and the
+  signing loop, so a previously-published and a freshly-signed image are
+  verified identically. Reproduced locally end-to-end against the burned
+  v0.1.15 digest with the pinned cosign v3.1.3: the old `--statement`
+  invocation still dies with `predicate cannot be empty`; the new form,
+  driven by this fix's own `attestation-statement` output, clears predicate
+  loading, statement generation, and digest resolution, and fails only at
+  a deliberately-invalid `--identity-token deadbeef` with `open deadbeef:
+  no such file or directory` — the first failure a real GitHub Actions
+  OIDC token clears.
+
+### Security
+
+- Go toolchain bumped 1.26.5 -> 1.26.6, remediating 8 HIGH-severity (zero
+  CRITICAL) Go standard-library CVEs that lidersea.com's v0.1.15
+  release-publisher run surfaced via its Trivy vulnerability gate:
+  CVE-2026-33818 (`encoding/asn1` DoS), CVE-2026-39821 (`net/http` IDNA
+  punycode), CVE-2026-46600 (`dns/dnsmessage` DoS), CVE-2026-56853
+  (`net/http` h2c DoS), CVE-2026-56858 (`html/template` XSS), CVE-2026-56859
+  (`encoding/xml` DoS), CVE-2026-56860 (`net/url` DoS), and CVE-2026-56862
+  (`crypto/tls` KeyUpdate DoS). naranjo.online builds with the identical
+  pinned Go 1.26.5 toolchain as lidersea.com, so its own just-triggered
+  v0.1.15 publisher run was expected to fail the same gate; this bump is
+  the remediation either way.
+- The pin moves everywhere it is asserted, with no application code
+  changes: `go.mod`'s `toolchain` directive (`go 1.26.0`'s language-version
+  floor is unchanged), the Dockerfile's `golang:1.26.6-trixie` builder stage
+  (digest re-pinned to the new image), the `go-version` inputs in
+  `.github/workflows/codeql.yml` and `.github/workflows/pr-gate.yml`, and
+  `pr-gate.yml`'s `go env GOVERSION` verification step. `AGENTS.md` and
+  `README.md`'s toolchain callouts move with it so the documented pin never
+  lags the enforced one.
+
 ## [0.1.15] - 2026-08-18
 
 ### Fixed

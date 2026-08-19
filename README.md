@@ -50,7 +50,7 @@ go test -race ./...
 docker build .
 ```
 
-Toolchain pins live in CI (`node 24.19.0`, `npm 11.17.0`, `go 1.26.5`);
+Toolchain pins live in CI (`node 24.19.0`, `npm 11.17.0`, `go 1.26.6`);
 newer local versions generally work, CI is authoritative.
 
 ## Releases

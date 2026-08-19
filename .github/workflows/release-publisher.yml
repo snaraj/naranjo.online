@@ -372,6 +372,7 @@ jobs:
           for platform in "${required_platforms[@]}"; do
             predicate="${RUNNER_TEMP}/existing-${platform//\//-}.json"
             statement="${RUNNER_TEMP}/existing-${platform//\//-}.statement.json"
+            modified_predicate="${RUNNER_TEMP}/existing-${platform//\//-}.predicate.json"
             if ! docker buildx imagetools inspect "${IMAGE}@${digest}" \
               --format "{{ json (index .Provenance \"${platform}\").SLSA }}" > "${predicate}"; then
               source_match=false
@@ -379,6 +380,7 @@ jobs:
             fi
             if ! python3 -I -B scripts/ci/release_contract.py attestation-statement \
               --predicate "${predicate}" --output "${statement}" \
+              --predicate-output "${modified_predicate}" \
               --image "${IMAGE}" --digest "${digest}" --source "${source}" \
               --revision "${SOURCE_SHA}" --platform "${platform}"; then
               source_match=false
@@ -464,9 +466,24 @@ jobs:
         run: cosign sign --yes "${IMAGE}@${{ steps.image.outputs.digest }}"
       - name: Attach the BuildKit SLSA provenance as cosign attestations
         # Buildx embeds one SLSA v1 predicate per platform. Preserve each
-        # complete predicate inside an exact in-toto statement, add a
-        # release binding that cosign's --statement path retains verbatim,
-        # and sign both statements about the immutable index digest. The
+        # complete predicate inside an exact in-toto statement for later
+        # comparison, add a release binding to a COPY consumed only as the
+        # signed predicate, and sign that modified predicate about the
+        # immutable index digest. cosign's `attest` has no working
+        # --statement path -- PredicatePath is unconditionally required, so
+        # --predicate is the only flag that can carry it -- and --type is
+        # the literal predicate-type URI, never the "slsaprovenance1" alias:
+        # the alias resolves to cosign's strict typed SLSA decoder, which
+        # silently discards unknown fields -- BuildKit's own
+        # buildkit_metadata and buildkit_completeness. Our release binding
+        # in buildDefinition.internalParameters is NOT among them:
+        # internalParameters is typed as a google.protobuf.Struct, so
+        # protojson's unknown-field discarding never reaches it and the
+        # binding survives either path. The literal URI is still the right
+        # choice -- losing buildkit_metadata/buildkit_completeness alone
+        # already breaks this step's later exact-statement comparison, and
+        # the literal URI routes to cosign's generic/custom path, which
+        # embeds the predicate verbatim instead of dropping anything. The
         # final decision is made only from cosign's cryptographically
         # verified output, never from an unauthenticated download count.
         env:
@@ -485,24 +502,29 @@ jobs:
           test "${platforms[*]}" = "${expected_platforms}"
           source="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
           statements=()
+          modified_predicates=()
           expected_attestations=()
           for platform in "${platforms[@]}"; do
             predicate="${RUNNER_TEMP}/slsa-${platform//\//-}.json"
             statement="${RUNNER_TEMP}/slsa-${platform//\//-}.statement.json"
+            modified_predicate="${RUNNER_TEMP}/slsa-${platform//\//-}.predicate.json"
             docker buildx imagetools inspect "${IMAGE}@${DIGEST}" \
               --format "{{ json (index .Provenance \"${platform}\").SLSA }}" \
               > "${predicate}"
             python3 -I -B scripts/ci/release_contract.py attestation-statement \
               --predicate "${predicate}" --output "${statement}" \
+              --predicate-output "${modified_predicate}" \
               --image "${IMAGE}" --digest "${DIGEST}" --source "${source}" \
               --revision "${SOURCE_SHA}" --platform "${platform}"
             statements+=("${statement}")
+            modified_predicates+=("${modified_predicate}")
             expected_attestations+=(--expected "${platform}=${statement}")
           done
           test "$(sha256sum "${statements[@]}" | awk '{print $1}' | sort -u | wc -l)" \
             -eq "${#statements[@]}"
-          for statement in "${statements[@]}"; do
-            cosign attest --yes --statement "${statement}" "${IMAGE}@${DIGEST}"
+          for modified_predicate in "${modified_predicates[@]}"; do
+            cosign attest --yes --predicate "${modified_predicate}" \
+              --type "https://slsa.dev/provenance/v1" "${IMAGE}@${DIGEST}"
           done
           identity="${source}/.github/workflows/release-publisher.yml@refs/heads/main"
           verified="${RUNNER_TEMP}/verified-new-attestations.json"

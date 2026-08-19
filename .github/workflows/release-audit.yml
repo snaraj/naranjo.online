@@ -211,10 +211,12 @@ jobs:
           for platform in ${expected_platforms}; do
             predicate="${RUNNER_TEMP}/audit-${platform//\//-}.json"
             statement="${RUNNER_TEMP}/audit-${platform//\//-}.statement.json"
+            modified_predicate="${RUNNER_TEMP}/audit-${platform//\//-}.predicate.json"
             docker buildx imagetools inspect "${IMAGE}@${image_digest}" \
               --format "{{ json (index .Provenance \"${platform}\").SLSA }}" > "${predicate}"
             python3 -I -B scripts/ci/release_contract.py attestation-statement \
               --predicate "${predicate}" --output "${statement}" \
+              --predicate-output "${modified_predicate}" \
               --image "${IMAGE}" --digest "${image_digest}" \
               --source "https://github.com/${GITHUB_REPOSITORY}" \
               --revision "${source_sha}" --platform "${platform}"
