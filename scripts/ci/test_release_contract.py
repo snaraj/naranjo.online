@@ -811,13 +811,28 @@ class RawSBOMBindingTests(unittest.TestCase):
                 platform=platform,
             )
 
+    def test_sbom_statement_type_literal_is_the_pinned_in_toto_v1_uri(self):
+        # Hardcoded here rather than read from RC.SBOM_STATEMENT_TYPE: the
+        # fixture builds its statement FROM the module constant, so without
+        # this literal the oracle is self-referential and any constant value
+        # passes -- exactly how the v0.1 pin survived until the first live
+        # v0.1.17 publish DENYed on a real BuildKit statement. BuildKit
+        # attaches in-toto v1 statements; cosign generates v0.1 ones. The
+        # two generators are pinned by SEPARATE constants with OPPOSITE
+        # correct values, each guarded by its own literal test (the cosign
+        # side is test_statement_type_literal_is_the_pinned_in_toto_v01_uri).
+        # A mutant reverting SBOM_STATEMENT_TYPE to v0.1 turns this red.
+        fixture = sbom_registry_fixture()
+        statement = json.loads(fixture["statements"]["linux/amd64"])
+        self.assertEqual(statement["_type"], "https://in-toto.io/Statement/v1")
+
     def test_null_malformed_wrong_platform_wrong_subject_duplicate_and_extra_fail(self):
         fixture = sbom_registry_fixture()
         exact = json.loads(fixture["statements"]["linux/amd64"])
         statements: list[dict[str, object]] = []
         for path, value in (
             (("predicate",), None),
-            (("_type",), "https://in-toto.io/Statement/v1"),
+            (("_type",), "https://in-toto.io/Statement/v0.1"),
             (("predicateType",), "https://example.test/foreign"),
             (("predicate", "spdxVersion"), "SPDX-2.2"),
             (("predicate", "packages"), None),
