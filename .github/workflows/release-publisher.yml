@@ -474,12 +474,18 @@ jobs:
         # --predicate is the only flag that can carry it -- and --type is
         # the literal predicate-type URI, never the "slsaprovenance1" alias:
         # the alias resolves to cosign's strict typed SLSA decoder, which
-        # silently discards unknown fields (including BuildKit's own
-        # buildkit_metadata and our release binding), while an explicit URI
-        # routes to cosign's generic/custom path, which embeds the predicate
-        # verbatim. The final decision is made only from cosign's
-        # cryptographically verified output, never from an unauthenticated
-        # download count.
+        # silently discards unknown fields -- BuildKit's own
+        # buildkit_metadata and buildkit_completeness. Our release binding
+        # in buildDefinition.internalParameters is NOT among them:
+        # internalParameters is typed as a google.protobuf.Struct, so
+        # protojson's unknown-field discarding never reaches it and the
+        # binding survives either path. The literal URI is still the right
+        # choice -- losing buildkit_metadata/buildkit_completeness alone
+        # already breaks this step's later exact-statement comparison, and
+        # the literal URI routes to cosign's generic/custom path, which
+        # embeds the predicate verbatim instead of dropping anything. The
+        # final decision is made only from cosign's cryptographically
+        # verified output, never from an unauthenticated download count.
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
         if: steps.image_state.outputs.state == 'absent'

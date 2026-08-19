@@ -30,10 +30,15 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   `PredicateTypeMap`, to cosign's typed SLSA decoder
   (`protojson.UnmarshalOptions{DiscardUnknown: true}`), which would have
   silently dropped BuildKit's `runDetails.metadata.buildkit_metadata` and
-  our injected `buildDefinition.internalParameters.release` binding before
-  signing; the literal URI instead takes cosign's generic/custom path,
-  which embeds the predicate verbatim. Both paths set the signed
-  statement's envelope `_type` to `https://in-toto.io/Statement/v0.1`
+  `buildkit_completeness` before signing. Our injected
+  `buildDefinition.internalParameters.release` binding survives either
+  path — `internalParameters` is typed as a `google.protobuf.Struct`,
+  which protojson's unknown-field discarding never reaches — but the
+  literal URI is still the correct choice: losing the two BuildKit fields
+  alone already breaks this step's later exact-statement comparison, and
+  the literal URI instead takes cosign's generic/custom path, which embeds
+  the predicate verbatim rather than dropping anything. Both paths set the
+  signed statement's envelope `_type` to `https://in-toto.io/Statement/v0.1`
   (`in_toto.StatementInTotoV01` upstream), never the `.../Statement/v1`
   this repo previously expected and cosign never actually emitted, so
   `INTOTO_STATEMENT_TYPE` in `scripts/ci/release_contract.py` now matches
