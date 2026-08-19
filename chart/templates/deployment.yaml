@@ -15,8 +15,19 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
+      # The namespace quota is pods:2 / limits.memory 256Mi. At
+      # replicaCount's default and schema maximum of 2 (values.schema.json
+      # allows 1..2 so the workload can scale down for dev use — owner
+      # directive 2026-08-19), steady state already consumes the whole
+      # quota, so any surge pod is quota-rejected and wedges the rollout
+      # permanently (cluster-proven during the lidersea.com v0.1.16
+      # deploy — the controller scaled the OLD ReplicaSet to 2 first to
+      # hold the maxUnavailable 0 floor, filling the quota before the new
+      # pod could schedule). Swapping one pod out before its replacement
+      # starts is the only rolling path at 2 replicas, and works cleanly
+      # at 1 too.
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "naranjo-online.name" . }}
