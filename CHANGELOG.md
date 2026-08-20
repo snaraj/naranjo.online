@@ -7,6 +7,40 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.22] - 2026-08-20
+
+### Added
+
+- CI now schema-validates `.github/dependabot.yml` and fails the PR on
+  malformation (issue #59). `scripts/ci/dependabot_contract.py` is a
+  stdlib-only (no PyYAML), fail-closed, indentation-based recursive-descent
+  reader for the block-style YAML subset Dependabot configs need, followed
+  by a semantic pass against this repository's contract: `version: 2`
+  exactly; a non-empty `updates:` list of mappings; per-entry required
+  `package-ecosystem` (checked against the documented ecosystem allowlist),
+  `directory` (must start with `/`), and `schedule` (`interval` restricted
+  to `daily`/`weekly`/`monthly`, with optional `day`/`time`/`timezone`);
+  optional `groups:` (each group limited to `patterns`, `exclude-patterns`,
+  `dependency-type`, `update-types`, `applies-to`, with `patterns`/
+  `exclude-patterns` validated as non-empty string lists). Every level
+  rejects unknown keys, duplicate keys, tabs, comments, and flow-style
+  collections outright (fail-closed: unparseable is invalid), and every
+  rejection names the offending line.
+  `scripts/ci/test_dependabot_contract.py` (31 tests) proves it: the real
+  `.github/dependabot.yml` passes; a hostile battery covers `version: 1`,
+  a missing `schedule`, an unknown ecosystem, unknown keys at the
+  top-level/entry/schedule/group levels, empty `updates`, tab indentation,
+  a flow-style list, a non-mapping entry, and a duplicate key; and one test
+  reproduces the exact `groups.svelte` `patterns:` -> `patternz:` mutation
+  the PR #58 adversarial review proved SURVIVED every gate that existed at
+  the time (mutants f/f2/g in that review's matrix) against a temp copy of
+  the real on-disk file, showing the new gate goes red where the old one
+  stayed green.
+  `.github/workflows/pr-gate.yml`'s `security` job now discovers
+  `test_*.py` (was `test_release_contract.py` alone, so the new suite runs
+  in the same step) and separately invokes the validator against the
+  repository's own config.
+
 ## [0.1.18] - 2026-08-19
 
 ### Fixed
