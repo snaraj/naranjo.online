@@ -17,6 +17,19 @@
   /* Collapsed by default on narrow viewports, evaluated once at mount; the
      visitor's toggle choice then owns the state for the rest of the visit. */
   let collapsed = $state(window.matchMedia('(max-width: 60rem)').matches);
+
+  /* The rail is fixed chrome floating over the page, so the page has to know
+     when it is occupying that strip: a centered in-flow panel would otherwise
+     be laid out underneath an open rail on a wide viewport. The state is
+     published on the document root exactly as the reading mode is (see
+     lib/themes.ts), and styles.css turns it into the reserved gutter — one
+     attribute out, no component reaching into another's layout. */
+  $effect(() => {
+    document.documentElement.dataset.railOpen = collapsed ? 'false' : 'true';
+    return () => {
+      delete document.documentElement.dataset.railOpen;
+    };
+  });
 </script>
 
 <aside class="side-rail" data-collapsed={collapsed} aria-label={label}>
@@ -50,14 +63,20 @@
     position: fixed;
     inset-block: 0;
     inset-inline-end: 0;
-    z-index: 10;
+    /* One entry in the document's stacking scale (styles.css), above the
+       passive activity bar and below the reading-mode control. */
+    z-index: var(--layer-rail, 20);
     display: flex;
     align-items: stretch;
+    /* Fixed chrome pinned to the viewport edges has to clear the notch and
+       the home indicator itself; the page's own padding cannot help it. */
+    padding-block: env(safe-area-inset-top) env(safe-area-inset-bottom);
+    padding-inline-end: env(safe-area-inset-right);
     color: var(--rail-text);
   }
 
   .rail-toggle {
-    inline-size: 1.375rem;
+    inline-size: var(--panel-rail-toggle-width, 1.375rem);
     padding: 0.75rem 0;
     display: flex;
     flex-direction: column;
@@ -93,8 +112,12 @@
     letter-spacing: 0.06em;
   }
 
+  /* min-block-size: 0 lets a filling panel inside actually shrink, so its own
+     scrolling region reaches the bottom of the rail instead of pushing the
+     rail past the viewport. */
   .rail-panels {
     inline-size: var(--rail-width);
+    min-block-size: 0;
     overflow-y: auto;
     display: flex;
     flex-direction: column;

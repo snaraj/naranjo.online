@@ -13,7 +13,7 @@
 <script lang="ts">
   import PanelShell from './PanelShell.svelte';
   import ContributionGrid from './ContributionGrid.svelte';
-  import { panelAge, panelKinds, watchPanel, type PanelEnvelope } from '../panels';
+  import { panelAge, panelKinds, watchPanel, type PanelEnvelope, type PanelWatcher } from '../panels';
   import { activityCells, activityPanelId, parseVCSActivity } from '../activity';
   import { formatWhole, toColumns } from '../grid';
 
@@ -22,8 +22,21 @@
   const shownCommitRows = 5;
 
   let envelope = $state<PanelEnvelope | null>(null);
+  let watcher = $state<PanelWatcher | undefined>();
 
-  $effect(() => watchPanel(activityPanelId, (loaded) => (envelope = loaded)));
+  $effect(() => {
+    const active = watchPanel(activityPanelId, (loaded) => (envelope = loaded));
+    watcher = active;
+    return () => {
+      watcher = undefined;
+      active();
+    };
+  });
+
+  /* The shell's refresh control rides the same single-flight watcher the bar
+     already polls with, so pressing it costs one request, never a second
+     request path. */
+  const refresh = () => watcher?.refresh() ?? Promise.resolve();
 
   /* A payload renders only when the envelope carries the pinned kind AND the
      data passes strict admission; anything else is the honest empty state. */
@@ -48,6 +61,7 @@
     title={envelope?.title || 'Version-control activity'}
     status={envelope?.status ?? 'unavailable'}
     generatedAt={envelope?.generatedAt}
+    {refresh}
   >
     <div class="activity">
       <p class="activity-totals">
@@ -86,22 +100,45 @@
 
 <style>
   /* The bar docks at the viewport's bottom start corner like a status bar,
-     out of the document flow, so mounting it never reflows the page. Width
-     is bounded against the viewport; anything wider scrolls inside. */
+     out of the document flow, so mounting it never reflows the page. Width is
+     bounded against the viewport; anything wider scrolls inside. The insets
+     add the safe-area values so the bar clears a home indicator rather than
+     hiding under it, and the block bound is the same token the page reserves
+     below, so the bar can never grow past the strip set aside for it. */
   .activity-bar {
     position: fixed;
-    inset-block-end: var(--activity-inset-block, 0.75rem);
-    inset-inline-start: var(--activity-inset-inline, 0.75rem);
+    inset-block-end: calc(var(--activity-inset-block, 0.75rem) + env(safe-area-inset-bottom));
+    inset-inline-start: calc(var(--activity-inset-inline, 0.75rem) + env(safe-area-inset-left));
     inline-size: min(var(--activity-width, 21rem), calc(100vw - 1.5rem));
-    z-index: var(--activity-layer, 10);
+    max-block-size: calc(var(--panel-activity-reserve, 19rem) - var(--activity-inset-block, 0.75rem));
+    overflow-y: auto;
+    z-index: var(--layer-activity, 10);
   }
 
-  /* Short viewports flow the bar after the page content instead of
-     overlaying the centered shell. */
-  @media (max-height: 30rem) {
+  /* Fixed chrome floats over the page, so the page must reserve the strip it
+     covers or the last of the in-flow content — the token panel's tail — sits
+     underneath it. The bar reports the strip it is occupying on the document
+     root and styles.css lays the page out around it; the reserve and the
+     bar's own block bound read the same token, and both switch off together
+     in the flow branch below. Publishing the fact from HERE is what keeps the
+     switch condition in one place instead of two that can drift. */
+  :global(:root) {
+    --page-activity-gutter: var(--panel-activity-reserve, 19rem);
+  }
+
+  /* Narrow or short viewports flow the bar after the page content instead of
+     overlaying the centered shell — on a phone there is no room beside it —
+     and the page's reserve goes away with it. */
+  @media (max-width: 45rem), (max-height: 30rem) {
     .activity-bar {
       position: static;
       margin: 1rem auto;
+      max-block-size: none;
+      overflow-y: visible;
+    }
+
+    :global(:root) {
+      --page-activity-gutter: 0px;
     }
   }
 

@@ -1,67 +1,119 @@
-<!-- BossLog renders the boss-log/v1 panel as a dense three-column tile grid:
-  each tile is a small boss icon beside a right-aligned, thousands-separated
-  kill count, with a hover/focus detail carrying the full name, the rank, and
-  the score. The origin serves EVERY boss the hiscores report — dozens of
-  them — so the grid scrolls inside its own fixed-height box and never grows
-  the page.
+<!-- BossLog renders the boss-log/v1 panel as the account's whole public record,
+  laid out the way the RuneLite hiscore panel lays one out: a dense grid of
+  skill cells first — small icon, right-aligned level — then the boss tallies
+  below, each an icon beside a right-aligned, thousands-separated kill count
+  with a hover/focus detail carrying the full name, the rank, and the score.
+  The origin serves EVERY row the hiscores report — twenty-five skills and
+  dozens of bosses — so the boss region claims the rest of the rail and scrolls
+  inside itself rather than growing the page.
 
-  Every boss shown arrives as API data through lib/panels.ts; the only
+  Every row shown arrives as API data through lib/panels.ts; the only
   name-shaped logic here is the slug lookup from a data name into the shipped
   icon files. Only icons already vendored under the Jagex Fan Content Policy
-  notice are used, and a boss without one renders a clean initials tile
-  rather than reaching for new art.
+  notice are used, and a row without one renders a clean initials tile rather
+  than reaching for new art.
 
   "Unranked" is real information, not a gap: the hiscores rank an account
   only once it clears a threshold, so a null rank means unranked while the
-  count beside it may still be a genuine figure. Cells have fixed dimensions
-  and icons declare their box and load lazily, so nothing shifts as data or
-  images arrive. -->
+  figure beside it may still be genuine. Cells have fixed dimensions and icons
+  declare their box and load lazily, so nothing shifts as data or images
+  arrive. -->
 <script lang="ts">
   import PanelShell from './PanelShell.svelte';
   import { watchPanel } from '../panels';
-  import type { BossLogData, PanelEnvelope } from '../panels';
-  import { bossInitials, bossSlug } from '../bossIcons';
-  import { formatWhole } from '../grid.ts';
-  import { cellLabel, rankLabel, tally } from '../bossLog.ts';
+  import type { BossLogData, PanelEnvelope, PanelWatcher } from '../panels';
+  import { bossInitials, bossSlug, skillSlug } from '../bossIcons';
+  import { cellLabel, panelSummary, rankLabel, skillLabel, tally } from '../bossLog.ts';
 
-  /* The icon files under assets/icons/bosses become content-hashed URLs at
-     build time. Keyed by slug: the boss list stays data, adding an icon is
-     a file drop, and no boss name exists in this map's source. */
-  const iconFiles = import.meta.glob('../../assets/icons/bosses/*.png', {
-    eager: true,
-    query: '?url',
-    import: 'default'
-  }) as Record<string, string>;
-  const icons = new Map<string, string>();
-  for (const [path, url] of Object.entries(iconFiles)) {
-    const file = path.split('/').at(-1) ?? '';
-    icons.set(file.replace(/\.png$/, ''), url);
+  /* The icon files under assets/icons become content-hashed URLs at build
+     time. Keyed by slug: the row lists stay data, adding an icon is a file
+     drop, and no boss or skill name exists in these maps' source. */
+  function iconMap(files: Record<string, string>): Map<string, string> {
+    const icons = new Map<string, string>();
+    for (const [path, url] of Object.entries(files)) {
+      const file = path.split('/').at(-1) ?? '';
+      icons.set(file.replace(/\.png$/, ''), url);
+    }
+    return icons;
   }
 
-  let envelope = $state<PanelEnvelope<BossLogData> | undefined>();
+  const icons = iconMap(
+    import.meta.glob('../../assets/icons/bosses/*.png', {
+      eager: true,
+      query: '?url',
+      import: 'default'
+    }) as Record<string, string>
+  );
+  const skillIcons = iconMap(
+    import.meta.glob('../../assets/icons/skills/*.png', {
+      eager: true,
+      query: '?url',
+      import: 'default'
+    }) as Record<string, string>
+  );
 
-  $effect(() => watchPanel<BossLogData>('boss-log', (loaded) => (envelope = loaded)));
+  let envelope = $state<PanelEnvelope<BossLogData> | undefined>();
+  let watcher = $state<PanelWatcher | undefined>();
+
+  $effect(() => {
+    const active = watchPanel<BossLogData>('boss-log', (loaded) => (envelope = loaded));
+    watcher = active;
+    return () => {
+      watcher = undefined;
+      active();
+    };
+  });
+
+  /* The header's refresh control rides the same watcher the panel polls with,
+     so a forced read is single-flight against the periodic one rather than a
+     second request path with its own rules. */
+  const refresh = () => watcher?.refresh() ?? Promise.resolve();
 
   const data = $derived(envelope?.data ?? undefined);
+  const skills = $derived(data?.skills ?? []);
 
-  /* tally, rankLabel, and cellLabel live in lib/bossLog.ts: a null tally and
-     an unranked row are the two renderings that carry real meaning here, and
-     they are executed by tests there rather than pattern-matched in this
-     file's source. */
+  /* tally, rankLabel, cellLabel, skillLabel, and panelSummary live in
+     lib/bossLog.ts: a null tally and an unranked row are the two renderings
+     that carry real meaning here, and they are executed by tests there rather
+     than pattern-matched in this file's source. */
 </script>
 
 <PanelShell
-  title={envelope?.title ?? 'Boss log'}
+  title={envelope?.title ?? 'Old School RuneScape Stats'}
   status={envelope?.status ?? 'unavailable'}
   generatedAt={envelope?.generatedAt}
+  fill
+  {refresh}
 >
   {#if data}
-    <p class="boss-account">
-      {data.account}<span class="boss-count"> · {formatWhole(data.bosses.length)} bosses</span>
-    </p>
-    <!-- The complete boss table is dozens of tiles, so the grid scrolls
-      inside its own box; a scrollable region is keyboard-reachable only when
-      focusable, so the tabindex is deliberate. -->
+    <p class="boss-account">{panelSummary(data.account, skills.length, data.bosses.length)}</p>
+    {#if skills.length > 0}
+      <ul class="skill-grid" aria-label={`${data.account} skill levels`}>
+        {#each skills as skill (skill.name)}
+          <li class="skill-cell" aria-label={skillLabel(skill)} title={skillLabel(skill)}>
+            {#if skillIcons.has(skillSlug(skill.name))}
+              <img
+                class="skill-icon"
+                src={skillIcons.get(skillSlug(skill.name))}
+                alt=""
+                width="18"
+                height="18"
+                loading="lazy"
+                decoding="async"
+              />
+            {:else}
+              <span class="skill-icon boss-glyph" aria-hidden="true">{bossInitials(skill.name)}</span>
+            {/if}
+            <span class="skill-level">{tally(skill.level)}</span>
+          </li>
+        {/each}
+      </ul>
+    {:else}
+      <p class="boss-note">No skill levels reported.</p>
+    {/if}
+    <!-- The complete boss table is dozens of tiles, so the grid claims the
+      rest of the rail and scrolls inside its own box; a scrollable region is
+      keyboard-reachable only when focusable, so the tabindex is deliberate. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <ul class="boss-grid" tabindex="0" aria-label={`${data.account} boss tallies`}>
       {#each data.bosses as boss (boss.name)}
@@ -109,14 +161,15 @@
 
 <style>
   .boss-account {
-    margin: 0 0 0.375rem;
+    margin: 0;
     font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
     color: var(--panel-muted, rgb(158, 158, 158));
   }
 
-  /* Fixed height plus internal scrolling: the complete boss table is dozens
-     of tiles, and the rail must stay a rail. 12 rows of 2.125rem plus their
-     hairline separators is the visible window. */
+  /* Both tables share the RuneLite cell chrome: a hairline gap over the
+     border color reads as a grid rule without a border per cell. */
+  .skill-grid,
   .boss-grid {
     margin: 0;
     padding: 0;
@@ -124,11 +177,25 @@
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 1px;
-    max-block-size: var(--boss-grid-max-block, 26rem);
-    overflow-y: auto;
-    overscroll-behavior: contain;
     background: var(--panel-border, rgb(23, 23, 23));
     border: 1px solid var(--panel-border, rgb(23, 23, 23));
+  }
+
+  /* The skills table is a fixed nine rows of three and never scrolls: it is
+     the top of the panel and its size is known before any data arrives, so
+     the rail's geometry is identical before and after the payload lands. */
+  .skill-grid {
+    flex: none;
+  }
+
+  /* The boss table claims whatever height the skills grid left and scrolls
+     inside itself. min-block-size: 0 is what allows a flex child to shrink
+     below its content instead of pushing the rail past the viewport. */
+  .boss-grid {
+    flex: 1;
+    min-block-size: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .boss-grid:focus-visible {
@@ -136,14 +203,22 @@
     outline-offset: 1px;
   }
 
+  .skill-cell,
   .boss-cell {
-    position: relative;
     display: flex;
     align-items: center;
     gap: 0.25rem;
-    block-size: 2.125rem;
     padding-inline: 0.25rem;
     background: var(--panel-surface, rgb(40, 40, 40));
+  }
+
+  .skill-cell {
+    block-size: 1.625rem;
+  }
+
+  .boss-cell {
+    position: relative;
+    block-size: 2.125rem;
   }
 
   .boss-cell:focus-visible {
@@ -155,6 +230,13 @@
     flex: none;
     inline-size: 26px;
     block-size: 26px;
+    object-fit: contain;
+  }
+
+  .skill-icon {
+    flex: none;
+    inline-size: 18px;
+    block-size: 18px;
     object-fit: contain;
   }
 
@@ -175,10 +257,7 @@
     color: var(--panel-muted, rgb(158, 158, 158));
   }
 
-  .boss-count {
-    font-variant-numeric: tabular-nums;
-  }
-
+  .skill-level,
   .boss-kc {
     flex: 1;
     min-inline-size: 0;
@@ -186,6 +265,10 @@
     font-size: 0.75rem;
     font-variant-numeric: tabular-nums;
     color: var(--panel-text, rgb(230, 230, 230));
+  }
+
+  .skill-level {
+    font-size: 0.6875rem;
   }
 
   .boss-tip {

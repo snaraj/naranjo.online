@@ -33,7 +33,20 @@ test('initial source remains local and viewport-responsive', () => {
     assert.doesNotMatch(source, /(?:https?:)?\/\//, `${name} introduces a remote origin`);
   }
   assert.match(styles, /font-size:\s*clamp\(/);
-  assert.match(styles, /min-height:\s*100vh/);
+  // Rendering-lane floor (issue #26, delivered by #78): dynamic viewport
+  // units, never 100vh. 100vh is the TALLEST the viewport ever gets, so on a
+  // phone showing its toolbars the page is taller than the screen and its
+  // bottom sits under the browser chrome. The absence assertion is what makes
+  // this a floor rather than a suggestion — a reintroduced 100vh anywhere in
+  // the stylesheet fails here.
+  assert.match(styles, /min-height:\s*100dvh/);
+  assert.doesNotMatch(
+    styles,
+    /\b100vh\b/,
+    'the static viewport unit is banned by the rendering-lane floor; use dvh or svh'
+  );
+  // The insets only report real values when the document opts into them.
+  assert.match(fallback, /viewport-fit=cover/);
   // Deliberate reading-modes change (issue #22): light is now the :root
   // default palette, so the media query maps the DARK tokens in — and only
   // for documents without an explicit stamped choice.

@@ -8,7 +8,7 @@
  * null is data that must survive the round trip. */
 
 import { formatWhole } from './grid.ts';
-import type { BossLogEntry } from './panels';
+import type { BossLogEntry, BossLogSkill } from './panels';
 
 /* The rendering for a figure the hiscores do not report. It is deliberately
  * NOT "0": zero kills and no reported figure are different claims, and a
@@ -39,4 +39,23 @@ export function cellLabel(boss: BossLogEntry): string {
     parts.push(`score ${tally(boss.score)}`);
   }
   return parts.join(', ');
+}
+
+/* skillLabel is the same contract for a skill cell: the level a sighted
+ * reader sees is one number in a dense grid, so the accessible text carries
+ * the whole row — including the nulls the hiscores legitimately report. */
+export function skillLabel(skill: BossLogSkill): string {
+  const parts = [`${skill.name}: level ${tally(skill.level)}`, `rank ${rankLabel(skill.rank)}`];
+  if (skill.xp !== undefined && skill.xp !== null) {
+    parts.push(`${tally(skill.xp)} xp`);
+  }
+  return parts.join(', ');
+}
+
+/* panelSummary is the rail's subtitle: the account name plus what the payload
+ * actually contains. It counts the rows served rather than any number this
+ * file knows, so an upstream that adds a skill or a boss is reported, and an
+ * empty section says zero instead of quietly disappearing. */
+export function panelSummary(account: string, skills: number, bosses: number): string {
+  return `${account} · ${formatWhole(skills)} skills · ${formatWhole(bosses)} bosses`;
 }
