@@ -110,8 +110,9 @@ export interface VCSActivityData {
   recentCommits: VCSCommit[];
 }
 
-/* boss-log/v1 — one game account's boss tallies. kc and rank are null when
- * the account is unranked for that boss; null is data and renders as "--". */
+/* boss-log/v1 — one game account's skill table and boss tallies. Every figure
+ * is nullable because the hiscores legitimately report none below their
+ * listing threshold; null is data and renders as "--", never as a zero. */
 export interface BossLogEntry {
   name: string;
   kc: number | null;
@@ -119,8 +120,20 @@ export interface BossLogEntry {
   score?: number | null;
 }
 
+/* One skill row. Optional on the payload because skills were added to
+ * boss-log/v1 after it shipped — an additive extension inside the same kind
+ * version, exactly like the token panel's tiles, so a payload written before
+ * they existed still renders. */
+export interface BossLogSkill {
+  name: string;
+  level: number | null;
+  rank: number | null;
+  xp?: number | null;
+}
+
 export interface BossLogData {
   account: string;
+  skills?: BossLogSkill[];
   bosses: BossLogEntry[];
 }
 
@@ -268,10 +281,12 @@ export async function loadPanelIndex(fetcher: PanelFetcher = defaultFetcher): Pr
 
 /* panelRefreshIntervalMs is how often a mounted panel re-reads its envelope.
  * One minute is the deliberate compromise: the origin refreshes fetch-backed
- * panels on a 45-minute TTL, so a visitor sees new data within a minute of it
- * existing while a long-open tab costs the origin one conditional GET a
- * minute per panel — and every one of those is a 304 with no body while the
- * data is unchanged, because the panel API serves digest ETags. */
+ * panels on a five-minute TTL (ttlMinutes in internal/panels/config/fetch.json,
+ * pinned to the same 30s-5m band from the Go side), so a visitor sees new data
+ * within a minute of it existing while a long-open tab costs the origin one
+ * conditional GET a minute per panel — and every one of those is a 304 with no
+ * body while the data is unchanged, because the panel API serves digest
+ * ETags. */
 export const panelRefreshIntervalMs = 60_000;
 
 /* panelClockIntervalMs is how often the freshness badge re-reads the clock.
@@ -318,31 +333,54 @@ export interface PanelWatchOptions {
   host?: Partial<PanelWatchHost>;
 }
 
+/* PanelWatcher is what watchPanel hands back. Calling it stops the loop for
+ * good — the whole contract every caller had before — and refresh() forces one
+ * immediate read past both the cadence and the hidden-page check, which is
+ * what a visitor pressing the panel's refresh control needs. It is a callable
+ * carrying a method rather than an object so no existing call site changes
+ * shape, and refresh() resolves only when the read it is riding has settled,
+ * so a control can stay busy for exactly as long as the request is. */
+export interface PanelWatcher {
+  (): void;
+  refresh(): Promise<void>;
+}
+
 /* watchPanel keeps one panel current: an immediate first read, then one read
- * per interval, then a stop function that ends the loop for good. Three rules
- * make it cheap and safe to leave running:
+ * per interval, plus any forced read a caller asks for, then a stop that ends
+ * the loop for good. Four rules make it cheap and safe to leave running:
  *
  *   - A hidden page is not polled. A background tab produces no requests at
  *     all, and becoming visible again triggers an immediate catch-up read
  *     rather than waiting out the remaining interval.
  *   - At most one request is in flight per panel. A slow origin can never
  *     stack requests behind itself.
+ *   - A forced read that arrives while one is already in flight JOINS it
+ *     instead of queueing a second: a visitor hammering refresh costs the
+ *     origin exactly one request, and still sees the control settle when real
+ *     data lands.
  *   - After stop() nothing is delivered, even from a read already in flight,
  *     so an unmounted component can never write to a dead state. */
 export function watchPanel<Data = unknown>(
   id: string,
   onEnvelope: (envelope: PanelEnvelope<Data>) => void,
   options: PanelWatchOptions = {}
-): () => void {
+): PanelWatcher {
   const host = { ...defaultWatchHost, ...options.host };
   let stopped = false;
   let inFlight = false;
-  const read = (force: boolean) => {
-    if (stopped || inFlight || (!force && host.hidden())) {
-      return;
+  let pending: Promise<void> = Promise.resolve();
+  const read = (force: boolean): Promise<void> => {
+    if (stopped) {
+      return Promise.resolve();
+    }
+    if (inFlight) {
+      return pending;
+    }
+    if (!force && host.hidden()) {
+      return Promise.resolve();
     }
     inFlight = true;
-    loadPanel<Data>(id, host.fetcher)
+    pending = loadPanel<Data>(id, host.fetcher)
       .catch(() => unavailablePanel(id) as PanelEnvelope<Data>)
       .then((envelope) => {
         inFlight = false;
@@ -350,15 +388,17 @@ export function watchPanel<Data = unknown>(
           onEnvelope(envelope);
         }
       });
+    return pending;
   };
   read(true);
   const handle = host.schedule(() => read(false), options.intervalMs ?? panelRefreshIntervalMs);
   const unsubscribe = host.onVisible(() => read(true));
-  return () => {
+  const stop = () => {
     stopped = true;
     host.cancel(handle);
     unsubscribe();
   };
+  return Object.assign(stop, { refresh: () => read(true) });
 }
 
 /* watchClock ticks a shared wall clock so a rendered age keeps telling the

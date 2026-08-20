@@ -1,9 +1,10 @@
 # Third-party content attribution
 
-## Old School RuneScape boss icons
+## Old School RuneScape boss and skill icons
 
-The images under `frontend/src/assets/icons/bosses/` are small downscaled
-thumbnails of Old School RuneScape artwork, sourced from the
+The images under `frontend/src/assets/icons/bosses/` and
+`frontend/src/assets/icons/skills/` are small downscaled thumbnails of Old
+School RuneScape artwork, sourced from the
 [Old School RuneScape Wiki](https://oldschool.runescape.wiki/) — thanks to
 the wiki community for hosting and curating them. The underlying artwork is
 Jagex intellectual property, used on this personal, non-commercial site as
@@ -13,13 +14,64 @@ fan content:
 > terms of Jagex's Fan Content Policy. This content is not endorsed by or
 > affiliated with Jagex.
 
-The panel serves every boss the hiscores report, and only a handful of them
-have a vendored icon here. That is deliberate: no art is fetched to fill the
-gap, and a boss without an icon renders a plain initials tile instead. A
-frontend test enforces the direction that matters — every icon that ships
-must belong to a boss the origin actually serves, so third-party art can
-never outlive the data that justified vendoring it. Widening the icon set is
-an owner decision, taken one reviewed batch at a time.
+### The reviewed batch (2026-08-20, issue #78)
+
+The panel serves every row the hiscores report, and the icon set now covers
+all of them: **71 boss icons and 25 skill icons, 410,125 bytes in total**
+(404,452 + 5,673). Six boss icons were already vendored and are unchanged;
+this batch added 65 boss icons (369,141 bytes) and the whole skills
+directory. Every file is the wiki's own thumbnail bytes, unmodified — nothing
+was re-encoded, recoloured, or cropped — so any reviewer can re-derive the
+exact bytes.
+
+**How each file was derived.** Boss icons come from the lead image of the
+wiki page named by the hiscores row, requested through the MediaWiki API at
+`pithumbsize=52`; skill icons are the wiki's `<Skill> icon.png` files at
+their native size. Each file is named by the slug of the data name it serves
+(`bossSlug`/`skillSlug` in `frontend/src/lib/bossIcons.ts`), and a frontend
+test holds the set to exactly the rows the origin serves — in both
+directions, so a missing icon and an orphaned one both fail.
+
+Twenty-three boss rows do not name their own wiki file, and each is recorded
+here rather than left to be rediscovered:
+
+| Hiscores row | Wiki file |
+| --- | --- |
+| Abyssal Sire | `Abyssal_Sire_(phase_1).png` |
+| Alchemical Hydra | `Alchemical_Hydra_(serpentine).png` |
+| Barrows Chests | `Chest (Barrows).png` |
+| Chambers of Xeric: Challenge Mode | `Chambers of Xeric logo.png` |
+| Crazy Archaeologist | `Crazy_archaeologist.png` |
+| Deranged Archaeologist | `Deranged_archaeologist.png` |
+| Grotesque Guardians | `Dawn.png` |
+| Kree'Arra | `Kree'arra.png` |
+| Lunar Chests | `Lunar_Chest_(closed).png` |
+| Mad Angel | `Mad Angel.png` |
+| Mimic | `Mimic_detail.png` |
+| Nightmare | `The_Nightmare.png` |
+| Phosani's Nightmare | `The_Nightmare.png` |
+| Phantom Muspah | `Phantom_Muspah_(ranged).png` |
+| Shellbane Gryphon | `Shellbane_gryphon.png` |
+| The Gauntlet | `Crystalline Hunllef.png` |
+| The Corrupted Gauntlet | `Corrupted Hunllef.png` |
+| The Royal Titans | `Eldric_the_Ice_King.png` |
+| Theatre of Blood: Hard Mode | `Theatre of Blood logo.png` |
+| Thermonuclear Smoke Devil | `Thermonuclear_smoke_devil.png` |
+| Tombs of Amascut: Expert Mode | `Tombs_of_Amascut.png` |
+| Wintertodt | `Wintertodt icon.png` |
+| Zalcano | `Zalcano_(weakened).png` |
+
+Four of those are judgement calls worth stating plainly: a raid's challenge
+or expert mode shares the base raid's artwork because the wiki has no
+separate image for it; Grotesque Guardians and The Royal Titans are pairs, so
+one of the two is shown; Phosani's Nightmare shares The Nightmare's image for
+the same reason; and Wintertodt uses the wiki's own 25px interface icon
+because its lead image is an animation, not a PNG.
+
+The initials fallback stays in the component regardless of how complete this
+set is: Jagex ships new bosses, and a row with no icon yet must render as a
+designed state rather than a hole. Widening the set remains an owner
+decision, taken one reviewed batch at a time.
 
 ## RuneLite-style panel chrome
 
@@ -27,3 +79,7 @@ The site's side rail recreates the look of the RuneLite client's side panel
 purely in CSS from RuneLite's published palette values (RuneLite is
 BSD-2-Clause open source). Color values are facts; no RuneLite artwork,
 sprites, or logo — a registered trademark — are included in this repository.
+RuneLite ships skill icons of its own under
+`runelite-client/src/main/resources/skill_icons/`; they were deliberately not
+used, so this boundary stays true and all game art in this repository has one
+source and one licence story.

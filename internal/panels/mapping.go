@@ -14,17 +14,25 @@ import (
 	"time"
 )
 
-// mapHiscores maps a hiscores/v1 document onto EVERY boss the upstream
-// reports, in upstream order, minus the activities configuration names as
-// non-bosses. The direction matters: the upstream activity table grows
-// whenever new content ships, so enumerating bosses would silently drop
-// every boss added since the last edit. Enumerating the non-bosses instead
-// means an unrecognized entry is PRESERVED — the fail-soft direction — and
-// only genuinely new non-boss activities need a data edit.
+// mapHiscores maps a hiscores/v1 document onto the account's whole public
+// record: every skill row the upstream reports, and EVERY boss it reports in
+// upstream order minus the activities configuration names as non-bosses. The
+// direction matters: the upstream activity table grows whenever new content
+// ships, so enumerating bosses would silently drop every boss added since the
+// last edit. Enumerating the non-bosses instead means an unrecognized entry is
+// PRESERVED — the fail-soft direction — and only genuinely new non-boss
+// activities need a data edit. Skills need no exclusion list at all: every row
+// of that table is a skill, including ones that do not exist yet.
 //
-// A rank of -1 is the upstream's "not ranked" sentinel and becomes a null
-// rank the frontend renders as "Unranked"; a score of -1 becomes a null
-// count rendered as "--". A score of 0 is a real zero and stays one.
+// A rank of -1 is the upstream's "not ranked" sentinel and becomes a null rank
+// the frontend renders as "Unranked"; a score, level, or experience of -1
+// becomes a null figure rendered as "--". A reported 0 is a real zero and
+// stays one.
+//
+// A document carrying no skill rows serves none: skills are an additive
+// section of boss-log/v1, and an empty table renders as the honest empty
+// state. An empty BOSS table stays an error, because that is the panel's
+// original contract and a boss list that vanished is drift, not data.
 func mapHiscores(raw []byte, spec *bossLogFetchSpec) (json.RawMessage, error) {
 	var document hiscoresDocument
 	if err := decodeStrict(raw, &document); err != nil {
@@ -34,23 +42,35 @@ func mapHiscores(raw []byte, spec *bossLogFetchSpec) (json.RawMessage, error) {
 	for _, name := range spec.ExcludeActivities {
 		excluded[name] = true
 	}
-	payload := BossLogData{Account: spec.Account, Bosses: make([]BossLogEntry, 0, len(document.Activities))}
+	payload := BossLogData{
+		Account: spec.Account,
+		Skills:  make([]BossLogSkill, 0, len(document.Skills)),
+		Bosses:  make([]BossLogEntry, 0, len(document.Activities)),
+	}
+	seenSkill := make(map[string]bool, len(document.Skills))
+	for _, skill := range document.Skills {
+		if skill.Name == "" || seenSkill[skill.Name] {
+			continue
+		}
+		seenSkill[skill.Name] = true
+		payload.Skills = append(payload.Skills, BossLogSkill{
+			Name:  skill.Name,
+			Level: hiscoreFigure(skill.Level),
+			Rank:  hiscoreFigure(skill.Rank),
+			XP:    hiscoreFigure(skill.XP),
+		})
+	}
 	seen := make(map[string]bool, len(document.Activities))
 	for _, activity := range document.Activities {
 		if activity.Name == "" || excluded[activity.Name] || seen[activity.Name] {
 			continue
 		}
 		seen[activity.Name] = true
-		entry := BossLogEntry{Name: activity.Name}
-		if activity.Score >= 0 {
-			score := activity.Score
-			entry.KC = &score
-		}
-		if activity.Rank >= 0 {
-			rank := activity.Rank
-			entry.Rank = &rank
-		}
-		payload.Bosses = append(payload.Bosses, entry)
+		payload.Bosses = append(payload.Bosses, BossLogEntry{
+			Name: activity.Name,
+			KC:   hiscoreFigure(activity.Score),
+			Rank: hiscoreFigure(activity.Rank),
+		})
 	}
 	if len(payload.Bosses) == 0 {
 		return nil, errors.New("hiscores document names no bosses after exclusions")
@@ -58,6 +78,18 @@ func mapHiscores(raw []byte, spec *bossLogFetchSpec) (json.RawMessage, error) {
 	// Marshaling the package-owned payload cannot fail.
 	data, _ := json.Marshal(payload)
 	return data, nil
+}
+
+// hiscoreFigure turns one upstream figure into the served nullable value: the
+// upstream writes -1 where it has nothing to report, and every other value —
+// zero included — is a real figure. One helper for skills and bosses alike, so
+// the two tables can never disagree about what "unreported" means.
+func hiscoreFigure(value int64) *int64 {
+	if value < 0 {
+		return nil
+	}
+	figure := value
+	return &figure
 }
 
 // mapContributions maps the PUBLIC contribution-calendar document onto the

@@ -7,8 +7,10 @@ package panels
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -80,6 +82,108 @@ func TestMapHiscoresServesEveryBossTheUpstreamReports(t *testing.T) {
 			t.Errorf("%s: mapHiscores accepted a bad document", name)
 		}
 	}
+}
+
+// TestMapHiscoresServesTheSkillTable pins the additive half of boss-log/v1
+// (issue #78): the upstream skill table was parsed and then discarded, so the
+// panel could not render a level even though the bytes were already in hand.
+// Table-driven because the interesting cases are all about ONE row's shape —
+// a ranked row, the -1 sentinels the hiscores use for a row they do not list,
+// a genuine zero, and a duplicate the upstream should never send but might.
+func TestMapHiscoresServesTheSkillTable(t *testing.T) {
+	t.Parallel()
+	figure := func(value int64) *int64 { return &value }
+	for name, tc := range map[string]struct {
+		skills string
+		want   []BossLogSkill
+	}{
+		"a ranked row keeps every figure": {
+			skills: `{"id":1,"name":"Attack","rank":124252,"level":99,"xp":19794965}`,
+			want:   []BossLogSkill{{Name: "Attack", Level: figure(99), Rank: figure(124252), XP: figure(19794965)}},
+		},
+		"an unlisted row becomes nulls, never zeros": {
+			skills: `{"id":24,"name":"Sailing","rank":-1,"level":-1,"xp":-1}`,
+			want:   []BossLogSkill{{Name: "Sailing"}},
+		},
+		"a real zero survives beside an unranked rank": {
+			skills: `{"id":22,"name":"Hunter","rank":-1,"level":1,"xp":0}`,
+			want:   []BossLogSkill{{Name: "Hunter", Level: figure(1), XP: figure(0)}},
+		},
+		"a repeated row is served once, in upstream order": {
+			skills: `{"id":1,"name":"Attack","rank":5,"level":99,"xp":1},` +
+				`{"id":2,"name":"Defence","rank":6,"level":98,"xp":2},` +
+				`{"id":1,"name":"Attack","rank":7,"level":50,"xp":3}`,
+			want: []BossLogSkill{
+				{Name: "Attack", Level: figure(99), Rank: figure(5), XP: figure(1)},
+				{Name: "Defence", Level: figure(98), Rank: figure(6), XP: figure(2)},
+			},
+		},
+		"a nameless row is dropped rather than served blank": {
+			skills: `{"id":0,"name":"","rank":1,"level":1,"xp":1}`,
+			want:   []BossLogSkill{},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			spec := &bossLogFetchSpec{Account: "fixture", ExcludeActivities: []string{"Clue Scrolls (all)"}}
+			raw := []byte(`{"name":"fixture","skills":[` + tc.skills + `],"activities":[` +
+				`{"id":2,"name":"Alpha","rank":5,"score":10}]}`)
+			data, err := mapHiscores(raw, spec)
+			if err != nil {
+				t.Fatalf("mapHiscores() error = %v", err)
+			}
+			var payload BossLogData
+			if err := decodeStrict(data, &payload); err != nil {
+				t.Fatalf("decode mapped payload: %v", err)
+			}
+			if len(payload.Skills) != len(tc.want) {
+				t.Fatalf("skills = %+v, want %+v", payload.Skills, tc.want)
+			}
+			for index, want := range tc.want {
+				got := payload.Skills[index]
+				if got.Name != want.Name ||
+					!sameFigure(got.Level, want.Level) ||
+					!sameFigure(got.Rank, want.Rank) ||
+					!sameFigure(got.XP, want.XP) {
+					t.Errorf("skill[%d] = %s, want %s", index, showSkill(got), showSkill(want))
+				}
+			}
+			// The SERVED BYTES, not just the decoded struct: the grid's "--"
+			// and "Unranked" renderings key off literal nulls on the wire, and
+			// an omitempty regression would erase them while leaving every
+			// decode above green.
+			if len(tc.want) > 0 && tc.want[0].Level == nil && !bytes.Contains(data, []byte(`"level":null`)) {
+				t.Errorf("served payload carries no literal null level; the \"--\" rendering is unreachable:\n%s", data)
+			}
+			// An empty skill table is served as an ABSENT section, not as an
+			// empty array: the section is optional inside boss-log/v1, and a
+			// payload written before skills existed must still decode.
+			if len(tc.want) == 0 && bytes.Contains(data, []byte(`"skills"`)) {
+				t.Errorf("an empty skill table must be omitted, not serialized:\n%s", data)
+			}
+		})
+	}
+}
+
+// sameFigure compares two nullable hiscore figures, null included — the whole
+// point of the pointer is that "no figure" and "zero" are different answers.
+func sameFigure(got, want *int64) bool {
+	if got == nil || want == nil {
+		return got == nil && want == nil
+	}
+	return *got == *want
+}
+
+// showSkill renders a skill row with its nulls visible, so a failure message
+// distinguishes an unreported figure from a zero.
+func showSkill(skill BossLogSkill) string {
+	show := func(value *int64) string {
+		if value == nil {
+			return "null"
+		}
+		return strconv.FormatInt(*value, 10)
+	}
+	return fmt.Sprintf("{%s level=%s rank=%s xp=%s}", skill.Name, show(skill.Level), show(skill.Rank), show(skill.XP))
 }
 
 // TestMapHiscoresAdmitsTheRealUpstreamDocument is the regression that the
@@ -510,14 +614,14 @@ func TestMapContributionsReadsTheRealCalendar(t *testing.T) {
 			t.Errorf("week %d has %d days, want %d", index, len(week), daysPerWeek)
 		}
 	}
-	if payload.TotalContributions != 303 {
-		t.Errorf("total = %d, want the 303 the document's own labels sum to", payload.TotalContributions)
+	if payload.TotalContributions != 499 {
+		t.Errorf("total = %d, want the 499 the document's own labels sum to", payload.TotalContributions)
 	}
-	if payload.EndDate != "2026-08-12" {
+	if payload.EndDate != "2026-08-20" {
 		t.Errorf("endDate = %q, want the document's last covered day", payload.EndDate)
 	}
-	if payload.Streak != 4 {
-		t.Errorf("streak = %d, want 4", payload.Streak)
+	if payload.Streak != 1 {
+		t.Errorf("streak = %d, want 1", payload.Streak)
 	}
 	// The counts must come from the labels: the level attribute is a coarse
 	// 0..4 bucket, so a parser reading it would cap every busy day at 4.
@@ -534,7 +638,7 @@ func TestMapContributionsReadsTheRealCalendar(t *testing.T) {
 	}
 	// The fixture's two synthetic undated cells exercise the skip branch and
 	// must influence nothing: 12 columns of 7 is 84 cell slots, the capture
-	// supplies 81 dated days, and the totals above are the captured days'
+	// supplies 82 dated days, and the totals above are the captured days'
 	// own. A skip branch that counted them would move one of these numbers.
 	if len(payload.Weeks)*daysPerWeek != 84 {
 		t.Errorf("grid holds %d cells, want 84", len(payload.Weeks)*daysPerWeek)
@@ -573,7 +677,7 @@ func TestMapContributionsFailsClosedOnDrift(t *testing.T) {
 			return strings.Replace(in, `data-date="2026-08-09"`, `data-date="2026-08-10"`, 1)
 		},
 		"the span runs past a year and a half": func(in string) string {
-			return strings.Replace(in, `data-date="2026-05-24"`, `data-date="2019-05-24"`, 1)
+			return strings.Replace(in, `data-date="2026-05-31"`, `data-date="2019-05-31"`, 1)
 		},
 		// The partial-drift case the count floor and the span ceiling both
 		// miss: lose ONE cell and dozens remain, spanning under a year, so
@@ -584,9 +688,10 @@ func TestMapContributionsFailsClosedOnDrift(t *testing.T) {
 				`data-level="4" role="gridcell" data-view-component="true" class="ContributionCalendar-other"`, 1)
 		},
 		"the grid stops starting on a Sunday": func(in string) string {
-			// Move the first covered day forward one, so the span still
-			// parses but week columns would no longer be calendar weeks.
-			return strings.Replace(in, `data-date="2026-05-24"`, `data-date="2026-08-13"`, 1)
+			// Move the first covered day past the end of the covered span, so
+			// the calendar still parses contiguously but now starts on a Monday
+			// and week columns would no longer be calendar weeks.
+			return strings.Replace(in, `data-date="2026-05-31"`, `data-date="2026-08-21"`, 1)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

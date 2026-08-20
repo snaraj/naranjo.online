@@ -21,7 +21,7 @@
   Every color and metric reads a custom property with a dark-native default,
   so themes restyle by overriding variables. -->
 <script lang="ts">
-  import type { PanelEnvelope, TokenUsageData, TokenUsageSource } from '../panels';
+  import type { PanelEnvelope, PanelWatcher, TokenUsageData, TokenUsageSource } from '../panels';
   import { watchPanel } from '../panels';
   import {
     formatStatValue,
@@ -37,8 +37,20 @@
   import PanelShell from './PanelShell.svelte';
 
   let envelope = $state<PanelEnvelope<TokenUsageData> | undefined>(undefined);
+  let watcher = $state<PanelWatcher | undefined>();
 
-  $effect(() => watchPanel<TokenUsageData>('token-usage', (loaded) => (envelope = loaded)));
+  $effect(() => {
+    const active = watchPanel<TokenUsageData>('token-usage', (loaded) => (envelope = loaded));
+    watcher = active;
+    return () => {
+      watcher = undefined;
+      active();
+    };
+  });
+
+  /* The shell's refresh control rides the same single-flight watcher this
+     panel already polls with. */
+  const refresh = () => watcher?.refresh() ?? Promise.resolve();
 
   /* One view choice for the whole panel: the sources are read side by side,
      so switching lens on one and not the other would be a comparison trap. */
@@ -69,7 +81,7 @@
 
 {#if envelope}
   <aside class="token-usage" data-panel-id="token-usage" aria-label={title}>
-    <PanelShell {title} status={envelope.status} generatedAt={envelope.generatedAt}>
+    <PanelShell {title} status={envelope.status} generatedAt={envelope.generatedAt} {refresh}>
       {#if sources.length === 0}
         <p class="usage-empty">No usage data available.</p>
       {:else}
