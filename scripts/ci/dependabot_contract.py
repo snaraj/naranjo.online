@@ -40,9 +40,13 @@ CLI:
 
     python3 -I -B scripts/ci/dependabot_contract.py .github/dependabot.yml
 
-Exit 0 when the file satisfies the contract; exit 2 (never 1, which stays
-reserved for argparse's own usage errors) when it does not, with a `DENY:`
-line naming the offending line on stderr.
+Exit 0 when the file satisfies the contract; exit 2, with a `DENY:` line
+naming the offending line on stderr, when it does not. A malformed
+invocation (missing/extra argument) is also exit 2 -- that is argparse's
+own usage-error status, not a choice this module makes -- distinguishable
+from a contract denial only by the `usage:` vs `DENY:` line on stderr, so
+1 is not reserved for anything; it would only appear from an unhandled
+crash, which every known input in this module's own test suite forecloses.
 """
 
 from __future__ import annotations
@@ -53,13 +57,19 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Documented `package-ecosystem` values, https://docs.github.com/en/code-
-# security/dependabot/dependabot-version-updates/configuration-options-for-
-# the-dependabot.yml-file (fetched 2026-08-20). Includes every ecosystem
-# this repository's real config uses today (github-actions, gomod, npm)
-# plus the rest of the documented set, so a future addition of an official
-# ecosystem never needs this allowlist touched -- only a genuinely unknown
-# string is refused.
+# Documented `package-ecosystem` values, cross-checked against two
+# independent sources (both re-read 2026-08-20): the github/docs
+# supported-package-managers table (docs.github.com/en/code-security/
+# dependabot/dependabot-version-updates/configuration-options-for-the-
+# dependabot.yml-file) and SchemaStore's `dependabot-2.0.json` enum, which
+# agree on all 33 values. Includes every ecosystem this repository's real
+# config uses today (github-actions, gomod, npm) plus the rest of the
+# documented set, so a future addition of an official ecosystem never needs
+# this allowlist touched -- only a genuinely unknown string is refused.
+# Corrected 2026-08-20 (PR #84 adversarial review): an initial single-
+# source fetch mistakenly carried `hex` where the documented value for
+# Hex/Elixir is `mix` -- both sources agree `mix` is correct and `hex` is
+# not a `package-ecosystem` value at all.
 ECOSYSTEMS = frozenset(
     {
         "bazel",
@@ -79,9 +89,9 @@ ECOSYSTEMS = frozenset(
         "gomod",
         "gradle",
         "helm",
-        "hex",
         "julia",
         "maven",
+        "mix",
         "nix",
         "npm",
         "nuget",
@@ -476,7 +486,13 @@ def validate_text(text: str) -> None:
 def validate_file(path: Path) -> None:
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
+        # UnicodeDecodeError is a ValueError, not an OSError -- read_text
+        # raises it directly when the bytes on disk are not valid UTF-8, and
+        # without this arm it propagated uncaught: a crash and a bare
+        # non-zero exit instead of the DENY line every other rejection in
+        # this module produces. Non-UTF-8 bytes are exactly the kind of
+        # input the module docstring promises to reject, never guess at.
         raise DependabotContractError(f"cannot read {path}: {exc}") from exc
     validate_text(text)
 
