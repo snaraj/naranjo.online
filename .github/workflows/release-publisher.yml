@@ -461,6 +461,28 @@ jobs:
           fi
           [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'digest=%s\n' "${digest}" >> "${GITHUB_OUTPUT}"
+      - name: Reject high or critical vulnerabilities in the final image digest
+        # POSITION IS THE CONTRACT: this gate runs immediately after digest
+        # resolution and BEFORE cosign sign/attest, so a digest that fails
+        # HIGH/CRITICAL never receives this repository's release identity
+        # (issue #69 -- v0.1.15 was signed and only then gated, leaving a
+        # signed vulnerable image in GHCR). The gate is unconditional: it
+        # covers the freshly built `absent` path and the reused `complete`
+        # path alike, so a previously clean digest is rescanned against
+        # today's vulnerability database. `require_exact_release_wiring`
+        # pins digest < gate < sign < attest; moving this step back below
+        # signing fails the contract suite.
+        #
+        # --include-dev-deps is a source/lockfile concept (npm, etc.) that
+        # `trivy fs` understands; the installed trivy rejects it as an
+        # unknown flag on `trivy image` (issue #73), so this step FATALed
+        # before scanning anything and the final digest was never gated.
+        run: >-
+          trivy image --scanners vuln
+          --severity HIGH,CRITICAL --exit-code 1
+          --ignore-unfixed=false --timeout 10m
+          --cache-dir "${RUNNER_TEMP}/trivy-image-cache"
+          "${IMAGE}@${{ steps.image.outputs.digest }}"
       - name: Sign the immutable image digest
         if: steps.image_state.outputs.state == 'absent'
         run: cosign sign --yes "${IMAGE}@${{ steps.image.outputs.digest }}"
@@ -538,17 +560,6 @@ jobs:
             "${IMAGE}@${DIGEST}" > "${verified}"
           python3 -I -B scripts/ci/release_contract.py attestation-set \
             --verified "${verified}" "${expected_attestations[@]}"
-      - name: Reject high or critical vulnerabilities in the final image digest
-        # --include-dev-deps is a source/lockfile concept (npm, etc.) that
-        # `trivy fs` understands; the installed trivy rejects it as an
-        # unknown flag on `trivy image` (issue #73), so this step FATALed
-        # before scanning anything and the final digest was never gated.
-        run: >-
-          trivy image --scanners vuln
-          --severity HIGH,CRITICAL --exit-code 1
-          --ignore-unfixed=false --timeout 10m
-          --cache-dir "${RUNNER_TEMP}/trivy-image-cache"
-          "${IMAGE}@${{ steps.image.outputs.digest }}"
       - name: Classify an absent, complete, or burned chart version
         id: chart_state
         env:
