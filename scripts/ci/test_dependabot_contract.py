@@ -169,6 +169,21 @@ class CLITests(unittest.TestCase):
         self.assertIn("DENY:", completed.stderr)
         self.assertIn("version must be exactly 2", completed.stderr)
 
+    def test_cli_exits_two_and_denies_for_non_utf8_bytes_instead_of_crashing(self):
+        # PR #84 review finding 2: Path.read_text(encoding="utf-8") raises
+        # UnicodeDecodeError -- a ValueError, not an OSError -- on invalid
+        # bytes. Before the fix, validate_file caught only OSError, so this
+        # propagated uncaught: a traceback and a bare non-zero exit (1),
+        # with no DENY line. Reproduces the reviewer's exact fixture: a file
+        # containing a lone 0xff byte, not valid UTF-8 anywhere.
+        with tempfile.TemporaryDirectory() as tmp:
+            bad_path = Path(tmp) / "dependabot.yml"
+            bad_path.write_bytes(b"\xff")
+            completed = self.run_cli(bad_path)
+        self.assertEqual(completed.returncode, 2, completed.stdout + completed.stderr)
+        self.assertIn("DENY:", completed.stderr)
+        self.assertNotIn("Traceback", completed.stderr)
+
 
 class TopLevelTests(unittest.TestCase):
     def test_minimal_and_rich_fixtures_are_both_accepted(self):
@@ -280,6 +295,19 @@ class UpdateEntryTests(unittest.TestCase):
         for ecosystem in ("docker", "pip", "cargo", "bundler", "gomod"):
             with self.subTest(ecosystem=ecosystem):
                 DC.validate_text(single_update_document(ecosystem))
+
+    def test_mix_is_accepted_as_the_documented_hex_elixir_ecosystem(self):
+        # PR #84 review finding 1: `mix` (not `hex`) is the documented
+        # package-ecosystem value for Hex/Elixir, per both the github/docs
+        # supported-package-managers table and SchemaStore's
+        # dependabot-2.0.json enum.
+        DC.validate_text(single_update_document("mix"))
+
+    def test_hex_is_rejected_it_is_not_a_documented_ecosystem_value(self):
+        text = replace_once(single_update_document(), "package-ecosystem: npm", "package-ecosystem: hex")
+        with self.assertRaises(DC.DependabotContractError) as caught:
+            DC.validate_text(text)
+        self.assertIn("unknown package-ecosystem 'hex'", str(caught.exception))
 
 
 class ScheduleTests(unittest.TestCase):
