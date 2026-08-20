@@ -38,6 +38,182 @@ def snapshot(version: str) -> dict[str, str]:
     }
 
 
+# --- Normalized workflow parsing -------------------------------------------
+#
+# Issue #69 follow-up. The publisher-order contract first asserted over raw
+# indented workflow text, and two spellings defeat that. Both were reproduced
+# live against the complete suite before this hardening landed:
+#
+#  1. HEADINGS ARE NOT SIDE EFFECTS. Pinning the canonical step names and
+#     their relative order says nothing about what any OTHER step does, so a
+#     step named anything at all could run `cosign sign` over the resolved
+#     digest before the vulnerability gate while every heading assertion
+#     stayed green -- issue #69's exact failure mode, restored under a new
+#     name.
+#  2. KEYS ARE NOT THEIR SPELLING. YAML permits whitespace and quoting
+#     between a key and its colon, so `if :`, `"if":`, and `'if' :` are the
+#     same live conditional to the Actions runner while defeating an
+#     `^        if:` regex. An ABSENCE assertion written against raw text
+#     therefore fails OPEN -- the dangerous direction. (A PRESENCE assertion
+#     written the same way fails closed, which is why the `tags:`/`sbom:`
+#     regexes nearby are safe as written.)
+#
+# Every key-based and position-based publisher assertion normalizes through
+# these helpers, so the contract binds step objects and executable run-block
+# content rather than source spelling. Stdlib only by design: the gate runs
+# `python3 -I -B`, which cannot import PyYAML.
+
+_STEP_START = "      - "
+_STEP_KEY = re.compile(r"^        (?=\S)")
+_NEXT_JOB = re.compile(r"(?m)^  [A-Za-z_][A-Za-z0-9_-]*:[ \t]*$")
+
+# Signing-capable commands, for the publisher ordering property. Each binds
+# this repository's release identity to bytes: `cosign sign` and
+# `cosign sign-blob` emit a bare signature, and `cosign attest` emits a SIGNED
+# in-toto attestation -- an attested-then-refused digest carries exactly the
+# false assurance a signed-then-refused digest does, so it counts. `cosign
+# verify` and `cosign verify-attestation` are read-only and are deliberately
+# absent from this tuple: they may run at any position. The lookarounds keep
+# `cosign sign` from also matching `cosign sign-blob`, and keep
+# `cosign verify-attestation` from matching `cosign attest`.
+SIGNING_CAPABLE = (
+    re.compile(r"(?<![\w./-])cosign\s+sign-blob(?![\w-])"),
+    re.compile(r"(?<![\w./-])cosign\s+sign(?![\w-])"),
+    re.compile(r"(?<![\w./-])cosign\s+attest(?![\w-])"),
+)
+IMAGE_SIGNATURE = re.compile(r"(?<![\w./-])cosign\s+sign(?![\w-])")
+# Installing cosign is not signing with it. Every publisher action is pinned
+# to a full commit SHA, so the companion check is name-level by construction:
+# it refuses an obviously signing-capable action ahead of the gate and cannot
+# prove what arbitrary pinned bytes do -- a stated boundary, not a claim.
+SIGNING_TOOL_INSTALLERS = ("sigstore/cosign-installer",)
+SIGNING_CAPABLE_ACTION = re.compile(r"(?i)(cosign|sigstore|attest|notary|signer)")
+
+
+def normalized_yaml_key(line: str) -> str:
+    """Return one YAML line's normalized mapping key, or "" if it declares none.
+
+    `if:`, `if :`, `"if":`, and `'if' :` all normalize to `if` -- the one key
+    the Actions runner honors and the spelling difference that defeated the
+    raw-text assertions this replaces.
+    """
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return ""
+    if stripped.startswith("- "):
+        stripped = stripped[2:].strip()
+    head, separator, _value = stripped.partition(":")
+    if not separator:
+        return ""
+    key = head.strip()
+    if len(key) >= 2 and key[0] == key[-1] and key[0] in "\"'":
+        key = key[1:-1].strip()
+    if not key or any(character.isspace() for character in key):
+        return ""
+    return key
+
+
+def normalized_keys(block: str, indent: int) -> list[str]:
+    """Return the normalized mapping keys declared at exactly `indent` spaces."""
+    at_indent = re.compile(r"^ {%d}(?=\S)" % indent)
+    keys = []
+    for line in block.split("\n"):
+        if at_indent.match(line):
+            key = normalized_yaml_key(line)
+            if key:
+                keys.append(key)
+    return keys
+
+
+def _step_scalar(lines: list[str], key: str) -> str:
+    """Return a step key's scalar value, block scalars folded to their body."""
+    for index, line in enumerate(lines):
+        if not (line.startswith(_STEP_START) or _STEP_KEY.match(line)):
+            continue
+        if normalized_yaml_key(line) != key:
+            continue
+        _head, _separator, value = line.partition(":")
+        value = value.strip()
+        if value and value[0] not in "|>":
+            return value
+        body = []
+        for follow in lines[index + 1 :]:
+            if not follow.strip():
+                body.append("")
+                continue
+            if follow.startswith(_STEP_START) or _STEP_KEY.match(follow):
+                break
+            body.append(follow.strip())
+        return "\n".join(body).strip()
+    return ""
+
+
+def job_steps(workflow: str, job: str) -> list[dict]:
+    """Split one job's `steps:` list into normalized execution-ordered records."""
+    marker = f"\n  {job}:\n"
+    if workflow.count(marker) != 1:
+        raise ValueError(f"workflow must declare exactly one job named {job}")
+    block = workflow.split(marker, 1)[1]
+    following = _NEXT_JOB.search(block)
+    if following is not None:
+        block = block[: following.start()]
+    steps_marker = "\n    steps:\n"
+    if block.count(steps_marker) != 1:
+        raise ValueError(f"job {job} must declare exactly one steps list")
+    steps: list[dict] = []
+    current: dict | None = None
+    for line in block.split(steps_marker, 1)[1].split("\n"):
+        if line.startswith(_STEP_START):
+            current = {"position": len(steps), "lines": [], "keys": []}
+            steps.append(current)
+        elif current is None:
+            continue
+        elif line.strip() and not line.startswith("      "):
+            break
+        current["lines"].append(line)
+        if line.startswith(_STEP_START) or _STEP_KEY.match(line):
+            key = normalized_yaml_key(line)
+            if key:
+                current["keys"].append(key)
+    for step in steps:
+        step["name"] = _step_scalar(step["lines"], "name")
+        step["run"] = _step_scalar(step["lines"], "run")
+        step["uses"] = _step_scalar(step["lines"], "uses")
+    return steps
+
+
+def executable_commands(run: str) -> list[str]:
+    """Return a run block's executable commands, comments dropped and continuations joined.
+
+    A `#` line is never executed, so it must not register as a side effect --
+    the vulnerability gate's own comment names `cosign sign/attest`.
+    """
+    commands = []
+    pending = ""
+    for raw in run.split("\n"):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.endswith("\\"):
+            pending += line[:-1].strip() + " "
+            continue
+        commands.append((pending + line).strip())
+        pending = ""
+    if pending.strip():
+        commands.append(pending.strip())
+    return commands
+
+
+def signing_invocations(steps: list[dict]) -> list[tuple[int, str, str]]:
+    """Return (position, step name, command) for every signing-capable command."""
+    found = []
+    for step in steps:
+        for command in executable_commands(step["run"]):
+            if any(pattern.search(command) for pattern in SIGNING_CAPABLE):
+                found.append((step["position"], step["name"], command))
+    return found
+
+
 def event(sha: str) -> dict[str, object]:
     return {
         "repository": {"full_name": "owner/site"},
@@ -1575,7 +1751,14 @@ class ArtifactStateTests(unittest.TestCase):
     def test_absent_complete_and_every_partial_state(self):
         self.assertEqual(RC.classify_artifact(present=False, source_match=False, signature_match=False, evidence_count=0, expected_evidence=2), "absent")
         self.assertEqual(RC.classify_artifact(present=True, source_match=True, signature_match=True, evidence_count=2, expected_evidence=2), "complete")
-        for source, signed, count in ((False, True, 2), (True, False, 2), (True, True, 0), (True, True, 1), (True, True, 3)):
+        # (True, False, 0) is the exact residue a gate-before-sign publisher
+        # leaves when the HIGH/CRITICAL scan denies (issue #69): Buildx has
+        # already pushed the alias, so the digest is present with matching
+        # provenance and SBOMs, but nothing signed it and no attestation
+        # exists. It must classify burned, which the resolver then refuses as
+        # an unpublishable state -- the tag is consumed and needs an operator,
+        # never a silent republish over a vulnerable digest.
+        for source, signed, count in ((False, True, 2), (True, False, 2), (True, False, 0), (True, True, 0), (True, True, 1), (True, True, 3)):
             with self.subTest(source=source, signed=signed, count=count):
                 self.assertEqual(RC.classify_artifact(present=True, source_match=source, signature_match=signed, evidence_count=count, expected_evidence=2), "burned")
         with self.assertRaises(RC.ContractError):
@@ -2635,7 +2818,10 @@ class MainAndCodeQLAuthorizationShellPathTests(unittest.TestCase):
         dependency = gate.split("\n  dependency-review:\n", 1)[1].split(
             "\n  application:\n", 1
         )[0]
-        if re.search(r"(?m)^    if:", security):
+        # Normalized keys, not raw text: `if :` is a live conditional the
+        # runner honors, so `^    if:` would let the security job be skipped
+        # (same fail-open class as the publisher gate's conditional pin).
+        if "if" in normalized_keys(security, 4):
             raise ValueError("security main job may not be conditionally skipped")
         if "if: github.event_name == 'pull_request'" not in dependency:
             raise ValueError("dependency-review must be skipped only outside pull requests")
@@ -2781,6 +2967,11 @@ gh() {
         self.require_workflow_contract(gate, publisher)
         mutants = (
             (gate.replace("  security:\n", "  security:\n    if: false\n", 1), publisher),
+            # Same fail-open spelling class as the publisher gate's
+            # conditional pin: a raw `^    if:` assertion does not see these,
+            # but the Actions runner honors both and skips the job.
+            (gate.replace("  security:\n", "  security:\n    if : false\n", 1), publisher),
+            (gate.replace("  security:\n", '  security:\n    "if": false\n', 1), publisher),
             (gate, publisher.replace("main-jobs-record", "deleted-main-jobs", 1)),
             (gate, publisher.replace("codeql-run-record", "deleted-codeql-run", 1)),
             (gate, publisher.replace("codeql-jobs-record", "deleted-codeql-jobs", 1)),
@@ -4885,9 +5076,28 @@ class WorkflowStructureTests(unittest.TestCase):
         registry_index = publisher.index("      - name: Classify an absent, complete, or burned image tag")
         if tag_index >= registry_index:
             raise ValueError("exact tag transaction must precede registry side effects")
-        scan_index = publisher.index(
+        # Issue #69: this chain pinned the scan's position relative to the
+        # alias/manifest/Release stages but said NOTHING about signing, so a
+        # publisher that signed the digest and gated it afterwards satisfied
+        # every assertion -- and did, leaving a HIGH-vulnerable v0.1.15 image
+        # in GHCR carrying this repository's release identity. The gate now
+        # stands between digest resolution and the signing pair, and both
+        # signing steps carry pinned positions so the order cannot silently
+        # revert.
+        scan_heading = (
             "      - name: Reject high or critical vulnerabilities in the final image digest"
         )
+        sign_heading = "      - name: Sign the immutable image digest"
+        attest_heading = (
+            "      - name: Attach the BuildKit SLSA provenance as cosign attestations"
+        )
+        for heading in (scan_heading, sign_heading, attest_heading):
+            if publisher.count(heading) != 1:
+                raise ValueError(f"publisher must carry exactly one step named:{heading.split(':', 1)[1]}")
+        digest_index = publisher.index(image_resolver_heading)
+        scan_index = publisher.index(scan_heading)
+        sign_index = publisher.index(sign_heading)
+        attest_index = publisher.index(attest_heading)
         alias_index = publisher.index(alias_heading)
         manifest_index = publisher.index(
             "      - name: Build the deterministic release evidence manifest"
@@ -4899,10 +5109,80 @@ class WorkflowStructureTests(unittest.TestCase):
             "      - name: Re-bind the immutable Release to the exact annotated tag"
         )
         if not (
-            registry_index < scan_index < alias_index < manifest_index < release_index < terminal_index
+            registry_index
+            < digest_index
+            < scan_index
+            < sign_index
+            < attest_index
+            < alias_index
+            < manifest_index
+            < release_index
+            < terminal_index
         ):
             raise ValueError(
-                "scan, alias rebind, manifest, Release, and terminal binding order is not exact"
+                "digest resolution, HIGH/CRITICAL gate, signing, attestation, alias "
+                "rebind, manifest, Release, and terminal binding order is not exact"
+            )
+        # The heading chain above pins where the CANONICAL names sit; it does
+        # not constrain what any other step does. A step named anything at all
+        # could run `cosign sign` over the resolved digest before the gate and
+        # satisfy every index comparison -- issue #69's failure mode restored
+        # under a new name, reproduced live against the full suite. The real
+        # property is a side-effect property, so it is asserted over normalized
+        # step objects and executable run-block content in execution order.
+        steps = job_steps(publisher, "publish")
+        by_name: dict[str, list[dict]] = {}
+        for step in steps:
+            by_name.setdefault(step["name"], []).append(step)
+        gate_name = scan_heading.split(": ", 1)[1]
+        sign_name = sign_heading.split(": ", 1)[1]
+        for name in (gate_name, sign_name, attest_heading.split(": ", 1)[1]):
+            if len(by_name.get(name, ())) != 1:
+                raise ValueError(f"publisher must carry exactly one parsed step named: {name}")
+        gate_position = by_name[gate_name][0]["position"]
+        sign_position = by_name[sign_name][0]["position"]
+        signings = signing_invocations(steps)
+        early = [entry for entry in signings if entry[0] <= gate_position]
+        if early:
+            raise ValueError(
+                "no signing-capable command may run at or before the HIGH/CRITICAL "
+                f"image gate: {early[0][2]} in step {early[0][1]}"
+            )
+        for step in steps:
+            if step["position"] > gate_position or not step["uses"]:
+                continue
+            action = step["uses"].split("@", 1)[0].strip()
+            if action in SIGNING_TOOL_INSTALLERS:
+                continue
+            if SIGNING_CAPABLE_ACTION.search(action):
+                raise ValueError(
+                    f"signing-capable action before the HIGH/CRITICAL image gate: {action}"
+                )
+        image_signatures = [
+            entry
+            for entry in signings
+            if "${IMAGE}@" in entry[2] and IMAGE_SIGNATURE.search(entry[2])
+        ]
+        if len(image_signatures) != 1:
+            raise ValueError(
+                "publisher must sign the resolved image digest exactly once, found "
+                f"{len(image_signatures)}"
+            )
+        if image_signatures[0][0] != sign_position:
+            raise ValueError(
+                f"the one image-signing command must belong to the pinned step: {sign_name}"
+            )
+        if len([entry for entry in signings if entry[0] == sign_position]) != 1:
+            raise ValueError("the pinned image-signing step must carry exactly one signing command")
+        # The gate covers the reused `complete` digest as well as the freshly
+        # built one: an image published by an earlier run is rescanned against
+        # today's vulnerability database before it can be released. A build-only
+        # condition here would restore exactly that hole. Asserted over
+        # NORMALIZED keys: `if :` and `"if":` are live conditionals the runner
+        # honors and a `^        if:` regex does not see.
+        if "if" in by_name[gate_name][0]["keys"]:
+            raise ValueError(
+                "the final-digest vulnerability gate must stay unconditional"
             )
         if terminal_index <= release_index or publisher.rfind("      - name:") != terminal_index:
             raise ValueError("the post-immutable tag rebind must be the terminal publisher step")
@@ -5016,7 +5296,10 @@ class WorkflowStructureTests(unittest.TestCase):
         ):
             if forbidden in settings:
                 raise ValueError(f"settings job gained mutation authority: {forbidden}")
-        if re.search(r"(?m)^    outputs:", settings):
+        # Normalized keys, not raw text: `outputs :` would export the App
+        # token past this job's boundary while `^    outputs:` saw nothing
+        # (same fail-open class as the publisher gate's conditional pin).
+        if "outputs" in normalized_keys(settings, 4):
             raise ValueError("settings job must not export its App token or any output")
         confined = (
             "${{ vars.PLATFORM_RELEASE_APP_ID }}",
@@ -5306,11 +5589,19 @@ class WorkflowStructureTests(unittest.TestCase):
                     publisher.replace(publish_marker, publish_marker + crossover, 1),
                 )
         settings_marker = "\n  immutable_settings:\n"
-        with self.assertRaises(ValueError):
-            self.require_successful_main_privilege_boundary(
-                orchestrator,
-                publisher.replace(settings_marker, settings_marker + "    outputs:\n      token: leaked\n", 1),
-            )
+        # Every spelling of the same key. `outputs :` and `"outputs":` export
+        # the App token exactly as `outputs:` does -- the fail-open class the
+        # publisher gate's conditional pin shared before normalization.
+        for export in (
+            "    outputs:\n      token: leaked\n",
+            "    outputs :\n      token: leaked\n",
+            '    "outputs":\n      token: leaked\n',
+        ):
+            with self.subTest(settings_export=export.strip()), self.assertRaises(ValueError):
+                self.require_successful_main_privilege_boundary(
+                    orchestrator,
+                    publisher.replace(settings_marker, settings_marker + export, 1),
+                )
         workflow_mutants = (
             (gate.replace("    timeout-minutes: 20\n", "", 1), codeql, orchestrator, publisher),
             (gate, codeql.replace("github.sha", "github.ref", 1), orchestrator, publisher),
@@ -5404,6 +5695,95 @@ class WorkflowStructureTests(unittest.TestCase):
             ("alias proof moved after manifest", displaced_alias),
         ):
             with self.subTest(registry_alias_mutant=mutant_name), self.assertRaises(ValueError):
+                self.require_exact_release_wiring(orchestrator, mutation)
+        # Issue #69's exact regression, rebuilt from the live publisher text:
+        # lift the whole gate step out from between digest resolution and
+        # signing, and drop it back where it used to live -- after the SLSA
+        # attestation step, immediately before the chart classifier. That is
+        # byte-for-byte the sign-then-gate publisher that signed a HIGH image.
+        scan_heading = (
+            "      - name: Reject high or critical vulnerabilities in the final image digest"
+        )
+        sign_heading = "      - name: Sign the immutable image digest"
+        chart_state_heading = "      - name: Classify an absent, complete, or burned chart version"
+        gate_block = scan_heading + publisher.split(scan_heading, 1)[1].split(sign_heading, 1)[0]
+        gate_removed = publisher.replace(gate_block, "", 1)
+        for mutant_name, mutation in (
+            (
+                "gate restored below signing and attestation",
+                gate_removed.replace(chart_state_heading, gate_block + chart_state_heading, 1),
+            ),
+            ("gate deleted outright", gate_removed),
+            (
+                "gate skipped for a reused digest",
+                publisher.replace(
+                    scan_heading + "\n",
+                    scan_heading
+                    + "\n        if: steps.image_state.outputs.state == 'absent'\n",
+                    1,
+                ),
+            ),
+            (
+                "second gate copy added so one can drift",
+                publisher.replace(chart_state_heading, gate_block + chart_state_heading, 1),
+            ),
+            # Both bypasses the independent security review reproduced against
+            # the complete suite while every heading assertion stayed green.
+            # They are permanent rows because each is a live regression, not a
+            # hypothetical: the first signs the resolved digest before the gate
+            # under a name the chain never mentions, the second makes the gate
+            # conditional in a spelling `^        if:` cannot see.
+            (
+                "renamed step signs the resolved digest before the gate",
+                publisher.replace(
+                    scan_heading,
+                    "      - name: Prime the release signature cache\n"
+                    "        if: steps.image_state.outputs.state == 'absent'\n"
+                    '        run: cosign sign --yes "${IMAGE}@${{ steps.image.outputs.digest }}"\n'
+                    + scan_heading,
+                    1,
+                ),
+            ),
+            (
+                "gate made conditional in the `if :` spelling",
+                publisher.replace(
+                    scan_heading + "\n",
+                    scan_heading
+                    + "\n        if : steps.image_state.outputs.state == 'absent'\n",
+                    1,
+                ),
+            ),
+            (
+                "gate made conditional in the quoted `\"if\":` spelling",
+                publisher.replace(
+                    scan_heading + "\n",
+                    scan_heading
+                    + "\n        \"if\": steps.image_state.outputs.state == 'absent'\n",
+                    1,
+                ),
+            ),
+            (
+                "attestation hoisted above the gate under another name",
+                publisher.replace(
+                    scan_heading,
+                    "      - name: Warm the provenance cache\n"
+                    '        run: cosign attest --yes --predicate p.json "${IMAGE}@${DIGEST}"\n'
+                    + scan_heading,
+                    1,
+                ),
+            ),
+            (
+                "second image signature added outside the pinned step",
+                publisher.replace(
+                    chart_state_heading,
+                    "      - name: Re-sign the image for good measure\n"
+                    '        run: cosign sign --yes "${IMAGE}@${{ steps.image.outputs.digest }}"\n'
+                    + chart_state_heading,
+                    1,
+                ),
+            ),
+        ):
+            with self.subTest(gate_order_mutant=mutant_name), self.assertRaises(ValueError):
                 self.require_exact_release_wiring(orchestrator, mutation)
         for forbidden in (
             "tag-state",

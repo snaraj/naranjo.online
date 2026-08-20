@@ -7,6 +7,66 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.20] - 2026-08-20
+
+### Security
+
+- The release publisher gates before it signs. The HIGH/CRITICAL final-image
+  scan now runs immediately after digest resolution and BEFORE `cosign sign`
+  and the SLSA attestation step, matching the sibling repository's
+  arrangement. Previously the publisher signed the digest, attached
+  attestations, and only then scanned, so run 32195803008 (v0.1.15) put a
+  vulnerable image — 8 HIGH Go 1.26.5 standard-library CVEs — into GHCR
+  carrying this repository's release identity. The gate did not refuse that
+  digest; it was never reached. The Actions record for that run shows step
+  14 sign success, step 15 attest failure, step 16 gate SKIPPED, so under
+  the pre-fix order the gate protected no signature under any observed
+  outcome.
+  A gated-out digest is now never signed: it stays an unsigned pushed alias,
+  which the artifact classifier reads as `burned` and the digest resolver
+  refuses as unpublishable.
+
+### Fixed
+
+- The publisher's step-order contract had no opinion on signing at all. Its
+  ordering chain pinned `registry < scan < alias < manifest < Release <
+  terminal`, and the literals `Sign the immutable image digest` and
+  `Attach the BuildKit SLSA provenance` appeared nowhere in the contract
+  suite, so the sign-then-gate publisher satisfied every assertion. The
+  chain now pins `registry < digest < scan < sign < attest < alias <
+  manifest < Release < terminal`, requires exactly one step of each of
+  those three names, and refuses any conditional on the gate so a
+  reused `complete` digest is still rescanned against the current
+  vulnerability database. Step headings are not the property, so the
+  contract binds signing side effects instead: it parses the `publish` job
+  into normalized, execution-ordered step objects and requires that no
+  signing-capable command (`cosign sign`, `cosign sign-blob`,
+  `cosign attest`) runs at or before the gate, that the resolved image
+  digest is signed exactly once across every run block, and that the one
+  image-signing command belongs to the pinned post-gate step. Mapping keys
+  are normalized before any key-based check, because `if :` and `"if":` are
+  live conditionals the Actions runner honors and a raw `^        if:`
+  regex does not see. Nine hostile mutants prove it: the gate restored
+  below signing (the exact pre-fix workflow), the gate deleted, the gate
+  made conditional on a fresh build, a duplicated second gate copy, a
+  renamed step signing the resolved digest before the gate, the gate made
+  conditional in the `if :` and in the quoted `"if":` spelling, an
+  attestation hoisted above the gate under another name, and a second image
+  signature placed outside the pinned step.
+- The same fail-open spelling class is closed everywhere it appeared rather
+  than only on the gate. An absence assertion matched against raw indented
+  text passes whenever the spelling shifts, so the pr-gate `security` job's
+  "may not be conditionally skipped" pin and the publisher
+  `immutable_settings` job's "must not export its App token" pin now read
+  normalized keys too, each proven by `if :`/`"if":` and
+  `outputs :`/`"outputs":` mutants. The three presence assertions nearby
+  (`tags:`, `sbom:`, `timeout-minutes:`) already failed closed under the
+  same attack and are unchanged.
+- The artifact classifier pins the residue a denied gate now leaves —
+  present, provenance- and SBOM-matched, unsigned, zero attestations —
+  as `burned`, so a consumed tag needs an operator instead of a silent
+  republish over a vulnerable digest.
+
 ## [0.1.19] - 2026-08-20
 
 ### Security
