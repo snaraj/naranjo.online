@@ -5,7 +5,7 @@ document scan that a second `NetworkPolicy` could walk straight past by
 spelling its keys `kind :` and `spec :` -- valid YAML, invisible to a
 prefix match, and an additive allow-all for every Pod once Kubernetes has
 it. The behavioural half of the proof lives in `chart-egress-pin.sh`, whose
-assertions (d) and (g) rewrite the REAL Helm render into 40 hostile ones and
+assertions (d) and (g) rewrite the REAL Helm render into 41 hostile ones and
 require the census to refuse every single one. This suite is the other half:
 it pins the reader itself, one rejection per test, without needing helm --
 so it runs in the `security` job alongside the other contract suites, which
@@ -239,7 +239,69 @@ class ReaderReadsRealYAML(unittest.TestCase):
         self.assertEqual(parse("---\na: 1\n---\n---\nb: 2\n"), [{"a": 1}, None, {"b": 2}])
 
     def test_a_document_end_marker_closes_a_document(self):
+        # The acceptance companion to the two refusals below: PyYAML 6.0.3
+        # reads every one of these exactly as this reader does. `...` may end a
+        # document, may repeat, may be followed by comments and blank lines,
+        # and a `---` may reopen the stream after it.
         self.assertEqual(parse("a: 1\n...\n---\nb: 2\n"), [{"a": 1}, {"b": 2}])
+        self.assertEqual(parse("a: 1\n...\n"), [{"a": 1}])
+        self.assertEqual(parse("a: 1\n...\n...\n"), [{"a": 1}])
+        self.assertEqual(parse("---\n...\n"), [None])
+        self.assertEqual(parse("a: 1\n...\n\n# c\n---\nb: 2\n"), [{"a": 1}, {"b": 2}])
+
+    def test_a_document_end_marker_is_only_one_at_column_zero(self):
+        # The companion that keeps the refusal from eating ordinary text: an
+        # indented `...`, a `...` inside a quoted or block scalar, and a `...`
+        # in value position are all plain content to PyYAML, and to this
+        # reader. Only a column-zero marker line ends a document.
+        self.assertEqual(parse("  ...\n"), ["..."])
+        self.assertEqual(parse("a: ...\n"), [{"a": "..."}])
+        self.assertEqual(parse('a: "..."\n'), [{"a": "..."}])
+        self.assertEqual(parse("a: '...'\n"), [{"a": "..."}])
+        self.assertEqual(parse("a: |\n  ...\nb: 2\n"), [{"a": "...\n", "b": 2}])
+        self.assertEqual(parse("...x\n"), ["...x"])
+
+    def test_unicode_whitespace_is_scalar_CONTENT_not_whitespace(self):
+        # YAML's whitespace is exactly space and tab. Python's `str.strip()`
+        # also eats U+00A0, U+1680, U+2000-U+200A, U+202F, U+205F and U+3000,
+        # and leaning on it made every line below a MISREAD: `a: \xa0` was the
+        # value None here and the string "\xa0" to PyYAML 6.0.3, and a
+        # whole-document `\xa0` was ZERO documents here and one there. Each
+        # answer below is PyYAML's own on the same input.
+        for ch in ("\xa0", "\u1680", "\u2000", "\u2004", "\u200a", "\u2007",
+                   "\u202f", "\u205f", "\u3000"):
+            self.assertEqual(parse("a: %s\n" % ch), [{"a": ch}])
+            self.assertEqual(parse("%s\n" % ch), [ch])
+            self.assertEqual(parse("  %s  \n" % ch), [ch])
+            self.assertEqual(parse("a:\n  - %s\n" % ch), [{"a": [ch]}])
+            self.assertEqual(parse("a:\n  -%s\n" % ch), [{"a": "-" + ch}])
+            self.assertEqual(parse("%s: v\n" % ch), [{ch: "v"}])
+            self.assertEqual(parse("a: {k: %s}\n" % ch), [{"a": {"k": ch}}])
+            self.assertEqual(parse("a: [%s]\n" % ch), [{"a": [ch]}])
+            self.assertEqual(parse("a: |\n  x\n  %s\n  y\n" % ch),
+                             [{"a": "x\n%s\ny\n" % ch}])
+            # ... and neither `---` nor `...` survives one being glued to it.
+            self.assertEqual(parse("---%s\n" % ch), ["---" + ch])
+            self.assertEqual(parse("...%s\n" % ch), ["..." + ch])
+
+    def test_unicode_digits_are_strings_and_ascii_digits_still_resolve(self):
+        # `int()` and `float()` accept Unicode decimal digits and Unicode
+        # whitespace -- `int("\u0665")` (ARABIC-INDIC FIVE) is 5, and so is
+        # `int("\xa05")` -- but every
+        # call site here is gated by a pattern whose classes are the literal
+        # ASCII ranges `[0-9]`, so none of them ever reaches a conversion. Neither
+        # does PyYAML 6.0.3: its own resolver patterns carry no `\\d` and no
+        # `re.ASCII`, so a fullwidth or Arabic-Indic digit is a plain STRING to
+        # both readers. The second half is the companion that keeps the gate
+        # useful: ordinary numbers still resolve to numbers.
+        for digits in ("\u0665", "\uff15", "\u0966", "\u06f5", "\uff10\uff10",
+                       "1\uff10", "\uff11.\uff15", "\u2460", "\u00b2"):
+            self.assertEqual(parse("a: %s\n" % digits), [{"a": digits}])
+        self.assertEqual(parse("a: 202\uff16-08-20\n"), [{"a": "202\uff16-08-20"}])
+        self.assertEqual(parse("a: \uff10x\uff11f\n"), [{"a": "\uff10x\uff11f"}])
+        self.assertEqual(parse("port: 8080\n"), [{"port": 8080}])
+        self.assertEqual(parse("a: 5\nb: -5\nc: 1.5\nd: .5\ne: 5.\n"),
+                         [{"a": 5, "b": -5, "c": 1.5, "d": 0.5, "e": 5.0}])
 
     def test_scalars_resolve_the_way_kubernetes_yaml_resolves_them(self):
         docs = parse("i: 8080\nf: 1.5\nt: true\nf2: false\nnil: null\ntilde: ~\ns: 200m\nq: \"8080\"\n")
@@ -640,6 +702,62 @@ class ReaderFailsClosed(unittest.TestCase):
 
     def test_unexpected_indentation(self):
         self.reject("a: 1\n  b: 2\n", "unexpected indentation")
+
+    def test_a_unicode_space_after_a_block_scalar_header(self):
+        # `str.split(None, 1)` splits on PYTHON's whitespace, so `|\xa0` came
+        # back as the header `|` with no trailing text and `a: |\xa0` parsed as
+        # an ordinary literal block scalar here -- while PyYAML 6.0.3 raises a
+        # ScannerError on the U+00A0 after the indicator. Splitting on the
+        # ASCII space alone puts the character back in the header, where the
+        # header loop refuses it.
+        for ch in ("\xa0", "\u1680", "\u2000", "\u202f", "\u3000"):
+            self.reject("a: |%s\n  x\n" % ch, "unsupported block scalar header")
+            self.reject("a: >%s\n  x\n" % ch, "unsupported block scalar header")
+            self.reject("a: |%s# c\n  x\n" % ch, "block scalar header")
+            self.reject("a: |2%s\n   x\n" % ch, "unsupported block scalar header")
+            self.reject("a: | %s\n  x\n" % ch, "unexpected text after a block scalar header")
+        self.reject("a: |\xa0\n  x\n", "line 1")
+
+    def test_unicode_whitespace_after_a_value_is_trailing_content(self):
+        # The same Unicode-strip leak one method along: `_require_trailing_blank`
+        # stripped it away and read on, where PyYAML refuses the stream. A
+        # character YAML does not call whitespace cannot follow a closed value.
+        for ch in ("\xa0", "\u2000", "\u3000"):
+            self.reject("a: [1] %s\n" % ch, "unexpected trailing content")
+            self.reject('a: "x" %s\n' % ch, "unexpected trailing content")
+            self.reject("a: [1]%s\n" % ch, "unexpected trailing content")
+
+    def test_a_document_end_marker_before_any_document(self):
+        # `...` ENDS a document; PyYAML has none to end here and raises. This
+        # reader used to skip the line and return ZERO documents -- a whole
+        # stream read as nothing at all.
+        self.reject("...\n", "before any document")
+        self.reject("...\n...\n", "before any document")
+        self.reject("# c\n...\n", "before any document")
+        self.reject("...\nfoo: v\n", "before any document")
+        self.reject("...\n", "line 1")
+
+    def test_content_after_a_document_end_marker(self):
+        # And the other half: PyYAML accepts only a directive, a `---`, another
+        # `...` or end-of-stream after a document-end marker, and raises a
+        # ParserError on anything else. This reader used to read straight on,
+        # so `x: 1\n...\nfoo: v` was TWO documents here and a refused stream
+        # there -- accept-where-the-declared-oracle-refuses.
+        self.reject("x: 1\n...\nfoo: v\n", "content after a document-end marker")
+        self.reject("x: 1\n...\n# c\nfoo: v\n", "content after a document-end marker")
+        self.reject("x: 1\n...\n...\nfoo: v\n", "content after a document-end marker")
+        self.reject("a:\n  - 1\n...\nb: 2\n", "content after a document-end marker")
+        self.reject("x: 1\n...\nfoo: v\n", "line 3")
+
+    def test_a_unicode_space_does_not_make_a_document_marker(self):
+        # `raw.strip()` turned `---\xa0` and `...\xa0` into markers here while
+        # PyYAML reads them as ordinary plain scalars (its own check wants a
+        # space, tab, line break or end-of-stream after the three characters).
+        self.reject("a: 1\n---\xa0\nb: 2\n", "neither a mapping key")
+        self.reject("a: 1\n...\xa0\nb: 2\n", "neither a mapping key")
+        self.reject("a: 1\n... \xa0\n", "content on a document-end line")
+        self.reject("... \xa0\n", "content on a document-end line")
+        self.reject("a: 1\n--- \xa0\n", "content on a document-start line")
 
 
 class CensusFixture(unittest.TestCase):

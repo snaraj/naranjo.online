@@ -93,7 +93,27 @@ extended. Refused outright:
   reader is never the more permissive of the two;
 - plain scalars opening with a block sequence indicator (`- `), which real
   YAML refuses too -- this reader must never be MORE permissive than the
-  tools that install the render.
+  tools that install the render;
+- a document-end marker (`...`) with no document to end, and any content
+  after one that is not preceded by a `---` document-start line: `...` ENDS
+  a document rather than separating two, and a real YAML reader accepts only
+  a directive, a `---`, another `...` or end-of-stream after it.
+
+WHERE PYTHON'S STRING SEMANTICS ARE NOT YAML'S. YAML whitespace is exactly
+SPACE and TAB, and tabs are refused above -- but Python's `str.strip()`,
+`.lstrip()`, `.rstrip()` and `.split(None)` are UNICODE-aware and also eat
+U+00A0, U+1680, U+2000-U+200A, U+202F, U+205F, U+3000 and the C0 separators,
+while `str.splitlines()` additionally breaks lines at \\v, \\f, \\x1c-\\x1e and
+U+0085/U+2028/U+2029. Every strip in this module therefore goes through the
+ASCII-explicit `_ascii_strip`/`_ascii_rstrip` helpers, every split names its
+separator, `str.splitlines()` is never used at all, and every regex spells
+its character classes as literal ASCII ranges (`[0-9]`, `[a-fA-F]`) rather
+than `\\d`/`\\w`/`\\s` -- which is also PyYAML 6.0.3's own choice, so the
+transcribed patterns stay both string-equal AND behaviour-equal to the
+oracle's without an `re.ASCII` flag the oracle does not carry. `int()` and
+`float()` accept Unicode decimal digits and Unicode whitespace (`int('\\u0665')`
+is 5), so every call site is gated behind one of those ASCII-only patterns
+first and a fullwidth or Arabic-Indic digit is a plain STRING to both readers.
 
 Floats are the one number form this reader RESOLVES rather than refuses, so
 `_FLOAT_RE` is PyYAML's own float-resolver decimal branches transcribed
@@ -102,7 +122,7 @@ character for character; `.5` is 0.5 to both readers and `-.5` is the string
 
 Both directions are checked against PyYAML 6.0.3 -- the oracle, never a
 dependency; nothing in this repository imports it -- over a corpus of
-Helm-render and hostile shapes. Three rounds of independent review have
+Helm-render and hostile shapes. Four rounds of independent review have
 extended that corpus, and each round measured divergences this file then
 closed:
 
@@ -127,14 +147,30 @@ closed:
   underscored sexagesimals (`1_:0`, the integer 60 there), a comment inside
   a plain key (`k #: v`), and plain scalars run past `?`, `[` or `{` inside
   a flow collection.
+- round four (PR #96): one root cause with several members -- Python's
+  UNICODE string semantics leaking through where YAML defines ASCII-only
+  behaviour, described in full under "WHERE PYTHON'S STRING SEMANTICS ARE
+  NOT YAML'S" above. `a: \\xa0` was the value None here and the string
+  "\\xa0" there; a whole-document `\\xa0` was ZERO documents here and one
+  there; `a: |\\xa0` parsed as a block scalar here and raised a ScannerError
+  there; `---\\xa0` and `...\\xa0` were document markers here and plain
+  scalars there; `a: [1] \\xa0` read on here and raised there. Closed by
+  ASCII-explicit strips and splits rather than by refusal, so U+00A0 stays
+  part of the scalar exactly as the oracle reads it and mid-token `©`, `é`,
+  CJK and emoji keep reading as before. The same round closed the document-end
+  marker (`...`), which this reader treated as a benign boundary while PyYAML
+  ends the document there: `...` alone was ZERO documents here and a
+  ParserError there, and `x: 1` / `...` / `foo: v` was TWO documents here and
+  a ParserError there. Closed by refusal, which is agreement in that shape --
+  and `a: 1` / `...` / `---` / `b: 2` still reads on both sides.
 
 Every one of those classes is closed. The claim this file makes is therefore
 a bounded, re-runnable one rather than a universal quantifier: over that
 corpus there is no input this reader accepts and reads differently than
 PyYAML, and none it accepts that PyYAML refuses. Every divergence that
 remains runs the other way -- this reader refusing something PyYAML resolves
-(`2026_08`, `=` in key position) -- which is the direction that cannot hide
-a document.
+(`2026_08`, `=` in key position, `--- x`, a `%YAML` directive reopening a
+stream after `...`) -- which is the direction that cannot hide a document.
 
 CLI (stdin is the render for `census` and `mutate`):
 
@@ -332,13 +368,63 @@ _SIMPLE_ESCAPES = {
 }
 
 
+# YAML's whitespace is exactly SPACE and TAB, and tabs are refused outright by
+# `_check_bytes`, so the only whitespace this reader may ever strip is the
+# ASCII space. Python's `str.strip()`/`.lstrip()`/`.rstrip()`/`.split(None)`
+# are UNICODE-aware and eat far more than that -- U+00A0, U+1680,
+# U+2000-U+200A, U+202F, U+205F, U+3000, plus the C0 separators. Leaning on
+# them made `a: \xa0` the value None here where PyYAML 6.0.3 reads the string
+# "\xa0", made a whole-document `\xa0` vanish into ZERO documents, and let
+# `a: |\xa0` parse as a block scalar where PyYAML raises: accept-and-misread
+# and accept-where-the-oracle-refuses, in this reader's own taxonomy. PR #96's
+# round-four review measured all three. Every strip below is therefore
+# ASCII-explicit through these helpers, and `str.splitlines()` is never used
+# anywhere in this module -- it breaks lines at \v, \f, \x1c-\x1e and
+# U+0085/U+2028/U+2029 as well as \n, which is the same bug one step earlier.
+_YAML_SPACE = " "
+
+
+def _ascii_strip(raw: str) -> str:
+    return raw.strip(_YAML_SPACE)
+
+
+def _ascii_rstrip(raw: str) -> str:
+    return raw.rstrip(_YAML_SPACE)
+
+
 def _indent_of(raw: str) -> int:
-    return len(raw) - len(raw.lstrip(" "))
+    return len(raw) - len(raw.lstrip(_YAML_SPACE))
 
 
 def _ignorable(raw: str) -> bool:
-    stripped = raw.strip()
+    stripped = _ascii_strip(raw)
     return stripped == "" or stripped.startswith("#")
+
+
+def _document_marker(raw: str) -> str | None:
+    """`"---"`, `"..."` or None: which document marker this LINE is.
+
+    ONE predicate, in ONE place. `documents()` and the four block readers each
+    used to decide this for themselves, and two of those spellings could
+    disagree about a line like `---\xa0`: Python's `str.strip()` eats the
+    U+00A0 and calls it a marker where an ASCII strip does not. A stream
+    carrying one then made `documents()` hand the line to `_document_body`,
+    which returned None without consuming it, and the outer loop spun forever
+    -- a HANG rather than a red gate, which is worse than either answer.
+    Sharing the predicate makes that desynchronisation unrepresentable, for
+    exactly the reason `_INDICATOR_START` is one constant.
+
+    A marker is only a marker at column zero and only when the three
+    characters are followed by nothing or by a space, which is PyYAML's own
+    rule -- `...x` and `  ...` are ordinary plain scalars to both readers.
+    """
+    if _indent_of(raw) != 0:
+        return None
+    stripped = _ascii_strip(raw)
+    for marker in ("---", "..."):
+        if stripped == marker or stripped.startswith(marker + " "):
+            return marker
+    return None
 
 
 class Reader:
@@ -393,8 +479,16 @@ class Reader:
                     # PyYAML's reader rejects the whole stream for any of these
                     # (its printable set skips U+0080-U+009F), so a render this
                     # gate read happily would be a render nothing installs. The
-                    # range STOPS at U+009F: U+00A0 and every letter above it --
-                    # `©`, `é`, CJK, emoji -- stay perfectly readable.
+                    # range STOPS at U+009F: `©`, `é`, CJK and emoji all read
+                    # normally, and so does U+00A0 -- but U+00A0 reads normally
+                    # only because the strip helpers above are ASCII-explicit.
+                    # This comment used to claim it "stays perfectly readable"
+                    # full stop, which was true of a MID-TOKEN U+00A0 and false
+                    # of a sole or edge one: `a: \xa0` was the value None here
+                    # against PyYAML's string "\xa0", because Python's
+                    # `str.strip()` had already eaten it. PR #96's round-four
+                    # review measured that; the claim is narrowed to what the
+                    # refusal actually promises -- this range, and no more.
                     self.fail("the C1 control character U+%04X is refused; a real YAML reader "
                               "rejects the entire stream for it, so a render this gate could "
                               "read would be a render nothing can install" % code, lineno)
@@ -406,24 +500,46 @@ class Reader:
 
     def documents(self) -> list[object]:
         docs: list[object] = []
+        # `...` ENDS a document; it does not separate two. PyYAML accepts only
+        # a directive, a `---`, another `...` or end-of-stream after one, and
+        # raises a ParserError on anything else -- while this reader used to
+        # treat `...` as a benign boundary and read straight on. `...\n` alone
+        # was ZERO documents here and a ParserError there; `x: 1\n...\nfoo: v`
+        # was TWO documents here and a ParserError there. PR #96's round-four
+        # review measured both. Refused, in the oracle's own shape: a bare
+        # `...` before any document, or content after one with no intervening
+        # `---`, stops the gate with the offending line named.
+        after_document_end = False
         while True:
             self._skip_ignorable()
             if self.i >= len(self.lines):
                 return docs
             raw = self.lines[self.i]
-            stripped = raw.strip()
-            if _indent_of(raw) == 0 and (stripped == "---" or stripped.startswith("--- ")):
+            stripped = _ascii_strip(raw)
+            marker = _document_marker(raw)
+            if marker == "---":
                 if stripped != "---":
                     self.fail("content on a document-start line is refused; write the document "
                               "on the following lines")
                 self.i += 1
+                after_document_end = False
                 docs.append(self._document_body())
                 continue
-            if _indent_of(raw) == 0 and (stripped == "..." or stripped.startswith("... ")):
+            if marker == "...":
                 if stripped != "...":
                     self.fail("content on a document-end line is refused")
+                if not docs:
+                    self.fail("a document-end marker (`...`) before any document is refused; a "
+                              "real YAML reader has no document to end here and raises instead "
+                              "of reading on")
                 self.i += 1
+                after_document_end = True
                 continue
+            if after_document_end:
+                self.fail("content after a document-end marker (`...`) is refused; a real YAML "
+                          "reader requires a `---` document-start line first and raises "
+                          "otherwise, so a stream this gate read two documents out of is a "
+                          "stream nothing installs")
             docs.append(self._document_body())
 
     def _document_body(self) -> object:
@@ -431,7 +547,7 @@ class Reader:
         if self.i >= len(self.lines):
             return None
         raw = self.lines[self.i]
-        if _indent_of(raw) == 0 and raw.strip() in ("---", "..."):
+        if _document_marker(raw) is not None:
             return None
         start = self.i
         node = self._node(_indent_of(raw))
@@ -448,7 +564,7 @@ class Reader:
     def _node(self, indent: int) -> object:
         raw = self.lines[self.i]
         body = raw[indent:]
-        if body.rstrip() == "-" or body.startswith("- "):
+        if _ascii_rstrip(body) == "-" or body.startswith("- "):
             return self._sequence(indent)
         if body[:1] in ("[", "{"):
             return self._scalar_line(indent)
@@ -477,14 +593,14 @@ class Reader:
                 self.i += 1
                 continue
             here = _indent_of(raw)
-            if here == 0 and raw.strip() in ("---", "..."):
+            if _document_marker(raw) is not None:
                 break
             if here < indent:
                 break
             if here > indent:
                 self.fail("unexpected indentation inside a block mapping")
             body = raw[indent:]
-            if body.rstrip() == "-" or body.startswith("- "):
+            if _ascii_rstrip(body) == "-" or body.startswith("- "):
                 self.fail("a block sequence entry appears where a mapping key was expected")
             lineno = self.i + 1
             scanned = self._scan_key(body, lineno)
@@ -508,14 +624,14 @@ class Reader:
                 self.i += 1
                 continue
             here = _indent_of(raw)
-            if here == 0 and raw.strip() in ("---", "..."):
+            if _document_marker(raw) is not None:
                 break
             if here < indent:
                 break
             if here > indent:
                 self.fail("unexpected indentation inside a block sequence")
             body = raw[indent:]
-            if body.rstrip() == "-":
+            if _ascii_rstrip(body) == "-":
                 self.i += 1
                 items.append(self._child(indent, allow_sibling_sequence=False))
                 continue
@@ -531,7 +647,7 @@ class Reader:
         return items
 
     def _value_after_key(self, text: str, parent_indent: int, lineno: int) -> object:
-        stripped = text.strip()
+        stripped = _ascii_strip(text)
         if stripped == "" or stripped.startswith("#"):
             return self._child(parent_indent, allow_sibling_sequence=True)
         if stripped[0] in ("|", ">"):
@@ -546,20 +662,27 @@ class Reader:
             return None
         raw = self.lines[self.i]
         here = _indent_of(raw)
-        if here == 0 and raw.strip() in ("---", "..."):
+        if _document_marker(raw) is not None:
             return None
         if here > parent_indent:
             return self._node(here)
         if allow_sibling_sequence and here == parent_indent:
             body = raw[here:]
-            if body.rstrip() == "-" or body.startswith("- "):
+            if _ascii_rstrip(body) == "-" or body.startswith("- "):
                 return self._sequence(here)
         return None
 
     def _block_scalar(self, header_text: str, parent_indent: int, lineno: int) -> str:
-        parts = header_text.split(None, 1)
+        # `str.split(None, 1)` splits on Python's whitespace, not YAML's: it
+        # cut `|\xa0` into the header `|` and no trailing text at all, so
+        # `a: |\xa0` parsed as an ordinary literal block scalar here while
+        # PyYAML 6.0.3 raises a ScannerError on the U+00A0 after the
+        # indicator. Splitting on the ASCII space alone keeps the header
+        # exactly the bytes YAML says it is, so an unsupported one is refused
+        # by the loop below instead of silently accepted.
+        parts = header_text.split(_YAML_SPACE, 1)
         header = parts[0]
-        trailing = parts[1] if len(parts) > 1 else ""
+        trailing = _ascii_strip(parts[1]) if len(parts) > 1 else ""
         if trailing and not trailing.startswith("#"):
             self.fail("unexpected text after a block scalar header", lineno)
         style = header[0]
@@ -580,7 +703,7 @@ class Reader:
         detected = parent_indent + explicit if explicit is not None else None
         while self.i < len(self.lines):
             raw = self.lines[self.i]
-            if raw.strip() == "":
+            if _ascii_strip(raw) == "":
                 content.append("")
                 self.i += 1
                 continue
@@ -612,7 +735,7 @@ class Reader:
     # -- scalars ------------------------------------------------------------
 
     def _require_trailing_blank(self, text: str, end: int, lineno: int) -> None:
-        rest = text[end:].strip()
+        rest = _ascii_strip(text[end:])
         if rest and not rest.startswith("#"):
             self.fail("unexpected trailing content %r after a value" % rest, lineno)
 
@@ -1522,7 +1645,7 @@ def _split(text: str) -> list[str]:
 
 def _find_block(lines: list[str], anchor: list[str]) -> int:
     hits = [i for i in range(len(lines) - len(anchor) + 1)
-            if [l.rstrip() for l in lines[i:i + len(anchor)]] == anchor]
+            if [_ascii_rstrip(l) for l in lines[i:i + len(anchor)]] == anchor]
     if len(hits) != 1:
         raise CensusError("mutation anchor %r matched %d places in the render; the self-test "
                           "needs exactly one" % (anchor, len(hits)))
@@ -1540,7 +1663,7 @@ def _insert_into_policy_file(text: str, document: str) -> str:
     lines = _split(text)
     at = _find_block(lines, ["kind: NetworkPolicy"])
     end = at + 1
-    while end < len(lines) and lines[end].rstrip() != "---":
+    while end < len(lines) and _ascii_rstrip(lines[end]) != "---":
         end += 1
     block = ["---"] + _split(document.rstrip("\n"))
     return "\n".join(lines[:end] + block + lines[end:])
@@ -1549,6 +1672,28 @@ def _insert_into_policy_file(text: str, document: str) -> str:
 def _append_new_file(text: str, document: str, source: str) -> str:
     tail = ["---", "# Source: %s" % source] + _split(document.rstrip("\n")) + [""]
     return text.rstrip("\n") + "\n" + "\n".join(tail)
+
+
+def _end_a_document_with_a_marker(text: str) -> str:
+    """Separate the render's LAST document with `...` instead of `---`.
+
+    PR #96's round-four review measured `...`: a document-end marker ENDS a
+    document, and PyYAML 6.0.3 accepts only a directive, a `---`, another
+    `...` or end-of-stream after one -- anything else is a ParserError. This
+    reader used to treat `...` as a benign boundary and read straight on, so
+    the render below parsed here into the SAME four documents and the SAME
+    pinned policy and this gate reported GREEN on a stream the tool that
+    installs it refuses outright. That is accept-where-the-oracle-refuses, and
+    a gate reporting on a document nothing will apply is a gate reporting on
+    something else.
+    """
+    lines = _split(text)
+    at = [i for i, line in enumerate(lines) if _ascii_rstrip(line) == "---"]
+    if not at:
+        raise CensusError("the render carries no document-start line to rewrite; the "
+                          "self-test needs one")
+    lines[at[-1]] = "..."
+    return "\n".join(lines)
 
 
 def mutations(facts: ChartFacts) -> list[tuple[str, object]]:
@@ -1609,6 +1754,8 @@ def mutations(facts: ChartFacts) -> list[tuple[str, object]]:
         ("shadow-commented-plain-key", new_file(_SHADOW_COMMENTED_KEY)),
         ("shadow-merge-key-scalar", new_file(_SHADOW_MERGE_KEY_SCALAR)),
         ("shadow-underscored-sexagesimal", new_file(_SHADOW_UNDERSCORED_SEXAGESIMAL)),
+        ("render-separated-by-a-document-end-marker",
+         lambda text: _end_a_document_with_a_marker(text)),
         # --- the pinned policy itself, widened ------------------------------
         ("policy-egress-allow-all",
          lambda text: _replace_block(text, ["  egress: []"], ["  egress: [{}]"])),
