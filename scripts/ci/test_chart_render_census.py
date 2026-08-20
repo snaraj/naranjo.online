@@ -5,7 +5,7 @@ document scan that a second `NetworkPolicy` could walk straight past by
 spelling its keys `kind :` and `spec :` -- valid YAML, invisible to a
 prefix match, and an additive allow-all for every Pod once Kubernetes has
 it. The behavioural half of the proof lives in `chart-egress-pin.sh`, whose
-assertions (d) and (g) rewrite the REAL Helm render into 32 hostile ones and
+assertions (d) and (g) rewrite the REAL Helm render into 40 hostile ones and
 require the census to refuse every single one. This suite is the other half:
 it pins the reader itself, one rejection per test, without needing helm --
 so it runs in the `security` job alongside the other contract suites, which
@@ -397,6 +397,221 @@ class ReaderFailsClosed(unittest.TestCase):
         self.assertEqual(parse("value: ==\n"), [{"value": "=="}])
         self.assertEqual(parse("value: =x\n"), [{"value": "=x"}])
         self.assertEqual(parse("value: x=\n"), [{"value": "x="}])
+
+    def test_signed_leading_dot_floats_are_strings_on_both_sides(self):
+        # PR #96's round-three review measured this one: `-.5` was READ AS THE
+        # FLOAT -0.5 here while the oracle PyYAML 6.0.3 read the string "-.5",
+        # because its float resolver's leading-dot branch carries NO sign and
+        # only its digit-before-the-dot branch does. Closed by transcribing the
+        # oracle's own branches rather than by refusing, so this is an
+        # AGREEMENT test, not a rejection one: both readers say string.
+        for form in ("-.5", "+.5", "-.0", "+.0", "-.25"):
+            self.assertEqual(parse("value: %s\n" % form), [{"value": form}])
+            self.assertEqual(parse("a: {b: %s}\n" % form), [{"a": {"b": form}}])
+            self.assertEqual(parse("a:\n  - %s\n" % form), [{"a": [form]}])
+
+    def test_unsigned_and_digit_led_floats_still_resolve(self):
+        # The companion acceptance: the tightening must not cost a single form
+        # the oracle really does resolve. Every value below is the identical
+        # float object under PyYAML 6.0.3.
+        self.assertEqual(parse("value: .5\n"), [{"value": 0.5}])
+        self.assertEqual(parse("value: .0\n"), [{"value": 0.0}])
+        self.assertEqual(parse("value: 0.5\n"), [{"value": 0.5}])
+        self.assertEqual(parse("value: -0.5\n"), [{"value": -0.5}])
+        self.assertEqual(parse("value: +0.5\n"), [{"value": 0.5}])
+        self.assertEqual(parse("value: 5.\n"), [{"value": 5.0}])
+        self.assertEqual(parse("value: -5.\n"), [{"value": -5.0}])
+        self.assertEqual(parse("value: 00.5\n"), [{"value": 0.5}])
+        # ... and a bare dot is a string to both, as it always was.
+        self.assertEqual(parse("value: .\n"), [{"value": "."}])
+
+    def test_unicode_line_breaks(self):
+        # NEL, LINE SEPARATOR and PARAGRAPH SEPARATOR are LINE BREAKS to a real
+        # YAML reader and ordinary characters to one that only splits on `\n`,
+        # so a stream carrying one has a different number of LINES there than
+        # here -- PyYAML either refuses it outright or reads a scalar this
+        # reader never saw. Refused everywhere in the stream, never translated.
+        for ch, needle in (("\u0085", "NEL (U+0085)"),
+                           ("\u2028", "LINE SEPARATOR (U+2028)"),
+                           ("\u2029", "PARAGRAPH SEPARATOR (U+2029)")):
+            self.reject("kind: Network%sPolicy\n" % ch, needle)
+            self.reject('kind: "Network%sPolicy"\n' % ch, needle)
+            self.reject("kind: 'Network%sPolicy'\n" % ch, needle)
+            self.reject("%skind: NetworkPolicy\n" % ch, needle)
+            self.reject("kind: NetworkPolicy%s\n" % ch, needle)
+            self.reject("kind: |\n  Network%sPolicy\n" % ch, needle)
+            self.reject("ki%snd: NetworkPolicy\n" % ch, needle)
+            self.reject("a: {b: x%sy}\n" % ch, needle)
+            self.reject("kind: Network%sPolicy\n" % ch, "line 1")
+            self.reject("a: 1\nkind: Network%sPolicy\n" % ch, "line 2")
+
+    def test_an_escaped_line_break_character_is_still_produced(self):
+        # The refusal is about the render's own BYTES. `\\N`, `\\L` and `\\P`
+        # inside a double-quoted scalar PRODUCE these characters, and PyYAML
+        # 6.0.3 produces exactly the same string, so refusing them here would
+        # be over-reach into a case where the two readers already agree.
+        self.assertEqual(parse(r'kind: "a\Nb"' + "\n"), [{"kind": "a\u0085b"}])
+        self.assertEqual(parse(r'kind: "a\Lb"' + "\n"), [{"kind": "a\u2028b"}])
+        self.assertEqual(parse(r'kind: "a\Pb"' + "\n"), [{"kind": "a\u2029b"}])
+        self.assertEqual(parse(r'kind: "a\x85b"' + "\n"), [{"kind": "a\u0085b"}])
+        self.assertEqual(parse(r'kind: "a\u2028b"' + "\n"), [{"kind": "a\u2028b"}])
+
+    def test_c1_control_characters(self):
+        # PyYAML's reader rejects the WHOLE STREAM for any of U+0080-U+009F
+        # (they are outside its printable set), so a render this gate read
+        # happily would be a render nothing can install.
+        for code in (0x80, 0x81, 0x84, 0x86, 0x8A, 0x90, 0x9B, 0x9F):
+            ch = chr(code)
+            self.reject("kind: Network%sPolicy\n" % ch, "C1 control character U+%04X" % code)
+            self.reject('kind: "Network%sPolicy"\n' % ch, "C1 control character")
+            self.reject("ki%snd: NetworkPolicy\n" % ch, "C1 control character")
+        self.reject("kind: Network\x80Policy\n", "line 1")
+        self.reject("a: 1\nkind: Network\x80Policy\n", "line 2")
+
+    def test_the_c1_refusal_stops_at_u00a0(self):
+        # The range is U+0080-U+009F and nothing above it: a refusal that ate
+        # ordinary letters would break every render carrying a name, a symbol
+        # or a translated label. U+0085 is excluded here only because it is
+        # already refused as a LINE BREAK by the test above.
+        for code in (0xA0, 0xA9, 0xE9, 0xFF, 0x100, 0x2013, 0x4E2D, 0x1F600):
+            ch = chr(code)
+            self.assertEqual(parse("kind: Network%sPolicy\n" % ch),
+                             [{"kind": "Network%sPolicy" % ch}])
+            self.assertEqual(parse('kind: "Network%sPolicy"\n' % ch),
+                             [{"kind": "Network%sPolicy" % ch}])
+            self.assertEqual(parse("ki%snd: NetworkPolicy\n" % ch),
+                             [{"ki%snd" % ch: "NetworkPolicy"}])
+        self.assertEqual(parse(r'kind: "a\_b"' + "\n"), [{"kind": "a\xa0b"}])
+
+    def test_flow_context_colon_glued_keys(self):
+        # Inside a flow collection a colon only ENDS a key when a space or a
+        # flow indicator follows it, so PyYAML reads `{a:1}` as the single
+        # plain scalar `a:1` with NO value. This reader used to split at the
+        # colon and hand back `{a: 1}` -- a mapping the installer never sees.
+        for form in ("{a:1}", "{a :1}", "{a:1, b: 2}", "{a:b:c}", "{a:1}"):
+            self.reject("value: %s\n" % form, "glued to the next character")
+        self.reject("value: {a:1}\n", "line 1")
+
+    def test_a_spaced_or_quoted_flow_key_still_reads(self):
+        # The companion acceptance: only the GLUED spelling is ambiguous.
+        # PyYAML reads every line below exactly as this reader does, including
+        # the JSON-style quoted key whose colon may legally be adjacent.
+        self.assertEqual(parse("value: {a: 1}\n"), [{"value": {"a": 1}}])
+        self.assertEqual(parse("value: {a : 1}\n"), [{"value": {"a": 1}}])
+        self.assertEqual(parse('value: {"a":1}\n'), [{"value": {"a": 1}}])
+        self.assertEqual(parse("value: {'a':1}\n"), [{"value": {"a": 1}}])
+        self.assertEqual(parse("value: [a:1]\n"), [{"value": ["a:1"]}])
+        self.assertEqual(parse("value: a:1\n"), [{"value": "a:1"}])
+
+    def test_flow_plain_scalars_end_at_a_nested_indicator(self):
+        # PyYAML's `scan_plain` ends a plain scalar inside a flow collection at
+        # any of `,?[]{}`. Reading straight past them made `{b: 1 [}` the
+        # scalar "1 [" here and a parse error there.
+        self.reject("a: {b: 1 [}\n", "unexpected character")
+        self.reject("a: {b: k {}\n", "unexpected character")
+        self.reject("a: [1 {]\n", "unexpected character")
+        self.reject("a: {b: -?}\n", "block sequence indicator")
+        self.reject("a: {- k: v}\n", "is refused")
+        self.reject("a: {1 [: v}\n", "is refused")
+        self.reject("a: {1 #: v}\n", "is refused")
+
+    def test_indicator_leading_plain_keys(self):
+        # `_scan_key` refused only `& * ! ?` and `<<` while `_scan_value`
+        # refused the wider indicator set, so `@foo:`, `` `foo: ``, `|foo:`,
+        # `>foo:` and `,foo:` were keys here and hard scanner errors in the
+        # tool that installs the render. One shared constant now, both sides.
+        for ch in "@`|>%,]}":
+            self.reject("%sfoo: v\n" % ch, "refused")
+            self.reject("first: 1\n%sfoo: v\n" % ch, "refused")
+        for ch in "@`|>%[{":
+            self.reject("a: {%sfoo: v}\n" % ch, "refused")
+        self.reject("first: 1\n[foo: v\n", "refused")
+        self.reject("first: 1\n{foo: v\n", "refused")
+        self.reject("@foo: v\n", "line 1")
+        self.reject("first: 1\n@foo: v\n", "line 2")
+
+    def test_indicator_leading_plain_values(self):
+        for ch in "@`%,]}":
+            self.reject("value: %sfoo\n" % ch, "refused")
+        # `|` and `>` in this position are read as a block scalar HEADER first,
+        # which is its own refusal with its own message; PyYAML refuses them
+        # too ("expected chomping or indentation indicators").
+        for ch in "|>":
+            self.reject("value: %sfoo\n" % ch, "block scalar header")
+        for ch in "@`|>%,}":
+            self.reject("value: [%sfoo]\n" % ch, "refused")
+        # `:` opens a legal plain scalar in BLOCK context and an illegal one
+        # inside a flow collection -- the one deliberate, measured asymmetry.
+        self.reject("a: {b: :foo}\n", "refused")
+        self.reject("a: [:foo]\n", "refused")
+        self.reject("value: @foo\n", "line 1")
+
+    def test_the_indicators_a_plain_scalar_may_still_open_with(self):
+        # The companion acceptance, one line per measured asymmetry: PyYAML
+        # reads every one of these, so refusing them would be over-reach.
+        self.assertEqual(parse("value: -foo\n"), [{"value": "-foo"}])
+        self.assertEqual(parse("-foo: v\n"), [{"-foo": "v"}])
+        self.assertEqual(parse("value: -5\n"), [{"value": -5}])
+        self.assertEqual(parse("value: :foo\n"), [{"value": ":foo"}])
+        self.assertEqual(parse(":foo: v\n"), [{":foo": "v"}])
+        self.assertEqual(parse("value: a@b\n"), [{"value": "a@b"}])
+        self.assertEqual(parse("value: a,b\n"), [{"value": "a,b"}])
+        self.assertEqual(parse("value: a|b\n"), [{"value": "a|b"}])
+        self.assertEqual(parse("value: http://x\n"), [{"value": "http://x"}])
+
+    def test_the_merge_key_plain_scalar(self):
+        # `=`'s twin, one tag along: PyYAML resolves a plain `<<` to
+        # tag:yaml.org,2002:merge, its safe loader has no constructor for that
+        # tag, and `a: <<` raises a ConstructorError instead of parsing. It was
+        # already refused in KEY position and accepted as the string "<<" in
+        # value position -- the direction a reader must never be looser in.
+        self.reject("value: <<\n", "YAML 1.1's merge key")
+        self.reject("value: <<\n", "line 1")
+        self.reject("a:\n  - <<\n", "YAML 1.1's merge key")
+        self.reject("a: {b: <<}\n", "YAML 1.1's merge key")
+        self.reject("a: [<<]\n", "YAML 1.1's merge key")
+
+    def test_a_quoted_merge_key_is_still_an_ordinary_string(self):
+        # Only the bare, whole scalar `<<` is the merge key.
+        self.assertEqual(parse('value: "<<"\n'), [{"value": "<<"}])
+        self.assertEqual(parse("value: '<<'\n"), [{"value": "<<"}])
+        self.assertEqual(parse("value: <<<\n"), [{"value": "<<<"}])
+        self.assertEqual(parse("value: x<<\n"), [{"value": "x<<"}])
+        self.assertEqual(parse("value: <\n"), [{"value": "<"}])
+
+    def test_a_comment_inside_a_plain_mapping_key(self):
+        # ` #` opens a comment, so real YAML ends the scalar there and the line
+        # stops being a mapping entry at all: `k #: v` is the plain scalar "k"
+        # to PyYAML and was the key "k #" here.
+        self.reject("k #: v\n", "may not carry a comment")
+        self.reject("first: 1\nk #: v\n", "may not carry a comment")
+        self.reject("first: 1\nk #: v\n", "line 2")
+
+    def test_comments_around_a_value_are_still_comments(self):
+        # The companion acceptance: a comment after a value, a `#` with no
+        # space before it, and a whole-line comment all still read.
+        self.assertEqual(parse("kind: NetworkPolicy  # trailing\n"),
+                         [{"kind": "NetworkPolicy"}])
+        self.assertEqual(parse("kind: a#b\n"), [{"kind": "a#b"}])
+        self.assertEqual(parse("a#b: v\n"), [{"a#b": "v"}])
+        self.assertEqual(parse("# whole line\nkind: NetworkPolicy\n"),
+                         [{"kind": "NetworkPolicy"}])
+
+    def test_underscored_sexagesimals(self):
+        # YAML 1.1's sexagesimal resolvers take digit-group underscores in
+        # every group, so `1_:0` is the integer 60 to PyYAML and was the string
+        # "1_:0" here. Found by this PR's own exhaustive fuzz of the number
+        # alphabet, not by the receipt.
+        for form in ("1_:0", "5_:9", "1_0:3_0", "1_:0.5", "-1_:0", "1:3_0"):
+            self.reject("value: %s\n" % form, "sexagesimal")
+        self.reject("value: 1_:0\n", "line 1")
+
+    def test_sexagesimal_neighbours_that_carry_no_colon_still_read(self):
+        # The refusal needs a colon: an ordinary underscored identifier, a
+        # quoted sexagesimal, and a plain time-looking STRING are untouched.
+        self.assertEqual(parse('value: "1_:0"\n'), [{"value": "1_:0"}])
+        self.assertEqual(parse("value: app_name\n"), [{"value": "app_name"}])
+        self.assertEqual(parse("value: _1\n"), [{"value": "_1"}])
 
     def test_a_plain_scalar_opening_with_a_sequence_indicator(self):
         # Real YAML refuses this. So must this reader: being more permissive

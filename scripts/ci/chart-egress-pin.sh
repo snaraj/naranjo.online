@@ -84,7 +84,7 @@ census_module="${script_dir}/chart_render_census.py"
 # Bumped only when a mutation is ADDED. They exist so deleting one is a red
 # build rather than a silently smaller battery.
 minimum_mutations=19
-minimum_census_mutations=32
+minimum_census_mutations=40
 
 fail() {
   printf 'chart-egress-pin: %s\n' "$1" >&2

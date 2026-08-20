@@ -45,40 +45,64 @@ module therefore implements the reader, in the same spirit as
 render actually uses: comments, flow collections, quoted keys and scalars,
 and block scalars.
 
-FAIL-CLOSED IS THE WHOLE DESIGN. This reader does not need to implement all
-of YAML; it needs to be unable to MISREAD anything. Every construct it does
-not fully understand is refused with the offending line named, never guessed
-at, so an unreadable render is a red gate rather than a quiet pass. Refused
-outright:
+FAIL-CLOSED IS THE STRUCTURAL DESIGN GOAL. This reader does not implement all
+of YAML, and it does not try to: the goal every rule below serves is that it
+REFUSE rather than misread. Every construct it does not fully understand is
+refused with the offending line named, never guessed at, so an unreadable
+render is a red gate rather than a quiet pass. That is the design goal, not a
+proof -- what is PROVEN is the bounded, re-runnable differential claim stated
+after the list, over a corpus three rounds of independent review have
+extended. Refused outright:
 
-- tabs, carriage returns, other C0 control characters, byte-order marks
-  (U+FEFF, anywhere in the stream -- invisible, and readers disagree about
-  whether a leading one belongs to the next token), and `%` directives;
+- tabs, carriage returns, other C0 control characters, DEL, the C1 control
+  characters U+0080-U+009F (a real YAML reader rejects the whole stream for
+  one; the range STOPS at U+009F, so `©`, `é`, CJK and emoji all read
+  normally), byte-order marks (U+FEFF, anywhere in the stream -- invisible,
+  and readers disagree about whether a leading one belongs to the next
+  token), and `%` directives;
+- the Unicode line breaks NEL (U+0085), LINE SEPARATOR (U+2028) and
+  PARAGRAPH SEPARATOR (U+2029), anywhere in the stream: a real YAML reader
+  BREAKS THE LINE at each of them, so a stream carrying one has a different
+  number of lines there than here. `\\N`, `\\L` and `\\P` inside a
+  double-quoted scalar still PRODUCE those characters, exactly as PyYAML
+  does -- the refusal is about what the render's own bytes contain;
 - anchors (`&`), aliases (`*`), tags (`!`), explicit keys (`?`), and merge
   keys (`<<`) -- each of which lets one document's meaning be assembled
   somewhere else in the stream;
+- every other indicator a plain scalar may not open with, in KEY and VALUE
+  position alike and from one shared constant (`_INDICATOR_START`), because
+  a set kept in two places drifted apart once already;
 - duplicate mapping keys, in block and flow style alike, since a later
   duplicate silently replaces the pinned earlier one;
-- non-string mapping keys;
+- non-string mapping keys, plain keys carrying a comment (`k #: v` is the
+  plain scalar "k" to a real reader, not a mapping entry), and plain keys
+  inside a flow mapping whose colon is glued to what follows (`{a:1}` is the
+  single scalar `a:1` there, with no value at all);
 - flow collections or quoted scalars that do not open and close on one line,
   and multi-line plain scalars;
 - plain scalars whose meaning differs between YAML 1.1 and 1.2 (`yes`, `no`,
-  `on`, `off`, `y`, `n`), sexagesimals (`1:30`), hex/octal/binary integers,
-  exponent forms (`1e3`, `1.0e3`), digit-group underscores (`1_000`),
-  timestamps (`2026-08-20`, `2026-08-20T10:30:00Z`), `.inf`/`.nan`, and
-  integers with a leading zero;
-- the plain scalar `=`, YAML 1.1's value key: PyYAML's SAFE loader has no
-  constructor for it and REFUSES a document that carries one as a value,
-  while reading the very same bytes as the string "=" in key position.
-  Refused in BOTH positions here, so this reader is never the more
-  permissive of the two;
+  `on`, `off`, `y`, `n`), sexagesimals (`1:30`, and `1_:0` -- the digit
+  groups take underscores too), hex/octal/binary integers, exponent forms
+  (`1e3`, `1.0e3`), digit-group underscores (`1_000`), timestamps
+  (`2026-08-20`, `2026-08-20T10:30:00Z`), `.inf`/`.nan`, and integers with a
+  leading zero;
+- the plain scalars `=` and `<<`, YAML 1.1's value key and merge key:
+  PyYAML's SAFE loader has no constructor for either tag and REFUSES a
+  document that carries one as a VALUE, while reading the same bytes as an
+  ordinary string in key position. Refused in BOTH positions here, so this
+  reader is never the more permissive of the two;
 - plain scalars opening with a block sequence indicator (`- `), which real
   YAML refuses too -- this reader must never be MORE permissive than the
   tools that install the render.
 
+Floats are the one number form this reader RESOLVES rather than refuses, so
+`_FLOAT_RE` is PyYAML's own float-resolver decimal branches transcribed
+character for character; `.5` is 0.5 to both readers and `-.5` is the string
+"-.5" to both, because the oracle's leading-dot branch carries no sign.
+
 Both directions are checked against PyYAML 6.0.3 -- the oracle, never a
 dependency; nothing in this repository imports it -- over a corpus of
-Helm-render and hostile shapes. Two rounds of independent review have
+Helm-render and hostile shapes. Three rounds of independent review have
 extended that corpus, and each round measured divergences this file then
 closed:
 
@@ -92,9 +116,20 @@ closed:
   scalar `=`, ACCEPTED here as the string "=" where PyYAML's safe loader
   REFUSES the document, the one measured input in the direction that could
   hide a policy.
+- round three (PR #96): signed leading-dot floats (`-.5`, `+.5`), READ AS
+  FLOATS here and strings there -- closed by transcribing the oracle's own
+  float branches rather than by refusing, so `.5` still resolves on both
+  sides; flow-context colon-glued keys (`{a:1}`); NEL/LS/PS and the C1
+  controls; and plain keys opening with an indicator (`@foo:`, `` `foo: ``,
+  `|foo:`, `>foo:`, `,foo:`) that `_scan_value` already refused. The same
+  round's exhaustive fuzz of the number and indicator alphabets found four
+  more members and closed them the same way: `<<` in value position,
+  underscored sexagesimals (`1_:0`, the integer 60 there), a comment inside
+  a plain key (`k #: v`), and plain scalars run past `?`, `[` or `{` inside
+  a flow collection.
 
-All four classes are refusals now. The claim this file makes is therefore a
-bounded, re-runnable one rather than a universal quantifier: over that
+Every one of those classes is closed. The claim this file makes is therefore
+a bounded, re-runnable one rather than a universal quantifier: over that
 corpus there is no input this reader accepts and reads differently than
 PyYAML, and none it accepts that PyYAML refuses. Every divergence that
 remains runs the other way -- this reader refusing something PyYAML resolves
@@ -164,13 +199,40 @@ _NULL_PLAIN = frozenset({"~", "null", "Null", "NULL"})
 _TRUE_PLAIN = frozenset({"true", "True", "TRUE"})
 _FALSE_PLAIN = frozenset({"false", "False", "FALSE"})
 _INT_RE = re.compile(r"[-+]?[0-9]+")
-_FLOAT_RE = re.compile(r"[-+]?(?:[0-9]*\.[0-9]+|[0-9]+\.[0-9]*)")
+# A float is the one number form this reader RESOLVES rather than refuses, so
+# its pattern is PyYAML's own float resolver's two decimal branches,
+# transcribed character for character:
+#
+#     [-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+][0-9]+)?
+#     \.[0-9][0-9_]*(?:[eE][-+][0-9]+)?
+#
+# The leading-dot branch carries NO sign there -- only the branch with a digit
+# BEFORE the dot does -- so `-.5` and `+.5` match neither, and PyYAML 6.0.3
+# reads them as the STRINGS "-.5"/"+.5". A pattern that allowed a sign in front
+# of a leading-dot mantissa made them the floats -0.5/0.5 here: the same shape
+# as `1_000` and the timestamps, and PR #96's round-three review measured it.
+# Unsigned `.5` stays a float on both sides. The resolver's other three
+# branches -- sexagesimal floats, `.inf`, `.nan` -- and the exponent suffix are
+# all refused further up, so only plain decimals ever reach this pattern and
+# `float()` never sees an underscore or an exponent.
+_FLOAT_RE = re.compile(
+    r"[-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+][0-9]+)?"
+    r"|\.[0-9][0-9_]*(?:[eE][-+][0-9]+)?"
+)
 # Exponent forms are refused outright: YAML 1.2 reads `1e3` and `1.0e3` as
 # floats, while YAML 1.1 -- which is what sigs.k8s.io/yaml and PyYAML 6.0.3
 # implement -- reads both as plain strings and wants `1.0e+3`. Three spellings,
 # two answers, no way to be sure which one a cluster will see.
 _EXPONENT_RE = re.compile(r"[-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)[eE][-+]?[0-9]+")
-_SEXAGESIMAL_RE = re.compile(r"[-+]?[0-9]+(?::[0-9]+)+(?:\.[0-9]*)?")
+# Sexagesimals carry digit-group underscores too, and the two YAML 1.1
+# resolvers that VALUE them -- the int branch `[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+`
+# and the float branch `[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*` -- both
+# allow `_` inside every digit group. A pattern that allowed digits only left
+# `1_:0` a string here and the integer 60 there, which PR #96's round-three
+# exhaustive fuzz of the number alphabet found; `_` is in every class below so
+# this pattern is a strict SUPERSET of both oracle branches, which is the
+# direction that can only ever over-refuse.
+_SEXAGESIMAL_RE = re.compile(r"[-+]?[0-9][0-9_]*(?::[0-9_]+)+(?:\.[0-9_]*)?")
 # Timestamps are refused for the same reason, one step further along: YAML 1.1
 # resolves a timestamp-shaped plain scalar to a date/datetime OBJECT -- PyYAML
 # 6.0.3 reads `2026-08-20` as `datetime.date(2026, 8, 20)` and
@@ -196,6 +258,15 @@ _TIMESTAMP_RE = re.compile(
 # refusal in the tool that would install the render -- the one direction a
 # reader must never be looser in. Refused in both positions.
 _VALUE_KEY_PLAIN = "="
+# `<<` is YAML 1.1's merge key, and it is the exact same shape as `=` one tag
+# along: PyYAML resolves a plain `<<` to `tag:yaml.org,2002:merge`, its SAFE
+# loader has no constructor for that tag, and `a: <<` therefore raises a
+# ConstructorError instead of parsing -- while `_scan_key` already refused it
+# in key position. PR #96's round-three hunt measured it in value position,
+# where this reader handed back the string "<<" and read on. Refused in both,
+# for the same reason: a gate that reads a document the installer will not read
+# is a gate reporting on something else.
+_MERGE_KEY_PLAIN = "<<"
 # Digit-group underscores are refused for the same reason as the exponent
 # forms: YAML 1.1 -- what PyYAML 6.0.3 and sigs.k8s.io/yaml implement -- lets
 # `_` separate digit groups, so `1_000` is the integer 1000 there, while
@@ -209,7 +280,36 @@ _UNDERSCORE_NUMBER_RE = re.compile(
 )
 _RADIX_RE = re.compile(r"[-+]?0[xXoObB][0-9a-fA-F_]+")
 _SPECIAL_FLOAT_RE = re.compile(r"[-+]?\.(?:inf|Inf|INF|nan|NaN|NAN)")
-_INDICATOR_START = "&*!?|>%@`"
+# The characters a plain scalar may not OPEN with. PyYAML's `check_plain`
+# forbids `-?:,[]{}#&*!|>'"%@` plus a backtick, letting through only `-` when
+# the next character is not a space, and `?`/`:` when the next character is not
+# a space AND the scalar is not inside a flow collection. This reader refuses
+# the same set from ONE constant used in
+# all three plain-scalar entry points -- block value, block key, flow key --
+# because a set that lived in two places drifted apart once already: `_scan_key`
+# refused only `& * ! ?` while `_scan_value` refused the wider set, so `@foo:`,
+# `` `foo: ``, `|foo:`, `>foo:` and `,foo:` were keys here and hard scanner
+# errors in the tool that installs the render. Quotes, `[`, `{` and `#` never
+# reach the check in value position -- they are dispatched to the quoted, flow
+# and comment paths first -- and the two deliberate, measured asymmetries are
+# `-` (refused only as the block sequence indicator `- `, since `-5` is a plain
+# scalar both readers agree on) and `:` (a legal plain-scalar opener in BLOCK
+# context, refused only inside a flow collection, exactly as PyYAML does).
+_INDICATOR_START = "&*!?|>%@`,[]{}#"
+
+# NEL, LINE SEPARATOR and PARAGRAPH SEPARATOR are LINE BREAKS to a YAML 1.1
+# reader and ordinary characters to anything that only splits on `\n`. PyYAML
+# 6.0.3 breaks the line at each of them, so `kind: Network<NEL>Policy` is two
+# lines and a scanner error there while it was one line and the scalar
+# "Network\x85Policy" here -- and a leading or trailing one silently vanished
+# from a key or value here that PyYAML never saw at all. Refused everywhere in
+# the stream, never translated: a reader that disagrees with the installer
+# about how many LINES a document has is not reading the same document.
+_UNICODE_LINE_BREAKS = {
+    "\x85": "NEL (U+0085)",
+    "\u2028": "LINE SEPARATOR (U+2028)",
+    "\u2029": "PARAGRAPH SEPARATOR (U+2029)",
+}
 
 _SIMPLE_ESCAPES = {
     "0": "\0",
@@ -227,8 +327,8 @@ _SIMPLE_ESCAPES = {
     "\\": "\\",
     "N": "\x85",
     "_": "\xa0",
-    "L": " ",
-    "P": " ",
+    "L": "\u2028",
+    "P": "\u2029",
 }
 
 
@@ -281,8 +381,23 @@ class Reader:
                 self.fail("a byte-order mark (U+FEFF) is refused; it is invisible and readers "
                           "disagree about whether it is part of the next token", lineno)
             for ch in raw:
-                if ord(ch) < 0x20 or ord(ch) == 0x7F:
+                code = ord(ch)
+                if code < 0x20 or code == 0x7F:
                     self.fail("control character %r is refused" % ch, lineno)
+                if ch in _UNICODE_LINE_BREAKS:
+                    self.fail("%s is refused; a real YAML reader treats it as a LINE BREAK, so "
+                              "the bytes after it start a new line there while they continue "
+                              "this one here -- one stream, two different documents"
+                              % _UNICODE_LINE_BREAKS[ch], lineno)
+                if 0x80 <= code <= 0x9F:
+                    # PyYAML's reader rejects the whole stream for any of these
+                    # (its printable set skips U+0080-U+009F), so a render this
+                    # gate read happily would be a render nothing installs. The
+                    # range STOPS at U+009F: U+00A0 and every letter above it --
+                    # `©`, `é`, CJK, emoji -- stay perfectly readable.
+                    self.fail("the C1 control character U+%04X is refused; a real YAML reader "
+                              "rejects the entire stream for it, so a render this gate could "
+                              "read would be a render nothing can install" % code, lineno)
             if raw[:1] == "%":
                 self.fail("YAML directives are refused; they can change how the rest of the "
                           "stream is interpreted", lineno)
@@ -519,12 +634,23 @@ class Reader:
                 key = body[:k].rstrip(" ")
                 if key == "":
                     self.fail("a mapping key is empty", lineno)
-                if key[0] in "&*!?" or key.startswith("<<"):
+                if key[0] in _INDICATOR_START or key.startswith("<<"):
                     self.fail("anchors, aliases, tags, explicit keys, and merge keys are "
-                              "refused; a document whose meaning is assembled elsewhere in "
-                              "the stream is a document this gate will not follow", lineno)
+                              "refused, and so is every other indicator a plain scalar may "
+                              "not open with (%r); a key whose meaning is assembled elsewhere "
+                              "in the stream, or that real YAML will not read as a key at "
+                              "all, is a key this gate will not follow" % key[0], lineno)
                 if '"' in key or "'" in key:
                     self.fail("unexpected quote character inside a plain mapping key", lineno)
+                if " #" in key:
+                    # ` #` opens a comment, so real YAML ends the scalar there
+                    # and this line stops being a mapping entry at all: `k #: v`
+                    # is the plain scalar "k" to PyYAML, and a mapping key "k #"
+                    # here. Refused rather than re-implemented -- a rendered key
+                    # carrying a comment is not a shape any chart needs.
+                    self.fail("a plain mapping key may not carry a comment (%r); real YAML ends "
+                              "the scalar at the ` #`, so this line is not the mapping entry it "
+                              "looks like" % key, lineno)
                 resolved = self._resolve_plain(key, lineno)
                 if not isinstance(resolved, str):
                     self.fail("non-string mapping key %r is refused" % key, lineno)
@@ -587,16 +713,24 @@ class Reader:
             return self._flow_mapping(s, i, lineno)
         if ch in ('"', "'"):
             return self._scan_quoted(s, i, lineno)
-        if ch in _INDICATOR_START:
+        if ch in _INDICATOR_START or (flow and ch == ":"):
+            # `:` opens a legal plain scalar in BLOCK context (`a: :b` is the
+            # string ":b" to PyYAML too) and an illegal one inside a flow
+            # collection, which is why it is the one position-dependent member.
             self.fail("anchors, aliases, tags, explicit keys, block scalars in this position, "
-                      "and reserved indicators are refused (%r)" % ch, lineno)
+                      "and every other indicator a plain scalar may not open with are "
+                      "refused (%r)" % ch, lineno)
         if flow:
             j = i
             while j < len(s):
                 cur = s[j]
-                if cur in ",]}":
+                # PyYAML's `scan_plain` ends a plain scalar inside a flow
+                # collection at any of `,?[]{}`, and at a `:` followed by a
+                # space or one of `,[]{}`. Breaking on a narrower set left
+                # `{b: 1 [}` the scalar "1 [" here and a parse error there.
+                if cur in ",?[]{}":
                     break
-                if cur == ":" and (j + 1 >= len(s) or s[j + 1] in " ,]}"):
+                if cur == ":" and (j + 1 >= len(s) or s[j + 1] in " ,[]{}"):
                     break
                 if cur == "#" and j > i and s[j - 1] == " ":
                     break
@@ -664,12 +798,35 @@ class Reader:
                     k += 1
                 if k >= len(s) or s[k] != ":":
                     self.fail("flow mapping entry without a value", lineno)
+                if k + 1 < len(s) and s[k + 1] not in " ,}]":
+                    # Inside a flow collection a colon only ENDS a key when a
+                    # space or a flow indicator follows it. PyYAML reads
+                    # `{a:1}` as the single plain scalar `a:1` with no value,
+                    # and `{a :1}` as `a :1`; this reader used to split both at
+                    # the colon and hand back `{a: 1}` -- a mapping the tool
+                    # that installs the render never sees. Refused rather than
+                    # re-implemented: an empty flow value is not a shape any
+                    # Helm render needs.
+                    self.fail("a flow mapping key whose colon is glued to the next character "
+                              "is refused; real YAML reads %r as one plain scalar with no "
+                              "value, not as a key and a value" % s[j:], lineno)
                 raw = s[j:k].rstrip(" ")
                 if raw == "":
                     self.fail("a mapping key is empty", lineno)
-                if raw[0] in "&*!?" or raw.startswith("<<"):
+                if raw == "-" or raw.startswith("- ") or any(c in raw for c in "?[{#"):
+                    # The same `scan_plain` rule, on the key side: inside a flow
+                    # collection a plain scalar ENDS at `?`, `[`, `{` and at a
+                    # `#` that opens a comment, and may not open with `- `. A
+                    # key scanned straight through them was a key real YAML
+                    # never reads (`{1 [: v}`, `{- k: v}`).
+                    self.fail("a plain key inside a flow mapping that carries a nested "
+                              "collection, an explicit-key indicator, a comment, or a block "
+                              "sequence indicator is refused (%r); real YAML ends the key "
+                              "there" % raw, lineno)
+                if raw[0] in _INDICATOR_START or raw.startswith("<<"):
                     self.fail("anchors, aliases, tags, explicit keys, and merge keys are "
-                              "refused", lineno)
+                              "refused, and so is every other indicator a plain scalar may "
+                              "not open with (%r)" % raw[0], lineno)
                 resolved = self._resolve_plain(raw, lineno)
                 if not isinstance(resolved, str):
                     self.fail("non-string mapping key %r is refused" % raw, lineno)
@@ -710,6 +867,10 @@ class Reader:
                       "safe YAML loader REFUSES outright in value position and reads as an "
                       "ordinary string in key position -- quote it to mean the string" % raw,
                       lineno)
+        if raw == _MERGE_KEY_PLAIN:
+            self.fail("the plain scalar %r is refused; it is YAML 1.1's merge key, which a "
+                      "safe YAML loader REFUSES outright in value position -- quote it to "
+                      "mean the string" % raw, lineno)
         if _RADIX_RE.fullmatch(raw):
             self.fail("hexadecimal, octal, and binary integer forms are refused; "
                       "implementations disagree about them (%r)" % raw, lineno)
@@ -1262,6 +1423,99 @@ spec:
 """ + _ALLOW_ALL_TAIL
 
 
+# The eight constructs PR #96's round-three review and the author's own hunt
+# measured, each written into a shadow policy the way a chart could really emit
+# it. Every one of them is a shape where this reader and the reader that
+# INSTALLS the render used to disagree -- about how many lines the document
+# has, about whether the stream is readable at all, or about what a scalar
+# means -- and a gate that reads a different document than the installer is a
+# gate reporting on something else.
+_SHADOW_UNICODE_LINE_BREAK = (
+    "apiVersion: networking.k8s.io/v1\n"
+    "kind: NetworkPolicy\n"
+    "metadata:\n"
+    "  name: shadow-allow-all\n"
+    "  namespace: shadow\n"
+    "  labels:\n"
+    "    shadow-marker: a\u2028b\n"
+    "spec:\n"
+) + _ALLOW_ALL_TAIL
+
+_SHADOW_C1_CONTROL = (
+    "apiVersion: networking.k8s.io/v1\n"
+    "kind: NetworkPolicy\n"
+    "metadata:\n"
+    "  name: shadow-allow-all\n"
+    "  namespace: shadow\n"
+    "  labels:\n"
+    "    shadow-marker: a\u009fb\n"
+    "spec:\n"
+) + _ALLOW_ALL_TAIL
+
+_SHADOW_FLOW_GLUED_COLON = """\
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shadow-allow-all
+  namespace: shadow
+  labels: {shadow-marker:enabled}
+spec:
+""" + _ALLOW_ALL_TAIL
+
+_SHADOW_FLOW_NESTED_INDICATOR = """\
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shadow-allow-all
+  namespace: shadow
+  labels: {shadow-marker: enabled [}
+spec:
+""" + _ALLOW_ALL_TAIL
+
+_SHADOW_INDICATOR_LEADING_KEY = """\
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shadow-allow-all
+  namespace: shadow
+  labels:
+    @shadow-marker: enabled
+spec:
+""" + _ALLOW_ALL_TAIL
+
+_SHADOW_COMMENTED_KEY = """\
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shadow-allow-all
+  namespace: shadow
+  labels:
+    shadow-marker #hidden: enabled
+spec:
+""" + _ALLOW_ALL_TAIL
+
+_SHADOW_MERGE_KEY_SCALAR = """\
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shadow-allow-all
+  namespace: shadow
+  labels:
+    shadow-marker: <<
+spec:
+""" + _ALLOW_ALL_TAIL
+
+_SHADOW_UNDERSCORED_SEXAGESIMAL = """\
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shadow-allow-all
+  namespace: shadow
+  generation: 1_:0
+spec:
+""" + _ALLOW_ALL_TAIL
+
+
 def _split(text: str) -> list[str]:
     return text.split("\n")
 
@@ -1347,6 +1601,14 @@ def mutations(facts: ChartFacts) -> list[tuple[str, object]]:
         ("shadow-underscore-number", new_file(_SHADOW_UNDERSCORE_NUMBER)),
         ("shadow-timestamp-scalar", new_file(_SHADOW_TIMESTAMP)),
         ("shadow-value-key-scalar", new_file(_SHADOW_VALUE_KEY)),
+        ("shadow-unicode-line-break", new_file(_SHADOW_UNICODE_LINE_BREAK)),
+        ("shadow-c1-control-character", new_file(_SHADOW_C1_CONTROL)),
+        ("shadow-flow-glued-colon-key", new_file(_SHADOW_FLOW_GLUED_COLON)),
+        ("shadow-flow-nested-indicator", new_file(_SHADOW_FLOW_NESTED_INDICATOR)),
+        ("shadow-indicator-leading-key", new_file(_SHADOW_INDICATOR_LEADING_KEY)),
+        ("shadow-commented-plain-key", new_file(_SHADOW_COMMENTED_KEY)),
+        ("shadow-merge-key-scalar", new_file(_SHADOW_MERGE_KEY_SCALAR)),
+        ("shadow-underscored-sexagesimal", new_file(_SHADOW_UNDERSCORED_SEXAGESIMAL)),
         # --- the pinned policy itself, widened ------------------------------
         ("policy-egress-allow-all",
          lambda text: _replace_block(text, ["  egress: []"], ["  egress: [{}]"])),

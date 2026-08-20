@@ -35,41 +35,58 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   requires EXACTLY ONE `NetworkPolicy`, and asserts that policy's selector,
   `policyTypes`, ingress rule and `egress: []` semantics against an
   expectation the gate states itself — never read back out of the template
-  under test. Anything it cannot read unambiguously is refused with the
-  offending line named: tabs, carriage returns, control characters,
-  byte-order marks, `%` directives, anchors, aliases, tags, merge keys,
-  duplicate keys in block or flow style, non-string keys, unterminated flow
-  collections or quoted scalars, multi-line plain scalars, plain scalars
-  opening with a sequence indicator, YAML 1.1's value key (`=`), and plain
-  scalars whose meaning differs between YAML 1.1 and 1.2
-  (`yes`/`no`/`on`/`off`, `1:30`, `0x1F90`, `0755`, `1e3`, `1_000`,
-  `2026-08-20`, `.inf`). The reader is differentially checked against an
-  out-of-tree PyYAML 6.0.3 over a corpus of real-render and hostile shapes,
-  and two rounds of independent review extended that corpus; every
-  divergence either round measured — `1_000`, a leading byte-order mark,
-  YAML 1.1 timestamps, and plain `=` — is a refusal here. Over that corpus
-  there is now no input this reader accepts and reads differently than
-  PyYAML, and none it accepts that PyYAML refuses; the divergences that
-  remain all run the other way, this reader refusing what PyYAML resolves.
-  Nothing in this repository depends on PyYAML; it is the oracle, not a
-  dependency.
+  under test. Its structural design goal is to refuse rather than misread,
+  so anything it cannot read unambiguously is refused with the offending
+  line named: tabs, carriage returns, C0 and C1 control characters
+  (U+0080–U+009F), the Unicode line breaks NEL/LS/PS (U+0085, U+2028,
+  U+2029), byte-order marks, `%` directives, anchors, aliases, tags, merge
+  keys, duplicate keys in block or flow style, non-string keys, plain keys
+  carrying a comment (`k #: v`), flow-mapping keys whose colon is glued to
+  what follows (`{a:1}`), plain scalars opening with an indicator in KEY and
+  VALUE position alike (`@foo:`, `` `foo: ``, `|foo:`, `>foo:`, `,foo:`),
+  unterminated flow collections or quoted scalars, multi-line plain scalars,
+  plain scalars opening with a sequence indicator, YAML 1.1's value key
+  (`=`) and merge key (`<<`) in both positions, and plain scalars whose
+  meaning differs between YAML 1.1 and 1.2 (`yes`/`no`/`on`/`off`, `1:30`,
+  `1_:0`, `0x1F90`, `0755`, `1e3`, `1_000`, `2026-08-20`, `.inf`). Floats
+  are the one number form it RESOLVES rather than refuses, so its pattern is
+  PyYAML's own float-resolver decimal branches transcribed character for
+  character: `.5` is 0.5 to both readers and `-.5` is the string "-.5" to
+  both. The reader is differentially checked against an out-of-tree
+  PyYAML 6.0.3 over a corpus of real-render and hostile shapes, and three
+  rounds of independent review extended that corpus; every divergence any
+  round measured — `1_000`, a leading byte-order mark, YAML 1.1 timestamps,
+  plain `=`, signed leading-dot floats, colon-glued flow keys, NEL/LS/PS,
+  the C1 controls, indicator-leading keys, plain `<<`, underscored
+  sexagesimals, commented keys, and flow scalars run past `?`/`[`/`{` — is
+  closed here. Over that corpus there is now no input this reader accepts
+  and reads differently than PyYAML, and none it accepts that PyYAML
+  refuses; the divergences that remain all run the other way, this reader
+  refusing what PyYAML resolves. Nothing in this repository depends on
+  PyYAML; it is the oracle, not a dependency.
 - `scripts/ci/chart-egress-pin.sh` grows from four assertions to seven. The
   original text pin and its 19 mutations are untouched; (c) is the
-  whole-render census, (d) rewrites the real render into 32 hostile ones —
+  whole-render census, (d) rewrites the real render into 40 hostile ones —
   same-file and new-file shadow policies with spaced, double-quoted,
   single-quoted and `\x`-escaped keys, flow-style documents, block-scalar
   kinds, generic/typed/nested/uninspectable list wrappers, a policy under a
   CNI's own kind, anchors, merge keys, explicit tags, tab indentation, a
   byte-order mark, an underscored number, a YAML 1.1 timestamp, a value-key
-  scalar, and ten widenings of the pinned policy itself — and requires
+  scalar, a Unicode line break, a C1 control character, a colon-glued flow
+  key, a flow scalar run past a nested indicator, an indicator-leading key,
+  a commented key, a merge-key scalar, an underscored sexagesimal, and ten
+  widenings of the pinned policy itself — and requires
   every one to be refused; (e) now runs the census under each values override too; (f) and
   (g) pin both batteries against being quietly shrunk.
-- `scripts/ci/test_chart_render_census.py` (82 tests) pins the reader
+- `scripts/ci/test_chart_render_census.py` (100 tests) pins the reader
   itself in the `security` job, without helm: that `kind :`, `"kind"`,
   `'kind'` and `"\x6bind"` are all the same key, that list wrappers are
   flattened into their items rather than merely rejected, that a legal
   respelling of the real policy still PASSES (normalisation must not turn
-  into a false alarm), and one refusal per fail-closed rule. It also pins
+  into a false alarm), one refusal per fail-closed rule, and one acceptance
+  companion per refusal so no rule over-reaches — `.5` still resolves,
+  `©`/`é`/CJK/emoji still read, `\N`/`\L`/`\P` still produce their
+  characters, and `{a: 1}` still parses. It also pins
   the shell script's mutation floor against the battery's real size, so the
   two cannot disagree.
 
