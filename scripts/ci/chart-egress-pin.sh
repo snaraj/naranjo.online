@@ -20,15 +20,33 @@
 # rewrite fails — in block or flow style. The parser is stdlib Python (these
 # repos are stdlib-only): no PyYAML, no yq, so it runs anywhere helm does.
 #
+# AND WHY THAT IS NOT ENOUGH ON ITS OWN (issue #86). The text pin below reads
+# ONE template's render by raw line: a document is recognised by a line whose
+# prefix is exactly `kind`, and the spec by a line exactly equal to `spec:`.
+# YAML allows whitespace before a key's colon, allows the key to be quoted,
+# and resolves escapes inside a double-quoted key — so a SECOND NetworkPolicy
+# spelled `kind :` / `spec :`, in this same file, was invisible to that
+# census and to all 19 mutations while parsing, under a real YAML
+# implementation, as an empty-selector `policyTypes: [Egress]` policy with
+# one empty egress rule. NetworkPolicy allowances are ADDITIVE: that second
+# document hands every Pod unrestricted outbound access. The independent
+# security review of PR #80 reproduced exactly that at the merged head.
+# Assertions (c), (d) and (g) are the answer: a whole-render census through a real
+# document reader that normalises keys to their canonical spelling BEFORE
+# matching, flattens list wrappers, and requires exactly one NetworkPolicy in
+# the complete installable render, equal to an expectation stated in the
+# gate. It lives in scripts/ci/chart_render_census.py — too big to embed
+# here, and it is unit-tested in scripts/ci/test_chart_render_census.py.
+#
 # WHERE THE EXPECTATIONS COME FROM. The ingress sibling reads the peer
 # identity out of chart/values.yaml because that peer is configuration. This
 # policy has no configuration: "no outbound connection, ever" is a constant,
 # so it is written here as a constant and NOT read back out of the template
 # under test — an expectation derived from the template would pass for any
 # template. The selector's two facts come from chart/Chart.yaml (the chart
-# name) and this script (the release name it renders with).
+# name) and this script (the release name and namespace it renders with).
 #
-# Four assertions, all failing closed:
+# Seven assertions, all failing closed:
 #   a. the DEFAULT render — no flags, shipped values — carries the pinned
 #      selector, exactly [Ingress, Egress] policy types, and exactly
 #      `egress: []`, each compared in full;
@@ -36,22 +54,37 @@
 #      render and fed back through assertion (a)'s own checker, which must
 #      exit non-zero. A gate that cannot fail is not a gate, and a mutation
 #      that survives is a hole this file would otherwise hide;
-#   c. no values override re-opens egress — the deny is unconditional, not a
-#      default (requirement 4: security behavior is never toggleable);
-#   d. the mutation battery has not been quietly shrunk.
+#   c. the COMPLETE installable render — every template, CRDs included —
+#      parses, carries the pinned document inventory, and holds exactly one
+#      NetworkPolicy equal to the pinned object, semantics compared, not
+#      lines;
+#   d. every hostile whole-render mutation is REFUSED by (c) — including the
+#      shadow policies that defeated the text pin;
+#   e. no values override re-opens egress — the deny is unconditional, not a
+#      default (requirement 4: security behavior is never toggleable) — and
+#      no override adds a second policy anywhere in the render either;
+#   f. the text mutation battery has not been quietly shrunk;
+#   g. the census battery has not been quietly shrunk either.
 #
-# This file asserts nothing about the ingress rule: chart-ingress-pin.sh owns
-# that sub-tree byte for byte, and one owner per pin means one place to edit.
+# Assertion (c) does compare the ingress rule, because a census that ignores
+# half the spec cannot claim the object it found is the pinned one; it takes
+# the peer identity from chart/values.yaml, the binding point, so this file
+# still names no provider. chart-ingress-pin.sh keeps sole ownership of the
+# ingress sub-tree's byte-for-byte canonical TEXT.
 set -euo pipefail
 
 chart_dir="${CHART_DIR:-chart}"
 kube_version="${KUBE_VERSION:-v1.36.0}"
 release_name=egress-pin
+release_namespace=egress-pin-namespace
 chart_file="${chart_dir}/Chart.yaml"
+script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+census_module="${script_dir}/chart_render_census.py"
 
-# Bumped only when a mutation is ADDED. It exists so deleting one is a red
+# Bumped only when a mutation is ADDED. They exist so deleting one is a red
 # build rather than a silently smaller battery.
 minimum_mutations=19
+minimum_census_mutations=30
 
 fail() {
   printf 'chart-egress-pin: %s\n' "$1" >&2
@@ -317,17 +350,40 @@ else:
 render() {
   helm template "${release_name}" "${chart_dir}" \
     --kube-version "${kube_version}" \
+    --namespace "${release_namespace}" \
     --show-only templates/network-policy.yaml "$@"
+}
+
+# render_all prints the COMPLETE installable render instead: every template
+# file, plus `crds/` — the same set `helm install` would apply. No
+# --show-only, because --show-only is exactly the blindfold assertions (e)
+# through (g) exist to remove.
+render_all() {
+  helm template "${release_name}" "${chart_dir}" \
+    --kube-version "${kube_version}" \
+    --namespace "${release_namespace}" \
+    --include-crds "$@"
 }
 
 check() {
   python3 -c "${py_core}" assert "${chart_name}" "${release_name}"
 }
 
+# Extra arguments go straight to the census (assertion (e) uses this to state
+# the peer instance it deliberately overrode).
+census() {
+  python3 -I -B "${census_module}" census \
+    --chart "${chart_dir}" \
+    --release "${release_name}" \
+    --namespace "${release_namespace}" "$@"
+}
+
 if ! chart_name="$(python3 -c "${py_core}" chart-name "${chart_file}")"; then
   fail "could not read the chart name from ${chart_file}"
 fi
 [ -n "${chart_name}" ] || fail "chart metadata declares no name"
+
+[ -f "${census_module}" ] || fail "the whole-render census module is missing at ${census_module}"
 
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
@@ -354,15 +410,63 @@ $(python3 -c "${py_core}" mutations "${chart_name}" "${release_name}")
 EOF
 echo "chart-egress-pin: (b) ${mutation_count} hostile mutations of the real render all refused"
 
-# (c) The deny is unconditional. No shipped value toggles it, so every value
-# the schema lets a deployment move must leave the egress answer identical.
-# (Values the schema pins outright — service.port, image.pullPolicy,
-# media.enabled — cannot render at all, so they never reach this loop; a
-# typo here fails the render and the pipeline rather than passing quietly.)
+# (c) The COMPLETE installable render — not one --show-only extract — carries
+# exactly one NetworkPolicy, and it is the pinned object. Documents are
+# recognised by their parsed, canonically spelled keys, so `kind :`, a quoted
+# `"kind"`, an escaped `"\x6bind"`, a flow-style document, and a policy tucked
+# inside a List wrapper are all just NetworkPolicies to this census.
+render_all >"${work}/whole-render.yaml"
+census <"${work}/whole-render.yaml"
+echo "chart-egress-pin: (c) the complete render holds exactly one NetworkPolicy, equal to the pinned object"
+
+# (d) Every hostile whole-render mutation is refused. Same discipline as (b):
+# the list comes from the census itself, each mutant is built from the REAL
+# render, and a mutant that survives is a hole this file would otherwise
+# hide. The shadow-policy entries are the exact attack shapes that passed the
+# pinned gate before issue #86.
+census_mutation_count=0
+while IFS= read -r mutation; do
+  [ -n "${mutation}" ] || continue
+  python3 -I -B "${census_module}" mutate \
+    --chart "${chart_dir}" --release "${release_name}" \
+    --namespace "${release_namespace}" --name "${mutation}" \
+    <"${work}/whole-render.yaml" >"${work}/census-mutant.yaml"
+  if census <"${work}/census-mutant.yaml" >/dev/null 2>&1; then
+    fail "the hostile whole-render mutation '${mutation}' was ACCEPTED — this gate would not catch it in a real render"
+  fi
+  census_mutation_count=$((census_mutation_count + 1))
+done <<EOF
+$(python3 -I -B "${census_module}" mutations)
+EOF
+echo "chart-egress-pin: (d) ${census_mutation_count} hostile whole-render mutations all refused"
+
+# (e) The deny is unconditional. No shipped value toggles it, so every value
+# the schema lets a deployment move must leave the egress answer identical —
+# and must not add a second policy to the render either, which is why the
+# whole-render census runs under each override too. This is a fixed sample of
+# the overrides the schema admits, not an exhaustive sweep of them: the
+# exact-render pin in (a) and the object census in (c) are what stand behind
+# a values-conditional change nobody sampled.
 while IFS= read -r override; do
   [ -n "${override}" ] || continue
   render --set "${override}" | check ||
     fail "the override '${override}' changed the egress answer — a deny that a value can move is not a deny"
+  # One override deliberately moves the ingress peer identity, which the
+  # census pins as well. Telling the census which instance was rendered keeps
+  # the assertion exact under the override instead of skipping it — and
+  # proves the ingress expectation really does track the values, rather than
+  # being a constant that would match anything.
+  case "${override}" in
+    ingress.peerInstance=*)
+      render_all --set "${override}" |
+        census --peer-instance "${override#ingress.peerInstance=}" >/dev/null ||
+        fail "the override '${override}' changed the whole-render census — a deny that a value can move is not a deny"
+      ;;
+    *)
+      render_all --set "${override}" | census >/dev/null ||
+        fail "the override '${override}' changed the whole-render census — a deny that a value can move is not a deny"
+      ;;
+  esac
 done <<'EOF'
 replicaCount=1
 deploymentReady=true
@@ -370,11 +474,16 @@ ingress.peerInstance=another-connector-instance
 resources.limits.cpu=500m
 resources.requests.cpu=50m
 EOF
-echo "chart-egress-pin: (c) no shipped value override re-opens egress"
+echo "chart-egress-pin: (e) no shipped value override re-opens egress or adds a policy"
 
-# (d) The battery has not been quietly shrunk.
+# (f) The text battery has not been quietly shrunk.
 [ "${mutation_count}" -ge "${minimum_mutations}" ] ||
   fail "only ${mutation_count} mutations ran; at least ${minimum_mutations} are required. Mutations are added, never removed."
-echo "chart-egress-pin: (d) mutation battery is at or above its pinned floor of ${minimum_mutations}"
+echo "chart-egress-pin: (f) mutation battery is at or above its pinned floor of ${minimum_mutations}"
 
-echo "chart-egress-pin: the rendered policy makes every outbound connection unrepresentable"
+# (g) And the census battery has not been quietly shrunk either.
+[ "${census_mutation_count}" -ge "${minimum_census_mutations}" ] ||
+  fail "only ${census_mutation_count} census mutations ran; at least ${minimum_census_mutations} are required. Mutations are added, never removed."
+echo "chart-egress-pin: (g) census battery is at or above its pinned floor of ${minimum_census_mutations}"
+
+echo "chart-egress-pin: the rendered policy makes every outbound connection unrepresentable, and it is the only policy the chart installs"

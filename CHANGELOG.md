@@ -7,6 +7,82 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.24] - 2026-08-20
+
+### Security
+
+- The chart gates now census the COMPLETE installable Helm render for
+  NetworkPolicy documents, through a reader that resolves every key to its
+  canonical spelling before matching (issue #86). The independent security
+  review of PR #80 proved the previous census could be walked past: it
+  recognised a document only by a raw line whose prefix was exactly `kind`
+  (`chart-egress-pin.sh:146-149` at that head) and the spec only by a raw
+  line exactly equal to `spec:` (`:94-103`), so a SECOND `NetworkPolicy` in
+  the same rendered file spelled `kind :` / `spec :` was invisible to the
+  assertion and to all 19 self-mutations — while parsing, under a real YAML
+  implementation, as an empty-`podSelector`, `policyTypes: [Egress]` policy
+  carrying one empty egress rule. NetworkPolicy allowances are additive, so
+  that document grants every Pod unrestricted outbound access while the
+  first policy still reads "default deny". Helm lint reported 0 failed
+  charts, `helm template` exited 0, and the pinned gate exited 0.
+- `scripts/ci/chart_render_census.py` is the answer: a stdlib-only
+  (no PyYAML, no yq), fail-closed reader for the YAML subset a Helm render
+  actually uses — comments, flow collections, quoted keys and scalars,
+  block scalars — followed by a semantic census. It parses the whole render
+  (`helm template` with no `--show-only`, `--include-crds`), flattens
+  generic and typed list wrappers so nothing hides inside one, requires the
+  render's `(apiVersion, kind)` inventory to equal a pinned multiset,
+  requires EXACTLY ONE `NetworkPolicy`, and asserts that policy's selector,
+  `policyTypes`, ingress rule and `egress: []` semantics against an
+  expectation the gate states itself — never read back out of the template
+  under test. Anything it cannot read unambiguously is refused with the
+  offending line named: tabs, carriage returns, control characters, `%`
+  directives, anchors, aliases, tags, merge keys, duplicate keys in block
+  or flow style, non-string keys, unterminated flow collections or quoted
+  scalars, multi-line plain scalars, plain scalars opening with a sequence
+  indicator, and plain scalars whose meaning differs between YAML 1.1 and
+  1.2 (`yes`/`no`/`on`/`off`, `1:30`, `0x1F90`, `0755`, `1e3`, `.inf`).
+  The reader was differentially checked, during development, against an
+  out-of-tree PyYAML 6.0.3 over a 79-case corpus of real-render and hostile
+  shapes: identical results wherever both accept, and ZERO inputs where
+  this reader accepts something PyYAML refuses. Nothing in this repository
+  depends on PyYAML; it was the oracle, not a dependency.
+- `scripts/ci/chart-egress-pin.sh` grows from four assertions to seven. The
+  original text pin and its 19 mutations are untouched; (c) is the
+  whole-render census, (d) rewrites the real render into 28 hostile ones —
+  same-file and new-file shadow policies with spaced, double-quoted,
+  single-quoted and `\x`-escaped keys, flow-style documents, block-scalar
+  kinds, generic/typed/nested/uninspectable list wrappers, a policy under a
+  CNI's own kind, anchors, merge keys, explicit tags, tab indentation, and
+  ten widenings of the pinned policy itself — and requires every one to be
+  refused; (e) now runs the census under each values override too; (f) and
+  (g) pin both batteries against being quietly shrunk.
+- `scripts/ci/test_chart_render_census.py` (75 tests) pins the reader
+  itself in the `security` job, without helm: that `kind :`, `"kind"`,
+  `'kind'` and `"\x6bind"` are all the same key, that list wrappers are
+  flattened into their items rather than merely rejected, that a legal
+  respelling of the real policy still PASSES (normalisation must not turn
+  into a false alarm), and one refusal per fail-closed rule. It also pins
+  the shell script's mutation floor against the battery's real size, so the
+  two cannot disagree.
+
+### Changed
+
+- `chart-egress-pin.sh` renders with an explicit `--namespace` so the
+  census can assert the namespace the policy landed in rather than inherit
+  helm's default. `chart-ingress-pin.sh` is untouched by this change; its
+  own blind spot is recorded below.
+
+### Known gaps
+
+- `scripts/ci/chart-ingress-pin.sh` still recognises the spec by a raw line
+  exactly equal to `spec:` (`:103-105`), so the same-file shadow policy is
+  invisible to it in isolation; it exits 0 on all four hostile charts the
+  egress gate now refuses. Nothing ships weaker for it — both gates run in
+  the same `chart` job, and the census refuses those renders — but the
+  ingress gate's own census is a follow-up, tracked separately rather than
+  quietly bundled here.
+
 ## [0.1.23] - 2026-08-20
 
 ### Fixed
