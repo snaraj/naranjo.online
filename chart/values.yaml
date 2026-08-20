@@ -51,10 +51,13 @@ media:
 # operational decision that needs all three of: this value, the credential
 # Secrets named by `keyEnvName` in internal/panels/config/fetch.json for the
 # sources that use one, and an egress allowance for that file's `hosts` list.
-# The chart's NetworkPolicy is ingress-only today, so the egress half does not
-# exist yet (issue #79) and this stays false until it does. The schema requires
-# the key: a values file that forgot to decide fails validation rather than
-# rendering a guess.
+# The chart's NetworkPolicy denies every outbound connection -- the `Egress`
+# policy type over an empty rule list -- so enabling this today buys nothing
+# but failed attempts and the same `stale` snapshots, the fail-soft outcome.
+# An exact-destination egress allowance is tracked separately (issue #79); it
+# never means removing the deny. This stays false until that lands. The schema
+# requires the key: a values file that forgot to decide fails validation
+# rather than rendering a guess.
 panels:
   refresh:
     enabled: false
