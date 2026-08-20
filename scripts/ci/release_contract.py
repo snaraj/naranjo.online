@@ -72,11 +72,25 @@ EXPECTED_MAIN_RULE_TYPES = frozenset(
         "code_coverage",
     }
 )
+# The complete, closed set of pull-request rule parameters GitHub exposes for
+# Protect-Main.  The compare against this dict is exact equality in both
+# directions, so a field GitHub adds is as fatal as a field it drops: the
+# publisher refuses to release onto a settings surface nobody re-anchored.
+# That is what happened on 2026-08-20 (issue #91), when GitHub began returning
+# require_extra_approval_for_unattributed_changes and every release from 0.1.20
+# on denied with "pull-request rule parameters are not exact" until this pin
+# grew to know it.  It is pinned True -- the live value AND the stricter
+# direction: a commit whose author is not the pushing/attributed actor needs an
+# extra approval.  Agent commits here are authored and committed as the owner's
+# noreply identity and SSH-signed (AGENTS.md, "Commit identity mechanics"), so
+# they are attributed and no flow changes.  Re-anchoring means extending this
+# set deliberately, never relaxing the compare.
 EXPECTED_PULL_REQUEST_PARAMETERS = {
     "required_approving_review_count": 0,
     "dismiss_stale_reviews_on_push": False,
     "required_reviewers": [],
     "require_code_owner_review": False,
+    "require_extra_approval_for_unattributed_changes": True,
     "require_last_push_approval": False,
     "required_review_thread_resolution": True,
     "allowed_merge_methods": ["squash", "rebase"],
@@ -736,6 +750,7 @@ def validate_settings_receipt(receipt: Mapping[str, object], repository: str) ->
         "private_vulnerability_reporting",
         "repository",
         "require_code_owner_review",
+        "require_extra_approval_for_unattributed_changes",
         "require_last_push_approval",
         "require_linear_history",
         "require_pull_request",
@@ -1006,6 +1021,9 @@ def build_settings_receipt(
         ),
         "required_reviewers": pull_parameters.get("required_reviewers"),
         "require_code_owner_review": pull_parameters.get("require_code_owner_review"),
+        "require_extra_approval_for_unattributed_changes": pull_parameters.get(
+            "require_extra_approval_for_unattributed_changes"
+        ),
         "require_last_push_approval": pull_parameters.get("require_last_push_approval"),
         "required_review_thread_resolution": pull_parameters.get(
             "required_review_thread_resolution"

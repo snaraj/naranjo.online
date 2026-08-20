@@ -223,6 +223,7 @@ The exact successful receipt is:
   "private_vulnerability_reporting": true,
   "repository": "snaraj/naranjo.online",
   "require_code_owner_review": false,
+  "require_extra_approval_for_unattributed_changes": true,
   "require_last_push_approval": false,
   "require_linear_history": true,
   "require_pull_request": true,
@@ -270,10 +271,22 @@ enablement, allow policy and full-SHA pinning; default workflow permissions and
 workflow-token approval; the `Protect-Main` ruleset's identity, source,
 enforcement and `refs/heads/main`-only condition; and every field of its
 `rules[]` — required pull request and its exact parameters (including
-`allowed_merge_methods`, the authoritative merge-method source), required status
+`allowed_merge_methods`, the authoritative merge-method source, and
+`require_extra_approval_for_unattributed_changes`), required status
 checks and their GitHub-Actions integration binding, linear history, signatures,
 creation/deletion/non-fast-forward restrictions, and the CodeQL/code-quality/
 code-coverage rules.
+
+That pull-request parameter set is compared for exact equality in both
+directions, so GitHub adding a field is as fatal as GitHub dropping one. When
+`require_extra_approval_for_unattributed_changes` appeared on the live surface
+on 2026-08-20, the preflight denied with `pull-request rule parameters are not
+exact` and releases 0.1.20 through 0.1.22 stayed unpublished (issue #91). The
+remedy is always the same: re-anchor the pin in
+`EXPECTED_PULL_REQUEST_PARAMETERS` to the deliberate value — never widen the
+compare, never allow unknown fields through. The receipt field above and that
+pin move together, and both this document's receipt and the contract tests are
+part of that lockstep.
 
 **Owner-verified** (asserted only by the repository owner, GET-only, under
 their own credential, with the standalone command below): that `Protect-Main`
