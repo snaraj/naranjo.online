@@ -7,6 +7,44 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-08-20
+
+### Security
+
+- The application NetworkPolicy now denies every outbound connection. It
+  declares both `Ingress` and `Egress` policy types over an exactly empty
+  `egress: []` rule list, so a Pod rendered from this chart has no outbound
+  network access at all. Previously the policy declared `Ingress` only:
+  Kubernetes applies egress rules exclusively to policies that name `Egress`
+  in `policyTypes`, so the workload retained unrestricted outbound
+  connectivity no matter what the manifest looked like. The ingress
+  peer/namespace/port contract is byte-for-byte unchanged.
+- New structural gate `scripts/ci/chart-egress-pin.sh`, wired into the
+  `chart` job of the PR gate beside the ingress pin. It extracts
+  `spec.podSelector`, `spec.policyTypes`, and `spec.egress` from the real
+  render by indentation and compares each whole sub-tree against a pinned
+  literal, so an added rule, peer, port, DNS exception, duplicate key, or
+  flow-style rewrite fails in block or flow style. Its expectations are
+  constants rather than values read back out of the template under test —
+  "no outbound connection, ever" is not configuration, and an oracle derived
+  from the implementation passes for any implementation.
+- The gate proves its own refusals: 19 hostile mutations are applied to the
+  real render and fed back through the same checker, which must reject every
+  one — omitted `Egress` policy type (the inert-policy trap: `egress: []`
+  that Kubernetes never applies), omitted `policyTypes`, omitted egress key,
+  `{}`, `- {}`, `0.0.0.0/0`, `::/0`, ports-only, a port 53/UDP DNS
+  exception, `namespaceSelector` and `podSelector` peers, inline `[{}]`,
+  non-canonical `[ ]`, a duplicate `egress` key, inline `policyTypes`, a
+  wrong-app selector, a dropped instance label, an empty `podSelector`, and
+  a second shadow document. A pinned floor fails the build if the battery is
+  ever shrunk. The gate additionally renders under every value override the
+  schema admits and requires the egress answer to be identical, so the deny
+  is unconditional rather than a default (requirement 4).
+- README's live-refresh enablement step 3 now states what the chart actually
+  does. It claimed the NetworkPolicy was "ingress-only today" while
+  concluding that refresh attempts fail with policy unchanged; the first
+  half is no longer true and the second half is now true because of it.
+
 ## [0.1.18] - 2026-08-19
 
 ### Fixed

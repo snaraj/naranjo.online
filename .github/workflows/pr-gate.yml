@@ -204,6 +204,8 @@ jobs:
           helm template smoke chart --kube-version v1.36.0 >/dev/null
       - name: The ingress policy must pin one peer by its full identity
         run: ./scripts/ci/chart-ingress-pin.sh
+      - name: The application policy must deny every outbound connection
+        run: ./scripts/ci/chart-egress-pin.sh
       - name: Chart version must match VERSION
         run: |
           IFS= read -r version < VERSION
