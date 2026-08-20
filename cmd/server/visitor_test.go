@@ -278,8 +278,9 @@ func TestVisitorReadsThePanels(t *testing.T) {
 // null as "--", and this pin fails if an omitempty-style regression ever
 // erases a null on the round trip.
 type visitorBossLog struct {
-	Account string           `json:"account"`
-	Bosses  []visitorBossRow `json:"bosses"`
+	Account string            `json:"account"`
+	Skills  []visitorSkillRow `json:"skills"`
+	Bosses  []visitorBossRow  `json:"bosses"`
 }
 
 type visitorBossRow struct {
@@ -287,6 +288,19 @@ type visitorBossRow struct {
 	KC    *int64 `json:"kc"`
 	Rank  *int64 `json:"rank"`
 	Score *int64 `json:"score,omitempty"`
+}
+
+// visitorSkillRow is the additive skill section of boss-log/v1, declared here
+// as its own expected shape exactly like the token panel's later sections: a
+// reader of this file sees the contract the rail's skill grid depends on
+// without leaving the story. Every figure is a pointer because the hiscores
+// report none below their listing threshold, and the grid prints that as a
+// dash rather than a zero.
+type visitorSkillRow struct {
+	Name  string `json:"name"`
+	Level *int64 `json:"level"`
+	Rank  *int64 `json:"rank"`
+	XP    *int64 `json:"xp"`
 }
 
 // TestVisitorChecksTheBossLog is the boss-log reader's story: open the page
@@ -312,7 +326,7 @@ func TestVisitorChecksTheBossLog(t *testing.T) {
 		}
 	})
 
-	t.Run("reads the boss log: the grid's cell contract holds", func(t *testing.T) {
+	t.Run("reads the stats panel: the grid's cell contract holds", func(t *testing.T) {
 		response := session.On(t).Navigate("/api/panels/boss-log")
 		if response.StatusCode != http.StatusOK {
 			t.Fatalf("GET /api/panels/boss-log = %d", response.StatusCode)
@@ -322,10 +336,37 @@ func TestVisitorChecksTheBossLog(t *testing.T) {
 		if envelope.Kind != "boss-log/v1" {
 			t.Fatalf("boss-log kind = %q, want boss-log/v1", envelope.Kind)
 		}
+		// The heading the rail puts on the card. The panel's id and kind are
+		// its stable public identity and deliberately did NOT follow the
+		// owner's rename, so this is the one place the new title is visible.
+		if envelope.Title != "Old School RuneScape Stats" {
+			t.Errorf("boss-log title = %q, want the panel's current heading", envelope.Title)
+		}
 		var payload visitorBossLog
 		decodeVisitorJSON(t, envelope.Data, &payload)
 		if payload.Account == "" {
 			t.Error("payload names no account")
+		}
+		// The upstream hiscores document always carries a skill table, and
+		// the panel exists to render it beside the tallies; an empty section
+		// here means the mapping dropped it on the floor again, which is the
+		// exact defect this section was added to end.
+		if len(payload.Skills) == 0 {
+			t.Fatal("payload lists no skills; the rail's skill grid would render its empty state")
+		}
+		for _, skill := range payload.Skills {
+			if skill.Name == "" {
+				t.Error("a skill row carries no name; cells and labels need one")
+			}
+			if skill.Level != nil && *skill.Level < 0 {
+				t.Errorf("skill %s level = %d, want null or non-negative", skill.Name, *skill.Level)
+			}
+			if skill.Rank != nil && *skill.Rank < 0 {
+				t.Errorf("skill %s rank = %d, want null or non-negative", skill.Name, *skill.Rank)
+			}
+			if skill.XP != nil && *skill.XP < 0 {
+				t.Errorf("skill %s xp = %d, want null or non-negative", skill.Name, *skill.XP)
+			}
 		}
 		if len(payload.Bosses) == 0 {
 			t.Fatal("payload lists no bosses; the grid would render empty")

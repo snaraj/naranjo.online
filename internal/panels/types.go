@@ -247,12 +247,37 @@ type VCSCommit struct {
 	At string `json:"at"`
 }
 
-// BossLogData is the boss-log/v1 payload: one game account's boss tallies.
+// BossLogData is the boss-log/v1 payload: one game account's skill table and
+// boss tallies. The kind version stays v1 because Skills is ADDITIVE — a
+// payload written before it existed still decodes and still renders, exactly
+// like the token-usage tiles and the activity end date before it. A breaking
+// reshape would mint a new kind; adding an optional section never does.
 type BossLogData struct {
 	// Account is the public account name.
 	Account string `json:"account"`
+	// Skills lists the account's skill rows in upstream order. Optional: it
+	// arrived after the kind shipped, and a document that reports no skill
+	// rows serves none rather than serving invented ones.
+	Skills []BossLogSkill `json:"skills,omitempty"`
 	// Bosses lists the tracked bosses in display order.
 	Bosses []BossLogEntry `json:"bosses"`
+}
+
+// BossLogSkill is one skill row. Level, Rank, and XP are pointers for exactly
+// the reason the boss row's fields are: the upstream reports -1 for a figure
+// it does not have, null is data the frontend renders as "--", and omitempty
+// would silently erase the difference between "unreported" and a real zero.
+type BossLogSkill struct {
+	// Name is the skill display name. One row is the account's combined
+	// total rather than a trainable skill, and it is named by the upstream
+	// like every other row — no skill name is a Go constant here.
+	Name string `json:"name"`
+	// Level is the reported level; null when the upstream reports none.
+	Level *int64 `json:"level"`
+	// Rank is the hiscore rank; null means unranked.
+	Rank *int64 `json:"rank"`
+	// XP is the reported experience; null when the upstream reports none.
+	XP *int64 `json:"xp"`
 }
 
 // BossLogEntry is one boss row. KC and Rank are pointers because the
@@ -572,14 +597,15 @@ type hiscoresDocument struct {
 	// know every field the document carries — and it did not, which is why
 	// every live refresh of this panel failed before it could map a row.
 	Name string `json:"name"`
-	// Skills holds the skill table; unused by the boss log but part of the
-	// document, so the strict decoder must know it.
+	// Skills holds the skill table the panel's skill grid is mapped from.
 	Skills []hiscoresSkill `json:"skills"`
 	// Activities holds ranked activities including bosses.
 	Activities []hiscoresActivity `json:"activities"`
 }
 
-// hiscoresSkill is one skill row of the hiscores document.
+// hiscoresSkill is one skill row of the hiscores document. Rank, Level, and
+// XP are -1 when the account is unranked for that row, which maps to null in
+// the served payload exactly as an unranked activity does.
 type hiscoresSkill struct {
 	ID    int64  `json:"id"`
 	Name  string `json:"name"`
