@@ -7,6 +7,74 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-08-20
+
+### Added
+
+- The boss-log panel becomes **Old School RuneScape Stats**: a skills grid of
+  every level the hiscores report sits above the boss tallies, and the tally
+  region claims the rest of the rail and scrolls inside itself. `boss-log/v1`
+  gains an optional `skills` section (name, level, rank, xp, every figure
+  nullable) — additive inside the same kind version, so a payload written
+  before it existed still decodes. The panel id, kind, and URL are unchanged:
+  they are public identity, and a heading is not.
+- The complete icon set the panel always needed: **71 boss icons and 25 skill
+  icons, 410,125 bytes**, all downscaled Old School RuneScape Wiki thumbnails
+  shipped as files (`assetsInlineLimit: 0`). Sixty-five of the boss icons and
+  the whole skills directory are new; the frontend pin that had to run
+  one-directionally while sixty-five bosses rendered letter chips now runs in
+  BOTH directions again — every served row has an icon, and every icon
+  belongs to a served row. `ATTRIBUTION.md` records the batch, its byte
+  count, the exact wiki file behind each row that does not name its own, and
+  keeps the Jagex Fan Content Policy notice byte for byte.
+- A force-refresh control replaces the `stale · 8d ago` badge in every panel
+  header. `watchPanel` now returns a callable that also carries `refresh()`:
+  a forced read is single-flight against the periodic one — a second press
+  joins the request in flight instead of stacking behind it — and resolves
+  only when that read lands, so the control is busy for exactly as long as
+  the origin is. No honesty left with the badge: the status still drives a
+  dot whose shape differs per state, and the full reading rides the button's
+  accessible name and its tooltip.
+
+### Changed
+
+- Live refresh is reachable from a deployment for the first time.
+  `chart/templates/deployment.yaml` renders `PANELS_REFRESH` from a new
+  `panels.refresh.enabled` value — **unconditionally**, so the deployed state
+  is readable off the manifest — defaulting to `false` and required by
+  `chart/values.schema.json`, so a values file that omits the decision fails
+  validation instead of letting the origin guess. Nothing is enabled
+  anywhere: the egress allowance the switch also needs is issue #79.
+- The upstream refresh TTL drops from 45 minutes to 5 (`ttlMinutes`), putting
+  the origin inside the same 30s–5m freshness band the client poll already
+  sat in; the backoff ladder is unchanged and is now pinned to stay outside
+  that band, so a failing upstream still backs off past the healthy cadence.
+- All three panel snapshots that can be regenerated without secrets were
+  regenerated from fresh captures taken at cut time: `boss-log.json` (25
+  skills, 71 bosses) and `vcs-activity.json` (53 weeks, 499 contributions),
+  with their `testdata` captures replaced in the same commit so the
+  snapshot-equals-capture pins still close the loop. `token-usage.json` needs
+  admin credentials and is unchanged.
+
+### Fixed
+
+- The five confirmed layout collisions between fixed chrome and page content.
+  Arbitration is now one ordered `--layer-*` scale in `styles.css` (base <
+  activity < rail < menu) instead of three components that had each picked
+  `10` or nothing, so the reading-mode control can no longer be buried under
+  the side rail. The rail publishes its open state on the document root and
+  the page reserves an inline gutter for it above 60rem; the activity bar
+  publishes the strip it covers, bounds itself by that same token so it can
+  never outgrow the reserve, and flows in the document below 45rem where a
+  fixed bar has nowhere to go.
+- Rendering-lane floors (issue #26): `100vh` is gone from `styles.css` in
+  favour of `100dvh`, with a frontend pin that refuses the static spelling
+  anywhere in the file; the viewport meta opts into `viewport-fit=cover` and
+  every fixed element pads itself by the `env(safe-area-inset-*)` values, so
+  the rail, the bar, and the reading-mode control all clear a notch and a
+  home indicator. The hero gives the activity bar's reserve back, so a page
+  with nothing below it is still exactly one viewport tall.
+
 ## [0.1.20] - 2026-08-20
 
 ### Security

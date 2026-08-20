@@ -369,8 +369,21 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 			t.Errorf("%s body cap = %d, want a positive value at or below the shared %d", name, cap, bounds.MaxBytes)
 		}
 	}
-	if bounds.TTL < 30*time.Minute || bounds.TTL > time.Hour {
-		t.Errorf("ttl = %v, want the owner's 30-60 minute band", bounds.TTL)
+	// The owner's freshness band (issue #78): a dashboard that claims to be
+	// live must refresh inside minutes, not inside an hour. The upper bound is
+	// what makes the claim honest; the lower bound keeps a self-hosted origin
+	// from hammering a public upstream, and the client poll in
+	// frontend/src/lib/panels.ts is pinned to the same 30s-5m band from its
+	// side, so the two ends of the freshness path cannot drift apart.
+	if bounds.TTL < 30*time.Second || bounds.TTL > 5*time.Minute {
+		t.Errorf("ttl = %v, want the owner's 30s-5m freshness band", bounds.TTL)
+	}
+	// The retry ladder is deliberately NOT inside that band: a failing
+	// upstream must be backed off further than the healthy cadence, or a
+	// broken endpoint gets retried at full rate forever.
+	if bounds.InitialBackoff < bounds.TTL/10 || bounds.MaxBackoff <= bounds.TTL {
+		t.Errorf("backoff ladder = %v..%v against a %v ttl; a failing upstream must back off past the healthy cadence",
+			bounds.InitialBackoff, bounds.MaxBackoff, bounds.TTL)
 	}
 }
 

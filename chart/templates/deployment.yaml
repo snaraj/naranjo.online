@@ -60,6 +60,19 @@ spec:
             # rendered. Enabling media requires the reviewed ADR 0012 follow-up.
             - name: MEDIA_ENABLED
               value: {{ .Values.media.enabled | quote }}
+            {{- /* The panel API's background refresh loops. Rendered ALWAYS and
+            explicitly, never conditionally: an absent variable and a false one
+            reach the process identically today, but a template that emits the
+            switch only when it is on is one edit away from emitting nothing at
+            all, and the operator loses the ability to read the deployed state
+            off the manifest. The value defaults to false in values.yaml and the
+            schema requires the key, so a chart that forgot to decide cannot
+            render. Turning it on is an operational decision that needs the
+            egress allowance too (issue #79) -- without one the refresh attempts
+            simply fail and the panels keep serving their snapshots as stale,
+            which is the fail-soft outcome, not an outage. */}}
+            - name: PANELS_REFRESH
+              value: {{ .Values.panels.refresh.enabled | quote }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}

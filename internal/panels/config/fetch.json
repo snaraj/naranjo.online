@@ -1,6 +1,6 @@
 {
   "hosts": ["secure.runescape.com", "github.com", "api.anthropic.com", "api.openai.com"],
-  "ttlMinutes": 45,
+  "ttlMinutes": 5,
   "timeoutSeconds": 10,
   "maxBytes": 524288,
   "initialBackoffSeconds": 60,
