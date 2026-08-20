@@ -36,28 +36,35 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   `policyTypes`, ingress rule and `egress: []` semantics against an
   expectation the gate states itself — never read back out of the template
   under test. Anything it cannot read unambiguously is refused with the
-  offending line named: tabs, carriage returns, control characters, `%`
-  directives, anchors, aliases, tags, merge keys, duplicate keys in block
-  or flow style, non-string keys, unterminated flow collections or quoted
-  scalars, multi-line plain scalars, plain scalars opening with a sequence
-  indicator, and plain scalars whose meaning differs between YAML 1.1 and
-  1.2 (`yes`/`no`/`on`/`off`, `1:30`, `0x1F90`, `0755`, `1e3`, `.inf`).
-  The reader was differentially checked, during development, against an
-  out-of-tree PyYAML 6.0.3 over a 79-case corpus of real-render and hostile
-  shapes: identical results wherever both accept, and ZERO inputs where
-  this reader accepts something PyYAML refuses. Nothing in this repository
-  depends on PyYAML; it was the oracle, not a dependency.
+  offending line named: tabs, carriage returns, control characters,
+  byte-order marks, `%` directives, anchors, aliases, tags, merge keys,
+  duplicate keys in block or flow style, non-string keys, unterminated flow
+  collections or quoted scalars, multi-line plain scalars, plain scalars
+  opening with a sequence indicator, YAML 1.1's value key (`=`), and plain
+  scalars whose meaning differs between YAML 1.1 and 1.2
+  (`yes`/`no`/`on`/`off`, `1:30`, `0x1F90`, `0755`, `1e3`, `1_000`,
+  `2026-08-20`, `.inf`). The reader is differentially checked against an
+  out-of-tree PyYAML 6.0.3 over a corpus of real-render and hostile shapes,
+  and two rounds of independent review extended that corpus; every
+  divergence either round measured — `1_000`, a leading byte-order mark,
+  YAML 1.1 timestamps, and plain `=` — is a refusal here. Over that corpus
+  there is now no input this reader accepts and reads differently than
+  PyYAML, and none it accepts that PyYAML refuses; the divergences that
+  remain all run the other way, this reader refusing what PyYAML resolves.
+  Nothing in this repository depends on PyYAML; it is the oracle, not a
+  dependency.
 - `scripts/ci/chart-egress-pin.sh` grows from four assertions to seven. The
   original text pin and its 19 mutations are untouched; (c) is the
-  whole-render census, (d) rewrites the real render into 28 hostile ones —
+  whole-render census, (d) rewrites the real render into 32 hostile ones —
   same-file and new-file shadow policies with spaced, double-quoted,
   single-quoted and `\x`-escaped keys, flow-style documents, block-scalar
   kinds, generic/typed/nested/uninspectable list wrappers, a policy under a
-  CNI's own kind, anchors, merge keys, explicit tags, tab indentation, and
-  ten widenings of the pinned policy itself — and requires every one to be
-  refused; (e) now runs the census under each values override too; (f) and
+  CNI's own kind, anchors, merge keys, explicit tags, tab indentation, a
+  byte-order mark, an underscored number, a YAML 1.1 timestamp, a value-key
+  scalar, and ten widenings of the pinned policy itself — and requires
+  every one to be refused; (e) now runs the census under each values override too; (f) and
   (g) pin both batteries against being quietly shrunk.
-- `scripts/ci/test_chart_render_census.py` (75 tests) pins the reader
+- `scripts/ci/test_chart_render_census.py` (82 tests) pins the reader
   itself in the `security` job, without helm: that `kind :`, `"kind"`,
   `'kind'` and `"\x6bind"` are all the same key, that list wrappers are
   flattened into their items rather than merely rejected, that a legal

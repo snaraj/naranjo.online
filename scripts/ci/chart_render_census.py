@@ -65,21 +65,41 @@ outright:
 - plain scalars whose meaning differs between YAML 1.1 and 1.2 (`yes`, `no`,
   `on`, `off`, `y`, `n`), sexagesimals (`1:30`), hex/octal/binary integers,
   exponent forms (`1e3`, `1.0e3`), digit-group underscores (`1_000`),
-  `.inf`/`.nan`, and integers with a leading zero;
+  timestamps (`2026-08-20`, `2026-08-20T10:30:00Z`), `.inf`/`.nan`, and
+  integers with a leading zero;
+- the plain scalar `=`, YAML 1.1's value key: PyYAML's SAFE loader has no
+  constructor for it and REFUSES a document that carries one as a value,
+  while reading the very same bytes as the string "=" in key position.
+  Refused in BOTH positions here, so this reader is never the more
+  permissive of the two;
 - plain scalars opening with a block sequence indicator (`- `), which real
   YAML refuses too -- this reader must never be MORE permissive than the
   tools that install the render.
 
-Both directions were checked against PyYAML 6.0.3 on a corpus of Helm-render
-and hostile shapes: identical results wherever both accept, and ZERO inputs
-this reader accepts that PyYAML refuses -- the only direction that could hide
-a policy. The independent security review of that work extended the corpus and
-found exactly two inputs this reader ACCEPTED and read differently than
-PyYAML: `1_000` (YAML 1.1 integer, YAML 1.2 string) and a byte-order mark
-before a key (stripped by PyYAML, kept here, so `kind` behind a BOM stopped
-being the key `kind`). Both are now refusals -- the two bullets above naming
-them -- so every remaining divergence is this reader refusing an ambiguity
-PyYAML resolves one of two ways.
+Both directions are checked against PyYAML 6.0.3 -- the oracle, never a
+dependency; nothing in this repository imports it -- over a corpus of
+Helm-render and hostile shapes. Two rounds of independent review have
+extended that corpus, and each round measured divergences this file then
+closed:
+
+- round one (PR #94): `1_000`, the integer 1000 to PyYAML and ACCEPTED as
+  the string "1_000" here; and a byte-order mark before a key, stripped by
+  PyYAML, so `kind` behind one stopped being the key `kind` here.
+- round two (PR #96): YAML 1.1 timestamps -- `2026-08-20`,
+  `2026-08-20T10:30:00Z`, `2026-08-20 10:30:00`, `2001-12-14 21:59:43.10 -5`
+  and the other forms of PyYAML's own timestamp pattern -- ACCEPTED here as
+  strings where PyYAML builds `date`/`datetime` objects; and the plain
+  scalar `=`, ACCEPTED here as the string "=" where PyYAML's safe loader
+  REFUSES the document, the one measured input in the direction that could
+  hide a policy.
+
+All four classes are refusals now. The claim this file makes is therefore a
+bounded, re-runnable one rather than a universal quantifier: over that
+corpus there is no input this reader accepts and reads differently than
+PyYAML, and none it accepts that PyYAML refuses. Every divergence that
+remains runs the other way -- this reader refusing something PyYAML resolves
+(`2026_08`, `=` in key position) -- which is the direction that cannot hide
+a document.
 
 CLI (stdin is the render for `census` and `mutate`):
 
@@ -151,6 +171,31 @@ _FLOAT_RE = re.compile(r"[-+]?(?:[0-9]*\.[0-9]+|[0-9]+\.[0-9]*)")
 # two answers, no way to be sure which one a cluster will see.
 _EXPONENT_RE = re.compile(r"[-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)[eE][-+]?[0-9]+")
 _SEXAGESIMAL_RE = re.compile(r"[-+]?[0-9]+(?::[0-9]+)+(?:\.[0-9]*)?")
+# Timestamps are refused for the same reason, one step further along: YAML 1.1
+# resolves a timestamp-shaped plain scalar to a date/datetime OBJECT -- PyYAML
+# 6.0.3 reads `2026-08-20` as `datetime.date(2026, 8, 20)` and
+# `2026-08-20 10:30:00` as a `datetime` -- while YAML 1.2's core schema has no
+# timestamp type at all and reads the same bytes as a string. The pattern below
+# is PyYAML's own resolver pattern, transcribed, so this reader refuses exactly
+# the forms that reader VALUES and no more: the bare date form wants a two-digit
+# month and day, which is why `2026-8-20` on its own stays the string both
+# readers already agree it is, and `2026-08-20t10:30:00z` (lowercase zone) does
+# too. Tabs never survive `_check_bytes`; `\t` is kept in the pattern only so it
+# stays the oracle's, character for character.
+_TIMESTAMP_RE = re.compile(
+    r"(?:[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"
+    r"|[0-9][0-9][0-9][0-9]-[0-9][0-9]?-[0-9][0-9]?"
+    r"(?:[Tt]|[ \t]+)[0-9][0-9]?:[0-9][0-9]:[0-9][0-9](?:\.[0-9]*)?"
+    r"(?:[ \t]*(?:Z|[-+][0-9][0-9]?(?::[0-9][0-9])?))?)"
+)
+# `=` is YAML 1.1's "value key". PyYAML resolves a plain `=` to
+# `tag:yaml.org,2002:value`, and its SAFE loader has no constructor for that
+# tag, so `a: =` raises a ConstructorError instead of parsing; in KEY position
+# the same bytes survive as the string "=", because `flatten_mapping` retags
+# them first. One spelling, two answers, and one of those answers is a hard
+# refusal in the tool that would install the render -- the one direction a
+# reader must never be looser in. Refused in both positions.
+_VALUE_KEY_PLAIN = "="
 # Digit-group underscores are refused for the same reason as the exponent
 # forms: YAML 1.1 -- what PyYAML 6.0.3 and sigs.k8s.io/yaml implement -- lets
 # `_` separate digit groups, so `1_000` is the integer 1000 there, while
@@ -660,12 +705,21 @@ class Reader:
         if raw in _AMBIGUOUS_PLAIN:
             self.fail("plain scalar %r resolves to a boolean under YAML 1.1 and to a string "
                       "under YAML 1.2; quote it or write true/false" % raw, lineno)
+        if raw == _VALUE_KEY_PLAIN:
+            self.fail("the plain scalar %r is refused; it is YAML 1.1's value key, which a "
+                      "safe YAML loader REFUSES outright in value position and reads as an "
+                      "ordinary string in key position -- quote it to mean the string" % raw,
+                      lineno)
         if _RADIX_RE.fullmatch(raw):
             self.fail("hexadecimal, octal, and binary integer forms are refused; "
                       "implementations disagree about them (%r)" % raw, lineno)
         if _SEXAGESIMAL_RE.fullmatch(raw):
             self.fail("sexagesimal number forms are refused; %r means 60-base arithmetic "
                       "under YAML 1.1 and a string under YAML 1.2" % raw, lineno)
+        if _TIMESTAMP_RE.fullmatch(raw):
+            self.fail("timestamp scalars are refused; %r is a date/datetime OBJECT under "
+                      "YAML 1.1 and a plain string under YAML 1.2 -- quote it to mean the "
+                      "string" % raw, lineno)
         if _SPECIAL_FLOAT_RE.fullmatch(raw):
             self.fail("infinity and not-a-number scalars are refused (%r)" % raw, lineno)
         if _EXPONENT_RE.fullmatch(raw):
@@ -1177,6 +1231,36 @@ metadata:
 spec:
 """ + _ALLOW_ALL_TAIL
 
+# A YAML 1.1 timestamp is a date/datetime OBJECT to the reader that installs
+# the render and a plain string to a YAML 1.2 one. `creationTimestamp` is a
+# field every Kubernetes object really carries, so this is the shape a shadow
+# policy would wear without looking odd at all.
+_SHADOW_TIMESTAMP = """\
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shadow-allow-all
+  namespace: shadow
+  creationTimestamp: 2026-08-20T10:30:00Z
+spec:
+""" + _ALLOW_ALL_TAIL
+
+# `=` is YAML 1.1's value key: a safe YAML loader REFUSES the document that
+# carries one in value position, where this reader used to hand back the
+# string "=" and read on. An installer that refuses a render installs nothing
+# and says so, but a gate that reads a document the installer will not read is
+# a gate reporting on something else.
+_SHADOW_VALUE_KEY = """\
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shadow-allow-all
+  namespace: shadow
+  labels:
+    shadow-marker: =
+spec:
+""" + _ALLOW_ALL_TAIL
+
 
 def _split(text: str) -> list[str]:
     return text.split("\n")
@@ -1261,6 +1345,8 @@ def mutations(facts: ChartFacts) -> list[tuple[str, object]]:
         ("shadow-tab-indented", new_file(_SHADOW_TAB_INDENTED)),
         ("shadow-bom-prefixed", new_file(_SHADOW_BOM_PREFIXED)),
         ("shadow-underscore-number", new_file(_SHADOW_UNDERSCORE_NUMBER)),
+        ("shadow-timestamp-scalar", new_file(_SHADOW_TIMESTAMP)),
+        ("shadow-value-key-scalar", new_file(_SHADOW_VALUE_KEY)),
         # --- the pinned policy itself, widened ------------------------------
         ("policy-egress-allow-all",
          lambda text: _replace_block(text, ["  egress: []"], ["  egress: [{}]"])),

@@ -5,7 +5,7 @@ document scan that a second `NetworkPolicy` could walk straight past by
 spelling its keys `kind :` and `spec :` -- valid YAML, invisible to a
 prefix match, and an additive allow-all for every Pod once Kubernetes has
 it. The behavioural half of the proof lives in `chart-egress-pin.sh`, whose
-assertions (d) and (g) rewrite the REAL Helm render into 30 hostile ones and
+assertions (d) and (g) rewrite the REAL Helm render into 32 hostile ones and
 require the census to refuse every single one. This suite is the other half:
 it pins the reader itself, one rejection per test, without needing helm --
 so it runs in the `security` job alongside the other contract suites, which
@@ -344,6 +344,59 @@ class ReaderFailsClosed(unittest.TestCase):
         self.reject("\ufeffkind: NetworkPolicy\n", "line 1")
         self.reject("kind: NetworkPolicy\n\ufeffmetadata:\n  name: a\n", "line 2")
         self.reject("kind: Network\ufeffPolicy\n", "byte-order mark")
+
+    def test_yaml_11_timestamps(self):
+        # PR #96's independent review measured this class: `a: 2026-08-20` was
+        # ACCEPTED and read as the string "2026-08-20" while the oracle PyYAML
+        # 6.0.3 built `datetime.date(2026, 8, 20)`. YAML 1.2's core schema has
+        # no timestamp type, so one spelling has two meanings -- an object and
+        # a string -- and this reader refuses to pick. The four forms the
+        # receipt enumerated come first.
+        for form in ("2026-08-20", "2026-08-20T10:30:00Z", "2026-08-20 10:30:00",
+                     "2001-12-14 21:59:43.10 -5", "2026-8-20 10:30:00",
+                     "2026-08-20 10:30:00.5", "2026-08-20 10:30:00 +5:30",
+                     "2026-08-20 10:30:00-5", "2026-08-20T10:30:00+05:00"):
+            self.reject("value: %s\n" % form, "timestamp scalars are refused")
+        self.reject("value: 2026-08-20\n", "line 1")
+        # In key position too: the census matches on keys before anything else.
+        self.reject("2026-08-20: a\n", "timestamp scalars are refused")
+
+    def test_a_quoted_timestamp_is_still_an_ordinary_string(self):
+        # The refusal must not over-reach: only a PLAIN timestamp is ambiguous,
+        # and only the shapes PyYAML's own resolver VALUES are timestamps. The
+        # near-misses below are strings to both readers and must stay readable
+        # -- version numbers especially, since this chart renders `v0.1.24`.
+        self.assertEqual(parse('value: "2026-08-20"\n'), [{"value": "2026-08-20"}])
+        self.assertEqual(parse("value: '2026-08-20'\n"), [{"value": "2026-08-20"}])
+        self.assertEqual(parse("value: 2026-8-20\n"), [{"value": "2026-8-20"}])
+        self.assertEqual(parse("value: 2026-08\n"), [{"value": "2026-08"}])
+        self.assertEqual(parse("value: 2026-08-20x\n"), [{"value": "2026-08-20x"}])
+        self.assertEqual(parse("value: 2026-08-20T10:30\n"), [{"value": "2026-08-20T10:30"}])
+        self.assertEqual(parse("value: v0.1.24\n"), [{"value": "v0.1.24"}])
+        self.assertEqual(parse("value: 0.1.24\n"), [{"value": "0.1.24"}])
+
+    def test_the_value_key_plain_scalar(self):
+        # The other class PR #96's review measured, and the one counterexample
+        # to "nothing this reader accepts is refused by the oracle": plain `=`
+        # was ACCEPTED here as the string "=" while PyYAML 6.0.3's safe loader
+        # raises ConstructorError for it in VALUE position (no constructor for
+        # tag:yaml.org,2002:value). Refused in BOTH positions -- in key
+        # position the oracle reads "=", so refusing there is this reader being
+        # the STRICTER of the two, which is the safe direction.
+        self.reject("value: =\n", "YAML 1.1's value key")
+        self.reject("value: =\n", "line 1")
+        self.reject("=: a\n", "YAML 1.1's value key")
+        self.reject("a:\n  - =\n", "YAML 1.1's value key")
+        self.reject("a: {b: =}\n", "YAML 1.1's value key")
+
+    def test_a_quoted_value_key_is_still_an_ordinary_string(self):
+        # Only the bare, whole scalar `=` is the value key; quoted, or as part
+        # of any longer scalar, it is ordinary text both readers agree on.
+        self.assertEqual(parse('value: "="\n'), [{"value": "="}])
+        self.assertEqual(parse("value: '='\n"), [{"value": "="}])
+        self.assertEqual(parse("value: ==\n"), [{"value": "=="}])
+        self.assertEqual(parse("value: =x\n"), [{"value": "=x"}])
+        self.assertEqual(parse("value: x=\n"), [{"value": "x="}])
 
     def test_a_plain_scalar_opening_with_a_sequence_indicator(self):
         # Real YAML refuses this. So must this reader: being more permissive
