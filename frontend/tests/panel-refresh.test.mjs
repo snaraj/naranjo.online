@@ -251,6 +251,94 @@ test('watchClock ticks a fresh instant on the exported cadence and stops cleanly
   assert.deepEqual(host.canceled, [0]);
 });
 
+// The force-refresh control's half of the contract (issue #78). The button in
+// PanelShell is only as good as what watchPanel gives it, so every property it
+// relies on is executed here rather than asserted about in source.
+test('refresh() forces a read a hidden page would otherwise skip', async () => {
+  const host = fakeHost();
+  const seen = [];
+  const watcher = watchPanel('token-usage', (envelope) => seen.push(envelope.status), { host });
+  await flush();
+  assert.equal(host.requests.length, 1);
+
+  // Hidden page: the cadence produces nothing, and the forced read still must.
+  host.isHidden = true;
+  host.scheduled[0].callback();
+  await flush();
+  assert.equal(host.requests.length, 1, 'the cadence must stay quiet on a hidden page');
+
+  await watcher.refresh();
+  assert.equal(host.requests.length, 2, 'refresh() must be forced past the hidden check');
+  assert.deepEqual(seen, ['ok', 'ok'], 'and must deliver what it read');
+  watcher();
+});
+
+test('refresh() resolves only once the read it rode has settled', async () => {
+  const host = fakeHost();
+  let release;
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  host.respond = () => pending.then(() => ({ ok: true, json: async () => envelopeBody('token-usage') }));
+  const watcher = watchPanel('token-usage', () => {}, { host });
+  await flush();
+
+  // The first read is still outstanding. Two more presses must JOIN it — one
+  // request total — and none of the three promises may settle early, or the
+  // control would stop spinning while the origin is still thinking.
+  let settled = 0;
+  const rides = [watcher.refresh(), watcher.refresh()].map((ride) => ride.then(() => (settled += 1)));
+  await flush();
+  assert.equal(host.requests.length, 1, 'a forced read must join the read in flight, never stack behind it');
+  assert.equal(settled, 0, 'no ride may settle while its read is outstanding');
+
+  release();
+  await Promise.all(rides);
+  assert.equal(settled, 2, 'every ride settles when the read it joined lands');
+
+  // And the loop is not wedged: the next press is a fresh request.
+  await watcher.refresh();
+  assert.equal(host.requests.length, 2);
+  watcher();
+});
+
+test('refresh() after stop() is inert, and a failed read still releases it', async () => {
+  const stopped = fakeHost();
+  const watcher = watchPanel('token-usage', () => {}, { host: stopped });
+  await flush();
+  watcher();
+  await watcher.refresh();
+  assert.equal(stopped.requests.length, 1, 'a stopped watcher must issue no forced read either');
+
+  // A read that fails resolves like any other, so a control awaiting it can
+  // never latch busy forever; the envelope it delivers is the honest one.
+  const failing = fakeHost();
+  failing.fetcher = async () => {
+    failing.requests.push('boom');
+    throw new Error('network down');
+  };
+  const seen = [];
+  const live = watchPanel('token-usage', (envelope) => seen.push(envelope.status), { host: failing });
+  await flush();
+  await live.refresh();
+  assert.equal(failing.requests.length, 2);
+  assert.deepEqual(seen, ['unavailable', 'unavailable']);
+  live();
+});
+
+test('the watcher is still the stop function every caller had before', async () => {
+  const host = fakeHost();
+  const watcher = watchPanel('token-usage', () => {}, { host });
+  await flush();
+  assert.equal(typeof watcher, 'function', 'the return value must stay directly callable');
+  assert.equal(typeof watcher.refresh, 'function');
+  // Svelte binds $effect cleanup to the returned value, so calling it must
+  // still tear the loop down completely.
+  watcher();
+  assert.deepEqual(host.canceled, [0]);
+  assert.equal(host.unsubscribes, 1);
+});
+
 test('the exported cadences stay inside their documented bands', () => {
   // Fast enough that a visitor sees new data promptly, slow enough that a
   // long-open tab is not a load source. A change here is a conscious edit.

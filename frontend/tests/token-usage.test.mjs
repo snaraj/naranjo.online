@@ -163,10 +163,18 @@ describe('tokenUsageSources admission', () => {
 });
 
 describe('TokenUsagePanel source contract', () => {
-  it('renders inside the shared PanelShell with the envelope status and age', () => {
+  it('renders inside the shared PanelShell with the envelope status, age, and refresher', () => {
     assert.match(component, /import PanelShell from '\.\/PanelShell\.svelte'/);
-    assert.match(component, /<PanelShell \{title\} status=\{envelope\.status\} generatedAt=\{envelope\.generatedAt\}>/);
+    assert.match(
+      component,
+      /<PanelShell \{title\} status=\{envelope\.status\} generatedAt=\{envelope\.generatedAt\} \{refresh\}>/
+    );
     assert.match(component, /<\/PanelShell>/);
+    // The refresher must be the panel's OWN watcher, not a second request
+    // path with its own rules: a forced read has to be single-flight against
+    // the periodic one or a visitor pressing it twice costs two requests.
+    assert.match(component, /const refresh = \(\) => watcher\?\.refresh\(\)/);
+    assert.match(component, /watcher = active/);
   });
 
   it('iterates payload sources and takes every label from the data', () => {

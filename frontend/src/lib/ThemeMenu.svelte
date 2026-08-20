@@ -181,11 +181,16 @@
 
 <style>
   /* Fixed in the shell's header corner: opening the popover reflows nothing
-     and can never introduce horizontal overflow, even at 320px. */
+     and can never introduce horizontal overflow, even at 320px. The insets
+     add the safe-area values so the control clears a notch, and the explicit
+     layer keeps it above the side rail — a control the visitor cannot reach
+     because other chrome landed on top of it is a broken control, and before
+     this the menu declared no layer at all while the rail declared 10. */
   .theme-menu {
     position: fixed;
-    top: 1rem;
-    right: 1rem;
+    top: calc(1rem + env(safe-area-inset-top));
+    right: calc(1rem + env(safe-area-inset-right) + var(--page-rail-gutter, 0px));
+    z-index: var(--layer-menu, 30);
   }
 
   .trigger,
