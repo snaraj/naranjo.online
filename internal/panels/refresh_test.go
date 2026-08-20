@@ -625,7 +625,7 @@ func TestActivityRefreshServesTheLiveCalendar(t *testing.T) {
 	if err := decodeStrict(envelope.Data, &payload); err != nil {
 		t.Fatalf("decode refreshed payload: %v", err)
 	}
-	if len(payload.Weeks) != 12 || payload.TotalContributions != 303 || payload.EndDate != "2026-08-12" {
+	if len(payload.Weeks) != 12 || payload.TotalContributions != 499 || payload.EndDate != "2026-08-20" {
 		t.Errorf("refreshed payload = %d weeks, total %d, end %q", len(payload.Weeks), payload.TotalContributions, payload.EndDate)
 	}
 

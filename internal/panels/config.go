@@ -26,7 +26,12 @@ func buildBuiltinPanels() []panelDefinition {
 	definitions := []panelDefinition{
 		{id: "token-usage", kind: KindTokenUsage, title: "Token usage", source: tokenUsageSnapshot},
 		{id: "vcs-activity", kind: KindVCSActivity, title: "Version-control activity", source: vcsActivitySnapshot},
-		{id: "boss-log", kind: KindBossLog, title: "Boss log", source: bossLogSnapshot},
+		// The id and kind are the panel's stable public identity and stay put;
+		// the TITLE is display copy the owner chose, and the panel now serves
+		// the account's skills beside its boss tallies rather than a boss log
+		// alone. Renaming identity to follow copy would break every stored
+		// URL and mint a kind version for a heading change.
+		{id: "boss-log", kind: KindBossLog, title: "Old School RuneScape Stats", source: bossLogSnapshot},
 	}
 	document, bounds, err := loadFetchConfig(fetchConfigBytes)
 	if err != nil {

@@ -1,27 +1,179 @@
 {
-  "generatedAt": "2026-08-12T07:05:00Z",
+  "generatedAt": "2026-08-20T09:50:34Z",
   "data": {
     "account": "Roll The J",
+    "skills": [
+      {
+        "name": "Overall",
+        "level": 2274,
+        "rank": 138220,
+        "xp": 453846899
+      },
+      {
+        "name": "Attack",
+        "level": 99,
+        "rank": 124252,
+        "xp": 19794965
+      },
+      {
+        "name": "Defence",
+        "level": 99,
+        "rank": 130342,
+        "xp": 17046174
+      },
+      {
+        "name": "Strength",
+        "level": 99,
+        "rank": 67411,
+        "xp": 49462428
+      },
+      {
+        "name": "Hitpoints",
+        "level": 99,
+        "rank": 66336,
+        "xp": 61333268
+      },
+      {
+        "name": "Ranged",
+        "level": 99,
+        "rank": 77663,
+        "xp": 55935567
+      },
+      {
+        "name": "Prayer",
+        "level": 97,
+        "rank": 232427,
+        "xp": 11684446
+      },
+      {
+        "name": "Magic",
+        "level": 99,
+        "rank": 30049,
+        "xp": 44664619
+      },
+      {
+        "name": "Cooking",
+        "level": 99,
+        "rank": 361840,
+        "xp": 13064208
+      },
+      {
+        "name": "Woodcutting",
+        "level": 96,
+        "rank": 311082,
+        "xp": 10484086
+      },
+      {
+        "name": "Fletching",
+        "level": 94,
+        "rank": 368192,
+        "xp": 8289954
+      },
+      {
+        "name": "Fishing",
+        "level": 99,
+        "rank": 63288,
+        "xp": 14223380
+      },
+      {
+        "name": "Firemaking",
+        "level": 99,
+        "rank": 192356,
+        "xp": 13177696
+      },
+      {
+        "name": "Crafting",
+        "level": 99,
+        "rank": 170999,
+        "xp": 13186002
+      },
+      {
+        "name": "Smithing",
+        "level": 93,
+        "rank": 191571,
+        "xp": 7506436
+      },
+      {
+        "name": "Mining",
+        "level": 99,
+        "rank": 53789,
+        "xp": 15037294
+      },
+      {
+        "name": "Herblore",
+        "level": 99,
+        "rank": 57889,
+        "xp": 13507341
+      },
+      {
+        "name": "Agility",
+        "level": 87,
+        "rank": 274751,
+        "xp": 3984037
+      },
+      {
+        "name": "Thieving",
+        "level": 91,
+        "rank": 296409,
+        "xp": 6378895
+      },
+      {
+        "name": "Slayer",
+        "level": 99,
+        "rank": 53386,
+        "xp": 22074029
+      },
+      {
+        "name": "Farming",
+        "level": 99,
+        "rank": 19342,
+        "xp": 37760662
+      },
+      {
+        "name": "Runecraft",
+        "level": 83,
+        "rank": 328120,
+        "xp": 2696739
+      },
+      {
+        "name": "Hunter",
+        "level": 79,
+        "rank": 640022,
+        "xp": 1809869
+      },
+      {
+        "name": "Construction",
+        "level": 96,
+        "rank": 171242,
+        "xp": 9756056
+      },
+      {
+        "name": "Sailing",
+        "level": 72,
+        "rank": 282181,
+        "xp": 988748
+      }
+    ],
     "bosses": [
       {
         "name": "Abyssal Sire",
         "kc": 652,
-        "rank": 69650
+        "rank": 70084
       },
       {
         "name": "Alchemical Hydra",
         "kc": 563,
-        "rank": 143113
+        "rank": 143779
       },
       {
         "name": "Amoxliatl",
         "kc": 193,
-        "rank": 20322
+        "rank": 20454
       },
       {
         "name": "Araxxor",
         "kc": 441,
-        "rank": 120622
+        "rank": 121690
       },
       {
         "name": "Artio",
@@ -31,22 +183,22 @@
       {
         "name": "Barrows Chests",
         "kc": 28,
-        "rank": 943345
+        "rank": 945152
       },
       {
         "name": "Brutus",
         "kc": 524,
-        "rank": 101530
+        "rank": 102862
       },
       {
         "name": "Bryophyta",
         "kc": 20,
-        "rank": 95136
+        "rank": 95397
       },
       {
         "name": "Callisto",
         "kc": 39,
-        "rank": 208857
+        "rank": 209239
       },
       {
         "name": "Calvar'ion",
@@ -56,132 +208,132 @@
       {
         "name": "Cerberus",
         "kc": 585,
-        "rank": 154052
+        "rank": 154394
       },
       {
         "name": "Chambers of Xeric",
         "kc": 10,
-        "rank": 334057
+        "rank": 335170
       },
       {
         "name": "Chambers of Xeric: Challenge Mode",
         "kc": 13,
-        "rank": 83368
+        "rank": 84474
       },
       {
         "name": "Chaos Elemental",
         "kc": 901,
-        "rank": 1523
+        "rank": 1525
       },
       {
         "name": "Chaos Fanatic",
         "kc": 243,
-        "rank": 28233
+        "rank": 28311
       },
       {
         "name": "Commander Zilyana",
         "kc": 116,
-        "rank": 150552
+        "rank": 150887
       },
       {
         "name": "Corporeal Beast",
         "kc": 64,
-        "rank": 112659
+        "rank": 112750
       },
       {
         "name": "Crazy Archaeologist",
         "kc": 218,
-        "rank": 31854
+        "rank": 31973
       },
       {
         "name": "Dagannoth Prime",
         "kc": 813,
-        "rank": 35039
+        "rank": 35078
       },
       {
         "name": "Dagannoth Rex",
         "kc": 1007,
-        "rank": 32299
+        "rank": 32322
       },
       {
         "name": "Dagannoth Supreme",
         "kc": 889,
-        "rank": 30973
+        "rank": 30993
       },
       {
         "name": "Deranged Archaeologist",
         "kc": 64,
-        "rank": 40549
+        "rank": 40906
       },
       {
         "name": "Doom of Mokhaiotl",
         "kc": 468,
-        "rank": 11127
+        "rank": 11382
       },
       {
         "name": "Duke Sucellus",
         "kc": 416,
-        "rank": 70370
+        "rank": 71029
       },
       {
         "name": "General Graardor",
         "kc": 508,
-        "rank": 98370
+        "rank": 98533
       },
       {
         "name": "Giant Mole",
         "kc": 1428,
-        "rank": 33243
+        "rank": 33313
       },
       {
         "name": "Grotesque Guardians",
         "kc": 1103,
-        "rank": 15921
+        "rank": 16018
       },
       {
         "name": "Hespori",
         "kc": 98,
-        "rank": 109609
+        "rank": 109948
       },
       {
         "name": "Kalphite Queen",
         "kc": 614,
-        "rank": 20707
+        "rank": 20729
       },
       {
         "name": "King Black Dragon",
         "kc": 3711,
-        "rank": 4268
+        "rank": 4284
       },
       {
         "name": "Kraken",
         "kc": 3995,
-        "rank": 38526
+        "rank": 38579
       },
       {
         "name": "Kree'Arra",
         "kc": 477,
-        "rank": 42067
+        "rank": 42120
       },
       {
         "name": "K'ril Tsutsaroth",
         "kc": 523,
-        "rank": 27043
+        "rank": 27115
       },
       {
         "name": "Lunar Chests",
         "kc": 37,
-        "rank": 343259
+        "rank": 345705
       },
       {
         "name": "Mad Angel",
-        "kc": 80,
-        "rank": 31514
+        "kc": 81,
+        "rank": 35392
       },
       {
         "name": "Maggot King",
         "kc": 776,
-        "rank": 3787
+        "rank": 4226
       },
       {
         "name": "Mimic",
@@ -191,52 +343,52 @@
       {
         "name": "Nex",
         "kc": 32,
-        "rank": 177604
+        "rank": 178193
       },
       {
         "name": "Nightmare",
         "kc": 13,
-        "rank": 106271
+        "rank": 106873
       },
       {
         "name": "Phosani's Nightmare",
         "kc": 121,
-        "rank": 28855
+        "rank": 29550
       },
       {
         "name": "Obor",
         "kc": 11,
-        "rank": 170198
+        "rank": 170580
       },
       {
         "name": "Phantom Muspah",
         "kc": 593,
-        "rank": 20533
+        "rank": 20679
       },
       {
         "name": "Sarachnis",
         "kc": 1005,
-        "rank": 25343
+        "rank": 25490
       },
       {
         "name": "Scorpia",
         "kc": 757,
-        "rank": 8126
+        "rank": 8147
       },
       {
         "name": "Scurrius",
         "kc": 158,
-        "rank": 102278
+        "rank": 102565
       },
       {
         "name": "Shellbane Gryphon",
         "kc": 643,
-        "rank": 13120
+        "rank": 13607
       },
       {
         "name": "Skotizo",
         "kc": 53,
-        "rank": 68782
+        "rank": 69033
       },
       {
         "name": "Sol Heredit",
@@ -251,37 +403,37 @@
       {
         "name": "Tempoross",
         "kc": 56,
-        "rank": 539963
+        "rank": 542197
       },
       {
         "name": "The Gauntlet",
         "kc": 62,
-        "rank": 56565
+        "rank": 56704
       },
       {
         "name": "The Corrupted Gauntlet",
         "kc": 17,
-        "rank": 309041
+        "rank": 311402
       },
       {
         "name": "The Hueycoatl",
         "kc": 196,
-        "rank": 43684
+        "rank": 44064
       },
       {
         "name": "The Leviathan",
         "kc": 97,
-        "rank": 61314
+        "rank": 61912
       },
       {
         "name": "The Royal Titans",
         "kc": 293,
-        "rank": 90845
+        "rank": 91862
       },
       {
         "name": "The Whisperer",
         "kc": 180,
-        "rank": 42395
+        "rank": 42819
       },
       {
         "name": "Theatre of Blood",
@@ -296,67 +448,67 @@
       {
         "name": "Thermonuclear Smoke Devil",
         "kc": 304,
-        "rank": 196311
+        "rank": 196723
       },
       {
         "name": "Tombs of Amascut",
         "kc": 23,
-        "rank": 229600
+        "rank": 230446
       },
       {
         "name": "Tombs of Amascut: Expert Mode",
         "kc": 70,
-        "rank": 104905
+        "rank": 105407
       },
       {
         "name": "TzKal-Zuk",
         "kc": 2,
-        "rank": 32622
+        "rank": 32684
       },
       {
         "name": "TzTok-Jad",
         "kc": 24,
-        "rank": 39513
+        "rank": 39541
       },
       {
         "name": "Vardorvis",
         "kc": 1169,
-        "rank": 34476
+        "rank": 34788
       },
       {
         "name": "Venenatis",
         "kc": 256,
-        "rank": 51684
+        "rank": 51805
       },
       {
         "name": "Vet'ion",
         "kc": 71,
-        "rank": 105491
+        "rank": 105852
       },
       {
         "name": "Vorkath",
         "kc": 715,
-        "rank": 139355
+        "rank": 139597
       },
       {
         "name": "Wintertodt",
         "kc": 360,
-        "rank": 411059
+        "rank": 411679
       },
       {
         "name": "Yama",
         "kc": 467,
-        "rank": 40914
+        "rank": 41397
       },
       {
         "name": "Zalcano",
         "kc": 203,
-        "rank": 83109
+        "rank": 83403
       },
       {
         "name": "Zulrah",
         "kc": 1192,
-        "rank": 111737
+        "rank": 111856
       }
     ]
   }
