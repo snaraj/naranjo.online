@@ -134,8 +134,12 @@ producers additionally need credentials, and a source whose credential is
 absent is simply skipped.
 
 Mounted panels re-read their envelope roughly once a minute and stop entirely
-while the tab is hidden. Because each response carries a digest ETag, an
-unchanged panel costs a conditional request and a bodyless `304`.
+while the tab is hidden, and each panel's header carries a refresh control
+that forces one immediate re-read through the same single-flight path. Because
+each response carries a digest ETag, an unchanged panel costs a conditional
+request and a bodyless `304`. Upstream, a fetch-backed panel's data goes stale
+after five minutes (`ttlMinutes` in `internal/panels/config/fetch.json`), so
+the two ends of the freshness path sit inside the same 30s–5m band.
 
 ### Enabling live refresh (not enabled anywhere today)
 
@@ -143,8 +147,13 @@ Live refresh is off in every deployment this repository describes, and
 turning it on is a reviewed operational change, not a code change. It
 requires all of the following, together:
 
-1. `PANELS_REFRESH=true` in the pod environment. Any other value than
-   `true`/`false` fails the boot rather than guessing.
+1. `PANELS_REFRESH=true` in the pod environment. The chart renders that
+   variable from `panels.refresh.enabled`, which defaults to `false` and is
+   required by `chart/values.schema.json` — a values file that omits the
+   decision fails validation rather than letting the origin guess, and the
+   variable is rendered whether it is on or off so the deployed state is
+   readable off the manifest. Any value other than `true`/`false` fails the
+   boot rather than guessing.
 2. The credential environment variables named by the `keyEnvName` fields in
    `internal/panels/config/fetch.json`, supplied as cluster Secrets. They are
    read at fetch time only, flow straight into a request header, and are
@@ -155,7 +164,9 @@ requires all of the following, together:
 3. An egress allowance for the hosts in that file's `hosts` allowlist. The
    chart's NetworkPolicy is ingress-only today, so with policy unchanged the
    refresh attempts fail and the panels keep serving their snapshots as
-   `stale` — the fail-soft outcome, not an outage.
+   `stale` — the fail-soft outcome, not an outage. That allowance is tracked
+   separately as issue #79; until it lands, setting `panels.refresh.enabled`
+   would buy nothing but failed attempts.
 
 **Cluster enablement is a separate owner-reviewed step** (standing audit item
 S2) covering the Secret material, the egress policy, and the review of what

@@ -14,7 +14,7 @@ image:
   # It is locked to this chart's appVersion by the release gate's four-way
   # lock (numeric VERSION/chart version/appVersion <-> plain-v image tag), so a chart
   # claiming one release can never ship the tag of another.
-  tag: v0.1.18
+  tag: v0.1.19
   digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
   pullPolicy: IfNotPresent
 
@@ -43,6 +43,21 @@ ingress:
 media:
   enabled: false
   profile: UNRESOLVED_PI_MEDIA_STORAGE
+
+# The panel API's background refresh loops, off in every deployment this
+# repository describes. Off means NO loop is started at all, so egress is
+# impossible rather than merely unattempted, and the panels serve their
+# embedded snapshots as `stale` -- honest, not broken. Turning it on is an
+# operational decision that needs all three of: this value, the credential
+# Secrets named by `keyEnvName` in internal/panels/config/fetch.json for the
+# sources that use one, and an egress allowance for that file's `hosts` list.
+# The chart's NetworkPolicy is ingress-only today, so the egress half does not
+# exist yet (issue #79) and this stays false until it does. The schema requires
+# the key: a values file that forgot to decide fails validation rather than
+# rendering a guess.
+panels:
+  refresh:
+    enabled: false
 
 resources:
   requests:
