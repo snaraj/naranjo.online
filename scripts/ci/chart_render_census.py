@@ -51,7 +51,7 @@ REFUSE rather than misread. Every construct it does not fully understand is
 refused with the offending line named, never guessed at, so an unreadable
 render is a red gate rather than a quiet pass. That is the design goal, not a
 proof -- what is PROVEN is the bounded, re-runnable differential claim stated
-after the list, over a corpus three rounds of independent review have
+after the list, over a corpus five rounds of independent review have
 extended. Refused outright:
 
 - tabs, carriage returns, other C0 control characters, DEL, the C1 control
@@ -79,7 +79,9 @@ extended. Refused outright:
   inside a flow mapping whose colon is glued to what follows (`{a:1}` is the
   single scalar `a:1` there, with no value at all);
 - flow collections or quoted scalars that do not open and close on one line,
-  and multi-line plain scalars;
+  and multi-line plain scalars -- a value continuing onto the next line, at
+  ANY indentation, including the top level where the continuation used to be
+  read as a second document instead (see the document-boundary bullet below);
 - plain scalars whose meaning differs between YAML 1.1 and 1.2 (`yes`, `no`,
   `on`, `off`, `y`, `n`), sexagesimals (`1:30`, and `1_:0` -- the digit
   groups take underscores too), hex/octal/binary integers, exponent forms
@@ -97,7 +99,28 @@ extended. Refused outright:
 - a document-end marker (`...`) with no document to end, and any content
   after one that is not preceded by a `---` document-start line: `...` ENDS
   a document rather than separating two, and a real YAML reader accepts only
-  a directive, a `---`, another `...` or end-of-stream after it.
+  a directive, a `---`, another `...` or end-of-stream after it;
+- a SECOND document that the stream never spelled. A document boundary is
+  `---`, `...` or end-of-stream and nothing else, so a top-level node that
+  simply stops -- a plain scalar with another line under it, a block sequence
+  followed by a mapping key -- is refused rather than closed and reopened. A
+  real YAML reader either FOLDS the next line into that node or refuses the
+  stream; it never invents a boundary, and neither does this one.
+
+BLOCK SCALARS ARE TRANSCRIBED, NOT PARAPHRASED. `|` and `>` bodies are the
+one multi-line construct this reader RESOLVES, because their line semantics
+are fully specified and PyYAML 6.0.3 implements them in one readable function
+-- so exact agreement is provable and refusal would be over-reach on a
+construct every Helm render is entitled to use. `_block_scalar_body` and its
+two helpers follow `Scanner.scan_block_scalar`, `scan_block_scalar_breaks`
+and `scan_block_scalar_indentation` step for step: the block's indentation is
+the WIDEST run of leading whitespace crossed on the way to the first content
+line (so a whitespace-only line wider than the body puts the body outside the
+block, where the oracle raises and this reader refuses), a line of spaces is
+blank only while it fits inside that indentation and is CONTENT past it, and
+the folding and chomping tails are the oracle's own. A stream that does not
+end in a newline has no final break to chomp, which is why the reader records
+whether the trailing newline was there before splitting it away.
 
 WHERE PYTHON'S STRING SEMANTICS ARE NOT YAML'S. YAML whitespace is exactly
 SPACE and TAB, and tabs are refused above -- but Python's `str.strip()`,
@@ -122,7 +145,7 @@ character for character; `.5` is 0.5 to both readers and `-.5` is the string
 
 Both directions are checked against PyYAML 6.0.3 -- the oracle, never a
 dependency; nothing in this repository imports it -- over a corpus of
-Helm-render and hostile shapes. Four rounds of independent review have
+Helm-render and hostile shapes. Five rounds of independent review have
 extended that corpus, and each round measured divergences this file then
 closed:
 
@@ -163,6 +186,29 @@ closed:
   ParserError there, and `x: 1` / `...` / `foo: v` was TWO documents here and
   a ParserError there. Closed by refusal, which is agreement in that shape --
   and `a: 1` / `...` / `---` / `b: 2` still reads on both sides.
+- round five (PR #96): the two classes rounds one through four could not
+  reach, because every alphabet those rounds swept was NEWLINE-FREE and both
+  of these are about what happens across a line break.
+  First, implicit document boundaries: `documents()` started a new document
+  wherever a top-level node happened to end. `a` / `b` was ['a', 'b'] here
+  and the ONE folded scalar "a b" there; `-` / `a` was [[None], 'a'] here and
+  a ScannerError there; `x` / `kind: v` was ['x', {'kind': 'v'}] here and a
+  ScannerError there. That also FALSIFIED this file's standing claim that
+  multi-line plain scalars were refused -- the reader was not refusing them,
+  it was silently splitting the stream. Closed by refusal (`_read_document`),
+  which is agreement wherever the oracle refuses and the designed direction
+  wherever it folds; the claim above now states what the code does.
+  Second, block-scalar line semantics: `a: >` / `` / `  x` was "x\\n" here and
+  "\\nx\\n" there (a leading blank line is content); `a: |` / `  x` / `   `
+  was "x\\n" here and "x\\n \\n" there (a whitespace-only line WIDER than the
+  block indent is content, not a blank line); `a: >` / `   ` / `  x` was
+  accepted here and a ParserError there (the widest leading run SETS the
+  indent, so the body falls outside the block). This reader's own
+  newline-bearing sweep added a third member: a stream not ending in a
+  newline has no final break, so `a: |` / `  x` is "x" there and was "x\\n"
+  here. Closed by transcribing `Scanner.scan_block_scalar` and its helpers,
+  so the first two and the fourth are exact AGREEMENT and only the third --
+  the shape the oracle itself refuses -- is a refusal.
 
 Every one of those classes is closed. The claim this file makes is therefore
 a bounded, re-runnable one rather than a universal quantifier: over that
@@ -170,7 +216,8 @@ corpus there is no input this reader accepts and reads differently than
 PyYAML, and none it accepts that PyYAML refuses. Every divergence that
 remains runs the other way -- this reader refusing something PyYAML resolves
 (`2026_08`, `=` in key position, `--- x`, a `%YAML` directive reopening a
-stream after `...`) -- which is the direction that cannot hide a document.
+stream after `...`, and a plain scalar folded across a line break) -- which
+is the direction that cannot hide a document.
 
 CLI (stdin is the render for `census` and `mutate`):
 
@@ -436,10 +483,26 @@ class Reader:
         # A trailing newline terminates the last line; it does not add an
         # empty one. Keeping the split artefact would give a `|+` block
         # scalar one newline more than it really has.
-        if self.lines and self.lines[-1] == "":
+        #
+        # WHETHER the stream ended with that newline is itself a fact the
+        # block-scalar reader needs, and popping the artefact destroys it:
+        # `a: |` / `  x` WITH a final newline is "x\n" to PyYAML 6.0.3 and
+        # WITHOUT one is "x", because clip chomping appends the last line's
+        # break and an unterminated last line has none. Recording it here
+        # keeps the two streams distinguishable after the split.
+        self.ends_with_newline = bool(self.lines) and self.lines[-1] == ""
+        if self.ends_with_newline:
             self.lines.pop()
         self.i = 0
         self._check_bytes()
+
+    def _line_break_after(self, index: int) -> bool:
+        """Does line `index` end with a line break, or with end-of-stream?"""
+        if index >= len(self.lines):
+            return False
+        if index < len(self.lines) - 1:
+            return True
+        return self.ends_with_newline
 
     # -- diagnostics --------------------------------------------------------
 
@@ -523,7 +586,7 @@ class Reader:
                               "on the following lines")
                 self.i += 1
                 after_document_end = False
-                docs.append(self._document_body())
+                docs.append(self._read_document())
                 continue
             if marker == "...":
                 if stripped != "...":
@@ -540,7 +603,39 @@ class Reader:
                           "reader requires a `---` document-start line first and raises "
                           "otherwise, so a stream this gate read two documents out of is a "
                           "stream nothing installs")
-            docs.append(self._document_body())
+            docs.append(self._read_document())
+
+    def _read_document(self) -> object:
+        """One document, and then the boundary that closes it.
+
+        A DOCUMENT BOUNDARY IS SPELLED, NEVER INFERRED. `documents()` used to
+        loop straight back and start a second document wherever a top-level
+        node happened to end -- and a top-level node ends whenever the next
+        line is not more indented, which is to say almost anywhere. PyYAML
+        6.0.3 does something else entirely in every one of those shapes: it
+        FOLDS the next line into the node above (`a` / `b` is the one scalar
+        "a b" there and was TWO documents ['a', 'b'] here), or it refuses the
+        stream outright (`-` / `a` and `x` / `kind: v` are both ScannerErrors
+        there and were two documents here). Accept-and-misread and
+        accept-where-the-oracle-refuses, in this reader's own taxonomy; PR
+        #96's round-five review measured all three, and they were structurally
+        unreachable to rounds one through four because every corpus alphabet
+        those rounds swept was newline-free.
+        Refused here, with the offending line named, which also makes the
+        module's standing claim that "multi-line plain scalars are refused"
+        TRUE: the reader was not refusing them, it was silently splitting the
+        stream into documents nothing would install.
+        """
+        node = self._document_body()
+        self._skip_ignorable()
+        if self.i >= len(self.lines):
+            return node
+        if _document_marker(self.lines[self.i]) is not None:
+            return node
+        self.fail("a second document may begin only after a `---` document-start line; this "
+                  "line ends or continues the document above instead, and a real YAML reader "
+                  "either FOLDS it into that node or refuses the stream outright -- it never "
+                  "starts a new document here, so neither will this gate")
 
     def _document_body(self) -> object:
         self._skip_ignorable()
@@ -699,38 +794,147 @@ class Reader:
                 explicit = int(ch)
             else:
                 self.fail("unsupported block scalar header %r" % header, lineno)
-        content: list[str] = []
-        detected = parent_indent + explicit if explicit is not None else None
-        while self.i < len(self.lines):
-            raw = self.lines[self.i]
-            if _ascii_strip(raw) == "":
-                content.append("")
-                self.i += 1
-                continue
-            here = _indent_of(raw)
-            if here <= parent_indent:
+        return self._block_scalar_body(style, chomp, explicit, parent_indent)
+
+    # -- block scalar bodies, transcribed from the oracle --------------------
+    #
+    # WHY THIS IS A TRANSCRIPTION AND NOT A PARAPHRASE. Block-scalar line
+    # semantics are fully specified and the oracle implements them in one
+    # readable function (`Scanner.scan_block_scalar` and its three helpers in
+    # PyYAML 6.0.3), so exact agreement is PROVABLE here and refusal would be
+    # over-reach: a Helm render is entitled to a `|` block. The paraphrase
+    # that stood here before called every all-space line "blank" whatever its
+    # width, detected the block's indentation from the first non-blank line
+    # instead of from the widest leading whitespace run, and threw leading
+    # blank lines away — three separate divergences PR #96's round-five review
+    # measured:
+    #
+    #   `a: >` / `` / `  x`     -> "x\n"  here, "\nx\n" there (leading break lost)
+    #   `a: |` / `  x` / `   `  -> "x\n"  here, "x\n \n" there (a whitespace-only
+    #                              line WIDER than the block indent is CONTENT,
+    #                              not a blank line)
+    #   `a: >` / `   ` / `  x`  -> accepted here, ParserError there (the widest
+    #                              leading run SETS the indent, so the following
+    #                              line is not in the block at all)
+    #
+    # The functions below follow the oracle's own control flow step for step
+    # — its indentation scan, its break scan, its main loop, its folding rule
+    # and its chomping tail — over this reader's line list instead of a
+    # character stream. Column arithmetic replaces `self.column`, and
+    # `_line_break_after` replaces `peek() != '\0'` at a line end, because a
+    # stream whose last line carries no newline has no final break to chomp.
+    # Tabs, carriage returns and the Unicode line breaks never reach here:
+    # `_check_bytes` refuses the whole stream for any of them, so every break
+    # in this reader is exactly "\n".
+
+    def _bs_skip_indent(self, k: int, col: int, indent: int) -> int:
+        """The oracle's `while self.column < indent and self.peek() == ' '`."""
+        if k >= len(self.lines):
+            return col
+        line = self.lines[k]
+        while col < indent and col < len(line) and line[col] == " ":
+            col += 1
+        return col
+
+    def _bs_breaks(self, k: int, col: int, indent: int) -> tuple[int, int, int]:
+        """`scan_block_scalar_breaks`: the blank lines at or under `indent`.
+
+        A line is blank only once at most `indent` of its leading spaces have
+        been skipped and NOTHING is left before its break. A whitespace-only
+        line carrying MORE spaces than that is a content line whose text is
+        the surplus spaces — the exact rule `a: |` / `  x` / `   ` turns on.
+        """
+        breaks = 0
+        col = self._bs_skip_indent(k, col, indent)
+        while k < len(self.lines) and col >= len(self.lines[k]) and self._line_break_after(k):
+            breaks += 1
+            k += 1
+            col = self._bs_skip_indent(k, 0, indent)
+        return breaks, k, col
+
+    def _bs_indentation(self, k: int) -> tuple[int, int, int, int]:
+        """`scan_block_scalar_indentation`: leading breaks and the widest run.
+
+        The oracle walks spaces and line breaks together, so the widest run of
+        leading spaces it crosses — on a whitespace-only line just as much as
+        on the first content line — is what `max()` compares against the
+        parent indentation. A whitespace-only line wider than the first
+        content line therefore pushes the block's indent PAST that content,
+        which is why the oracle then reads an empty scalar and the parser
+        raises on the orphaned line.
+        """
+        breaks = 0
+        max_indent = 0
+        col = 0
+        while k < len(self.lines):
+            line = self.lines[k]
+            while col < len(line) and line[col] == " ":
+                col += 1
+                if col > max_indent:
+                    max_indent = col
+            if col < len(line) or not self._line_break_after(k):
                 break
-            if detected is None:
-                detected = here
-            if here < detected:
-                break
-            content.append(raw[detected:])
-            self.i += 1
-        trailing_blanks = 0
-        while content and content[-1] == "":
-            content.pop()
-            trailing_blanks += 1
-        if style == "|":
-            body = "\n".join(content)
+            breaks += 1
+            k += 1
+            col = 0
+        return breaks, max_indent, k, col
+
+    def _block_scalar_body(self, style: str, chomp: str, explicit: int | None,
+                           parent_indent: int) -> str:
+        folded = style == ">"
+        min_indent = max(parent_indent + 1, 1)
+        k = self.i
+        if explicit is not None:
+            indent = min_indent + explicit - 1
+            breaks, k, col = self._bs_breaks(k, 0, indent)
         else:
-            body = _fold(content)
-        if not content:
-            return "" if chomp != "+" else "\n" * trailing_blanks
-        if chomp == "-":
-            return body
+            breaks, max_indent, k, col = self._bs_indentation(k)
+            indent = max(min_indent, max_indent)
+        chunks: list[str] = []
+        line_break = ""
+        while col == indent and self._bs_has_more(k, col):
+            chunks.append("\n" * breaks)
+            line = self.lines[k]
+            leading_non_space = line[col:col + 1] != " "
+            chunks.append(line[col:])
+            if self._line_break_after(k):
+                line_break = "\n"
+                k += 1
+                col = 0
+            else:
+                line_break = ""
+                k = len(self.lines)
+                col = 0
+            breaks, k, col = self._bs_breaks(k, col, indent)
+            if col == indent and self._bs_has_more(k, col):
+                # The oracle's own folding rule, comment and all: a single
+                # break between two lines that both start with content folds
+                # to one space, and anything else keeps its break.
+                if (folded and line_break == "\n" and leading_non_space
+                        and self.lines[k][col:col + 1] != " "):
+                    if not breaks:
+                        chunks.append(" ")
+                else:
+                    chunks.append(line_break)
+            else:
+                break
+        self.i = k
+        # Chomp the tail, exactly as the oracle does: clip and keep both put
+        # the final break back, and only keep also puts the trailing blank
+        # lines back.
+        if chomp != "-":
+            chunks.append(line_break)
         if chomp == "+":
-            return body + "\n" * (1 + trailing_blanks)
-        return body + "\n"
+            chunks.append("\n" * breaks)
+        return "".join(chunks)
+
+    def _bs_has_more(self, k: int, col: int) -> bool:
+        """The oracle's `self.peek() != '\\0'` at (line, column)."""
+        if k >= len(self.lines):
+            return False
+        if col < len(self.lines[k]):
+            return True
+        return self._line_break_after(k)
 
     # -- scalars ------------------------------------------------------------
 
@@ -1021,38 +1225,6 @@ class Reader:
         if _FLOAT_RE.fullmatch(raw):
             return float(raw)
         return raw
-
-
-def _fold(content: list[str]) -> str:
-    """Fold a `>` block scalar's lines, the common rule.
-
-    More-indented lines and blank lines keep their breaks; consecutive lines
-    at the base indentation join with a single space. No assertion in this
-    module depends on folded text -- the census reads keys and short plain
-    scalars -- but a `kind` written as a folded scalar must still resolve to
-    the string it really is, which is what this supports.
-    """
-    parts: list[str] = []
-    pending_breaks = 0
-    previous_more_indented = False
-    for line in content:
-        if line == "":
-            pending_breaks += 1
-            continue
-        more_indented = line[:1] == " "
-        if not parts:
-            parts.append(line)
-        else:
-            if pending_breaks:
-                parts.append("\n" * pending_breaks)
-            elif more_indented or previous_more_indented:
-                parts.append("\n")
-            else:
-                parts.append(" ")
-            parts.append(line)
-        pending_breaks = 0
-        previous_more_indented = more_indented
-    return "".join(parts)
 
 
 def parse_documents(text: str, origin: str) -> list[object]:
@@ -1638,6 +1810,42 @@ metadata:
 spec:
 """ + _ALLOW_ALL_TAIL
 
+# PR #96's round-five review measured the two classes below. Both were
+# structurally out of reach of rounds one through four, because every corpus
+# alphabet those rounds swept was newline-free and both classes are about what
+# happens ACROSS a line break.
+#
+# A document nobody spelled. `null` is a whole, legal top-level document; the
+# reader used to end it wherever the next line was not more indented, and start
+# a SECOND document there -- so the wrapper below became a document of its own
+# although the stream never spelled a `---` in front of it. The wrapper carries
+# no items, so the census counted the same four objects and passed, while
+# PyYAML 6.0.3 refuses this stream outright: `kubectl apply` installs nothing
+# from a file the census reported GREEN on. Put a policy in those `items` and
+# the same trick is how a second document appears where a reviewer counted one.
+_SHADOW_UNSPELLED_DOCUMENT = """\
+null
+apiVersion: v1
+kind: List
+items: []
+"""
+
+# A block scalar that swallows the line after it. The block's indentation is
+# set by the WIDEST run of leading whitespace the oracle crosses on its way to
+# the first content line -- a whitespace-only line included -- so the seven
+# spaces below push the block's indent past `shadow-marker` and PyYAML 6.0.3
+# reads an EMPTY scalar and then raises on the orphaned line. This reader used
+# to call every all-space line blank whatever its width, detect the indent from
+# the first non-blank line, and read `shadow-marker` as block content: green
+# gate, unloadable render. Written under `metadata.labels`, the one part of the
+# pinned policy whose CONTENT the census does not fix, so the mutation reaches
+# the reader rather than tripping a different assertion first.
+_SHADOW_BLOCK_SCALAR_NOTE = [
+    "    shadow-note: |",
+    "       ",
+    "      shadow-marker",
+]
+
 
 def _split(text: str) -> list[str]:
     return text.split("\n")
@@ -1711,6 +1919,14 @@ def mutations(facts: ChartFacts) -> list[tuple[str, object]]:
         "          protocol: TCP",
     ]
     peer_instance_anchor = ["              app.kubernetes.io/instance: " + facts.peer_instance]
+    # The policy's own metadata head, which no other document in the render
+    # repeats: the one anchor that lets a mutation reach INSIDE the pinned
+    # policy's labels.
+    policy_labels_anchor = [
+        "  name: " + POLICY_NAME_PREFIX + name,
+        "  namespace: " + facts.namespace,
+        "  labels:",
+    ]
     shadow_source = "%s/templates/shadow-policy.yaml" % name
 
     def same_file(document: str):
@@ -1756,6 +1972,10 @@ def mutations(facts: ChartFacts) -> list[tuple[str, object]]:
         ("shadow-underscored-sexagesimal", new_file(_SHADOW_UNDERSCORED_SEXAGESIMAL)),
         ("render-separated-by-a-document-end-marker",
          lambda text: _end_a_document_with_a_marker(text)),
+        ("render-with-an-unspelled-document-boundary", new_file(_SHADOW_UNSPELLED_DOCUMENT)),
+        ("shadow-block-scalar-swallows-the-next-line",
+         lambda text: _replace_block(text, policy_labels_anchor,
+                                     policy_labels_anchor + _SHADOW_BLOCK_SCALAR_NOTE)),
         # --- the pinned policy itself, widened ------------------------------
         ("policy-egress-allow-all",
          lambda text: _replace_block(text, ["  egress: []"], ["  egress: [{}]"])),

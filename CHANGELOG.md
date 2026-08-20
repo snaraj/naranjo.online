@@ -44,7 +44,9 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   carrying a comment (`k #: v`), flow-mapping keys whose colon is glued to
   what follows (`{a:1}`), plain scalars opening with an indicator in KEY and
   VALUE position alike (`@foo:`, `` `foo: ``, `|foo:`, `>foo:`, `,foo:`),
-  unterminated flow collections or quoted scalars, multi-line plain scalars,
+  unterminated flow collections or quoted scalars, multi-line plain scalars
+  at any indentation including the top level,
+  a second document the stream never spelled `---` in front of,
   plain scalars opening with a sequence indicator, a document-end marker
   (`...`) with no document to end or with content after it and no
   intervening `---`, YAML 1.1's value key
@@ -54,14 +56,22 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   are the one number form it RESOLVES rather than refuses, so its pattern is
   PyYAML's own float-resolver decimal branches transcribed character for
   character: `.5` is 0.5 to both readers and `-.5` is the string "-.5" to
-  both. It reads YAML's whitespace as YAML defines it — space and tab only —
+  both. Block scalars are the one MULTI-LINE construct it resolves rather
+  than refuses, for the same reason and by the same method: `|` and `>`
+  bodies follow PyYAML's `scan_block_scalar` and its three helpers step for
+  step, so the block's indentation is the widest run of leading whitespace
+  crossed on the way to its first content line, a line of spaces is blank
+  only while it fits inside that indentation and is content past it, and the
+  folding and chomping tails are the oracle's own — including the fact that a
+  stream not ending in a newline has no final break to chomp.
+  It reads YAML's whitespace as YAML defines it — space and tab only —
   rather than through Python's Unicode-aware `str.strip()`/`.split()`, decides
   what a `---`/`...` document marker is from ONE shared predicate rather than
   five, and spells every regex class as a literal ASCII range rather than
   `\d`, which is PyYAML's own choice too, so `int()`/`float()` never see a
   fullwidth or Arabic-Indic digit. The reader is differentially checked
   against an out-of-tree
-  PyYAML 6.0.3 over a corpus of real-render and hostile shapes, and four
+  PyYAML 6.0.3 over a corpus of real-render and hostile shapes, and five
   rounds of independent review extended that corpus; every divergence any
   round measured — `1_000`, a leading byte-order mark, YAML 1.1 timestamps,
   plain `=`, signed leading-dot floats, colon-glued flow keys, NEL/LS/PS,
@@ -70,16 +80,30 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   Unicode whitespace silently stripped out of a scalar (`a: \xa0` was the
   value `None` here and the string `"\xa0"` there; a whole-document `\xa0`
   was zero documents here and one there; `a: |\xa0` parsed here and raised
-  there), and the document-end marker `...` (zero documents here and a
-  ParserError there; two documents here and a ParserError there) — is
+  there), the document-end marker `...` (zero documents here and a
+  ParserError there; two documents here and a ParserError there),
+  implicit document boundaries (`a`/`b` was two documents here and the one
+  folded scalar `"a b"` there; `-`/`a` and `x`/`kind: v` were two documents
+  here and ScannerErrors there), and block-scalar line semantics (`a: >`//`  x`
+  was `"x\n"` here and `"\nx\n"` there; `a: |`/`  x`/`   ` was `"x\n"` here and
+  `"x\n \n"` there; `a: >`/`   `/`  x` was accepted here and a ParserError
+  there; and a stream not ending in a newline gained a final `\n` here that
+  the oracle does not add) — is
   closed here. Over that corpus there is now no input this reader accepts
   and reads differently than PyYAML, and none it accepts that PyYAML
   refuses; the divergences that remain all run the other way, this reader
   refusing what PyYAML resolves. Nothing in this repository depends on
   PyYAML; it is the oracle, not a dependency.
+- The round-five findings also FALSIFIED a claim this module and this entry
+  both carried: that multi-line plain scalars were refused. They were not —
+  the reader was silently splitting them into separate documents, and only an
+  indented continuation ever reached the refusal. The claim is true now,
+  because the repair makes it true: a document boundary is `---`, `...` or
+  end-of-stream, and a top-level node that simply stops is refused with the
+  offending line named rather than closed and reopened.
 - `scripts/ci/chart-egress-pin.sh` grows from four assertions to seven. The
   original text pin and its 19 mutations are untouched; (c) is the
-  whole-render census, (d) rewrites the real render into 41 hostile ones —
+  whole-render census, (d) rewrites the real render into 43 hostile ones —
   same-file and new-file shadow policies with spaced, double-quoted,
   single-quoted and `\x`-escaped keys, flow-style documents, block-scalar
   kinds, generic/typed/nested/uninspectable list wrappers, a policy under a
@@ -90,11 +114,17 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   a commented key, a merge-key scalar, an underscored sexagesimal, a render
   whose last document is separated by `...` instead of `---` (which the
   census read as the same four documents and passed while PyYAML refuses the
-  whole stream), and ten
+  whole stream), a render carrying a document nobody spelled — a top-level
+  `null` followed by an empty `List` wrapper, which the pre-repair census
+  counted as the same four objects and passed while PyYAML refuses the stream
+  outright — a block scalar that swallows the line after it — a
+  whitespace-only line wider than its body, which sets the block's
+  indentation past that body so the oracle raises and the pre-repair census
+  read on and passed — and ten
   widenings of the pinned policy itself — and requires
   every one to be refused; (e) now runs the census under each values override too; (f) and
   (g) pin both batteries against being quietly shrunk.
-- `scripts/ci/test_chart_render_census.py` (108 tests) pins the reader
+- `scripts/ci/test_chart_render_census.py` (121 tests) pins the reader
   itself in the `security` job, without helm: that `kind :`, `"kind"`,
   `'kind'` and `"\x6bind"` are all the same key, that list wrappers are
   flattened into their items rather than merely rejected, that a legal
@@ -104,8 +134,11 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   resolve, `©`/`é`/CJK/emoji still read, a mid-token or sole U+00A0 stays
   part of the scalar, `\N`/`\L`/`\P` still produce their
   characters, `{a: 1}` still parses, a `...` inside a quoted or block scalar
-  is still ordinary text, and `a: 1` / `...` / `---` / `b: 2` still reads as
-  two documents. It also pins
+  is still ordinary text, `a: 1` / `...` / `---` / `b: 2` still reads as
+  two documents, a spelled `---` boundary still separates documents, and a
+  render carrying a real multi-line block-scalar label — blank line,
+  more-indented line and whitespace-only line inside it — still reads byte
+  for byte as PyYAML reads it and still censuses green. It also pins
   the shell script's mutation floor against the battery's real size, so the
   two cannot disagree.
 

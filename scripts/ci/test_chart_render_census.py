@@ -5,7 +5,7 @@ document scan that a second `NetworkPolicy` could walk straight past by
 spelling its keys `kind :` and `spec :` -- valid YAML, invisible to a
 prefix match, and an additive allow-all for every Pod once Kubernetes has
 it. The behavioural half of the proof lives in `chart-egress-pin.sh`, whose
-assertions (d) and (g) rewrite the REAL Helm render into 41 hostile ones and
+assertions (d) and (g) rewrite the REAL Helm render into 43 hostile ones and
 require the census to refuse every single one. This suite is the other half:
 it pins the reader itself, one rejection per test, without needing helm --
 so it runs in the `security` job alongside the other contract suites, which
@@ -221,6 +221,114 @@ class ReaderReadsRealYAML(unittest.TestCase):
         self.assertEqual(parse("a: |\n  x\n\n"), [{"a": "x\n"}])
         self.assertEqual(parse("a: |-\n  x\n\n"), [{"a": "x"}])
         self.assertEqual(parse("a: |+\n  x\n\n"), [{"a": "x\n\n"}])
+
+    def test_the_whole_chomping_grid(self):
+        # Clip, strip and keep, literal and folded, with and without trailing
+        # blank lines. Every value below is PyYAML 6.0.3's own on the same
+        # input: clip keeps ONE final break, strip keeps none, keep keeps them
+        # all, and a body with no content at all still keeps what `+` promises.
+        self.assertEqual(parse("a: |\n  x\n"), [{"a": "x\n"}])
+        self.assertEqual(parse("a: |-\n  x\n"), [{"a": "x"}])
+        self.assertEqual(parse("a: |+\n  x\n"), [{"a": "x\n"}])
+        self.assertEqual(parse("a: >\n  x\n"), [{"a": "x\n"}])
+        self.assertEqual(parse("a: >-\n  x\n"), [{"a": "x"}])
+        self.assertEqual(parse("a: >+\n  x\n"), [{"a": "x\n"}])
+        self.assertEqual(parse("a: |\n  x\n\n\n"), [{"a": "x\n"}])
+        self.assertEqual(parse("a: |-\n  x\n\n\n"), [{"a": "x"}])
+        self.assertEqual(parse("a: |+\n  x\n\n\n"), [{"a": "x\n\n\n"}])
+        self.assertEqual(parse("a: |\nb: 2\n"), [{"a": "", "b": 2}])
+        self.assertEqual(parse("a: |\n\n\n"), [{"a": ""}])
+        self.assertEqual(parse("a: |+\n\n\n"), [{"a": "\n\n"}])
+        self.assertEqual(parse("a: |+\n\n\nb: 2\n"), [{"a": "\n\n", "b": 2}])
+
+    def test_a_block_scalar_keeps_its_leading_blank_lines(self):
+        # PR #96's round-five review measured this one: `a: >` / `` / `  x` was
+        # "x\n" here and "\nx\n" to PyYAML 6.0.3, because the folder threw a
+        # leading break away when nothing had been emitted yet. A leading blank
+        # line is CONTENT -- and content dropped out of a scalar is content a
+        # reviewer never reads. Closed by transcribing the oracle rather than
+        # by refusing, so these are AGREEMENT tests.
+        self.assertEqual(parse("a: >\n\n  x\n"), [{"a": "\nx\n"}])
+        self.assertEqual(parse("a: |\n\n  x\n"), [{"a": "\nx\n"}])
+        self.assertEqual(parse("a: |\n\n\n  x\n"), [{"a": "\n\nx\n"}])
+        self.assertEqual(parse("a: >+\n\n  x\n"), [{"a": "\nx\n"}])
+        self.assertEqual(parse("a: >-\n\n  x\n"), [{"a": "\nx"}])
+        self.assertEqual(parse("a: |2\n\n   x\n"), [{"a": "\n x\n"}])
+        self.assertEqual(parse("top:\n  a: >\n\n    x\n"), [{"top": {"a": "\nx\n"}}])
+
+    def test_a_whitespace_only_line_is_blank_only_up_to_the_block_indent(self):
+        # The second round-five member: `a: |` / `  x` / `   ` was "x\n" here
+        # and "x\n \n" there. A line of spaces is a BLANK line only while it
+        # fits inside the block's indentation; one space wider and the surplus
+        # is scalar content. Three spaces against a two-space block is one
+        # space of content, four spaces is two, and one or two spaces is a
+        # blank line -- PyYAML 6.0.3's answer on each.
+        self.assertEqual(parse("a: |\n  x\n \n"), [{"a": "x\n"}])
+        self.assertEqual(parse("a: |\n  x\n  \n"), [{"a": "x\n"}])
+        self.assertEqual(parse("a: |\n  x\n   \n"), [{"a": "x\n \n"}])
+        self.assertEqual(parse("a: |\n  x\n    \n"), [{"a": "x\n  \n"}])
+        self.assertEqual(parse("a: |\n  x\n   \n  y\n"), [{"a": "x\n \ny\n"}])
+        self.assertEqual(parse("a: >\n  x\n   \n  y\n"), [{"a": "x\n \ny\n"}])
+        self.assertEqual(parse("a: |\n  x\n \n  y\n"), [{"a": "x\n\ny\n"}])
+        self.assertEqual(parse("top:\n  a: |\n    x\n     \n"), [{"top": {"a": "x\n \n"}}])
+
+    def test_the_folding_rule_is_the_oracle_s_own(self):
+        # A single break between two content lines folds to one space; a blank
+        # line, or a more-indented line on either side, keeps every break.
+        self.assertEqual(parse("a: >\n  x\n  y\n"), [{"a": "x y\n"}])
+        self.assertEqual(parse("a: >\n  x\n\n  y\n"), [{"a": "x\ny\n"}])
+        self.assertEqual(parse("a: >\n  x\n\n\n  y\n"), [{"a": "x\n\ny\n"}])
+        self.assertEqual(parse("a: >\n  x\n   y\n  z\n"), [{"a": "x\n y\nz\n"}])
+        self.assertEqual(parse("a: |\n  x\n  y\n"), [{"a": "x\ny\n"}])
+        self.assertEqual(parse("a: |\n  x\n\n  y\n"), [{"a": "x\n\ny\n"}])
+
+    def test_an_explicit_indentation_indicator_counts_from_the_parent(self):
+        self.assertEqual(parse("a: |2\n   x\n"), [{"a": " x\n"}])
+        self.assertEqual(parse("a: |2\n  x\n"), [{"a": "x\n"}])
+        self.assertEqual(parse("a: |1\n x\n"), [{"a": "x\n"}])
+        self.assertEqual(parse("a: |4\n    x\n"), [{"a": "x\n"}])
+        self.assertEqual(parse("a: >2\n   x\n"), [{"a": " x\n"}])
+        self.assertEqual(parse("top:\n  a: |2\n     x\n"), [{"top": {"a": " x\n"}}])
+
+    def test_a_stream_that_does_not_end_in_a_newline_has_no_final_break(self):
+        # Not in the round-five receipt -- this reader's own newline-bearing
+        # sweep found it. Clip chomping appends the LAST LINE'S break, and an
+        # unterminated final line has none, so `a: |` / `  x` is "x" to PyYAML
+        # 6.0.3 with no trailing newline and "x\n" with one. Splitting the
+        # stream on "\n" and popping the empty tail destroyed that distinction,
+        # so both spellings read "x\n" here: an accept-and-misread over 3,774
+        # members of the round-five block-scalar sweep alone.
+        self.assertEqual(parse("a: |\n  x"), [{"a": "x"}])
+        self.assertEqual(parse("a: |\n  x\n"), [{"a": "x\n"}])
+        self.assertEqual(parse("a: |-\n  x"), [{"a": "x"}])
+        self.assertEqual(parse("a: |+\n  x"), [{"a": "x"}])
+        self.assertEqual(parse("a: >\n  x"), [{"a": "x"}])
+        self.assertEqual(parse("a: |\n  x\n  y"), [{"a": "x\ny"}])
+        self.assertEqual(parse("a: 1"), [{"a": 1}])
+        # An unterminated line of pure whitespace is not a line the block ever
+        # enters: end-of-stream stops the scan before the first content line,
+        # so clip and strip both give the empty scalar and only `+` keeps the
+        # blank line above it. Each answer is PyYAML 6.0.3's own.
+        self.assertEqual(parse("a: |\n\n "), [{"a": ""}])
+        self.assertEqual(parse("a: >\n\n "), [{"a": ""}])
+        self.assertEqual(parse("a: |-\n\n "), [{"a": ""}])
+        self.assertEqual(parse("a: |+\n\n "), [{"a": "\n"}])
+        self.assertEqual(parse("a: |\n\n  "), [{"a": ""}])
+        self.assertEqual(parse("a: |\n  x\n  "), [{"a": "x\n"}])
+        self.assertEqual(parse("top:\n  a: |\n\n   "), [{"top": {"a": ""}}])
+
+    def test_a_document_boundary_may_be_spelled_and_still_reads(self):
+        # The acceptance companion to the refusal below: a document really
+        # ended by `---`, by `...`, by end-of-stream, or by a comment or blank
+        # line before end-of-stream still reads on both sides.
+        self.assertEqual(parse("a\n---\nb\n"), ["a", "b"])
+        self.assertEqual(parse("a\n...\n"), ["a"])
+        self.assertEqual(parse("a\n"), ["a"])
+        self.assertEqual(parse("a\n# c\n"), ["a"])
+        self.assertEqual(parse("a\n\n"), ["a"])
+        self.assertEqual(parse("a: 1\n\nb: 2\n"), [{"a": 1, "b": 2}])
+        self.assertEqual(parse("- a: 1\n  b: 2\n- c: 3\n"), [[{"a": 1, "b": 2}, {"c": 3}]])
+        self.assertEqual(parse("a: >\n   \nb: 2\n"), [{"a": "", "b": 2}])
 
     def test_a_document_marker_inside_a_block_scalar_does_not_split_the_stream(self):
         docs = parse("data: |\n  ---\n  kind: NetworkPolicy\nkind: ConfigMap\n")
@@ -749,6 +857,51 @@ class ReaderFailsClosed(unittest.TestCase):
         self.reject("a:\n  - 1\n...\nb: 2\n", "content after a document-end marker")
         self.reject("x: 1\n...\nfoo: v\n", "line 3")
 
+    def test_a_document_boundary_is_spelled_never_inferred(self):
+        # PR #96's round-five review measured this class, and it was
+        # structurally unreachable to rounds one through four because every
+        # alphabet they swept was newline-free. `documents()` started a new
+        # document wherever a top-level node happened to end -- which is
+        # wherever the next line is not more indented. PyYAML 6.0.3 does
+        # something else in every one of these: it FOLDS the next line into the
+        # node above (`a` / `b` is the ONE scalar "a b" there and was ['a','b']
+        # here) or it refuses the stream outright (`-` / `a` and `x` /
+        # `kind: v` are both ScannerErrors there and were two documents here).
+        # A document boundary is spelled `---`; it is never inferred.
+        for text in ("a\nb\n", "a\nb\nc\n", "-\na\n", "x\nkind: v\n",
+                     "[1]\nb\n", "{a: 1}\nb\n", '"q"\nb\n', "'q'\nb\n",
+                     "- a\nb: 1\n", "-\n- a\nb\n", "null\napiVersion: v1\n"):
+            self.reject(text, "may begin only after a `---` document-start line")
+        self.reject("a\nb\n", "line 2")
+        self.reject("-\n- a\nb\n", "line 3")
+
+    def test_the_multi_line_plain_scalar_claim_is_now_true(self):
+        # The claim this module has carried since it was written was FALSE at
+        # the round-four head: the reader was not refusing a plain scalar that
+        # continued onto the next line, it was silently splitting the stream
+        # into documents. An indented continuation hit the older refusal; a
+        # continuation at the same indentation hit nothing at all. Both refuse
+        # now, so the claim states what the code does.
+        self.reject("a\n b\n", "multi-line plain scalars are refused")
+        self.reject("a\n  b\n", "multi-line plain scalars are refused")
+        self.reject("---\nNetwork\n  Policy\n", "multi-line plain scalars are refused")
+        self.reject("kind: Network\n  Policy\n", "unexpected indentation")
+        self.reject("kind: NetworkPolicy\nshadow\n", "neither a mapping key")
+
+    def test_a_wide_whitespace_only_line_pushes_the_block_indent_past_its_content(self):
+        # The third round-five member, and the one repaired by REFUSAL rather
+        # than by agreement -- because the oracle refuses it too. The block's
+        # indentation is the widest run of leading whitespace the oracle
+        # crosses on its way to the first content line, a whitespace-only line
+        # included, so three spaces above a two-space body put the body OUTSIDE
+        # the block: PyYAML 6.0.3 reads an empty scalar and its parser then
+        # raises on the orphaned line. This reader used to swallow the line as
+        # block content and read on -- accept-where-the-oracle-refuses.
+        self.reject("a: >\n   \n  x\n", "unexpected indentation inside a block mapping")
+        self.reject("a: |\n   \n  x\n", "unexpected indentation inside a block mapping")
+        self.reject("top:\n  a: >\n     \n    x\n", "unexpected indentation")
+        self.reject("a: >\n   \n  x\n", "line 3")
+
     def test_a_unicode_space_does_not_make_a_document_marker(self):
         # `raw.strip()` turned `---\xa0` and `...\xa0` into markers here while
         # PyYAML reads them as ordinary plain scalars (its own check wants a
@@ -786,6 +939,28 @@ class CensusAcceptsThePinnedRender(CensusFixture):
         self.assertEqual(self.facts.peer_app_name, FIXTURE_PEER_APP)
         self.assertEqual(self.facts.peer_instance, FIXTURE_PEER_INSTANCE)
         self.assertEqual(self.facts.service_port, FIXTURE_PORT)
+
+    def test_a_render_carrying_a_multi_line_value_still_passes(self):
+        # The acceptance companion to the round-five refusals: tightening the
+        # document boundary and transcribing the block-scalar rules must not
+        # cost a render a legal multi-line value. The label below is a literal
+        # block scalar with a blank line, a more-indented line and a
+        # whitespace-only line inside it -- and it still reads, byte for byte,
+        # as PyYAML 6.0.3 reads it, while the census still counts four objects.
+        note = ("    note: |\n"
+                "      first\n"
+                "\n"
+                "       indented\n"
+                "       \n"
+                "      last\n")
+        base = render()
+        anchor = "    app.kubernetes.io/name: %s\n" % FIXTURE_CHART_NAME
+        self.assertIn(anchor, base)
+        mutated = base.replace(anchor, anchor + note, 1)
+        self.assertEqual(self.census(mutated)["objects"], 4)
+        policy = self.census(mutated)["policy"]
+        self.assertEqual(policy["metadata"]["labels"]["note"],
+                         "first\n\n indented\n \nlast\n")
 
     def test_the_peer_instance_may_be_stated_by_the_caller(self):
         facts = CRC.ChartFacts(self.chart, FIXTURE_RELEASE, FIXTURE_NAMESPACE, "another-instance")
@@ -901,6 +1076,35 @@ class CensusRefusesASecondPolicy(CensusFixture):
     def test_any_extra_document_trips_the_inventory(self):
         extra = "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: extra\n"
         self.reject(render() + extra, "object inventory is not the pinned one")
+
+    def test_a_document_nobody_spelled_is_refused(self):
+        # The round-five shadow, at census scale. A top-level `null` is a whole
+        # legal document; the reader used to END it at the next line and open a
+        # SECOND document there, although the stream spelled no `---`. The
+        # wrapper below carries no items, so the census counted the same four
+        # objects and passed -- while PyYAML 6.0.3 refuses this stream outright
+        # and `kubectl apply` would install nothing from a file this gate had
+        # just reported green on. Put a policy in those `items` and the same
+        # trick is how a second policy appears where a reviewer counted one.
+        conjured = "---\nnull\napiVersion: v1\nkind: List\nitems: []\n"
+        self.reject(render() + conjured,
+                    "may begin only after a `---` document-start line")
+
+    def test_a_block_scalar_that_swallows_the_next_line_is_refused(self):
+        # The other round-five shadow: a whitespace-only line WIDER than the
+        # block body sets the block's indentation past that body, so the oracle
+        # reads an empty scalar and raises on the orphaned line. This reader
+        # used to swallow the line as block content and read on. Written under
+        # `metadata.labels`, whose CONTENT the census deliberately does not
+        # pin, so the mutation reaches the reader instead of tripping a
+        # different assertion first.
+        base = render()
+        anchor = "    app.kubernetes.io/name: %s\n" % FIXTURE_CHART_NAME
+        self.assertIn(anchor, base)
+        swallowed = base.replace(
+            anchor, anchor + "    shadow-note: |\n       \n      shadow-marker\n", 1)
+        self.assertNotEqual(swallowed, base)
+        self.reject(swallowed, "unexpected indentation inside a block mapping")
 
     def test_a_missing_document_trips_the_inventory(self):
         text = render()
