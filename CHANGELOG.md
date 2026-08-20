@@ -7,6 +7,38 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.23] - 2026-08-20
+
+### Fixed
+
+- Releases publish again. GitHub added
+  `require_extra_approval_for_unattributed_changes` to the live `Protect-Main`
+  `pull_request` rule on 2026-08-20; the publisher's fail-closed settings
+  preflight compares that rule's parameters for exact equality against
+  `EXPECTED_PULL_REQUEST_PARAMETERS`, so the unknown field denied with
+  `DENY: pull-request rule parameters are not exact` and 0.1.20, 0.1.21 and
+  0.1.22 merged without ever being published (issue #91). The gate was right —
+  the settings surface had drifted from the anchor — so the remedy is a
+  deliberate re-anchor, not a weaker compare: the pin gains the field at its
+  live value `True`, the stricter direction, under which a change not
+  attributed to the pushing actor needs an extra approval. Every agent commit
+  here is authored and committed as the owner's noreply identity and
+  SSH-signed, so it is attributed and no flow changes.
+- The closed-set discipline is unchanged in both halves, and that is the
+  point: the compare still rejects a missing field, a wrong value, and the
+  NEXT unknown field GitHub invents. `scripts/ci/test_release_contract.py`
+  pins the exact live parameter object field for field and drives the real
+  `observe_live_settings` path over the pre-fix shape (absent), the inverted
+  shape (`False`), and a further-foreign-field shape — all three deny with
+  that same message — while the corrected shape builds a receipt.
+- The value-only readiness receipt carries the new field too
+  (`build_settings_receipt` derives it; `validate_settings_receipt`'s closed
+  schema requires it exact), so the owner-run `settings-receipt` check proves
+  the setting offline rather than trusting the ruleset read alone.
+  `docs/release-governance.md` moves in lockstep: the canonical receipt JSON
+  gains the field, and the CI-proven column records both the pin and why a
+  field GitHub adds is as fatal as one it drops.
+
 ## [0.1.22] - 2026-08-20
 
 ### Added

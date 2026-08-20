@@ -524,6 +524,7 @@ def settings_receipt() -> dict[str, object]:
         "dismiss_stale_reviews_on_push": False,
         "required_reviewers": [],
         "require_code_owner_review": False,
+        "require_extra_approval_for_unattributed_changes": True,
         "require_last_push_approval": False,
         "required_review_thread_resolution": True,
         "required_status_checks": [
@@ -627,6 +628,7 @@ def settings_api() -> dict[str, object]:
                         "dismiss_stale_reviews_on_push": False,
                         "required_reviewers": [],
                         "require_code_owner_review": False,
+                        "require_extra_approval_for_unattributed_changes": True,
                         "require_last_push_approval": False,
                         "required_review_thread_resolution": True,
                         "allowed_merge_methods": ["squash", "rebase"],
@@ -1105,6 +1107,7 @@ class SettingsReceiptTests(unittest.TestCase):
             '"dismiss_stale_reviews_on_push": false',
             '"required_reviewers": []',
             '"require_code_owner_review": false',
+            '"require_extra_approval_for_unattributed_changes": true',
             '"require_last_push_approval": false',
             '"required_review_thread_resolution": true',
             '"require_linear_history": true',
@@ -1160,6 +1163,7 @@ class SettingsReceiptTests(unittest.TestCase):
             ("dismiss_stale_reviews_on_push", True),
             ("required_reviewers", [{"foreign": True}]),
             ("require_code_owner_review", True),
+            ("require_extra_approval_for_unattributed_changes", False),
             ("require_last_push_approval", True),
             ("required_review_thread_resolution", False),
             ("require_linear_history", False),
@@ -1325,6 +1329,7 @@ class SettingsReceiptTests(unittest.TestCase):
             ("dismiss_stale_reviews_on_push", True),
             ("required_reviewers", [{"foreign": True}]),
             ("require_code_owner_review", True),
+            ("require_extra_approval_for_unattributed_changes", False),
             ("require_last_push_approval", True),
             ("required_review_thread_resolution", False),
         ):
@@ -1430,6 +1435,79 @@ class SettingsReceiptTests(unittest.TestCase):
         for index, changed in enumerate(mutations):
             with self.subTest(raw_mutation=index), self.assertRaises(RC.ContractError):
                 self.observe(changed)
+
+    def test_unattributed_approval_parameter_is_pinned_to_the_live_rule(self):
+        # Issue #91.  On 2026-08-20 GitHub began returning
+        # require_extra_approval_for_unattributed_changes in the live
+        # Protect-Main pull_request rule.  The exact compare denied with
+        # "pull-request rule parameters are not exact" -- correctly, because a
+        # foreign field means the enforcing surface moved out from under the
+        # anchor -- and releases 0.1.20, 0.1.21 and 0.1.22 stayed unpublished.
+        # The re-anchor pins the field at its live value True (the stricter
+        # direction), and this test binds the pin to the EXACT parameter object
+        # the live ruleset returns, field for field, so a future silent drift
+        # in either direction is a red test rather than a stuck release.
+        live_parameters = {
+            "allowed_merge_methods": ["squash", "rebase"],
+            "dismiss_stale_reviews_on_push": False,
+            "require_code_owner_review": False,
+            "require_extra_approval_for_unattributed_changes": True,
+            "require_last_push_approval": False,
+            "required_approving_review_count": 0,
+            "required_review_thread_resolution": True,
+            "required_reviewers": [],
+        }
+        self.assertEqual(RC.EXPECTED_PULL_REQUEST_PARAMETERS, live_parameters)
+
+        def observed_with(parameters: dict[str, object]) -> dict[str, object]:
+            records = settings_api()
+            pull = next(
+                rule
+                for rule in records["repos/owner/site/rulesets/42"]["rules"]
+                if rule["type"] == "pull_request"
+            )
+            pull["parameters"] = copy.deepcopy(parameters)
+            return records
+
+        receipt = self.observe(observed_with(live_parameters))
+        self.assertIs(receipt["require_extra_approval_for_unattributed_changes"], True)
+        RC.validate_settings_receipt(receipt, "owner/site")
+
+        absent = copy.deepcopy(live_parameters)
+        del absent["require_extra_approval_for_unattributed_changes"]
+        for name, parameters in (
+            # The exact pre-fix live shape: the pin must no longer accept it.
+            ("absent", absent),
+            (
+                "wrong-value",
+                {**live_parameters, "require_extra_approval_for_unattributed_changes": False},
+            ),
+            # The closed set stays closed: re-anchoring one field must not have
+            # taught the compare to tolerate the NEXT unknown field.
+            ("further-foreign-field", {**live_parameters, "require_signature_hardening": True}),
+        ):
+            with self.subTest(pull_parameters=name):
+                with self.assertRaises(RC.ContractError) as caught:
+                    self.observe(observed_with(parameters))
+                self.assertIn(
+                    "pull-request rule parameters are not exact", str(caught.exception)
+                )
+
+        # The receipt half is closed and exact-valued too, so a receipt that
+        # drops, inverts, or stringifies the field can never be Ready.
+        for mutation in (
+            "delete",
+            False,
+            "true",
+            None,
+        ):
+            changed = copy.deepcopy(receipt)
+            if mutation == "delete":
+                del changed["require_extra_approval_for_unattributed_changes"]
+            else:
+                changed["require_extra_approval_for_unattributed_changes"] = mutation
+            with self.subTest(receipt_mutation=mutation), self.assertRaises(RC.ContractError):
+                RC.validate_settings_receipt(changed, "owner/site")
 
     def test_merge_methods_bind_to_the_enforcing_ruleset_under_the_ci_credential(self):
         # The publisher mints an Administration-read App token, and GitHub
@@ -1699,6 +1777,7 @@ class SettingsReceiptTests(unittest.TestCase):
             '"context": "security", "integration_id": 15368',
             '"strict_status_checks": true',
             '"require_pull_request": true',
+            '"require_extra_approval_for_unattributed_changes": true',
             '"require_linear_history": true',
             '"require_signed_commits": true',
             '"allow_force_pushes": false',
@@ -1737,6 +1816,10 @@ class SettingsReceiptTests(unittest.TestCase):
             ('"allow_deletions": false', '"allow_deletions": true'),
             ('"restrict_updates": false', '"restrict_updates": true'),
             ('"require_signed_commits": true', '"require_signed_commits": false'),
+            (
+                '"require_extra_approval_for_unattributed_changes": true',
+                '"require_extra_approval_for_unattributed_changes": false',
+            ),
             ('"secret_scanning": true', '"secret_scanning": false'),
             (
                 '"secret_scanning_push_protection": true',
