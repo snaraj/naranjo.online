@@ -7,6 +7,40 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-08-20
+
+### Security
+
+- The release publisher gates before it signs. The HIGH/CRITICAL final-image
+  scan now runs immediately after digest resolution and BEFORE `cosign sign`
+  and the SLSA attestation step, matching the sibling repository's
+  arrangement. Previously the publisher signed the digest, attached
+  attestations, and only then scanned, so run 32195803008 (v0.1.15) put a
+  vulnerable image — 8 HIGH Go 1.26.5 standard-library CVEs — into GHCR
+  carrying this repository's release identity before the gate refused it.
+  A gated-out digest is now never signed: it stays an unsigned pushed alias,
+  which the artifact classifier reads as `burned` and the digest resolver
+  refuses as unpublishable.
+
+### Fixed
+
+- The publisher's step-order contract had no opinion on signing at all. Its
+  ordering chain pinned `registry < scan < alias < manifest < Release <
+  terminal`, and the literals `Sign the immutable image digest` and
+  `Attach the BuildKit SLSA provenance` appeared nowhere in the contract
+  suite, so the sign-then-gate publisher satisfied every assertion. The
+  chain now pins `registry < digest < scan < sign < attest < alias <
+  manifest < Release < terminal`, requires exactly one step of each of
+  those three names, and refuses any `if:` condition on the gate so a
+  reused `complete` digest is still rescanned against the current
+  vulnerability database. Four hostile mutants prove it: the gate restored
+  below signing (the exact pre-fix workflow), the gate deleted, the gate
+  made conditional on a fresh build, and a duplicated second gate copy.
+- The artifact classifier pins the residue a denied gate now leaves —
+  present, provenance- and SBOM-matched, unsigned, zero attestations —
+  as `burned`, so a consumed tag needs an operator instead of a silent
+  republish over a vulnerable digest.
+
 ## [0.1.18] - 2026-08-19
 
 ### Fixed
