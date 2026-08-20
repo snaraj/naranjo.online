@@ -153,9 +153,12 @@ requires all of the following, together:
    unset is simply skipped; it is never an error and never a fabricated
    number.
 3. An egress allowance for the hosts in that file's `hosts` allowlist. The
-   chart's NetworkPolicy is ingress-only today, so with policy unchanged the
-   refresh attempts fail and the panels keep serving their snapshots as
-   `stale` — the fail-soft outcome, not an outage.
+   chart's NetworkPolicy denies every outbound connection — it declares the
+   `Egress` policy type over an empty rule list — so with policy unchanged
+   the refresh attempts fail and the panels keep serving their snapshots as
+   `stale` — the fail-soft outcome, not an outage. Turning that into an
+   allowance means naming exact destinations in a separately reviewed change
+   (issue #79); it never means removing the deny.
 
 **Cluster enablement is a separate owner-reviewed step** (standing audit item
 S2) covering the Secret material, the egress policy, and the review of what
