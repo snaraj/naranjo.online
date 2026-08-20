@@ -1575,7 +1575,14 @@ class ArtifactStateTests(unittest.TestCase):
     def test_absent_complete_and_every_partial_state(self):
         self.assertEqual(RC.classify_artifact(present=False, source_match=False, signature_match=False, evidence_count=0, expected_evidence=2), "absent")
         self.assertEqual(RC.classify_artifact(present=True, source_match=True, signature_match=True, evidence_count=2, expected_evidence=2), "complete")
-        for source, signed, count in ((False, True, 2), (True, False, 2), (True, True, 0), (True, True, 1), (True, True, 3)):
+        # (True, False, 0) is the exact residue a gate-before-sign publisher
+        # leaves when the HIGH/CRITICAL scan denies (issue #69): Buildx has
+        # already pushed the alias, so the digest is present with matching
+        # provenance and SBOMs, but nothing signed it and no attestation
+        # exists. It must classify burned, which the resolver then refuses as
+        # an unpublishable state -- the tag is consumed and needs an operator,
+        # never a silent republish over a vulnerable digest.
+        for source, signed, count in ((False, True, 2), (True, False, 2), (True, False, 0), (True, True, 0), (True, True, 1), (True, True, 3)):
             with self.subTest(source=source, signed=signed, count=count):
                 self.assertEqual(RC.classify_artifact(present=True, source_match=source, signature_match=signed, evidence_count=count, expected_evidence=2), "burned")
         with self.assertRaises(RC.ContractError):
@@ -4885,9 +4892,28 @@ class WorkflowStructureTests(unittest.TestCase):
         registry_index = publisher.index("      - name: Classify an absent, complete, or burned image tag")
         if tag_index >= registry_index:
             raise ValueError("exact tag transaction must precede registry side effects")
-        scan_index = publisher.index(
+        # Issue #69: this chain pinned the scan's position relative to the
+        # alias/manifest/Release stages but said NOTHING about signing, so a
+        # publisher that signed the digest and gated it afterwards satisfied
+        # every assertion -- and did, leaving a HIGH-vulnerable v0.1.15 image
+        # in GHCR carrying this repository's release identity. The gate now
+        # stands between digest resolution and the signing pair, and both
+        # signing steps carry pinned positions so the order cannot silently
+        # revert.
+        scan_heading = (
             "      - name: Reject high or critical vulnerabilities in the final image digest"
         )
+        sign_heading = "      - name: Sign the immutable image digest"
+        attest_heading = (
+            "      - name: Attach the BuildKit SLSA provenance as cosign attestations"
+        )
+        for heading in (scan_heading, sign_heading, attest_heading):
+            if publisher.count(heading) != 1:
+                raise ValueError(f"publisher must carry exactly one step named:{heading.split(':', 1)[1]}")
+        digest_index = publisher.index(image_resolver_heading)
+        scan_index = publisher.index(scan_heading)
+        sign_index = publisher.index(sign_heading)
+        attest_index = publisher.index(attest_heading)
         alias_index = publisher.index(alias_heading)
         manifest_index = publisher.index(
             "      - name: Build the deterministic release evidence manifest"
@@ -4899,10 +4925,28 @@ class WorkflowStructureTests(unittest.TestCase):
             "      - name: Re-bind the immutable Release to the exact annotated tag"
         )
         if not (
-            registry_index < scan_index < alias_index < manifest_index < release_index < terminal_index
+            registry_index
+            < digest_index
+            < scan_index
+            < sign_index
+            < attest_index
+            < alias_index
+            < manifest_index
+            < release_index
+            < terminal_index
         ):
             raise ValueError(
-                "scan, alias rebind, manifest, Release, and terminal binding order is not exact"
+                "digest resolution, HIGH/CRITICAL gate, signing, attestation, alias "
+                "rebind, manifest, Release, and terminal binding order is not exact"
+            )
+        # The gate covers the reused `complete` digest as well as the freshly
+        # built one: an image published by an earlier run is rescanned against
+        # today's vulnerability database before it can be released. A build-only
+        # condition here would restore exactly that hole.
+        gate_step = publisher.split(scan_heading, 1)[1].split(sign_heading, 1)[0]
+        if re.search(r"(?m)^        if:", gate_step):
+            raise ValueError(
+                "the final-digest vulnerability gate must stay unconditional"
             )
         if terminal_index <= release_index or publisher.rfind("      - name:") != terminal_index:
             raise ValueError("the post-immutable tag rebind must be the terminal publisher step")
@@ -5404,6 +5448,40 @@ class WorkflowStructureTests(unittest.TestCase):
             ("alias proof moved after manifest", displaced_alias),
         ):
             with self.subTest(registry_alias_mutant=mutant_name), self.assertRaises(ValueError):
+                self.require_exact_release_wiring(orchestrator, mutation)
+        # Issue #69's exact regression, rebuilt from the live publisher text:
+        # lift the whole gate step out from between digest resolution and
+        # signing, and drop it back where it used to live -- after the SLSA
+        # attestation step, immediately before the chart classifier. That is
+        # byte-for-byte the sign-then-gate publisher that signed a HIGH image.
+        scan_heading = (
+            "      - name: Reject high or critical vulnerabilities in the final image digest"
+        )
+        sign_heading = "      - name: Sign the immutable image digest"
+        chart_state_heading = "      - name: Classify an absent, complete, or burned chart version"
+        gate_block = scan_heading + publisher.split(scan_heading, 1)[1].split(sign_heading, 1)[0]
+        gate_removed = publisher.replace(gate_block, "", 1)
+        for mutant_name, mutation in (
+            (
+                "gate restored below signing and attestation",
+                gate_removed.replace(chart_state_heading, gate_block + chart_state_heading, 1),
+            ),
+            ("gate deleted outright", gate_removed),
+            (
+                "gate skipped for a reused digest",
+                publisher.replace(
+                    scan_heading + "\n",
+                    scan_heading
+                    + "\n        if: steps.image_state.outputs.state == 'absent'\n",
+                    1,
+                ),
+            ),
+            (
+                "second gate copy added so one can drift",
+                publisher.replace(chart_state_heading, gate_block + chart_state_heading, 1),
+            ),
+        ):
+            with self.subTest(gate_order_mutant=mutant_name), self.assertRaises(ValueError):
                 self.require_exact_release_wiring(orchestrator, mutation)
         for forbidden in (
             "tag-state",
