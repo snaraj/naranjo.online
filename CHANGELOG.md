@@ -71,7 +71,8 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   `\d`, which is PyYAML's own choice too, so `int()`/`float()` never see a
   fullwidth or Arabic-Indic digit. The reader is differentially checked
   against an out-of-tree
-  PyYAML 6.0.3 over a corpus of real-render and hostile shapes, and five
+  PyYAML 6.0.3 over a corpus of real-render and hostile shapes — 182,170
+  inputs at this head, measuring ZERO divergence — and six
   rounds of independent review extended that corpus; every divergence any
   round measured — `1_000`, a leading byte-order mark, YAML 1.1 timestamps,
   plain `=`, signed leading-dot floats, colon-glued flow keys, NEL/LS/PS,
@@ -103,7 +104,7 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   offending line named rather than closed and reopened.
 - `scripts/ci/chart-egress-pin.sh` grows from four assertions to seven. The
   original text pin and its 19 mutations are untouched; (c) is the
-  whole-render census, (d) rewrites the real render into 43 hostile ones —
+  whole-render census, (d) rewrites the real render into 47 hostile ones —
   same-file and new-file shadow policies with spaced, double-quoted,
   single-quoted and `\x`-escaped keys, flow-style documents, block-scalar
   kinds, generic/typed/nested/uninspectable list wrappers, a policy under a
@@ -120,11 +121,15 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   outright — a block scalar that swallows the line after it — a
   whitespace-only line wider than its body, which sets the block's
   indentation past that body so the oracle raises and the pre-repair census
-  read on and passed — and ten
+  read on and passed — four renders a real API server will not install whole
+  (a multi-line label value, a label key carrying a second `/`, an object
+  name with an underscore, an annotation key carrying a second `/`), each of
+  which the pre-repair census reported GREEN on and Kubernetes v1.36.3
+  partially refuses — and ten
   widenings of the pinned policy itself — and requires
   every one to be refused; (e) now runs the census under each values override too; (f) and
   (g) pin both batteries against being quietly shrunk.
-- `scripts/ci/test_chart_render_census.py` (121 tests) pins the reader
+- `scripts/ci/test_chart_render_census.py` (140 tests) pins the reader
   itself in the `security` job, without helm: that `kind :`, `"kind"`,
   `'kind'` and `"\x6bind"` are all the same key, that list wrappers are
   flattened into their items rather than merely rejected, that a legal
@@ -136,11 +141,68 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   characters, `{a: 1}` still parses, a `...` inside a quoted or block scalar
   is still ordinary text, `a: 1` / `...` / `---` / `b: 2` still reads as
   two documents, a spelled `---` boundary still separates documents, and a
-  render carrying a real multi-line block-scalar label — blank line,
+  render carrying a real multi-line block-scalar value — blank line,
   more-indented line and whitespace-only line inside it — still reads byte
-  for byte as PyYAML reads it and still censuses green. It also pins
+  for byte as PyYAML reads it, still censuses green, and now also APPLIES
+  cleanly to a real API server. It also pins
   the shell script's mutation floor against the battery's real size, so the
   two cannot disagree.
+- The census now refuses objects Kubernetes will not install, because its own
+  claim is "N INSTALLABLE objects" and PR #96's round-five review measured
+  that claim false in the fatal direction. A render carrying a multi-line
+  value in a LABEL censused GREEN — four objects, exactly one NetworkPolicy,
+  equal to the pinned expectation — while `kubectl apply` against Kubernetes
+  v1.36.3 creates the ServiceAccount, Service and Deployment and REJECTS the
+  NetworkPolicy alone: the workload installed without its deny, the gate
+  reporting everything fine. The suite's acceptance companion had blessed
+  exactly that render. It carries the multi-line value in an ANNOTATION now,
+  which is where Kubernetes permits arbitrary strings (verified: rc=0, all
+  four objects created, the stored annotation byte-identical), and keeps
+  block-scalar coverage on the label side with a strip-chomped one-line
+  scalar. The census additionally validates the fields Kubernetes rejects on,
+  every boundary probed from both sides against that same server: label and
+  annotation KEYS (optional lowercase-DNS-subdomain prefix ≤253, name part
+  ≤63), label VALUES (≤63 bytes, empty allowed, alphanumeric with `-`/`_`/`.`,
+  starting and ending alphanumeric), annotation values as arbitrary strings
+  under a 262144-byte total, `metadata.name` as an RFC 1123 subdomain — and
+  as an RFC 1123 LABEL for a Service, which may start with a digit but may
+  not contain a dot — `metadata.namespace`, and every `matchLabels`,
+  `nodeSelector` and Service `spec.selector` at any depth. It deliberately
+  does NOT validate per-kind spec schemas: that is the OpenAPI schema of
+  every kind rather than a small stable rule, a stdlib-only gate cannot carry
+  it, and it is not the fatal direction — the one object whose absence IS
+  fatal has its whole spec pinned against a literal. One deliberate
+  over-refusal is stated rather than hidden: a null label value, which the
+  server accepts and coerces to the empty string, is refused here rather than
+  guessed at.
+- Three shipped claims about what an installer does with a refused stream
+  were FALSE against the real API server, and are now measured rather than
+  reasoned about. `render-with-an-unspelled-document-boundary` does not
+  "install nothing": it is a PARTIAL APPLY — all four objects created, THEN
+  rc=1. `render-separated-by-a-document-end-marker` is worse still: rc=0,
+  three objects installed, the Deployment after the `...` silently discarded,
+  and with the policy rendered last behind that marker the workload installs
+  with NO POLICY AT ALL and a green exit code. The same correction lands on
+  the C1-control and value-key comments, which claimed whole-stream refusals
+  where the server does a partial apply. The truth is a stronger reason for
+  these refusals, not a weaker one: a silent partial install is more
+  dangerous than a rejection, because nothing anywhere reports it.
+- A kill battery over every guard clause rounds four and five introduced —
+  each `_ascii_*` call site, `_document_marker`, `_read_document`, and every
+  clause inside `_bs_indentation`, `_bs_breaks`, `_bs_skip_indent`,
+  `_bs_has_more`, `_block_scalar_body` and `_line_break_after` — mutated one
+  at a time, 84 mutants, each run against the whole unit suite AND the census
+  gate. It found the surviving mutant PR #96's round-five review reported:
+  dropping `_line_break_after(k)` from `_bs_breaks`'s loop survived both
+  while diverging from PyYAML on 1,100 corpus members, because a final
+  whitespace-only line with no trailing newline is the end of the stream and
+  not a blank line, so keep chomping put back a break that was never there.
+  78 mutants die to the existing suite and gate; nine more die to the tests
+  added here; the remaining six are equivalent mutants proven so by
+  measurement — identical values AND identical refusal messages over all
+  182,170 corpus inputs and 29 targeted probes — and each is documented at
+  its own clause with the reason it cannot differ, rather than pinned by a
+  test no input could fail.
 
 ### Changed
 

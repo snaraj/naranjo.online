@@ -209,6 +209,24 @@ closed:
   here. Closed by transcribing `Scanner.scan_block_scalar` and its helpers,
   so the first two and the fourth are exact AGREEMENT and only the third --
   the shape the oracle itself refuses -- is a refusal.
+- round six (PR #96): the corpus above measures ZERO divergence at this head,
+  re-run over 182,170 inputs. What round six added instead is a KILL BATTERY
+  over the clauses rounds four and five introduced -- each `_ascii_*` call
+  site, `_document_marker`, `_read_document`, and every clause inside
+  `_bs_indentation`, `_bs_breaks`, `_bs_skip_indent`, `_bs_has_more`,
+  `_block_scalar_body` and `_line_break_after`, mutated ONE AT A TIME, 84
+  mutants, each run against the whole unit suite AND the census gate. 78 die.
+  Nine more are killed by the tests round six adds, starting with the one the
+  round-five review found itself: dropping `_line_break_after(k)` from
+  `_bs_breaks`'s loop survived everything while diverging from the oracle on
+  1,100 corpus members, because a final whitespace-only line with no trailing
+  newline is the END OF THE STREAM, not a blank line, so keep chomping put
+  back a break that was never there (`a: |+` / ` x` / ` ` is "x\\n" to both
+  readers and was "x\\n\\n" to the mutant). The remaining SIX are equivalent
+  mutants -- identical values AND identical refusal messages over all 182,170
+  corpus inputs and 29 targeted probes -- and each is named at its own clause
+  below, with the reason it cannot differ, rather than pinned by a test no
+  input could fail.
 
 Every one of those classes is closed. The claim this file makes is therefore
 a bounded, re-runnable one rather than a universal quantifier: over that
@@ -338,8 +356,13 @@ _TIMESTAMP_RE = re.compile(
 # tag, so `a: =` raises a ConstructorError instead of parsing; in KEY position
 # the same bytes survive as the string "=", because `flatten_mapping` retags
 # them first. One spelling, two answers, and one of those answers is a hard
-# refusal in the tool that would install the render -- the one direction a
-# reader must never be looser in. Refused in both positions.
+# refusal in the ORACLE -- the one direction a reader must never be looser in.
+# What the INSTALLER does with it is a separate, measured fact and is not the
+# same refusal: on Kubernetes v1.36.3, `kubectl apply` on a shadow policy
+# carrying `shadow-marker: =` reads `=` as the ordinary string "=", creates the
+# four objects it could, and then rejects the shadow for its LABEL VALUE
+# ("a valid label must be an empty string or ..."), exiting 1 -- a partial
+# apply, not a whole-stream refusal. Refused here in both positions.
 _VALUE_KEY_PLAIN = "="
 # `<<` is YAML 1.1's merge key, and it is the exact same shape as `=` one tag
 # along: PyYAML resolves a plain `<<` to `tag:yaml.org,2002:merge`, its SAFE
@@ -540,8 +563,13 @@ class Reader:
                               % _UNICODE_LINE_BREAKS[ch], lineno)
                 if 0x80 <= code <= 0x9F:
                     # PyYAML's reader rejects the whole stream for any of these
-                    # (its printable set skips U+0080-U+009F), so a render this
-                    # gate read happily would be a render nothing installs. The
+                    # (its printable set skips U+0080-U+009F). Measured against
+                    # Kubernetes v1.36.3, the installer does not reject the
+                    # whole stream: `kubectl apply` on a render carrying one
+                    # CREATES the four objects it could read and then exits 1
+                    # ("yaml: control characters are not allowed"), so a render
+                    # this gate read happily would be a render that installs
+                    # PART of itself. The
                     # range STOPS at U+009F: `©`, `é`, CJK and emoji all read
                     # normally, and so does U+00A0 -- but U+00A0 reads normally
                     # only because the strip helpers above are ASCII-explicit.
@@ -585,6 +613,14 @@ class Reader:
                     self.fail("content on a document-start line is refused; write the document "
                               "on the following lines")
                 self.i += 1
+                # EQUIVALENT MUTANT (round six, proven by measurement):
+                # dropping this reset changes nothing -- 0 diffs over 182,170
+                # corpus inputs and 29 probes -- but only BECAUSE of round
+                # five. Since `_read_document` returns only at a spelled marker
+                # or end-of-stream, the loop can never come back round to the
+                # `if after_document_end` test with ordinary content in hand,
+                # so a stale flag is unobservable. Before round five it was
+                # load-bearing, and it stays as the statement of intent.
                 after_document_end = False
                 docs.append(self._read_document())
                 continue
@@ -601,8 +637,12 @@ class Reader:
             if after_document_end:
                 self.fail("content after a document-end marker (`...`) is refused; a real YAML "
                           "reader requires a `---` document-start line first and raises "
-                          "otherwise, so a stream this gate read two documents out of is a "
-                          "stream nothing installs")
+                          "otherwise. Measured against Kubernetes v1.36.3, a render whose last "
+                          "document is separated by `...` instead of `---` is WORSE than a "
+                          "refused one: `kubectl apply` exits 0 and installs three of the four "
+                          "objects, silently discarding everything after the marker. A stream "
+                          "this gate read two documents out of is a stream that installs a "
+                          "DIFFERENT set of objects than the one it was counted from")
             docs.append(self._read_document())
 
     def _read_document(self) -> object:
@@ -624,7 +664,12 @@ class Reader:
         Refused here, with the offending line named, which also makes the
         module's standing claim that "multi-line plain scalars are refused"
         TRUE: the reader was not refusing them, it was silently splitting the
-        stream into documents nothing would install.
+        stream into documents that DO NOT INSTALL AS COUNTED. Measured against
+        Kubernetes v1.36.3 rather than reasoned about: `kubectl apply` on such
+        a render is a PARTIAL APPLY -- it creates the four objects it could
+        read and THEN exits 1 on the unreadable tail, so the cluster is left
+        half-changed and the census's count described a file nothing applied
+        whole.
         """
         node = self._document_body()
         self._skip_ignorable()
@@ -646,6 +691,15 @@ class Reader:
             return None
         start = self.i
         node = self._node(_indent_of(raw))
+        # EQUIVALENT MUTANT (round six, proven by measurement): no input
+        # reaches this guard -- 0 diffs over 182,170 corpus inputs and 29
+        # probes with it removed. It exists because round four measured a real
+        # HANG here: `documents()` and `_document_body` decided independently
+        # what a `---`/`...` marker was, and a line like `---\xa0` could be a
+        # marker to one and content to the other, so the outer loop spun
+        # forever. Sharing `_document_marker` made the desynchronisation
+        # unrepresentable and left this guard as the belt behind that brace.
+        # A hang is worse than either answer, so the belt stays.
         if self.i == start:
             self.fail("this document consumed no input; refusing rather than looping")
         return node
@@ -763,6 +817,14 @@ class Reader:
             return self._node(here)
         if allow_sibling_sequence and here == parent_indent:
             body = raw[here:]
+            # EQUIVALENT MUTANT (round six, proven by measurement): spelling
+            # this `body.rstrip()` instead is indistinguishable -- 0 diffs in
+            # values and refusal messages over 182,170 corpus inputs and 29
+            # targeted probes. `-\xa0` would enter `_sequence` here, but
+            # `_sequence`'s own test is ASCII-explicit, so it consumes nothing,
+            # returns [], and the caller re-reads the same line and fails with
+            # the identical message. The clause is redundant with that one, not
+            # unreachable, and `_sequence`'s copy IS killed by the suite.
             if _ascii_rstrip(body) == "-" or body.startswith("- "):
                 return self._sequence(here)
         return None
@@ -882,6 +944,15 @@ class Reader:
     def _block_scalar_body(self, style: str, chomp: str, explicit: int | None,
                            parent_indent: int) -> str:
         folded = style == ">"
+        # EQUIVALENT MUTANT (round six, proven by measurement, twice over): the
+        # `max(..., 1)` here and the `- 1` below are the oracle's own spelling
+        # and are ARITHMETICALLY redundant in this reader, because
+        # `parent_indent` is a block mapping's indentation and is never
+        # negative. `parent_indent + 1` and `parent_indent + explicit` are the
+        # same two numbers -- 0 diffs over 182,170 corpus inputs and 29 probes,
+        # as they must be. Kept as the oracle writes them, so the
+        # transcription stays line-for-line checkable against
+        # `Scanner.scan_block_scalar`.
         min_indent = max(parent_indent + 1, 1)
         k = self.i
         if explicit is not None:
@@ -910,6 +981,17 @@ class Reader:
                 # The oracle's own folding rule, comment and all: a single
                 # break between two lines that both start with content folds
                 # to one space, and anything else keeps its break.
+                #
+                # EQUIVALENT MUTANT (round six, proven by measurement): the
+                # `line_break == "\n"` conjunct is unreachable-false here.
+                # `line_break` is "" only in the branch above that also sets
+                # `k = len(self.lines)`, after which `_bs_breaks` cannot move
+                # the column off 0 and `indent` is at least 1, so the test
+                # guarding this block is already False and the loop has broken.
+                # Dropping it changes nothing over 182,170 corpus inputs and 29
+                # probes. Kept because it is the oracle's own condition, and a
+                # transcription that quietly simplifies is a transcription
+                # nobody can check.
                 if (folded and line_break == "\n" and leading_non_space
                         and self.lines[k][col:col + 1] != " "):
                     if not breaks:
@@ -1315,11 +1397,276 @@ class ChartFacts:
         }
 
 
-# --- Census -----------------------------------------------------------------
-
-
 def _describe(value: object) -> str:
     return repr(value)
+
+
+# --- What "installable" has to mean -----------------------------------------
+#
+# THE CLAIM THIS GATE PRINTS IS "N INSTALLABLE OBJECTS". If it counts an
+# object Kubernetes will not install, that claim is false in the fatal
+# direction, and PR #96's round-five review found the first measured instance:
+# a render carrying a multi-line value in a LABEL censused GREEN -- four
+# objects, exactly one NetworkPolicy, equal to the pinned expectation -- while
+# a real API server REFUSES the NetworkPolicy for it and applies the
+# ServiceAccount, Service and Deployment anyway. THE WORKLOAD INSTALLS WITHOUT
+# ITS DENY while this gate reports everything fine. Measured against
+# Kubernetes v1.36.3, not reasoned about:
+#
+#     $ kubectl apply -f multiline-label.yaml   # rc=1
+#     serviceaccount/naranjo-online created
+#     service/naranjo-online created
+#     deployment.apps/naranjo-online created
+#     The NetworkPolicy "ingress-to-naranjo-online" is invalid:
+#       metadata.labels: Invalid value: "first\n\n indented\n \nlast\n": a
+#       valid label must be an empty string or consist of alphanumeric
+#       characters, '-', '_' or '.', and must start and end with an
+#       alphanumeric character
+#
+# The reason that shape could ride at all is that `metadata.labels` is the one
+# part of the pinned policy whose CONTENT the census deliberately does not fix
+# -- which is exactly why the round-five block-scalar shadow was written there
+# too.
+#
+# THE RULES BELOW ARE MEASURED, EACH BOUNDARY PROBED FROM BOTH SIDES against
+# the same v1.36.3 API server (`kubectl apply --dry-run=server`, and
+# `kubectl create --dry-run=server` where `apply`'s own
+# last-applied-configuration annotation would have confounded a size limit):
+#
+#   label VALUE   `` accepted, `a` accepted, `MyValue` accepted, `12345`
+#                 accepted, `a_b.c-d` accepted, 63 bytes accepted, 64 bytes
+#                 refused, and `-abc`, `abc-`, `.abc`, `-`, `a b`, `a/b`,
+#                 `a\nb`, `é` all refused.
+#   label KEY     `a` accepted, 63-byte name accepted, 64 refused,
+#                 `A_b.c-d` accepted, `example.com/a` accepted, a 253-byte
+#                 prefix accepted, 254 refused, and ``, `/a`, `example.com/`,
+#                 `a/b/c`, `-a`, `a\nb`, `Example.com/a`, `exa_mple.com/a`
+#                 all refused. The prefix is a LOWERCASE DNS subdomain; the
+#                 name part is not (uppercase and `_` are legal there).
+#   annotations   keys follow the label-key rule exactly (`a/b/c` and a
+#                 64-byte name are both refused); values are arbitrary strings
+#                 -- `x\ny\n` and a non-ASCII value are both accepted, where
+#                 a LABEL refuses each of them, which is what makes
+#                 an annotation the right home for a multi-line value -- and
+#                 the SUM of every key and value is capped: 262144 bytes
+#                 accepted, 262145 refused.
+#   metadata.name a lowercase RFC 1123 SUBDOMAIN for NetworkPolicy,
+#                 ServiceAccount and Deployment (`a-b.c` accepted, `1abc`
+#                 accepted, 253 bytes accepted, 254 refused, `a_b`, `AbC` and
+#                 `abc.` refused) and a lowercase RFC 1123 LABEL for Service,
+#                 which additionally forbids dots and caps at 63 (`abc` and
+#                 `1abc` accepted; `a.b`, `Abc`, `abc-` and 64 bytes refused).
+#   selectors     `matchLabels`, a Service's `spec.selector` and a Pod's
+#                 `nodeSelector` are validated by the same label key/value
+#                 rules, at any depth -- `spec.podSelector.matchLabels`,
+#                 `spec.selector` and `spec.template.spec.nodeSelector` each
+#                 refused `a\nb` and `a/b/c` on the real server.
+#   value TYPES   a label or annotation value that is a YAML number or boolean
+#                 is refused by the server before validation even runs ("json:
+#                 cannot unmarshal number into Go struct field
+#                 ObjectMeta.metadata.labels of type string"), so it is refused
+#                 here too.
+#
+# ONE DELIBERATE, MEASURED OVER-REFUSAL, stated rather than hidden: a label or
+# annotation value written as the plain YAML `null` is ACCEPTED by the API
+# server, which decodes it into Go's zero string and stores an EMPTY label.
+# This gate refuses it. Coercing a value nobody wrote into a value the render
+# does not say is exactly the guess every other rule in this file declines to
+# make, and refusing is the direction that cannot hide a policy. It is the one
+# place the installability check is stricter than the installer, and
+# `test_a_null_label_value_is_the_one_deliberate_over_refusal` pins it as such.
+#
+# WHAT THIS DELIBERATELY DOES NOT DO, stated rather than left to be discovered:
+# it does not validate per-kind SPEC schemas. A Deployment with no
+# `spec.selector` is refused by the API server and counted installable here.
+# That rule is not a small stable regex -- it is the OpenAPI schema of every
+# kind, which a stdlib-only gate cannot carry (requirements 1 and 9) -- and it
+# is not in the fatal direction either: a malformed Deployment leaves the deny
+# installed and the workload absent, which is the safe half. The one object
+# whose absence IS fatal, the NetworkPolicy, has its whole spec pinned against
+# a literal expectation a few lines below, so its spec cannot be malformed
+# without failing the census outright. Namespace EXISTENCE is likewise out of
+# scope: it is a property of the cluster, not of the render.
+
+LABEL_VALUE_MAX_BYTES = 63
+QUALIFIED_NAME_MAX_BYTES = 63
+DNS_SUBDOMAIN_MAX_BYTES = 253
+DNS_LABEL_MAX_BYTES = 63
+ANNOTATIONS_MAX_BYTES = 262144
+
+# Spelled as literal ASCII ranges for the same reason every other pattern in
+# this file is: `\w` and `\d` are Unicode-aware in Python and would admit a
+# fullwidth digit the API server refuses.
+_LABEL_VALUE_RE = re.compile(r"(?:(?:[A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?")
+_QUALIFIED_NAME_RE = re.compile(r"(?:[A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]")
+_DNS_LABEL_RE = re.compile(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?")
+_DNS_SUBDOMAIN_RE = re.compile(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?"
+                               r"(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*")
+
+# Kinds whose `metadata.name` is a DNS-1123 LABEL rather than a subdomain.
+# The inventory above pins the render to four kinds, so this set is complete
+# for what this gate can ever see; growing the inventory is the moment to
+# re-measure it.
+_DNS_LABEL_NAME_KINDS = frozenset({"Service"})
+
+# Mappings that are label maps wherever they appear, at any depth.
+_LABEL_MAP_KEYS = ("matchLabels", "nodeSelector")
+
+
+def _too_long(text: str, ceiling: int) -> bool:
+    # Kubernetes counts BYTES, not characters, and says so in its own error
+    # text ("must be no more than 63 bytes").
+    return len(text.encode("utf-8")) > ceiling
+
+
+def _label_value_problem(value: object) -> str | None:
+    if not isinstance(value, str):
+        return ("is %s, not a string; Kubernetes stores label values as strings "
+                "and refuses anything else" % _describe(value))
+    if _too_long(value, LABEL_VALUE_MAX_BYTES):
+        return "is longer than %d bytes" % LABEL_VALUE_MAX_BYTES
+    if not _LABEL_VALUE_RE.fullmatch(value):
+        return ("is not a valid label value; Kubernetes wants an empty string, "
+                "or alphanumerics with `-`, `_` and `.` inside, starting and "
+                "ending alphanumeric")
+    return None
+
+
+def _label_key_problem(key: object) -> str | None:
+    if not isinstance(key, str):
+        return "is %s, not a string" % _describe(key)
+    prefix, slash, name = key.rpartition("/")
+    if slash:
+        if prefix == "":
+            return "has an empty prefix before its `/`"
+        if "/" in prefix:
+            return "carries more than one `/`"
+        if _too_long(prefix, DNS_SUBDOMAIN_MAX_BYTES):
+            return "has a prefix longer than %d bytes" % DNS_SUBDOMAIN_MAX_BYTES
+        if not _DNS_SUBDOMAIN_RE.fullmatch(prefix):
+            return ("has a prefix that is not a lowercase DNS subdomain "
+                    "(uppercase and `_` are legal in the NAME part, never in "
+                    "the prefix)")
+    if name == "":
+        return "has an empty name part"
+    if _too_long(name, QUALIFIED_NAME_MAX_BYTES):
+        return "has a name part longer than %d bytes" % QUALIFIED_NAME_MAX_BYTES
+    if not _QUALIFIED_NAME_RE.fullmatch(name):
+        return ("has a name part that is not a valid qualified name; "
+                "Kubernetes wants alphanumerics with `-`, `_` and `.` inside, "
+                "starting and ending alphanumeric")
+    return None
+
+
+def _uninstallable(where: str, detail: str) -> CensusError:
+    return CensusError(
+        "%s: %s. This gate's claim is that the render carries N INSTALLABLE "
+        "objects, so an object a real API server refuses is not one of them -- "
+        "and a render whose NetworkPolicy is refused while its workload applies "
+        "installs the workload WITHOUT its deny." % (where, detail))
+
+
+def _check_label_map(mapping: object, where: str, what: str) -> None:
+    if not isinstance(mapping, dict):
+        raise _uninstallable(where, "%s is %s, not a mapping" % (what, _describe(mapping)))
+    for key, value in mapping.items():
+        problem = _label_key_problem(key)
+        if problem is not None:
+            raise _uninstallable(where, "the %s key %s %s" % (what, _describe(key), problem))
+        problem = _label_value_problem(value)
+        if problem is not None:
+            raise _uninstallable(
+                where, "the %s value for %s %s" % (what, _describe(key), problem))
+
+
+def _check_annotations(mapping: object, where: str) -> None:
+    if not isinstance(mapping, dict):
+        raise _uninstallable(where, "metadata.annotations is %s, not a mapping"
+                             % _describe(mapping))
+    total = 0
+    for key, value in mapping.items():
+        problem = _label_key_problem(key)
+        if problem is not None:
+            raise _uninstallable(
+                where, "the metadata.annotations key %s %s" % (_describe(key), problem))
+        if not isinstance(value, str):
+            raise _uninstallable(
+                where, "the metadata.annotations value for %s is %s, not a string"
+                % (_describe(key), _describe(value)))
+        total += len(key.encode("utf-8")) + len(value.encode("utf-8"))
+    if total > ANNOTATIONS_MAX_BYTES:
+        raise _uninstallable(
+            where, "its annotations total %d bytes; Kubernetes caps them at %d"
+            % (total, ANNOTATIONS_MAX_BYTES))
+
+
+def _check_metadata_maps(metadata: dict, where: str) -> None:
+    if "labels" in metadata:
+        _check_label_map(metadata["labels"], where, "metadata.labels")
+    if "annotations" in metadata:
+        _check_annotations(metadata["annotations"], where)
+
+
+def _walk_installable(node: object, where: str) -> None:
+    """Every label map in the object, at any depth.
+
+    ObjectMeta is checked and then NOT descended into: a label whose KEY
+    happens to be spelled `matchLabels` is an ordinary label, not a selector,
+    and descending would refuse a render Kubernetes installs happily.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "metadata" and isinstance(value, dict):
+                _check_metadata_maps(value, where)
+                continue
+            if key in _LABEL_MAP_KEYS:
+                _check_label_map(value, where, key)
+                continue
+            _walk_installable(value, where)
+    elif isinstance(node, list):
+        for item in node:
+            _walk_installable(item, where)
+
+
+def check_installable(objects: list[dict]) -> None:
+    """Refuse any object a real Kubernetes API server would refuse."""
+    for index, obj in enumerate(objects, start=1):
+        kind = obj.get("kind")
+        where = "object %d (%s)" % (index, kind if isinstance(kind, str) else "?")
+        metadata = obj.get("metadata")
+        if not isinstance(metadata, dict):
+            raise _uninstallable(where, "carries no metadata mapping, so it has no name")
+        name = metadata.get("name")
+        if not isinstance(name, str) or name == "":
+            raise _uninstallable(where, "declares no non-empty string metadata.name")
+        where = "object %d (%s %s)" % (index, kind, name)
+        if kind in _DNS_LABEL_NAME_KINDS:
+            if _too_long(name, DNS_LABEL_MAX_BYTES) or not _DNS_LABEL_RE.fullmatch(name):
+                raise _uninstallable(
+                    where, "is named %s; a %s name must be a lowercase RFC 1123 LABEL "
+                    "of at most %d bytes -- lowercase alphanumerics and `-`, no dots"
+                    % (_describe(name), kind, DNS_LABEL_MAX_BYTES))
+        elif _too_long(name, DNS_SUBDOMAIN_MAX_BYTES) or not _DNS_SUBDOMAIN_RE.fullmatch(name):
+            raise _uninstallable(
+                where, "is named %s; a name must be a lowercase RFC 1123 subdomain of "
+                "at most %d bytes" % (_describe(name), DNS_SUBDOMAIN_MAX_BYTES))
+        namespace = metadata.get("namespace")
+        if namespace is not None:
+            if (not isinstance(namespace, str) or namespace == ""
+                    or _too_long(namespace, DNS_LABEL_MAX_BYTES)
+                    or not _DNS_LABEL_RE.fullmatch(namespace)):
+                raise _uninstallable(
+                    where, "renders into namespace %s; a namespace name must be a "
+                    "lowercase RFC 1123 label of at most %d bytes, so no such namespace "
+                    "can ever exist" % (_describe(namespace), DNS_LABEL_MAX_BYTES))
+        if kind == "Service":
+            spec = obj.get("spec")
+            if isinstance(spec, dict) and "selector" in spec:
+                _check_label_map(spec["selector"], where, "spec.selector")
+        _walk_installable(obj, where)
+
+
+# --- Census -----------------------------------------------------------------
 
 
 def flatten(documents: list[object]) -> list[dict]:
@@ -1363,6 +1710,12 @@ def _flatten_one(doc: object, out: list[dict], depth: int, where: str) -> None:
 def census(text: str, facts: ChartFacts, origin: str = "<render>") -> dict:
     """Assert the whole render carries exactly one, exactly pinned, policy."""
     objects = flatten(parse_documents(text, origin))
+
+    # Before anything is COUNTED, everything counted must be installable: the
+    # sentence this gate prints is "N installable objects", and PR #96's
+    # round-five review measured a render where that sentence was false in the
+    # fatal direction. See "What `installable` has to mean" above.
+    check_installable(objects)
 
     policies = [o for o in objects if o.get("kind") == POLICY_KIND]
     if len(policies) != 1:
@@ -1703,9 +2056,11 @@ spec:
 
 # `=` is YAML 1.1's value key: a safe YAML loader REFUSES the document that
 # carries one in value position, where this reader used to hand back the
-# string "=" and read on. An installer that refuses a render installs nothing
-# and says so, but a gate that reads a document the installer will not read is
-# a gate reporting on something else.
+# string "=" and read on. A gate that reads a document the installer will not
+# read is a gate reporting on something else -- and "will not read" is rarely
+# "installs nothing": measured on Kubernetes v1.36.3, `kubectl apply` on this
+# render creates the four objects it could read and THEN exits 1 on the shadow,
+# leaving the cluster half-changed.
 _SHADOW_VALUE_KEY = """\
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -1820,9 +2175,14 @@ spec:
 # a SECOND document there -- so the wrapper below became a document of its own
 # although the stream never spelled a `---` in front of it. The wrapper carries
 # no items, so the census counted the same four objects and passed, while
-# PyYAML 6.0.3 refuses this stream outright: `kubectl apply` installs nothing
-# from a file the census reported GREEN on. Put a policy in those `items` and
-# the same trick is how a second document appears where a reviewer counted one.
+# PyYAML 6.0.3 refuses this stream outright. What the INSTALLER does is worse
+# than a refusal, and was measured on Kubernetes v1.36.3 rather than assumed:
+# `kubectl apply` on this exact render CREATES all four objects and only THEN
+# exits 1 ("error converting YAML to JSON: yaml: line 3: mapping values are not
+# allowed in this context") -- a PARTIAL APPLY out of a file the census
+# reported GREEN on, which leaves a cluster half-changed and a reviewer with no
+# signal at all. Put a policy in those `items` and the same trick is how a
+# second document appears where a reviewer counted one.
 _SHADOW_UNSPELLED_DOCUMENT = """\
 null
 apiVersion: v1
@@ -1844,6 +2204,48 @@ _SHADOW_BLOCK_SCALAR_NOTE = [
     "    shadow-note: |",
     "       ",
     "      shadow-marker",
+]
+
+# PR #96's round-five review measured the first CENSUS-VS-CLUSTER gap, and it
+# ran in the fatal direction. The four shadows below are that class, each one
+# a render the PRE-REPAIR census reported GREEN on -- "4 installable objects,
+# exactly one NetworkPolicy, equal to the pinned expectation" -- and a real
+# v1.36.3 API server refuses an object out of. Written under `metadata`, the
+# part of the render the census pins least, exactly where the round-five
+# block-scalar shadow rode.
+#
+# The first is the one that is FATAL rather than merely false: a multi-line
+# value in a LABEL of the pinned policy. `kubectl apply` creates the
+# ServiceAccount, the Service and the Deployment and rejects the NetworkPolicy
+# alone, so the workload installs WITHOUT ITS DENY while the gate reports
+# everything fine.
+_SHADOW_UNINSTALLABLE_LABEL_VALUE = [
+    "    shadow-note: |",
+    "      first",
+    "",
+    "       indented",
+    "       ",
+    "      last",
+]
+
+# A label KEY carrying a second `/`. The API server refuses the object; this
+# reader read the key happily, because a key is only ever matched here, never
+# validated.
+_SHADOW_UNINSTALLABLE_LABEL_KEY = [
+    "    shadow.example/marker/extra: enabled",
+]
+
+# And the same class on an object the census counts but does not pin: a name
+# no Kubernetes object may carry, and an annotation key no Kubernetes object
+# may carry. Neither is fatal on its own -- a refused ServiceAccount leaves the
+# deny installed -- but "N INSTALLABLE objects" is a false sentence either way,
+# and a census that only checks the objects it already pins is checking the
+# wrong half.
+_SHADOW_UNINSTALLABLE_NAME_SUFFIX = "_shadow"
+
+_SHADOW_UNINSTALLABLE_ANNOTATION_KEY = [
+    "  annotations:",
+    "    shadow.example/marker/extra: enabled",
 ]
 
 
@@ -1890,10 +2292,20 @@ def _end_a_document_with_a_marker(text: str) -> str:
     `...` or end-of-stream after one -- anything else is a ParserError. This
     reader used to treat `...` as a benign boundary and read straight on, so
     the render below parsed here into the SAME four documents and the SAME
-    pinned policy and this gate reported GREEN on a stream the tool that
-    installs it refuses outright. That is accept-where-the-oracle-refuses, and
-    a gate reporting on a document nothing will apply is a gate reporting on
-    something else.
+    pinned policy and this gate reported GREEN on it.
+
+    THE INSTALLER DOES NOT REFUSE THIS STREAM, and PR #96's round-five review
+    was right to insist the difference be measured rather than assumed. On
+    Kubernetes v1.36.3, `kubectl apply` on this render EXITS 0 and creates
+    three objects -- the NetworkPolicy, the ServiceAccount and the Service --
+    silently discarding the Deployment that follows the `...`. That is the
+    stronger case for the refusal, not the weaker one: a partial install with a
+    success exit code is more dangerous than a rejected file, because nothing
+    anywhere reports a problem. And which object goes missing is only an
+    accident of template order: on the same server, a render whose
+    NetworkPolicy renders LAST behind a `...` applies at rc=0 with the
+    ServiceAccount, the Service and the Deployment installed and NO POLICY AT
+    ALL -- the workload up, its deny silently discarded, and a green exit code.
     """
     lines = _split(text)
     at = [i for i, line in enumerate(lines) if _ascii_rstrip(line) == "---"]
@@ -1927,6 +2339,10 @@ def mutations(facts: ChartFacts) -> list[tuple[str, object]]:
         "  namespace: " + facts.namespace,
         "  labels:",
     ]
+    # The ServiceAccount's own head: an object the census COUNTS but does not
+    # pin, so a mutation of its metadata reaches the installability check
+    # rather than tripping the pinned-policy assertions first.
+    account_anchor = ["kind: ServiceAccount", "metadata:", "  name: " + name]
     shadow_source = "%s/templates/shadow-policy.yaml" % name
 
     def same_file(document: str):
@@ -1976,6 +2392,20 @@ def mutations(facts: ChartFacts) -> list[tuple[str, object]]:
         ("shadow-block-scalar-swallows-the-next-line",
          lambda text: _replace_block(text, policy_labels_anchor,
                                      policy_labels_anchor + _SHADOW_BLOCK_SCALAR_NOTE)),
+        # --- a render this gate counted that Kubernetes will not install -----
+        ("render-with-an-uninstallable-label-value",
+         lambda text: _replace_block(text, policy_labels_anchor,
+                                     policy_labels_anchor + _SHADOW_UNINSTALLABLE_LABEL_VALUE)),
+        ("render-with-an-uninstallable-label-key",
+         lambda text: _replace_block(text, policy_labels_anchor,
+                                     policy_labels_anchor + _SHADOW_UNINSTALLABLE_LABEL_KEY)),
+        ("render-with-an-uninstallable-object-name",
+         lambda text: _replace_block(
+             text, account_anchor,
+             account_anchor[:2] + [account_anchor[2] + _SHADOW_UNINSTALLABLE_NAME_SUFFIX])),
+        ("render-with-an-uninstallable-annotation-key",
+         lambda text: _replace_block(text, account_anchor,
+                                     account_anchor + _SHADOW_UNINSTALLABLE_ANNOTATION_KEY)),
         # --- the pinned policy itself, widened ------------------------------
         ("policy-egress-allow-all",
          lambda text: _replace_block(text, ["  egress: []"], ["  egress: [{}]"])),

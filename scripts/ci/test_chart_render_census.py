@@ -913,6 +913,134 @@ class ReaderFailsClosed(unittest.TestCase):
         self.reject("a: 1\n--- \xa0\n", "content on a document-start line")
 
 
+class EveryGuardClauseTheKillBatteryReachedIsPinned(unittest.TestCase):
+    """One test per SURVIVING mutant of PR #96's round-six kill battery.
+
+    Round five closed two divergence classes; round six asked the next
+    question -- is every clause those repairs introduced actually load
+    bearing? The battery mutates each guard clause rounds four and five added
+    INDEPENDENTLY (each `_ascii_*` call site, `_document_marker`,
+    `_read_document`, and every clause inside `_bs_indentation`, `_bs_breaks`,
+    `_bs_skip_indent`, `_bs_has_more`, `_block_scalar_body` and
+    `_line_break_after`) -- 84 mutants -- and runs the whole suite and the
+    census gate against each. Sixty-nine died. The nine tests below kill nine
+    of the fifteen that survived; the other six are PROVEN equivalent by
+    measurement and are named in the module's own comments rather than pinned
+    by a test that no input could fail.
+
+    The first is the round-five review's own finding, and the only survivor
+    that was WRONG rather than merely unpinned.
+    """
+
+    def reject(self, text: str, needle: str):
+        with self.assertRaises(CRC.CensusError) as caught:
+            parse(text)
+        self.assertIn(needle, str(caught.exception))
+
+    def test_keep_chomping_counts_only_the_breaks_the_stream_really_has(self):
+        # THE SURVIVOR THAT MATTERED. Dropping `_line_break_after(k)` from
+        # `_bs_breaks`'s loop condition survived the entire suite AND the gate
+        # while diverging from PyYAML 6.0.3 on 928 members of the reviewer's
+        # corpus and 1,100 of round six's own. `_bs_breaks` counts BLANK LINES,
+        # and a line is only blank if a BREAK follows it: a final
+        # whitespace-only line with no trailing newline is the end of the
+        # stream, not a blank line, so keep chomping has nothing extra to put
+        # back. Without the clause, `a: |+` / ` x` / ` ` gained a newline the
+        # oracle does not produce -- content invented inside a scalar.
+        # Every value below is PyYAML 6.0.3's own on the same input.
+        self.assertEqual(parse("a: |+\n x\n "), [{"a": "x\n"}])
+        self.assertEqual(parse("a: |+\n  x\n  "), [{"a": "x\n"}])
+        self.assertEqual(parse("a: >+\n\n    x\n "), [{"a": "\nx\n"}])
+        self.assertEqual(parse("top:\n  a: |+\n    x\n    "), [{"top": {"a": "x\n"}}])
+        # ... and the companion that keeps the clause from over-reaching: WITH
+        # the final newline the same line really is a blank line, and keep
+        # chomping really does put it back.
+        self.assertEqual(parse("a: |+\n x\n \n"), [{"a": "x\n\n"}])
+        self.assertEqual(parse("a: |+\n  x\n  \n"), [{"a": "x\n\n"}])
+        self.assertEqual(parse("a: >+\n\n    x\n \n"), [{"a": "\nx\n\n"}])
+        # ... and a final line WIDER than the block indent is content on both
+        # sides, terminated or not, so the clause has not eaten that either.
+        self.assertEqual(parse("a: |+\n x\n  "), [{"a": "x\n "}])
+        self.assertEqual(parse("a: |+\n  x\n   "), [{"a": "x\n "}])
+
+    def test_a_dash_carrying_unicode_whitespace_is_not_a_sequence_entry(self):
+        # `_ascii_rstrip(body) == "-"` in `_mapping`: with Python's Unicode
+        # rstrip, `-\xa0` became a block sequence indicator and the line was
+        # refused with the WRONG reason. PyYAML 6.0.3 raises a ScannerError on
+        # both spellings ("could not find expected ':'"), and it is the same
+        # class as every other Unicode-strip leak round four closed: YAML's
+        # whitespace is space and tab, so `-\xa0` is a plain scalar starting
+        # with a dash, not a dash followed by whitespace.
+        for ch in ("\xa0", "\u2000", "\u3000"):
+            self.reject("a: 1\n-%s\n" % ch, "neither a mapping key")
+            self.reject("a:\n-%s\n" % ch, "neither a mapping key")
+        # ... and the ASCII companions, each PyYAML's own answer: a dash with a
+        # real space IS a sequence entry, and a dash INSIDE a scalar is not.
+        self.assertEqual(parse("a:\n- \n"), [{"a": [None]}])
+        self.assertEqual(parse("a:\n- x\n"), [{"a": ["x"]}])
+        self.assertEqual(parse("a:\n  -\xa0\n"), [{"a": "-\xa0"}])
+        self.assertEqual(parse("-\xa0\n"), ["-\xa0"])
+        self.reject("a: 1\n- \n", "a block sequence entry appears where a mapping key")
+
+    def test_the_mutation_builders_read_yamls_whitespace_too(self):
+        # Three more `_ascii_rstrip` sites, all in the self-test machinery
+        # rather than the reader: `_find_block`, `_insert_into_policy_file` and
+        # `_end_a_document_with_a_marker`. Python's Unicode rstrip made each of
+        # them treat a line carrying a trailing U+00A0 as a structural line --
+        # an anchor match, a `---` separator -- which is a mutation applied
+        # somewhere the render does not actually have that structure. A
+        # mutation battery that anchors on the wrong line proves nothing about
+        # the right one.
+        self.assertEqual(
+            CRC._find_block(CRC._split("kind: NetworkPolicy \nmetadata:\n"),
+                            ["kind: NetworkPolicy"]), 0)
+        with self.assertRaises(CRC.CensusError):
+            CRC._find_block(CRC._split("kind: NetworkPolicy\xa0\nmetadata:\n"),
+                            ["kind: NetworkPolicy"])
+        self.assertEqual(CRC._end_a_document_with_a_marker("a\n---\nb\n"), "a\n...\nb\n")
+        with self.assertRaises(CRC.CensusError):
+            CRC._end_a_document_with_a_marker("kind: NetworkPolicy\n---\xa0\nkind: Service\n")
+        glued = CRC._insert_into_policy_file(
+            "kind: NetworkPolicy\nmetadata:\n---\xa0\nkind: Service\n", "kind: X\n")
+        self.assertTrue(glued.endswith("---\nkind: X"), glued)
+        spelled = CRC._insert_into_policy_file(
+            "kind: NetworkPolicy\nmetadata:\n---\nkind: Service\n", "kind: X\n")
+        self.assertEqual(spelled,
+                         "kind: NetworkPolicy\nmetadata:\n---\nkind: X\n---\nkind: Service\n")
+
+    def test_the_end_of_stream_helpers_answer_for_a_line_that_is_not_there(self):
+        # `_line_break_after`'s past-the-end guard and `_bs_has_more`'s. Both
+        # survived every input the corpus could reach, because the block-scalar
+        # arithmetic never asks them past the end -- so they are pinned here by
+        # direct call instead. A guard nothing exercises is a guard that can
+        # rot, and both of these would answer TRUE or raise IndexError without
+        # the clause.
+        reader = CRC.Reader("a\n", "<t>")
+        self.assertFalse(reader._line_break_after(1))
+        self.assertFalse(reader._line_break_after(99))
+        self.assertFalse(reader._bs_has_more(1, 0))
+        self.assertFalse(reader._bs_has_more(99, 0))
+
+    def test_a_bare_line_end_is_more_input_only_when_a_break_follows(self):
+        # `_bs_has_more`'s last clause, the oracle's `peek() != '\0'`: standing
+        # just past a line's text is more input when a break follows and
+        # end-of-stream when none does.
+        terminated = CRC.Reader("a\n", "<t>")
+        self.assertTrue(terminated._bs_has_more(0, 1))
+        self.assertTrue(terminated._bs_has_more(0, 0))
+        unterminated = CRC.Reader("a", "<t>")
+        self.assertFalse(unterminated._bs_has_more(0, 1))
+        self.assertTrue(unterminated._bs_has_more(0, 0))
+
+    def test_the_reader_records_whether_the_stream_ended_in_a_newline(self):
+        # The fact `_line_break_after` is built on, pinned as a fact. Popping
+        # the split artefact destroys it, which is why it is recorded first.
+        self.assertTrue(CRC.Reader("a: |\n  x\n", "<t>").ends_with_newline)
+        self.assertFalse(CRC.Reader("a: |\n  x", "<t>").ends_with_newline)
+        self.assertTrue(CRC.Reader("a\n\n", "<t>").ends_with_newline)
+        self.assertFalse(CRC.Reader("a\n\nb", "<t>").ends_with_newline)
+
+
 class CensusFixture(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -943,23 +1071,50 @@ class CensusAcceptsThePinnedRender(CensusFixture):
     def test_a_render_carrying_a_multi_line_value_still_passes(self):
         # The acceptance companion to the round-five refusals: tightening the
         # document boundary and transcribing the block-scalar rules must not
-        # cost a render a legal multi-line value. The label below is a literal
-        # block scalar with a blank line, a more-indented line and a
-        # whitespace-only line inside it -- and it still reads, byte for byte,
-        # as PyYAML 6.0.3 reads it, while the census still counts four objects.
-        note = ("    note: |\n"
+        # cost a render a legal multi-line value.
+        #
+        # PR #96's round-five review found this companion BLESSING A RENDER
+        # THE REAL API SERVER PARTIALLY REFUSES. It carried the multi-line
+        # value in a LABEL, and Kubernetes label values may not contain a
+        # newline: measured against v1.36.3, `kubectl apply` exits 1, the
+        # ServiceAccount, Service and Deployment are created, and the
+        # NetworkPolicy alone is rejected -- the workload installs WITHOUT its
+        # deny while the census reports "4 installable objects, exactly one
+        # NetworkPolicy". The census refuses that render now; the shape lives
+        # on in `test_a_multi_line_label_value_is_refused` below.
+        #
+        # A multi-line value belongs where Kubernetes permits arbitrary
+        # strings, which is an ANNOTATION -- `kubectl apply` on exactly the
+        # render below exits 0 and creates all four objects on that same
+        # server. So the companion proves what it means to prove, and keeps
+        # block-scalar coverage on BOTH sides: the annotation carries a blank
+        # line, a more-indented line and a whitespace-only line, and the policy
+        # label carries a strip-chomped block scalar whose value is a legal
+        # label.
+        note = ("  annotations:\n"
+                "    note: |\n"
                 "      first\n"
                 "\n"
                 "       indented\n"
                 "       \n"
                 "      last\n")
         base = render()
-        anchor = "    app.kubernetes.io/name: %s\n" % FIXTURE_CHART_NAME
-        self.assertIn(anchor, base)
-        mutated = base.replace(anchor, anchor + note, 1)
-        self.assertEqual(self.census(mutated)["objects"], 4)
-        policy = self.census(mutated)["policy"]
-        self.assertEqual(policy["metadata"]["labels"]["note"],
+        account = ("kind: ServiceAccount\nmetadata:\n  name: %s\n" % FIXTURE_CHART_NAME)
+        self.assertIn(account, base)
+        label = "    reviewed: |-\n      by-hand\n"
+        label_anchor = "    app.kubernetes.io/name: %s\n" % FIXTURE_CHART_NAME
+        self.assertIn(label_anchor, base)
+        mutated = (base
+                   .replace(account, account + note, 1)
+                   .replace(label_anchor, label_anchor + label, 1))
+        self.assertNotEqual(mutated, base)
+        result = self.census(mutated)
+        self.assertEqual(result["objects"], 4)
+        self.assertEqual(result["policy"]["metadata"]["labels"]["reviewed"], "by-hand")
+        accounts = [o for o in CRC.flatten(parse(mutated))
+                    if o["kind"] == "ServiceAccount"]
+        self.assertEqual(len(accounts), 1)
+        self.assertEqual(accounts[0]["metadata"]["annotations"]["note"],
                          "first\n\n indented\n \nlast\n")
 
     def test_the_peer_instance_may_be_stated_by_the_caller(self):
@@ -1082,10 +1237,16 @@ class CensusRefusesASecondPolicy(CensusFixture):
         # legal document; the reader used to END it at the next line and open a
         # SECOND document there, although the stream spelled no `---`. The
         # wrapper below carries no items, so the census counted the same four
-        # objects and passed -- while PyYAML 6.0.3 refuses this stream outright
-        # and `kubectl apply` would install nothing from a file this gate had
-        # just reported green on. Put a policy in those `items` and the same
-        # trick is how a second policy appears where a reviewer counted one.
+        # objects and passed -- while PyYAML 6.0.3 refuses this stream outright.
+        #
+        # What `kubectl apply` does with it was MEASURED for round six, against
+        # a real Kubernetes v1.36.3 API server, because the claim that stood
+        # here -- that it "would install nothing" -- was false. It is a PARTIAL
+        # APPLY: all four objects are created and the command THEN exits 1 on
+        # the unreadable tail. That is the stronger reason to refuse, not the
+        # weaker one: a half-applied file leaves a cluster in a state no render
+        # describes. Put a policy in those `items` and the same trick is how a
+        # second policy appears where a reviewer counted one.
         conjured = "---\nnull\napiVersion: v1\nkind: List\nitems: []\n"
         self.reject(render() + conjured,
                     "may begin only after a `---` document-start line")
@@ -1178,6 +1339,236 @@ class CensusRefusesAWidenedPolicy(CensusFixture):
         wrong = base.replace("  name: ingress-to-%s" % FIXTURE_CHART_NAME,
                              "  name: something-else", 1)
         self.reject(wrong, "is named")
+
+
+class CensusRefusesWhatKubernetesRefuses(CensusFixture):
+    """"N INSTALLABLE objects" has to mean objects Kubernetes will install.
+
+    PR #96's round-five review measured the first census-vs-cluster gap, and it
+    ran in the fatal direction: a render carrying a multi-line value in a LABEL
+    censused GREEN while a real v1.36.3 API server refuses the NetworkPolicy
+    for it and applies the ServiceAccount, Service and Deployment anyway --
+    the workload up, its deny missing, the gate reporting four installable
+    objects. Every rule below was probed from BOTH sides against that same
+    server; the module's own "What `installable` has to mean" comment records
+    the measurements this suite turns into assertions.
+    """
+
+    POLICY_LABELS = "    app.kubernetes.io/name: %s\n" % FIXTURE_CHART_NAME
+    ACCOUNT = "kind: ServiceAccount\nmetadata:\n  name: %s\n" % FIXTURE_CHART_NAME
+
+    def policy_label(self, spelling: str) -> str:
+        base = render()
+        self.assertIn(self.POLICY_LABELS, base)
+        mutated = base.replace(self.POLICY_LABELS, self.POLICY_LABELS + spelling, 1)
+        self.assertNotEqual(mutated, base)
+        return mutated
+
+    def account_block(self, block: str) -> str:
+        base = render()
+        self.assertIn(self.ACCOUNT, base)
+        mutated = base.replace(self.ACCOUNT, self.ACCOUNT + block, 1)
+        self.assertNotEqual(mutated, base)
+        return mutated
+
+    def object_with(self, **metadata) -> list:
+        return [{"apiVersion": "v1", "kind": "ConfigMap",
+                 "metadata": dict({"name": "probe"}, **metadata)}]
+
+    def test_a_multi_line_label_value_is_refused(self):
+        # The measured gap itself, in the shape the acceptance companion used
+        # to bless. Against Kubernetes v1.36.3:
+        #
+        #     $ kubectl apply -f multiline-label.yaml     # rc=1
+        #     serviceaccount/naranjo-online created
+        #     service/naranjo-online created
+        #     deployment.apps/naranjo-online created
+        #     The NetworkPolicy "ingress-to-naranjo-online" is invalid:
+        #       metadata.labels: Invalid value: "first\n\n indented\n \nlast\n"
+        #
+        # Three objects installed, the policy refused. The census said four.
+        note = ("    note: |\n"
+                "      first\n"
+                "\n"
+                "       indented\n"
+                "       \n"
+                "      last\n")
+        self.reject(self.policy_label(note), "is not a valid label value")
+        self.reject(self.policy_label(note), "NetworkPolicy ingress-to-%s" % FIXTURE_CHART_NAME)
+
+    def test_label_values_follow_the_api_servers_own_rule(self):
+        # Accepted on the real server, so accepted here.
+        for written in ("''", "a", "MyValue", "'12345'", "a_b.c-d", "a" * 63,
+                        "0.1.24", '"0.1.24"'):
+            self.assertEqual(self.census(self.policy_label("    probe: %s\n" % written))["objects"],
+                             4, written)
+        # Refused on the real server, so refused here.
+        for written in ("'-abc'", "'abc-'", "'.abc'", "'-'", "'a b'", "'a/b'",
+                        "\xe9", "'_a'", "'a.'"):
+            self.reject(self.policy_label("    probe: %s\n" % written),
+                        "is not a valid label value")
+        self.reject(self.policy_label("    probe: %s\n" % ("a" * 64)),
+                    "is longer than 63 bytes")
+
+    def test_label_keys_follow_the_api_servers_own_rule(self):
+        for key in ("a", "a" * 63, "A_b.c-d", "example.com/a",
+                    (("a" * 61 + ".") * 4 + "a" * 5) + "/a"):
+            self.assertEqual(self.census(self.policy_label("    %s: enabled\n" % key))["objects"],
+                             4, key)
+        self.reject(self.policy_label("    a/b/c: enabled\n"), "carries more than one `/`")
+        self.reject(self.policy_label("    /a: enabled\n"), "has an empty prefix")
+        self.reject(self.policy_label("    example.com/: enabled\n"), "has an empty name part")
+        self.reject(self.policy_label("    '': enabled\n"), "has an empty name part")
+        self.reject(self.policy_label("    -a: enabled\n"), "is not a valid qualified name")
+        self.reject(self.policy_label("    %s: enabled\n" % ("a" * 64)),
+                    "has a name part longer than 63 bytes")
+        # The prefix is a LOWERCASE DNS subdomain; the name part is not, which
+        # is why `A_b.c-d` above is legal and these two are not.
+        self.reject(self.policy_label("    Example.com/a: enabled\n"),
+                    "not a lowercase DNS subdomain")
+        self.reject(self.policy_label("    exa_mple.com/a: enabled\n"),
+                    "not a lowercase DNS subdomain")
+        self.reject(self.policy_label("    %s/a: enabled\n" % (("a" * 61 + ".") * 4 + "a" * 6)),
+                    "has a prefix longer than 253 bytes")
+
+    def test_annotation_keys_follow_the_label_key_rule_and_values_are_free(self):
+        # The whole reason an annotation is the right home for a multi-line
+        # value: Kubernetes validates annotation KEYS exactly as label keys and
+        # leaves annotation VALUES alone. Measured both ways on the real
+        # server -- a newline-bearing value and a non-ASCII one are both
+        # accepted as annotation values and both refused as label values.
+        free = ("  annotations:\n"
+                "    note: |\n"
+                "      first\n"
+                "\n"
+                "      last\n"
+                "    unicode: \xe9\u4e2d\n")
+        self.assertEqual(self.census(self.account_block(free))["objects"], 4)
+        self.reject(self.account_block("  annotations:\n    a/b/c: enabled\n"),
+                    "carries more than one `/`")
+        self.reject(self.account_block("  annotations:\n    %s: enabled\n" % ("a" * 64)),
+                    "has a name part longer than 63 bytes")
+        self.reject(self.account_block("  annotations:\n    note: 5\n"),
+                    "is 5, not a string")
+
+    def test_the_annotation_size_ceiling_is_the_api_servers_own(self):
+        # 262144 bytes accepted, 262145 refused -- measured with
+        # `kubectl create --dry-run=server`, because `kubectl apply` adds its
+        # own last-applied-configuration annotation and would have moved the
+        # boundary. The sum is over every key AND value.
+        limit = CRC.ANNOTATIONS_MAX_BYTES
+        CRC.check_installable(self.object_with(annotations={"a": "x" * (limit - 1)}))
+        with self.assertRaises(CRC.CensusError) as caught:
+            CRC.check_installable(self.object_with(annotations={"a": "x" * limit}))
+        self.assertIn("Kubernetes caps them at %d" % limit, str(caught.exception))
+        # Counted in BYTES, not characters: two-byte characters count twice.
+        CRC.check_installable(self.object_with(annotations={"a": "\xe9" * ((limit - 1) // 2)}))
+        with self.assertRaises(CRC.CensusError):
+            CRC.check_installable(self.object_with(annotations={"a": "\xe9" * (limit // 2)}))
+
+    def test_a_non_string_label_value_is_refused(self):
+        # "json: cannot unmarshal number into Go struct field
+        # ObjectMeta.metadata.labels of type string" -- the server refuses
+        # these before validation even runs.
+        for written in ("5", "true", "1.5"):
+            self.reject(self.policy_label("    probe: %s\n" % written), "not a string")
+
+    def test_a_null_label_value_is_the_one_deliberate_over_refusal(self):
+        # Measured: the API server ACCEPTS a null label value and stores an
+        # empty label for it. This gate refuses it anyway -- coercing a value
+        # nobody wrote into a value the render does not say is exactly the
+        # guess every other rule here declines to make, and refusing is the
+        # direction that cannot hide a policy. Pinned as an over-refusal so
+        # nobody later mistakes it for the server's own rule.
+        self.reject(self.policy_label("    probe: null\n"), "not a string")
+        self.reject(self.policy_label("    probe: ~\n"), "not a string")
+        # ... while the EMPTY STRING, which is what the server would have
+        # stored, still reads and still passes.
+        self.assertEqual(self.census(self.policy_label("    probe: ''\n"))["objects"], 4)
+
+    def test_object_names_must_be_names_kubernetes_accepts(self):
+        subdomain = ("a" * 61 + ".") * 4 + "a" * 5
+        for name in ("a-b.c", "1abc", subdomain):
+            CRC.check_installable([{"apiVersion": "v1", "kind": "ServiceAccount",
+                                    "metadata": {"name": name}}])
+        for name in ("a_b", "AbC", "abc.", "-abc", subdomain + "a"):
+            with self.assertRaises(CRC.CensusError) as caught:
+                CRC.check_installable([{"apiVersion": "v1", "kind": "ServiceAccount",
+                                        "metadata": {"name": name}}])
+            self.assertIn("lowercase RFC 1123 subdomain", str(caught.exception))
+        for metadata in ({}, {"name": ""}, {"name": 5}):
+            with self.assertRaises(CRC.CensusError):
+                CRC.check_installable([{"apiVersion": "v1", "kind": "ServiceAccount",
+                                        "metadata": metadata}])
+        with self.assertRaises(CRC.CensusError) as caught:
+            CRC.check_installable([{"apiVersion": "v1", "kind": "ServiceAccount"}])
+        self.assertIn("carries no metadata mapping", str(caught.exception))
+
+    def test_a_service_name_is_a_dns_label_not_a_subdomain(self):
+        # The rule that would have been wrong if it had been reasoned about
+        # instead of measured: a Service name may START WITH A DIGIT on
+        # v1.36.3, but it may not contain a dot and may not exceed 63 bytes --
+        # while a NetworkPolicy of the same name is fine.
+        for name in ("abc", "1abc", "a-b", "s" + "a" * 62):
+            CRC.check_installable([{"apiVersion": "v1", "kind": "Service",
+                                    "metadata": {"name": name}}])
+        for name in ("a.b", "Abc", "abc-", "s" + "a" * 63):
+            with self.assertRaises(CRC.CensusError) as caught:
+                CRC.check_installable([{"apiVersion": "v1", "kind": "Service",
+                                        "metadata": {"name": name}}])
+            self.assertIn("lowercase RFC 1123 LABEL", str(caught.exception))
+        CRC.check_installable([{"apiVersion": "networking.k8s.io/v1",
+                                "kind": "NetworkPolicy", "metadata": {"name": "a.b"}}])
+
+    def test_the_namespace_must_be_a_name_a_namespace_could_have(self):
+        CRC.check_installable(self.object_with(namespace="a-b"))
+        for namespace in ("A", "a.b", "", "n" * 64, 5):
+            with self.assertRaises(CRC.CensusError) as caught:
+                CRC.check_installable(self.object_with(namespace=namespace))
+            self.assertIn("no such namespace can ever exist", str(caught.exception))
+
+    def test_every_selector_is_a_label_map_at_any_depth(self):
+        # `matchLabels`, a Service's `spec.selector` and a Pod's `nodeSelector`
+        # are all validated by the API server with the same rules, wherever
+        # they sit -- `spec.podSelector.matchLabels`, `spec.selector` and
+        # `spec.template.spec.nodeSelector` each refused `a\nb` and `a/b/c` on
+        # the real server -- and so is a nested `spec.template.metadata`.
+        bad = "a\nb"
+        for obj in (
+            {"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+             "metadata": {"name": "p"}, "spec": {"podSelector": {"matchLabels": {"k": bad}}}},
+            {"apiVersion": "v1", "kind": "Service", "metadata": {"name": "s"},
+             "spec": {"selector": {"k": bad}}},
+            {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "d"},
+             "spec": {"template": {"spec": {"nodeSelector": {"k": bad}}}}},
+            {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "d"},
+             "spec": {"template": {"metadata": {"labels": {"k": bad}}}}},
+            {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "d"},
+             "spec": {"selector": {"matchLabels": {"a/b/c": "v"}}}},
+        ):
+            with self.assertRaises(CRC.CensusError):
+                CRC.check_installable([obj])
+        # ... and a Service selector that is not a mapping at all.
+        with self.assertRaises(CRC.CensusError):
+            CRC.check_installable([{"apiVersion": "v1", "kind": "Service",
+                                    "metadata": {"name": "s"},
+                                    "spec": {"selector": "elsewhere"}}])
+
+    def test_a_label_spelled_matchLabels_is_still_a_label(self):
+        # The companion that keeps the selector walk from over-reaching:
+        # ObjectMeta is checked and then not descended into, so a label whose
+        # KEY happens to be `matchLabels` is an ordinary label -- Kubernetes
+        # installs it, and refusing it would be a false alarm.
+        CRC.check_installable(self.object_with(labels={"matchLabels": "v",
+                                                       "nodeSelector": "v"}))
+        CRC.check_installable(self.object_with(annotations={"matchLabels": "a\nb"}))
+
+    def test_the_pinned_render_is_not_over_refused(self):
+        # The whole point of the acceptance companions, restated for this
+        # class: every rule above must leave the real shape alone. The fixture
+        # render carries `app.kubernetes.io/*` keys, a quoted version value,
+        # matchLabels on both selector sides and a namespace -- and it passes.
+        self.assertEqual(self.census(render())["objects"], 4)
 
 
 class MutationBattery(CensusFixture):
