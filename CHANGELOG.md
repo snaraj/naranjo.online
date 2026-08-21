@@ -27,6 +27,8 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   gap as documentation. An absent verdict, a foreign class, or any mismatch
   fails the job red. There is no third path and no toggle.
 
+## [0.1.26] - 2026-08-21
+
 ### Added
 
 - Publish the parallel-agent worktree contract in `AGENTS.md` so any clone
