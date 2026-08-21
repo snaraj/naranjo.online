@@ -55,8 +55,15 @@ newer local versions generally work, CI is authoritative.
 
 ## Releases
 
-Every protected-main merge publishes exactly one patch release after the
-merged SHA's PR gate succeeds. The merged source carries numeric `X.Y.Z` in
+Every protected-main merge that changes an artifact publishes exactly one patch
+release after the merged SHA's PR gate succeeds. A merge whose every commit is
+confined to the documentation allowlist — root `AGENTS.md`, `README.md`,
+`.gitignore`, and Markdown under `docs/` — changes no artifact, so it advances
+no version and publishes nothing; the orchestrator re-derives that class from
+git and logs an explicit verdict instead of dispatching the publisher. Nothing
+is relaxed by that: an unchanged artifact has nothing to version, sign, scan,
+or attest, and documentation merges still run the entire PR gate. The merged
+source of an artifact release carries numeric `X.Y.Z` in
 `VERSION`, chart `version`, `appVersion`, and the dated changelog heading, and
 exact plain `vX.Y.Z` in the image tag. Automation creates that plain tag at the
 exact SHA and explicitly dispatches the publisher definition from protected

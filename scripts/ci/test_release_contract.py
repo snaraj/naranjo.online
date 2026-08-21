@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from unittest import mock
 from pathlib import Path
 
@@ -2955,6 +2956,655 @@ class NoArtifactClassTests(unittest.TestCase):
                 RC.classify_transition(root, inside, crossing, first_parent=True)
             self.assertIn("escaped.txt", str(denied.exception))
 
+    def test_gitlink_entry_denies_even_under_an_allowlisted_path(self):
+        # A submodule records mode 160000, which is outside the regular-file
+        # mode set. The path itself is allowlisted, so only the mode guard can
+        # deny here — exactly the case a path-only allowlist would wave
+        # through.
+        with tempfile.TemporaryDirectory() as temporary:
+            root, base = self.repo(temporary)
+            pointer = self.git(root, "rev-parse", "HEAD")
+            self.git(
+                root, "update-index", "--add", "--cacheinfo", f"160000,{pointer},docs/vendored"
+            )
+            self.git(
+                root, "-c", "user.name=Release Test",
+                "-c", "user.email=release@example.invalid", "commit", "-m", "gitlink",
+            )
+            head = self.git(root, "rev-parse", "HEAD")
+            with self.assertRaises(RC.ContractError) as denied:
+                RC.classify_transition(root, base, head, first_parent=True)
+            self.assertIn("docs/vendored", str(denied.exception))
+
+    def test_malformed_diff_entry_denies_instead_of_being_skipped(self):
+        # The raw-diff parser is the one place a hostile or novel git output
+        # could silently drop an entry, so its guard must deny rather than
+        # ignore. Drive it directly: a real repository cannot easily emit a
+        # malformed entry, and a guard nothing can reach is not a guard.
+        with tempfile.TemporaryDirectory() as temporary:
+            root, base = self.repo(temporary)
+            head = self.paths_commit(root, {"AGENTS.md": "agents\n"}, "docs")
+            self.assertEqual(
+                RC.classify_transition(root, base, head, first_parent=True)["class"],
+                "no-artifact",
+            )
+            # _diff_entries shells out itself rather than going through the
+            # _git helper, so the seam to stub is subprocess.run inside the
+            # module under test.
+            original = RC.subprocess.run
+            for corrupt, reason in (
+                (":100644 100644 aaaaaaa bbbbbbb\x00AGENTS.md\x00", "status field missing"),
+                (":100644 100644 aaaaaaa bbbbbbb Z\x00AGENTS.md\x00", "unknown status letter"),
+                (":100644 100644 zzzzzzz bbbbbbb M\x00AGENTS.md\x00", "non-hex blob id"),
+                (":100644 100644 aaaaaaa bbbbbbb M\x00\x00", "empty path"),
+                (":100644 M\x00AGENTS.md\x00", "truncated meta"),
+            ):
+                with self.subTest(reason=reason):
+                    def fake(command, *args, _corrupt=corrupt, **kwargs):
+                        if "diff" in command:
+                            return subprocess.CompletedProcess(
+                                command, 0, stdout=_corrupt.encode("utf-8"), stderr=b""
+                            )
+                        return original(command, *args, **kwargs)
+
+                    RC.subprocess.run = fake
+                    try:
+                        with self.assertRaises(RC.ContractError) as denied:
+                            RC.classify_transition(root, base, head, first_parent=True)
+                    finally:
+                        RC.subprocess.run = original
+                    self.assertIn("malformed", str(denied.exception))
+            # An unpaired stream denies on its own branch, not this one.
+            RC.subprocess.run = lambda command, *args, **kwargs: (
+                subprocess.CompletedProcess(command, 0, stdout=b":100644\x00", stderr=b"")
+                if "diff" in command
+                else original(command, *args, **kwargs)
+            )
+            try:
+                with self.assertRaises(RC.ContractError) as unpaired:
+                    RC.classify_transition(root, base, head, first_parent=True)
+            finally:
+                RC.subprocess.run = original
+            self.assertIn("not meta/path paired", str(unpaired.exception))
+            # The stub is fully reverted: the same range classifies again.
+            self.assertEqual(
+                RC.classify_transition(root, base, head, first_parent=True)["class"],
+                "no-artifact",
+            )
+
+    def test_head_snapshot_is_revalidated_even_when_the_range_touches_no_lock(self):
+        # Unchanged locks across the range do NOT imply a coherent release
+        # snapshot: the range can START from an incoherent one. The head
+        # validate_snapshot call is what catches that, and without it this
+        # range would report a no-artifact verdict carrying a tag that
+        # contradicts the chart.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.git(root, "init", "-q")
+            self.git(root, "branch", "-m", "main")
+            skewed = snapshot("0.1.9")
+            skewed["chart/Chart.yaml"] = 'apiVersion: v2\nversion: 0.1.8\nappVersion: "0.1.8"\n'
+            base = self.paths_commit(root, skewed, "skewed base")
+            head = self.paths_commit(root, {"AGENTS.md": "agents\n"}, "docs only")
+            for lock in RC.RELEASE_LOCK_PATHS:
+                self.assertEqual(
+                    self.git(root, "show", f"{base}:{lock}"),
+                    self.git(root, "show", f"{head}:{lock}"),
+                    lock,
+                )
+            with self.assertRaises(RC.ContractError) as denied:
+                RC.classify_transition(root, base, head, first_parent=True)
+            self.assertIn("chart version does not equal VERSION", str(denied.exception))
+
+
+class NoArtifactClassifyShellPathTests(unittest.TestCase):
+    """Executed coverage for the release-after-main classify step's shell.
+
+    ``NoArtifactWiringTests`` only pins substrings of this step's source; it
+    never runs the ~110 lines of bash that decide whether a release happens.
+    This class extracts the real step body from the real workflow file and
+    runs it under real bash, real git (against a synthetic repository this
+    class builds), real jq, real unzip, and the real ``release_contract.py``
+    copied verbatim into that repository -- following the
+    ``ExistingImageShellPathTests`` / ``MainAndCodeQLAuthorizationShellPathTests``
+    house style. Only ``gh``, ``curl``, and ``python3`` are stubbed: ``gh``
+    and ``curl`` because they are the two real network calls the step makes,
+    and ``python3`` only to redirect to this interpreter (it still runs the
+    genuine ``release_contract.py``).
+
+    A note on the case statement's ``*)`` arm ("DENY: unknown transition
+    class"): the line immediately before it,
+    ``test "${rederived_class}" = "${claimed_class}"``, already denies (fails
+    closed, silently, via ``set -e``) for ANY ``claimed_class`` the real
+    ``classify_transition`` cannot itself emit -- and that function only ever
+    returns ``"artifact"`` or ``"no-artifact"``. So a foreign claimed class
+    is caught one line before the printed catch-all message can run;
+    ``test_foreign_verdict_class_denies_before_reaching_the_catchall`` proves
+    the fail-closed *behavior* and documents this reachability limit rather
+    than silently asserting text that cannot appear.
+    """
+
+    STEP = "Classify the completed range from its authorized gate verdict"
+
+    # --- synthetic repository helpers, mirroring NoArtifactClassTests -----
+
+    def git(self, root: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(root), *args], check=True, text=True, stdout=subprocess.PIPE
+        ).stdout.strip()
+
+    def release_commit(self, root: Path, version: str) -> str:
+        files = snapshot(version)
+        for name, contents in files.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(contents, encoding="utf-8")
+        self.git(root, "add", ".")
+        self.git(
+            root, "-c", "user.name=Release Test", "-c", "user.email=release@example.invalid",
+            "commit", "-m", version,
+        )
+        return self.git(root, "rev-parse", "HEAD")
+
+    def paths_commit(self, root: Path, files: dict[str, str | None], marker: str) -> str:
+        for name, contents in files.items():
+            path = root / name
+            if contents is None:
+                path.unlink()
+                self.git(root, "rm", "-q", "--cached", name)
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(contents, encoding="utf-8")
+            self.git(root, "add", name)
+        self.git(
+            root, "-c", "user.name=Release Test", "-c", "user.email=release@example.invalid",
+            "commit", "-m", marker,
+        )
+        return self.git(root, "rev-parse", "HEAD")
+
+    def repo(self, temporary: str) -> tuple[Path, str]:
+        root = Path(temporary)
+        self.git(root, "init", "-q")
+        self.git(root, "branch", "-m", "main")
+        return root, self.release_commit(root, "0.1.9")
+
+    def _seed_documentation_push(self, temporary: str) -> tuple[Path, str, str, str]:
+        """Build base(0.1.9) -> release_head(0.1.10) -> docs_head.
+
+        The one real patch boundary (base -> release_head) is what every
+        legitimate no-artifact scenario re-derives against; release_head
+        doubles as this push's true base AND the head a real pr-gate.yml run
+        history would report as the last successfully gated main commit.
+        """
+        root, base = self.repo(temporary)
+        release_head = self.release_commit(root, "0.1.10")
+        docs_head = self.paths_commit(root, {"AGENTS.md": "post-release docs\n"}, "docs")
+        return root, base, release_head, docs_head
+
+    @staticmethod
+    def _install_release_contract(root: Path) -> None:
+        destination = root / "scripts" / "ci"
+        destination.mkdir(parents=True, exist_ok=True)
+        shutil.copy(HERE / "release_contract.py", destination / "release_contract.py")
+
+    @staticmethod
+    def _pr_gate_runs(entries: list[tuple[int, str]]) -> dict[str, object]:
+        return {
+            "workflow_runs": [
+                {
+                    "id": run_id,
+                    "head_branch": "main",
+                    "event": "push",
+                    "conclusion": "success",
+                    "head_sha": sha,
+                }
+                for run_id, sha in entries
+            ]
+        }
+
+    # --- workflow step extraction -------------------------------------------
+
+    @staticmethod
+    def workflow_run_block(step_name: str) -> str:
+        """Extract one step's ``run: |`` body from release-after-main.yml.
+
+        ``ExistingImageShellPathTests.workflow_run_block`` is hardcoded to
+        release-publisher.yml, so this repeats its exact dedent logic against
+        the orchestrator workflow instead. A renamed or removed step raises
+        AssertionError rather than testing an empty block.
+        """
+        lines = (ROOT / ".github" / "workflows" / "release-after-main.yml").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        marker = f"      - name: {step_name}"
+        try:
+            start = lines.index(marker)
+            run = lines.index("        run: |", start)
+        except ValueError as exc:
+            raise AssertionError(f"workflow step is missing: {step_name}") from exc
+        body: list[str] = []
+        for line in lines[run + 1 :]:
+            if line.startswith("      - name:"):
+                break
+            if line.startswith("          "):
+                body.append(line[10:])
+            elif not line:
+                body.append("")
+            else:
+                break
+        if not body:
+            raise AssertionError(f"workflow step has no executable run block: {step_name}")
+        return "\n".join(body) + "\n"
+
+    # --- execution -----------------------------------------------------------
+
+    def execute(
+        self,
+        block: str,
+        *,
+        root: Path,
+        completed_sha: str,
+        main_run_id: str = "1000",
+        artifacts_pages: list[dict[str, object]] | None = None,
+        pr_gate_runs: dict[str, object] | None = None,
+        verdict: dict[str, object] | None = None,
+        zip_entries: dict[str, bytes] | None = None,
+    ) -> tuple[subprocess.CompletedProcess[str], str, str]:
+        for tool in ("jq", "unzip", "find"):
+            if shutil.which(tool) is None:
+                raise AssertionError(
+                    f"required tool is not installed on this machine: {tool} "
+                    "-- refusing to skip silently"
+                )
+        if artifacts_pages is None:
+            artifacts_pages = [
+                {"artifacts": [{"id": 1, "name": "transition-verdict", "expired": False}]}
+            ]
+        if pr_gate_runs is None:
+            pr_gate_runs = {"workflow_runs": []}
+        if zip_entries is None:
+            payload = json.dumps(verdict if verdict is not None else {}).encode("utf-8")
+            zip_entries = {"transition-verdict.json": payload}
+
+        with tempfile.TemporaryDirectory() as scratch:
+            runner = Path(scratch)
+            artifacts_json = runner / "artifacts-listing.json"
+            artifacts_json.write_text(json.dumps(artifacts_pages), encoding="utf-8")
+            pr_gate_json = runner / "pr-gate-runs.json"
+            pr_gate_json.write_text(json.dumps(pr_gate_runs), encoding="utf-8")
+            verdict_zip = runner / "verdict.zip"
+            with zipfile.ZipFile(verdict_zip, "w") as archive:
+                for name, data in zip_entries.items():
+                    archive.writestr(name, data)
+            event_path = runner / "event.json"
+            event_path.write_text(json.dumps(event(completed_sha)), encoding="utf-8")
+            output_path = runner / "github-output.txt"
+            output_path.write_text("", encoding="utf-8")
+            summary_path = runner / "github-summary.md"
+            summary_path.write_text("", encoding="utf-8")
+            runner_temp = runner / "runner-temp"
+            runner_temp.mkdir()
+
+            # set -x: several of this step's guards are bare `test`/`[[ ]]`
+            # statements with no printed message on failure (fail closed via
+            # `set -e` alone). Tracing makes the exact compared values -- the
+            # "distinguishing output" -- visible on stderr without touching
+            # the workflow block itself.
+            prelude = r'''
+set -x
+
+python3() {
+  "${TEST_PYTHON}" "$@"
+}
+
+gh() {
+  local all="$*"
+  case "${all}" in
+    *"/artifacts?"*) cat "${ARTIFACTS_JSON}" ;;
+    *"pr-gate.yml/runs?"*) cat "${PR_GATE_JSON}" ;;
+    *) return 2 ;;
+  esac
+}
+
+curl() {
+  local output=''
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--output" ]; then
+      output="$2"
+      shift 2
+    else
+      shift
+    fi
+  done
+  cp "${VERDICT_ZIP}" "${output}"
+}
+'''
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "TEST_PYTHON": ExistingImageShellPathTests.bash_path(sys.executable),
+                    "GH_TOKEN": "fixture-token",
+                    "COMPLETED_SHA": completed_sha,
+                    "MAIN_RUN_ID": main_run_id,
+                    "RUNNER_TEMP": str(runner_temp),
+                    "GITHUB_OUTPUT": str(output_path),
+                    "GITHUB_STEP_SUMMARY": str(summary_path),
+                    "GITHUB_REPOSITORY": "owner/site",
+                    "GITHUB_API_URL": "https://api.github.example.invalid",
+                    "GITHUB_EVENT_PATH": str(event_path),
+                    "ARTIFACTS_JSON": str(artifacts_json),
+                    "PR_GATE_JSON": str(pr_gate_json),
+                    "VERDICT_ZIP": str(verdict_zip),
+                }
+            )
+            completed = subprocess.run(
+                [ExistingImageShellPathTests.bash_executable()],
+                cwd=root,
+                env=environment,
+                check=False,
+                input=prelude + "\n" + block,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                timeout=30,
+            )
+            return (
+                completed,
+                output_path.read_text(encoding="utf-8"),
+                summary_path.read_text(encoding="utf-8"),
+            )
+
+    # --- scenario 1: documentation-only merge, both-direction happy path ---
+
+    def test_documentation_only_merge_writes_no_artifact_class_and_summary(self):
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, base, release_head, docs_head = self._seed_documentation_push(temporary)
+            self._install_release_contract(root)
+            verdict = {"class": "no-artifact", "base_sha": release_head, "source_sha": docs_head}
+            pr_gate_runs = self._pr_gate_runs([(500, release_head)])
+            completed, output, summary = self.execute(
+                block,
+                root=root,
+                completed_sha=docs_head,
+                verdict=verdict,
+                pr_gate_runs=pr_gate_runs,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertIn("class=no-artifact\n", output)
+            self.assertIn("NO-ARTIFACT:", completed.stdout)
+            self.assertIn("No-artifact merge", summary)
+
+    # --- scenario 2: artifact merge, the other happy-path direction --------
+
+    def test_artifact_merge_writes_artifact_class(self):
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, base = self.repo(temporary)
+            self._install_release_contract(root)
+            bump_head = self.release_commit(root, "0.1.10")
+            verdict = {"class": "artifact", "base_sha": base, "source_sha": bump_head}
+            completed, output, summary = self.execute(
+                block, root=root, completed_sha=bump_head, verdict=verdict
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertIn("class=artifact\n", output)
+            self.assertNotIn("NO-ARTIFACT:", completed.stdout)
+            self.assertEqual(summary, "")
+
+    # --- scenario 3: THE KEY REGRESSION -- a forged base inside the push ---
+
+    def test_forged_base_inside_the_push_is_caught_by_the_independent_anchor(self):
+        """A verdict naming base_sha AFTER the version bump must still deny.
+
+        Push = [bump commit that changes VERSION and a code file] then
+        [docs-only commit]. The true class over the whole push is artifact.
+        A forged (or buggy) verdict claims base_sha = the BUMP commit itself
+        and class = no-artifact: re-deriving over [bump..docs] genuinely
+        reports no-artifact, because the docs commit alone changes nothing --
+        the re-derivation is parameterised by claimed_base, so it is NOT
+        independent of the verdict. Before the independent previous_head
+        anchor existed, this verdict would have sailed through and silently
+        skipped a release -- the wrong failure direction for requirement 10.
+        The fix asks the Actions record for the pr-gate.yml run history
+        directly, so the forged base cannot move the anchor: the four-lock
+        diff against the TRUE previous gated head (`base`, before the bump)
+        finds VERSION changed and denies before the parameterised
+        re-derivation is ever trusted.
+        """
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, base = self.repo(temporary)
+            self._install_release_contract(root)
+            bump = self.paths_commit(
+                root,
+                {**snapshot("0.1.10"), "cmd/site/main.go": "package main\n"},
+                "bump with trailing code",
+            )
+            docs_head = self.paths_commit(root, {"AGENTS.md": "docs\n"}, "docs")
+            verdict = {"class": "no-artifact", "base_sha": bump, "source_sha": docs_head}
+            pr_gate_runs = self._pr_gate_runs([(500, base)])
+            completed, output, _summary = self.execute(
+                block,
+                root=root,
+                completed_sha=docs_head,
+                verdict=verdict,
+                pr_gate_runs=pr_gate_runs,
+            )
+            self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertIn("VERSION", completed.stderr)
+            self.assertIn("changed since the last gated main head", completed.stderr)
+            self.assertIn(base, completed.stderr)
+            self.assertNotIn("class=", output)
+
+    # --- scenarios 4-6: the transition-verdict artifact listing ------------
+
+    def _assert_artifact_listing_denies(self, *, artifacts: list[dict[str, object]]) -> None:
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, base, release_head, docs_head = self._seed_documentation_push(temporary)
+            self._install_release_contract(root)
+            # A fully valid pr_gate_runs fixture, matching the happy-path
+            # scenario exactly: this isolates the artifact-listing guard as
+            # the ONLY thing that can make the run deny. Without this, a
+            # mutation that silently widens the artifact selection (e.g.
+            # `length == 1` -> `length >= 1`) would still be masked by the
+            # unrelated empty-pr-gate-runs default and this test would stay
+            # green for the wrong reason.
+            completed, output, _summary = self.execute(
+                block,
+                root=root,
+                completed_sha=docs_head,
+                artifacts_pages=[{"artifacts": artifacts}],
+                pr_gate_runs=self._pr_gate_runs([(500, release_head)]),
+                verdict={"class": "no-artifact", "base_sha": release_head, "source_sha": docs_head},
+            )
+            self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            # `set -x` traces the jq PROGRAM TEXT (a static command-line
+            # argument) on every invocation, so the literal else-branch
+            # message string is visible in stderr even when jq never takes
+            # that branch -- that text alone is not distinguishing. jq's
+            # actual runtime error is prefixed "jq: error (at FILE:LINE): ",
+            # with no surrounding quotes; matching "): " immediately before
+            # the message is what proves the error() call actually fired.
+            self.assertIn("): expected exactly one transition-verdict artifact", completed.stderr)
+            self.assertNotIn("class=", output)
+
+    def test_missing_transition_verdict_artifact_denies(self):
+        self._assert_artifact_listing_denies(artifacts=[])
+
+    def test_duplicate_transition_verdict_artifacts_deny(self):
+        self._assert_artifact_listing_denies(
+            artifacts=[
+                {"id": 1, "name": "transition-verdict", "expired": False},
+                {"id": 2, "name": "transition-verdict", "expired": False},
+            ]
+        )
+
+    def test_expired_only_transition_verdict_artifact_denies(self):
+        self._assert_artifact_listing_denies(
+            artifacts=[{"id": 1, "name": "transition-verdict", "expired": True}]
+        )
+
+    # --- scenario 7: claimed_source disagrees with the completed SHA -------
+
+    def test_claimed_source_mismatch_denies(self):
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, base, release_head, docs_head = self._seed_documentation_push(temporary)
+            self._install_release_contract(root)
+            wrong_source = "b" * 40
+            verdict = {
+                "class": "no-artifact", "base_sha": release_head, "source_sha": wrong_source,
+            }
+            completed, output, _summary = self.execute(
+                block, root=root, completed_sha=docs_head, verdict=verdict
+            )
+            self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertIn(f"test {wrong_source} = {docs_head}", completed.stderr)
+            self.assertNotIn("class=", output)
+
+    # --- scenario 8: claimed_base is not 40 lowercase hex characters -------
+
+    def test_claimed_base_not_lowercase_hex_denies(self):
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, base, release_head, docs_head = self._seed_documentation_push(temporary)
+            self._install_release_contract(root)
+            bad_base = "A" * 40
+            verdict = {"class": "no-artifact", "base_sha": bad_base, "source_sha": docs_head}
+            completed, output, _summary = self.execute(
+                block, root=root, completed_sha=docs_head, verdict=verdict
+            )
+            self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            # `=~` alone is not distinguishing (the earlier, always-reached
+            # MAIN_RUN_ID regex check also traces one); require the bad
+            # value adjacent to the operator, matching the traced
+            # `[[ AAAA...A =~ ... ]]` line for this exact guard.
+            self.assertIn(f"[[ {bad_base} =~", completed.stderr)
+            self.assertNotIn("class=", output)
+
+    # --- scenarios 9-10: claimed_class disagrees with the re-derivation ----
+
+    def _assert_class_mismatch_denies(self, *, claimed_class: str) -> None:
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, base, release_head, docs_head = self._seed_documentation_push(temporary)
+            self._install_release_contract(root)
+            verdict = {
+                "class": claimed_class, "base_sha": release_head, "source_sha": docs_head,
+            }
+            completed, output, _summary = self.execute(
+                block, root=root, completed_sha=docs_head, verdict=verdict
+            )
+            self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertIn(f"test no-artifact = {claimed_class}", completed.stderr)
+            self.assertNotIn(
+                "DENY: unknown transition class", completed.stdout + completed.stderr
+            )
+            self.assertNotIn("class=", output)
+
+    def test_foreign_verdict_class_denies_before_reaching_the_catchall(self):
+        # See the class docstring: a claimed class of "release" is denied by
+        # the equality gate one line above the case statement, because the
+        # real classifier can never itself produce "release" to agree with
+        # it. Fail-closed is proven; the printed catch-all text is not
+        # reachable here and this test does not pretend otherwise.
+        self._assert_class_mismatch_denies(claimed_class="release")
+
+    def test_claimed_class_disagrees_with_rederivation_denies(self):
+        self._assert_class_mismatch_denies(claimed_class="artifact")
+
+    # --- scenario 11: no earlier successful protected-main gate run --------
+
+    def test_no_earlier_successful_protected_main_gate_run_denies(self):
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, base, release_head, docs_head = self._seed_documentation_push(temporary)
+            self._install_release_contract(root)
+            verdict = {"class": "no-artifact", "base_sha": release_head, "source_sha": docs_head}
+            for description, pr_gate_runs in (
+                ("empty", self._pr_gate_runs([])),
+                ("only later runs", self._pr_gate_runs([(1500, release_head)])),
+            ):
+                with self.subTest(description=description):
+                    completed, output, _summary = self.execute(
+                        block,
+                        root=root,
+                        completed_sha=docs_head,
+                        verdict=verdict,
+                        pr_gate_runs=pr_gate_runs,
+                    )
+                    self.assertNotEqual(
+                        completed.returncode, 0, completed.stdout + completed.stderr
+                    )
+                    # See _assert_artifact_listing_denies: the jq else-branch
+                    # message is traced as static program text on every
+                    # invocation of this same jq command (including the
+                    # happy path), so only the runtime "jq: error (at ...): "
+                    # prefix immediately before the message proves the
+                    # error() call actually fired here.
+                    self.assertIn(
+                        "): no earlier successful protected-main gate run",
+                        completed.stderr,
+                    )
+                    self.assertNotIn("class=", output)
+
+    # --- scenario 12: the previous gated head is not an ancestor -----------
+
+    def test_previous_gated_head_not_an_ancestor_denies(self):
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, base, release_head, docs_head = self._seed_documentation_push(temporary)
+            self._install_release_contract(root)
+            # A disconnected root commit sharing docs_head's EXACT tree, so
+            # only its ancestry -- never its lock-file content -- is what
+            # can make the check fail. commit-tree needs no checkout, so
+            # HEAD never leaves docs_head.
+            tree = self.git(root, "rev-parse", f"{docs_head}^{{tree}}")
+            foreign_sha = self.git(
+                root, "-c", "user.name=Release Test", "-c", "user.email=release@example.invalid",
+                "commit-tree", tree, "-m", "foreign root sharing the same tree",
+            )
+            verdict = {"class": "no-artifact", "base_sha": release_head, "source_sha": docs_head}
+            pr_gate_runs = self._pr_gate_runs([(500, foreign_sha)])
+            completed, output, _summary = self.execute(
+                block,
+                root=root,
+                completed_sha=docs_head,
+                verdict=verdict,
+                pr_gate_runs=pr_gate_runs,
+            )
+            self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertIn("merge-base --is-ancestor", completed.stderr)
+            self.assertIn(foreign_sha, completed.stderr)
+            self.assertIn(docs_head, completed.stderr)
+            self.assertNotIn("class=", output)
+
+    # --- scenario 13: the verdict zip carries more than one file -----------
+
+    def test_zip_with_more_than_one_file_denies(self):
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, base, release_head, docs_head = self._seed_documentation_push(temporary)
+            self._install_release_contract(root)
+            verdict = {"class": "no-artifact", "base_sha": release_head, "source_sha": docs_head}
+            zip_entries = {
+                "transition-verdict.json": json.dumps(verdict).encode("utf-8"),
+                "unexpected-extra-file.json": b"{}",
+            }
+            completed, output, _summary = self.execute(
+                block, root=root, completed_sha=docs_head, zip_entries=zip_entries
+            )
+            self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            # `wc -l` output carries platform-dependent leading whitespace
+            # (e.g. macOS: "       2"); match the traced comparison loosely
+            # enough to survive that without losing the "it was 2, not 1"
+            # distinguishing evidence.
+            self.assertIn("2' -eq 1", completed.stderr)
+            self.assertNotIn("class=", output)
+
 
 class ExistingImageShellPathTests(unittest.TestCase):
     @staticmethod
@@ -5181,6 +5831,26 @@ class NoArtifactWiringTests(unittest.TestCase):
         )
         self.assertNotIn("attempts", artifact_fetch[0])
         self.assertIn("overwrite: true", (ROOT / ".github/workflows/pr-gate.yml").read_text(encoding="utf-8"))
+        # claimed_base is verdict-supplied and the class re-derivation is
+        # parameterised by it, so the no-artifact path must anchor on a base
+        # the verdict cannot choose. Pin every load-bearing piece: the shape
+        # check, the Actions-record lookup, the ancestry sanity check, and
+        # the four-lock equality against that independent head.
+        no_artifact = orchestrator.split("no-artifact)", 1)[1].split(
+            "DENY: unknown transition class", 1
+        )[0]
+        self.assertIn('[[ "${claimed_base}" =~ ^[0-9a-f]{40}$ ]]', orchestrator)
+        self.assertIn("actions/workflows/pr-gate.yml/runs?branch=main", no_artifact)
+        self.assertIn("no earlier successful protected-main gate run", no_artifact)
+        self.assertIn('[[ "${previous_head}" =~ ^[0-9a-f]{40}$ ]]', no_artifact)
+        self.assertIn(
+            'git merge-base --is-ancestor "${previous_head}" "${COMPLETED_SHA}"', no_artifact
+        )
+        self.assertIn(
+            'git diff --quiet "${previous_head}" "${COMPLETED_SHA}" -- "${lock}"', no_artifact
+        )
+        for lock in ("VERSION", "chart/Chart.yaml", "chart/values.yaml", "CHANGELOG.md"):
+            self.assertIn(lock, no_artifact.split("for lock in", 1)[1].split("\n", 1)[0])
         self.assertIn("DENY: unknown transition class", orchestrator)
         self.assertIn("publisher not dispatched", orchestrator)
         self.assertLess(

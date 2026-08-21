@@ -111,7 +111,15 @@ Numbered for citation, repo-scoped, none negotiable in code:
     mode all deny; renames decompose into add plus delete, so a rename
     crossing the allowlist boundary denies through its non-allowlisted side.
     Widening the allowlist is itself an artifact-classified gate change that
-    releases.
+    releases. One consequence is deliberate and must not be mistaken for a
+    bug: because the orchestrator anchors the no-artifact re-proof on the last
+    release boundary and on the head of the newest earlier successful
+    protected-main gate run, a documentation merge whose retained release
+    never completed fails red — and that red is STICKY. Every later
+    documentation merge fails the same way until an artifact merge moves the
+    boundary past it. That is the intended trade: loud and recoverable, never
+    a wrong release. It is reachable under the ordinary rebase convention of
+    a separate slot commit, not only under exotic histories.
     Successful main CI publishes that exact SHA as one
     server-locked plain `vX.Y.Z` release. The explicit workflow dispatch after
     a token-created tag selects the publisher definition from protected `main`
@@ -461,7 +469,8 @@ Worker must re-run the bounded check at the new exact head.
   the exact head, the base equals current protected `main`, all discussions and
   findings are resolved, a fresh exact-head APPROVE receipt exists, a fresh
   exact-head canonical `ROLE: MAIN-WORKER` / `VERDICT: PASS` receipt exists, the next patch
-  still follows that base, the automatic release consequence is proven, and
+  still follows that base for an artifact-classified PR (a documentation-only
+  PR reserves no patch at all), the automatic release consequence is proven, and
   the owner-observed release-control receipt proves immutable releases plus
   strict exact required checks, and the owner's separate bypass check reports
   no bypass actor — the receipt carries no bypass field. Only the coordinator
@@ -523,7 +532,9 @@ The complete delivery loop, each step gated by the sections around it:
    are lane-prefixed (`<lane>/<topic>`, e.g. `sonnet5/contracts-0.1.13`,
    `opus5/panels-fix`). One writer per branch, always —
    a branch that is not yours is a branch you never push to. Reserve the exact
-   next patch from that base; if another PR lands, create a fresh branch from
+   next patch from that base when the change touches any artifact surface; a
+   documentation-only change (requirement 10's closed allowlist) reserves no
+   patch and must leave every release lock untouched. If another PR lands, create a fresh branch from
    current main, carry the still-valid diff without rewriting published
    history, take the new next patch, and close/supersede the stale PR.
 3. **Build the change** inside the requirements and doctrine above.

@@ -112,6 +112,44 @@ jobs:
               retained_tag="$(jq -er '.tag' <<<"${rederived}")"
               retained_version="$(jq -er '.version' <<<"${rederived}")"
               [[ "${retained_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+              # The re-derivation above is PARAMETERISED by claimed_base, so
+              # it is not independent of the verdict: a verdict naming a base
+              # INSIDE this push makes a genuine artifact merge re-derive as
+              # documentation, and every downstream check - including the gap
+              # re-proof, whose boundary would then BE that base - agrees with
+              # it. That skips a release silently, the wrong failure direction
+              # for requirement 10. So anchor on a base the verdict cannot
+              # choose: the head of the newest EARLIER successful protected-
+              # main gate run, straight from the Actions record. A
+              # documentation-only push changes no release lock, so all four
+              # locks must be byte-identical between that head and this one.
+              # A forged base cannot move this anchor.
+              previous_json="${RUNNER_TEMP}/previous-main-runs.json"
+              gh api --method GET \
+                --header 'Accept: application/vnd.github+json' \
+                --header 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/${GITHUB_REPOSITORY}/actions/workflows/pr-gate.yml/runs?branch=main&event=push&status=success&per_page=100" \
+                > "${previous_json}"
+              # No earlier successful main run - a fresh repository, or one
+              # whose run records have aged out of retention - denies. The
+              # anchor is unavailable, so the class is unprovable.
+              previous_head="$(jq -er --argjson current "${MAIN_RUN_ID}" \
+                '[.workflow_runs[]
+                  | select(.id < $current and .head_branch == "main"
+                           and .event == "push" and .conclusion == "success")]
+                 | if length == 0 then error("no earlier successful protected-main gate run")
+                   else (max_by(.id) | .head_sha) end' \
+                "${previous_json}")"
+              [[ "${previous_head}" =~ ^[0-9a-f]{40}$ ]]
+              test "${previous_head}" != "${COMPLETED_SHA}"
+              git merge-base --is-ancestor "${previous_head}" "${COMPLETED_SHA}"
+              for lock in VERSION chart/Chart.yaml chart/values.yaml CHANGELOG.md; do
+                if ! git diff --quiet "${previous_head}" "${COMPLETED_SHA}" -- "${lock}"; then
+                  printf 'DENY: %s changed since the last gated main head %s; this is not a documentation-only push\n' \
+                    "${lock}" "${previous_head}" >&2
+                  exit 1
+                fi
+              done
               # DELIBERATE DELTA from the sibling delivery repository, whose
               # orchestrator creates the tag itself and can therefore poll
               # for the retained tag to anchor this check. Here the PUBLISHER
@@ -145,9 +183,10 @@ jobs:
               # artifact merge (which would carry its own boundary and
               # contradict last-boundary recovery), so the walk cannot leave
               # the release push, and the anchor lands on the commit the
-              # publisher actually tagged. A pathological rebase ordering
-              # that interleaves documentation commits before trailing
-              # artifact commits still fails closed (red), never silently —
+              # publisher actually tagged. A rebase ordering that interleaves
+              # documentation commits before trailing artifact commits still
+              # fails closed (red), never silently — this is ORDINARY under
+              # the separate-slot-commit convention, not exotic —
               # and that red is STICKY: every later documentation merge
               # fails the same way until an artifact merge moves the
               # boundary past it. Loud and recoverable, never a wrong
@@ -179,6 +218,17 @@ jobs:
                 "${COMPLETED_SHA}" "${retained_tag}" >> "${GITHUB_STEP_SUMMARY}"
               ;;
             *)
+              # UNREACHABLE TODAY, and deliberately kept. classify_transition
+              # emits exactly two verdicts, so a foreign claimed_class can
+              # never equal the re-derived one and the equality test above
+              # already denies - silently, under set -e - one line before
+              # this printf could run. The executed shell-path suite proves
+              # that: it asserts the denial happens, not that this text
+              # appears. This branch exists so that if the classifier ever
+              # gains a third verdict, an unhandled value fails loudly here
+              # instead of falling through the case with a zero exit. It is
+              # a structural backstop, not a live guard, and should not be
+              # scored as a decorative check.
               printf 'DENY: unknown transition class %s\n' "${claimed_class}" >&2
               exit 1
               ;;
