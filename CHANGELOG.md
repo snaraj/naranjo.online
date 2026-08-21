@@ -7,6 +7,15 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.27] - 2026-08-21
+
+### Changed
+
+- Classify a merged range whose every commit is confined to the documentation
+  allowlist as no-artifact: no version advance, no tag, no Release, no
+  publisher dispatch. Artifact ranges keep the one-exact-patch contract
+  unchanged (#102).
+
 ## [0.1.26] - 2026-08-21
 
 ### Added
