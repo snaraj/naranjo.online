@@ -7,6 +7,21 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.25] - 2026-08-20
+
+### Security
+
+- Refuse the complete 2,050-code-point class that YAML 1.2.2 and PyYAML
+  6.0.3 exclude from printable streams: U+D800-U+DFFF and U+FFFE-U+FFFF
+  (issue #98). The v0.1.24 census reader accepted those raw characters even
+  though the oracle rejected the stream; its production stdin path also
+  accepted malformed UTF-8 preserved by Python's `surrogateescape`. The new
+  pre-parse guard covers every placement before YAML scanning while retaining
+  the exact allowed boundaries, including U+1FFFE/U+1FFFF. Exhaustive class,
+  endpoint-placement, allowed-boundary and raw-byte stdin tests pin the
+  behavior, and a 48th hostile render mutation carries raw U+FFFE in a YAML
+  comment so the real chart gate exercises the guard.
+
 ## [0.1.24] - 2026-08-20
 
 ### Security
