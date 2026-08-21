@@ -41,7 +41,142 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Classify the completed range from its authorized gate verdict
+        # A documentation-only merge changes no artifact, so there is nothing
+        # to version, sign, scan, or release. The gate that validated the
+        # exact pushed range published its verdict as a run artifact on the
+        # run this event names; this step re-derives the entire class from
+        # git before trusting one byte of it, and a no-artifact verdict must
+        # additionally re-prove the whole boundary-to-head gap as
+        # documentation. Every other outcome — absent verdict, foreign class,
+        # mismatch — fails this job red. There is no third path.
+        id: classify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMPLETED_SHA: ${{ github.event.workflow_run.head_sha }}
+          MAIN_RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          set -euo pipefail
+          event_sha="$(python3 -I -B scripts/ci/release_contract.py workflow-run \
+            --event "${GITHUB_EVENT_PATH}" --repository "${GITHUB_REPOSITORY}")"
+          test "${event_sha}" = "${COMPLETED_SHA}"
+          test "$(git rev-parse HEAD)" = "${COMPLETED_SHA}"
+          [[ "${MAIN_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]
+          artifacts_json="${RUNNER_TEMP}/gate-artifacts.json"
+          # Attempt-scoped: the verdict must come from the exact completed
+          # attempt this event names, and a re-attempt overwrites its own
+          # artifact rather than stacking a second one beside it.
+          gh api --method GET --paginate --slurp \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${MAIN_RUN_ID}/attempts/${RUN_ATTEMPT}/artifacts?per_page=100" \
+            > "${artifacts_json}"
+          artifact_id="$(jq -er \
+            '[.[].artifacts[] | select(.name == "transition-verdict" and .expired == false)]
+             | if length == 1 then .[0].id else error("expected exactly one transition-verdict artifact") end' \
+            "${artifacts_json}")"
+          archive="${RUNNER_TEMP}/transition-verdict.zip"
+          curl --silent --show-error --location --fail \
+            --proto '=https' --tlsv1.2 \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2026-03-10' \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --output "${archive}" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip"
+          verdict_dir="${RUNNER_TEMP}/transition-verdict"
+          mkdir -p "${verdict_dir}"
+          unzip -q -o "${archive}" -d "${verdict_dir}"
+          verdict="${verdict_dir}/transition-verdict.json"
+          test "$(find "${verdict_dir}" -type f | wc -l)" -eq 1
+          test -s "${verdict}"
+          claimed_class="$(jq -er '.class' "${verdict}")"
+          claimed_base="$(jq -er '.base_sha' "${verdict}")"
+          claimed_source="$(jq -er '.source_sha' "${verdict}")"
+          test "${claimed_source}" = "${COMPLETED_SHA}"
+          [[ "${claimed_base}" =~ ^[0-9a-f]{40}$ ]]
+          rederived="$(python3 -I -B scripts/ci/release_contract.py transition \
+            --repository . --base "${claimed_base}" --head "${COMPLETED_SHA}" \
+            --first-parent)"
+          rederived_class="$(jq -er '.class' <<<"${rederived}")"
+          test "${rederived_class}" = "${claimed_class}"
+          case "${claimed_class}" in
+            artifact) ;;
+            no-artifact)
+              retained_tag="$(jq -er '.tag' <<<"${rederived}")"
+              retained_version="$(jq -er '.version' <<<"${rederived}")"
+              [[ "${retained_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+              # DELIBERATE DELTA from the sibling delivery repository, whose
+              # orchestrator creates the tag itself and can therefore poll
+              # for the retained tag to anchor this check. Here the PUBLISHER
+              # creates the tag, 15-20 minutes after the merge, so a
+              # documentation merge racing an in-flight release would find no
+              # tag and false-DENY. Anchor on the BOUNDARY COMMIT instead:
+              # release-window revalidates the ENTIRE mainline VERSION
+              # machine and recovers the last exact patch boundary, whose
+              # commit is the first mainline commit after the recovered base.
+              # Re-classifying that boundary -> head gap proves every commit
+              # since the retained release is documentation, from pure git,
+              # with no tag-timing dependency at all. Tag and Release
+              # integrity for that retained version is separately and
+              # continuously proven by the scheduled release audit.
+              window="$(python3 -I -B scripts/ci/release_contract.py release-window \
+                --repository . --head "${COMPLETED_SHA}")"
+              window_base="$(jq -er '.base_sha' <<<"${window}")"
+              # Same-tree consistency assertions, not independent corroboration:
+              # window and rederived both read the version off COMPLETED_SHA.
+              test "$(jq -er '.version' <<<"${window}")" = "${retained_version}"
+              test "$(jq -er '.tag' <<<"${window}")" = "${retained_tag}"
+              [[ "${window_base}" =~ ^[0-9a-f]{40}$ ]]
+              mainline="$(git rev-list --first-parent --reverse "${window_base}..${COMPLETED_SHA}")"
+              boundary_sha="${mainline%%$'\n'*}"
+              [[ "${boundary_sha}" =~ ^[0-9a-f]{40}$ ]]
+              # The publisher tagged the release push's HEAD, which under an
+              # allowed rebase merge may trail the bump commit by further
+              # artifact commits. Advance the anchor over that same push's
+              # non-documentation commits: a later merged range can only be a
+              # docs merge (per-commit confined, which stops this walk) or an
+              # artifact merge (which would carry its own boundary and
+              # contradict last-boundary recovery), so the walk cannot leave
+              # the release push, and the anchor lands on the commit the
+              # publisher actually tagged. A pathological rebase ordering
+              # that interleaves documentation commits before trailing
+              # artifact commits still fails closed (red), never silently.
+              anchor="${boundary_sha}"
+              advancing=false
+              while IFS= read -r commit; do
+                if [ "${commit}" = "${boundary_sha}" ]; then
+                  advancing=true
+                  continue
+                fi
+                [ "${advancing}" = true ] || continue
+                if step="$(python3 -I -B scripts/ci/release_contract.py transition \
+                    --repository . --base "${anchor}" --head "${commit}" \
+                    --first-parent 2>/dev/null)" \
+                  && [ "$(jq -er '.class' <<<"${step}")" = no-artifact ]; then
+                  break
+                fi
+                anchor="${commit}"
+              done <<<"${mainline}"
+              cumulative="$(python3 -I -B scripts/ci/release_contract.py transition \
+                --repository . --base "${anchor}" --head "${COMPLETED_SHA}" \
+                --first-parent)"
+              test "$(jq -er '.class' <<<"${cumulative}")" = no-artifact
+              test "$(jq -er '.tag' <<<"${cumulative}")" = "${retained_tag}"
+              printf 'NO-ARTIFACT: %s is documentation-only; no tag, no Release, publisher not dispatched.\n' \
+                "${COMPLETED_SHA}"
+              printf '## No-artifact merge\n\nCommit %s changed documentation surfaces only; the retained version stays %s (tag and Release integrity are proven by the scheduled release audit) and the publisher was not dispatched.\n' \
+                "${COMPLETED_SHA}" "${retained_tag}" >> "${GITHUB_STEP_SUMMARY}"
+              ;;
+            *)
+              printf 'DENY: unknown transition class %s\n' "${claimed_class}" >&2
+              exit 1
+              ;;
+          esac
+          printf 'class=%s\n' "${claimed_class}" >> "${GITHUB_OUTPUT}"
       - name: Bind event, source, and exact next patch
+        if: steps.classify.outputs.class == 'artifact'
         id: release
         env:
           COMPLETED_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -72,6 +207,7 @@ jobs:
           printf 'base_sha=%s\nsource_sha=%s\nversion=%s\ntag=%s\n' \
             "${base_sha}" "${source_sha}" "${version}" "${tag}" >> "${GITHUB_OUTPUT}"
       - name: Dispatch the successful-main-bound publisher explicitly
+        if: steps.classify.outputs.class == 'artifact'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SOURCE_SHA: ${{ steps.release.outputs.source_sha }}

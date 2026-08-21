@@ -92,10 +92,27 @@ Numbered for citation, repo-scoped, none negotiable in code:
    yes.
 9. **Dependency-free Go.** The Go module stays standard-library only.
    Adding a dependency is an owner decision, not a convenience.
-10. **Every merge releases after the server gate; deploy remains separate.** Every PR, including
-    docs and Dependabot, advances exactly one patch from its current protected
-    base: numeric `VERSION`, chart `version`, `appVersion`, and changelog
-    `X.Y.Z`, plus plain `vX.Y.Z` image tag. Successful main CI publishes that exact SHA as one
+10. **Every artifact merge releases after the server gate; deploy remains
+    separate.** Every PR whose range touches any artifact surface advances
+    exactly one patch from its current protected base: numeric `VERSION`,
+    chart `version`, `appVersion`, and changelog `X.Y.Z`, plus plain `vX.Y.Z`
+    image tag. A range whose every commit is individually confined to the
+    closed documentation allowlist — root `AGENTS.md`, `README.md`,
+    `.gitignore`, and Markdown files under `docs/` — classifies no-artifact:
+    it advances nothing, and the orchestrator re-derives that class from git,
+    re-proves the whole boundary-commit-to-head gap as documentation, and
+    skips the publisher with an explicit logged verdict instead of
+    dispatching it. Removing the release from a documentation-only merge
+    weakens nothing: the artifact is unchanged, so there is
+    nothing to version, sign, scan, or attest. The classifier has exactly
+    two verdicts and no flag, environment variable, or configuration input;
+    a non-allowlisted path with an unchanged version, a mixed range without
+    its one exact patch, an unparseable diff entry, or a non-regular file
+    mode all deny; renames decompose into add plus delete, so a rename
+    crossing the allowlist boundary denies through its non-allowlisted side.
+    Widening the allowlist is itself an artifact-classified gate change that
+    releases.
+    Successful main CI publishes that exact SHA as one
     server-locked plain `vX.Y.Z` release. The explicit workflow dispatch after
     a token-created tag selects the publisher definition from protected `main`
     and carries the completed main-run ID. A separate read-only job verifies
@@ -213,9 +230,11 @@ Build and test, in this order (the same gate CI enforces):
    defaults to older capabilities).
 4. `docker build .` when the Dockerfile or build inputs change.
 
-Releases: every PR advances numeric `VERSION`, chart `version`, `appVersion`,
-and changelog `X.Y.Z`, plus plain `vX.Y.Z` `image.tag`, by exactly one patch
-from its current protected base. Successful main CI creates the plain git tag at the
+Releases: every artifact-classified PR advances numeric `VERSION`, chart
+`version`, `appVersion`, and changelog `X.Y.Z`, plus plain `vX.Y.Z`
+`image.tag`, by exactly one patch from its current protected base; a
+documentation-only range (requirement 10's closed allowlist) advances nothing
+and skips release orchestration entirely. Successful main CI creates the plain git tag at the
 exact merged SHA and explicitly dispatches the protected-main publisher with
 that successful run's ID; a token-created tag is never assumed to trigger
 another push workflow. The publisher's read-only authorization job verifies
@@ -674,6 +693,9 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
 - **release-after-main.yml** — success-only exact-SHA main-CI completion;
   performs no publication mutation and explicitly dispatches the publisher
   definition on protected `main` with the exact completed-run ID.
+  It first re-derives the gate's published transition class from git and
+  gates every release-effect step on `artifact`; a no-artifact range logs its
+  verdict and dispatches nothing.
   The release boundary is recovered for both squash and multi-commit rebase
   pushes. Distinct main SHAs share no cancellation group.
 - **release-publisher.yml** — explicit dispatch on protected `main`; a
@@ -786,9 +808,12 @@ Structural promises of the panels subsystem, pinned by
 
 ## Docs and attribution conventions
 
-- **CHANGELOG discipline.** Keep a Changelog format; every PR immediately
-  follows an empty `[Unreleased]` heading with its exact next-version and ISO
-  date, matching every source lock. There is no later release PR.
+- **CHANGELOG discipline.** Keep a Changelog format; every artifact-classified
+  PR immediately follows an empty `[Unreleased]` heading with its exact
+  next-version and ISO date, matching every source lock; a documentation-only
+  PR leaves `CHANGELOG.md` untouched (the file sits outside the documentation
+  allowlist precisely so a no-release range can never claim one). There is no
+  later release PR.
 - **Truthful README.** Badges and claims report only what CI actually
   measured or the repository can demonstrate — the coverage badges
   publish the gate's own numbers, and prose never advertises a
