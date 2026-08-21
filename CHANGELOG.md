@@ -7,6 +7,220 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.24] - 2026-08-20
+
+### Security
+
+- The chart gates now census the COMPLETE installable Helm render for
+  NetworkPolicy documents, through a reader that resolves every key to its
+  canonical spelling before matching (issue #86). The independent security
+  review of PR #80 proved the previous census could be walked past: it
+  recognised a document only by a raw line whose prefix was exactly `kind`
+  (`chart-egress-pin.sh:146-149` at that head) and the spec only by a raw
+  line exactly equal to `spec:` (`:94-103`), so a SECOND `NetworkPolicy` in
+  the same rendered file spelled `kind :` / `spec :` was invisible to the
+  assertion and to all 19 self-mutations — while parsing, under a real YAML
+  implementation, as an empty-`podSelector`, `policyTypes: [Egress]` policy
+  carrying one empty egress rule. NetworkPolicy allowances are additive, so
+  that document grants every Pod unrestricted outbound access while the
+  first policy still reads "default deny". Helm lint reported 0 failed
+  charts, `helm template` exited 0, and the pinned gate exited 0.
+- `scripts/ci/chart_render_census.py` is the answer: a stdlib-only
+  (no PyYAML, no yq), fail-closed reader for the YAML subset a Helm render
+  actually uses — comments, flow collections, quoted keys and scalars,
+  block scalars — followed by a semantic census. It parses the whole render
+  (`helm template` with no `--show-only`, `--include-crds`), flattens
+  generic and typed list wrappers so nothing hides inside one, requires the
+  render's `(apiVersion, kind)` inventory to equal a pinned multiset,
+  requires EXACTLY ONE `NetworkPolicy`, and asserts that policy's selector,
+  `policyTypes`, ingress rule and `egress: []` semantics against an
+  expectation the gate states itself — never read back out of the template
+  under test. Its structural design goal is to refuse rather than misread,
+  so anything it cannot read unambiguously is refused with the offending
+  line named: tabs, carriage returns, C0 and C1 control characters
+  (U+0080–U+009F), the Unicode line breaks NEL/LS/PS (U+0085, U+2028,
+  U+2029), byte-order marks, `%` directives, anchors, aliases, tags, merge
+  keys, duplicate keys in block or flow style, non-string keys, plain keys
+  carrying a comment (`k #: v`), flow-mapping keys whose colon is glued to
+  what follows (`{a:1}`), plain scalars opening with an indicator in KEY and
+  VALUE position alike (`@foo:`, `` `foo: ``, `|foo:`, `>foo:`, `,foo:`),
+  unterminated flow collections or quoted scalars, multi-line plain scalars
+  at any indentation including the top level,
+  a second document the stream never spelled `---` in front of,
+  plain scalars opening with a sequence indicator, a document-end marker
+  (`...`) with no document to end or with content after it and no
+  intervening `---`, YAML 1.1's value key
+  (`=`) and merge key (`<<`) in both positions, and plain scalars whose
+  meaning differs between YAML 1.1 and 1.2 (`yes`/`no`/`on`/`off`, `1:30`,
+  `1_:0`, `0x1F90`, `0755`, `1e3`, `1_000`, `2026-08-20`, `.inf`). Floats
+  are the one number form it RESOLVES rather than refuses, so its pattern is
+  PyYAML's own float-resolver decimal branches transcribed character for
+  character: `.5` is 0.5 to both readers and `-.5` is the string "-.5" to
+  both. Block scalars are the one MULTI-LINE construct it resolves rather
+  than refuses, for the same reason and by the same method: `|` and `>`
+  bodies follow PyYAML's `scan_block_scalar` and its three helpers step for
+  step, so the block's indentation is the widest run of leading whitespace
+  crossed on the way to its first content line, a line of spaces is blank
+  only while it fits inside that indentation and is content past it, and the
+  folding and chomping tails are the oracle's own — including the fact that a
+  stream not ending in a newline has no final break to chomp.
+  It reads YAML's whitespace as YAML defines it — space and tab only —
+  rather than through Python's Unicode-aware `str.strip()`/`.split()`, decides
+  what a `---`/`...` document marker is from ONE shared predicate rather than
+  five, and spells every regex class as a literal ASCII range rather than
+  `\d`, which is PyYAML's own choice too, so `int()`/`float()` never see a
+  fullwidth or Arabic-Indic digit. The reader is differentially checked
+  against an out-of-tree
+  PyYAML 6.0.3 over a corpus of real-render and hostile shapes — 182,170
+  inputs at this head, measuring ZERO divergence — and six
+  rounds of independent review extended that corpus; every divergence any
+  round measured — `1_000`, a leading byte-order mark, YAML 1.1 timestamps,
+  plain `=`, signed leading-dot floats, colon-glued flow keys, NEL/LS/PS,
+  the C1 controls, indicator-leading keys, plain `<<`, underscored
+  sexagesimals, commented keys, flow scalars run past `?`/`[`/`{`,
+  Unicode whitespace silently stripped out of a scalar (`a: \xa0` was the
+  value `None` here and the string `"\xa0"` there; a whole-document `\xa0`
+  was zero documents here and one there; `a: |\xa0` parsed here and raised
+  there), the document-end marker `...` (zero documents here and a
+  ParserError there; two documents here and a ParserError there),
+  implicit document boundaries (`a`/`b` was two documents here and the one
+  folded scalar `"a b"` there; `-`/`a` and `x`/`kind: v` were two documents
+  here and ScannerErrors there), and block-scalar line semantics (`a: >`//`  x`
+  was `"x\n"` here and `"\nx\n"` there; `a: |`/`  x`/`   ` was `"x\n"` here and
+  `"x\n \n"` there; `a: >`/`   `/`  x` was accepted here and a ParserError
+  there; and a stream not ending in a newline gained a final `\n` here that
+  the oracle does not add) — is
+  closed here. Over that corpus there is now no input this reader accepts
+  and reads differently than PyYAML, and none it accepts that PyYAML
+  refuses; the divergences that remain all run the other way, this reader
+  refusing what PyYAML resolves. Nothing in this repository depends on
+  PyYAML; it is the oracle, not a dependency.
+- The round-five findings also FALSIFIED a claim this module and this entry
+  both carried: that multi-line plain scalars were refused. They were not —
+  the reader was silently splitting them into separate documents, and only an
+  indented continuation ever reached the refusal. The claim is true now,
+  because the repair makes it true: a document boundary is `---`, `...` or
+  end-of-stream, and a top-level node that simply stops is refused with the
+  offending line named rather than closed and reopened.
+- `scripts/ci/chart-egress-pin.sh` grows from four assertions to seven. The
+  original text pin and its 19 mutations are untouched; (c) is the
+  whole-render census, (d) rewrites the real render into 47 hostile ones —
+  same-file and new-file shadow policies with spaced, double-quoted,
+  single-quoted and `\x`-escaped keys, flow-style documents, block-scalar
+  kinds, generic/typed/nested/uninspectable list wrappers, a policy under a
+  CNI's own kind, anchors, merge keys, explicit tags, tab indentation, a
+  byte-order mark, an underscored number, a YAML 1.1 timestamp, a value-key
+  scalar, a Unicode line break, a C1 control character, a colon-glued flow
+  key, a flow scalar run past a nested indicator, an indicator-leading key,
+  a commented key, a merge-key scalar, an underscored sexagesimal, a render
+  whose last document is separated by `...` instead of `---` (which the
+  census read as the same four documents and passed while PyYAML refuses the
+  whole stream), a render carrying a document nobody spelled — a top-level
+  `null` followed by an empty `List` wrapper, which the pre-repair census
+  counted as the same four objects and passed while PyYAML refuses the stream
+  outright — a block scalar that swallows the line after it — a
+  whitespace-only line wider than its body, which sets the block's
+  indentation past that body so the oracle raises and the pre-repair census
+  read on and passed — four renders a real API server will not install whole
+  (a multi-line label value, a label key carrying a second `/`, an object
+  name with an underscore, an annotation key carrying a second `/`), each of
+  which the pre-repair census reported GREEN on and Kubernetes v1.36.3
+  partially refuses — and ten
+  widenings of the pinned policy itself — and requires
+  every one to be refused; (e) now runs the census under each values override too; (f) and
+  (g) pin both batteries against being quietly shrunk.
+- `scripts/ci/test_chart_render_census.py` (140 tests) pins the reader
+  itself in the `security` job, without helm: that `kind :`, `"kind"`,
+  `'kind'` and `"\x6bind"` are all the same key, that list wrappers are
+  flattened into their items rather than merely rejected, that a legal
+  respelling of the real policy still PASSES (normalisation must not turn
+  into a false alarm), one refusal per fail-closed rule, and one acceptance
+  companion per refusal so no rule over-reaches — `.5` and `8080` still
+  resolve, `©`/`é`/CJK/emoji still read, a mid-token or sole U+00A0 stays
+  part of the scalar, `\N`/`\L`/`\P` still produce their
+  characters, `{a: 1}` still parses, a `...` inside a quoted or block scalar
+  is still ordinary text, `a: 1` / `...` / `---` / `b: 2` still reads as
+  two documents, a spelled `---` boundary still separates documents, and a
+  render carrying a real multi-line block-scalar value — blank line,
+  more-indented line and whitespace-only line inside it — still reads byte
+  for byte as PyYAML reads it, still censuses green, and now also APPLIES
+  cleanly to a real API server. It also pins
+  the shell script's mutation floor against the battery's real size, so the
+  two cannot disagree.
+- The census now refuses objects Kubernetes will not install, because its own
+  claim is "N INSTALLABLE objects" and PR #96's round-five review measured
+  that claim false in the fatal direction. A render carrying a multi-line
+  value in a LABEL censused GREEN — four objects, exactly one NetworkPolicy,
+  equal to the pinned expectation — while `kubectl apply` against Kubernetes
+  v1.36.3 creates the ServiceAccount, Service and Deployment and REJECTS the
+  NetworkPolicy alone: the workload installed without its deny, the gate
+  reporting everything fine. The suite's acceptance companion had blessed
+  exactly that render. It carries the multi-line value in an ANNOTATION now,
+  which is where Kubernetes permits arbitrary strings (verified: rc=0, all
+  four objects created, the stored annotation byte-identical), and keeps
+  block-scalar coverage on the label side with a strip-chomped one-line
+  scalar. The census additionally validates the fields Kubernetes rejects on,
+  every boundary probed from both sides against that same server: label and
+  annotation KEYS (optional lowercase-DNS-subdomain prefix ≤253, name part
+  ≤63), label VALUES (≤63 bytes, empty allowed, alphanumeric with `-`/`_`/`.`,
+  starting and ending alphanumeric), annotation values as arbitrary strings
+  under a 262144-byte total, `metadata.name` as an RFC 1123 subdomain — and
+  as an RFC 1123 LABEL for a Service, which may start with a digit but may
+  not contain a dot — `metadata.namespace`, and every `matchLabels`,
+  `nodeSelector` and Service `spec.selector` at any depth. It deliberately
+  does NOT validate per-kind spec schemas: that is the OpenAPI schema of
+  every kind rather than a small stable rule, a stdlib-only gate cannot carry
+  it, and it is not the fatal direction — the one object whose absence IS
+  fatal has its whole spec pinned against a literal. One deliberate
+  over-refusal is stated rather than hidden: a null label value, which the
+  server accepts and coerces to the empty string, is refused here rather than
+  guessed at.
+- Three shipped claims about what an installer does with a refused stream
+  were FALSE against the real API server, and are now measured rather than
+  reasoned about. `render-with-an-unspelled-document-boundary` does not
+  "install nothing": it is a PARTIAL APPLY — all four objects created, THEN
+  rc=1. `render-separated-by-a-document-end-marker` is worse still: rc=0,
+  three objects installed, the Deployment after the `...` silently discarded,
+  and with the policy rendered last behind that marker the workload installs
+  with NO POLICY AT ALL and a green exit code. The same correction lands on
+  the C1-control and value-key comments, which claimed whole-stream refusals
+  where the server does a partial apply. The truth is a stronger reason for
+  these refusals, not a weaker one: a silent partial install is more
+  dangerous than a rejection, because nothing anywhere reports it.
+- A kill battery over every guard clause rounds four and five introduced —
+  each `_ascii_*` call site, `_document_marker`, `_read_document`, and every
+  clause inside `_bs_indentation`, `_bs_breaks`, `_bs_skip_indent`,
+  `_bs_has_more`, `_block_scalar_body` and `_line_break_after` — mutated one
+  at a time, 84 mutants, each run against the whole unit suite AND the census
+  gate. It found the surviving mutant PR #96's round-five review reported:
+  dropping `_line_break_after(k)` from `_bs_breaks`'s loop survived both
+  while diverging from PyYAML on 1,100 corpus members, because a final
+  whitespace-only line with no trailing newline is the end of the stream and
+  not a blank line, so keep chomping put back a break that was never there.
+  78 mutants die to the existing suite and gate; nine more die to the tests
+  added here; the remaining six are equivalent mutants proven so by
+  measurement — identical values AND identical refusal messages over all
+  182,170 corpus inputs and 29 targeted probes — and each is documented at
+  its own clause with the reason it cannot differ, rather than pinned by a
+  test no input could fail.
+
+### Changed
+
+- `chart-egress-pin.sh` renders with an explicit `--namespace` so the
+  census can assert the namespace the policy landed in rather than inherit
+  helm's default. `chart-ingress-pin.sh` is untouched by this change; its
+  own blind spot is recorded below.
+
+### Known gaps
+
+- `scripts/ci/chart-ingress-pin.sh` still recognises the spec by a raw line
+  exactly equal to `spec:` (`:103-105`), so the same-file shadow policy is
+  invisible to it in isolation; it exits 0 on all four hostile charts the
+  egress gate now refuses. Nothing ships weaker for it — both gates run in
+  the same `chart` job, and the census refuses those renders — but the
+  ingress gate's own census is a follow-up, tracked separately rather than
+  quietly bundled here.
+
 ## [0.1.23] - 2026-08-20
 
 ### Fixed
