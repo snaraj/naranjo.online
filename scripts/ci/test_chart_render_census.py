@@ -5,7 +5,7 @@ document scan that a second `NetworkPolicy` could walk straight past by
 spelling its keys `kind :` and `spec :` -- valid YAML, invisible to a
 prefix match, and an additive allow-all for every Pod once Kubernetes has
 it. The behavioural half of the proof lives in `chart-egress-pin.sh`, whose
-assertions (d) and (g) rewrite the REAL Helm render into 43 hostile ones and
+assertions (d) and (g) rewrite the REAL Helm render into 48 hostile ones and
 require the census to refuse every single one. This suite is the other half:
 it pins the reader itself, one rejection per test, without needing helm --
 so it runs in the `security` job alongside the other contract suites, which
@@ -28,6 +28,7 @@ Two rules shape every test here, both taken from AGENTS.md:
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -535,15 +536,15 @@ class ReaderFailsClosed(unittest.TestCase):
         # The refusal must not over-reach: only a PLAIN timestamp is ambiguous,
         # and only the shapes PyYAML's own resolver VALUES are timestamps. The
         # near-misses below are strings to both readers and must stay readable
-        # -- version numbers especially, since this chart renders `v0.1.24`.
+        # -- version numbers especially, since this chart renders `v0.1.25`.
         self.assertEqual(parse('value: "2026-08-20"\n'), [{"value": "2026-08-20"}])
         self.assertEqual(parse("value: '2026-08-20'\n"), [{"value": "2026-08-20"}])
         self.assertEqual(parse("value: 2026-8-20\n"), [{"value": "2026-8-20"}])
         self.assertEqual(parse("value: 2026-08\n"), [{"value": "2026-08"}])
         self.assertEqual(parse("value: 2026-08-20x\n"), [{"value": "2026-08-20x"}])
         self.assertEqual(parse("value: 2026-08-20T10:30\n"), [{"value": "2026-08-20T10:30"}])
-        self.assertEqual(parse("value: v0.1.24\n"), [{"value": "v0.1.24"}])
-        self.assertEqual(parse("value: 0.1.24\n"), [{"value": "0.1.24"}])
+        self.assertEqual(parse("value: v0.1.25\n"), [{"value": "v0.1.25"}])
+        self.assertEqual(parse("value: 0.1.25\n"), [{"value": "0.1.25"}])
 
     def test_the_value_key_plain_scalar(self):
         # The other class PR #96's review measured, and the one counterexample
@@ -637,6 +638,65 @@ class ReaderFailsClosed(unittest.TestCase):
             self.reject("ki%snd: NetworkPolicy\n" % ch, "C1 control character")
         self.reject("kind: Network\x80Policy\n", "line 1")
         self.reject("a: 1\nkind: Network\x80Policy\n", "line 2")
+
+    def test_every_yaml_reader_forbidden_code_point_is_refused(self):
+        # YAML 1.2.2 and PyYAML 6.0.3 exclude exactly the surrogate block plus
+        # U+FFFE/U+FFFF from otherwise printable non-ASCII code points. This
+        # expectation is deliberately written independently of production's
+        # guard: deleting or narrowing that guard must make this test red.
+        forbidden = list(range(0xD800, 0xE000)) + [0xFFFE, 0xFFFF]
+        self.assertEqual(len(forbidden), 2050)
+        for code in forbidden:
+            with self.subTest(codepoint="U+%04X" % code):
+                self.reject("# hostile %s\na: 1\n" % chr(code),
+                            "YAML-forbidden code point U+%04X" % code)
+
+    def test_yaml_reader_forbidden_endpoints_are_refused_before_parsing(self):
+        # Comments, keys, values, quoted scalars and block scalar bodies all
+        # take the same stream-level path; none may hide the endpoint members.
+        placements = (
+            "# hostile %s\na: 1\n",
+            "key%s: value\n",
+            "value: plain%svalue\n",
+            'value: "quoted%svalue"\n',
+            "value: |\n  block%svalue\n",
+        )
+        for code in (0xD800, 0xDFFF, 0xFFFE, 0xFFFF):
+            for placement in placements:
+                with self.subTest(codepoint="U+%04X" % code, placement=placement):
+                    self.reject(placement % chr(code),
+                                "YAML-forbidden code point U+%04X" % code)
+
+    def test_yaml_reader_forbidden_boundaries_remain_readable(self):
+        # The exact companions on both sides of each excluded range, including
+        # supplementary noncharacters explicitly admitted by c-printable.
+        for code in (0xD7FF, 0xE000, 0xFFFD, 0x10000,
+                     0x1FFFE, 0x1FFFF, 0x10FFFF):
+            ch = chr(code)
+            with self.subTest(codepoint="U+%X" % code):
+                self.assertEqual(parse("value: a%sb\n" % ch),
+                                 [{"value": "a%sb" % ch}])
+
+    def test_raw_production_stdin_refuses_forbidden_and_malformed_bytes(self):
+        # Exercise `main()` through its real byte stdin. Valid UTF-8 encodings
+        # for U+FFFE/U+FFFF and malformed 80 (preserved as U+DC80 by
+        # surrogateescape) must all die at the same pre-parse guard, not later
+        # on an unrelated inventory assertion.
+        hostile = ((b"# hostile \xef\xbf\xbe\n", "U+FFFE"),
+                   (b"# hostile \xef\xbf\xbf\n", "U+FFFF"),
+                   (b"# hostile \x80\n", "U+DC80"))
+        command = [sys.executable, "-I", "-B", str(HERE / "chart_render_census.py"),
+                   "census", "--chart", str(REAL_CHART),
+                   "--release", "raw-input", "--namespace", "raw-input"]
+        for raw, codepoint in hostile:
+            with self.subTest(raw=raw.hex()):
+                result = subprocess.run(command, input=raw, capture_output=True,
+                                        check=False)
+                diagnostic = result.stderr.decode("ascii")
+                self.assertEqual(result.returncode, 1, diagnostic)
+                self.assertIn("YAML-forbidden code point " + codepoint, diagnostic)
+                self.assertIn("line 1", diagnostic)
+                self.assertNotIn("complete render carries", diagnostic)
 
     def test_the_c1_refusal_stops_at_u00a0(self):
         # The range is U+0080-U+009F and nothing above it: a refusal that ate
@@ -1399,7 +1459,7 @@ class CensusRefusesWhatKubernetesRefuses(CensusFixture):
     def test_label_values_follow_the_api_servers_own_rule(self):
         # Accepted on the real server, so accepted here.
         for written in ("''", "a", "MyValue", "'12345'", "a_b.c-d", "a" * 63,
-                        "0.1.24", '"0.1.24"'):
+                        "0.1.25", '"0.1.25"'):
             self.assertEqual(self.census(self.policy_label("    probe: %s\n" % written))["objects"],
                              4, written)
         # Refused on the real server, so refused here.
@@ -1579,6 +1639,14 @@ class MutationBattery(CensusFixture):
     def test_an_unknown_mutation_is_refused(self):
         with self.assertRaises(CRC.CensusError):
             CRC.mutate(render(), self.facts, "no-such-mutation")
+
+    def test_yaml_forbidden_code_point_mutation_is_killed_by_the_reader(self):
+        hostile = CRC.mutate(render(), self.facts,
+                             "shadow-yaml-forbidden-code-point")
+        self.assertIn("\ufffe", hostile)
+        with self.assertRaises(CRC.CensusError) as caught:
+            CRC.census(hostile, self.facts)
+        self.assertIn("YAML-forbidden code point U+FFFE", str(caught.exception))
 
     def test_the_gate_script_pins_the_battery_at_its_real_size(self):
         # One fact in two files: the shell floor and the battery itself.

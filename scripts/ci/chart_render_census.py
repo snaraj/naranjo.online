@@ -51,15 +51,17 @@ REFUSE rather than misread. Every construct it does not fully understand is
 refused with the offending line named, never guessed at, so an unreadable
 render is a red gate rather than a quiet pass. That is the design goal, not a
 proof -- what is PROVEN is the bounded, re-runnable differential claim stated
-after the list, over a corpus five rounds of independent review have
-extended. Refused outright:
+after the list, over a corpus six rounds of independent review and the
+post-merge audit for issue #98 have extended. Refused outright:
 
 - tabs, carriage returns, other C0 control characters, DEL, the C1 control
   characters U+0080-U+009F (a real YAML reader rejects the whole stream for
   one; the range STOPS at U+009F, so `©`, `é`, CJK and emoji all read
-  normally), byte-order marks (U+FEFF, anywhere in the stream -- invisible,
-  and readers disagree about whether a leading one belongs to the next
-  token), and `%` directives;
+  normally), every YAML-reader-forbidden code point U+D800-U+DFFF and
+  U+FFFE-U+FFFF (all 2,050 of them, including malformed UTF-8 preserved by
+  Python's stdin `surrogateescape`), byte-order marks (U+FEFF, anywhere in
+  the stream -- invisible, and readers disagree about whether a leading one
+  belongs to the next token), and `%` directives;
 - the Unicode line breaks NEL (U+0085), LINE SEPARATOR (U+2028) and
   PARAGRAPH SEPARATOR (U+2029), anywhere in the stream: a real YAML reader
   BREAKS THE LINE at each of them, so a stream carrying one has a different
@@ -145,9 +147,9 @@ character for character; `.5` is 0.5 to both readers and `-.5` is the string
 
 Both directions are checked against PyYAML 6.0.3 -- the oracle, never a
 dependency; nothing in this repository imports it -- over a corpus of
-Helm-render and hostile shapes. Five rounds of independent review have
-extended that corpus, and each round measured divergences this file then
-closed:
+Helm-render and hostile shapes. Six rounds of independent review and one
+post-merge audit have extended that evidence, and each measured divergence
+this file then closed:
 
 - round one (PR #94): `1_000`, the integer 1000 to PyYAML and ACCEPTED as
   the string "1_000" here; and a byte-order mark before a key, stripped by
@@ -228,14 +230,25 @@ closed:
   below, with the reason it cannot differ, rather than pinned by a test no
   input could fail.
 
+- post-merge audit (issue #98): the bounded corpus did not carry the complete
+  character class YAML 1.2.2 excludes from `c-printable`. This reader ACCEPTED
+  every raw U+D800-U+DFFF and U+FFFE-U+FFFF in a comment while PyYAML 6.0.3
+  rejected the stream before scanning. Production stdin made the gap wider:
+  Python's `surrogateescape` preserves a malformed byte such as `80` as
+  U+DC80, and the gate read straight through that too. `_check_bytes` now
+  refuses the exact 2,050-code-point class before parsing, while U+D7FF,
+  U+E000, U+FFFD, U+10000, U+1FFFE, U+1FFFF and U+10FFFF remain readable as
+  the spec and oracle require. Exhaustive class, boundary, placement and raw
+  stdin tests make that new claim re-runnable rather than inferred.
+
 Every one of those classes is closed. The claim this file makes is therefore
 a bounded, re-runnable one rather than a universal quantifier: over that
-corpus there is no input this reader accepts and reads differently than
-PyYAML, and none it accepts that PyYAML refuses. Every divergence that
-remains runs the other way -- this reader refusing something PyYAML resolves
-(`2026_08`, `=` in key position, `--- x`, a `%YAML` directive reopening a
-stream after `...`, and a plain scalar folded across a line break) -- which
-is the direction that cannot hide a document.
+corpus and the exact YAML-reader-forbidden class there is no input this reader
+accepts and reads differently than PyYAML, and none it accepts that PyYAML
+refuses. Every divergence that remains runs the other way -- this reader
+refusing something PyYAML resolves (`2026_08`, `=` in key position, `--- x`,
+a `%YAML` directive reopening a stream after `...`, and a plain scalar folded
+across a line break) -- which is the direction that cannot hide a document.
 
 CLI (stdin is the render for `census` and `mutate`):
 
@@ -556,6 +569,19 @@ class Reader:
                 code = ord(ch)
                 if code < 0x20 or code == 0x7F:
                     self.fail("control character %r is refused" % ch, lineno)
+                if 0xD800 <= code <= 0xDFFF or 0xFFFE <= code <= 0xFFFF:
+                    # YAML 1.2.2's `c-printable` excludes the entire surrogate
+                    # block and the two BMP noncharacters. PyYAML 6.0.3 uses
+                    # that exact printable set and rejects the stream before
+                    # scanning. The surrogate block also catches malformed
+                    # UTF-8 that Python preserves through stdin's
+                    # `surrogateescape` (for example byte 80 -> U+DC80).
+                    # Supplementary noncharacters such as U+1FFFE/U+1FFFF are
+                    # deliberately NOT included: the spec and oracle permit
+                    # every code point from U+10000 through U+10FFFF.
+                    self.fail("the YAML-forbidden code point U+%04X is refused; YAML 1.2.2 "
+                              "and PyYAML 6.0.3 exclude it from printable streams" % code,
+                              lineno)
                 if ch in _UNICODE_LINE_BREAKS:
                     self.fail("%s is refused; a real YAML reader treats it as a LINE BREAK, so "
                               "the bytes after it start a new line there while they continue "
@@ -2102,6 +2128,13 @@ _SHADOW_C1_CONTROL = (
     "spec:\n"
 ) + _ALLOW_ALL_TAIL
 
+# U+FFFE is valid UTF-8 (`EF BF BE`) but is outside YAML 1.2.2's printable
+# set. Put it in a comment so this mutation proves the pre-parse stream guard
+# itself, independent of policy semantics or scalar resolution.
+_SHADOW_YAML_FORBIDDEN_CODE_POINT = (
+    "# raw YAML-forbidden code point: \ufffe\n"
+) + _SHADOW_SPACED
+
 _SHADOW_FLOW_GLUED_COLON = """\
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -2380,6 +2413,8 @@ def mutations(facts: ChartFacts) -> list[tuple[str, object]]:
         ("shadow-value-key-scalar", new_file(_SHADOW_VALUE_KEY)),
         ("shadow-unicode-line-break", new_file(_SHADOW_UNICODE_LINE_BREAK)),
         ("shadow-c1-control-character", new_file(_SHADOW_C1_CONTROL)),
+        ("shadow-yaml-forbidden-code-point",
+         new_file(_SHADOW_YAML_FORBIDDEN_CODE_POINT)),
         ("shadow-flow-glued-colon-key", new_file(_SHADOW_FLOW_GLUED_COLON)),
         ("shadow-flow-nested-indicator", new_file(_SHADOW_FLOW_NESTED_INDICATOR)),
         ("shadow-indicator-leading-key", new_file(_SHADOW_INDICATOR_LEADING_KEY)),
@@ -2459,6 +2494,15 @@ def _add_facts_arguments(parser: argparse.ArgumentParser) -> None:
                         help="expected ingress peer instance; defaults to the chart values")
 
 
+def _read_stdin_utf8() -> str:
+    """Decode the CLI byte stream deterministically without text-wrapper normalization."""
+    try:
+        raw = sys.stdin.buffer.read()
+    except AttributeError as error:
+        raise CensusError("standard input has no byte buffer; refusing an ambiguous stream") from error
+    return raw.decode("utf-8", errors="surrogateescape")
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="chart_render_census", description=__doc__)
     sub = parser.add_subparsers(dest="mode", required=True)
@@ -2477,12 +2521,12 @@ def main(argv: list[str]) -> int:
             return 0
         facts = ChartFacts(Path(args.chart), args.release, args.namespace, args.peer_instance)
         if args.mode == "census":
-            result = census(sys.stdin.read(), facts)
+            result = census(_read_stdin_utf8(), facts)
             sys.stdout.write("chart-render-census: %d installable objects, exactly one "
                              "NetworkPolicy, equal to the pinned expectation\n"
                              % result["objects"])
             return 0
-        sys.stdout.write(mutate(sys.stdin.read(), facts, args.name))
+        sys.stdout.write(mutate(_read_stdin_utf8(), facts, args.name))
         return 0
     except CensusError as error:
         sys.stderr.write("chart-render-census: %s\n" % error)
