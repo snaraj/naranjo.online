@@ -5165,9 +5165,22 @@ class NoArtifactWiringTests(unittest.TestCase):
         self.assertIn('test "${rederived_class}" = "${claimed_class}"', orchestrator)
         self.assertIn("expected exactly one transition-verdict artifact", orchestrator)
         self.assertIn('test "${claimed_source}" = "${COMPLETED_SHA}"', orchestrator)
-        self.assertIn("RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}", orchestrator)
-        self.assertIn('[[ "${RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]', orchestrator)
-        self.assertIn("/attempts/${RUN_ATTEMPT}/artifacts", orchestrator)
+        # The verdict fetch must stay RUN-scoped: GitHub serves no
+        # attempts/<n>/artifacts endpoint (404), so an attempt-scoped fetch
+        # would fail every dispatch and end all releases. Pinned as a
+        # negative assertion so the 404 shape cannot be reintroduced, with
+        # the upload-side overwrite as the actual re-attempt defense.
+        # Pin the single artifacts-fetch LINE rather than the whole file, so
+        # prose explaining the 404 cannot satisfy or break this assertion.
+        artifact_fetch = [
+            line for line in orchestrator.splitlines() if "/artifacts?per_page=" in line
+        ]
+        self.assertEqual(len(artifact_fetch), 1, artifact_fetch)
+        self.assertIn(
+            "/actions/runs/${MAIN_RUN_ID}/artifacts?per_page=100", artifact_fetch[0]
+        )
+        self.assertNotIn("attempts", artifact_fetch[0])
+        self.assertIn("overwrite: true", (ROOT / ".github/workflows/pr-gate.yml").read_text(encoding="utf-8"))
         self.assertIn("DENY: unknown transition class", orchestrator)
         self.assertIn("publisher not dispatched", orchestrator)
         self.assertLess(

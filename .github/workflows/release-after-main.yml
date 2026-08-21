@@ -55,7 +55,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMPLETED_SHA: ${{ github.event.workflow_run.head_sha }}
           MAIN_RUN_ID: ${{ github.event.workflow_run.id }}
-          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
           set -euo pipefail
           event_sha="$(python3 -I -B scripts/ci/release_contract.py workflow-run \
@@ -63,15 +62,21 @@ jobs:
           test "${event_sha}" = "${COMPLETED_SHA}"
           test "$(git rev-parse HEAD)" = "${COMPLETED_SHA}"
           [[ "${MAIN_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
-          [[ "${RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]
           artifacts_json="${RUNNER_TEMP}/gate-artifacts.json"
-          # Attempt-scoped: the verdict must come from the exact completed
-          # attempt this event names, and a re-attempt overwrites its own
-          # artifact rather than stacking a second one beside it.
+          # Run-scoped listing, deliberately. There is no per-attempt
+          # artifacts endpoint: .../runs/{id}/attempts/{n}/artifacts returns
+          # 404 (verified against this repository's live API, with
+          # .../attempts/{n}/jobs returning 200 as the control), so scoping
+          # the fetch that way would fail this step on every merge and take
+          # releases down. Re-attempt safety does not need it: the gate
+          # uploads with overwrite, so one run holds exactly one
+          # transition-verdict artifact - the latest attempt's - and the
+          # exactly-one assertion below fails closed if that ever stops
+          # being true.
           gh api --method GET --paginate --slurp \
             --header 'Accept: application/vnd.github+json' \
             --header 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/${GITHUB_REPOSITORY}/actions/runs/${MAIN_RUN_ID}/attempts/${RUN_ATTEMPT}/artifacts?per_page=100" \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${MAIN_RUN_ID}/artifacts?per_page=100" \
             > "${artifacts_json}"
           artifact_id="$(jq -er \
             '[.[].artifacts[] | select(.name == "transition-verdict" and .expired == false)]
@@ -142,7 +147,11 @@ jobs:
               # the release push, and the anchor lands on the commit the
               # publisher actually tagged. A pathological rebase ordering
               # that interleaves documentation commits before trailing
-              # artifact commits still fails closed (red), never silently.
+              # artifact commits still fails closed (red), never silently —
+              # and that red is STICKY: every later documentation merge
+              # fails the same way until an artifact merge moves the
+              # boundary past it. Loud and recoverable, never a wrong
+              # release.
               anchor="${boundary_sha}"
               advancing=false
               while IFS= read -r commit; do
