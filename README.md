@@ -60,9 +60,13 @@ release after the merged SHA's PR gate succeeds. A merge whose every commit is
 confined to the documentation allowlist — root `AGENTS.md`, `README.md`,
 `.gitignore`, and Markdown under `docs/` — changes no artifact, so it advances
 no version and publishes nothing; the orchestrator proves that class against
-an anchor the merge cannot choose - the last gated `main` head from the
-Actions record, with every release lock required byte-identical to it - and
-logs an explicit verdict instead of dispatching the publisher. Nothing
+evidence the merge cannot choose, then logs an explicit verdict instead of
+dispatching the publisher. That evidence is threefold: the last successful
+protected-`main` gate head from the Actions record, with every release lock
+required byte-identical to it; a re-classification of the whole
+boundary-to-head gap as documentation; and an anchor-advance walk hard-capped
+at that gated head, so a lock-free artifact commit landing after it cannot be
+stepped over. Nothing
 is relaxed by that: an unchanged artifact has nothing to version, sign, scan,
 or attest, and documentation merges still run the entire PR gate. The merged
 source of an artifact release carries numeric `X.Y.Z` in

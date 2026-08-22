@@ -99,10 +99,19 @@ Numbered for citation, repo-scoped, none negotiable in code:
     image tag. A range whose every commit is individually confined to the
     closed documentation allowlist — root `AGENTS.md`, `README.md`,
     `.gitignore`, and Markdown files under `docs/` — classifies no-artifact:
-    it advances nothing, and the orchestrator re-derives that class from git,
-    re-proves the whole boundary-commit-to-head gap as documentation, and
-    skips the publisher with an explicit logged verdict instead of
-    dispatching it. Removing the release from a documentation-only merge
+    it advances nothing, and the orchestrator proves that class against
+    evidence the VERDICT CANNOT CHOOSE before skipping the publisher. Saying
+    it "re-derives the class from git" is not enough and was disproved by a
+    working attack: the re-derivation is parameterised by the verdict's
+    claimed base, so a base naming a commit inside the push re-derives a
+    genuine artifact merge as documentation. Three things make the outcome
+    trustworthy — the newest earlier successful protected-main gate run, read
+    from the Actions record, with all four release locks required
+    byte-identical between it and the merged head; a re-classification of the
+    whole boundary-commit-to-head gap as documentation; and an anchor-advance
+    walk hard-capped at that gated head, so a lock-free artifact commit
+    landing after it cannot be stepped over. Only then is the publisher
+    skipped, with an explicit logged verdict instead of a dispatch. Removing the release from a documentation-only merge
     weakens nothing: the artifact is unchanged, so there is
     nothing to version, sign, scan, or attest. The classifier has exactly
     two verdicts and no flag, environment variable, or configuration input;
@@ -718,9 +727,10 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
 - **release-after-main.yml** — success-only exact-SHA main-CI completion;
   performs no publication mutation and explicitly dispatches the publisher
   definition on protected `main` with the exact completed-run ID.
-  It first re-derives the gate's published transition class from git and
-  gates every release-effect step on `artifact`; a no-artifact range logs its
-  verdict and dispatches nothing.
+  It re-proves the gate's published transition class against an anchor the
+  verdict cannot choose — not from the claimed base alone, which is
+  forgeable — and gates every release-effect step on `artifact`; a
+  no-artifact range logs its verdict and dispatches nothing.
   The release boundary is recovered for both squash and multi-commit rebase
   pushes. Distinct main SHAs share no cancellation group.
 - **release-publisher.yml** — explicit dispatch on protected `main`; a
