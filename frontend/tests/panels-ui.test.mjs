@@ -146,10 +146,18 @@ test('each card keeps its own freshness reading and none keeps a control', () =>
   //
   // A blanket ban on <button> inside a panel was tried here and is wrong:
   // TokenUsagePanel legitimately owns a daily/weekly/cumulative radiogroup,
-  // which is a view control, not a refresher. The shell-level assertion above
-  // already closes the realistic path — a control rendered by the shared
-  // PanelShell — and reaching a watcher is what makes a control a refresher.
-  for (const [name, source] of Object.entries({ bossLog, activityBar, tokenUsage })) {
+  // which is a view control, not a refresher.
+  //
+  // What this comment used to say next — "reaching a watcher is what makes a
+  // control a refresher, whatever it is named" — is FALSE and was retracted.
+  // A card needs no watcher handle at all: refreshPanels() is module-level.
+  // The refreshPanels assertion below exists precisely because that sentence
+  // was wrong, so the sentence is not left standing above it.
+  // PanelShell is swept with the cards, not instead of them: it is the ONE
+  // component that renders for all three, so a control added there appears
+  // on every card at once — the widest version of the regression these
+  // assertions exist to stop, and the one the per-card loop used to miss.
+  for (const [name, source] of Object.entries({ bossLog, activityBar, tokenUsage, panelShell: shell })) {
     assert.doesNotMatch(
       source,
       /\{\s*refresh\s*\}|(?:const|let|var)\s+refresh\s*=/,

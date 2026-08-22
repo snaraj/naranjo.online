@@ -115,7 +115,14 @@ function paletteLiterals(css) {
 // the first match can be defeated by simply APPENDING an override — which is
 // exactly the attack that got past the previous version of this helper.
 function cssRules(css) {
-  const source = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  // Comments are blanked, and braces INSIDE string literals are defused: a
+  // `content: "}"` declaration would otherwise close a rule early and hide
+  // every repaint after it. Only the braces go — blanking whole strings also
+  // empties the quoted value in `[data-theme="dark"]`, which is a selector
+  // this walk has to keep reading.
+  const source = css
+    .replace(/\/\*[\s\S]*?\*\//g, (match) => ' '.repeat(match.length))
+    .replace(/"[^"\n]*"|'[^'\n]*'/g, (match) => match.replace(/[{}]/g, ' '));
   const rules = [];
   const enclosing = [];
   let cursor = 0;
@@ -147,8 +154,30 @@ function cssRules(css) {
 const stylesCode = styles.replace(/\/\*[\s\S]*?\*\//g, '');
 
 const styleRules = cssRules(styles).map((rule, order) => ({ ...rule, order }));
-const underColorScheme = (rule) => rule.enclosing.some((at) => at.includes('prefers-color-scheme'));
-const themeTokenPattern = /^--(?:color|panel|grid-cell)-/;
+// WHICH preference, not merely that there is one. Matching the bare
+// substring routed a `prefers-color-scheme: light` block to auto-DARK and
+// skipped it for auto-light — exactly inverted, and inverted precisely in
+// the mode the auto split was added to model. An unrecognised preference
+// fails loudly rather than landing in whichever mode the substring reached.
+function colorSchemeOf(rule) {
+  const at = rule.enclosing.find((entry) => entry.includes('prefers-color-scheme'));
+  if (!at) return null;
+  const value = /prefers-color-scheme\s*:\s*([a-z]+)/.exec(at);
+  assert.ok(value, `"${at}" queries prefers-color-scheme without a value this resolver can read`);
+  assert.ok(
+    value[1] === 'dark' || value[1] === 'light',
+    `"${at}" asks for prefers-color-scheme: ${value[1]}, which this resolver cannot place in a mode`
+  );
+  return value[1];
+}
+const underColorScheme = (rule) => colorSchemeOf(rule) !== null;
+// --palette-* belongs here as much as --color-*. The token layer resolves
+// --color-* THROUGH --palette-*, so a rule that redeclares only a palette
+// literal repaints exactly the same pixels while declaring nothing this
+// pattern used to recognise — invisible to the resolver, to the loud
+// selector assert, and to the token-layer pin at once. The var() spelling
+// this file's own doctrine mandates was the spelling that got through.
+const themeTokenPattern = /^--(?:color|panel|grid-cell|palette)-/;
 const declaresThemeToken = (body) =>
   [...body.matchAll(/(--[a-z0-9-]+)\s*:/g)].some(([, name]) => themeTokenPattern.test(name));
 
@@ -173,8 +202,14 @@ function tokenLayerSelector(selector) {
     return null;
   });
   if (forms.some((form) => form === null)) return null;
+  // No Math.max: hoisting the highest weight onto every part of a list
+  // makes the weak parts punch above their specificity, and a browser
+  // paints the difference. A list whose parts genuinely disagree is a form
+  // this resolver cannot weigh as one rule, so it says so.
+  const weights = new Set(forms.map((form) => form.weight));
+  if (weights.size > 1) return null;
   return {
-    weight: Math.max(...forms.map((form) => form.weight)),
+    weight: forms[0].weight,
     applies: (mode) => forms.some((form) => form.applies(mode)),
   };
 }
@@ -202,7 +237,8 @@ function modeRules(mode) {
     // this resolver applied the dark media block to auto unconditionally.
     // That is the rendering `:root:not([data-theme])` repaints, since it
     // outweighs :root at (0,2,0) while the media block is not in force.
-    if (underColorScheme(rule) && mode !== 'auto-dark') continue;
+    const scheme = colorSchemeOf(rule);
+    if (scheme !== null && mode !== `auto-${scheme}`) continue;
     if (!form.applies(mode)) continue;
     applied.push({ ...rule, weight: form.weight });
   }
