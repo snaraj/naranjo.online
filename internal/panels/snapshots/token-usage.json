@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-21T00:00:00Z",
+  "generatedAt": "2026-08-22T00:00:00Z",
   "data": {
     "sources": [
       {
@@ -9,7 +9,7 @@
           {
             "key": "lifetime",
             "label": "Lifetime tokens",
-            "value": 11617530545,
+            "value": 13300000000,
             "unit": "tokens",
             "recorded": true
           },
@@ -23,14 +23,14 @@
           {
             "key": "current-streak",
             "label": "Current streak",
-            "value": 6,
+            "value": 7,
             "unit": "days",
             "recorded": true
           },
           {
             "key": "longest-streak",
             "label": "Longest streak",
-            "value": 6,
+            "value": 7,
             "unit": "days",
             "recorded": true
           },
@@ -73,21 +73,21 @@
           {
             "key": "lifetime",
             "label": "Lifetime tokens",
-            "value": 22700000000,
+            "value": 35000000000,
             "unit": "tokens",
             "recorded": true
           },
           {
             "key": "peak",
             "label": "Peak tokens",
-            "value": 2900000000,
+            "value": 3000000000,
             "unit": "tokens",
             "recorded": true
           },
           {
             "key": "current-streak",
             "label": "Current streak",
-            "value": 4,
+            "value": 3,
             "unit": "days",
             "recorded": true
           },

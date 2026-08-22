@@ -12,14 +12,21 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 ### Changed
 
 - The token-usage panel's anthropic source now carries real figures instead of
-  an empty shell: lifetime tokens, peak day, current and longest streak, and
-  longest session, plus the model mix as insights. They are captured from the
-  workstation's own local aggregate - no credential of any kind is involved,
-  and none reaches the cluster - so every one keeps `recorded: true` and says
-  it came from an out-of-band capture rather than borrowing the panel's
-  freshness. The five stat keys deliberately match the codex source's, so the
-  closed unit set (tokens, days, seconds) needed no new member and the
-  frontend formatter is untouched.
+  an empty shell, and the codex source is refreshed from a stale 2026-08-12
+  capture: lifetime tokens, peak day, current and longest streak, and longest
+  session, plus the model mix as insights. Both are captured from the tools'
+  own usage panels on the owner's workstation - no credential of any kind is
+  involved, and none reaches the cluster - so every figure keeps
+  `recorded: true` and says it came from an out-of-band capture rather than
+  borrowing the panel's freshness.
+- The five stat keys deliberately match across both sources, so the closed
+  unit set (tokens, days, seconds) needed no new member and the frontend
+  formatter is untouched.
+- Two capture bases, stated rather than blended: everything except the
+  anthropic peak comes from the 2026-08-22 usage panels; the anthropic peak
+  day comes from the workstation's local daily aggregate, whose last computed
+  date is 2026-08-21, because the usage panel reports no peak-day token total
+  and inventing one is not an option.
 
 ## [0.1.28] - 2026-08-22
 
