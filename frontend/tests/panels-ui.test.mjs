@@ -139,8 +139,19 @@ test('each card keeps its own freshness reading and none keeps a control', () =>
   assert.match(shell, /\.panel-badge-dot\[data-panel-status='stale'\]\s*\{[^}]*background:\s*none/);
   // No per-card control, and no panel hands one up any more.
   assert.doesNotMatch(shell, /panel-refresh|<button/, 'a card grew its own refresh control back');
+  // Two spellings, because a bespoke refresher does not have to be CALLED
+  // "refresh" to be one. The delta review showed a panel could reintroduce
+  // the control under any name so long as it reached a watcher's refresh(),
+  // so the call itself is pinned rather than one identifier.
+  //
+  // A blanket ban on <button> inside a panel was tried here and is wrong:
+  // TokenUsagePanel legitimately owns a daily/weekly/cumulative radiogroup,
+  // which is a view control, not a refresher. The shell-level assertion above
+  // already closes the realistic path — a control rendered by the shared
+  // PanelShell — and reaching a watcher is what makes a control a refresher.
   for (const [name, source] of Object.entries({ bossLog, activityBar, tokenUsage })) {
     assert.doesNotMatch(source, /\{refresh\}|const refresh =/, `${name} still hands a refresher to its shell`);
+    assert.doesNotMatch(source, /\.refresh\(\)/, `${name} drives a watcher refresh of its own`);
   }
 });
 
@@ -158,6 +169,18 @@ test('one refresh serves every tracker, and it belongs to the stack', () => {
   );
   assert.match(refreshAll, /aria-label="Refresh all trackers"/);
   assert.match(refreshAll, /refreshPanels\(\)/);
+  // One source pin survives here, and deliberately: a watcher LEAVING the
+  // live set is unobservable through the public API, because stop() also sets
+  // the stopped flag and read() short-circuits on it — so a watcher that
+  // stayed in the set would behave identically while the set grew without
+  // bound. The delta review caught exactly this: deleting the delete was red
+  // before and green after, a real net loss. Behavior proves the rest; only
+  // the leak needs the pin.
+  assert.match(
+    panelsSource,
+    /liveWatchers\.delete\(watcher\)/,
+    'a stopped watcher must leave the live set, or the set grows without bound'
+  );
   // What refreshPanels actually DOES is proven behaviorally in
   // panel-refresh.test.mjs — that it reads every mounted panel, that a
   // stopped panel leaves the set, that an empty page is a no-op, and that a

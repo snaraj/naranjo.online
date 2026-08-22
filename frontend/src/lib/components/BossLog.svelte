@@ -71,7 +71,7 @@
   title={envelope?.title ?? 'Old School RuneScape Stats'}
   status={envelope?.status ?? 'unavailable'}
   generatedAt={envelope?.generatedAt}
- 
+
 >
   {#if data}
     <p class="boss-account">{panelSummary(data.account, skills.length, data.bosses.length)}</p>

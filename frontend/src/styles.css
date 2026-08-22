@@ -55,7 +55,7 @@
   /* Brand and data colors. RuneLite's published orange is the panels' accent
      and stays the brand mark in every reading mode — but it only clears
      WCAG 1.4.3 on a DARK surface (6.37:1 on the dark card, 5.74:1 on sepia,
-     a failing 2.2:1 on the light one), so the light palette carries the same
+     a failing 2.37:1 on the light card), so the light palette carries the same
      hue darkened until it passes at 5.33:1. Same brand, legible everywhere,
      rather than a brand that quietly becomes unreadable in one mode. */
   --palette-brand-orange: #dc8a00;

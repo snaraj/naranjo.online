@@ -109,47 +109,80 @@ function paletteLiterals(css) {
   return palette;
 }
 
-// blockBody returns the brace-matched body of the rule that starts at the
-// first occurrence of `opener`, so a nested at-rule cannot truncate it.
-function blockBody(css, opener) {
-  const start = css.indexOf(opener);
-  assert.ok(start >= 0, `the stylesheet has no rule opening with ${opener}`);
-  const from = css.indexOf('{', start) + 1;
-  let depth = 0;
-  for (let i = from - 1; i < css.length; i += 1) {
-    if (css[i] === '{') depth += 1;
-    else if (css[i] === '}') {
-      depth -= 1;
-      if (depth === 0) return css.slice(from, i);
+// cssRules walks the stylesheet once and returns every rule in DOCUMENT
+// ORDER with the at-rules it sits inside. Order is the point: CSS resolves a
+// repeated declaration by taking the last one, so a resolver that stops at
+// the first match can be defeated by simply APPENDING an override — which is
+// exactly the attack that got past the previous version of this helper.
+function cssRules(css) {
+  const source = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = [];
+  const enclosing = [];
+  let cursor = 0;
+  while (cursor < source.length) {
+    const open = source.indexOf('{', cursor);
+    if (open < 0) break;
+    const prelude = source.slice(cursor, open).replace(/^[};\s]+/, '').trim();
+    if (prelude.startsWith('@')) {
+      enclosing.push(prelude);
+      cursor = open + 1;
+      continue;
+    }
+    const close = source.indexOf('}', open);
+    rules.push({ enclosing: [...enclosing], selector: prelude, body: source.slice(open + 1, close) });
+    cursor = close + 1;
+    while (enclosing.length > 0 && /^\s*}/.test(source.slice(cursor))) {
+      enclosing.pop();
+      cursor = source.indexOf('}', cursor) + 1;
     }
   }
-  assert.fail(`the rule opening with ${opener} is never closed`);
+  return rules;
 }
 
-// indirections maps every `--<prefix>-*: var(--target)` declaration in a rule
-// body to the token it defers to. It reads ONLY var() forms, because a token
-// resolved to a literal is not an indirection and belongs in the palette.
-function indirections(body, prefix) {
-  const map = {};
-  const pattern = new RegExp(`(--${prefix}-[a-z0-9-]+)\\s*:\\s*var\\((--[a-z0-9-]+)\\)`, 'g');
-  for (const [, name, target] of body.matchAll(pattern)) {
-    map[name] = target;
+const styleRules = cssRules(styles);
+const underColorScheme = (rule) => rule.enclosing.some((at) => at.includes('prefers-color-scheme'));
+const rootish = (rule) => rule.selector.split(',').some((part) => part.trim().startsWith(':root'));
+const stamped = (rule, mode) => rule.selector.includes(`[data-theme="${mode}"]`);
+
+// The rules that paint one reading mode, base first and override second, each
+// in document order. `auto` is modelled because it is a real mode this page
+// serves: it is the ABSENCE of a stamp, so it resolves through the
+// prefers-color-scheme mapping — the one block nothing used to resolve, and
+// the block the auto mode is precisely what makes render.
+function modeRules(mode) {
+  const base = styleRules.filter((rule) => rootish(rule) && !underColorScheme(rule) && !/\[data-theme=/.test(rule.selector));
+  const override =
+    mode === 'auto'
+      ? styleRules.filter((rule) => underColorScheme(rule) && rootish(rule))
+      : mode === 'light'
+        ? styleRules.filter((rule) => stamped(rule, 'light'))
+        : styleRules.filter((rule) => stamped(rule, mode));
+  return [...base, ...override];
+}
+
+// Every custom property a mode declares, later declaration winning.
+function tokensFor(mode) {
+  const tokens = {};
+  for (const rule of modeRules(mode)) {
+    for (const [, name, value] of rule.body.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)) {
+      tokens[name] = value.trim();
+    }
   }
-  return map;
+  return tokens;
 }
 
-// The component-facing hooks, declared once and shared by every mode.
-const rootBody = blockBody(styles, ':root {');
-const panelHooks = { ...indirections(rootBody, 'panel'), ...indirections(rootBody, 'grid-cell') };
-
-// Each reading mode's own wiring of the --color-* slots. Light lives in the
-// same :root rule that declares the hooks; the other two are attribute rules
-// the origin's stamp selects.
-const modeWiring = (mode) =>
-  indirections(
-    mode === 'light' ? rootBody : blockBody(styles, `[data-theme="${mode}"]`),
-    'color'
-  );
+// Follow a token through however many var() hops the layer takes until a
+// literal falls out. A dangling or circular reference fails loudly rather
+// than resolving to undefined and quietly passing.
+function resolveToken(name, tokens, seen = new Set()) {
+  const value = tokens[name];
+  assert.ok(value !== undefined, `${name} resolves to nothing in this mode`);
+  const reference = /^var\((--[a-z0-9-]+)\)$/.exec(value);
+  if (!reference) return value;
+  assert.ok(!seen.has(name), `${name} is a circular token reference`);
+  seen.add(name);
+  return resolveToken(reference[1], tokens, seen);
+}
 
 // hardInlineSizes returns every declaration that pins a box to an absolute
 // inline size, with the value in CSS pixels. Fluid forms are skipped on
@@ -179,7 +212,6 @@ function hardInlineSizes(css) {
 // orange that reads perfectly on a dark card fails outright on the light one,
 // which is exactly the class of mistake a palette swap invites.
 test('every reading mode paints panels at a legible contrast', () => {
-  const palette = paletteLiterals(styles);
   // Every panel color travels a CHAIN: a --panel-* hook reads a --color-*
   // slot, and each reading mode wires that slot to a --palette-* literal.
   // Measuring the literals through a hand-written name map would leave the
@@ -187,14 +219,7 @@ test('every reading mode paints panels at a legible contrast', () => {
   // the raw orange, restoring the 2.37:1 failure this test exists to catch,
   // and the suite would stay green. So the chain is resolved out of the
   // stylesheet and the test measures what the page will actually paint.
-  const resolve = (hook, mode) => {
-    const slot = panelHooks[hook];
-    assert.ok(slot, `no --panel-* hook named ${hook}`);
-    if (slot.startsWith('--palette-')) return palette[slot];
-    const wired = modeWiring(mode)[slot];
-    assert.ok(wired, `${mode} never wires ${slot}, so ${hook} resolves to nothing`);
-    return palette[wired];
-  };
+  const resolve = (hook, mode) => resolveToken(hook, tokensFor(mode));
   // 4.5:1 is WCAG 1.4.3 for body text; 3:1 is 1.4.11 for a non-text
   // indicator, which is all the status dot is — its state is carried by
   // SHAPE as well, so color is the redundant channel and never the only one.
@@ -204,7 +229,7 @@ test('every reading mode paints panels at a legible contrast', () => {
     '--panel-accent': 4.5,
     '--panel-status-ok': 3,
   };
-  for (const mode of ['light', 'dark', 'sepia']) {
+  for (const mode of ['light', 'auto', 'dark', 'sepia']) {
     const background = resolve('--panel-surface', mode);
     assert.ok(background, `${mode} has no raised surface to measure against`);
     for (const [hook, floor] of Object.entries(floors)) {
