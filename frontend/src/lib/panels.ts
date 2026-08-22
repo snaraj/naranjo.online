@@ -57,7 +57,7 @@ export interface TokenUsageWindow {
  * version, exactly as the envelope contract requires. `recorded` marks a
  * figure captured out of band rather than fetched live, so a tile can say
  * where it came from instead of implying a freshness it does not have. */
-export type TokenStatUnit = 'tokens' | 'days' | 'seconds';
+export type TokenStatUnit = 'tokens' | 'days' | 'seconds' | 'count';
 
 export interface TokenUsageStat {
   key: string;
