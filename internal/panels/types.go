@@ -159,7 +159,8 @@ type TokenUsageStat struct {
 	Label string `json:"label"`
 	// Value is the magnitude in Unit; null means the source reports none.
 	Value *int64 `json:"value"`
-	// Unit names how Value is measured: UnitTokens, UnitDays, or UnitSeconds.
+	// Unit names how Value is measured: UnitTokens, UnitDays,
+	// UnitSeconds, or UnitCount.
 	Unit string `json:"unit"`
 	// Recorded marks a figure that came from a dated out-of-band capture
 	// rather than the live feed, so the tile can say so instead of implying
@@ -177,6 +178,11 @@ const (
 	UnitDays = "days"
 	// UnitSeconds measures an elapsed duration in seconds.
 	UnitSeconds = "seconds"
+	// UnitCount measures a plain tally of things that are neither tokens nor
+	// time — sessions, for instance. It renders with thousands separators and
+	// no unit word, because the tile's own label already names what is being
+	// counted.
+	UnitCount = "count"
 )
 
 // TokenUsageSeries is the daily consumption series behind the activity grid,

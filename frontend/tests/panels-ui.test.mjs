@@ -269,6 +269,36 @@ test('the skills grid mirrors the hiscore panel and renders levels honestly', ()
 //
 // The initials fallback stays in the component regardless: a boss shipped
 // upstream tomorrow must render as a designed state, not a hole.
+// The stat unit set is hand-duplicated across the tree: a Go const block that
+// the origin serves by, and a TypeScript admission set that the frontend
+// refuses unknown units with. The contract calls adding a unit "a conscious
+// edit on both sides" — this pin is what makes that true rather than hoped
+// for. Adding a unit to one side alone fails here, naming the side that is
+// behind, instead of shipping a tile the frontend cannot format.
+test('the stat unit set is identical on both sides', { skip: reducedContextNote }, async () => {
+  const goSource = await read('../../internal/panels/types.go');
+  const tsSource = await read('../src/lib/token-usage.ts');
+
+  const goUnits = new Set(
+    [...goSource.matchAll(/\bUnit[A-Z][A-Za-z]*\s*=\s*"([a-z]+)"/g)].map(([, value]) => value)
+  );
+  const declared = /const statUnits: ReadonlySet<string> = new Set\(\[([^\]]*)\]\)/.exec(tsSource);
+  assert.ok(declared, 'the frontend admission set is not where this pin expects it');
+  const tsUnits = new Set(
+    declared[1]
+      .split(',')
+      .map((entry) => entry.trim().replace(/^'|'$/g, ''))
+      .filter(Boolean)
+  );
+
+  assert.ok(goUnits.size > 0, 'no Unit* consts found in the Go source; the pin has nothing to protect');
+  assert.deepEqual(
+    [...tsUnits].sort(),
+    [...goUnits].sort(),
+    'the Go unit consts and the frontend admission set have drifted apart'
+  );
+});
+
 test('the icon set covers exactly the rows the origin serves', { skip: reducedContextNote }, async () => {
   const snapshot = await read('../../internal/panels/snapshots/boss-log.json').then(JSON.parse);
   const directories = {

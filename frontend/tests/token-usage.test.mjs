@@ -254,6 +254,10 @@ describe('stat tiles', () => {
     assert.equal(formatStatValue(4, 'days'), '4 days');
     assert.equal(formatStatValue(1, 'days'), '1 day');
     assert.equal(formatStatValue(80_880, 'seconds'), '22h 28m');
+    // A tally is grouped but never abbreviated: the tile exists to show the
+    // figure, and "17.1K" is not the figure.
+    assert.equal(formatStatValue(25, 'count'), '25');
+    assert.equal(formatStatValue(17_069, 'count'), '17,069');
   });
 
   it('renders an unreported figure as a dash, never as a zero', () => {
@@ -261,6 +265,7 @@ describe('stat tiles', () => {
     // conflates them invents data.
     assert.equal(formatStatValue(null, 'tokens'), '--');
     assert.equal(formatStatValue(null, 'days'), '--');
+    assert.equal(formatStatValue(null, 'count'), '--');
     assert.equal(formatStatValue(0, 'tokens'), '0');
   });
 

@@ -14,10 +14,59 @@
             "recorded": true
           },
           {
+            "key": "input",
+            "label": "Input",
+            "value": 623100,
+            "unit": "tokens",
+            "recorded": true
+          },
+          {
+            "key": "output",
+            "label": "Output",
+            "value": 49800000,
+            "unit": "tokens",
+            "recorded": true
+          },
+          {
+            "key": "cache-read",
+            "label": "Cache read",
+            "value": 12800000000,
+            "unit": "tokens",
+            "recorded": true
+          },
+          {
+            "key": "cache-write",
+            "label": "Cache write",
+            "value": 494100000,
+            "unit": "tokens",
+            "recorded": true
+          },
+          {
             "key": "peak",
             "label": "Peak day",
             "value": 3649274247,
             "unit": "tokens",
+            "recorded": true
+          },
+          {
+            "key": "sessions",
+            "label": "Sessions",
+            "value": 25,
+            "unit": "count",
+            "recorded": true
+          },
+          {
+            "key": "active-days",
+            "label": "Active days",
+            "value": 15,
+            "unit": "days",
+            "recorded": true
+          },
+          {
+            "key": "tracked-days",
+            "label": "Days tracked",
+            "value": 52,
+            "unit": "days",
             "recorded": true
           },
           {

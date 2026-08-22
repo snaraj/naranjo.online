@@ -22,6 +22,17 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - The five stat keys deliberately match across both sources, so the closed
   unit set (tokens, days, seconds) needed no new member and the frontend
   formatter is untouched.
+- A `count` unit joins the closed stat unit set, so a tally that is neither
+  tokens nor time can be published: sessions, for one. It renders grouped and
+  exact rather than abbreviated, because a tile showing "17.1K" has lost the
+  figure it exists to show. The set is now hand-duplicated in a Go const block
+  and a frontend admission set, so a parity pin holds the two together and
+  fails naming whichever side is behind - the contract calls a new unit "a
+  conscious edit on both sides" and this is what makes that mechanical.
+- The anthropic source grows from five tiles to twelve, matching the detail
+  the source tool itself reports: the input/output/cache-read/cache-write
+  breakdown, sessions, active days, and days tracked, alongside the lifetime,
+  peak, streak, and longest-session figures it already had.
 - Two capture bases, stated rather than blended: everything except the
   anthropic peak comes from the 2026-08-22 usage panels; the anthropic peak
   day comes from the workstation's local daily aggregate, whose last computed
