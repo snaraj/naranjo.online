@@ -7,6 +7,20 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.30] - 2026-08-22
+
+### Changed
+
+- The token-usage panel's anthropic source now carries real figures instead of
+  an empty shell: lifetime tokens, peak day, current and longest streak, and
+  longest session, plus the model mix as insights. They are captured from the
+  workstation's own local aggregate - no credential of any kind is involved,
+  and none reaches the cluster - so every one keeps `recorded: true` and says
+  it came from an out-of-band capture rather than borrowing the panel's
+  freshness. The five stat keys deliberately match the codex source's, so the
+  closed unit set (tokens, days, seconds) needed no new member and the
+  frontend formatter is untouched.
+
 ## [0.1.28] - 2026-08-22
 
 ### Fixed

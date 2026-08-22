@@ -1,25 +1,118 @@
 {
-  "generatedAt": "2026-08-12T00:00:00Z",
+  "generatedAt": "2026-08-21T00:00:00Z",
   "data": {
     "sources": [
       {
         "label": "anthropic",
         "windows": [],
-        "stats": [],
-        "insights": []
+        "stats": [
+          {
+            "key": "lifetime",
+            "label": "Lifetime tokens",
+            "value": 11617530545,
+            "unit": "tokens",
+            "recorded": true
+          },
+          {
+            "key": "peak",
+            "label": "Peak day",
+            "value": 3649274247,
+            "unit": "tokens",
+            "recorded": true
+          },
+          {
+            "key": "current-streak",
+            "label": "Current streak",
+            "value": 6,
+            "unit": "days",
+            "recorded": true
+          },
+          {
+            "key": "longest-streak",
+            "label": "Longest streak",
+            "value": 6,
+            "unit": "days",
+            "recorded": true
+          },
+          {
+            "key": "longest-task",
+            "label": "Longest session",
+            "value": 70486,
+            "unit": "seconds",
+            "recorded": true
+          }
+        ],
+        "insights": [
+          {
+            "label": "Opus 5",
+            "pct": 53.1,
+            "recorded": true
+          },
+          {
+            "label": "Fable 5",
+            "pct": 32.8,
+            "recorded": true
+          },
+          {
+            "label": "Sonnet 5",
+            "pct": 7.3,
+            "recorded": true
+          },
+          {
+            "label": "Opus 4.8",
+            "pct": 6.8,
+            "recorded": true
+          }
+        ]
       },
       {
         "label": "codex",
         "account": "thealienmessiah",
         "windows": [],
         "stats": [
-          { "key": "lifetime", "label": "Lifetime tokens", "value": 22700000000, "unit": "tokens", "recorded": true },
-          { "key": "peak", "label": "Peak tokens", "value": 2900000000, "unit": "tokens", "recorded": true },
-          { "key": "current-streak", "label": "Current streak", "value": 4, "unit": "days", "recorded": true },
-          { "key": "longest-streak", "label": "Longest streak", "value": 11, "unit": "days", "recorded": true },
-          { "key": "longest-task", "label": "Longest task", "value": 80880, "unit": "seconds", "recorded": true }
+          {
+            "key": "lifetime",
+            "label": "Lifetime tokens",
+            "value": 22700000000,
+            "unit": "tokens",
+            "recorded": true
+          },
+          {
+            "key": "peak",
+            "label": "Peak tokens",
+            "value": 2900000000,
+            "unit": "tokens",
+            "recorded": true
+          },
+          {
+            "key": "current-streak",
+            "label": "Current streak",
+            "value": 4,
+            "unit": "days",
+            "recorded": true
+          },
+          {
+            "key": "longest-streak",
+            "label": "Longest streak",
+            "value": 11,
+            "unit": "days",
+            "recorded": true
+          },
+          {
+            "key": "longest-task",
+            "label": "Longest task",
+            "value": 80880,
+            "unit": "seconds",
+            "recorded": true
+          }
         ],
-        "insights": [{ "label": "Fast mode", "pct": 4, "recorded": true }]
+        "insights": [
+          {
+            "label": "Fast mode",
+            "pct": 4,
+            "recorded": true
+          }
+        ]
       }
     ]
   }
