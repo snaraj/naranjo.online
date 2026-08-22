@@ -118,7 +118,7 @@ func TestTokenUsagePanelKeepsSourceLabelsAsData(t *testing.T) {
 		t.Fatalf("token-usage ships %d sources, want 2", len(payload.Sources))
 	}
 	labels := map[string]bool{}
-	units := map[string]bool{UnitTokens: true, UnitDays: true, UnitSeconds: true}
+	units := map[string]bool{UnitTokens: true, UnitDays: true, UnitSeconds: true, UnitCount: true}
 	for _, source := range payload.Sources {
 		labels[source.Label] = true
 		// Windows, stats, and insights are all optional and all honest: the
