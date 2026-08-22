@@ -52,31 +52,98 @@
   --palette-sepia-accent: #b79d7e;
   --palette-sepia-text: #f4eaea;
 
-  /* Stacking order, as tokens rather than magic numbers. Every fixed element
-     on the page reads exactly one of these, so "which chrome wins" is one
-     ordered list here instead of a race between components that all happened
-     to pick 10. Bottom to top: page content, the passive activity bar, the
-     rail the visitor opens deliberately, and the reading-mode control, which
-     must stay reachable over everything else. */
+  /* Brand and data colors. RuneLite's published orange is the panels' accent
+     and stays the brand mark in every reading mode — but it only clears
+     WCAG 1.4.3 on a DARK surface (6.37:1 on the dark card, 5.74:1 on sepia,
+     a failing 2.37:1 on the light card), so the light palette carries the same
+     hue darkened until it passes at 5.33:1. Same brand, legible everywhere,
+     rather than a brand that quietly becomes unreadable in one mode. */
+  --palette-brand-orange: #dc8a00;
+  --palette-brand-orange-on-light: #8a5600;
+
+  /* Panel status. Shape already distinguishes these states (filled, hollow,
+     square), so color is the redundant channel — it still has to clear
+     1.4.11's 3:1 as a non-text indicator, which the green does not do on a
+     light surface until it is darkened. */
+  --palette-status-ok: #5eab5e;
+  --palette-status-ok-on-light: #2f7d32;
+  --palette-status-unavailable: #6e6e6e;
+
+  /* The contribution ramp: one hue, monotone lightness, five steps. The
+     DIRECTION is per-palette and that is the whole point — "steps brighter"
+     is only correct against a dark card. On the light one the identical ramp
+     would step toward its own background and the busiest days would read as
+     the emptiest, so light steps darker instead. Sepia runs warm to sit in
+     its own palette rather than importing the blue one. */
+  --palette-light-grid-0: #dcdcd2;
+  --palette-light-grid-1: #a8c4e8;
+  --palette-light-grid-2: #6f9fd8;
+  --palette-light-grid-3: #3f79c4;
+  --palette-light-grid-4: #1c5cab;
+
+  --palette-dark-grid-0: #262b36;
+  --palette-dark-grid-1: #1c5cab;
+  --palette-dark-grid-2: #2a78d6;
+  --palette-dark-grid-3: #5598e7;
+  --palette-dark-grid-4: #86b6ef;
+
+  --palette-sepia-grid-0: #3a322b;
+  --palette-sepia-grid-1: #6b4f2a;
+  --palette-sepia-grid-2: #946d33;
+  --palette-sepia-grid-3: #b98f4a;
+  --palette-sepia-grid-4: #d9b676;
+
+  /* Stacking order, as tokens rather than magic numbers. The page holds no
+     fixed chrome any more — the rail and the docked activity bar are gone, so
+     nothing overlays the document and there is no arbitration to do. What
+     remains is one genuine overlap: the reading-mode popover hangs over the
+     panel stack, which is later in the document and would otherwise paint
+     over it. Two named layers say that, and a component reading a raw number
+     instead is still the defect this scale exists to prevent. */
   --layer-base: 0;
-  --layer-activity: 10;
-  --layer-rail: 20;
   --layer-menu: 30;
 
-  /* Right-rail geometry, defined once so the rail and the page gutter the
-     rail reserves cannot disagree about how wide it is. */
-  --panel-rail-width: 16.25rem;
-  --panel-rail-toggle-width: 1.375rem;
-  /* The strip the bottom-start activity bar occupies. It bounds the bar AND
-     is the page's bottom reserve, so the bar can never grow past the space
-     the page set aside for it (ActivityBar.svelte owns both ends). */
-  --panel-activity-reserve: 19rem;
-  /* Both gutters are zero until the chrome that occupies them says otherwise:
-     the rail publishes an attribute on this element, the activity bar
-     publishes the block gutter from its own stylesheet. Reserving space no
-     chrome is using would be the opposite defect. */
-  --page-rail-gutter: 0px;
-  --page-activity-gutter: 0px;
+  /* The page column: one width for the header and every panel in the stack,
+     so the chrome sits over the cards rather than beside them, and a panel
+     added later inherits the column instead of choosing a width of its own. */
+  --page-column-width: 30rem;
+  --page-gutter: 1rem;
+  --page-stack-gap: 0.75rem;
+  --page-header-height: 3.5rem;
+
+  /* The panel theme layer. Every panel component was built "shaped, not
+     styled" — each color reads a --panel-* custom property with a
+     dark-native fallback, so the theme layer restyles panels by overriding
+     variables and never by editing a component. This block is that layer,
+     and it is the whole of it.
+
+     It is written ONCE, against the active --color-* tokens rather than per
+     reading mode, so a theme block that remaps the palette moves the panels
+     with it automatically and a mode added later needs no entry here. The
+     panels used to keep RuneLite's dark chrome in every mode, which barely
+     showed while they were a side rail; now that they are the page, a light
+     reading mode with dark cards reads as a bug rather than a style.
+
+     The RuneLite orange survives as the brand mark in all three modes —
+     --color-brand, not --color-accent, so it stays orange rather than
+     dissolving into each palette's neutral. */
+  --panel-surface: var(--color-surface-raised);
+  --panel-tip-surface: var(--color-surface-overlay);
+  --usage-tile-surface: var(--color-surface);
+  --panel-border: var(--color-border);
+  --panel-text: var(--color-text);
+  /* The accent slot is each palette's mid-tone: dimmer than text, and
+     measured at 8.6:1 / 9.7:1 / 6.1:1 on its own card, so "muted" never
+     means "unreadable". */
+  --panel-muted: var(--color-accent);
+  --panel-accent: var(--color-brand);
+  --panel-status-ok: var(--color-status-ok);
+  --panel-status-unavailable: var(--palette-status-unavailable);
+  --grid-cell-0: var(--color-grid-0);
+  --grid-cell-1: var(--color-grid-1);
+  --grid-cell-2: var(--color-grid-2);
+  --grid-cell-3: var(--color-grid-3);
+  --grid-cell-4: var(--color-grid-4);
 
   color-scheme: light;
   --color-surface: var(--palette-light-surface);
@@ -86,6 +153,13 @@
   --color-border-strong: var(--palette-light-border-strong);
   --color-accent: var(--palette-light-accent);
   --color-text: var(--palette-light-text);
+  --color-brand: var(--palette-brand-orange-on-light);
+  --color-status-ok: var(--palette-status-ok-on-light);
+  --color-grid-0: var(--palette-light-grid-0);
+  --color-grid-1: var(--palette-light-grid-1);
+  --color-grid-2: var(--palette-light-grid-2);
+  --color-grid-3: var(--palette-light-grid-3);
+  --color-grid-4: var(--palette-light-grid-4);
   color: var(--color-text);
   background: var(--color-surface);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -108,6 +182,13 @@
     --color-border-strong: var(--palette-dark-border-strong);
     --color-accent: var(--palette-dark-accent);
     --color-text: var(--palette-dark-text);
+    --color-brand: var(--palette-brand-orange);
+    --color-status-ok: var(--palette-status-ok);
+    --color-grid-0: var(--palette-dark-grid-0);
+    --color-grid-1: var(--palette-dark-grid-1);
+    --color-grid-2: var(--palette-dark-grid-2);
+    --color-grid-3: var(--palette-dark-grid-3);
+    --color-grid-4: var(--palette-dark-grid-4);
   }
 }
 
@@ -120,6 +201,13 @@
   --color-border-strong: var(--palette-dark-border-strong);
   --color-accent: var(--palette-dark-accent);
   --color-text: var(--palette-dark-text);
+  --color-brand: var(--palette-brand-orange);
+  --color-status-ok: var(--palette-status-ok);
+  --color-grid-0: var(--palette-dark-grid-0);
+  --color-grid-1: var(--palette-dark-grid-1);
+  --color-grid-2: var(--palette-dark-grid-2);
+  --color-grid-3: var(--palette-dark-grid-3);
+  --color-grid-4: var(--palette-dark-grid-4);
 }
 
 [data-theme="sepia"] {
@@ -131,18 +219,13 @@
   --color-border-strong: var(--palette-sepia-border-strong);
   --color-accent: var(--palette-sepia-accent);
   --color-text: var(--palette-sepia-text);
-}
-
-/* The rail publishes its open state on the document root the same way the
-   reading mode does, and the page turns that into a reserved gutter so the
-   centered in-flow content is laid out beside the rail instead of underneath
-   it. Only above the width at which the rail starts collapsed
-   (SideRail.svelte's own 60rem query): on a phone, reserving a rail's width
-   would leave nothing to read. */
-@media (min-width: 60.0625rem) {
-  :root[data-rail-open='true'] {
-    --page-rail-gutter: calc(var(--panel-rail-width) + var(--panel-rail-toggle-width));
-  }
+  --color-brand: var(--palette-brand-orange);
+  --color-status-ok: var(--palette-status-ok);
+  --color-grid-0: var(--palette-sepia-grid-0);
+  --color-grid-1: var(--palette-sepia-grid-1);
+  --color-grid-2: var(--palette-sepia-grid-2);
+  --color-grid-3: var(--palette-sepia-grid-3);
+  --color-grid-4: var(--palette-sepia-grid-4);
 }
 
 * {
@@ -166,35 +249,111 @@ body {
   min-height: 100dvh;
 }
 
-/* The page lays itself out around whatever fixed chrome is currently
-   occupying an edge: the rail's gutter on the inline end, the activity bar's
-   strip on the block end. */
+/* The page is one centered column: the header row, then the panel stack. It
+   used to lay itself out AROUND fixed chrome — a gutter reserved for the rail
+   on the inline end, a strip reserved for the activity bar on the block end —
+   and every one of those reserves existed only because chrome was floating
+   over the document. Nothing floats now, so the arithmetic is gone and the
+   page simply contains what it shows.
+
+   The insets are the page's, not each component's: with no fixed elements
+   left, one padding rule here clears the notch and the home indicator for
+   everything inside. */
 #app {
-  padding-inline-end: var(--page-rail-gutter);
-  padding-block-end: var(--page-activity-gutter);
+  display: grid;
+  justify-items: center;
+  padding-inline: max(var(--page-gutter), env(safe-area-inset-left)) max(var(--page-gutter), env(safe-area-inset-right));
+  padding-block: max(0px, env(safe-area-inset-top)) calc(2rem + env(safe-area-inset-bottom));
 }
 
-/* The hero gives the bar's strip back, so a page carrying nothing below it is
-   still exactly one viewport tall and grows no scrollbar over reserved but
-   empty space. */
+/* The header and the hero both take the column's width so the controls sit
+   directly over the cards they act on. */
+#app > .page-header,
+#app > main {
+  inline-size: min(var(--page-column-width), 100%);
+}
+
+/* The chrome row is styled HERE rather than inside PageHeader.svelte because
+   the static shell renders the same empty row and must reserve the identical
+   height — a component-scoped rule would style only the hydrated one, and the
+   controls arriving would push the page down. */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  min-block-size: var(--page-header-height);
+}
+
 main {
   display: grid;
-  min-height: calc(100dvh - var(--page-activity-gutter));
-  place-items: center;
-  padding: 2rem;
+  justify-items: center;
+  gap: 2rem;
 }
 
+/* The stack: one card per tracker, top to bottom, each filling the column.
+   Adding a tracker is one mount line in App.svelte — the stack gives it the
+   column's width and the gap to its neighbour, so no panel carries page
+   layout of its own.
+
+   min-inline-size: 0 on the stack AND on every card is load-bearing, not
+   defensive. A grid item's automatic minimum size is its MIN-CONTENT, so a
+   card holding a dense table refuses to shrink below that table and drags the
+   stack past the column — which the page then scrolls sideways to reveal, at
+   every viewport width, breaking the no-horizontal-scroll floor. Measured
+   before this rule: a 480px column with a 708px stack. Anything genuinely too
+   wide to fit scrolls inside its own panel instead. */
+.panel-stack,
+.panel-stack > * {
+  min-inline-size: 0;
+}
+
+.panel-stack {
+  display: grid;
+  gap: var(--page-stack-gap);
+  inline-size: 100%;
+}
+
+/* The hero used to be the only thing on the page and was sized like it — a
+   viewport-filling splash that pushed every panel below the fold now that the
+   panels are in the document. It reads as the page's title instead. */
 h1 {
   margin: 0;
-  font-size: clamp(2.5rem, 12vw, 8rem);
+  font-size: clamp(2rem, 8vw, 3.5rem);
   font-weight: 650;
   letter-spacing: -0.05em;
   line-height: 1;
 }
 
-/* The panel mount region is layout-neutral on purpose: each mounted panel
-   places itself (the side rail floats over the page; inline panels flow), so
-   adding or removing a panel never reflows the hello shell. */
-.panels-mount {
-  display: contents;
+/* The shared shape of every page-level icon control — the reading-mode
+   trigger and the refresh button beside it. Defined once, here, because two
+   controls that sit side by side and are meant to read as siblings cannot be
+   allowed to drift apart in two component stylesheets. 2.75rem = 44px: the
+   minimum comfortable touch target. */
+.icon-button {
+  inline-size: 2.75rem;
+  block-size: 2.75rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+.icon-button:hover,
+.icon-button[aria-expanded='true'] {
+  background: var(--color-surface-overlay);
+  border-color: var(--color-border-strong);
+}
+
+.icon-button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.icon-button[disabled] {
+  cursor: progress;
 }

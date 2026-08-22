@@ -163,18 +163,19 @@ describe('tokenUsageSources admission', () => {
 });
 
 describe('TokenUsagePanel source contract', () => {
-  it('renders inside the shared PanelShell with the envelope status, age, and refresher', () => {
+  it('renders inside the shared PanelShell with the envelope status, age, and no per-card control', () => {
     assert.match(component, /import PanelShell from '\.\/PanelShell\.svelte'/);
     assert.match(
       component,
-      /<PanelShell \{title\} status=\{envelope\.status\} generatedAt=\{envelope\.generatedAt\} \{refresh\}>/
+      /<PanelShell \{title\} status=\{envelope\.status\} generatedAt=\{envelope\.generatedAt\}>/
     );
     assert.match(component, /<\/PanelShell>/);
-    // The refresher must be the panel's OWN watcher, not a second request
-    // path with its own rules: a forced read has to be single-flight against
-    // the periodic one or a visitor pressing it twice costs two requests.
-    assert.match(component, /const refresh = \(\) => watcher\?\.refresh\(\)/);
-    assert.match(component, /watcher = active/);
+    // Refreshing is one gesture for the whole stack, not a per-card decision,
+    // so this panel hands its shell no refresher and holds no watcher handle
+    // of its own — watchPanel enrols itself, and RefreshAll drives them all
+    // through the same single-flight read the periodic poll uses.
+    assert.doesNotMatch(component, /\{refresh\}|const refresh =|watcher/);
+    assert.match(component, /return watchPanel<TokenUsageData>\('token-usage'/);
   });
 
   it('iterates payload sources and takes every label from the data', () => {

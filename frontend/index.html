@@ -3,15 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <!-- viewport-fit=cover is what makes env(safe-area-inset-*) report real
-      values; without it every inset is zero and the fixed chrome sits under a
-      notch or a home indicator. Each fixed element pads itself by those
-      insets (rendering-lane floor, issue #26). -->
+      values; without it every inset is zero and the page sits under a notch
+      or a home indicator. The page itself pads by those insets, once, for
+      everything inside it (rendering-lane floor, issue #26). -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="dark light" />
     <title>naranjo.online</title>
   </head>
   <body>
     <div id="app">
+      <!-- The chrome row exists in BOTH shells so the controls arriving at
+        hydration fill space the static document already held open, rather
+        than pushing the page down. -->
+      <header class="page-header"></header>
       <main aria-labelledby="static-page-title" data-static-fallback>
         <h1 id="static-page-title">Hello World!</h1>
       </main>

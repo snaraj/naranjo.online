@@ -241,9 +241,15 @@ test('the strip owns fixed geometry and its own overflow', () => {
   assert.match(component, /\.activity-commits \{[^}]*block-size: 5\.625rem/);
   // A wide window scrolls inside the strip, never the page.
   assert.match(grid, /\.grid-strip \{[^}]*overflow-x: auto/);
-  // The bar is out of the document flow and bounded against the viewport.
-  assert.match(component, /position: fixed/);
-  assert.match(component, /calc\(100vw - 1\.5rem\)/);
+  // The panel is an ordinary block in the page's stack. It used to dock to
+  // the viewport's bottom-start corner, which meant the page had to reserve a
+  // strip for a bar that overlaid it AND the bar had to bound its own height
+  // against that same reserve so the two could not disagree — two facts that
+  // only existed because it floated. It takes the column's width now, so it
+  // declares neither.
+  assert.match(component, /\.activity-bar \{[^}]*display: block/);
+  assert.doesNotMatch(component, /position: fixed/, 'the panel must not dock again');
+  assert.doesNotMatch(component, /--page-activity-gutter/, 'a card reserves no gutter');
 });
 
 test('activity sources stay local-origin and provider-neutral', () => {
