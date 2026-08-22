@@ -31,6 +31,30 @@ The Go service serves the embedded bundle with strict caching, conditional
 requests, security headers, and `/livez` + `/readyz` probes on port 8080.
 There is no runtime dependency beyond the Go standard library.
 
+Public traffic is HTTPS-only: TLS terminates at the Cloudflare edge, and the
+tunnel carries it to this plain-HTTP origin, never reachable directly. A
+client cannot forge that header — Cloudflare does not honor a
+client-supplied `X-Forwarded-Proto` — so the origin's own
+`Strict-Transport-Security: max-age=31536000` (365 days, no subdomains) is
+minted only on legs the edge itself declares TLS; either way, only the edge's
+broader `max-age=15552000; includeSubDomains` (180 days, preload off) has ever
+been observed reaching a visitor: scope up, lifetime roughly halved. That
+origin promise only matters if the edge is ever bypassed. Non-preloaded HSTS
+protects every visit after the first, upgrading a later link, typed hostname,
+or downgrade attempt before any packet leaves, but not that first visit, which
+may still go out as plain HTTP exactly as interceptable as before; the 301
+answers that exposure, it does not fix it. Only `preload` would close it, and
+it is off.
+
+`includeSubDomains` costs nothing for a first-level subdomain: the apex
+certificate already carries `*.naranjo.online`, so `www`, `blog`, and similar
+inherit valid TLS automatically. The real constraint is one level deeper:
+Cloudflare's free wildcard covers exactly one label, so a host like
+`api.staging.naranjo.online` gets no certificate without Advanced Certificate
+Manager, a paid add-on; under `includeSubDomains` that would make it
+unreachable, not merely insecure, at a cost this project doesn't spend.
+Grey-clouded (DNS-only) records bypass the edge certificate entirely.
+
 ## Development
 
 ```sh
