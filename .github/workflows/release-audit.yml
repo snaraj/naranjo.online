@@ -239,6 +239,16 @@ jobs:
             "${expected_tree}" "${published_tree}"
           git archive "${source_sha}" chart | tar -x -C "${expected_source}"
           chart_name="$(awk '/^name:/{print $2; exit}' "${expected_source}/chart/Chart.yaml")"
+          # ADR 0016 step 1 (issue #111): the published chart carries the
+          # released image digest, while the committed source keeps the
+          # fail-closed sentinel. This audit reproduces the publisher, so it
+          # performs the publisher's substitution with the digest THIS RELEASE'S
+          # manifest binds. That is strictly stronger than the byte compare it
+          # replaces: the diff below now also proves the published chart deploys
+          # the exact image the Release, the signature, and the provenance are
+          # about, and a chart carrying any other digest fails the audit.
+          python3 -I -B scripts/ci/release_contract.py chart-digest-embed \
+            --values "${expected_source}/chart/values.yaml" --digest "${image_digest}"
           helm package "${expected_source}/chart" --version "${version}" \
             --app-version "${version}" -d "${expected_archives}"
           printf '%s' "${GHCR_PASSWORD}" | helm registry login ghcr.io \
@@ -246,6 +256,8 @@ jobs:
           helm pull "oci://${CHART}" --version "${version}" -d "${published_archives}"
           tar -xzf "${expected_archives}/${chart_name}-${version}.tgz" -C "${expected_tree}"
           tar -xzf "${published_archives}/${chart_name}-${version}.tgz" -C "${published_tree}"
+          python3 -I -B scripts/ci/release_contract.py chart-digest-assert \
+            --values "${published_tree}/${chart_name}/values.yaml" --digest "${image_digest}"
           diff -ru --no-dereference "${expected_tree}/${chart_name}" "${published_tree}/${chart_name}"
 
           trivy image --scanners vuln \

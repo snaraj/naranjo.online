@@ -560,10 +560,53 @@ jobs:
             "${IMAGE}@${DIGEST}" > "${verified}"
           python3 -I -B scripts/ci/release_contract.py attestation-set \
             --verified "${verified}" "${expected_attestations[@]}"
+      - name: Embed the resolved image digest into the chart values
+        # ADR 0016 step 1 (issue #111). The published chart must be deployable
+        # AS PUBLISHED. `chart/values.yaml` ships the all-zeros fail-closed
+        # sentinel in git -- a syntactically valid digest no registry can
+        # resolve -- so anything installing the published chart unmodified
+        # failed at pull time and the platform had to override `image.digest`
+        # by hand on every release.
+        #
+        # POSITION IS THE CONTRACT, on both sides:
+        #
+        #  * AFTER the HIGH/CRITICAL gate, `cosign sign`, and the provenance
+        #    attestation, so the only digest that can reach the chart is the
+        #    one all three stages already accepted. The value is read from
+        #    `steps.image.outputs.digest` and never re-derived from a tag
+        #    lookup, which could resolve to different bytes.
+        #
+        #  * BEFORE the chart classifier, so BOTH `helm package` invocations
+        #    -- the classifier's reproducibility re-package and the publish
+        #    step's -- read the identical substituted working tree. ONE
+        #    substitution ahead of both is why they cannot drift: a
+        #    substitution written into the publish step alone would make the
+        #    classifier package the sentinel, diff it against an already
+        #    published chart carrying the real digest, and misclassify an
+        #    idempotent re-run as `burned` instead of `complete`. Each
+        #    packaging step still re-reads what it actually produced (see the
+        #    `chart-digest-assert` calls below), so a substitution that
+        #    silently became a no-op cannot publish.
+        #
+        # The edit exists on the runner only and is never committed: the
+        # source tree keeps the sentinel, so pr-gate's four-way lock,
+        # `values.schema.json`, and the rendered-digest assertion stay exactly
+        # as strict as they are today.
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "${DIGEST}" != "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          python3 -I -B scripts/ci/release_contract.py chart-digest-embed \
+            --values chart/values.yaml --digest "${DIGEST}"
+          python3 -I -B scripts/ci/release_contract.py chart-digest-assert \
+            --values chart/values.yaml --digest "${DIGEST}"
       - name: Classify an absent, complete, or burned chart version
         id: chart_state
         env:
           VERSION: ${{ steps.release.outputs.version }}
+          DIGEST: ${{ steps.image.outputs.digest }}
           GHCR_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -607,6 +650,14 @@ jobs:
           helm pull "oci://${CHART}" --version "${VERSION}" -d "${published_archives}"
           tar -xzf "${expected_archives}/${chart_name}-${VERSION}.tgz" -C "${expected_tree}"
           tar -xzf "${published_archives}/${chart_name}-${VERSION}.tgz" -C "${published_tree}"
+          # The expected tree is what a re-run would publish, so it must carry
+          # the same resolved digest the publish step embeds. Asserting it HERE
+          # rather than trusting the earlier step means a substitution that
+          # silently became a no-op fails this step loudly instead of producing
+          # a sentinel-bearing expected tree that diffs against the real
+          # published chart and reports a false `burned`.
+          python3 -I -B scripts/ci/release_contract.py chart-digest-assert \
+            --values "${expected_tree}/${chart_name}/values.yaml" --digest "${DIGEST}"
           source_match=true
           if ! diff -ru --no-dereference "${expected_tree}/${chart_name}" "${published_tree}/${chart_name}" >/dev/null; then
             source_match=false
@@ -637,11 +688,22 @@ jobs:
       - name: Publish and sign an absent chart version
         if: steps.chart_state.outputs.state == 'absent'
         id: chart_publish
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           set -euo pipefail
           version="${{ steps.release.outputs.version }}"
           chart_name="$(awk '/^name:/{print $2; exit}' chart/Chart.yaml)"
           helm package chart --version "${version}" --app-version "${version}" -d "${RUNNER_TEMP}"
+          # Re-read the ARCHIVE, not the working tree: this is the byte stream
+          # that is about to be pushed and signed, and it is the last moment a
+          # chart still carrying the sentinel can be stopped. A green run that
+          # published an unpullable chart must be impossible.
+          packaged_tree="${RUNNER_TEMP}/packaged-chart-tree"
+          mkdir -p "${packaged_tree}"
+          tar -xzf "${RUNNER_TEMP}/${chart_name}-${version}.tgz" -C "${packaged_tree}"
+          python3 -I -B scripts/ci/release_contract.py chart-digest-assert \
+            --values "${packaged_tree}/${chart_name}/values.yaml" --digest "${DIGEST}"
           printf '%s' "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           push_log="${RUNNER_TEMP}/chart-push.log"
           helm push "${RUNNER_TEMP}/${chart_name}-${version}.tgz" "oci://${CHART%/*}" 2>&1 | tee "${push_log}"
