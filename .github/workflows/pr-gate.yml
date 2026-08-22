@@ -63,8 +63,13 @@ jobs:
         # The orchestrator must learn WHICH range this push validated — the
         # push base is unrecoverable from git alone once later merges land —
         # so the gate's own verdict rides as a run artifact bound to this
-        # exact run ID. The orchestrator re-derives the whole classification
-        # from git before acting on it; the artifact only supplies the range.
+        # exact run ID. The artifact supplies the RANGE, and the orchestrator
+        # re-derives the classification over it from git. Note precisely what
+        # that does and does not buy: because the re-derivation takes the
+        # claimed base as input, a verdict naming a base inside the push
+        # would re-derive a different answer, so the orchestrator anchors its
+        # no-artifact path on the last gated main head from the Actions
+        # record instead of trusting this range alone.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

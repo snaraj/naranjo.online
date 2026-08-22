@@ -2957,15 +2957,19 @@ class NoArtifactClassTests(unittest.TestCase):
             self.assertIn("escaped.txt", str(denied.exception))
 
     def test_gitlink_entry_denies_even_under_an_allowlisted_path(self):
-        # A submodule records mode 160000, which is outside the regular-file
-        # mode set. The path itself is allowlisted, so only the mode guard can
-        # deny here — exactly the case a path-only allowlist would wave
-        # through.
+        # A submodule records mode 160000, outside the regular-file mode
+        # set. The path MUST be allowlisted (docs/*.md) or this test is
+        # decorative: with a non-allowlisted path the PATH guard denies and
+        # the mode guard is never reached, so adding 160000 to
+        # _DOCUMENTATION_DIFF_MODES would leave the suite green while a
+        # gitlink at an allowlisted path classified no-artifact. That is
+        # exactly the defect an adversarial review found in the first
+        # version of this test.
         with tempfile.TemporaryDirectory() as temporary:
             root, base = self.repo(temporary)
             pointer = self.git(root, "rev-parse", "HEAD")
             self.git(
-                root, "update-index", "--add", "--cacheinfo", f"160000,{pointer},docs/vendored"
+                root, "update-index", "--add", "--cacheinfo", f"160000,{pointer},docs/vendored.md"
             )
             self.git(
                 root, "-c", "user.name=Release Test",
@@ -2974,7 +2978,7 @@ class NoArtifactClassTests(unittest.TestCase):
             head = self.git(root, "rev-parse", "HEAD")
             with self.assertRaises(RC.ContractError) as denied:
                 RC.classify_transition(root, base, head, first_parent=True)
-            self.assertIn("docs/vendored", str(denied.exception))
+            self.assertIn("docs/vendored.md", str(denied.exception))
 
     def test_malformed_diff_entry_denies_instead_of_being_skipped(self):
         # The raw-diff parser is the one place a hostile or novel git output
@@ -3447,6 +3451,38 @@ curl() {
             artifacts=[{"id": 1, "name": "transition-verdict", "expired": True}]
         )
 
+    def test_valid_artifact_alongside_an_expired_duplicate_still_succeeds(self):
+        # Parity with the sibling repository, and the positive half of the
+        # `expired == false` filter. The three denials above all exercise the
+        # exactly-one LENGTH check; this is the case where the filter itself
+        # has to do work -- two entries named transition-verdict, one of them
+        # expired -- and it must SUCCEED by picking the live one. The
+        # regression this guards is only a false-deny, not a false-release,
+        # which is why it is a low-severity gap rather than a hole; it is
+        # closed here so the two repositories' suites do not differ.
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, _base, release_head, docs_head = self._seed_documentation_push(temporary)
+            self._install_release_contract(root)
+            verdict = {"class": "no-artifact", "base_sha": release_head, "source_sha": docs_head}
+            completed, output, _summary = self.execute(
+                block,
+                root=root,
+                completed_sha=docs_head,
+                verdict=verdict,
+                pr_gate_runs=self._pr_gate_runs([(500, release_head)]),
+                artifacts_pages=[
+                    {
+                        "artifacts": [
+                            {"id": 7, "name": "transition-verdict", "expired": True},
+                            {"id": 1, "name": "transition-verdict", "expired": False},
+                        ]
+                    }
+                ],
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertIn("class=no-artifact", output)
+
     # --- scenario 7: claimed_source disagrees with the completed SHA -------
 
     def test_claimed_source_mismatch_denies(self):
@@ -3607,6 +3643,94 @@ curl() {
             # the suite pass on one platform and fail on the other; this
             # regression cost one red CI run before it was caught.
             self.assertRegex(completed.stderr, r"test\s+'?\s*2'?\s+-eq\s+1")
+            self.assertNotIn("class=", output)
+
+
+    def test_lock_free_artifact_commit_after_the_gated_head_is_not_skipped(self):
+        """An artifact change that moves no release lock must still deny.
+
+        The four-lock equality check proves no LOCK moved; it cannot see an
+        artifact change that touches none of them -- a code or workflow edit
+        with no version bump. The anchor-advance walk then made that
+        invisible change actively dangerous: it existed to step the anchor
+        over the release push's own trailing artifact commits, and with a
+        forged base it happily stepped over a LATER, unreleased one too,
+        re-anchoring past it so the cumulative proof never saw it.
+
+        History: [0.1.9] -> [M1 releases 0.1.10] -> [C changes code, no
+        bump] -> [D docs]. The push is [C, D]; its true class is artifact.
+        A verdict claiming base = C re-derives no-artifact, and every lock
+        matches between M1 and D, so only the walk's cap can deny. It must.
+        """
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, _base = self.repo(temporary)
+            release_head = self.release_commit(root, "0.1.10")
+            lock_free = self.paths_commit(
+                root, {"cmd/site/main.go": "package main // changed\n"}, "lock-free artifact"
+            )
+            docs_head = self.paths_commit(root, {"AGENTS.md": "docs\n"}, "docs")
+            self._install_release_contract(root)
+            verdict = {"class": "no-artifact", "base_sha": lock_free, "source_sha": docs_head}
+            completed, output, _summary = self.execute(
+                block,
+                root=root,
+                completed_sha=docs_head,
+                verdict=verdict,
+                pr_gate_runs=self._pr_gate_runs([(500, release_head)]),
+            )
+            self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertNotIn("class=", output)
+            self.assertNotIn("NO-ARTIFACT:", completed.stdout)
+
+    def test_anchor_uses_the_newest_earlier_gated_run_not_the_oldest(self):
+        """The run selection must be max_by(id); min_by would false-deny.
+
+        Two earlier successful main runs exist: an older one at the 0.1.9
+        release and a newer one at 0.1.10. Only the NEWEST is the correct
+        anchor -- against it every lock matches and this documentation merge
+        is allowed. Selecting the oldest instead compares 0.1.9's locks with
+        0.1.10's, finds VERSION changed and denies a perfectly good merge.
+        Both orderings deny the attacks, so only this success case tells
+        max_by and min_by apart.
+        """
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, base, release_head, docs_head = self._seed_documentation_push(temporary)
+            self._install_release_contract(root)
+            verdict = {"class": "no-artifact", "base_sha": release_head, "source_sha": docs_head}
+            completed, output, _summary = self.execute(
+                block,
+                root=root,
+                completed_sha=docs_head,
+                verdict=verdict,
+                pr_gate_runs=self._pr_gate_runs([(400, base), (500, release_head)]),
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertIn("class=no-artifact", output)
+
+    def test_previous_head_equal_to_the_completed_sha_denies(self):
+        """The anchor must be a DIFFERENT commit, or it proves nothing.
+
+        If the run history reports this very SHA as the newest earlier
+        gated head, every downstream check passes vacuously: a commit's
+        locks always equal their own, and a commit is always its own
+        ancestor. The explicit inequality guard is what refuses that, and
+        without a case reaching it the guard survives deletion untested.
+        """
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, _base, release_head, docs_head = self._seed_documentation_push(temporary)
+            self._install_release_contract(root)
+            verdict = {"class": "no-artifact", "base_sha": release_head, "source_sha": docs_head}
+            completed, output, _summary = self.execute(
+                block,
+                root=root,
+                completed_sha=docs_head,
+                verdict=verdict,
+                pr_gate_runs=self._pr_gate_runs([(500, docs_head)]),
+            )
+            self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             self.assertNotIn("class=", output)
 
 

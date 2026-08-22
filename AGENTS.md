@@ -111,15 +111,19 @@ Numbered for citation, repo-scoped, none negotiable in code:
     mode all deny; renames decompose into add plus delete, so a rename
     crossing the allowlist boundary denies through its non-allowlisted side.
     Widening the allowlist is itself an artifact-classified gate change that
-    releases. One consequence is deliberate and must not be mistaken for a
-    bug: because the orchestrator anchors the no-artifact re-proof on the last
-    release boundary and on the head of the newest earlier successful
-    protected-main gate run, a documentation merge whose retained release
-    never completed fails red — and that red is STICKY. Every later
+    releases. Two denial modes are deliberate and must not be mistaken for
+    bugs, and they behave differently — conflating them misleads whoever is
+    on the other end of the red build. The BOUNDARY denial, from the
+    recovered last release boundary, is STICKY: a documentation merge whose
+    retained release never completed fails red, and every later
     documentation merge fails the same way until an artifact merge moves the
-    boundary past it. That is the intended trade: loud and recoverable, never
-    a wrong release. It is reachable under the ordinary rebase convention of
-    a separate slot commit, not only under exotic histories.
+    boundary past it. It is reachable under the ordinary rebase convention
+    of a separate slot commit, not only under exotic histories. The ANCHOR
+    denial, from the four-lock comparison against the newest earlier
+    successful protected-main gate run, is NOT sticky: the denied merge's
+    own gate run becomes the next anchor, so the following documentation
+    merge is green. Both are the intended trade — loud and recoverable,
+    never a wrong release — but only the first one persists.
     Successful main CI publishes that exact SHA as one
     server-locked plain `vX.Y.Z` release. The explicit workflow dispatch after
     a token-created tag selects the publisher definition from protected `main`
@@ -258,7 +262,8 @@ The Release carries one deterministic manifest binding source/run, artifacts,
 aliases, signer/provenance, and scan policy/results; a weekly read-only audit
 revalidates that complete chain. Histories and tags are append-only; stale
 concurrent PRs must resync
-and take the new next patch. Deployment RESOLVES digests, never tags. The
+and take the new next patch when they carry an artifact change; a
+documentation-only PR has no patch to retake. Deployment RESOLVES digests, never tags. The
 Helm chart/OCI tag is the documented numeric `X.Y.Z` exception because Helm
 requires its registry tag to equal valid chart SemVer; Git/image/Release tags
 remain plain `vX.Y.Z`.
@@ -616,8 +621,10 @@ with unaddressed owner comments.
 
 ## Dependent pull requests
 
-Dependent work may be described as a merge order, but every eventual PR to
-protected main must independently carry its next patch release. Keep a
+Dependent work may be described as a merge order, but every eventual
+artifact-classified PR to protected main must independently carry its next
+patch release; a documentation-only PR carries none and is never a release
+dependency. Keep a
 dependent PR Draft until its predecessor lands. Then fetch current main, create
 a fresh branch without force/rebase, port only the residual diff, allocate the
 new exact patch, rerun every gate, open a replacement Draft PR, and obtain a
