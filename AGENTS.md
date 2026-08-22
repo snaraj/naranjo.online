@@ -92,10 +92,46 @@ Numbered for citation, repo-scoped, none negotiable in code:
    yes.
 9. **Dependency-free Go.** The Go module stays standard-library only.
    Adding a dependency is an owner decision, not a convenience.
-10. **Every merge releases after the server gate; deploy remains separate.** Every PR, including
-    docs and Dependabot, advances exactly one patch from its current protected
-    base: numeric `VERSION`, chart `version`, `appVersion`, and changelog
-    `X.Y.Z`, plus plain `vX.Y.Z` image tag. Successful main CI publishes that exact SHA as one
+10. **Every artifact merge releases after the server gate; deploy remains
+    separate.** Every PR whose range touches any artifact surface advances
+    exactly one patch from its current protected base: numeric `VERSION`,
+    chart `version`, `appVersion`, and changelog `X.Y.Z`, plus plain `vX.Y.Z`
+    image tag. A range whose every commit is individually confined to the
+    closed documentation allowlist — root `AGENTS.md`, `README.md`,
+    `.gitignore`, and Markdown files under `docs/` — classifies no-artifact:
+    it advances nothing, and the orchestrator re-derives that class from git,
+    re-proves the whole boundary-commit-to-head gap as documentation, and
+    skips the publisher with an explicit logged verdict instead of
+    dispatching it. Removing the release from a documentation-only merge
+    weakens nothing: the artifact is unchanged, so there is
+    nothing to version, sign, scan, or attest. The classifier has exactly
+    two verdicts and no flag, environment variable, or configuration input;
+    a non-allowlisted path with an unchanged version, a mixed range without
+    its one exact patch, an unparseable diff entry, or a non-regular file
+    mode all deny; renames decompose into add plus delete, so a rename
+    crossing the allowlist boundary denies through its non-allowlisted side.
+    Widening the allowlist is itself an artifact-classified gate change that
+    releases. Two denial modes are deliberate and must not be mistaken for
+    bugs, and they behave differently — conflating them misleads whoever is
+    on the other end of the red build. The BOUNDARY denial, from the
+    recovered last release boundary, is STICKY: a documentation merge whose
+    retained release never completed fails red, and every later
+    documentation merge fails the same way until an artifact merge moves the
+    boundary past it. It is reachable under the ordinary rebase convention
+    of a separate slot commit, not only under exotic histories. The ANCHOR
+    denial, from the four-lock comparison against the newest earlier
+    successful protected-main gate run, does not persist the same way: it
+    needs no artifact merge to clear, because the denied merge's own gate
+    run becomes a later anchor. It is NOT, however, promised to clear on
+    the very NEXT merge, and an earlier revision of this contract wrongly
+    said it was. Main pushes each get their own concurrency group, so gate
+    runs can complete out of order and `select(.id < $current)` can filter
+    a newer run out of an older orchestration — two racing documentation
+    merges can therefore both deny, reporting the identical anchor. Both
+    denials are the intended trade — loud and recoverable, never a wrong
+    release — but only the boundary denial requires an artifact merge to
+    clear, and neither promises green on any particular next merge.
+    Successful main CI publishes that exact SHA as one
     server-locked plain `vX.Y.Z` release. The explicit workflow dispatch after
     a token-created tag selects the publisher definition from protected `main`
     and carries the completed main-run ID. A separate read-only job verifies
@@ -213,9 +249,11 @@ Build and test, in this order (the same gate CI enforces):
    defaults to older capabilities).
 4. `docker build .` when the Dockerfile or build inputs change.
 
-Releases: every PR advances numeric `VERSION`, chart `version`, `appVersion`,
-and changelog `X.Y.Z`, plus plain `vX.Y.Z` `image.tag`, by exactly one patch
-from its current protected base. Successful main CI creates the plain git tag at the
+Releases: every artifact-classified PR advances numeric `VERSION`, chart
+`version`, `appVersion`, and changelog `X.Y.Z`, plus plain `vX.Y.Z`
+`image.tag`, by exactly one patch from its current protected base; a
+documentation-only range (requirement 10's closed allowlist) advances nothing
+and skips release orchestration entirely. Successful main CI creates the plain git tag at the
 exact merged SHA and explicitly dispatches the protected-main publisher with
 that successful run's ID; a token-created tag is never assumed to trigger
 another push workflow. The publisher's read-only authorization job verifies
@@ -231,7 +269,8 @@ The Release carries one deterministic manifest binding source/run, artifacts,
 aliases, signer/provenance, and scan policy/results; a weekly read-only audit
 revalidates that complete chain. Histories and tags are append-only; stale
 concurrent PRs must resync
-and take the new next patch. Deployment RESOLVES digests, never tags. The
+and take the new next patch when they carry an artifact change; a
+documentation-only PR has no patch to retake. Deployment RESOLVES digests, never tags. The
 Helm chart/OCI tag is the documented numeric `X.Y.Z` exception because Helm
 requires its registry tag to equal valid chart SemVer; Git/image/Release tags
 remain plain `vX.Y.Z`.
@@ -442,7 +481,8 @@ Worker must re-run the bounded check at the new exact head.
   the exact head, the base equals current protected `main`, all discussions and
   findings are resolved, a fresh exact-head APPROVE receipt exists, a fresh
   exact-head canonical `ROLE: MAIN-WORKER` / `VERDICT: PASS` receipt exists, the next patch
-  still follows that base, the automatic release consequence is proven, and
+  still follows that base for an artifact-classified PR (a documentation-only
+  PR reserves no patch at all), the automatic release consequence is proven, and
   the owner-observed release-control receipt proves immutable releases plus
   strict exact required checks, and the owner's separate bypass check reports
   no bypass actor — the receipt carries no bypass field. Only the coordinator
@@ -504,7 +544,9 @@ The complete delivery loop, each step gated by the sections around it:
    are lane-prefixed (`<lane>/<topic>`, e.g. `sonnet5/contracts-0.1.13`,
    `opus5/panels-fix`). One writer per branch, always —
    a branch that is not yours is a branch you never push to. Reserve the exact
-   next patch from that base; if another PR lands, create a fresh branch from
+   next patch from that base when the change touches any artifact surface; a
+   documentation-only change (requirement 10's closed allowlist) reserves no
+   patch and must leave every release lock untouched. If another PR lands, create a fresh branch from
    current main, carry the still-valid diff without rewriting published
    history, take the new next patch, and close/supersede the stale PR.
 3. **Build the change** inside the requirements and doctrine above.
@@ -586,8 +628,10 @@ with unaddressed owner comments.
 
 ## Dependent pull requests
 
-Dependent work may be described as a merge order, but every eventual PR to
-protected main must independently carry its next patch release. Keep a
+Dependent work may be described as a merge order, but every eventual
+artifact-classified PR to protected main must independently carry its next
+patch release; a documentation-only PR carries none and is never a release
+dependency. Keep a
 dependent PR Draft until its predecessor lands. Then fetch current main, create
 a fresh branch without force/rebase, port only the residual diff, allocate the
 new exact patch, rerun every gate, open a replacement Draft PR, and obtain a
@@ -674,6 +718,9 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
 - **release-after-main.yml** — success-only exact-SHA main-CI completion;
   performs no publication mutation and explicitly dispatches the publisher
   definition on protected `main` with the exact completed-run ID.
+  It first re-derives the gate's published transition class from git and
+  gates every release-effect step on `artifact`; a no-artifact range logs its
+  verdict and dispatches nothing.
   The release boundary is recovered for both squash and multi-commit rebase
   pushes. Distinct main SHAs share no cancellation group.
 - **release-publisher.yml** — explicit dispatch on protected `main`; a
@@ -786,9 +833,12 @@ Structural promises of the panels subsystem, pinned by
 
 ## Docs and attribution conventions
 
-- **CHANGELOG discipline.** Keep a Changelog format; every PR immediately
-  follows an empty `[Unreleased]` heading with its exact next-version and ISO
-  date, matching every source lock. There is no later release PR.
+- **CHANGELOG discipline.** Keep a Changelog format; every artifact-classified
+  PR immediately follows an empty `[Unreleased]` heading with its exact
+  next-version and ISO date, matching every source lock; a documentation-only
+  PR leaves `CHANGELOG.md` untouched (the file sits outside the documentation
+  allowlist precisely so a no-release range can never claim one). There is no
+  later release PR.
 - **Truthful README.** Badges and claims report only what CI actually
   measured or the repository can demonstrate — the coverage badges
   publish the gate's own numbers, and prose never advertises a

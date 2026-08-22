@@ -7,6 +7,26 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.27] - 2026-08-21
+
+### Changed
+
+- Classify a merged range whose every commit is individually confined to the
+  closed documentation allowlist (root `AGENTS.md`, `README.md`, `.gitignore`,
+  Markdown under `docs/`) as no-artifact: it advances no version, creates no
+  tag, and dispatches no publisher. Every other range keeps the unchanged
+  one-exact-patch release contract, so an image-affecting merge still produces
+  the identical signed, scanned, attested release. Removing the release from a
+  documentation-only merge weakens nothing — the artifact is unchanged, so
+  there is nothing to version, sign, scan, or attest (issue #102).
+- Gate both release-effect steps of `release-after-main.yml` on a class the
+  orchestrator re-derives from git itself. The PR gate publishes its verdict
+  for the exact pushed range as a run artifact; the orchestrator requires it
+  from the run it already binds, re-derives the class independently, and for a
+  no-artifact range additionally re-proves the entire boundary-commit-to-head
+  gap as documentation. An absent verdict, a foreign class, or any mismatch
+  fails the job red. There is no third path and no toggle.
+
 ## [0.1.26] - 2026-08-21
 
 ### Added
