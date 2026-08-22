@@ -132,7 +132,7 @@ function isCount(value: unknown): value is number {
 
 /* The units a stat tile may declare. A unit the frontend cannot format is a
  * contract break, not a rendering choice, so admission refuses it. */
-const statUnits: ReadonlySet<string> = new Set(['tokens', 'days', 'seconds']);
+const statUnits: ReadonlySet<string> = new Set(['tokens', 'days', 'seconds', 'count']);
 
 /* formatDuration renders elapsed seconds the way a task length reads: hours
  * and minutes above an hour, minutes above a minute, seconds below that. */
@@ -150,7 +150,7 @@ export function formatDuration(seconds: number): string {
 
 /* formatStatValue renders one tile's figure by unit: compact digits for token
  * counts, whole days for streaks, an hours-and-minutes duration for elapsed
- * seconds. A null value is an unreported figure and renders as an explicit
+ * seconds, and grouped exact digits for a plain tally. A null value is an unreported figure and renders as an explicit
  * dash — never as a zero, which would be a different claim. */
 export function formatStatValue(value: number | null, unit: TokenStatUnit): string {
   if (value === null) {
@@ -161,6 +161,12 @@ export function formatStatValue(value: number | null, unit: TokenStatUnit): stri
   }
   if (unit === 'seconds') {
     return formatDuration(value);
+  }
+  if (unit === 'count') {
+    /* A plain tally, grouped but never abbreviated: 25 sessions is a number a
+       reader wants exactly, and "25" compacted to "25" gains nothing while
+       17,069 compacted to "17.1K" loses the figure the tile exists to show. */
+    return groupThousands(Math.round(value));
   }
   return formatTokenCount(value);
 }
