@@ -7,6 +7,90 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.29] - 2026-08-22
+
+### Changed
+
+- The page is one centered column instead of a document with chrome floating
+  over it. The reading-mode control was fixed to the viewport with an inline
+  offset that included the side rail's gutter, so it slid sideways every time
+  the rail opened or closed — a control that moves when the visitor touches
+  something else. It now sits alone in a page header, in the document flow.
+- Refreshing became one gesture instead of three. Every card used to carry its
+  own refresh button beside its title, which implied that bringing data up to
+  date was a per-tracker decision; one control at the head of the stack now
+  re-reads every mounted tracker at once. It is attached to the trackers
+  rather than to the page header, because it acts on the data and the header
+  is for controls that act on the document. What is genuinely per-card — how
+  old THIS tracker's data is — stayed exactly where it was, as each card's own
+  freshness badge, dot shape and all.
+- The side rail is retired and its panel mounts directly. The OSRS stats,
+  version-control activity, and token-usage panels are ordinary blocks stacked
+  in one centered column, so adding a tracker is one mount line and the page
+  grows to fit it. The two reserved gutters, the four-level layer scale, the
+  rail's published open-state attribute, and `PanelShell`'s rail-filling
+  variant all existed only to arbitrate floating chrome and left with it; the
+  layer scale keeps the two entries the reading-mode popover still needs.
+- Panels follow the reading mode. Every panel already read `--panel-*` custom
+  properties with dark-native fallbacks precisely so a theme layer could
+  restyle them without editing a component; that layer now exists, written
+  once against the active tokens rather than per mode. RuneLite's orange
+  survives as the brand mark in all three modes, carried by its own token so
+  it stays orange instead of dissolving into each palette's neutral.
+
+### Added
+
+- A fourth reading-mode choice, `auto`, which hands the decision back to the
+  operating system. It is deliberately not a stamped theme: choosing it
+  removes the `data-theme` attribute and EXPIRES the theme cookie, so the
+  origin serves the unstamped default document — whose tokens follow
+  `prefers-color-scheme` — from the next navigation on. Modelling it as a
+  fourth stamped id would need a `[data-theme="auto"]` block restating the
+  whole media query and a precomputed variant that cannot be correct for two
+  visitors whose devices disagree. The menu derives its four choices from the
+  three-id registry, so the two can never drift.
+- `refreshPanels()` and a live-watcher registry in `lib/panels.ts`. A watcher
+  joins the set when it starts and leaves when it stops, so the stack's one
+  control refreshes exactly what is mounted with no registration code in any
+  panel — and each panel dropped the watcher handle and refresher it only held
+  in order to hand one back up. It rides each panel's existing single-flight
+  read rather than opening a second request path, so pressing it costs at most
+  one request per mounted tracker however hard it is pressed.
+
+### Fixed
+
+- The body scrolled sideways at every viewport width. A grid item's automatic
+  minimum size is its min-content, so the card holding the boss table refused
+  to shrink and dragged the stack to 708px inside a 480px column. Measured
+  with a browser harness, not inferred.
+- The boss table cut the leading digits off every visible row. Its hover
+  tooltip carried a 9rem minimum inside a cell roughly a third that wide and
+  was anchored to a distant ancestor, so in the last column it extended past
+  the table's inline end and gave the grid a scroll width wider than the
+  panel. The tooltip is now anchored to its own cell, bounded against the
+  viewport, and flips at the end edge.
+- A control nobody can see scrolled the page sideways by 22px on a narrow
+  viewport: the panel refresh button expands its hit area to the 44px touch
+  target with a transparent overlay, and that overlay was centred on the
+  button, so half of it overhung the panel's inline edge. Harmless while the
+  panel sat inside a fixed rail; real overflow once panels became page-wide.
+  The overlay now grows inward from the control's end edge and keeps its full
+  44px.
+
+### Testing
+
+- The palette is validated rather than asserted: a new test computes WCAG 2.2
+  contrast for every panel foreground on every reading mode's own card and
+  fails below 4.5:1 for text and 3:1 for the status indicator. It caught a
+  real defect — RuneLite's orange measures 2.37:1 on the light card — which is
+  why the light palette carries a darkened amber at 5.33:1. The test also
+  derives each heatmap ramp's DIRECTION from its own surface, so a ramp that
+  steps toward its background instead of away from it is a red build.
+- A source pin refuses any hard inline size wider than the 320px floor,
+  because the browser harness available locally cannot open a window narrower
+  than 500px; the property is enforced where it is decided rather than assumed
+  from a wider measurement. Both new pins were mutation-tested.
+
 ## [0.1.28] - 2026-08-22
 
 ### Fixed

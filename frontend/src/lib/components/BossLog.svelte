@@ -4,8 +4,8 @@
   below, each an icon beside a right-aligned, thousands-separated kill count
   with a hover/focus detail carrying the full name, the rank, and the score.
   The origin serves EVERY row the hiscores report — twenty-five skills and
-  dozens of bosses — so the boss region claims the rest of the rail and scrolls
-  inside itself rather than growing the page.
+  dozens of bosses — so the boss region is bounded and scrolls inside itself
+  rather than growing its card past everything stacked below it.
 
   Every row shown arrives as API data through lib/panels.ts; the only
   name-shaped logic here is the slug lookup from a data name into the shipped
@@ -21,7 +21,7 @@
 <script lang="ts">
   import PanelShell from './PanelShell.svelte';
   import { watchPanel } from '../panels';
-  import type { BossLogData, PanelEnvelope, PanelWatcher } from '../panels';
+  import type { BossLogData, PanelEnvelope } from '../panels';
   import { bossInitials, bossSlug, skillSlug } from '../bossIcons';
   import { cellLabel, panelSummary, rankLabel, skillLabel, tally } from '../bossLog.ts';
 
@@ -53,21 +53,10 @@
   );
 
   let envelope = $state<PanelEnvelope<BossLogData> | undefined>();
-  let watcher = $state<PanelWatcher | undefined>();
 
   $effect(() => {
-    const active = watchPanel<BossLogData>('boss-log', (loaded) => (envelope = loaded));
-    watcher = active;
-    return () => {
-      watcher = undefined;
-      active();
-    };
+    return watchPanel<BossLogData>('boss-log', (loaded) => (envelope = loaded));
   });
-
-  /* The header's refresh control rides the same watcher the panel polls with,
-     so a forced read is single-flight against the periodic one rather than a
-     second request path with its own rules. */
-  const refresh = () => watcher?.refresh() ?? Promise.resolve();
 
   const data = $derived(envelope?.data ?? undefined);
   const skills = $derived(data?.skills ?? []);
@@ -82,8 +71,7 @@
   title={envelope?.title ?? 'Old School RuneScape Stats'}
   status={envelope?.status ?? 'unavailable'}
   generatedAt={envelope?.generatedAt}
-  fill
-  {refresh}
+ 
 >
   {#if data}
     <p class="boss-account">{panelSummary(data.account, skills.length, data.bosses.length)}</p>
@@ -111,9 +99,9 @@
     {:else}
       <p class="boss-note">No skill levels reported.</p>
     {/if}
-    <!-- The complete boss table is dozens of tiles, so the grid claims the
-      rest of the rail and scrolls inside its own box; a scrollable region is
-      keyboard-reachable only when focusable, so the tabindex is deliberate. -->
+    <!-- The complete boss table is dozens of tiles, so the grid is bounded and
+      scrolls inside its own box; a scrollable region is keyboard-reachable
+      only when focusable, so the tabindex is deliberate. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <ul class="boss-grid" tabindex="0" aria-label={`${data.account} boss tallies`}>
       {#each data.bosses as boss (boss.name)}
@@ -183,17 +171,18 @@
 
   /* The skills table is a fixed nine rows of three and never scrolls: it is
      the top of the panel and its size is known before any data arrives, so
-     the rail's geometry is identical before and after the payload lands. */
+     the card's geometry is identical before and after the payload lands. */
   .skill-grid {
     flex: none;
   }
 
-  /* The boss table claims whatever height the skills grid left and scrolls
-     inside itself. min-block-size: 0 is what allows a flex child to shrink
-     below its content instead of pushing the rail past the viewport. */
+  /* Dozens of boss rows would make this card taller than everything below it
+     put together, so the table is bounded and scrolls inside itself — the
+     page scrolls through the STACK, never through one panel's contents. The
+     bound is a fixed height rather than a share of the viewport, so the
+     card's geometry is identical before and after the payload lands. */
   .boss-grid {
-    flex: 1;
-    min-block-size: 0;
+    block-size: var(--boss-grid-height, 18rem);
     overflow-y: auto;
     overscroll-behavior: contain;
   }
@@ -208,8 +197,19 @@
     display: flex;
     align-items: center;
     gap: 0.25rem;
+    /* A cell must be allowed to shrink below the width of its own contents,
+       or three of them refuse to fit the column on a phone and the table
+       scrolls sideways with the leading digits cut off. */
+    min-inline-size: 0;
     padding-inline: 0.25rem;
     background: var(--panel-surface, rgb(40, 40, 40));
+  }
+
+  /* Each cell is the positioning context for its OWN tooltip. Without this
+     the tip resolved against a distant ancestor, so its 9rem minimum sat
+     wherever that ancestor started rather than beside the cell. */
+  .boss-cell {
+    position: relative;
   }
 
   .skill-cell {
@@ -279,7 +279,14 @@
     display: flex;
     flex-direction: column;
     gap: 0.125rem;
-    min-inline-size: 9rem;
+    /* The tip is wider than the cell it belongs to, which is fine until the
+       cell is in the last column — there it used to extend past the table's
+       inline end and give the grid a scroll width wider than the panel,
+       which is what cut the leading digits off every visible row. It is
+       bounded to the viewport and flips at the end edge (below), so it can
+       never widen the table it floats over. */
+    inline-size: max-content;
+    max-inline-size: min(12rem, calc(100vw - 3rem));
     padding: 0.375rem 0.5rem;
     background: var(--panel-tip-surface, rgb(23, 23, 23));
     border: 1px solid var(--panel-border, rgb(23, 23, 23));
@@ -295,6 +302,13 @@
   .boss-cell:focus-visible .boss-tip {
     visibility: visible;
     opacity: 1;
+  }
+
+  /* Last column: open toward the start edge instead, so the tip stays inside
+     the table on the one side where it otherwise could not. */
+  .boss-cell:nth-child(3n) .boss-tip {
+    inset-inline-start: auto;
+    inset-inline-end: 0;
   }
 
   .boss-tip-name {

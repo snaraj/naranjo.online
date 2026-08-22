@@ -1,4 +1,4 @@
-<!-- ActivityBar is the version-control activity status bar: the contribution
+<!-- ActivityBar is the version-control activity panel: the contribution
   calendar, the window totals and current streak, and the latest commits — all
   from the vcs-activity/v1 panel served same-origin by internal/panels.
 
@@ -8,12 +8,21 @@
   dark-native defaults, so the future theme layer restyles by overriding
   variables and never edits this component.
 
+  It used to dock to the viewport's bottom-start corner as fixed chrome, which
+  meant the page had to reserve a strip below itself for a bar that overlaid
+  it, and the bar had to bound its own height against that same reserve so the
+  two could not disagree. It is now an ordinary card in the page's panel
+  stack: it takes the column's width, grows to its own content, and neither
+  overlays anything nor asks the page to hold space open for it — so the
+  gutter token, the height bound, and the narrow-viewport reflow branch that
+  existed only to undo the docking are all gone with it.
+
   Every region has a fixed block size, so data arriving never shifts layout,
   and a wide window scrolls inside the grid, never the page. -->
 <script lang="ts">
   import PanelShell from './PanelShell.svelte';
   import ContributionGrid from './ContributionGrid.svelte';
-  import { panelAge, panelKinds, watchPanel, type PanelEnvelope, type PanelWatcher } from '../panels';
+  import { panelAge, panelKinds, watchPanel, type PanelEnvelope } from '../panels';
   import { activityCells, activityPanelId, parseVCSActivity } from '../activity';
   import { formatWhole, toColumns } from '../grid';
 
@@ -22,21 +31,10 @@
   const shownCommitRows = 5;
 
   let envelope = $state<PanelEnvelope | null>(null);
-  let watcher = $state<PanelWatcher | undefined>();
 
   $effect(() => {
-    const active = watchPanel(activityPanelId, (loaded) => (envelope = loaded));
-    watcher = active;
-    return () => {
-      watcher = undefined;
-      active();
-    };
+    return watchPanel(activityPanelId, (loaded) => (envelope = loaded));
   });
-
-  /* The shell's refresh control rides the same single-flight watcher the bar
-     already polls with, so pressing it costs one request, never a second
-     request path. */
-  const refresh = () => watcher?.refresh() ?? Promise.resolve();
 
   /* A payload renders only when the envelope carries the pinned kind AND the
      data passes strict admission; anything else is the honest empty state. */
@@ -61,7 +59,6 @@
     title={envelope?.title || 'Version-control activity'}
     status={envelope?.status ?? 'unavailable'}
     generatedAt={envelope?.generatedAt}
-    {refresh}
   >
     <div class="activity">
       <p class="activity-totals">
@@ -99,47 +96,14 @@
 </aside>
 
 <style>
-  /* The bar docks at the viewport's bottom start corner like a status bar,
-     out of the document flow, so mounting it never reflows the page. Width is
-     bounded against the viewport; anything wider scrolls inside. The insets
-     add the safe-area values so the bar clears a home indicator rather than
-     hiding under it, and the block bound is the same token the page reserves
-     below, so the bar can never grow past the strip set aside for it. */
+  /* An ordinary block in the page's panel stack. The stack owns the column
+     width and the gap between cards, so this panel declares neither: the one
+     thing that used to make it special — being fixed — is exactly what made
+     it fight the page, and the gutter token, the self-imposed height bound,
+     and the narrow-viewport branch that existed only to undo the docking all
+     left with it. */
   .activity-bar {
-    position: fixed;
-    inset-block-end: calc(var(--activity-inset-block, 0.75rem) + env(safe-area-inset-bottom));
-    inset-inline-start: calc(var(--activity-inset-inline, 0.75rem) + env(safe-area-inset-left));
-    inline-size: min(var(--activity-width, 21rem), calc(100vw - 1.5rem));
-    max-block-size: calc(var(--panel-activity-reserve, 19rem) - var(--activity-inset-block, 0.75rem));
-    overflow-y: auto;
-    z-index: var(--layer-activity, 10);
-  }
-
-  /* Fixed chrome floats over the page, so the page must reserve the strip it
-     covers or the last of the in-flow content — the token panel's tail — sits
-     underneath it. The bar reports the strip it is occupying on the document
-     root and styles.css lays the page out around it; the reserve and the
-     bar's own block bound read the same token, and both switch off together
-     in the flow branch below. Publishing the fact from HERE is what keeps the
-     switch condition in one place instead of two that can drift. */
-  :global(:root) {
-    --page-activity-gutter: var(--panel-activity-reserve, 19rem);
-  }
-
-  /* Narrow or short viewports flow the bar after the page content instead of
-     overlaying the centered shell — on a phone there is no room beside it —
-     and the page's reserve goes away with it. */
-  @media (max-width: 45rem), (max-height: 30rem) {
-    .activity-bar {
-      position: static;
-      margin: 1rem auto;
-      max-block-size: none;
-      overflow-y: visible;
-    }
-
-    :global(:root) {
-      --page-activity-gutter: 0px;
-    }
+    display: block;
   }
 
   .activity {

@@ -32,7 +32,9 @@ const reducedContextNote = fullCheckout
 const [
   app,
   shell,
-  rail,
+  refreshAll,
+  pageHeaderSource,
+  fallbackShell,
   bossLog,
   panelsSource,
   iconsSource,
@@ -46,7 +48,9 @@ const [
 ] = await Promise.all([
   read('../src/App.svelte'),
   read('../src/lib/components/PanelShell.svelte'),
-  read('../src/lib/components/SideRail.svelte'),
+  read('../src/lib/components/RefreshAll.svelte'),
+  read('../src/lib/components/PageHeader.svelte'),
+  read('../index.html'),
   read('../src/lib/components/BossLog.svelte'),
   read('../src/lib/panels.ts'),
   read('../src/lib/bossIcons.ts'),
@@ -79,24 +83,33 @@ test('panel mount region keeps its fences and mounts exactly one panel line', ()
     .filter((line) => line.length > 0);
   assert.deepEqual(
     mounted,
-    ['<SideRail><BossLog /></SideRail>', '<TokenUsagePanel />', '<ActivityBar />'],
+    ['<BossLog />', '<ActivityBar />', '<TokenUsagePanel />'],
     'the mount fence must hold exactly one line per panel'
   );
 });
 
-test('side rail recreates the RuneLite chrome as overridable custom properties', () => {
-  // The three published palette values, each expressed as a themable
-  // var(--panel-rail-*, dark-native default) pair — never a bare literal.
-  assert.match(rail, /--rail-surface:\s*var\(--panel-rail-surface,\s*rgb\(40,\s*40,\s*40\)\)/);
-  assert.match(rail, /--rail-border:\s*var\(--panel-rail-border,\s*rgb\(23,\s*23,\s*23\)\)/);
-  assert.match(rail, /--rail-accent:\s*var\(--panel-rail-accent,\s*rgb\(220,\s*138,\s*0\)\)/);
-  // Collapsible semantics: a real button wired to state, collapsed by
-  // default on narrow viewports, fixed-position so the page never reflows.
-  assert.match(rail, /aria-expanded=\{!collapsed\}/);
-  assert.match(rail, /aria-controls="side-rail-panels"/);
-  assert.match(rail, /matchMedia\('\(max-width: 60rem\)'\)\.matches/);
-  assert.match(rail, /position:\s*fixed/);
-  assert.match(rail, /\[data-collapsed='true'\]\s*\.rail-panels\s*\{\s*display:\s*none/);
+// The side rail is GONE (owner directive): the OSRS panel was a collapsible
+// fixed rail on the inline end, and the reading-mode control was fixed chrome
+// whose offset included that rail's gutter — so the control slid sideways
+// every time the rail opened. Both are now ordinary blocks in one centered
+// column, which is what removes the drift at its cause rather than picking a
+// different fixed position for the control to be wrong in.
+test('the panels are one centered column, not a rail', () => {
+  assert.ok(
+    !existsSync(new URL('../src/lib/components/SideRail.svelte', import.meta.url)),
+    'the side rail component must not come back'
+  );
+  // Nothing anywhere still reaches for the rail's geometry or its published
+  // open-state attribute; a leftover reference is a gutter nobody reserves.
+  for (const [name, source] of Object.entries({ app, styles, themeMenu, activityBar, bossLog })) {
+    assert.doesNotMatch(source, /data-rail-open|--page-rail-gutter|--panel-rail-|SideRail/, `${name} still references the retired rail`);
+  }
+  // The stack owns the column width and the gap; panels own neither, so a
+  // panel added later cannot pick a width that disagrees with its siblings.
+  assert.match(app, /<div class="panel-stack">/);
+  assert.match(styles, /\.panel-stack\s*\{[^}]*display:\s*grid/);
+  assert.match(styles, /\.panel-stack\s*\{[^}]*gap:\s*var\(--page-stack-gap\)/);
+  assert.match(styles, /#app > \.page-header,\s*\n#app > main\s*\{[^}]*inline-size:\s*min\(var\(--page-column-width\), 100%\)/);
 });
 
 test('panel shell surfaces status and generatedAt age over themable tokens', () => {
@@ -109,96 +122,116 @@ test('panel shell surfaces status and generatedAt age over themable tokens', () 
   }
 });
 
-// The "stale · 8d ago" text badge became a control the reader can act on
-// (issue #78). Nothing about the honesty was allowed to leave with it, so
-// this pins BOTH halves: the freshness sentence still exists and is still
-// reachable, and pressing the control forces a real read.
-test('the freshness badge became a control without losing a word of honesty', () => {
-  // The sentence itself is built from the same status and age as before.
+// The freshness READING is per-card and stayed; the freshness ACTION is not
+// per-card and left. Every panel used to carry its own refresh button beside
+// its title, which made refreshing look like a per-tracker decision when it is
+// one gesture. This pins both halves: no card grows a control back, and not a
+// word of the honesty left with it.
+test('each card keeps its own freshness reading and none keeps a control', () => {
+  // The sentence is still built from the same status and age as before.
   assert.match(shell, /const freshness = \$derived\(age \? `\$\{status\}, updated \$\{age\}` : status\)/);
-  // And it reaches a pointer user, a screen-reader user, and the tooltip.
-  assert.match(shell, /aria-label=\{`Refresh \$\{title\}\. \$\{freshness\}\.`\}/);
-  assert.match(shell, /title=\{`\$\{freshness\} — refresh`\}/);
+  // It reaches a pointer user and a screen-reader user through the badge.
+  assert.match(shell, /<p class="panel-badge" data-panel-status=\{status\} title=\{freshness\}>/);
+  assert.match(shell, /<span class="panel-badge-age">\{freshness\}<\/span>/);
   // Status is never color alone: the dot's SHAPE differs per state.
+  assert.match(shell, /\.panel-badge-dot\s*\{[^}]*inline-size:\s*0\.5em/, 'the dot lost its size');
   assert.match(shell, /\.panel-badge-dot\[data-panel-status='ok'\]\s*\{[^}]*border-radius:\s*50%/);
   assert.match(shell, /\.panel-badge-dot\[data-panel-status='stale'\]\s*\{[^}]*background:\s*none/);
-  // In flight: the control is disabled, announces itself busy, and moves —
-  // but only for a visitor who has not asked motion to stop.
-  assert.match(shell, /aria-busy=\{busy\}/);
-  assert.match(shell, /disabled=\{busy\}/);
-  assert.match(shell, /@media \(prefers-reduced-motion: no-preference\)[\s\S]*?animation:\s*panel-refresh-spin/);
-  assert.match(shell, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?opacity:\s*0\.4/);
-  // The busy flag is released in a finally, so a failed read cannot latch the
-  // control off forever — the failure itself renders as the honest
-  // unavailable envelope loadPanel already produces.
-  assert.match(shell, /} finally \{[\s\S]*?busy = false;/);
-  // 44px minimum touch target, delivered without inflating a dense header.
-  assert.match(shell, /\.panel-refresh::after\s*\{[^}]*inline-size:\s*2\.75rem/);
-  assert.match(shell, /\.panel-refresh::after\s*\{[^}]*block-size:\s*2\.75rem/);
-  // A panel that supplies no refresher still renders the honest reading.
-  assert.match(shell, /\{:else\}\s*<p class="panel-badge"/);
-  // Every mounted panel supplies one.
+  // No per-card control, and no panel hands one up any more.
+  assert.doesNotMatch(shell, /panel-refresh|<button/, 'a card grew its own refresh control back');
   for (const [name, source] of Object.entries({ bossLog, activityBar, tokenUsage })) {
-    assert.match(source, /watcher\?\.refresh\(\)/, `${name} has no force-refresh path`);
+    assert.doesNotMatch(source, /\{refresh\}|const refresh =/, `${name} still hands a refresher to its shell`);
   }
 });
 
-// Five collisions, all confirmed on real viewports before the fix (issue
-// #78): the bar over the token panel, the open rail over the token panel, the
-// reading-mode control buried under the rail, the rail and the bar tied at
-// the same layer, and 100vh floors. Arbitration is now one ordered scale plus
-// two reserved gutters, and every fixed element pads itself by the safe-area
-// insets.
-test('fixed chrome is arbitrated by one layer scale and reserves its own space', () => {
-  // An ORDERED scale, defined once. The order is the assertion: a menu the
-  // rail can bury is a control the visitor cannot reach.
-  const layers = ['base', 'activity', 'rail', 'menu'].map((name) => {
+// One control for the whole stack, attached to the trackers it acts on —
+// never in the page header, which is for controls that act on the document.
+test('one refresh serves every tracker, and it belongs to the stack', () => {
+  assert.match(app, /<RefreshAll \/>/);
+  // It sits inside the stack, above the mount fence, so it is visually part
+  // of the cards rather than part of the page chrome.
+  assert.match(app, /<div class="panel-stack">[\s\S]*<RefreshAll \/>[\s\S]*panels:mount:begin/);
+  assert.doesNotMatch(
+    pageHeaderSource,
+    /import RefreshAll|refreshPanels\(/,
+    'the refresh must not sit in the page header'
+  );
+  assert.match(refreshAll, /aria-label="Refresh all trackers"/);
+  assert.match(refreshAll, /refreshPanels\(\)/);
+  // It rides each panel's own single-flight read rather than a second path.
+  assert.match(panelsSource, /export function refreshPanels\(\): Promise<void>/);
+  assert.match(panelsSource, /liveWatchers\.add\(watcher\)/);
+  assert.match(panelsSource, /liveWatchers\.delete\(watcher\)/);
+  // In flight it is disabled, announces itself busy, and releases in a
+  // finally so a failed read cannot latch it off forever.
+  assert.match(refreshAll, /aria-busy=\{busy\}/);
+  assert.match(refreshAll, /disabled=\{busy\}/);
+  assert.match(refreshAll, /\} finally \{[\s\S]*?busy = false;/);
+  assert.match(refreshAll, /@media \(prefers-reduced-motion: reduce\)/);
+  // 44px minimum touch target, from the one shared icon-control rule.
+  assert.match(refreshAll, /class="icon-button"/);
+  assert.match(styles, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
+});
+
+// Five collisions were confirmed on real viewports before the previous fix
+// (issue #78) and were arbitrated by a four-level layer scale plus two
+// reserved gutters. Every one of them existed because chrome FLOATED over the
+// document: the bar over the token panel, the open rail over the token panel,
+// the reading-mode control buried under the rail, the rail and bar tied at one
+// layer, and 100vh floors. Removing the fixed positioning removes the whole
+// class — so the pin is now the absence of fixed chrome, which is a stronger
+// guarantee than any arbitration between overlapping things.
+test('no page chrome floats over the document', () => {
+  for (const [name, source] of Object.entries({ refreshAll, pageHeaderSource, themeMenu, activityBar, bossLog, tokenUsage, shell })) {
+    assert.doesNotMatch(
+      source,
+      /position:\s*fixed/,
+      `${name} floats over the page again; fixed chrome is what made the controls drift`
+    );
+  }
+  // With nothing floating there is nothing to reserve space for, so the
+  // gutter tokens that existed only to hold space open must stay gone.
+  assert.doesNotMatch(styles, /--page-activity-gutter|--panel-activity-reserve/);
+  // The page pads itself by the safe-area insets ONCE, for everything inside
+  // it — each fixed element used to have to do this for itself.
+  for (const side of ['top', 'bottom', 'left', 'right']) {
+    assert.match(
+      styles,
+      new RegExp(`env\\(safe-area-inset-${side}\\)`),
+      `the page does not clear the ${side} inset`
+    );
+  }
+  // The layer scale survives for the one real overlap left — the popover over
+  // the stack — and is still an ORDERED list of names, never a bare number.
+  const layers = ['base', 'menu'].map((name) => {
     const found = styles.match(new RegExp(`--layer-${name}:\\s*(\\d+);`));
     assert.ok(found, `the stacking scale lost --layer-${name}`);
     return Number(found[1]);
   });
-  for (let index = 1; index < layers.length; index += 1) {
-    assert.ok(
-      layers[index] > layers[index - 1],
-      `the stacking scale is not ordered: ${layers.join(' < ')} must strictly increase`
-    );
-  }
-  // Every fixed element reads exactly one of them — no bare numbers.
-  assert.match(activityBar, /z-index:\s*var\(--layer-activity,/);
-  assert.match(rail, /z-index:\s*var\(--layer-rail,/);
+  assert.ok(layers[1] > layers[0], `the stacking scale is not ordered: ${layers.join(' < ')}`);
   assert.match(themeMenu, /z-index:\s*var\(--layer-menu,/);
-  // ...and no fixed element sets a raw one. (A panel's own tooltip may still
-  // stack inside its cell: that is a local context, not page chrome.)
-  for (const [name, source] of Object.entries({ rail, activityBar, themeMenu })) {
+  for (const [name, source] of Object.entries({ refreshAll, pageHeaderSource, themeMenu, activityBar })) {
     assert.doesNotMatch(
       source,
       /z-index:\s*\d/,
       `${name} sets a raw z-index; the stacking order is the token scale, not a race`
     );
   }
-  // The rail publishes its state so the page can lay itself out beside it.
-  assert.match(rail, /dataset\.railOpen = collapsed \? 'false' : 'true'/);
-  assert.match(styles, /:root\[data-rail-open='true'\][\s\S]*?--page-rail-gutter:\s*calc\(/);
-  assert.match(styles, /#app\s*\{[^}]*padding-inline-end:\s*var\(--page-rail-gutter\)/);
-  // ...at exactly the width where the rail stops starting collapsed, so a
-  // phone never reserves a rail's width out of its reading area.
-  assert.match(rail, /matchMedia\('\(max-width: 60rem\)'\)/);
-  assert.match(styles, /@media \(min-width: 60\.0625rem\)/);
-  // The bar reserves the strip it covers and bounds itself by the same token,
-  // so it can never grow past the space the page set aside.
-  assert.match(activityBar, /--page-activity-gutter:\s*var\(--panel-activity-reserve/);
-  assert.match(activityBar, /max-block-size:\s*calc\(var\(--panel-activity-reserve/);
-  assert.match(styles, /#app\s*\{[^}]*padding-block-end:\s*var\(--page-activity-gutter\)/);
-  // ...and the hero gives it back, so a page with nothing below it is still
-  // exactly one viewport tall instead of scrolling over reserved emptiness.
-  assert.match(styles, /main\s*\{[^}]*min-height:\s*calc\(100dvh - var\(--page-activity-gutter\)\)/);
-  // Both switch off together where the bar flows in the document instead.
-  assert.match(activityBar, /@media \(max-width: 45rem\), \(max-height: 30rem\)[\s\S]*?position:\s*static/);
-  assert.match(activityBar, /@media \(max-width: 45rem\), \(max-height: 30rem\)[\s\S]*?--page-activity-gutter:\s*0px/);
-  // Safe-area insets on every fixed element (rendering-lane floor).
-  for (const [name, source] of Object.entries({ rail, activityBar, themeMenu })) {
-    assert.match(source, /env\(safe-area-inset-/, `${name} does not clear the notch or home indicator`);
-  }
+});
+
+// The reading-mode control sits alone in the top-end corner. It acts on the
+// document, so it is the only thing in the page header — pairing it with the
+// refresh implied the two had the same scope, and they do not.
+test('the reading mode is the page header, alone and in flow', () => {
+  assert.match(app, /<PageHeader \/>/);
+  assert.match(pageHeaderSource, /<ThemeMenu \/>/);
+  assert.doesNotMatch(pageHeaderSource, /<button/, 'the header carries the reading mode and nothing else');
+  assert.match(themeMenu, /class="icon-button trigger"/);
+  assert.match(styles, /\.page-header\s*\{[^}]*justify-content:\s*flex-end/);
+  // The static shell reserves the row, so the control arriving at hydration
+  // fills held-open space instead of pushing the page down.
+  assert.match(styles, /\.page-header\s*\{[^}]*min-block-size:\s*var\(--page-header-height\)/);
+  assert.match(fallbackShell, /<header class="page-header"><\/header>/);
 });
 
 test('boss log renders the dense fixed-cell grid with tooltips and -- tallies', () => {
@@ -209,19 +242,16 @@ test('boss log renders the dense fixed-cell grid with tooltips and -- tallies', 
   assert.match(bossLog, /decoding="async"/);
   assert.match(bossLog, /tally\(boss\.kc\)/, 'tallies must go through the tested renderer');
   assert.match(bossLog, /rankLabel\(boss\.rank\)/, 'ranks must go through the tested renderer');
-  // The complete table scrolls inside the panel. This used to be a bare
-  // max-block-size, which pinned that SOME bound existed without pinning what
-  // it was; the boss region now claims the rail's remaining height instead,
-  // so the three declarations that actually produce that behavior are pinned:
-  // the shell fills its flex parent, the region grows into it, and it is
-  // allowed to shrink below its content so it — not the page — scrolls.
-  assert.match(bossLog, /<PanelShell[\s\S]*?\n\s+fill\n/, 'the panel must claim the rail height');
-  assert.match(bossLog, /\.boss-grid\s*\{[^}]*flex:\s*1/, 'the boss region must grow into it');
-  assert.match(bossLog, /\.boss-grid\s*\{[^}]*min-block-size:\s*0/, 'and be allowed to shrink');
-  assert.match(bossLog, /\.boss-grid\s*\{[^}]*overflow-y:\s*auto/);
-  assert.match(shell, /\.panel-shell-fill\s*\{[^}]*flex:\s*1/);
-  assert.match(shell, /\.panel-shell-fill\s+\.panel-body\s*\{[^}]*min-block-size:\s*0/);
-  assert.match(rail, /\.rail-panels\s*\{[^}]*min-block-size:\s*0/, 'the rail must let it shrink too');
+  // The complete table scrolls inside the panel. Dozens of boss rows would
+  // otherwise make this card taller than everything stacked below it put
+  // together, so the region is bounded to a fixed height and scrolls itself:
+  // the page scrolls through the STACK, never through one panel's contents,
+  // and the card's geometry is the same before and after the payload lands.
+  assert.match(bossLog, /\.boss-grid\s*\{[^}]*block-size:\s*var\(--boss-grid-height/, 'the boss region must be bounded');
+  assert.match(bossLog, /\.boss-grid\s*\{[^}]*overflow-y:\s*auto/, 'and scroll inside itself');
+  // The fill variant existed only to claim the retired rail's height; a card
+  // in the stack grows to its content, so it must not come back.
+  assert.doesNotMatch(shell, /panel-shell-fill/, 'the rail-filling variant must stay retired');
   assert.match(bossLog, /role="tooltip"/);
   assert.match(bossLog, /:hover\s+\.boss-tip/);
   assert.match(bossLog, /:focus-visible\s+\.boss-tip/);
@@ -382,7 +412,7 @@ test('the contribution grid is one component both panels render', () => {
 test('panel sources stay local-origin', () => {
   for (const [name, source] of Object.entries({
     shell,
-    rail,
+    refreshAll,
     bossLog,
     panelsSource,
     iconsSource,

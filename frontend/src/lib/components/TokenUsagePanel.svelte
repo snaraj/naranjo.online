@@ -21,7 +21,7 @@
   Every color and metric reads a custom property with a dark-native default,
   so themes restyle by overriding variables. -->
 <script lang="ts">
-  import type { PanelEnvelope, PanelWatcher, TokenUsageData, TokenUsageSource } from '../panels';
+  import type { PanelEnvelope, TokenUsageData, TokenUsageSource } from '../panels';
   import { watchPanel } from '../panels';
   import {
     formatStatValue,
@@ -37,20 +37,10 @@
   import PanelShell from './PanelShell.svelte';
 
   let envelope = $state<PanelEnvelope<TokenUsageData> | undefined>(undefined);
-  let watcher = $state<PanelWatcher | undefined>();
 
   $effect(() => {
-    const active = watchPanel<TokenUsageData>('token-usage', (loaded) => (envelope = loaded));
-    watcher = active;
-    return () => {
-      watcher = undefined;
-      active();
-    };
+    return watchPanel<TokenUsageData>('token-usage', (loaded) => (envelope = loaded));
   });
-
-  /* The shell's refresh control rides the same single-flight watcher this
-     panel already polls with. */
-  const refresh = () => watcher?.refresh() ?? Promise.resolve();
 
   /* One view choice for the whole panel: the sources are read side by side,
      so switching lens on one and not the other would be a comparison trap. */
@@ -81,7 +71,7 @@
 
 {#if envelope}
   <aside class="token-usage" data-panel-id="token-usage" aria-label={title}>
-    <PanelShell {title} status={envelope.status} generatedAt={envelope.generatedAt} {refresh}>
+    <PanelShell {title} status={envelope.status} generatedAt={envelope.generatedAt}>
       {#if sources.length === 0}
         <p class="usage-empty">No usage data available.</p>
       {:else}
@@ -219,11 +209,12 @@
 {/if}
 
 <style>
+  /* An ordinary block in the page's panel stack. This panel used to be the
+     only one laid out in the document, so it centred itself and reserved its
+     own page padding; the stack owns both now, and a panel that decided its
+     own page position would fight whatever the stack decided. */
   .token-usage {
     display: block;
-    max-inline-size: var(--usage-max-inline, 30rem);
-    margin: 0 auto;
-    padding: var(--usage-mount-padding, 0 1rem 2rem);
   }
 
   .usage-source {

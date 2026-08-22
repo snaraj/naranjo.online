@@ -10,12 +10,14 @@
     triggerClick,
     triggerPointerDown
   } from './disclosure';
-  import { applyTheme, documentTheme, themes, type ThemeId } from './themes';
+  import { applyMode, documentMode, modes, type ModeId } from './themes';
 
   // The origin stamps the chosen mode on <html> before any script runs, so
   // the initial state reads the document itself — never a second source of
-  // truth that could disagree with what the visitor already sees.
-  let selected = $state<ThemeId | null>(documentTheme());
+  // truth that could disagree with what the visitor already sees. An
+  // unstamped document reads as auto, which is the state every visitor
+  // starts in.
+  let selected = $state<ModeId>(documentMode());
   // Every open/close decision lives in the extracted disclosure state
   // machine (see disclosure.ts for the engine-order rationale); this
   // component only renders it and moves focus.
@@ -59,9 +61,9 @@
     (buttons.find((button) => button.getAttribute('aria-pressed') === 'true') ?? buttons[0])?.focus();
   }
 
-  function choose(id: ThemeId): void {
+  function choose(id: ModeId): void {
     selected = id;
-    applyTheme(id);
+    applyMode(id);
     if (dismiss(disclosure)) {
       trigger?.focus();
     }
@@ -103,20 +105,26 @@
 </script>
 
 <!-- The wiki's toggle, minimally: a compact moon button opening a popover of
-     one round swatch per reading mode. Each swatch's background IS its
-     theme's page surface — read from that theme's own palette tokens, never
-     a second copy of the values — with a sun on the light surface, a
-     cratered moon on the dark surface, and a plain dark moon on the sepia
-     surface. Native buttons only; the glyphs are inline SVG. Plain
+     one round swatch per choice. Each swatch's background IS its mode's page
+     surface — read from that mode's own palette tokens, never a second copy
+     of the values — with a split light/dark disc for auto, a sun on the light
+     surface, a cratered moon on the dark surface, and a plain dark moon on
+     the sepia surface. Native buttons only; the glyphs are inline SVG. Plain
      aria-expanded disclosure semantics on purpose: aria-haspopup would
      announce a menu, but the popover is a group of pressed-state buttons
-     (review F4). -->
+     (review F4).
+
+     The widget sits in the page header's flow and takes its position from
+     there. It used to be fixed chrome offset by the side rail's gutter, which
+     meant the control slid sideways every time a panel opened — a control
+     that moves when the visitor touches something else reads as broken. Only
+     the popover is layered, because it overlaps the panel stack below it. -->
 <svelte:window onpointerdown={onWindowPointerdown} />
 
 <div class="theme-menu" bind:this={root} onfocusout={onFocusOut}>
   <button
     type="button"
-    class="trigger"
+    class="icon-button trigger"
     aria-label="Reading mode"
     aria-expanded={disclosure.open}
     aria-controls="reading-mode-menu"
@@ -138,17 +146,25 @@
     hidden={!disclosure.open}
     bind:this={popover}
   >
-    {#each themes as theme (theme.id)}
+    {#each modes as mode (mode.id)}
       <button
         type="button"
-        class="swatch swatch-{theme.id}"
-        aria-label={theme.label}
-        aria-pressed={selected === theme.id}
+        class="swatch swatch-{mode.id}"
+        aria-label={mode.label}
+        aria-pressed={selected === mode.id}
         onpointerdown={onSwatchPointerdown}
-        onclick={() => choose(theme.id)}
+        onclick={() => choose(mode.id)}
         onkeydown={onSwatchKeydown}
       >
-        {#if theme.id === 'light'}
+        {#if mode.id === 'auto'}
+          <!-- Two half-discs, each drawn in the ink of the half it sits on,
+            so the glyph previews both palettes at once and every half of it
+            is high-contrast against its own background. -->
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path class="auto-half-light" d="M12 3.4A8.6 8.6 0 0 0 12 20.6Z" />
+            <path class="auto-half-dark" d="M12 3.4A8.6 8.6 0 0 1 12 20.6Z" />
+          </svg>
+        {:else if mode.id === 'light'}
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
             <circle cx="12" cy="12" r="4.6" fill="currentColor" />
             <g stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
@@ -162,7 +178,7 @@
               <line x1="4.65" y1="19.35" x2="6.6" y2="17.4" />
             </g>
           </svg>
-        {:else if theme.id === 'dark'}
+        {:else if mode.id === 'dark'}
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
             <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" fill="currentColor" />
             <circle class="crater" cx="9.2" cy="9.6" r="1.3" />
@@ -180,47 +196,27 @@
 </div>
 
 <style>
-  /* Fixed in the shell's header corner: opening the popover reflows nothing
-     and can never introduce horizontal overflow, even at 320px. The insets
-     add the safe-area values so the control clears a notch, and the explicit
-     layer keeps it above the side rail — a control the visitor cannot reach
-     because other chrome landed on top of it is a broken control, and before
-     this the menu declared no layer at all while the rail declared 10. */
+  /* An in-flow inline control: the header decides where it sits, and the
+     popover anchors to the trigger. Nothing here is fixed, so opening the
+     popover reflows nothing and the control cannot drift when other page
+     chrome changes size. */
   .theme-menu {
-    position: fixed;
-    top: calc(1rem + env(safe-area-inset-top));
-    right: calc(1rem + env(safe-area-inset-right) + var(--page-rail-gutter, 0px));
-    z-index: var(--layer-menu, 30);
+    position: relative;
+    display: inline-flex;
   }
 
-  .trigger,
-  .swatch {
-    /* 2.75rem = 44px: the minimum comfortable touch target. */
-    width: 2.75rem;
-    height: 2.75rem;
-    display: grid;
-    place-items: center;
-    padding: 0;
-    cursor: pointer;
-    border-radius: 50%;
-  }
-
-  .trigger {
-    color: var(--color-text);
-    background: var(--color-surface-raised);
-    border: 1px solid var(--color-border);
-  }
-
-  .trigger[aria-expanded='true'],
-  .trigger:hover {
-    background: var(--color-surface-overlay);
-    border-color: var(--color-border-strong);
-  }
-
+  /* The trigger's chrome is the shared .icon-button rule in styles.css — one
+     definition for every page-level icon control, so the reading-mode button
+     and the refresh button beside it cannot drift apart. Only the swatches,
+     which preview palettes, are styled here. */
   .popover {
     position: absolute;
     top: calc(100% + 0.5rem);
     right: 0;
+    /* The one layered element in the widget: the popover hangs over the
+       panel stack, which is later in the document and would otherwise paint
+       on top of it. */
+    z-index: var(--layer-menu, 30);
     display: flex;
     gap: 0.5rem;
     padding: 0.5rem;
@@ -246,11 +242,38 @@
     }
   }
 
-  /* Each swatch previews its own palette: the background is that theme's
-     page surface token and the glyph color one of its foreground tokens —
-     values referenced from styles.css, never duplicated here. */
+  /* Each swatch previews its own palette: the background is that mode's page
+     surface token and the glyph color one of its foreground tokens — values
+     referenced from styles.css, never duplicated here. 2.75rem = 44px: the
+     minimum comfortable touch target. */
   .swatch {
+    width: 2.75rem;
+    height: 2.75rem;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    cursor: pointer;
+    border-radius: 50%;
     border: 1px solid var(--color-border-strong);
+  }
+
+  /* Auto has no palette of its own — it is whichever of the two the visitor's
+     device asks for — so its swatch shows both, split down the middle, and
+     each half of the glyph is drawn in the ink that belongs to its side. */
+  .swatch-auto {
+    background: linear-gradient(
+      90deg,
+      var(--palette-light-surface) 0 50%,
+      var(--palette-dark-surface) 50% 100%
+    );
+  }
+
+  .swatch-auto .auto-half-light {
+    fill: var(--palette-light-text);
+  }
+
+  .swatch-auto .auto-half-dark {
+    fill: var(--palette-dark-text);
   }
 
   .swatch-light {
@@ -280,7 +303,6 @@
     box-shadow: 0 0 0 2px var(--color-accent);
   }
 
-  .trigger:focus-visible,
   .swatch:focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;

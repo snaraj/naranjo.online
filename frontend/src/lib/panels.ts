@@ -345,6 +345,26 @@ export interface PanelWatcher {
   refresh(): Promise<void>;
 }
 
+/* liveWatchers is every watcher currently running. The page's own refresh
+ * control has to force ONE read across all mounted panels, and it cannot ask
+ * the components for their watchers without every panel growing a prop that
+ * exists only to be handed back up. A watcher joins this set when it starts
+ * and leaves when it stops, so the set is exactly what is mounted — an
+ * unmounted panel can never be refreshed, and a panel added later needs no
+ * registration code of its own. */
+const liveWatchers = new Set<PanelWatcher>();
+
+/* refreshPanels forces every mounted panel to re-read and resolves when the
+ * last of them has settled, so a control can stay busy for exactly as long as
+ * the slowest read really is. It rides each panel's own single-flight read:
+ * pressing the page control while a panel is already reading JOINS that read
+ * instead of opening a second, so this costs the origin at most one request
+ * per panel however hard it is pressed. A page with nothing mounted resolves
+ * immediately — an empty refresh is a no-op, never an error. */
+export function refreshPanels(): Promise<void> {
+  return Promise.all(Array.from(liveWatchers, (watcher) => watcher.refresh())).then(() => undefined);
+}
+
 /* watchPanel keeps one panel current: an immediate first read, then one read
  * per interval, plus any forced read a caller asks for, then a stop that ends
  * the loop for good. Four rules make it cheap and safe to leave running:
@@ -393,12 +413,20 @@ export function watchPanel<Data = unknown>(
   read(true);
   const handle = host.schedule(() => read(false), options.intervalMs ?? panelRefreshIntervalMs);
   const unsubscribe = host.onVisible(() => read(true));
-  const stop = () => {
-    stopped = true;
-    host.cancel(handle);
-    unsubscribe();
-  };
-  return Object.assign(stop, { refresh: () => read(true) });
+  /* The watcher leaves the live set inside its own stop, so the page-level
+     refresh follows mounting exactly — with no unmount bookkeeping in any
+     component, and no way for a stopped watcher to be woken by it. */
+  const watcher: PanelWatcher = Object.assign(
+    () => {
+      stopped = true;
+      host.cancel(handle);
+      unsubscribe();
+      liveWatchers.delete(watcher);
+    },
+    { refresh: () => read(true) }
+  );
+  liveWatchers.add(watcher);
+  return watcher;
 }
 
 /* watchClock ticks a shared wall clock so a rendered age keeps telling the

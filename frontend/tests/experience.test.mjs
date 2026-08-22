@@ -58,6 +58,141 @@ test('initial source remains local and viewport-responsive', () => {
 // palette-deduplication pins below.
 const occurrences = (source, needle) => source.split(needle).length - 1;
 
+// The narrowest viewport this site supports, in CSS pixels (rendering-lane
+// floor, issue #26). Nothing may claim a hard inline size wider than this, or
+// the body scrolls sideways on a phone.
+const narrowestViewportPx = 320;
+
+// WCAG 2.2 relative luminance and contrast ratio, computed here so the
+// palettes are VALIDATED rather than asserted to be fine. Six-digit hex only,
+// which the palette block is already pinned to by the dedup test above.
+function relativeLuminance(hex) {
+  const channels = [1, 3, 5].map((offset) => {
+    const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+function contrastRatio(foreground, background) {
+  const [lighter, darker] = [relativeLuminance(foreground), relativeLuminance(background)].sort(
+    (a, b) => b - a
+  );
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+// Every --palette-* literal, keyed by token name.
+function paletteLiterals(css) {
+  const palette = {};
+  for (const [, name, value] of css.matchAll(/(--palette-[a-z0-9-]+)\s*:\s*(#[0-9a-f]{6})\s*;/g)) {
+    palette[name] = value;
+  }
+  return palette;
+}
+
+// hardInlineSizes returns every declaration that pins a box to an absolute
+// inline size, with the value in CSS pixels. Fluid forms are skipped on
+// purpose — a percentage, `auto`, a token, or anything inside min()/max()/
+// clamp() is by construction able to shrink, which is the property this pin
+// is protecting. `max-*` is skipped for the same reason: a maximum never
+// forces a box wider than the viewport.
+function hardInlineSizes(css) {
+  const found = [];
+  for (const [declaration, property, value] of css.matchAll(
+    /(?:^|[;{])\s*((?:min-)?(?:width|inline-size))\s*:\s*([^;}]+)/g
+  )) {
+    const trimmed = value.trim();
+    if (/^(?:auto|100%|inherit|initial|revert|unset)$/.test(trimmed)) continue;
+    if (/(?:min|max|clamp|var|calc)\(/.test(trimmed)) continue;
+    const px = /^([\d.]+)px$/.exec(trimmed);
+    const rem = /^([\d.]+)rem$/.exec(trimmed);
+    if (px) found.push({ declaration: declaration.trim(), property, px: Number(px[1]) });
+    if (rem) found.push({ declaration: declaration.trim(), property, px: Number(rem[1]) * 16 });
+  }
+  return found;
+}
+
+// The panels are the page now, so they follow the reading mode instead of
+// keeping RuneLite's dark chrome in all three. That makes every panel color a
+// per-palette question, and this test answers it by MEASURING: the brand
+// orange that reads perfectly on a dark card fails outright on the light one,
+// which is exactly the class of mistake a palette swap invites.
+test('every reading mode paints panels at a legible contrast', () => {
+  const palette = paletteLiterals(styles);
+  // Each mode paints panels on its own raised surface; tiles sit on the page
+  // surface inset into that card.
+  const modes = {
+    light: { raised: 'light-surface-raised', brand: 'brand-orange-on-light', ok: 'status-ok-on-light', muted: 'light-accent', text: 'light-text' },
+    dark: { raised: 'dark-surface-raised', brand: 'brand-orange', ok: 'status-ok', muted: 'dark-accent', text: 'dark-text' },
+    sepia: { raised: 'sepia-surface-raised', brand: 'brand-orange', ok: 'status-ok', muted: 'sepia-accent', text: 'sepia-text' },
+  };
+  // 4.5:1 is WCAG 1.4.3 for body text; 3:1 is 1.4.11 for a non-text
+  // indicator, which is all the status dot is — its state is carried by
+  // SHAPE as well, so color is the redundant channel and never the only one.
+  const floors = { text: 4.5, muted: 4.5, brand: 4.5, ok: 3 };
+  for (const [mode, slots] of Object.entries(modes)) {
+    const background = palette[`--palette-${slots.raised}`];
+    assert.ok(background, `${mode} has no raised surface to measure against`);
+    for (const [slot, floor] of Object.entries(floors)) {
+      const foreground = palette[`--palette-${slots[slot]}`];
+      assert.ok(foreground, `${mode} palette is missing ${slot}`);
+      const ratio = contrastRatio(foreground, background);
+      assert.ok(
+        ratio >= floor,
+        `${mode}: ${slot} on the panel surface is ${ratio.toFixed(2)}:1, below ${floor}:1`
+      );
+    }
+    // The heatmap ramp is one hue with MONOTONE lightness, and its direction
+    // is per-palette: against a light card a ramp that steps brighter walks
+    // toward its own background, so the busiest days would read as the
+    // emptiest. Direction is derived from the palette, never assumed.
+    const ramp = [0, 1, 2, 3, 4].map((level) => palette[`--palette-${mode}-grid-${level}`]);
+    ramp.forEach((value, level) => assert.ok(value, `${mode} ramp is missing level ${level}`));
+    const luminances = ramp.map(relativeLuminance);
+    const descending = luminances[4] < luminances[0];
+    for (let level = 1; level < luminances.length; level += 1) {
+      assert.ok(
+        descending ? luminances[level] < luminances[level - 1] : luminances[level] > luminances[level - 1],
+        `${mode} ramp is not monotone at level ${level}: ${luminances.map((l) => l.toFixed(3)).join(' ')}`
+      );
+    }
+    // ...and it must travel AWAY from the card, not toward it.
+    assert.equal(
+      descending,
+      relativeLuminance(background) > 0.5,
+      `${mode} ramp steps the wrong way for its own surface`
+    );
+  }
+});
+
+// A 320px phone is the floor, and the page must reach it by SHRINKING rather
+// than by scrolling sideways. This is a source pin because the browser
+// harness available here cannot open a window narrower than 500px, so the
+// property is enforced where it is actually decided — in the declarations —
+// instead of being assumed from a wider measurement.
+test('nothing claims a hard inline size wider than the narrowest viewport', () => {
+  for (const [name, source] of Object.entries({ styles })) {
+    for (const { declaration, px } of hardInlineSizes(source)) {
+      assert.ok(
+        px <= narrowestViewportPx,
+        `${name}: "${declaration}" pins ${px}px, wider than the ${narrowestViewportPx}px floor — it will scroll the body sideways on a phone`
+      );
+    }
+  }
+  // The column is a MAXIMUM, never a fixed width: it must always be able to
+  // collapse to the viewport. This is the single most load-bearing use of
+  // min() on the page, so it is pinned by shape and not merely by value.
+  assert.match(
+    styles,
+    /inline-size:\s*min\(var\(--page-column-width\), 100%\)/,
+    'the page column must be a min() against 100%, never a fixed width'
+  );
+  // Grid items default to a min-content automatic minimum, so a card holding
+  // a dense table refuses to shrink and drags the stack past the column. This
+  // is the exact defect that made the body scroll sideways at every width.
+  assert.match(styles, /\.panel-stack,\s*\n\.panel-stack > \*\s*\{[^}]*min-inline-size:\s*0/);
+});
+
 // Reading modes (issue #22): the stylesheet is a custom-property token layer.
 // Light is the default :root palette; each further mode is one override block
 // scoped by the data-theme attribute the origin stamps on <html>. The colors
@@ -136,7 +271,9 @@ test('theme registry and toggle: named modes, exact cookie grammar, local only',
     assert.doesNotMatch(source, /https?:\/\//, 'theme sources must stay local-origin');
   }
 
-  // Exactly the three registered modes, each carrying a visible name.
+  // Exactly the three registered modes, each carrying a visible name. These
+  // are the STAMPED ids — the ones the origin precomputes a document for —
+  // and they are what the Go parity test compares against readingThemes.
   for (const id of ['light', 'dark', 'sepia']) {
     assert.match(themeRegistry, new RegExp(`id: '${id}', label: '[^']+'`), `registry lacks ${id}`);
   }
@@ -145,6 +282,33 @@ test('theme registry and toggle: named modes, exact cookie grammar, local only',
   // the origin parses: whole-site path, 365 days, SameSite=Lax.
   assert.match(themeRegistry, /setAttribute\('data-theme', id\)/);
   assert.match(themeRegistry, /'theme=' \+ id \+ '; path=\/; max-age=31536000; samesite=lax'/);
+});
+
+// Auto is the fourth toggle choice and the only one that is NOT a stamped
+// theme: it is the absence of a choice. Modelling it as a stamped id would
+// need a [data-theme="auto"] block restating the whole media query, and a Go
+// variant that cannot be right for two visitors whose devices disagree — so
+// the registry keeps three ids and the menu derives four choices from them.
+test('auto is the no-choice choice: derived menu, attribute removed, cookie expired', () => {
+  // The menu is DERIVED from the registry, so a theme added above cannot fail
+  // to appear in the toggle and the two lists can never disagree.
+  assert.match(themeRegistry, /export const modes: readonly Mode\[\] = \[\{ id: autoMode, label: '[^']+' \}, \.\.\.themes\]/);
+  assert.match(themeRegistry, /export const autoMode = 'auto'/);
+
+  // Auto is deliberately outside ThemeId — the type the origin's stamped
+  // variants and the cookie contract are keyed on.
+  assert.match(themeRegistry, /export type ThemeId = 'light' \| 'dark' \| 'sepia'/);
+  assert.match(themeRegistry, /export type ModeId = ThemeId \| typeof autoMode/);
+
+  // Choosing auto un-stamps the live document AND expires the cookie. Setting
+  // the cookie to any value instead would keep the origin answering with a
+  // stamped variant forever, which is the regression this pins.
+  assert.match(themeRegistry, /removeAttribute\('data-theme'\)/);
+  assert.match(themeRegistry, /'theme=; path=\/; max-age=0; samesite=lax'/);
+
+  // An unstamped document reads as auto SELECTED, never as nothing selected —
+  // otherwise the state every visitor starts in shows no pressed swatch.
+  assert.match(themeRegistry, /return documentTheme\(\) \?\? autoMode/);
 });
 
 // The toggle is the wiki's, minimally: a labeled moon button opening a
@@ -163,11 +327,11 @@ test('theme toggle: swatch popover, token-pure colors, machine-wired', () => {
   assert.match(themeMenu, /aria-controls="reading-mode-menu"/);
   assert.match(themeMenu, /<svg[^>]*aria-hidden="true"/);
 
-  // Popover: every registry entry becomes a named swatch button carrying
+  // Popover: every menu entry becomes a named swatch button carrying
   // pressed semantics for the current choice.
-  assert.match(themeMenu, /\{#each themes as theme \(theme\.id\)\}/);
-  assert.match(themeMenu, /aria-label=\{theme\.label\}/);
-  assert.match(themeMenu, /aria-pressed=\{selected === theme\.id\}/);
+  assert.match(themeMenu, /\{#each modes as mode \(mode\.id\)\}/);
+  assert.match(themeMenu, /aria-label=\{mode\.label\}/);
+  assert.match(themeMenu, /aria-pressed=\{selected === mode\.id\}/);
 
   // Swatch colors are references into each theme's own palette tokens —
   // never a third copy of the values (see the dedup pins above) and never a
@@ -179,6 +343,17 @@ test('theme toggle: swatch popover, token-pure colors, machine-wired', () => {
       `the ${id} swatch background must be that theme's own surface token`
     );
   }
+
+  // Auto has no palette of its own, so its swatch previews BOTH — split down
+  // the middle — and each half of the glyph is drawn in the ink belonging to
+  // its own side, which is what keeps every half of it legible.
+  assert.match(
+    themeMenu,
+    /linear-gradient\(\s*90deg,\s*var\(--palette-light-surface\) 0 50%,\s*var\(--palette-dark-surface\) 50% 100%\s*\)/,
+    'the auto swatch must preview both palettes from their own surface tokens'
+  );
+  assert.match(themeMenu, /\.auto-half-light \{\s*fill: var\(--palette-light-text\)/);
+  assert.match(themeMenu, /\.auto-half-dark \{\s*fill: var\(--palette-dark-text\)/);
   // The sepia glyph clears WCAG 1.4.11 with margin by mixing two sepia
   // tokens — still no restated value (review F4).
   assert.match(themeMenu, /color-mix\(in srgb, var\(--palette-sepia-border-strong\) 60%, var\(--palette-sepia-accent\)\)/);
