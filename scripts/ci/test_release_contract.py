@@ -3598,11 +3598,15 @@ curl() {
                 block, root=root, completed_sha=docs_head, zip_entries=zip_entries
             )
             self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-            # `wc -l` output carries platform-dependent leading whitespace
-            # (e.g. macOS: "       2"); match the traced comparison loosely
-            # enough to survive that without losing the "it was 2, not 1"
-            # distinguishing evidence.
-            self.assertIn("2' -eq 1", completed.stderr)
+            # Match the traced comparison across BOTH shells that run this
+            # suite, without losing the "it was 2, not 1" evidence. `wc -l`
+            # pads its output on macOS but not on GNU coreutils, and bash
+            # quotes a traced word only when it needs to -- so the same
+            # guard traces as `test '       2' -eq 1` locally and
+            # `test 2 -eq 1` on the CI runner. Pinning either literal makes
+            # the suite pass on one platform and fail on the other; this
+            # regression cost one red CI run before it was caught.
+            self.assertRegex(completed.stderr, r"test\s+'?\s*2'?\s+-eq\s+1")
             self.assertNotIn("class=", output)
 
 
