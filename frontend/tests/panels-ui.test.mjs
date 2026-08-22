@@ -150,8 +150,22 @@ test('each card keeps its own freshness reading and none keeps a control', () =>
   // already closes the realistic path — a control rendered by the shared
   // PanelShell — and reaching a watcher is what makes a control a refresher.
   for (const [name, source] of Object.entries({ bossLog, activityBar, tokenUsage })) {
-    assert.doesNotMatch(source, /\{refresh\}|const refresh =/, `${name} still hands a refresher to its shell`);
+    assert.doesNotMatch(
+      source,
+      /\{\s*refresh\s*\}|(?:const|let|var)\s+refresh\s*=/,
+      `${name} still hands a refresher to its shell`
+    );
     assert.doesNotMatch(source, /\.refresh\(\)/, `${name} drives a watcher refresh of its own`);
+    // The module-level refresher is the third door, and the one the delta
+    // review actually walked through: a card that imports refreshPanels()
+    // needs no watcher handle at all, so pinning "reaches a watcher" missed
+    // it completely. Zero panel component references it today, and the
+    // refresh control belongs to the page header for all of them at once.
+    assert.doesNotMatch(
+      source,
+      /refreshPanels/,
+      `${name} reaches the all-panels refresher; one control refreshes every tracker, and it lives in the page header`
+    );
   }
 });
 

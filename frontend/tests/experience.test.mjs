@@ -69,7 +69,7 @@ test('initial source remains local and viewport-responsive', () => {
   // Deliberate reading-modes change (issue #22): light is now the :root
   // default palette, so the media query maps the DARK tokens in — and only
   // for documents without an explicit stamped choice.
-  assert.match(styles, /@media \(prefers-color-scheme: dark\)/);
+  assert.match(stylesCode, /@media \(prefers-color-scheme: dark\)/);
   assert.match(styles, /:root:not\(\[data-theme\]\)/);
 });
 
@@ -139,10 +139,45 @@ function cssRules(css) {
   return rules;
 }
 
-const styleRules = cssRules(styles);
+// A comment-blind copy, because a raw-text pin matches text that a browser
+// never reads. The delta review commented the whole prefers-color-scheme
+// block OUT and stayed 137/137 green: the raw-text pins matched the
+// commented copy while cssRules stripped it, so `auto` silently degenerated
+// to light — the mode with no stamp rendering as though a stamp existed.
+const stylesCode = styles.replace(/\/\*[\s\S]*?\*\//g, '');
+
+const styleRules = cssRules(styles).map((rule, order) => ({ ...rule, order }));
 const underColorScheme = (rule) => rule.enclosing.some((at) => at.includes('prefers-color-scheme'));
-const rootish = (rule) => rule.selector.split(',').some((part) => part.trim().startsWith(':root'));
-const stamped = (rule, mode) => rule.selector.includes(`[data-theme="${mode}"]`);
+const themeTokenPattern = /^--(?:color|panel|grid-cell)-/;
+const declaresThemeToken = (body) =>
+  [...body.matchAll(/(--[a-z0-9-]+)\s*:/g)].some(([, name]) => themeTokenPattern.test(name));
+
+// Document order is NOT the cascade. `:root:not([data-theme])` carries
+// (0,2,0) against plain `:root`'s (0,1,0), so it wins from EARLIER in the
+// file — a repaint the previous order-only resolver could not see, and one
+// this stylesheet is already primed for because that selector is load-bearing
+// inside the prefers-color-scheme block.
+//
+// Only the forms this token layer actually uses are recognised. Anything
+// else returns null and fails the caller LOUDLY, because a selector the
+// matcher does not understand is precisely where the next repaint would
+// hide, and silently skipping it is how an order-only model got here.
+function tokenLayerSelector(selector) {
+  const parts = selector.split(',').map((part) => part.trim());
+  const forms = parts.map((part) => {
+    if (part === ':root') return { weight: 10, applies: () => true };
+    if (part === ':root:not([data-theme])')
+      return { weight: 20, applies: (mode) => mode.startsWith('auto') };
+    const stamp = /^(?::root)?\[data-theme="([a-z]+)"\]$/.exec(part);
+    if (stamp) return { weight: part.startsWith(':root') ? 20 : 10, applies: (mode) => mode === stamp[1] };
+    return null;
+  });
+  if (forms.some((form) => form === null)) return null;
+  return {
+    weight: Math.max(...forms.map((form) => form.weight)),
+    applies: (mode) => forms.some((form) => form.applies(mode)),
+  };
+}
 
 // The rules that paint one reading mode, base first and override second, each
 // in document order. `auto` is modelled because it is a real mode this page
@@ -150,14 +185,28 @@ const stamped = (rule, mode) => rule.selector.includes(`[data-theme="${mode}"]`)
 // prefers-color-scheme mapping — the one block nothing used to resolve, and
 // the block the auto mode is precisely what makes render.
 function modeRules(mode) {
-  const base = styleRules.filter((rule) => rootish(rule) && !underColorScheme(rule) && !/\[data-theme=/.test(rule.selector));
-  const override =
-    mode === 'auto'
-      ? styleRules.filter((rule) => underColorScheme(rule) && rootish(rule))
-      : mode === 'light'
-        ? styleRules.filter((rule) => stamped(rule, 'light'))
-        : styleRules.filter((rule) => stamped(rule, mode));
-  return [...base, ...override];
+  const applied = [];
+  for (const rule of styleRules) {
+    if (!declaresThemeToken(rule.body)) continue;
+    const form = tokenLayerSelector(rule.selector);
+    assert.ok(
+      form,
+      `"${rule.selector}" declares theme tokens through a selector this resolver cannot weigh; ` +
+        'the token layer is :root, :root:not([data-theme]), and [data-theme="…"]',
+    );
+    // A media-query block is a further condition on top of the selector, and
+    // it is the condition that splits auto in two. An unstamped document
+    // renders one way when the device asks for dark and another when it asks
+    // for light, so "auto" is not one rendering to validate but two — and the
+    // OS-LIGHT one was entirely unmodelled until the delta review, because
+    // this resolver applied the dark media block to auto unconditionally.
+    // That is the rendering `:root:not([data-theme])` repaints, since it
+    // outweighs :root at (0,2,0) while the media block is not in force.
+    if (underColorScheme(rule) && mode !== 'auto-dark') continue;
+    if (!form.applies(mode)) continue;
+    applied.push({ ...rule, weight: form.weight });
+  }
+  return applied.sort((a, b) => a.weight - b.weight || a.order - b.order);
 }
 
 // Every custom property a mode declares, later declaration winning.
@@ -229,7 +278,16 @@ test('every reading mode paints panels at a legible contrast', () => {
     '--panel-accent': 4.5,
     '--panel-status-ok': 3,
   };
-  for (const mode of ['light', 'auto', 'dark', 'sepia']) {
+  // Auto is the absence of a stamp, so it renders through the OS mapping and
+  // nothing else. If that block is deleted — or merely COMMENTED OUT, which
+  // the delta review did while staying 137/137 green — auto silently
+  // degenerates into light and this whole loop then validates light twice
+  // under two names. Fail on the block's absence, not on its contrast.
+  assert.ok(
+    styleRules.some((rule) => underColorScheme(rule) && declaresThemeToken(rule.body)),
+    'no prefers-color-scheme block declares theme tokens; auto-dark would render as light while claiming to follow the device',
+  );
+  for (const mode of ['light', 'auto-light', 'auto-dark', 'dark', 'sepia']) {
     const background = resolve('--panel-surface', mode);
     assert.ok(background, `${mode} has no raised surface to measure against`);
     for (const [hook, floor] of Object.entries(floors)) {
@@ -260,6 +318,40 @@ test('every reading mode paints panels at a legible contrast', () => {
       descending,
       relativeLuminance(background) > 0.5,
       `${mode} ramp steps the wrong way for its own surface`
+    );
+  }
+});
+
+// The contrast guard above resolves the TOKEN LAYER, not the DOM. That is a
+// deliberate limit — modelling which element a declaration reaches needs a
+// tree, and this suite is dependency-free by contract — but it leaves an
+// opening the delta review walked straight through: custom properties
+// INHERIT, so `#app { --color-brand: red }` or a component <style> repaints
+// every descendant while the resolver, which only weighs :root-ish rules,
+// sees nothing at all.
+//
+// Forbidding the declaration needs no tree. AGENTS.md already says the token
+// layer lives in styles.css — "the light palette on :root, every further
+// reading mode one [data-theme] override block" — and that components
+// "consume tokens, never raw palette literals". This makes that a red build
+// instead of a convention, which is the strictly stronger half of the pair:
+// the resolver proves the layer's VALUES are legible, and this proves there
+// is nowhere else for a value to come from.
+test('theme tokens are declared in the token layer and nowhere else', () => {
+  for (const [name, source] of Object.entries(componentStyles)) {
+    for (const [, property] of source.matchAll(/(--[a-z0-9-]+)\s*:/g)) {
+      assert.ok(
+        !themeTokenPattern.test(property),
+        `${name} declares ${property}; a component that declares a theme token repaints every element inside it, and no contrast guard resolving :root can see it`
+      );
+    }
+  }
+  const declaring = styleRules.filter((rule) => declaresThemeToken(rule.body));
+  assert.ok(declaring.length >= 4, `only ${declaring.length} rules declare theme tokens; the layer cannot have shrunk this far`);
+  for (const rule of declaring) {
+    assert.ok(
+      tokenLayerSelector(rule.selector),
+      `"${rule.selector}" declares theme tokens outside the token layer, which is :root, :root:not([data-theme]), and [data-theme="…"]`
     );
   }
 });
@@ -335,7 +427,7 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
     );
   }
   assert.match(
-    styles,
+    stylesCode,
     /prefers-color-scheme: dark\)\s*\{\s*:root:not\(\[data-theme\]\)\s*\{[^}]*var\(--palette-dark-/,
     'the media query must remap onto the dark palette, never restate values'
   );
