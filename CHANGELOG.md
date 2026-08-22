@@ -26,10 +26,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   and a frontend admission set, so a parity pin holds the two together and
   fails naming whichever side is behind - the contract calls a new unit "a
   conscious edit on both sides" and this is what makes that mechanical.
-- The anthropic source grows from five tiles to twelve, matching the detail
-  the source tool itself reports: the input/output/cache-read/cache-write
-  breakdown, sessions, active days, and days tracked, alongside the lifetime,
-  peak, streak, and longest-session figures it already had.
+- The anthropic source goes from an empty shell to twelve tiles, matching the
+  detail the source tool itself reports: lifetime tokens, the
+  input/output/cache-read/cache-write breakdown, peak day, sessions, active
+  days, days tracked, both streaks, and the longest session. It carried no
+  tiles at all before this release; the codex source is the one that had
+  five, and it still does.
 - Two capture bases, stated rather than blended: everything except the
   anthropic peak comes from the 2026-08-22 usage panels; the anthropic peak
   day comes from the workstation's local daily aggregate, whose last computed
