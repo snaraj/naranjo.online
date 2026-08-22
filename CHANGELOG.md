@@ -7,6 +7,40 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.28] - 2026-08-22
+
+### Fixed
+
+- The published Helm chart is deployable as published. `release-publisher.yml`
+  now substitutes the resolved image digest into `chart/values.yaml` on the
+  runner before packaging, so the chart in the registry no longer ships the
+  all-zeros fail-closed sentinel that no registry can resolve (issue #111,
+  ADR 0016 step 1). The substitution reads only
+  `steps.image.outputs.digest` — the value the HIGH/CRITICAL scan, the cosign
+  signature, and the provenance attestation already accepted — and never
+  re-derives a digest from a tag lookup.
+
+### Security
+
+- The substitution is fail closed in both directions. The workflow refuses a
+  digest that is not `^sha256:[0-9a-f]{64}$` or that is the all-zeros
+  sentinel; the source values file must still carry the sentinel before it is
+  rewritten, so committed drift or a second substitution denies instead of
+  overwriting; and every packaging step re-reads the archive it actually
+  produced, so a substitution that silently became a no-op fails the run
+  rather than publishing an unpullable chart.
+- One substitution runs ahead of BOTH `helm package` invocations, so the
+  chart-state classifier's reproducibility re-package and the publish step's
+  archive are the same bytes and an idempotent re-run of an already published
+  version still classifies `complete` instead of a false `burned`.
+- `release-audit.yml` reproduces that substitution with the image digest the
+  audited Release's own manifest binds, which strengthens the weekly
+  chart-source comparison: it now also proves the published chart deploys the
+  exact image that Release, signature, and provenance are about.
+- The committed `chart/values.yaml` keeps the sentinel, so the four-way
+  VERSION lock, `values.schema.json`, and the gate's rendered-digest
+  assertion stay exactly as strict as before.
+
 ## [0.1.27] - 2026-08-21
 
 ### Changed

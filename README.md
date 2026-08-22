@@ -89,6 +89,10 @@ final source tree. The publisher builds or verifies:
 - `ghcr.io/snaraj/charts/naranjo-online:X.Y.Z` — the Helm chart as an OCI
   artifact, also signed. This is the one narrow tag exception: Helm requires
   the registry tag to equal valid chart SemVer, and `vX.Y.Z` is not SemVerV2.
+  It is packaged with that release's resolved image digest already in
+  `image.digest`, so it is deployable as published; the committed
+  `chart/values.yaml` keeps an all-zeros fail-closed sentinel no registry can
+  resolve, and only the published artifact carries the real digest.
 - A GitHub Release with the immutable digests, human notes, and exactly one
   canonical JSON evidence manifest binding the source SHA, successful-main run,
   image/chart digests and aliases, signer identity, platforms, provenance, and

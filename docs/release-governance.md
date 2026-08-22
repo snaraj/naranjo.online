@@ -160,8 +160,13 @@ immutable Release has already exposed the race.
 For the latest Release it repeats the exact Release/manifest/successful-run/tag
 bindings; resolves image `vX.Y.Z` and chart `X.Y.Z` aliases and requires the
 manifest digests; verifies both Cosign identities, the exact two-platform SLSA
-and strict raw SBOM set, the chart archive against the release source tree, and
-the final image vulnerability policy including development dependencies. This
+and strict raw SBOM set, the chart archive against the release source tree with
+that Release's own image digest substituted exactly as the publisher does, and
+the final image vulnerability policy including development dependencies. That
+substitution is why the comparison still binds: the published chart carries the
+released digest while the committed source keeps the fail-closed sentinel, so
+the audit proves the published chart deploys the exact image the Release,
+signature, and provenance are about. This
 scheduled detection is defense in depth, never a substitute for the post-push
 pre-manifest alias/SBOM proof. It has no settings App token, OIDC, or publication
 method.

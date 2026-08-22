@@ -46,6 +46,21 @@ GITHUB_ACTIONS_BOT_ID = 41898282
 INTOTO_STATEMENT_TYPE = "https://in-toto.io/Statement/v0.1"
 SLSA_PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
 DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
+# The fail-closed value the COMMITTED chart carries. It is a syntactically
+# valid digest -- it satisfies values.schema.json and the gate's render
+# assertion -- that no registry can ever resolve, so a chart installed with it
+# fails at pull time instead of silently pulling a floating tag. The committed
+# tree keeps it forever (issue #111 acceptance 4); only the PUBLISHED artifact
+# carries the resolved digest, substituted on the runner by the publisher after
+# the vulnerability gate, signature, and provenance attestation have accepted
+# it.
+CHART_DIGEST_SENTINEL = "sha256:" + "0" * 64
+# The exact committed line the substitution replaces. Quoting and trailing
+# whitespace are tolerated because YAML permits them; ANY other spelling of the
+# value fails closed rather than being rewritten by guess.
+CHART_DIGEST_LINE_RE = re.compile(
+    r"(?m)^  digest:[ \t]+[\"']?" + CHART_DIGEST_SENTINEL + r"[\"']?[ \t]*$"
+)
 GITHUB_API_VERSION = "2026-03-10"
 EXPECTED_MAIN_RULESET = "Protect-Main"
 GITHUB_ACTIONS_INTEGRATION_ID = 15368
@@ -234,6 +249,64 @@ def validate_snapshot(files: Mapping[str, str]) -> ReleaseIntent:
     if not top.search(files["CHANGELOG.md"]):
         raise ContractError("current release must immediately follow an empty Unreleased heading")
     return ReleaseIntent(source_sha="", version=version)
+
+
+def require_publishable_digest(raw: object, field: str) -> str:
+    """Return a digest that is well formed AND is not the fail-closed sentinel.
+
+    Both halves are load-bearing and neither implies the other. The format
+    check refuses a truncated, upper-case, or prefix-less value that would
+    render an unpullable reference; the sentinel check refuses the one value
+    that IS well formed and still unpullable, which is exactly the bug the
+    embed exists to close. A substitution that wrote the sentinel back over
+    itself would satisfy every syntactic check and publish the same broken
+    chart.
+    """
+    digest = _require_digest(raw, field)
+    if digest == CHART_DIGEST_SENTINEL:
+        raise ContractError(f"{field} is the all-zeros fail-closed sentinel, not a resolved digest")
+    return digest
+
+
+def assert_chart_image_digest(values: str, digest: str) -> None:
+    """Fail unless chart values carry exactly the expected resolved digest.
+
+    Read-only, and deliberately usable against a PACKAGED chart: the publisher
+    re-reads what `helm package` actually produced rather than trusting that
+    the working-tree edit reached the archive.
+    """
+    expected = require_publishable_digest(digest, "expected image digest")
+    if CHART_DIGEST_SENTINEL in values:
+        raise ContractError("chart values still carry the all-zeros fail-closed digest sentinel")
+    observed = _direct_child_scalar(values, "image", "digest")
+    if observed != expected:
+        raise ContractError(f"chart image digest {observed!r} is not the resolved digest {expected!r}")
+
+
+def embed_chart_image_digest(values: str, digest: str) -> str:
+    """Return chart values with the sentinel replaced by the resolved digest.
+
+    The source text must still carry the sentinel: a values file that already
+    names some other digest is either committed source drift (acceptance 4 says
+    the committed tree keeps the sentinel) or a second substitution over an
+    already-substituted tree, and neither may be silently rewritten. Exactly one
+    line may match, and the result is re-asserted before it is returned, so no
+    caller can receive a half-substituted document.
+    """
+    expected = require_publishable_digest(digest, "embedded image digest")
+    observed = _direct_child_scalar(values, "image", "digest")
+    if observed != CHART_DIGEST_SENTINEL:
+        raise ContractError(
+            f"chart image digest is {observed!r}; the committed chart must carry the "
+            "all-zeros fail-closed sentinel before substitution"
+        )
+    embedded, substitutions = CHART_DIGEST_LINE_RE.subn(lambda _match: f"  digest: {expected}", values)
+    if substitutions != 1:
+        raise ContractError(
+            f"chart values must carry exactly one substitutable image digest line, found {substitutions}"
+        )
+    assert_chart_image_digest(embedded, expected)
+    return embedded
 
 
 def _git(repository: Path, *args: str) -> str:
@@ -2018,6 +2091,11 @@ def _parser() -> argparse.ArgumentParser:
     artifact.add_argument("--expected-evidence", type=int, required=True)
     registry = commands.add_parser("registry-state")
     registry.add_argument("--http-status", type=int, required=True)
+    chart_digest_embed = commands.add_parser("chart-digest-embed")
+    chart_digest_assert = commands.add_parser("chart-digest-assert")
+    for chart_digest_command in (chart_digest_embed, chart_digest_assert):
+        chart_digest_command.add_argument("--values", type=Path, required=True)
+        chart_digest_command.add_argument("--digest", required=True)
     sbom_index = commands.add_parser("sbom-index-record")
     sbom_index.add_argument("--index", type=Path, required=True)
     sbom_index.add_argument("--image-digest", required=True)
@@ -2228,6 +2306,15 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
         elif args.command == "registry-state":
             print(classify_registry_response(args.http_status))
+        elif args.command == "chart-digest-embed":
+            embedded = embed_chart_image_digest(
+                args.values.read_text(encoding="utf-8"), args.digest
+            )
+            args.values.write_text(embedded, encoding="utf-8")
+            print("embedded")
+        elif args.command == "chart-digest-assert":
+            assert_chart_image_digest(args.values.read_text(encoding="utf-8"), args.digest)
+            print("exact")
         elif args.command == "sbom-index-record":
             plan = validate_sbom_index(
                 args.index.read_bytes(), expected_image_digest=args.image_digest
