@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const [fallback, component, styles, themeRegistry, themeMenu] = await Promise.all([
@@ -9,6 +9,25 @@ const [fallback, component, styles, themeRegistry, themeMenu] = await Promise.al
   readFile(new URL('../src/lib/themes.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/ThemeMenu.svelte', import.meta.url), 'utf8'),
 ]);
+
+/* Every component's scoped <style>, keyed by file name. The global stylesheet
+ * is not the only place a width is decided — two of the three overflow
+ * defects this page has actually suffered lived in component style blocks —
+ * so a source pin that reads styles.css alone would be blind to the majority
+ * of its own subject. Discovered by walking the tree rather than listed by
+ * hand, so a component added later is covered without anyone remembering to
+ * add it here. */
+const componentStyles = Object.fromEntries(
+  await Promise.all(
+    (await readdir(new URL('../src', import.meta.url), { recursive: true }))
+      .filter((entry) => entry.endsWith('.svelte'))
+      .map(async (entry) => {
+        const source = await readFile(new URL(`../src/${entry}`, import.meta.url), 'utf8');
+        const block = /<style[^>]*>([\s\S]*?)<\/style>/.exec(source);
+        return [entry, block ? block[1] : ''];
+      })
+  )
+);
 
 // Browser execution is deliberately outside this dependency-free test. These
 // assertions keep the accessible, responsive first response intact even when
@@ -90,6 +109,48 @@ function paletteLiterals(css) {
   return palette;
 }
 
+// blockBody returns the brace-matched body of the rule that starts at the
+// first occurrence of `opener`, so a nested at-rule cannot truncate it.
+function blockBody(css, opener) {
+  const start = css.indexOf(opener);
+  assert.ok(start >= 0, `the stylesheet has no rule opening with ${opener}`);
+  const from = css.indexOf('{', start) + 1;
+  let depth = 0;
+  for (let i = from - 1; i < css.length; i += 1) {
+    if (css[i] === '{') depth += 1;
+    else if (css[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return css.slice(from, i);
+    }
+  }
+  assert.fail(`the rule opening with ${opener} is never closed`);
+}
+
+// indirections maps every `--<prefix>-*: var(--target)` declaration in a rule
+// body to the token it defers to. It reads ONLY var() forms, because a token
+// resolved to a literal is not an indirection and belongs in the palette.
+function indirections(body, prefix) {
+  const map = {};
+  const pattern = new RegExp(`(--${prefix}-[a-z0-9-]+)\\s*:\\s*var\\((--[a-z0-9-]+)\\)`, 'g');
+  for (const [, name, target] of body.matchAll(pattern)) {
+    map[name] = target;
+  }
+  return map;
+}
+
+// The component-facing hooks, declared once and shared by every mode.
+const rootBody = blockBody(styles, ':root {');
+const panelHooks = { ...indirections(rootBody, 'panel'), ...indirections(rootBody, 'grid-cell') };
+
+// Each reading mode's own wiring of the --color-* slots. Light lives in the
+// same :root rule that declares the hooks; the other two are attribute rules
+// the origin's stamp selects.
+const modeWiring = (mode) =>
+  indirections(
+    mode === 'light' ? rootBody : blockBody(styles, `[data-theme="${mode}"]`),
+    'color'
+  );
+
 // hardInlineSizes returns every declaration that pins a box to an absolute
 // inline size, with the value in CSS pixels. Fluid forms are skipped on
 // purpose — a percentage, `auto`, a token, or anything inside min()/max()/
@@ -119,34 +180,47 @@ function hardInlineSizes(css) {
 // which is exactly the class of mistake a palette swap invites.
 test('every reading mode paints panels at a legible contrast', () => {
   const palette = paletteLiterals(styles);
-  // Each mode paints panels on its own raised surface; tiles sit on the page
-  // surface inset into that card.
-  const modes = {
-    light: { raised: 'light-surface-raised', brand: 'brand-orange-on-light', ok: 'status-ok-on-light', muted: 'light-accent', text: 'light-text' },
-    dark: { raised: 'dark-surface-raised', brand: 'brand-orange', ok: 'status-ok', muted: 'dark-accent', text: 'dark-text' },
-    sepia: { raised: 'sepia-surface-raised', brand: 'brand-orange', ok: 'status-ok', muted: 'sepia-accent', text: 'sepia-text' },
+  // Every panel color travels a CHAIN: a --panel-* hook reads a --color-*
+  // slot, and each reading mode wires that slot to a --palette-* literal.
+  // Measuring the literals through a hand-written name map would leave the
+  // wiring itself unmeasured — light's --color-brand could be rewired back to
+  // the raw orange, restoring the 2.37:1 failure this test exists to catch,
+  // and the suite would stay green. So the chain is resolved out of the
+  // stylesheet and the test measures what the page will actually paint.
+  const resolve = (hook, mode) => {
+    const slot = panelHooks[hook];
+    assert.ok(slot, `no --panel-* hook named ${hook}`);
+    if (slot.startsWith('--palette-')) return palette[slot];
+    const wired = modeWiring(mode)[slot];
+    assert.ok(wired, `${mode} never wires ${slot}, so ${hook} resolves to nothing`);
+    return palette[wired];
   };
   // 4.5:1 is WCAG 1.4.3 for body text; 3:1 is 1.4.11 for a non-text
   // indicator, which is all the status dot is — its state is carried by
   // SHAPE as well, so color is the redundant channel and never the only one.
-  const floors = { text: 4.5, muted: 4.5, brand: 4.5, ok: 3 };
-  for (const [mode, slots] of Object.entries(modes)) {
-    const background = palette[`--palette-${slots.raised}`];
+  const floors = {
+    '--panel-text': 4.5,
+    '--panel-muted': 4.5,
+    '--panel-accent': 4.5,
+    '--panel-status-ok': 3,
+  };
+  for (const mode of ['light', 'dark', 'sepia']) {
+    const background = resolve('--panel-surface', mode);
     assert.ok(background, `${mode} has no raised surface to measure against`);
-    for (const [slot, floor] of Object.entries(floors)) {
-      const foreground = palette[`--palette-${slots[slot]}`];
-      assert.ok(foreground, `${mode} palette is missing ${slot}`);
+    for (const [hook, floor] of Object.entries(floors)) {
+      const foreground = resolve(hook, mode);
+      assert.ok(foreground, `${mode} palette is missing ${hook}`);
       const ratio = contrastRatio(foreground, background);
       assert.ok(
         ratio >= floor,
-        `${mode}: ${slot} on the panel surface is ${ratio.toFixed(2)}:1, below ${floor}:1`
+        `${mode}: ${hook} on the panel surface is ${ratio.toFixed(2)}:1, below ${floor}:1`
       );
     }
     // The heatmap ramp is one hue with MONOTONE lightness, and its direction
     // is per-palette: against a light card a ramp that steps brighter walks
     // toward its own background, so the busiest days would read as the
     // emptiest. Direction is derived from the palette, never assumed.
-    const ramp = [0, 1, 2, 3, 4].map((level) => palette[`--palette-${mode}-grid-${level}`]);
+    const ramp = [0, 1, 2, 3, 4].map((level) => resolve(`--grid-cell-${level}`, mode));
     ramp.forEach((value, level) => assert.ok(value, `${mode} ramp is missing level ${level}`));
     const luminances = ramp.map(relativeLuminance);
     const descending = luminances[4] < luminances[0];
@@ -171,7 +245,16 @@ test('every reading mode paints panels at a legible contrast', () => {
 // property is enforced where it is actually decided — in the declarations —
 // instead of being assumed from a wider measurement.
 test('nothing claims a hard inline size wider than the narrowest viewport', () => {
-  for (const [name, source] of Object.entries({ styles })) {
+  // Every component's scoped style is swept alongside the global sheet. The
+  // boss tooltip's own min-inline-size was one of the real defects behind
+  // this pin, and it lived in a component — a styles.css-only scan would have
+  // watched it come straight back.
+  const scanned = { styles, ...componentStyles };
+  assert.ok(
+    Object.keys(scanned).length > 5,
+    'the component sweep found almost nothing; the tree walk is broken'
+  );
+  for (const [name, source] of Object.entries(scanned)) {
     for (const { declaration, px } of hardInlineSizes(source)) {
       assert.ok(
         px <= narrowestViewportPx,

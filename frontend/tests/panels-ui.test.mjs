@@ -158,19 +158,27 @@ test('one refresh serves every tracker, and it belongs to the stack', () => {
   );
   assert.match(refreshAll, /aria-label="Refresh all trackers"/);
   assert.match(refreshAll, /refreshPanels\(\)/);
-  // It rides each panel's own single-flight read rather than a second path.
-  assert.match(panelsSource, /export function refreshPanels\(\): Promise<void>/);
-  assert.match(panelsSource, /liveWatchers\.add\(watcher\)/);
-  assert.match(panelsSource, /liveWatchers\.delete\(watcher\)/);
+  // What refreshPanels actually DOES is proven behaviorally in
+  // panel-refresh.test.mjs — that it reads every mounted panel, that a
+  // stopped panel leaves the set, that an empty page is a no-op, and that a
+  // second press joins the read in flight. Source pins were tried here first
+  // and were wrong for the job: every one of them matches an empty function
+  // body, which is exactly the regression that would matter, because the
+  // button would still render, still go busy, and still settle while
+  // refreshing nothing.
   // In flight it is disabled, announces itself busy, and releases in a
   // finally so a failed read cannot latch it off forever.
   assert.match(refreshAll, /aria-busy=\{busy\}/);
   assert.match(refreshAll, /disabled=\{busy\}/);
   assert.match(refreshAll, /\} finally \{[\s\S]*?busy = false;/);
   assert.match(refreshAll, /@media \(prefers-reduced-motion: reduce\)/);
-  // 44px minimum touch target, from the one shared icon-control rule.
+  // 44px minimum touch target, from the one shared icon-control rule. BOTH
+  // axes are pinned: a rule that bounded only the width would let the shared
+  // control shrink to an unhittable strip and take every icon button on the
+  // page with it.
   assert.match(refreshAll, /class="icon-button"/);
   assert.match(styles, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
+  assert.match(styles, /\.icon-button\s*\{[^}]*block-size:\s*2\.75rem/);
 });
 
 // Five collisions were confirmed on real viewports before the previous fix
@@ -182,7 +190,20 @@ test('one refresh serves every tracker, and it belongs to the stack', () => {
 // class — so the pin is now the absence of fixed chrome, which is a stronger
 // guarantee than any arbitration between overlapping things.
 test('no page chrome floats over the document', () => {
-  for (const [name, source] of Object.entries({ refreshAll, pageHeaderSource, themeMenu, activityBar, bossLog, tokenUsage, shell })) {
+  // styles.css is in this sweep deliberately and is the load-bearing entry:
+  // the page header's own rule lives THERE, not in a component, so a scan of
+  // components alone would let the exact drift this PR is named for return
+  // with the suite green.
+  for (const [name, source] of Object.entries({
+    refreshAll,
+    pageHeaderSource,
+    themeMenu,
+    activityBar,
+    bossLog,
+    tokenUsage,
+    shell,
+    styles
+  })) {
     assert.doesNotMatch(
       source,
       /position:\s*fixed/,
@@ -255,6 +276,28 @@ test('boss log renders the dense fixed-cell grid with tooltips and -- tallies', 
   assert.match(bossLog, /role="tooltip"/);
   assert.match(bossLog, /:hover\s+\.boss-tip/);
   assert.match(bossLog, /:focus-visible\s+\.boss-tip/);
+  // The tooltip is what actually cut the leading digits off the table: a
+  // minimum width inside a ~90px cell, positioned against a distant
+  // ancestor, pushed the grid's scroll width past the card. A viewport-width
+  // threshold cannot catch that — the offending value was 9rem, comfortably
+  // under the 320px floor — so the MECHANISM is pinned instead. The cell is
+  // the containing block, the tip is bounded by the viewport, and it claims
+  // no minimum of its own.
+  assert.match(
+    bossLog,
+    /\.boss-cell\s*\{[^}]*position:\s*relative/,
+    'the cell must be the tip’s containing block, or the tip anchors to the grid'
+  );
+  assert.match(
+    bossLog,
+    /\.boss-tip\s*\{[^}]*max-inline-size:\s*min\(/,
+    'the tip must be bounded by the viewport'
+  );
+  assert.doesNotMatch(
+    bossLog,
+    /\.boss-tip\s*\{[^}]*min-inline-size/,
+    'a tip wider than its cell widens the grid it floats over'
+  );
   assert.match(bossLog, /tabindex="0"/, 'cells must be focusable for the tooltip');
   assert.match(bossLog, /aria-label=\{cellLabel\(boss\)\}/);
   // Data flows only through the shared layer and shell; the sole

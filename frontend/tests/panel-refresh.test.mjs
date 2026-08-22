@@ -9,6 +9,7 @@ import {
   panelClockIntervalMs,
   panelEnvelopeSchema,
   panelRefreshIntervalMs,
+  refreshPanels,
   watchClock,
   watchPanel
 } from '../src/lib/panels.ts';
@@ -350,4 +351,84 @@ test('the exported cadences stay inside their documented bands', () => {
     panelClockIntervalMs >= 10_000 && panelClockIntervalMs <= panelRefreshIntervalMs,
     'the freshness clock must tick at least as often as the panel poll'
   );
+});
+
+/* refreshPanels is the page's single control over every mounted panel. It is
+ * exercised through BEHAVIOR rather than through the shape of its source,
+ * because a source pin matches an empty function body — and an empty body is
+ * precisely the regression that would matter: the button would still render,
+ * still go busy, and still settle, while refreshing nothing at all. */
+test('refreshPanels forces one read across every mounted panel', async () => {
+  const bossHost = fakeHost();
+  const usageHost = fakeHost();
+  const stopBoss = watchPanel('boss-log', () => {}, { host: bossHost });
+  const stopUsage = watchPanel('token-usage', () => {}, { host: usageHost });
+  await flush();
+  assert.equal(bossHost.requests.length, 1, 'the mount read did not happen');
+  assert.equal(usageHost.requests.length, 1, 'the mount read did not happen');
+
+  await refreshPanels();
+
+  assert.equal(bossHost.requests.length, 2, 'the boss panel did not re-read');
+  assert.equal(usageHost.requests.length, 2, 'the usage panel did not re-read');
+  stopBoss();
+  stopUsage();
+});
+
+/* The watcher leaves the live set inside its own stop, so an unmounted panel
+ * is unreachable from the page control rather than merely uninteresting to
+ * it. Without this, a stopped panel would keep answering the page's refresh
+ * and write to state nobody is rendering. */
+test('a stopped panel leaves the refresh set', async () => {
+  const liveHost = fakeHost();
+  const goneHost = fakeHost();
+  const stopLive = watchPanel('boss-log', () => {}, { host: liveHost });
+  const stopGone = watchPanel('token-usage', () => {}, { host: goneHost });
+  await flush();
+  stopGone();
+
+  await refreshPanels();
+
+  assert.equal(liveHost.requests.length, 2, 'the mounted panel did not re-read');
+  assert.equal(goneHost.requests.length, 1, 'an unmounted panel must never be refreshed');
+  stopLive();
+});
+
+/* An empty page is a no-op, never an error: the control exists before any
+ * panel has mounted and a visitor may press it then. */
+test('refreshing with nothing mounted resolves instead of failing', async () => {
+  await assert.doesNotReject(refreshPanels());
+});
+
+/* The cost promise: pressing refresh while a read is already in flight JOINS
+ * that read. A visitor hammering the control costs the origin exactly one
+ * request per panel, and the control still settles when real data lands. */
+test('pressing refresh during a read joins it instead of opening a second', async () => {
+  const host = fakeHost();
+  const stop = watchPanel('boss-log', () => {}, { host });
+  await flush();
+  assert.equal(host.requests.length, 1);
+
+  /* The next read hangs until this test releases it. */
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  host.respond = () => ({
+    ok: true,
+    json: async () => {
+      await gate;
+      return envelopeBody('boss-log', '2026-08-12T00:00:00Z');
+    }
+  });
+
+  const firstPress = refreshPanels();
+  await flush();
+  const secondPress = refreshPanels();
+  await flush();
+
+  assert.equal(host.requests.length, 2, 'the second press opened a second request');
+  release();
+  await Promise.all([firstPress, secondPress]);
+  stop();
 });
