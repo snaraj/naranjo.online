@@ -63,10 +63,13 @@ no version and publishes nothing; the orchestrator proves that class against
 evidence the merge cannot choose, then logs an explicit verdict instead of
 dispatching the publisher. That evidence is threefold: the last successful
 protected-`main` gate head from the Actions record, with every release lock
-required byte-identical to it; a re-classification of the whole
-boundary-to-head gap as documentation; and an anchor-advance walk hard-capped
-at that gated head, so a lock-free artifact commit landing after it cannot be
-stepped over. Nothing
+required byte-identical to it; an anchor-advance walk that begins at the
+recovered release boundary and steps over that same already released push's
+artifact commits, hard-capped at that gated head so a lock-free artifact commit
+landing after it cannot be stepped over; and a re-classification as
+documentation of the gap the walk leaves behind — from the advanced anchor to
+the merged head, not from the boundary, since the prefix the walk consumed is
+genuine artifact history that already released. Nothing
 is relaxed by that: an unchanged artifact has nothing to version, sign, scan,
 or attest, and documentation merges still run the entire PR gate. The merged
 source of an artifact release carries numeric `X.Y.Z` in

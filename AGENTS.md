@@ -107,10 +107,14 @@ Numbered for citation, repo-scoped, none negotiable in code:
     genuine artifact merge as documentation. Three things make the outcome
     trustworthy — the newest earlier successful protected-main gate run, read
     from the Actions record, with all four release locks required
-    byte-identical between it and the merged head; a re-classification of the
-    whole boundary-commit-to-head gap as documentation; and an anchor-advance
-    walk hard-capped at that gated head, so a lock-free artifact commit
-    landing after it cannot be stepped over. Only then is the publisher
+    byte-identical between it and the merged head; an anchor-advance walk that
+    begins at the recovered release boundary and steps over that same already
+    released push's artifact commits, hard-capped at that gated head so a
+    lock-free artifact commit landing after it cannot be stepped over; and a
+    re-classification as documentation of the gap the walk leaves behind —
+    from the advanced anchor to the merged head, NOT from the boundary, since
+    the prefix the walk consumed is genuine artifact history that already
+    released. Only then is the publisher
     skipped, with an explicit logged verdict instead of a dispatch. Removing the release from a documentation-only merge
     weakens nothing: the artifact is unchanged, so there is
     nothing to version, sign, scan, or attest. The classifier has exactly
