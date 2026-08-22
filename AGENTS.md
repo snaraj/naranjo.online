@@ -120,10 +120,17 @@ Numbered for citation, repo-scoped, none negotiable in code:
     boundary past it. It is reachable under the ordinary rebase convention
     of a separate slot commit, not only under exotic histories. The ANCHOR
     denial, from the four-lock comparison against the newest earlier
-    successful protected-main gate run, is NOT sticky: the denied merge's
-    own gate run becomes the next anchor, so the following documentation
-    merge is green. Both are the intended trade — loud and recoverable,
-    never a wrong release — but only the first one persists.
+    successful protected-main gate run, does not persist the same way: it
+    needs no artifact merge to clear, because the denied merge's own gate
+    run becomes a later anchor. It is NOT, however, promised to clear on
+    the very NEXT merge, and an earlier revision of this contract wrongly
+    said it was. Main pushes each get their own concurrency group, so gate
+    runs can complete out of order and `select(.id < $current)` can filter
+    a newer run out of an older orchestration — two racing documentation
+    merges can therefore both deny, reporting the identical anchor. Both
+    denials are the intended trade — loud and recoverable, never a wrong
+    release — but only the boundary denial requires an artifact merge to
+    clear, and neither promises green on any particular next merge.
     Successful main CI publishes that exact SHA as one
     server-locked plain `vX.Y.Z` release. The explicit workflow dispatch after
     a token-created tag selects the publisher definition from protected `main`

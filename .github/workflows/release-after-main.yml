@@ -194,10 +194,16 @@ jobs:
               # particular red is STICKY: it comes from the recovered
               # boundary, so every later documentation merge fails the same
               # way until an artifact merge moves the boundary past it. The
-              # lock-equality denial above is NOT sticky by contrast — the
-              # denied merge's own gate run becomes the next anchor, so the
-              # following documentation merge is green. Loud and
-              # recoverable, never a wrong release, in both cases.
+              # lock-equality denial above does not persist the same way:
+              # it needs no artifact merge to clear, because the denied
+              # merge's own gate run becomes a later anchor. It is NOT
+              # promised to clear on the very NEXT merge though - main
+              # pushes each get their own concurrency group, so gate runs
+              # can complete OUT OF ORDER and `select(.id < $current)` can
+              # filter a newer run out of an older orchestration, leaving
+              # two racing documentation merges both denying with the same
+              # anchor. Loud and recoverable, never a wrong release, in
+              # both cases - but do not read either as a promise of green.
               anchor="${boundary_sha}"
               advancing=false
               while IFS= read -r commit; do
