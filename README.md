@@ -64,6 +64,28 @@ travels only as fast as browsers ship it — so submitting would bind every
 subdomain this site ever adds to the same paid-certificate trap, which is
 exactly why the step still outstanding is a decision and not a formality.
 
+## Local development
+
+```sh
+make run              # build once, then serve the full app at http://localhost:8080
+make run PORT=9090    # override the port
+make dev               # Vite HMR at http://127.0.0.1:5173, proxying /api to a locally
+                        # built backend on the same PORT (default 8080)
+make help               # list every target
+```
+
+`make dev` builds the backend to a real binary and launches it in the
+background under a captured PID, killed by a trap on `EXIT`/`INT`/`TERM` —
+never a backgrounded `go run`, whose child process survives the parent's
+death and orphans the listening port. Both `run` and `dev` bind `127.0.0.1`
+only.
+
+Panels serve their embedded snapshot data egress-free by default; live
+refresh (`PANELS_REFRESH`) stays a production opt-in, never a local default
+(see "Enabling live refresh" below). Media stays disabled unless
+`MEDIA_ENABLED`, `MEDIA_ROOT`, and `MEDIA_MAX_CONCURRENT` are all supplied
+together — unset locally, the app serves with media off.
+
 ## Development
 
 ```sh
