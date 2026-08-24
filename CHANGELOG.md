@@ -7,6 +7,38 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.36] - 2026-08-24
+
+### Changed
+
+- Recent-commits feed rows are real navigation. The repo name links to the
+  repository, and — when a commit's own subject carries the trailing
+  `(#N)` a squash merge writes, the way every merge in this very changelog
+  does — the title links to that pull request. Every href is CONSTRUCTED
+  from a validated field, never interpolated from the payload's raw string:
+  the repo slug against the host's own character-set pattern, the PR number
+  as a clean positive integer anchored to the end of the subject. There is
+  no commit SHA in the `vcs-activity` payload, so a commit whose subject
+  resolves no PR renders its title as plain text rather than link to an
+  address nobody served. Two cells in every row are controls now, not
+  decoration, so the row grew from 1.125rem to the 44px touch floor every
+  other control on the page clears (#157).
+- The header nav row drops its idle underline. Hover adds the underline back
+  plus the brand ink, and keyboard focus keeps the exact site-wide ring
+  untouched; a nav link is told apart by POSITION (the one row directly
+  under the page's name) and ROLE (`<nav aria-label="Page sections">`)
+  before color enters into it at all (#157).
+
+### Fixed
+
+- The project gallery's placeholder frame rendered nearly viewport-tall at
+  the page's default column width — a 16:9 ratio alone has no ceiling on a
+  wide column, so 60rem of column asked for a 33.75rem frame. A second,
+  independent token, `--card-media-max-block-size` (20rem), caps the
+  reserved block-size; a narrow column still gets the full photograph
+  proportion below that cap, and `object-fit: cover` crops the picture to
+  fill the frame above it (#157).
+
 ## [0.1.35] - 2026-08-24
 
 ### Fixed
