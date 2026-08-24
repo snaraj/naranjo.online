@@ -521,6 +521,24 @@ func TestDataRootRefusesCryptographicFaults(t *testing.T) {
 	}
 }
 
+// TestDataRootPanelIDNamesAShippedPanel keeps the data-root path from
+// failing SILENTLY. Both the loop and the live-refresh ownership rule
+// (2026-08-24 review finding 8) resolve one panel by id, and every guard on
+// that path treats an unknown id as "this registry serves no such panel and
+// there is nothing to do" — correct for a synthetic registry, and invisible
+// for the shipped one. Renaming the builtin panel without renaming the
+// constant would therefore disable the sealed feed and its ownership rule at
+// once, with no error anywhere.
+func TestDataRootPanelIDNamesAShippedPanel(t *testing.T) {
+	t.Parallel()
+	for _, definition := range builtinPanels {
+		if definition.id == dataRootPanelID {
+			return
+		}
+	}
+	t.Fatalf("no shipped panel carries the id %q, so the sealed data root and its ownership rule would silently do nothing", dataRootPanelID)
+}
+
 // TestSealedSeriesCapParity pins this package's copy of the pipeline's
 // single payload ceiling against the shared constant the producer half
 // enforces. internal/panels cannot import internal/seal — the zero-egress
