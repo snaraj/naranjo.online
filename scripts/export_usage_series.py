@@ -134,6 +134,16 @@ MAX_SEALED_BYTES = 128 * 1024
 SEAL_OVERHEAD = 36
 MAX_PLAINTEXT_BYTES = MAX_SEALED_BYTES - SEAL_OVERHEAD
 
+# One merge source is a small JSON document — the biggest admissible one is
+# well under a hundred kilobytes — so it is read under an explicit bound
+# rather than handed whole to json.load (2026-08-24 round-3 review, finding
+# 10). An unbounded parse of an operator-configured path is a producer that
+# can be stopped by pointing it at a large file.
+MAX_MERGE_BYTES = 1 << 20
+
+# The instant form both ends of this pipeline speak: RFC 3339, UTC, seconds.
+INSTANT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
 # Compact separators: no spaces after the item and key separators.
 COMPACT_SEPARATORS = (",", ":")
 
@@ -150,14 +160,13 @@ def read_category_records(root, counters):
     the summed categories to equal the capture tool's totals day for day.
     """
     seen = set()
-    for path in capture.record_paths(root):
+    for path in capture.record_paths(root, counters):
         counters["files"] += 1
         handle = capture.open_record_file(path, counters)
         if handle is None:
             continue
         with handle:
-            for line in handle:
-                counters["lines"] += 1
+            for line in capture.bounded_lines(handle, counters):
                 reduced = reduce_category_line(line, seen, counters)
                 if reduced is not None:
                     counters["counted"] += 1
@@ -189,7 +198,7 @@ def reduce_category_line(line, seen, counters):
         if identity in seen:
             counters["duplicates"] += 1
             return None
-        seen.add(identity)
+        capture.remember_identity(identity, seen)
     day = capture.utc_day(stamp)
     if day is None:
         return None
@@ -295,23 +304,73 @@ def valid_source_key(key):
     return True
 
 
-def load_merge_source(path):
-    """Load and structurally validate one merged source file.
+def read_bounded_json(path):
+    """Read one small JSON document under an explicit byte bound.
 
-    The shape is the capture tool's stdout — {"series": ..., "derived": ...}
-    — optionally extended with "categories" and "windows". Every section is
-    re-checked here exactly as the origin will check it, and the caller runs
-    the emission guard over the result, so a hostile file cannot ride
-    through under a friendly key.
+    One byte PAST the bound is read so the ceiling itself is admitted and
+    anything larger refuses — the same edge the sealed-payload cap uses. The
+    parse is guarded against a recursion blow-up too: depth is a resource,
+    and a document nobody can parse without exhausting the stack is refused
+    like any other oversized input (2026-08-24 round-3 review, finding 10).
     """
     with pathlib.Path(path).open("r", encoding="utf-8") as handle:
-        document = json.load(handle)
+        text = handle.read(MAX_MERGE_BYTES + 1)
+    if len(text) > MAX_MERGE_BYTES:
+        raise capture.CaptureError(
+            "a merge source is larger than the %d byte bound" % MAX_MERGE_BYTES
+        )
+    try:
+        return json.loads(text)
+    except (ValueError, RecursionError):
+        raise capture.CaptureError("a merge source is not a parsable JSON document")
+
+
+def admit_capture_instant(value, now):
+    """Parse one merged source's own capture instant, or refuse.
+
+    REQUIRED, not optional (2026-08-24 round-3 review, finding 5). A merged
+    source is produced by a separate capture run and can be arbitrarily older
+    than the export that carries it; without its own instant, the combined
+    document stamped everything with the export's `now` and relabelled stale
+    data as current under one envelope. It may not be in the future either:
+    the origin refuses a section captured after the document naming it.
+    """
+    if not isinstance(value, str):
+        raise capture.CaptureError("a merge source carries no capture instant")
+    try:
+        captured = datetime.datetime.strptime(value, INSTANT_FORMAT)
+    except ValueError:
+        raise capture.CaptureError("a merge source capture instant is malformed")
+    captured = captured.replace(tzinfo=datetime.timezone.utc)
+    if captured > now:
+        raise capture.CaptureError("a merge source claims a capture instant in the future")
+    return captured
+
+
+def load_merge_source(path, now):
+    """Load and structurally validate one merged source file.
+
+    The shape is the capture tool's stdout — {"generatedAt": ..., "series":
+    ..., "derived": ...} — extended with "categories" and "windows". Every
+    section is re-checked here exactly as the origin will check it, and the
+    caller runs the emission guard over the result, so a hostile file cannot
+    ride through under a friendly key.
+
+    `windows` and `derived` are REQUIRED and COMPLETE, matching the origin
+    (2026-08-24 round-3 review, finding 5): an omitted section used to leave
+    the release-time figure rendered beside a runtime series under one
+    envelope instant, which no single `generatedAt` can describe honestly.
+
+    Returns (section, capture instant).
+    """
+    document = read_bounded_json(path)
     if not isinstance(document, dict):
         raise capture.CaptureError("a merge source must be a JSON object")
-    allowed = {"series", "derived", "categories", "windows"}
+    allowed = {"generatedAt", "series", "derived", "categories", "windows"}
     unknown = set(document) - allowed
     if unknown:
         raise capture.CaptureError("a merge source carries an unknown section")
+    captured = admit_capture_instant(document.get("generatedAt"), now)
     series = document.get("series")
     if not isinstance(series, dict) or series.get("recorded") is not True:
         raise capture.CaptureError("a merge source series must declare recorded provenance")
@@ -359,36 +418,39 @@ def load_merge_source(path):
         assert_partition(section["series"], admitted)
         section["categories"] = admitted
     windows = document.get("windows")
-    if windows is not None:
-        if not isinstance(windows, dict) or set(windows) - {WINDOW_TODAY, WINDOW_WEEK}:
-            raise capture.CaptureError("a merge source window is outside the closed vocabulary")
-        for window in windows.values():
-            if not isinstance(window, dict) or set(window) != {"input", "output"}:
-                raise capture.CaptureError("a merge source window is malformed")
-            if not all(
-                isinstance(value, int) and not isinstance(value, bool) and value >= 0
-                for value in window.values()
-            ):
-                raise capture.CaptureError("a merge source window carries malformed counts")
-        section["windows"] = windows
-    derived = document.get("derived")
-    if derived is not None:
-        if not isinstance(derived, dict) or set(derived) - {
-            capture.STAT_PEAK_DAY,
-            capture.STAT_CURRENT_STREAK,
-            capture.STAT_LONGEST_STREAK,
-        }:
-            raise capture.CaptureError("a merge source derived key is outside the closed vocabulary")
+    if not isinstance(windows, dict) or set(windows) != {WINDOW_TODAY, WINDOW_WEEK}:
+        raise capture.CaptureError(
+            "a merge source must carry the complete window vocabulary"
+        )
+    for window in windows.values():
+        if not isinstance(window, dict) or set(window) != {"input", "output"}:
+            raise capture.CaptureError("a merge source window is malformed")
         if not all(
             isinstance(value, int) and not isinstance(value, bool) and value >= 0
-            for value in derived.values()
+            for value in window.values()
         ):
-            raise capture.CaptureError("a merge source derived figure is malformed")
-        section["derived"] = derived
-    return section
+            raise capture.CaptureError("a merge source window carries malformed counts")
+    section["windows"] = windows
+    derived = document.get("derived")
+    derived_keys = {
+        capture.STAT_PEAK_DAY,
+        capture.STAT_CURRENT_STREAK,
+        capture.STAT_LONGEST_STREAK,
+    }
+    if not isinstance(derived, dict) or set(derived) != derived_keys:
+        raise capture.CaptureError(
+            "a merge source must carry the complete derived vocabulary"
+        )
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        for value in derived.values()
+    ):
+        raise capture.CaptureError("a merge source derived figure is malformed")
+    section["derived"] = derived
+    return section, captured
 
 
-def export(root, source_key, merge_files, today):
+def export(root, source_key, merge_files, now):
     """Walk, merge, guard, and return (sources payload, counters)."""
     counters = capture.new_counters()
     series, categories = category_series(read_category_records(root, counters))
@@ -398,14 +460,16 @@ def export(root, source_key, merge_files, today):
         source_key: {
             "series": series,
             "categories": categories,
-            "windows": windows_from(series, categories, today),
+            "windows": windows_from(series, categories, now.date()),
             "derived": derived,
         }
     }
+    # The walked tree is captured by THIS run, so its instant is this run's.
+    captured = {source_key: now}
     for key, path in merge_files:
         if key in sources:
             raise capture.CaptureError("two sources claim one key")
-        sources[key] = load_merge_source(path)
+        sources[key], captured[key] = load_merge_source(path, now)
     # THE guard — the capture tool's own, not a copy — over the complete
     # payload: nothing but calendar dates, non-negative integers, and the
     # declared recorded flags survives to the emission. Every dictionary key
@@ -415,6 +479,14 @@ def export(root, source_key, merge_files, today):
     # its embedded snapshot labels) — nothing read from a transcript or a
     # merge file can mint a key.
     capture.assert_only_dates_and_integers(sources, "sources", extra_keys=frozenset(sources))
+    # capturedAt is attached AFTER the guard, exactly as the document's own
+    # generatedAt is: the guard admits calendar dates and integers, and these
+    # are INSTANTS. Attaching them here also means nothing read from a
+    # transcript or a merge file can influence them — the walked source's is
+    # this run's clock, and a merged source's is the value its own capture
+    # stamped and this program already validated.
+    for key, instant in captured.items():
+        sources[key]["capturedAt"] = instant.strftime(INSTANT_FORMAT)
     return sources, counters
 
 
@@ -462,9 +534,9 @@ def main(argv=None):
             print("merge sources take the form KEY=FILE with a label-shaped key", file=sys.stderr)
             return 2
         merge_files.append((key, pathlib.Path(path).expanduser()))
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
     try:
-        sources, counters = export(root, arguments.source, merge_files, now.date())
+        sources, counters = export(root, arguments.source, merge_files, now)
     except capture.CaptureError as error:
         print(str(error), file=sys.stderr)
         return 1
@@ -474,10 +546,11 @@ def main(argv=None):
         print("a merge source file could not be read", file=sys.stderr)
         return 1
     print(
-        "files=%d unreadable=%d lines=%d counted=%d duplicates=%d sources=%d"
+        "files=%d unreadable=%d symlinks=%d lines=%d counted=%d duplicates=%d sources=%d"
         % (
             counters.get("files", 0),
             counters.get("unreadable", 0),
+            counters.get("symlinks", 0),
             counters.get("lines", 0),
             counters.get("counted", 0),
             counters.get("duplicates", 0),
@@ -487,7 +560,7 @@ def main(argv=None):
     )
     document = {
         "schema": SCHEMA,
-        "generatedAt": now.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generatedAt": now.strftime(INSTANT_FORMAT),
         "sources": sources,
     }
     # The emitted text INCLUDING its terminating newline is what the sealer

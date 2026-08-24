@@ -219,6 +219,35 @@ RECORD_SUFFIX = ".jsonl"
 # origin will not serve is worse than no snapshot at all.
 MAX_SERIES_DAYS = 732
 
+# THE upper bound on every count this pipeline emits, and it is ONE number
+# three languages agree on (2026-08-24 round-3 review, finding 9). It mirrors
+# maxCountValue in internal/panels/types.go and Number.isSafeInteger in
+# frontend/src/lib/token-usage.ts; CountBoundParityTest pins all three.
+#
+# Python integers are arbitrary precision, so nothing here overflows — which
+# is precisely the problem the bound solves. An unbounded figure emitted here
+# is a figure the Go boundary has to reason about in int64 (where three
+# authenticated, non-negative category values summed to zero by wrapping) and
+# the browser has to render in a float64 (where it silently rounds). Refusing
+# it at the producer means the three stages cannot disagree about what a
+# count is.
+MAX_COUNT = 2**53 - 1
+
+# RESOURCE BOUNDS ON THE RAW WALK (2026-08-24 round-3 review, finding 10).
+# Everything below is checked BEFORE the work it bounds, because the failure
+# this prevents is the scheduled producer exhausting the workstation on a tree
+# it was pointed at — a single unterminated line, a pathological directory
+# depth, or an unbounded de-duplication set will kill the run long before the
+# privacy guard at the far end ever gets to look at the emission. The numbers
+# are generous against a real transcript tree and finite against a hostile
+# one; every refusal names the BOUND and never the path that hit it.
+MAX_RECORD_FILES = 20_000
+MAX_TREE_DEPTH = 16
+MAX_RECORD_LINE_BYTES = 4 << 20
+MAX_RECORD_LINES = 5_000_000
+MAX_RECORD_BYTES = 2 << 30
+MAX_DEDUP_IDENTITIES = 2_000_000
+
 # The stat keys a daily series defines on its own — the same four
 # internal/panels/types.go lists, minus the window total, which is a property
 # of a fetch window rather than of a recorded series.
@@ -245,22 +274,117 @@ def new_counters():
         "counted": 0,
         "duplicates": 0,
         "restarts": 0,
+        # Bytes actually read, against MAX_RECORD_BYTES, and entries skipped
+        # for being symbolic links. Both are diagnostics AND bounds: the walk
+        # refuses past the byte ceiling, and a skipped link is something an
+        # operator should be able to see happened without being told where
+        # (2026-08-24 round-3 review, finding 10).
+        "bytes": 0,
+        "symlinks": 0,
     }
 
 
-def record_paths(root):
+def record_paths(root, counters=None):
     """Every journal file under root, in one deterministic order.
 
     Sorted because two runs over the same tree must produce the same series,
     and because the running-totals shape reads each file as a SEQUENCE — an
     order that varied by filesystem would make the walk's arithmetic vary
     with it.
+
+    ROOTED, NO-FOLLOW, AND BOUNDED (2026-08-24 round-3 review, finding 10).
+    The previous walk was `rglob` plus `is_file()`, which follows symbolic
+    links — `is_file()` answers about the TARGET — so a link inside the
+    transcript tree could point the producer at any file on the machine, and
+    a link to a parent directory could make the walk unbounded. This is an
+    explicit traversal instead:
+
+      * a symbolic link is SKIPPED, leaf or directory alike, and tallied;
+      * every admitted file is re-checked to resolve INSIDE the root, so
+        containment does not rest on the traversal alone;
+      * depth and file count are bounded before descending or admitting;
+      * an unreadable directory is tallied and skipped, never named.
     """
-    return sorted(
-        path
-        for path in pathlib.Path(root).rglob("*" + RECORD_SUFFIX)
-        if path.is_file()
-    )
+    counters = new_counters() if counters is None else counters
+    base = pathlib.Path(root)
+    try:
+        contained_in = base.resolve()
+    except OSError:
+        raise CaptureError("the transcript root cannot be resolved")
+    admitted = []
+    pending = [(base, 0)]
+    while pending:
+        directory, depth = pending.pop()
+        if depth > MAX_TREE_DEPTH:
+            raise CaptureError(
+                "the transcript tree is deeper than the %d level bound" % MAX_TREE_DEPTH
+            )
+        try:
+            entries = list(directory.iterdir())
+        except OSError:
+            # Counted, never named: see the module docstring.
+            counters["unreadable"] += 1
+            continue
+        for entry in entries:
+            if entry.is_symlink():
+                counters["symlinks"] += 1
+                continue
+            try:
+                if entry.is_dir():
+                    pending.append((entry, depth + 1))
+                    continue
+                if not entry.is_file() or entry.name[-len(RECORD_SUFFIX):] != RECORD_SUFFIX:
+                    continue
+                if not entry.resolve().is_relative_to(contained_in):
+                    counters["symlinks"] += 1
+                    continue
+            except OSError:
+                counters["unreadable"] += 1
+                continue
+            admitted.append(entry)
+            if len(admitted) > MAX_RECORD_FILES:
+                raise CaptureError(
+                    "the transcript tree holds more than the %d file bound" % MAX_RECORD_FILES
+                )
+    return sorted(admitted)
+
+
+def bounded_lines(handle, counters):
+    """Yield one journal file's lines under the line, count, and byte bounds.
+
+    `readline` is given an explicit limit so an unterminated multi-gigabyte
+    line is refused BEFORE it is read into memory — iterating the handle
+    would have read it first and refused afterwards, which is the failure
+    mode, not the fix (2026-08-24 round-3 review, finding 10).
+    """
+    while True:
+        line = handle.readline(MAX_RECORD_LINE_BYTES + 1)
+        if not line:
+            return
+        if len(line) > MAX_RECORD_LINE_BYTES:
+            raise CaptureError(
+                "a transcript line is longer than the %d byte bound" % MAX_RECORD_LINE_BYTES
+            )
+        counters["lines"] += 1
+        if counters["lines"] > MAX_RECORD_LINES:
+            raise CaptureError(
+                "the transcript tree holds more than the %d line bound" % MAX_RECORD_LINES
+            )
+        counters["bytes"] += len(line)
+        if counters["bytes"] > MAX_RECORD_BYTES:
+            raise CaptureError(
+                "the transcript tree is larger than the %d byte bound" % MAX_RECORD_BYTES
+            )
+        yield line
+
+
+def remember_identity(identity, seen):
+    """Add one de-duplication identity under the set's own size bound."""
+    if len(seen) >= MAX_DEDUP_IDENTITIES:
+        raise CaptureError(
+            "the walk holds more than the %d record identity bound" % MAX_DEDUP_IDENTITIES
+        )
+    seen.add(identity)
 
 
 def open_record_file(path, counters):
@@ -282,14 +406,13 @@ def read_records(root, counters):
     `counters`, never named.
     """
     seen = set()
-    for path in record_paths(root):
+    for path in record_paths(root, counters):
         counters["files"] += 1
         handle = open_record_file(path, counters)
         if handle is None:
             continue
         with handle:
-            for line in handle:
-                counters["lines"] += 1
+            for line in bounded_lines(handle, counters):
                 reduced = reduce_line(line, seen, counters)
                 if reduced is not None:
                     counters["counted"] += 1
@@ -311,15 +434,14 @@ def read_running_totals(root, counters):
     diagnostics say how much of the walk was replay and how much was a
     restart, without naming a single file.
     """
-    for path in record_paths(root):
+    for path in record_paths(root, counters):
         counters["files"] += 1
         handle = open_record_file(path, counters)
         if handle is None:
             continue
         previous = 0
         with handle:
-            for line in handle:
-                counters["lines"] += 1
+            for line in bounded_lines(handle, counters):
                 reduced = reduce_running_line(line)
                 if reduced is None:
                     continue
@@ -373,7 +495,7 @@ def reduce_line(line, seen, counters):
         if identity in seen:
             counters["duplicates"] += 1
             return None
-        seen.add(identity)
+        remember_identity(identity, seen)
     day = utc_day(stamp)
     if day is None:
         return None
@@ -553,7 +675,9 @@ def assert_only_dates_and_integers(value, where="emission", extra_keys=frozenset
       additionally admits only against its embedded snapshot);
     * a string must be a REAL calendar date (exact shape, real calendar, not
       one byte more);
-    * an integer must be non-negative — every emitted figure is a count;
+    * an integer must be non-negative AND within MAX_COUNT — every emitted
+      figure is a count, and one the Go boundary and the browser can both
+      represent exactly (2026-08-24 round-3 review, finding 9);
     * a boolean is admitted only under the one field that declares one, the
       series' `recorded` flag.
 
@@ -570,6 +694,8 @@ def _assert_emission(value, where, extra_keys, allow_bool):
     if isinstance(value, int):
         if value < 0:
             raise CaptureError("%s carries a negative integer" % where)
+        if value > MAX_COUNT:
+            raise CaptureError("%s carries an integer above the shared count bound" % where)
         return
     if isinstance(value, str):
         if valid_calendar_day(value):
@@ -702,10 +828,12 @@ def main(argv=None):
         print(str(error), file=sys.stderr)
         return 1
     print(
-        "files=%d unreadable=%d lines=%d counted=%d duplicates=%d restarts=%d days=%d"
+        "files=%d unreadable=%d symlinks=%d lines=%d counted=%d duplicates=%d "
+        "restarts=%d days=%d"
         % (
             counters.get("files", 0),
             counters.get("unreadable", 0),
+            counters.get("symlinks", 0),
             counters.get("lines", 0),
             counters.get("counted", 0),
             counters.get("duplicates", 0),
@@ -714,17 +842,28 @@ def main(argv=None):
         ),
         file=sys.stderr,
     )
-    if arguments.snapshot is None:
-        json.dump({"series": series, "derived": derived}, sys.stdout, indent=2)
-        sys.stdout.write("\n")
-        return 0
-    with open(arguments.snapshot, "r", encoding="utf-8") as handle:
-        document = json.load(handle)
     generated_at = (
         datetime.datetime.now(datetime.timezone.utc)
         .replace(microsecond=0)
         .strftime("%Y-%m-%dT%H:%M:%SZ")
     )
+    if arguments.snapshot is None:
+        # generatedAt is attached AFTER the guard, exactly as the snapshot
+        # path attaches it below: the guard admits calendar dates and
+        # integers, and this is an INSTANT. It is required rather than
+        # decorative — export_usage_series.py reads this document as a merge
+        # source and refuses one that cannot say when it was captured, because
+        # a second tool's series can be arbitrarily older than the export
+        # carrying it (2026-08-24 round-3 review, finding 5).
+        json.dump(
+            {"generatedAt": generated_at, "series": series, "derived": derived},
+            sys.stdout,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+        return 0
+    with open(arguments.snapshot, "r", encoding="utf-8") as handle:
+        document = json.load(handle)
     try:
         spliced = splice(document, arguments.source, series, derived, generated_at)
     except CaptureError as error:

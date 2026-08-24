@@ -93,9 +93,19 @@ def write_tree(root, files):
             handle.write("\n".join(lines) + "\n")
 
 
+# The instant every merge fixture claims it was captured at, and the clock
+# the tests hand the loader. Both are required now: a merge source without
+# its own capture instant is refused, because a second tool's series can be
+# arbitrarily older than the export carrying it (2026-08-24 round-3 review,
+# finding 5).
+MERGE_CAPTURED_AT = "2026-08-11T09:00:00Z"
+MERGE_NOW = datetime.datetime(2026, 8, 11, 10, 0, 0, tzinfo=datetime.timezone.utc)
+
+
 def merge_document(**overrides):
     """A well-formed two-day merge source in the capture tool's stdout shape."""
     document = {
+        "generatedAt": MERGE_CAPTURED_AT,
         "series": {"startDate": "2026-08-10", "totals": [30, 10], "recorded": True},
         "derived": {"peak-day": 30, "current-streak": 2, "longest-streak": 2},
         "categories": {
@@ -110,6 +120,34 @@ def merge_document(**overrides):
     }
     document.update(overrides)
     return document
+
+
+def merge_section(days, value):
+    """A COMPLETE merge source at a given span and per-category magnitude.
+
+    Complete because a section is now whole or refused: its own capture
+    instant, the full category vocabulary partitioning the totals, the full
+    window vocabulary, and the full derived vocabulary (2026-08-24 round-3
+    review, finding 5).
+    """
+    return {
+        "generatedAt": MERGE_CAPTURED_AT,
+        "series": {
+            "startDate": "2024-01-01",
+            "totals": [value * len(capture.CATEGORY_KEYS)] * days,
+            "recorded": True,
+        },
+        "categories": {key: [value] * days for key in capture.CATEGORY_KEYS},
+        "windows": {
+            "today": {"input": value, "output": value},
+            "week": {"input": value, "output": value},
+        },
+        "derived": {
+            "peak-day": value * len(capture.CATEGORY_KEYS),
+            "current-streak": days,
+            "longest-streak": days,
+        },
+    }
 
 
 def collect_strings(value, into):
@@ -526,22 +564,70 @@ class MergeSourceTest(unittest.TestCase):
             path = os.path.join(scratch, "merge.json")
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump(document, handle)
-            return export_usage_series.load_merge_source(path)
+            return export_usage_series.load_merge_source(path, MERGE_NOW)
 
     def test_well_formed_document_is_admitted_in_full(self):
-        section = self.load(merge_document())
+        section, captured = self.load(merge_document())
         self.assertEqual(section["series"]["totals"], [30, 10])
         self.assertEqual(section["categories"]["cache-read"], [15, 3])
         self.assertEqual(section["windows"]["today"], {"input": 7, "output": 3})
         self.assertEqual(section["derived"]["peak-day"], 30)
+        # The source's OWN capture instant travels with it, and it is the
+        # file's, never the export run's (2026-08-24 round-3 finding 5).
+        self.assertEqual(captured.strftime(export_usage_series.INSTANT_FORMAT),
+                         MERGE_CAPTURED_AT)
 
-    def test_series_and_derived_alone_are_enough(self):
-        document = merge_document()
-        del document["categories"]
-        del document["windows"]
-        section = self.load(document)
-        self.assertNotIn("categories", section)
-        self.assertNotIn("windows", section)
+    def test_the_complete_window_and_derived_sets_are_required(self):
+        # This test asserts the OPPOSITE of what it asserted before the
+        # 2026-08-24 round-3 review. `windows` and `derived` used to be
+        # optional per source, and an omitted section left the release-time
+        # figure rendered beside a runtime series under one envelope instant
+        # — release-age and runtime-age numbers described by one
+        # `generatedAt`, which is the mixing finding 5 named. A section is a
+        # WHOLE section now, and the origin enforces the same rule.
+        for name, mutate in {
+            "windows omitted": lambda d: d.pop("windows"),
+            "derived omitted": lambda d: d.pop("derived"),
+            "a window omitted": lambda d: d["windows"].pop("week"),
+            "a derived figure omitted": lambda d: d["derived"].pop("longest-streak"),
+        }.items():
+            with self.subTest(name):
+                document = merge_document()
+                mutate(document)
+                with self.assertRaises(CaptureError):
+                    self.load(document)
+
+    def test_a_source_without_its_own_capture_instant_is_refused(self):
+        # The whole point of finding 5: a merged source is captured by a
+        # separate run and can be arbitrarily older than the export carrying
+        # it. Without its own instant, the combined document stamped
+        # everything with the export's `now` and relabelled stale data as
+        # current.
+        for name, document in {
+            "absent": merge_document(),
+            "malformed": merge_document(generatedAt="yesterday"),
+            "not a string": merge_document(generatedAt=17),
+            "in the future": merge_document(generatedAt="2026-08-11T10:00:01Z"),
+        }.items():
+            if name == "absent":
+                del document["generatedAt"]
+            with self.subTest(name):
+                with self.assertRaises(CaptureError):
+                    self.load(document)
+
+    def test_a_merge_source_past_the_byte_bound_is_refused_before_parsing(self):
+        # 2026-08-24 round-3 finding 10: the merge input was handed whole to
+        # json.load, so an operator-configured path to a large file was an
+        # unbounded parse in the scheduled producer. The bound is checked on
+        # the READ, before any parse.
+        with tempfile.TemporaryDirectory() as scratch:
+            path = os.path.join(scratch, "huge.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("[" + "0," * export_usage_series.MAX_MERGE_BYTES + "0]")
+            with self.assertRaises(CaptureError) as caught:
+                export_usage_series.load_merge_source(path, MERGE_NOW)
+            self.assertIn("byte bound", str(caught.exception))
+            self.assertNotIn(scratch, str(caught.exception))
 
     def test_hostile_documents_are_refused(self):
         cases = {
@@ -636,7 +722,7 @@ class ExportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             self.tree(root)
             sources, counters = export_usage_series.export(
-                root, "alpha", [], datetime.date(2026, 8, 11)
+                root, "alpha", [], MERGE_NOW
             )
         self.assertEqual(set(sources), {"alpha"})
         section = sources["alpha"]
@@ -645,9 +731,20 @@ class ExportTest(unittest.TestCase):
         self.assertEqual(section["windows"]["today"], {"input": 0, "output": 3})
         self.assertEqual(section["derived"]["current-streak"], 2)
         self.assertEqual(counters["counted"], 2)
+        # capturedAt is attached AFTER the guard, exactly like the document's
+        # own generatedAt, because it is an INSTANT and the guard admits only
+        # calendar dates and integers. It must be this run's clock — nothing
+        # read from a transcript can influence it (2026-08-24 round-3 finding
+        # 5) — and it is excluded from the shape sweep below for that reason.
+        self.assertEqual(
+            section["capturedAt"],
+            MERGE_NOW.strftime(export_usage_series.INSTANT_FORMAT),
+        )
         strings = []
         collect_strings(sources, strings)
         for value in strings:
+            if value == section["capturedAt"]:
+                continue
             self.assertTrue(
                 capture.DAY_PATTERN.match(value) or capture.KEY_PATTERN.match(value),
                 value,
@@ -672,7 +769,7 @@ class ExportTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as root:
                 self.tree(root)
                 sources, _counters = export_usage_series.export(
-                    root, "alpha", [], datetime.date(2026, 8, 11)
+                    root, "alpha", [], MERGE_NOW
                 )
         finally:
             capture.assert_only_dates_and_integers = original
@@ -687,7 +784,7 @@ class ExportTest(unittest.TestCase):
                 json.dump(merge_document(), handle)
             try:
                 sources, _counters = export_usage_series.export(
-                    root, "alpha", [("beta", merge_path)], datetime.date(2026, 8, 11)
+                    root, "alpha", [("beta", merge_path)], MERGE_NOW
                 )
             finally:
                 os.remove(merge_path)
@@ -702,7 +799,7 @@ class ExportTest(unittest.TestCase):
                 json.dump(merge_document(), handle)
             with self.assertRaises(CaptureError):
                 export_usage_series.export(
-                    root, "alpha", [("alpha", merge_path)], datetime.date(2026, 8, 11)
+                    root, "alpha", [("alpha", merge_path)], MERGE_NOW
                 )
 
 
@@ -736,7 +833,7 @@ class MainTest(unittest.TestCase):
         # Diagnostics are counts, never paths.
         self.assertRegex(
             stderr.strip(),
-            r"^files=\d+ unreadable=\d+ lines=\d+ counted=\d+ duplicates=\d+ sources=\d+$",
+            r"^files=\d+ unreadable=\d+ symlinks=\d+ lines=\d+ counted=\d+ duplicates=\d+ sources=\d+$",
         )
 
     def test_prints_to_stdout_when_no_out_file_is_given(self):
@@ -785,17 +882,12 @@ class MainTest(unittest.TestCase):
         # very large daily values build a real over-ceiling document; no
         # constant is patched, so the shipped number is the one under test.
         days = capture.MAX_SERIES_DAYS
-        value = 10**16 - 1
-        section = {
-            "series": {
-                "startDate": "2024-01-01",
-                "totals": [value * 5] * days,
-                "recorded": True,
-            },
-            "categories": {
-                key: [value] * days for key in capture.CATEGORY_KEYS
-            },
-        }
+        # The largest per-category value whose five-way day total still fits
+        # the shared count bound (2026-08-24 round-3 finding 9): sixteen
+        # digits, and admissible, so what this test exercises is the BYTE
+        # ceiling and not the numeric one.
+        value = capture.MAX_COUNT // 5
+        section = merge_section(days, value)
         with tempfile.TemporaryDirectory() as scratch:
             root = os.path.join(scratch, "transcripts")
             self.tree(root)
@@ -824,16 +916,7 @@ class MainTest(unittest.TestCase):
         # the guard is a real edge rather than a blanket refusal.
         days = capture.MAX_SERIES_DAYS
         value = 10**9 - 1
-        section = {
-            "series": {
-                "startDate": "2024-01-01",
-                "totals": [value * 5] * days,
-                "recorded": True,
-            },
-            "categories": {
-                key: [value] * days for key in capture.CATEGORY_KEYS
-            },
-        }
+        section = merge_section(days, value)
         with tempfile.TemporaryDirectory() as scratch:
             root = os.path.join(scratch, "transcripts")
             self.tree(root)

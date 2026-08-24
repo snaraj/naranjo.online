@@ -762,14 +762,74 @@ class CapParityTest(unittest.TestCase):
         self.assertIsNotNone(match, "internal/seal/types.go carries no MaxSealedBytes")
         return int(match.group(1)) << int(match.group(2))
 
-    def test_the_canonical_cap_is_the_measured_ceiling(self):
+    def structural_maximum(self, digits):
+        """Seal-sized bytes of the largest document the origin can admit.
+
+        MEASURED here rather than quoted from a comment (2026-08-24 round-3
+        review, which found the quoted figure off by the mandatory trailing
+        newline). The maximum is one document covering every label the
+        SHIPPED snapshot carries — a document can never name another — each
+        at the series-day bound with the complete category vocabulary and the
+        complete window and derived sets, emitted in the producer's own
+        compact form with its terminating newline, plus the AEAD overhead.
+        Re-deriving it from the shipped constants means the number cannot go
+        stale behind a document-shape change again.
+        """
+        snapshot = json.loads(
+            (self.REPO_ROOT / "internal/panels/snapshots/token-usage.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        labels = [source["label"] for source in snapshot["data"]["sources"]]
+        self.assertGreater(len(labels), 0, "the shipped snapshot carries no sources")
+        instant = "2026-08-24T12:00:00Z"
+        value = 10**digits - 1
+        total = value * len(capture_usage_series.CATEGORY_KEYS)
+        days = capture_usage_series.MAX_SERIES_DAYS
+        document = {
+            "schema": "usage-series/v1",
+            "generatedAt": instant,
+            "sources": {
+                label: {
+                    "capturedAt": instant,
+                    "series": {
+                        "startDate": "2024-01-01",
+                        "totals": [total] * days,
+                        "recorded": True,
+                    },
+                    "categories": {
+                        key: [value] * days for key in capture_usage_series.CATEGORY_KEYS
+                    },
+                    "windows": {
+                        "today": {"input": value, "output": value},
+                        "week": {"input": value, "output": value},
+                    },
+                    "derived": {
+                        "peak-day": total,
+                        "current-streak": days,
+                        "longest-streak": days,
+                    },
+                }
+                for label in labels
+            },
+        }
+        plaintext = json.dumps(document, separators=(",", ":")) + "\n"
+        return len(plaintext.encode("utf-8")) + 36
+
+    def test_the_canonical_cap_exceeds_the_measured_structural_maximum(self):
         # Non-vacuity, and the one place the measurement is asserted rather
-        # than described: the structural maximum the origin can admit
-        # measures 98,889 sealed bytes, so the ceiling must exceed it with
-        # real headroom while staying a bound rather than an open door.
+        # than described: the ceiling must exceed the largest document the
+        # origin can admit, with real headroom, while staying a bound rather
+        # than an open door.
         cap = self.go_cap()
         self.assertEqual(cap, 131072)
-        self.assertGreater(cap, 98889)
+        maximum = self.structural_maximum(10)
+        self.assertGreater(cap, maximum)
+        # The headroom is three further decimal digits on every value: the
+        # same maximum still fits at thirteen digits and only crosses at
+        # fourteen. That is the claim docs/usage-export.md makes, measured.
+        self.assertLess(self.structural_maximum(13), cap)
+        self.assertGreater(self.structural_maximum(14), cap)
 
     def test_matches_the_origin_admission_cap(self):
         import re
