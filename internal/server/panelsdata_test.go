@@ -163,6 +163,40 @@ func TestStartPanelDataServesASealedSeriesEndToEnd(t *testing.T) {
 	}
 }
 
+// TestStartPanelDataClaimsTheTokenUsagePanel proves the composition root's
+// half of the 2026-08-24 review finding 8 repair: enabling the sealed data
+// root claims the token-usage panel, synchronously and before the loop
+// exists, and that claim is what cmd/server logs once at startup so an
+// operator with both switches on can see which producer is serving the
+// panel.
+//
+// The enforcement itself — the live path never fetching an owned panel while
+// every other refresh-backed panel keeps working — is proven against an
+// injected transport in internal/panels. It cannot be proven here: this
+// package's StartPanelRefresh wires the PRODUCTION doer, so exercising it
+// would mean real egress from the test suite.
+func TestStartPanelDataClaimsTheTokenUsagePanel(t *testing.T) {
+	t.Parallel()
+	site, err := New(testsupport.FrontendFS())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer site.Close()
+	if site.TokenUsageOwnedByDataRoot() {
+		t.Fatal("the panel reports an owner before any data root started")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := site.StartPanelData(ctx, t.TempDir(), "", func(string) string {
+		return panelsDataTestKeyHex
+	}); err != nil {
+		t.Fatalf("StartPanelData: %v", err)
+	}
+	if !site.TokenUsageOwnedByDataRoot() {
+		t.Fatal("the sealed data root started without claiming the token-usage panel")
+	}
+}
+
 func TestOpenPanelsDataRootRefusesUnsafeRoots(t *testing.T) {
 	t.Parallel()
 	base := t.TempDir()

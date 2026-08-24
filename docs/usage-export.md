@@ -68,6 +68,16 @@ keeps the last good payload and says so in the envelope `status`.
   whole set — categories must partition the day totals), refuses replays via
   a monotonic `generatedAt` floor, and re-checks the serving byte budget
   before publishing.
+- **One producer owns the panel.** When `PANELS_DATA_ROOT` is set, the
+  sealed data root OWNS the token-usage panel and the credentialed live
+  refresh never fetches it — the pod logs that decision once at startup
+  (`token-usage panel served from the sealed data root; its live refresh is
+  suppressed`). Every OTHER refresh-backed panel keeps refreshing normally,
+  so enabling the sealed feed never silently disables the rest. Both
+  switches on used to start two independent producers writing the same panel
+  with no precedence, so a live fetch could overwrite the sealed series and
+  the next five-minute tick could overwrite it back (2026-08-24 security
+  review, finding 8).
 - **A document is whole or it is refused.** Its source set must EQUAL the
   set the embedded snapshot ships (2026-08-24 security review, finding 7).
   The envelope carries ONE `status` and ONE `generatedAt` for the whole

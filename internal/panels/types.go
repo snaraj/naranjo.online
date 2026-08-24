@@ -1031,7 +1031,23 @@ type Registry struct {
 	// dataRootStarted guards StartDataRoot against double starts, exactly as
 	// refreshStarted guards the fetch loops.
 	dataRootStarted atomic.Bool
+	// dataRootOwnsPanel records that the sealed data-root loop OWNS the
+	// token-usage panel, so the credentialed live-refresh path must never
+	// write it (2026-08-24 review finding 8: both producers wrote the same
+	// state.current with no precedence, so a live fetch could overwrite the
+	// sealed series and the next data-root tick could overwrite it back).
+	//
+	// Claimed synchronously by startDataRoot before its goroutine exists and
+	// read by BOTH startRefresh and every refresh loop wake, so the rule
+	// holds whichever capability starts first: a loop already running exits
+	// at its next wake rather than racing the claim.
+	dataRootOwnsPanel atomic.Bool
 }
+
+// dataRootPanelID is the one panel the sealed data-root path serves. It is a
+// constant rather than a parameter because the file name, the document
+// schema, and the merge rules are all specific to this panel.
+const dataRootPanelID = "token-usage"
 
 // panelState is one panel's identity plus its atomically swapped current
 // response. fetch is non-nil only for fetch-backed panels.

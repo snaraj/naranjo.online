@@ -82,14 +82,14 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 		return err
 	}
 	defer handler.Close()
-	if panelsRefresh {
-		// Explicit opt-in (the chart supplies it in production) following the
-		// media-enablement precedent: capabilities that reach beyond the
-		// process are configuration decisions, and every test boot stays
-		// egress-free by default. Cancellation of ctx on shutdown stops the
-		// refresh loops before any further attempt.
-		handler.StartPanelRefresh(ctx)
-	}
+	// ORDER IS DELIBERATE: the sealed data root starts FIRST, so it claims
+	// the token-usage panel before any live refresh loop exists (2026-08-24
+	// review finding 8). Both switches on used to start two independent
+	// producers writing the same panel state with no precedence, so a
+	// credentialed live fetch could overwrite the sealed series and the next
+	// data-root tick could overwrite it back. The enforcement lives inside
+	// the panels package and holds whichever order a caller uses; this order
+	// simply means no wasted fetch happens before the claim is seen.
 	if panelsDataRoot != "" {
 		// The panels data root (issue #142): a mounted read-only directory
 		// carrying the sealed usage-series file pushed from the recording
@@ -102,6 +102,24 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 		if err := handler.StartPanelData(ctx, panelsDataRoot, panelsDataState, lookupEnv); err != nil {
 			return err
 		}
+	}
+	if panelsRefresh {
+		// Explicit opt-in (the chart supplies it in production) following the
+		// media-enablement precedent: capabilities that reach beyond the
+		// process are configuration decisions, and every test boot stays
+		// egress-free by default. Cancellation of ctx on shutdown stops the
+		// refresh loops before any further attempt.
+		//
+		// The ownership decision is logged ONCE here, where the composition
+		// is chosen, because an operator who enabled both switches must be
+		// able to see which producer is serving the token-usage panel
+		// without reading the code. Every other refresh-backed panel keeps
+		// refreshing.
+		if handler.TokenUsageOwnedByDataRoot() {
+			slog.Info("token-usage panel served from the sealed data root; its live refresh is suppressed",
+				"panel", "token-usage", "owner", "data-root")
+		}
+		handler.StartPanelRefresh(ctx)
 	}
 
 	httpServer := &http.Server{

@@ -80,8 +80,18 @@ func newSite(assets fs.FS, media *mediaHandler) (*Site, error) {
 // StartPanelRefresh starts the panel API's background live refresh. It is an
 // explicit capability enablement — construction and tests stay egress-free —
 // and the loops stop when ctx cancels, before any in-flight attempt begins.
+//
+// A panel the sealed data root owns starts no loop (2026-08-24 review
+// finding 8); every other fetch-backed panel is unaffected.
 func (s *Site) StartPanelRefresh(ctx context.Context) {
 	s.panels.StartRefresh(ctx)
+}
+
+// TokenUsageOwnedByDataRoot reports whether the sealed data-root path owns
+// the token-usage panel, so the composition root can log that decision once
+// at startup. It is a report, never the enforcement.
+func (s *Site) TokenUsageOwnedByDataRoot() bool {
+	return s.panels.DataRootOwnsTokenUsage()
 }
 
 // newHandler reads and prepares every embedded file exactly once. Any

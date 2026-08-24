@@ -16,6 +16,12 @@ import (
 // startRefresh launches one refresh loop per fetch-backed panel with the
 // injected transport and environment. It is idempotent, returns immediately,
 // and starts nothing for a registry without fetch-backed panels.
+//
+// A panel the sealed data-root path owns gets NO loop (2026-08-24 review
+// finding 8). Ownership is per panel, not per process: every other
+// fetch-backed panel keeps refreshing exactly as before, so enabling the
+// sealed feed for token usage never silently disables the boss log or the
+// version-control activity.
 func (reg *Registry) startRefresh(ctx context.Context, doer fetchDoer, env func(string) string) {
 	if !reg.refreshStarted.CompareAndSwap(false, true) {
 		return
@@ -24,8 +30,21 @@ func (reg *Registry) startRefresh(ctx context.Context, doer fetchDoer, env func(
 		if state.fetch == nil {
 			continue
 		}
+		if reg.dataRootOwns(state) {
+			// No goroutine at all, so the owned panel's credentialed
+			// endpoint is not merely unwritten but never reached.
+			continue
+		}
 		go reg.refreshLoop(ctx, state, doer, env)
 	}
+}
+
+// dataRootOwns reports whether the sealed data-root path owns this panel.
+// Checked at start AND at every loop wake: the composition root starts the
+// data root first, but a loop that is already running when ownership is
+// claimed must also stop, or the rule would depend on start order.
+func (reg *Registry) dataRootOwns(state *panelState) bool {
+	return state.definition.id == dataRootPanelID && reg.dataRootOwnsPanel.Load()
 }
 
 // refreshLoop drives one panel: an immediate first attempt, then the TTL
@@ -44,6 +63,13 @@ func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fe
 		case <-timer.C:
 		}
 		if ctx.Err() != nil {
+			return
+		}
+		if reg.dataRootOwns(state) {
+			// The sealed data root claimed this panel after the loop was
+			// already running. Stop before the fetch: the owner writes
+			// state.current, and two producers writing one panel with no
+			// precedence is the race finding 8 reported.
 			return
 		}
 		err := reg.refreshPanel(ctx, state, doer, env)

@@ -15,7 +15,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -1064,6 +1066,190 @@ func TestDataRootNeverPublishesAheadOfThePersistedFloor(t *testing.T) {
 			seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:01:00Z"))), shared.marker())
 		if envelope.Status != StatusStale || envelope.GeneratedAt == "2000-01-01T00:01:00Z" {
 			t.Fatalf("restart accepted a replay: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
+// compositionDoer answers both fetch shapes and counts which endpoint class
+// was reached, so a test can assert what the live path did rather than what
+// it was configured to do.
+type compositionDoer struct {
+	mu    sync.Mutex
+	usage int
+	boss  int
+}
+
+func (d *compositionDoer) Do(request *http.Request) (*http.Response, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	body := fixtureHiscores
+	if strings.Contains(request.URL.Path, "usage") {
+		d.usage++
+		body = fixtureUsagePage
+	} else {
+		d.boss++
+	}
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+}
+
+func (d *compositionDoer) counts() (usage, boss int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.usage, d.boss
+}
+
+// compositionRegistry builds a registry whose token-usage panel is
+// FETCH-BACKED over the synthetic snapshot (so the live path is genuinely
+// able to write it) alongside a fetch-backed boss-log panel that must keep
+// working either way.
+func compositionRegistry(t *testing.T) *Registry {
+	t.Helper()
+	fsys := fstest.MapFS{
+		"snapshots/token-usage.json": &fstest.MapFile{Data: []byte(synctestSnapshot)},
+		"snapshots/boss.json":        &fstest.MapFile{Data: validSnapshot(t)},
+	}
+	usage, err := NewFetchSource(
+		SnapshotSource{Name: "snapshots/token-usage.json"},
+		validFetchConfig(),
+		panelFetchSpecs{usage: &tokenUsageFetchSpec{Sources: []usageSourceSpec{
+			{
+				Label: "alpha", Endpoint: "https://api.example.test/usage-a", Shape: shapeUsagePage,
+				KeyEnvName: "PANEL_TEST_KEY_A", KeyHeader: "x-api-key",
+				Window: windowParamSpec{Param: "starting_at", Format: windowFormatRFC3339, LookbackDays: 7},
+			},
+			{
+				Label: "beta", Endpoint: "https://api.example.test/usage-b", Shape: shapeUsagePage,
+				KeyEnvName: "PANEL_TEST_KEY_B", KeyHeader: "Authorization", KeyPrefix: "Bearer ",
+				Window: windowParamSpec{Param: "start_time", Format: windowFormatUnix, LookbackDays: 7},
+			},
+		}}},
+	)
+	if err != nil {
+		t.Fatalf("token-usage fetch source: %v", err)
+	}
+	boss, err := NewFetchSource(
+		SnapshotSource{Name: "snapshots/boss.json"},
+		validFetchConfig(),
+		panelFetchSpecs{bossLog: validBossSpec()},
+	)
+	if err != nil {
+		t.Fatalf("boss-log fetch source: %v", err)
+	}
+	return newRegistry(fsys, []panelDefinition{
+		{id: "token-usage", kind: KindTokenUsage, title: "Token usage", source: usage},
+		{id: "boss-log", kind: KindBossLog, title: "Boss log", source: boss},
+	})
+}
+
+// compositionEnv supplies both credentials, so the live token-usage fetch is
+// fully able to run. Suppression must be the reason it does not — not a
+// missing key, which would make the whole assertion vacuous.
+func compositionEnv(name string) string {
+	switch name {
+	case "PANEL_TEST_KEY_A", "PANEL_TEST_KEY_B":
+		return "fixture-key"
+	}
+	return ""
+}
+
+// TestDataRootOwnsTheTokenUsagePanel is the 2026-08-24 review finding 8
+// regression test. cmd/server started BOTH producers when both switches were
+// on, and both wrote the same state.current with no ownership, precedence,
+// or merge rule — so a credentialed live refresh could overwrite the sealed
+// series and the next data-root tick could overwrite it back, with the panel
+// alternating between two provenances at two cadences.
+//
+// The repair is per-panel ownership, not refusal of the configuration: when
+// the sealed data root is enabled it OWNS the token-usage panel and the live
+// path never fetches it, while every other refresh-backed panel keeps
+// working. Both halves are asserted, and the control below proves the
+// suppressed fetch would otherwise have happened.
+func TestDataRootOwnsTheTokenUsagePanel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reg := compositionRegistry(t)
+		doer := &compositionDoer{}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// The composition root's order: the data root claims the panel, then
+		// live refresh starts for everything else.
+		reg.startDataRoot(ctx, seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:02:00Z"))),
+			productionUnsealer(dataRootTestKeyHex), nil, time.Now)
+		reg.startRefresh(ctx, doer, compositionEnv)
+		synctest.Wait()
+
+		if !reg.DataRootOwnsTokenUsage() {
+			t.Fatal("the data root did not claim the token-usage panel")
+		}
+		usage, boss := doer.counts()
+		if usage != 0 {
+			t.Fatalf("the live path fetched the owned panel %d times", usage)
+		}
+		if boss == 0 {
+			t.Fatal("suppressing one panel stopped the others refreshing")
+		}
+
+		// The sealed document is what the panel serves, and it stays that
+		// way across several live-refresh TTLs — the interval over which the
+		// racing producer would have overwritten it.
+		envelope, data := decodeServedUsage(t, reg.byID["token-usage"])
+		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:02:00Z" {
+			t.Fatalf("sealed series not served: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		if data.Sources[0].Series.StartDate != "2026-08-15" {
+			t.Fatalf("served series is not the sealed one: %+v", data.Sources[0].Series)
+		}
+		time.Sleep(4 * validFetchConfig().TTL)
+		synctest.Wait()
+		if usage, _ = doer.counts(); usage != 0 {
+			t.Fatalf("the live path fetched the owned panel %d times after several TTLs", usage)
+		}
+		envelope, data = decodeServedUsage(t, reg.byID["token-usage"])
+		if envelope.GeneratedAt != "2000-01-01T00:02:00Z" || data.Sources[0].Series.StartDate != "2026-08-15" {
+			t.Fatalf("the sealed series was overwritten: generatedAt %q series %+v", envelope.GeneratedAt, data.Sources[0].Series)
+		}
+		if _, laterBoss := doer.counts(); laterBoss <= boss {
+			// Not merely "still alive": the other panel must have refreshed
+			// AGAIN across those TTLs, so suppression is per panel rather
+			// than a process-wide stop that happened to leave one stale
+			// success behind.
+			t.Fatalf("the other panel stopped refreshing: %d fetches, then %d across four TTLs", boss, laterBoss)
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
+// TestLiveRefreshOwnsTheTokenUsagePanelWithoutTheDataRoot is the control for
+// the test above: the identical registry, doer and environment, with the
+// sealed data root NOT enabled. The live path must fetch and publish the
+// token-usage panel — otherwise the suppression assertion would pass for a
+// missing credential, an unreachable endpoint, or any other reason having
+// nothing to do with ownership.
+func TestLiveRefreshOwnsTheTokenUsagePanelWithoutTheDataRoot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reg := compositionRegistry(t)
+		doer := &compositionDoer{}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		reg.startRefresh(ctx, doer, compositionEnv)
+		synctest.Wait()
+
+		if reg.DataRootOwnsTokenUsage() {
+			t.Fatal("nothing claimed the panel, yet ownership reports true")
+		}
+		if usage, _ := doer.counts(); usage == 0 {
+			t.Fatal("the live path never fetched the token-usage panel; the suppression assertion would be vacuous")
+		}
+		envelope, _ := decodeServedUsage(t, reg.byID["token-usage"])
+		if envelope.Status != StatusOK {
+			t.Fatalf("live-refreshed status %q, want ok", envelope.Status)
+		}
+		if envelope.GeneratedAt == "2000-01-01T00:02:00Z" {
+			t.Fatal("the control served the sealed instant it was never given")
 		}
 		cancel()
 		synctest.Wait()

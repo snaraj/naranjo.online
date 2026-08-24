@@ -117,11 +117,23 @@ func (reg *Registry) startDataRoot(ctx context.Context, fsys fs.FS, unseal Unsea
 	if !reg.dataRootStarted.CompareAndSwap(false, true) {
 		return
 	}
-	state, ok := reg.byID["token-usage"]
+	state, ok := reg.byID[dataRootPanelID]
 	if !ok {
 		return
 	}
+	// Claim ownership BEFORE the loop exists, so the live-refresh path can
+	// never observe a started data root without its ownership (2026-08-24
+	// review finding 8).
+	reg.dataRootOwnsPanel.Store(true)
 	go reg.dataRootLoop(ctx, state, fsys, unseal, marker, now)
+}
+
+// DataRootOwnsTokenUsage reports whether the sealed data-root path owns the
+// token-usage panel. The composition root reads it to log the decision once
+// at startup; nothing depends on it for correctness, which is enforced
+// inside the refresh path itself.
+func (reg *Registry) DataRootOwnsTokenUsage() bool {
+	return reg.dataRootOwnsPanel.Load()
 }
 
 // dataRootLoop re-reads the sealed series on the TTL cadence: an immediate
