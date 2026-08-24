@@ -9,6 +9,7 @@ package panels
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -45,7 +46,13 @@ func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fe
 		if ctx.Err() != nil {
 			return
 		}
-		if err := reg.refreshPanel(ctx, state, doer, env); err != nil {
+		err := reg.refreshPanel(ctx, state, doer, env)
+		// Nothing due is not a failure. The loop wakes on the shared cadence
+		// while individual endpoints keep their own, longer, rate budgets, so
+		// a wake that finds every endpoint still inside its budget did not
+		// attempt anything, did not fail at anything, and must neither climb
+		// the retry ladder nor make the panel look stale.
+		if err != nil && !errors.Is(err, errNothingDue) {
 			timer.Reset(backoff)
 			backoff *= 2
 			if backoff > config.MaxBackoff {
@@ -53,7 +60,9 @@ func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fe
 			}
 			continue
 		}
-		backoff = config.InitialBackoff
+		if err == nil {
+			backoff = config.InitialBackoff
+		}
 		timer.Reset(config.TTL)
 	}
 }
@@ -65,6 +74,12 @@ func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fe
 func (reg *Registry) refreshPanel(ctx context.Context, state *panelState, doer fetchDoer, env func(string) string) error {
 	loaded, err := state.fetch.refresh(ctx, doer, env)
 	if err != nil {
+		// An attempt that never happened says nothing about the served data:
+		// marking a panel stale because its rate budget held the loop back
+		// would turn politeness into a false freshness signal.
+		if errors.Is(err, errNothingDue) {
+			return err
+		}
 		reg.markStale(state)
 		return err
 	}

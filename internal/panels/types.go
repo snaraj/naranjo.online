@@ -12,6 +12,7 @@ package panels
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"net/http"
 	"sync"
@@ -241,15 +242,28 @@ type VCSActivityData struct {
 	Streak int `json:"streak"`
 	// RecentCommits lists the latest commits, newest first.
 	RecentCommits []VCSCommit `json:"recentCommits"`
+	// CommitsAt is the RFC 3339 instant the recent-commit list was actually
+	// read from its producer, which is NOT the same instant the calendar was
+	// read: the two halves sit on different rate budgets and refresh on
+	// different cadences. Empty when no commit list has ever been fetched, so
+	// an empty list can never be mistaken for a list fetched a moment ago.
+	// The envelope's status still carries the whole payload's provenance;
+	// this says which half of it is the older one.
+	CommitsAt string `json:"commitsAt,omitempty"`
 }
 
 // VCSCommit is one recent commit reference.
 type VCSCommit struct {
-	// Repo is the repository's public name.
+	// Repo is the repository's public name. It comes from CONFIGURATION, not
+	// from the upstream document: a label an upstream can choose is a label a
+	// compromised upstream can forge, and the panel would then attribute a
+	// stranger's commit to the owner.
 	Repo string `json:"repo"`
-	// Message is the commit subject line.
+	// Message is the commit subject line, truncated with a visible marker
+	// past maxCommitMessageRunes so one absurd subject cannot dominate the
+	// panel budget.
 	Message string `json:"message"`
-	// At is the RFC 3339 commit instant.
+	// At is the RFC 3339 commit instant, normalized to UTC.
 	At string `json:"at"`
 }
 
@@ -406,7 +420,43 @@ type FetchSource struct {
 	config FetchConfig
 	// specs carries the one panel spec this source feeds.
 	specs panelFetchSpecs
+	// mu guards every mutable field below. Production drives one refresh loop
+	// per panel, so the lock is uncontended there; it exists because a source
+	// is shared with the request path's registry and because tests drive
+	// refreshes directly.
+	mu sync.Mutex
+	// gates maps a rate-budget role to the earliest instant an endpoint in
+	// that role may next be CONTACTED. Reservations are taken per attempt,
+	// not per success: a failing upstream must not be retried faster than a
+	// healthy one, which is precisely how a retry ladder walks into a rate
+	// limit.
+	gates map[string]time.Time
+	// calendar is the last successfully mapped contribution payload, kept so
+	// a cycle where only the commit half is due can serve the calendar it
+	// already has instead of asking for it again.
+	calendar json.RawMessage
+	// calendarAt is when that payload was fetched. It becomes the envelope's
+	// generatedAt, so a payload never claims to be newer than its calendar.
+	calendarAt time.Time
+	// commits is the last successfully fetched commit list.
+	commits []VCSCommit
+	// commitsAt is when that list was fetched; the zero instant means no list
+	// has ever been fetched, which the payload reports as an absent commitsAt
+	// rather than as a fresh empty list.
+	commitsAt time.Time
 }
+
+// Rate-budget roles. A role groups the endpoints that share one budget, so
+// the commit producer's several repository documents are one round rather
+// than several independent cadences.
+const (
+	// roleBossLog is the game-hiscores document.
+	roleBossLog = "boss-log"
+	// roleVCSCalendar is the contribution-calendar document.
+	roleVCSCalendar = "vcs-calendar"
+	// roleVCSCommits is the whole group of per-repository commit documents.
+	roleVCSCommits = "vcs-commits"
+)
 
 // panelFetchSpecs carries the per-kind fetch descriptions. EXACTLY ONE field
 // may be set: a source feeds one panel, and NewFetchSource refuses any other
@@ -468,6 +518,13 @@ type bossLogFetchSpec struct {
 	ExcludeActivities []string `json:"excludeActivities"`
 	// MaxBytes optionally tightens the shared body cap for this endpoint.
 	MaxBytes int64 `json:"maxBytes"`
+	// ContentType is the exact media type the answer must declare, checked
+	// before a byte of the body is parsed.
+	ContentType string `json:"contentType"`
+	// MinIntervalMinutes is this endpoint's rate budget: the shortest gap
+	// between two ATTEMPTS against it, honored no matter how often the loop
+	// wakes or how a retry ladder behaves.
+	MinIntervalMinutes int `json:"minIntervalMinutes"`
 }
 
 // vcsActivityHeaderAllowlist is the COMPLETE set of request headers the
@@ -495,6 +552,54 @@ type vcsActivityFetchSpec struct {
 	// cap is necessarily larger than the JSON endpoints' — which is exactly
 	// why the cap is per endpoint instead of one loose shared number.
 	MaxBytes int64 `json:"maxBytes"`
+	// ContentType is the exact media type the answer must declare.
+	ContentType string `json:"contentType"`
+	// MinIntervalMinutes is the calendar's own rate budget.
+	MinIntervalMinutes int `json:"minIntervalMinutes"`
+	// Commits configures the recent-commit half of this panel, which reads a
+	// DIFFERENT set of public documents on a DIFFERENT cadence. Optional: a
+	// panel configured without it serves the calendar and an empty commit
+	// list, which is what it did before this half existed.
+	Commits *vcsCommitsFetchSpec `json:"commits"`
+}
+
+// vcsCommitsFetchSpec configures the recent-commit producer: one PUBLIC,
+// UNAUTHENTICATED commit-list document per repository, each named by a
+// complete literal URL in configuration.
+//
+// Complete literal URLs are the load-bearing detail. The obvious alternative —
+// discovering repositories from an upstream activity document and building
+// request URLs out of the names it returns — would let an upstream choose
+// where this process connects next. Every endpoint here is instead a config
+// constant validated against the host allowlist at construction, so the set of
+// reachable URLs is fixed before the first request and no upstream answer can
+// extend it.
+type vcsCommitsFetchSpec struct {
+	// Sources lists one labeled commit document per repository.
+	Sources []vcsCommitSourceSpec `json:"sources"`
+	// Headers holds static request headers, held to the same public-producer
+	// allowlist the calendar's are.
+	Headers map[string]string `json:"headers"`
+	// MaxBytes optionally tightens the shared body cap for these endpoints.
+	MaxBytes int64 `json:"maxBytes"`
+	// ContentType is the exact media type each answer must declare.
+	ContentType string `json:"contentType"`
+	// MinIntervalMinutes is the rate budget applied to the whole group: the
+	// shortest gap between two rounds of attempts across every source.
+	MinIntervalMinutes int `json:"minIntervalMinutes"`
+	// Max caps how many commit rows the merged list serves. It can only ever
+	// tighten maxServedCommits.
+	Max int `json:"max"`
+}
+
+// vcsCommitSourceSpec is one repository's commit document: the public name the
+// panel SERVES and the literal URL it is read from. The name is configuration
+// precisely so a hostile or drifting upstream cannot relabel a row.
+type vcsCommitSourceSpec struct {
+	// Repo is the public repository name served on every row from this source.
+	Repo string `json:"repo"`
+	// Endpoint is the full request URL.
+	Endpoint string `json:"endpoint"`
 }
 
 // tokenUsageFetchSpec configures the token-usage live fetch: one entry per
@@ -573,6 +678,108 @@ const maxCalendarDays = 400
 // changed — and refusing keeps the last good payload instead of serving a
 // four-cell "calendar" that looks like data.
 const minCalendarDays = 28
+
+// Bounds on the recent-commit producer. Every one of them is a refusal, not a
+// clamp: a commit document that breaks any of them is discarded whole and the
+// panel keeps serving its last good list.
+const (
+	// maxCommitDocumentItems bounds how many rows one commit document may
+	// carry. The configured endpoints ask for a handful; a document with more
+	// is either drift or an upstream trying to make this process hold memory.
+	maxCommitDocumentItems = 30
+	// maxServedCommits is the absolute ceiling on the merged list, which the
+	// per-panel budget then has to fit as well. Configuration may tighten it
+	// and can never widen it.
+	maxServedCommits = 12
+	// maxCommitMessageRunes bounds one served subject line. Longer subjects
+	// are truncated with a visible marker rather than refused: a long subject
+	// is legal, and refusing the document over it would lose real commits.
+	maxCommitMessageRunes = 120
+	// maxCommitFutureSkew is how far ahead of now a commit instant may sit
+	// before it is nonsense. Clock skew is real; a week is not skew.
+	maxCommitFutureSkew = 2 * time.Hour
+	// maxCommitAge is how far back a served commit may sit. A "recent
+	// commits" list showing something years old is a broken list, not history.
+	maxCommitAge = 400 * 24 * time.Hour
+	// shaHexDigits is the length of the commit identity every row must carry.
+	// It is the cheapest proof that a document was really parsed rather than
+	// zero-valued into the projection below.
+	shaHexDigits = 40
+)
+
+// Bounds on any endpoint's configured rate budget. A budget below the floor is
+// a configuration accident that would hammer a public upstream; one above the
+// ceiling is a panel that has quietly stopped being live.
+const (
+	// minEndpointInterval is the shortest gap configuration may ask for
+	// between two attempts against one endpoint.
+	minEndpointInterval = time.Minute
+	// maxEndpointInterval is the longest.
+	maxEndpointInterval = 6 * time.Hour
+)
+
+// errNothingDue reports that every endpoint a source would have contacted is
+// still inside its own rate budget, so the attempt was skipped entirely. It is
+// NOT a failure: nothing was fetched, nothing was refused, and the panel keeps
+// serving exactly what it was serving — which is why the loop must not mark a
+// panel stale or climb its retry ladder on it.
+var errNothingDue = errors.New("fetch: every endpoint is still inside its rate budget")
+
+// errUpstreamRateLimited marks an answer that says, in the only way HTTP
+// has, "you are asking too often". It pushes that endpoint's next admissible
+// attempt out to the full backoff ceiling instead of letting the ordinary
+// cadence keep knocking.
+var errUpstreamRateLimited = errors.New("fetch: the upstream refused for rate reasons")
+
+// commitListEntry is the PROJECTION this package reads a public commit
+// document through, and the one place its admission gate is a projection
+// rather than decodeStrict. That is a narrow, deliberate exception, and both
+// halves of the reason matter:
+//
+//   - Closing the document is not possible without holding the author's name
+//     and EMAIL ADDRESS in this process. The upstream carries them on every
+//     row; DisallowUnknownFields would force this package to declare fields
+//     for personal contact details it must never hold, log, or serve
+//     (requirement 12). Reading only the three values the panel renders is
+//     the stronger privacy posture, not the looser one.
+//   - A projection decodes silently: feed it an unrelated JSON object and it
+//     yields zero values rather than an error. That is exactly why every
+//     field below is then value-checked — a 40-hex identity, a non-empty
+//     printable subject, a parseable instant inside a plausible window — and
+//     any row failing any check discards the WHOLE document. The gate moved
+//     from the decoder to the values; it did not go away.
+type commitListEntry struct {
+	// SHA is the commit identity.
+	SHA string `json:"sha"`
+	// Commit holds the authored content.
+	Commit commitDetail `json:"commit"`
+}
+
+// commitDetail is the authored half of one commit row.
+type commitDetail struct {
+	// Message is the full commit message; only its subject line is served.
+	Message string `json:"message"`
+	// Author carries the authoring instant, and deliberately nothing else.
+	Author commitAuthorship `json:"author"`
+}
+
+// commitAuthorship models the authoring INSTANT and no other authorship
+// field. The upstream also reports a name and an email address on this
+// object; neither is declared here, so neither is ever decoded into this
+// process's memory.
+type commitAuthorship struct {
+	// Date is the RFC 3339 authoring instant.
+	Date string `json:"date"`
+}
+
+// datedCommit pairs a served row with its parsed instant so the merge across
+// repositories can order rows without re-parsing or trusting string order.
+type datedCommit struct {
+	// at is the parsed authoring instant.
+	at time.Time
+	// row is the served commit row.
+	row VCSCommit
+}
 
 // maxSeriesDays bounds a mapped activity series. The configured endpoints
 // return at most a month of daily buckets, so any span beyond two years is
