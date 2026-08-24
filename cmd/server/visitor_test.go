@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -606,6 +607,7 @@ type visitorActivityPayload struct {
 
 type visitorActivityCommit struct {
 	Repo    string `json:"repo"`
+	SHA     string `json:"sha"`
 	Message string `json:"message"`
 	At      string `json:"at"`
 }
@@ -694,10 +696,22 @@ func TestVisitorSeesTheActivityStrip(t *testing.T) {
 		// list is either empty or a separately captured one; rows that DO
 		// appear must be complete, dated, and dated BY the list's own instant
 		// rather than by the calendar's, which is what commitsAt is for.
+		// SHA is carried through the wire contract (issue 157 follow-up) so the
+		// title link can fall back to a commit URL when no pull-request
+		// reference resolves, but the embedded snapshot predates the field and
+		// legitimately carries none — every row in it already resolves through
+		// its own trailing "(#N)", so an empty SHA here is truthful absence,
+		// never a decode fault. A NON-empty value must still be well-formed:
+		// the same 40-lowercase-hex identity internal/panels validates before
+		// ever building the row.
+		shaPattern := regexp.MustCompile(`^[0-9a-f]{40}$`)
 		var newest time.Time
 		for i, commit := range payload.RecentCommits {
 			if commit.Repo == "" || commit.Message == "" {
 				t.Errorf("commit %d incomplete: %+v", i, commit)
+			}
+			if commit.SHA != "" && !shaPattern.MatchString(commit.SHA) {
+				t.Errorf("commit %d sha = %q, want empty or 40 lowercase hex digits", i, commit.SHA)
 			}
 			at, err := time.Parse(time.RFC3339, commit.At)
 			if err != nil {
