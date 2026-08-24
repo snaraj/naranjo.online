@@ -56,9 +56,21 @@ keeps the last good payload and says so in the envelope `status`.
   references but never contains.
 - **Strict admission.** The app reads at most 64 KiB of sealed bytes,
   unseals, strict-decodes `usage-series/v1` (unknown fields refused, closed
-  window/derived vocabularies, categories must partition the day totals),
-  refuses replays via a monotonic `generatedAt` floor, and re-checks the
-  serving byte budget before publishing.
+  window/derived/CATEGORY vocabularies — a pushed file can never mint a
+  category label; the five accounting classes are the whole set — categories
+  must partition the day totals), refuses replays via a monotonic
+  `generatedAt` floor, and re-checks the serving byte budget before
+  publishing.
+- **The replay floor survives restarts.** The floor starts at the embedded
+  snapshot's capture instant and rises with every accepted push; the
+  accepted high-water mark is persisted as a sealed marker file in a
+  SEPARATE writable state volume (`panels.data.stateHostPath`), so a
+  restarted pod refuses ciphertext older than what any previous process
+  accepted — not merely older than the shipped snapshot (2026-08-24 security
+  review, finding H2). The marker is sealed under the same key as the
+  series, so the host cannot forge it; an absent or corrupt marker degrades
+  to the embedded floor, never lower, and a failed marker write degrades
+  durability, never admission or serving.
 
 ## Workstation setup
 
@@ -136,6 +148,22 @@ repository.
    World-readable is intended: the payload is ciphertext, and the pod's
    non-root user reads it through the read-only PV.
 
+   **State directory** — must match the chart's `panels.data.stateHostPath`
+   default, a SIBLING of the data directory (never inside it), owned by the
+   pod's runtime user so the app can persist its sealed replay-floor marker
+   (2026-08-24 security review, finding H2; 65532 is the chart's pinned
+   `runAsUser`/`runAsGroup`):
+
+   ```sh
+   sudo install -d -m 0700 -o 65532 -g 65532 \
+     /srv/naranjo-online/panels-state
+   ```
+
+   The push pipeline never touches this directory, and the pod never writes
+   anywhere else. If the directory is missing or unwritable the app still
+   serves — the floor simply stops surviving restarts — but create it with
+   the PV so the durability the review required is real.
+
 2. **Forced-command key** — append ONE line to the push user's
    `~/.ssh/authorized_keys` (single line; wrapped here for reading):
 
@@ -163,24 +191,28 @@ repository.
      --from-file=PANELS_DATA_KEY=<path-to-data.key>
    ```
 
-4. **The PersistentVolume** — cluster-scoped, so it is applied by an
+4. **The PersistentVolumes** — cluster-scoped, so they are applied by an
    operator from the chart's OWN render rather than by the namespaced
    release (see the `panels.data.persistentVolume` comment in
-   `chart/values.yaml` for the RBAC/PSA reasoning):
+   `chart/values.yaml` for the RBAC/PSA reasoning). Two render now: the
+   read-only DATA volume and the writable replay-floor STATE volume
+   (2026-08-24 security review, finding H2):
 
    ```sh
    helm template naranjo-online chart --kube-version v1.36.0 \
      --set panels.data.persistentVolume.enabled=true \
      --show-only chart/templates/panels-data.yaml > /tmp/panels-data.yaml
-   # The render carries the PV and the PVC. Delete the
-   # PersistentVolumeClaim document from the file — the claim is the
+   # The render carries both PVs and both PVCs. Delete the two
+   # PersistentVolumeClaim documents from the file — the claims are the
    # release's to manage — review what remains, then:
    kubectl apply -f /tmp/panels-data.yaml --dry-run=server   # inspect first
    kubectl apply -f /tmp/panels-data.yaml
    ```
 
-   The claim itself is part of every release; only the PV document is the
-   admin ceremony.
+   The claims themselves are part of every release; only the PV documents
+   are the admin ceremony. Apply the PVs (and create both host directories)
+   BEFORE deploying a release with `panels.data.enabled=true`, or the new
+   pod waits Pending on an unbindable claim.
 
 ## Verifying end to end
 
@@ -206,6 +238,8 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | `checksum mismatch after push` | landed bytes differ from sealed bytes — investigate before trusting the panel |
 | panel `status: stale` | the origin refused the newest file (tamper, replay, wrong key, over-cap, malformed) and kept the last good payload |
 | panel serves embedded snapshot | no data root configured, or no sealed file yet — the shipped fallback, not an error |
+| floor marker absent/corrupt in the state dir | the app falls back to the embedded snapshot's floor — replay protection degrades to the pre-marker guarantee, never below it; the next accepted push rewrites the marker |
+| pod Pending on the state claim | the state PV or its host directory was not created before enabling `panels.data` — finish the ceremony above |
 
 Rotation: generate a new hex key, update the Secret, restart the deployment,
 replace `data.key`, push again. The old file fails to unseal during the

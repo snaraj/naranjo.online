@@ -1094,7 +1094,9 @@ const (
 	// dataRootFutureSkew is how far ahead of the local clock a series
 	// file's generatedAt may sit before it is refused as nonsense. Clock
 	// skew between the workstation and this host is real; more than this is
-	// a file trying to pin itself artificially fresh.
+	// a file trying to pin itself artificially fresh. The same bound guards
+	// the persisted floor marker at load: a marker from the future is
+	// ignored as corrupt rather than allowed to refuse every honest push.
 	dataRootFutureSkew = 10 * time.Minute
 
 	// usageSeriesSchema is the exact schema marker the sealed document must

@@ -68,6 +68,10 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	panelsDataState, err := panelsDataStateConfiguration(lookupEnv("PANELS_DATA_STATE"), panelsDataRoot)
+	if err != nil {
+		return err
+	}
 	var handler *server.Site
 	if mediaEnabled {
 		handler, err = server.NewWithMedia(assets, mediaOptions)
@@ -95,7 +99,7 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 		// FILE inside a healthy root degrades softly to the embedded
 		// snapshot forever. The environment accessor is passed through so
 		// the decryption key is read at decrypt time only.
-		if err := handler.StartPanelData(ctx, panelsDataRoot, lookupEnv); err != nil {
+		if err := handler.StartPanelData(ctx, panelsDataRoot, panelsDataState, lookupEnv); err != nil {
 			return err
 		}
 	}
@@ -192,6 +196,26 @@ func panelsDataConfiguration(value string) (string, error) {
 	}
 	if !strings.HasPrefix(value, "/") {
 		return "", errors.New("PANELS_DATA_ROOT must be an absolute path")
+	}
+	return value, nil
+}
+
+// panelsDataStateConfiguration validates the optional writable state path
+// the replay-floor marker persists in (2026-08-24 review finding H2). Empty
+// runs the data-root loop with the process-memory floor only — the
+// documented degraded mode. Set, it demands the same absolute-path shape as
+// the data root, and it is meaningless without one: state describes where
+// the data root's floor lives, so state-without-root is a misconfiguration
+// that fails the boot loudly rather than dangling.
+func panelsDataStateConfiguration(value, dataRoot string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if dataRoot == "" {
+		return "", errors.New("PANELS_DATA_STATE requires PANELS_DATA_ROOT")
+	}
+	if !strings.HasPrefix(value, "/") {
+		return "", errors.New("PANELS_DATA_STATE must be an absolute path")
 	}
 	return value, nil
 }

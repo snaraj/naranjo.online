@@ -84,6 +84,13 @@ spec:
             {{- if .Values.panels.data.enabled }}
             - name: PANELS_DATA_ROOT
               value: "/var/lib/panels-data"
+            {{- /* The replay-floor state root (2026-08-24 review finding
+            H2): where the app persists the sealed floor marker so a restart
+            cannot re-admit replayed ciphertext. Must equal the writable
+            state volumeMount path below; the storage pin fails the render
+            if the two drift. */}}
+            - name: PANELS_DATA_STATE
+              value: "/var/lib/panels-state"
             - name: PANELS_DATA_KEY
               valueFrom:
                 secretKeyRef:
@@ -131,6 +138,17 @@ spec:
             - name: panels-data
               mountPath: /var/lib/panels-data
               readOnly: true
+            {{- /* The state mount is the pod's ONE writable projection
+            (2026-08-24 review finding H2): explicitly readOnly: false at
+            both levels, on a separate volume, so the floor marker persists
+            while the data mount above stays read-only exactly as reviewed.
+            scripts/ci/chart-storage-pin.sh fails the render if the state
+            mount flips read-only (a silently unwritable state root would
+            quietly lose the durable floor) or the data mount flips
+            writable. */}}
+            - name: panels-state
+              mountPath: /var/lib/panels-state
+              readOnly: false
             {{- end }}
       volumes:
         - name: tmp
@@ -146,4 +164,8 @@ spec:
           persistentVolumeClaim:
             claimName: {{ .Values.panels.data.volumeName }}
             readOnly: true
+        - name: panels-state
+          persistentVolumeClaim:
+            claimName: {{ .Values.panels.data.stateVolumeName }}
+            readOnly: false
         {{- end }}

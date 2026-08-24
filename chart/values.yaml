@@ -108,6 +108,22 @@ panels:
     # snapshot; it must never keep the site from scheduling.
     keySecret: naranjo-online-panels-data
     capacity: 16Mi
+    # The replay-floor STATE pair (2026-08-24 security review, finding H2):
+    # a second statically bound hostPath PV/PVC, WRITABLE by the pod, holding
+    # exactly one sealed marker file — the capture instant of the last
+    # ACCEPTED series file — so the replay floor survives a restart instead
+    # of resetting to the embedded snapshot's. It is deliberately a SEPARATE
+    # sibling directory and volume rather than a writable mount of the data
+    # volume above: the pushed-data projection stays read-only in every
+    # layer (both the claim reference and the mount, as reviewed), and the
+    # only thing the origin can ever write anywhere is this one sealed
+    # marker, in a directory the push pipeline never touches. The marker is
+    # sealed under the same key as the series, so storage that can write the
+    # state directory still cannot forge a floor; an absent or corrupt
+    # marker degrades to the embedded floor, never lower.
+    stateHostPath: /srv/naranjo-online/panels-state
+    stateVolumeName: naranjo-online-panels-state
+    stateCapacity: 1Mi
     persistentVolume:
       enabled: false
 
