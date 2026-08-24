@@ -890,6 +890,32 @@ def _string_set(value: object, field: str) -> set[str]:
     return result
 
 
+def _exact_pin(actual: object, expected: object) -> bool:
+    """Compare one pinned settings value with bool/int conflation closed.
+
+    Python evaluates ``True == 1`` and ``False == 0`` as true, so a plain
+    ``==`` against a pinned boolean ALSO accepts the integers 1 and 0, and a
+    pin of the integer 0 also accepts ``False``.  Both directions are live
+    holes in the settings validators: GitHub speaks JSON, where ``true`` and
+    ``1`` are different tokens, so a record carrying the wrong one means the
+    enforcing surface moved out from under the anchor -- exactly what
+    ``require_extra_approval_for_unattributed_changes`` did on 2026-08-20
+    (issue #91) -- and it must deny instead of round-tripping into the
+    receipt.  Issue #93.  Fail-closed direction only: nothing a genuine
+    boolean or a genuine integer used to satisfy stops satisfying.
+    """
+    if isinstance(actual, bool) != isinstance(expected, bool):
+        return False
+    return actual == expected
+
+
+def _exact_pin_mapping(actual: Mapping[str, object], expected: Mapping[str, object]) -> bool:
+    """Exact both-direction mapping compare with ``_exact_pin`` per value."""
+    if set(actual) != set(expected):
+        return False
+    return all(_exact_pin(actual[key], expected[key]) for key in expected)
+
+
 def _status_check_set(value: object) -> set[tuple[str, int]]:
     checks: set[tuple[str, int]] = set()
     values = _array(value, "required status checks")
@@ -1008,7 +1034,7 @@ def validate_settings_receipt(receipt: Mapping[str, object], repository: str) ->
         if key != "allowed_merge_methods"
     }
     for field, expected in expected_pull_receipt.items():
-        if receipt.get(field) != expected:
+        if not _exact_pin(receipt.get(field), expected):
             raise ContractError(f"settings receipt {field} is not exact")
     if receipt.get("code_scanning_tools") != EXPECTED_CODE_SCANNING_TOOLS:
         raise ContractError("settings receipt code-scanning tools are not exact")
@@ -1144,7 +1170,7 @@ def build_settings_receipt(
     pull_parameters = _object(pull_request.get("parameters"), "pull-request rule parameters")
     if set(pull_request) != {"type", "parameters"}:
         raise ContractError("pull-request rule fields are missing or foreign")
-    if pull_parameters != EXPECTED_PULL_REQUEST_PARAMETERS:
+    if not _exact_pin_mapping(pull_parameters, EXPECTED_PULL_REQUEST_PARAMETERS):
         raise ContractError("pull-request rule parameters are not exact")
     # The ruleset is the authoritative merge-method source: it is what actually
     # enforces merge behaviour on refs/heads/main, and unlike the repository
