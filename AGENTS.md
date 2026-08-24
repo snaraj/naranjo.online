@@ -334,14 +334,26 @@ Neither gets a different protocol.)
 
 **Reviewer independence.** The reviewer is a different agent or context
 than the author — a fresh session of the same vendor qualifies; a
-different lane is better. The reviewer works in a disposable worktree at
-the PR head, stays read-only toward the author's workspace, reverts every
-experiment, and removes the worktree afterward.
+different lane is better. Independence is established by the POSTING
+ACTOR, never by signature wording: a verdict receipt is posted by the
+`snaraj-agent-reviews[bot]` GitHub App — a principal distinct from the
+account that authors and pushes branches, and one granted Contents
+write in no repository, so a compromised review lane can never alter
+what it reviews. The signature line is lane provenance, content rather
+than identity, so any current or future model name is valid there and
+this contract pins no model roster. No rule compares the reviewer's
+name to the author's: that textual same-lane denial retired with issue
+#64, because a reviewer satisfies it by writing a different-looking
+signature — evidence that the reviewer can type, and nothing else.
+Same-lane review is therefore permitted and stays legible, and the
+actor is what a reader verifies. The reviewer works in a disposable
+worktree at the PR head, stays read-only toward the author's workspace,
+reverts every experiment, and removes the worktree afterward.
 
-**Exact-head receipt.** Review identity is textual because agents share the
-owner's GitHub account; it is not a claim of separate GitHub principals. The
-reviewer posts one normal PR comment in this exact shape (replacing every
-placeholder):
+**Exact-head receipt.** The receipt binds one exact head, and the bot
+actor above is what makes it a second party rather than a self-approval.
+The reviewer posts one normal PR comment in this exact shape (replacing
+every placeholder):
 
 ```text
 HEAD: <40-lowercase-hex>

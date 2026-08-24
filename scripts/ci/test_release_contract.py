@@ -5794,18 +5794,36 @@ python3() {
         )
 
 class GovernanceParityTests(unittest.TestCase):
+    # Reviewer independence is a GitHub PRINCIPAL, not a string. Verdict
+    # receipts post as this App, which is granted Contents write in no
+    # repository, so the reviewing identity can never push the code it
+    # reviews. Its predecessor compared the signature text to the recorded
+    # author context; a reviewer satisfied that rule by writing a
+    # different-looking signature, which proved only that the reviewer
+    # could type. The comparison — and its `author_context` parameter —
+    # are retired with issue #64 rather than kept alongside the actor
+    # check: keeping a rule that a keystroke satisfies invites the same
+    # signature-crafting the actor makes pointless. Nothing is weakened,
+    # because the replacement binds an unforgeable posting principal where
+    # the old rule bound editable prose.
+    REVIEW_ACTOR = "snaraj-agent-reviews[bot]"
+
     @staticmethod
     def adversarial_receipt_denial(
         text: str,
         expected_head: str,
         *,
-        author_context: str,
+        actor: str,
         resource_kind: str,
     ) -> str | None:
         if resource_kind != "pull-request":
             return "exact-head review receipts apply only to pull requests"
         if re.fullmatch(r"[0-9a-f]{40}", expected_head) is None:
             return "expected head is not one lowercase 40-hex SHA"
+        # Byte-exact, deliberately: a padded, case-varied, or lookalike
+        # login is not the App, and a fail-closed check never guesses.
+        if actor != GovernanceParityTests.REVIEW_ACTOR:
+            return "verdict receipt must be posted by the review App actor"
         lines = text.replace("\r\n", "\n").splitlines()
         heads = [line[6:] for line in lines if line.startswith("HEAD: ")]
         verdicts = [line[9:] for line in lines if line.startswith("VERDICT: ")]
@@ -5819,9 +5837,11 @@ class GovernanceParityTests(unittest.TestCase):
         signature = re.fullmatch(r"- (.+?) \(adversarial reviewer\)", nonempty[-1])
         if signature is None:
             return "final non-empty line must be adversarial reviewer signature"
-        reviewer = signature.group(1).strip().casefold()
-        if not reviewer or reviewer == author_context.strip().casefold():
-            return "reviewer context must differ textually from author context"
+        # The lane must be named — provenance is still mandatory — but WHICH
+        # lane is content: every current and future model name is valid, and
+        # no roster is pinned here.
+        if not signature.group(1).strip():
+            return "adversarial reviewer signature must name the reviewing lane"
         if "mutation" not in text.casefold() or "claim" not in text.casefold():
             return "receipt must report mutation and claim audit evidence"
         return None
@@ -5829,6 +5849,9 @@ class GovernanceParityTests(unittest.TestCase):
     @classmethod
     def require_adversarial_review_governance(cls, agents: str) -> str:
         try:
+            independence = agents.split("**Reviewer independence.**", 1)[1].split(
+                "**Exact-head receipt.**", 1
+            )[0]
             receipt = agents.split("**Exact-head receipt.**", 1)[1].split(
                 "**The review must:**", 1
             )[0]
@@ -5854,6 +5877,27 @@ class GovernanceParityTests(unittest.TestCase):
         ):
             if token not in receipt:
                 raise ValueError(f"canonical adversarial receipt lost: {token}")
+        independence_flat = " ".join(independence.split())
+        for token in (
+            "Independence is established by the POSTING ACTOR",
+            "`snaraj-agent-reviews[bot]` GitHub App",
+            "granted Contents write in no repository",
+            "any current or future model name is valid there",
+            "this contract pins no model roster",
+            "No rule compares the reviewer's name to the author's",
+        ):
+            if token not in independence_flat:
+                raise ValueError(f"actor-based reviewer independence lost: {token}")
+        # The retired rule must not return by prose either: restating it
+        # anywhere in the contract re-opens the signature-crafting path the
+        # actor check exists to close (issue #64).
+        agents_flat = " ".join(agents.split())
+        for forbidden in (
+            "differ textually from author",
+            "Review identity is textual because agents share",
+        ):
+            if forbidden in agents_flat:
+                raise ValueError(f"retired same-lane receipt rule returned: {forbidden}")
         label_flat = " ".join(label.split())
         working_flat = " ".join(working.split())
         for token in (
@@ -5895,7 +5939,7 @@ class GovernanceParityTests(unittest.TestCase):
         denial = cls.adversarial_receipt_denial(
             rendered,
             "a" * 40,
-            author_context="5.6 Sol",
+            actor=cls.REVIEW_ACTOR,
             resource_kind="pull-request",
         )
         if denial is not None:
@@ -6118,7 +6162,7 @@ class GovernanceParityTests(unittest.TestCase):
             self.adversarial_receipt_denial(
                 valid,
                 head,
-                author_context="5.6 Sol",
+                actor=self.REVIEW_ACTOR,
                 resource_kind="pull-request",
             )
         )
@@ -6126,7 +6170,7 @@ class GovernanceParityTests(unittest.TestCase):
             self.adversarial_receipt_denial(
                 valid.replace("VERDICT: APPROVE", "VERDICT: REQUEST-CHANGES", 1),
                 head,
-                author_context="5.6 Sol",
+                actor=self.REVIEW_ACTOR,
                 resource_kind="pull-request",
             )
         )
@@ -6144,7 +6188,7 @@ class GovernanceParityTests(unittest.TestCase):
                     self.adversarial_receipt_denial(
                         sample,
                         head,
-                        author_context="5.6 Sol",
+                        actor=self.REVIEW_ACTOR,
                         resource_kind="pull-request",
                     )
                 )
@@ -6152,10 +6196,183 @@ class GovernanceParityTests(unittest.TestCase):
             self.adversarial_receipt_denial(
                 valid,
                 head,
-                author_context="5.6 Sol",
+                actor=self.REVIEW_ACTOR,
                 resource_kind="issue",
             )
         )
+
+    def test_reviewer_independence_binds_the_bot_actor_not_the_signature_text(self):
+        """The App actor decides independence; the lane name is content."""
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        valid = self.require_adversarial_review_governance(agents)
+        head = "a" * 40
+        documented_signature = "- Fable5 (adversarial reviewer)"
+        self.assertIn(documented_signature, valid)
+
+        def denial(sample, *, actor=self.REVIEW_ACTOR, kind="pull-request"):
+            return self.adversarial_receipt_denial(
+                sample, head, actor=actor, resource_kind=kind
+            )
+
+        def signed(lane):
+            return valid.replace(
+                documented_signature, f"- {lane} (adversarial reviewer)", 1
+            )
+
+        self.assertIsNone(denial(valid))
+        wrong_actor = "verdict receipt must be posted by the review App actor"
+        for name, actor in (
+            ("owner account", "snaraj"),
+            ("release bot", "github-actions[bot]"),
+            ("app login without the bot suffix", "snaraj-agent-reviews"),
+            ("case-varied login", "Snaraj-Agent-Reviews[bot]"),
+            ("leading whitespace", " snaraj-agent-reviews[bot]"),
+            ("trailing whitespace", "snaraj-agent-reviews[bot] "),
+            ("prefixed lookalike", "evil-snaraj-agent-reviews[bot]"),
+            ("suffixed lookalike", "snaraj-agent-reviews[bot]2"),
+            ("empty actor", ""),
+        ):
+            with self.subTest(wrong_actor=name):
+                self.assertEqual(denial(valid, actor=actor), wrong_actor)
+        # A wrong actor denies even when every other field is perfect, and a
+        # right actor never rescues a malformed body — the two are independent.
+        self.assertEqual(
+            denial(valid.replace("VERDICT: APPROVE", "APPROVE", 1), actor="snaraj"),
+            wrong_actor,
+        )
+
+        # No roster: lanes that do not exist yet validate exactly like Fable5.
+        for lane in (
+            "Fable5",
+            "Opus5",
+            "Sonnet5",
+            "5.6 Sol",
+            "Nebula 9",
+            "Some-Future-Model 12.3",
+            "Claude Opus 42 (fresh session)",
+        ):
+            with self.subTest(novel_lane=lane):
+                self.assertIsNone(denial(signed(lane)))
+
+        # Same-lane review: every textual variation of one lane's signature
+        # yields the identical outcome, so crafting a distinguishing string
+        # can no longer change a verdict's fate.
+        crafted = {
+            variant: denial(signed(variant))
+            for variant in (
+                "Fable5",
+                "fable5",
+                "FABLE5",
+                "Fable5 / pr64-exact-head-review",
+                "Fable5 (fresh session)",
+                "Fable 5",
+            )
+        }
+        self.assertEqual(set(crafted.values()), {None}, crafted)
+
+        # Provenance is still mandatory: a nameless signature denies.
+        self.assertEqual(
+            denial(valid.replace(documented_signature, "-   (adversarial reviewer)", 1)),
+            "adversarial reviewer signature must name the reviewing lane",
+        )
+
+        # Shape still fails closed under the correct actor.
+        for name, sample, reason in (
+            (
+                "bare verdict",
+                valid.replace("VERDICT: APPROVE", "APPROVE", 1),
+                "receipt must contain exactly one supported VERDICT line",
+            ),
+            (
+                "unsupported verdict",
+                valid.replace("VERDICT: APPROVE", "VERDICT: LGTM", 1),
+                "receipt must contain exactly one supported VERDICT line",
+            ),
+            (
+                "duplicate head",
+                valid.replace(f"HEAD: {head}", f"HEAD: {head}\nHEAD: {head}", 1),
+                "receipt must bind exactly one expected HEAD line",
+            ),
+            (
+                "foreign head",
+                valid.replace(f"HEAD: {head}", "HEAD: " + "b" * 40, 1),
+                "receipt must bind exactly one expected HEAD line",
+            ),
+            (
+                "main worker signature",
+                valid.replace(" (adversarial reviewer)", " (Main Worker)", 1),
+                "final non-empty line must be adversarial reviewer signature",
+            ),
+            (
+                "missing mutation evidence",
+                valid.replace("Mutation audit:", "Evidence:", 1),
+                "receipt must report mutation and claim audit evidence",
+            ),
+            ("empty receipt", "", "receipt must bind exactly one expected HEAD line"),
+        ):
+            with self.subTest(malformed=name):
+                self.assertEqual(denial(sample), reason)
+        self.assertEqual(
+            denial(valid, kind="issue"),
+            "exact-head review receipts apply only to pull requests",
+        )
+        for bad_head in ("A" * 40, "a" * 39, "a" * 41, "", "z" * 40, "a" * 40 + "\n"):
+            with self.subTest(bad_head=repr(bad_head)):
+                self.assertEqual(
+                    self.adversarial_receipt_denial(
+                        valid,
+                        bad_head,
+                        actor=self.REVIEW_ACTOR,
+                        resource_kind="pull-request",
+                    ),
+                    "expected head is not one lowercase 40-hex SHA",
+                )
+
+    def test_retired_same_lane_signature_rule_cannot_return(self):
+        """Neither the validator nor the contract may restate the retired rule."""
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        valid = self.require_adversarial_review_governance(agents)
+        # The parameter itself is gone, so no caller can re-supply an author
+        # context and no edit can quietly restore the comparison behind one.
+        with self.assertRaises(TypeError):
+            self.adversarial_receipt_denial(
+                valid,
+                "a" * 40,
+                actor=self.REVIEW_ACTOR,
+                author_context="Fable5",
+                resource_kind="pull-request",
+            )
+        for anchor in (
+            "POSTING",
+            "`snaraj-agent-reviews[bot]` GitHub App",
+            "granted Contents",
+            "any current or future model name is valid there",
+            "this contract pins no model roster",
+            "No rule compares the reviewer's",
+        ):
+            self.assertIn(anchor, agents)
+            with self.subTest(deletion=anchor), self.assertRaises(ValueError):
+                self.require_adversarial_review_governance(agents.replace(anchor, "", 1))
+        for source, replacement in (
+            ("No rule compares the reviewer's", "One rule compares the reviewer's"),
+            (
+                "Independence is established by the POSTING",
+                "Independence is established by the SIGNATURE, not the POSTING",
+            ),
+        ):
+            self.assertIn(source, agents)
+            with self.subTest(inversion=source), self.assertRaises(ValueError):
+                self.require_adversarial_review_governance(
+                    agents.replace(source, replacement, 1)
+                )
+        for restatement in (
+            "The reviewer context must differ textually from author context.",
+            "Review identity is textual because agents share the account.",
+        ):
+            with self.subTest(restatement=restatement), self.assertRaises(ValueError):
+                self.require_adversarial_review_governance(
+                    agents.replace("what it reviews.", "what it reviews. " + restatement, 1)
+                )
 
     def test_main_worker_actor_scope_evidence_and_exact_head_are_parity_pinned(self):
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
