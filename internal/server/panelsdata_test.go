@@ -11,14 +11,20 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/snaraj/naranjo.online/internal/panels"
 	"github.com/snaraj/naranjo.online/internal/seal"
 	"github.com/snaraj/naranjo.online/internal/testsupport"
 )
@@ -31,16 +37,26 @@ const panelsDataTestKeyHex = "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfd0d1d2d3d4d5d6d7d8
 // document that refreshed only some of them is refused as partial
 // (2026-08-24 review finding 7), so a complete one is what this suite must
 // stage to exercise the serving path at all.
-func sealSeriesFile(t *testing.T, dir string, labels []string, generatedAt string) {
+func sealSeriesFile(t *testing.T, dir string, labels []string, generatedAt string) []byte {
 	t.Helper()
 	sources := make(map[string]any, len(labels))
 	for _, label := range labels {
 		sources[label] = map[string]any{
-			"series": map[string]any{"startDate": "2026-08-18", "totals": []int64{3, 4}, "recorded": true},
+			// Every section is a WHOLE section: its own capture instant plus
+			// the complete window and derived sets, so nothing series-derived
+			// is inherited from the release-time snapshot (2026-08-24 round-3
+			// review, finding 5).
+			"capturedAt": generatedAt,
+			"series":     map[string]any{"startDate": "2026-08-18", "totals": []int64{3, 4}, "recorded": true},
 			"categories": map[string]any{
 				"input":  []int64{1, 1},
 				"output": []int64{2, 3},
 			},
+			"windows": map[string]any{
+				"today": map[string]any{"input": 1, "output": 3},
+				"week":  map[string]any{"input": 2, "output": 5},
+			},
+			"derived": map[string]any{"peak-day": 4, "current-streak": 2, "longest-streak": 2},
 		}
 	}
 	document := map[string]any{
@@ -60,6 +76,17 @@ func sealSeriesFile(t *testing.T, dir string, labels []string, generatedAt strin
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
+	stageSeriesFile(t, dir, sealed)
+	return sealed
+}
+
+// stageSeriesFile puts EXACT bytes on the data root. Restoring the accepted
+// ciphertext — rather than re-sealing the same document — is what makes a
+// restart test a restart: the volume does not re-seal itself, and the
+// durable floor binds the exact ciphertext it recorded (2026-08-24 round-3
+// review, finding 2).
+func stageSeriesFile(t *testing.T, dir string, sealed []byte) {
+	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "token-usage.series.enc"), sealed, 0o644); err != nil {
 		t.Fatalf("stage sealed file: %v", err)
 	}
@@ -251,22 +278,41 @@ func TestPanelsDataRootConfinesReads(t *testing.T) {
 	}
 }
 
+// floorState builds one complete FloorState: an instant plus a digest of the
+// ciphertext that instant was accepted from. Both halves are required, so a
+// helper keeps every test honest about supplying them.
+func floorState(instant time.Time, seed string) panels.FloorState {
+	sum := sha256.Sum256([]byte(seed))
+	return panels.FloorState{Instant: instant, Digest: hex.EncodeToString(sum[:])}
+}
+
 // TestFloorMarkerRoundTripsAcrossRootInstances proves the durable half of
 // the 2026-08-24 review finding H2 fix on a REAL filesystem: a marker stored
 // through one rooted capability is read back by a SEPARATE rooted capability
 // over the same directory — which is exactly what a process restart is.
 //
-// It also pins the distinction finding 2 turned on (2026-08-24 review): an
-// ABSENT marker is the benign first boot and loads as (zero, false, nil),
-// while a marker that EXISTS and cannot be trusted — tampered, junk,
-// oversized, wrong key, no key — loads as an ERROR, so the loop refuses to
-// serve on a silently lowered floor instead of treating corruption as a cold
-// start.
+// It also pins the distinction finding 2 turned on: an ABSENT marker in a
+// NEVER-USED state directory is the benign first boot and loads as (zero,
+// false, nil), while a marker that EXISTS and cannot be trusted — tampered,
+// junk, oversized, wrong key, no key — loads as an ERROR, so the loop refuses
+// to serve on a silently lowered floor instead of treating corruption as a
+// cold start.
+//
+// And it pins the FULL-PRECISION round trip (2026-08-24 round-3 review,
+// finding 2). The instant used to serialize through a second-resolution
+// format: a floor written from 12:00:00.900 loaded back as 12:00:00, so an
+// authentic document at 12:00:00.100 — older than what had already been
+// published — passed the floor after a restart. Both directions are driven
+// here: the sub-second instant must survive, and the loaded value must
+// compare EQUAL rather than merely close.
 func TestFloorMarkerRoundTripsAcrossRootInstances(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	env := func(string) string { return panelsDataTestKeyHex }
-	instant := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	// Deliberately sub-second, and deliberately a value a second-resolution
+	// format would round DOWN — the exact shape of the review's mutant.
+	instant := time.Date(2026, 8, 24, 12, 0, 0, 900_000_000, time.UTC)
+	floor := floorState(instant, "accepted-ciphertext")
 
 	first, err := openPanelsDataRoot(dir)
 	if err != nil {
@@ -276,7 +322,7 @@ func TestFloorMarkerRoundTripsAcrossRootInstances(t *testing.T) {
 	if _, ok, err := writer.Load(); ok || err != nil {
 		t.Fatalf("an empty state directory must load as the benign absent marker: %v %v", ok, err)
 	}
-	if err := writer.Store(instant); err != nil {
+	if err := writer.Store(floor); err != nil {
 		t.Fatalf("store: %v", err)
 	}
 	first.Close()
@@ -289,18 +335,48 @@ func TestFloorMarkerRoundTripsAcrossRootInstances(t *testing.T) {
 	defer second.Close()
 	reader := newFloorMarker(second, env)
 	loaded, ok, err := reader.Load()
-	if !ok || err != nil || !loaded.Equal(instant) {
+	if !ok || err != nil {
 		t.Fatalf("marker did not survive the root boundary: %v %v %v", loaded, ok, err)
 	}
+	if !loaded.Instant.Equal(instant) {
+		t.Fatalf("the marker lost precision: stored %s, loaded %s",
+			instant.Format(time.RFC3339Nano), loaded.Instant.Format(time.RFC3339Nano))
+	}
+	if loaded.Digest != floor.Digest {
+		t.Fatalf("the marker lost its document digest: %q", loaded.Digest)
+	}
 
-	// A later Store REPLACES the marker; the newest instant wins.
-	later := instant.Add(time.Hour)
-	if err := reader.Store(later); err != nil {
+	// A later Store REPLACES the marker; the newest instant wins, and the
+	// sub-second component of THAT one survives too.
+	later := instant.Add(time.Hour).Add(123 * time.Millisecond)
+	laterFloor := floorState(later, "later-ciphertext")
+	if err := reader.Store(laterFloor); err != nil {
 		t.Fatalf("second store: %v", err)
 	}
-	if loaded, ok, err = reader.Load(); !ok || err != nil || !loaded.Equal(later) {
+	if loaded, ok, err = reader.Load(); !ok || err != nil || !loaded.Instant.Equal(later) {
 		t.Fatalf("marker did not advance: %v %v %v", loaded, ok, err)
 	}
+
+	// MONOTONIC (2026-08-24 round-3 review, finding 3). Two production roots
+	// over one state directory stored T3 then T2 and BOTH returned success,
+	// leaving the shared floor at T2. A store below the persisted floor is
+	// refused, so the losing writer's payload is never published either.
+	if err := reader.Store(floorState(instant, "rolled-back")); !errors.Is(err, errFloorNotMonotonic) {
+		t.Fatalf("a store below the persisted floor was accepted: %v", err)
+	}
+	if loaded, _, _ = reader.Load(); !loaded.Instant.Equal(later) {
+		t.Fatalf("the refused store still moved the floor to %v", loaded.Instant)
+	}
+	// Equality is not a lowering: a restart re-recording the same floor must
+	// not be refused.
+	if err := reader.Store(laterFloor); err != nil {
+		t.Fatalf("re-recording the persisted floor was refused: %v", err)
+	}
+
+	// A store leaves no staging file behind, and every staging name is
+	// unique — the fixed `.tmp` name let concurrent writers publish each
+	// other's bytes.
+	assertNoStagingFiles(t, dir)
 
 	// Corrupt directions all load as an ERROR — a marker that is there and
 	// unusable, which durable mode must refuse rather than forget.
@@ -310,11 +386,13 @@ func TestFloorMarkerRoundTripsAcrossRootInstances(t *testing.T) {
 		t.Fatalf("read marker: %v", err)
 	}
 	tampered := append([]byte(nil), sealed...)
-	tampered[len(tampered)/2] ^= 0x01
+	tampered[len(tampered)-1] ^= 0x01
 	for name, bytes := range map[string][]byte{
 		"tampered ciphertext": tampered,
 		"unsealed junk":       []byte("not a sealed marker"),
 		"oversized":           make([]byte, maxFloorMarkerBytes+1),
+		"header only":         []byte(panelsFloorFormat + " " + floorKeyID(panelsDataTestKeyHex) + "\n"),
+		"no header":           append([]byte(nil), sealed[10:]...),
 	} {
 		if err := os.WriteFile(markerPath, bytes, 0o600); err != nil {
 			t.Fatalf("stage %s: %v", name, err)
@@ -326,28 +404,140 @@ func TestFloorMarkerRoundTripsAcrossRootInstances(t *testing.T) {
 	if err := os.WriteFile(markerPath, sealed, 0o600); err != nil {
 		t.Fatalf("restore marker: %v", err)
 	}
-	wrongKey := newFloorMarker(second, func(string) string {
+
+	// KEY ROTATION IS A NAMED STATE (2026-08-24 round-3 review, finding 11).
+	// A marker sealed under a superseded key used to be indistinguishable
+	// from a corrupt one, so the documented rotation left the panel stale
+	// forever with no way to tell why. The marker's key identity makes it a
+	// specific refusal with a specific remedy — and still a REFUSAL: an
+	// unauthenticated header may never lower a floor.
+	rotated := newFloorMarker(second, func(string) string {
 		return strings.Repeat("ff", 32)
 	})
-	if _, ok, err := wrongKey.Load(); ok || err == nil {
-		t.Fatalf("the wrong key did not load as an untrusted marker: %v %v", ok, err)
+	if _, ok, err := rotated.Load(); ok || !errors.Is(err, errFloorKeyRotated) {
+		t.Fatalf("a rotated key did not load as the rotation state: %v %v", ok, err)
 	}
 	noKey := newFloorMarker(second, func(string) string { return "" })
 	if _, ok, err := noKey.Load(); ok || err == nil {
 		t.Fatalf("a missing key did not load as an untrusted marker: %v %v", ok, err)
 	}
-	if err := noKey.Store(instant); err == nil {
+	if err := noKey.Store(floor); err == nil {
 		t.Fatal("a missing key still stored a marker")
 	}
 
-	// And the absent marker stays benign after the directory has been used:
-	// removing it is a cold start, not a corruption.
+	// THE TOMBSTONE (2026-08-24 round-3 review, finding 4). This block
+	// asserts the exact OPPOSITE of what it asserted before the review: a
+	// marker removed from a state directory that has already recorded one is
+	// provenance LOSS, not a cold start. The old contract made `rm` a
+	// supported way to reset replay protection — and the recovery runbook
+	// told operators to do exactly that.
 	if err := os.Remove(markerPath); err != nil {
 		t.Fatalf("remove marker: %v", err)
 	}
-	if _, ok, err := reader.Load(); ok || err != nil {
-		t.Fatalf("a removed marker must load as absent, not untrusted: %v %v", ok, err)
+	if _, ok, err := reader.Load(); ok || !errors.Is(err, errFloorMarkerGone) {
+		t.Fatalf("a removed marker in a used directory must be loss, not a cold start: %v %v", ok, err)
 	}
+	// A store cannot paper over it either: the ceremony is the only way out.
+	if err := reader.Store(laterFloor); !errors.Is(err, errFloorMarkerGone) {
+		t.Fatalf("a store re-initialized a state directory that had lost its floor: %v", err)
+	}
+
+	// THE RESET CEREMONY, exactly as documented: remove the marker AND the
+	// init file. It is explicit, it is an operator action, and it truthfully
+	// returns the floor to the embedded snapshot's instant.
+	if err := os.Remove(filepath.Join(dir, "token-usage.floor.init")); err != nil {
+		t.Fatalf("remove tombstone: %v", err)
+	}
+	if _, ok, err := reader.Load(); ok || err != nil {
+		t.Fatalf("the reset ceremony did not return a benign cold start: %v %v", ok, err)
+	}
+	if err := reader.Store(floor); err != nil {
+		t.Fatalf("a reset directory refused a fresh floor: %v", err)
+	}
+}
+
+// assertNoStagingFiles proves a completed store left no temporary file in
+// the state directory. Unique O_EXCL staging names are what stop two writers
+// from renaming each other's bytes into place, and a leaked one would be the
+// tell that the sequence did not complete.
+func assertNoStagingFiles(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read state directory: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".tmp") {
+			t.Fatalf("a staging file survived a completed store: %q", entry.Name())
+		}
+	}
+}
+
+// TestFloorMarkerStoresAreExclusiveAndMonotonic is the 2026-08-24 round-3
+// finding 3 regression test, driven the way the review drove it: TWO
+// independently opened production roots over ONE state directory, storing
+// out of order. Both used to return success and the shared floor ended at
+// the LOWER instant — a durable floor that two pods could walk backwards
+// between them. The lower store is now refused, so the writer that would
+// have lowered it never publishes either.
+func TestFloorMarkerStoresAreExclusiveAndMonotonic(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	env := func(string) string { return panelsDataTestKeyHex }
+	base := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+
+	rootA, err := openPanelsDataRoot(dir)
+	if err != nil {
+		t.Fatalf("open root A: %v", err)
+	}
+	defer rootA.Close()
+	rootB, err := openPanelsDataRoot(dir)
+	if err != nil {
+		t.Fatalf("open root B: %v", err)
+	}
+	defer rootB.Close()
+	writerA := newFloorMarker(rootA, env)
+	writerB := newFloorMarker(rootB, env)
+
+	high := floorState(base.Add(3*time.Minute), "t3")
+	low := floorState(base.Add(2*time.Minute), "t2")
+	if err := writerA.Store(high); err != nil {
+		t.Fatalf("store T3: %v", err)
+	}
+	if err := writerB.Store(low); !errors.Is(err, errFloorNotMonotonic) {
+		t.Fatalf("a second writer lowered the shared floor: %v", err)
+	}
+	loaded, ok, err := writerA.Load()
+	if !ok || err != nil || !loaded.Instant.Equal(high.Instant) {
+		t.Fatalf("the shared floor is %v (%v %v), want T3", loaded.Instant, ok, err)
+	}
+
+	// Concurrent stores of the SAME advancing sequence must all either
+	// commit or be refused as non-monotonic — never leave a torn or
+	// foreign-bytes marker behind, which the shared `.tmp` staging name made
+	// possible.
+	var wait sync.WaitGroup
+	for index := range 8 {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			writer := newFloorMarker(rootA, env)
+			if index%2 == 1 {
+				writer = newFloorMarker(rootB, env)
+			}
+			_ = writer.Store(floorState(base.Add(time.Duration(10+index)*time.Minute),
+				fmt.Sprintf("concurrent-%d", index)))
+		}(index)
+	}
+	wait.Wait()
+	loaded, ok, err = writerA.Load()
+	if !ok || err != nil {
+		t.Fatalf("concurrent stores left an unreadable floor: %v %v %v", loaded, ok, err)
+	}
+	if loaded.Instant.Before(base.Add(10 * time.Minute)) {
+		t.Fatalf("concurrent stores lowered the floor to %v", loaded.Instant)
+	}
+	assertNoStagingFiles(t, dir)
 }
 
 // TestStartPanelDataFloorSurvivesProcessRestart is the composition-root
@@ -391,7 +581,7 @@ func TestStartPanelDataFloorSurvivesProcessRestart(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	labels := shippedSourceLabels(t, site1)
-	sealSeriesFile(t, dataDir, labels, acceptedAt)
+	accepted := sealSeriesFile(t, dataDir, labels, acceptedAt)
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	if err := site1.StartPanelData(ctx1, dataDir, stateDir, env); err != nil {
 		t.Fatalf("first StartPanelData: %v", err)
@@ -426,9 +616,10 @@ func TestStartPanelDataFloorSurvivesProcessRestart(t *testing.T) {
 	cancel2()
 	site2.Close()
 
-	// Process three, facing the UNCHANGED accepted file: recovery, not
-	// replay — served ok again at the accepted instant.
-	sealSeriesFile(t, dataDir, labels, acceptedAt)
+	// Process three, facing the UNCHANGED accepted file — the exact bytes,
+	// restored — is recovery, not replay: served ok again at the accepted
+	// instant.
+	stageSeriesFile(t, dataDir, accepted)
 	site3, err := New(testsupport.FrontendFS())
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -505,5 +696,60 @@ func TestNewUnsealerReadsTheKeyPerCall(t *testing.T) {
 	supplied = panelsDataTestKeyHex + "\n"
 	if plaintext, err := unseal(sealed); err != nil || string(plaintext) != "payload" {
 		t.Fatalf("newline-terminated key from the Secret ceremony: %v %q", err, plaintext)
+	}
+}
+
+// TestPanelsFloorNoticeClassifiesTheStateDirectory pins the one
+// operator-facing line the durable floor produces (2026-08-24 round-3
+// review, findings 4 and 11). Every refusal keeps the panel stale, which is
+// correct and completely uninformative on its own; the notice is what tells
+// an operator WHICH of the refusals they are looking at, and therefore which
+// remedy in docs/usage-export.md applies. It must never carry a path, a key,
+// or any payload byte.
+func TestPanelsFloorNoticeClassifiesTheStateDirectory(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	env := func(string) string { return panelsDataTestKeyHex }
+	root, err := openPanelsDataRoot(dir)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	defer root.Close()
+
+	// A never-used state directory says nothing: silence is the correct
+	// notice for the ordinary first boot.
+	if notice := describeFloorState(newFloorMarker(root, env)); notice != "" {
+		t.Fatalf("a cold state directory produced %q", notice)
+	}
+
+	floor := floorState(time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC), "accepted")
+	if err := newFloorMarker(root, env).Store(floor); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	if notice := describeFloorState(newFloorMarker(root, env)); !strings.Contains(notice, "recovered at") {
+		t.Fatalf("a healthy floor produced %q", notice)
+	}
+
+	rotated := describeFloorState(newFloorMarker(root, func(string) string {
+		return strings.Repeat("ab", 32)
+	}))
+	if !strings.Contains(rotated, "sealed under a different key") ||
+		!strings.Contains(rotated, "reset ceremony") {
+		t.Fatalf("a rotated key produced %q", rotated)
+	}
+
+	if err := os.Remove(filepath.Join(dir, "token-usage.floor.enc")); err != nil {
+		t.Fatalf("remove marker: %v", err)
+	}
+	lost := describeFloorState(newFloorMarker(root, env))
+	if !strings.Contains(lost, "marker is gone") || !strings.Contains(lost, "reset ceremony") {
+		t.Fatalf("a lost marker produced %q", lost)
+	}
+
+	// Nothing the notice says may name the directory it describes.
+	for _, notice := range []string{rotated, lost} {
+		if strings.Contains(notice, dir) || strings.Contains(notice, panelsDataTestKeyHex) {
+			t.Fatalf("the notice leaked a path or key: %q", notice)
+		}
 	}
 }

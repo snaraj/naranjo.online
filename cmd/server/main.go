@@ -102,6 +102,17 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 		if err := handler.StartPanelData(ctx, panelsDataRoot, panelsDataState, lookupEnv); err != nil {
 			return err
 		}
+		// The durable replay floor's one operator-facing line (2026-08-24
+		// round-3 review, findings 4 and 11). The loop itself stays silent
+		// and simply refuses ticks it cannot trust, which is correct but
+		// indistinguishable from every other reason a panel goes stale. This
+		// says WHICH state the state directory is in — recovered, rotated,
+		// lost, or untrusted — so the remedy in docs/usage-export.md is
+		// reachable without reading the code. It carries no path, no key,
+		// and no payload.
+		if notice := handler.PanelsFloorNotice(); notice != "" {
+			slog.Info(notice, "panel", "token-usage")
+		}
 	}
 	if panelsRefresh {
 		// Explicit opt-in (the chart supplies it in production) following the

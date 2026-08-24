@@ -17,6 +17,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -98,15 +99,21 @@ func productionUnsealer(hexKey string) Unsealer {
 // set (2026-08-24 review finding 7): one envelope carries one status and one
 // generatedAt for the whole payload, so a document that refreshed alpha and
 // left beta at release-time data could not be described honestly by either.
-// beta's section is deliberately minimal — a series and nothing else — since
-// categories, windows and derived tiles are all optional per source.
+// Every section carries its own capturedAt and the COMPLETE window and
+// derived sets (2026-08-24 round-3 review, finding 5). Both used to be
+// optional, which left release-age figures rendered beside a runtime series
+// under one envelope instant; beta's section is now a whole section like
+// alpha's, differing only in carrying no category partition — the one part
+// that genuinely is optional, because a source may report totals it cannot
+// break down.
 func validDocument() map[string]any {
 	return map[string]any{
 		"schema":      "usage-series/v1",
 		"generatedAt": "2026-08-24T12:00:00Z",
 		"sources": map[string]any{
 			"alpha": map[string]any{
-				"series": map[string]any{"startDate": "2026-08-15", "totals": []int64{5, 0, 7}, "recorded": true},
+				"capturedAt": "2026-08-24T12:00:00Z",
+				"series":     map[string]any{"startDate": "2026-08-15", "totals": []int64{5, 0, 7}, "recorded": true},
 				"categories": map[string]any{
 					"output": []int64{4, 0, 4},
 					"input":  []int64{1, 0, 3},
@@ -118,10 +125,21 @@ func validDocument() map[string]any {
 				"derived": map[string]any{"peak-day": 7, "current-streak": 1, "longest-streak": 1},
 			},
 			"beta": map[string]any{
-				"series": map[string]any{"startDate": "2026-08-18", "totals": []int64{2, 3}, "recorded": true},
+				"capturedAt": "2026-08-24T12:00:00Z",
+				"series":     map[string]any{"startDate": "2026-08-18", "totals": []int64{2, 3}, "recorded": true},
+				"windows": map[string]any{
+					"today": map[string]any{"input": 1, "output": 1},
+					"week":  map[string]any{"input": 2, "output": 3},
+				},
+				"derived": map[string]any{"peak-day": 3, "current-streak": 2, "longest-streak": 2},
 			},
 		},
 	}
+}
+
+// betaSection is alphaSection's twin for the second shipped source.
+func betaSection(document map[string]any) map[string]any {
+	return document["sources"].(map[string]any)["beta"].(map[string]any)
 }
 
 // sealDocument marshals and seals a document under the test key.
@@ -158,7 +176,9 @@ func fixedNow() time.Time {
 // process-memory mode, where there is no durable floor to commit.
 func refreshDirect(t *testing.T, reg *Registry, state *panelState, fsys fs.FS, unseal Unsealer) (time.Time, error) {
 	t.Helper()
-	return reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, reg.embeddedUsageInstant(state), false, nil)
+	floor := FloorState{Instant: reg.embeddedUsageInstant(state)}
+	accepted, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, floor, false, nil)
+	return accepted.Instant, err
 }
 
 // decodeServedUsage decodes the panel's currently served envelope.
@@ -229,9 +249,16 @@ func TestDataRootReplacesTheSeriesAndDerivedTiles(t *testing.T) {
 	}
 	// EVERY shipped source is refreshed by the same push, which is what
 	// makes one envelope status and one generatedAt honest for the whole
-	// payload (2026-08-24 review finding 7). beta's minimal section proves
-	// categories, windows and derived stay optional per source.
+	// payload (2026-08-24 review finding 7), and every section carries its
+	// own capture instant so a reader can see which half is older
+	// (2026-08-24 round-3 review, finding 5).
+	if alpha.CapturedAt != "2026-08-24T12:00:00Z" {
+		t.Fatalf("alpha capturedAt %q", alpha.CapturedAt)
+	}
 	beta := data.Sources[1]
+	if beta.CapturedAt != "2026-08-24T12:00:00Z" {
+		t.Fatalf("beta capturedAt %q", beta.CapturedAt)
+	}
 	if beta.Label != "beta" || beta.Series == nil || beta.Series.StartDate != "2026-08-18" || len(beta.Series.Totals) != 2 {
 		t.Fatalf("beta series not replaced: %+v", beta.Series)
 	}
@@ -341,7 +368,6 @@ func TestDataRootRefusesHostileDocuments(t *testing.T) {
 			section := alphaSection(d)
 			section["series"].(map[string]any)["totals"] = []int64{}
 			delete(section, "categories")
-			delete(section, "windows")
 		}, "days"},
 		"negative total": {func(d map[string]any) {
 			section := alphaSection(d)
@@ -357,6 +383,33 @@ func TestDataRootRefusesHostileDocuments(t *testing.T) {
 		"category partition broken": {func(d map[string]any) {
 			alphaSection(d)["categories"].(map[string]any)["input"] = []int64{2, 0, 3}
 		}, "sum"},
+		// 2026-08-24 round-3 review, finding 9. Every value here is
+		// non-negative and every value is authenticated; the DAY SUM was a
+		// plain int64 addition, so MaxInt64 + MaxInt64 + 2 wrapped to exactly
+		// zero and satisfied the partition against a zero total. A partition
+		// check that arithmetic can wrap is not a partition check.
+		"category values overflow the day partition": {func(d map[string]any) {
+			section := alphaSection(d)
+			section["series"].(map[string]any)["totals"] = []int64{0}
+			section["categories"] = map[string]any{
+				"input":      []int64{math.MaxInt64},
+				"output":     []int64{math.MaxInt64},
+				"cache-read": []int64{2},
+			}
+			section["windows"] = map[string]any{
+				"today": map[string]any{"input": 0, "output": 0},
+				"week":  map[string]any{"input": 0, "output": 0},
+			}
+			section["derived"] = map[string]any{"peak-day": 0, "current-streak": 0, "longest-streak": 0}
+		}, "bound every stage of this pipeline shares"},
+		"a count above the shared numeric bound": {func(d map[string]any) {
+			alphaSection(d)["derived"].(map[string]any)["peak-day"] = int64(maxCountValue) + 1
+		}, "bound every stage of this pipeline shares"},
+		"a window above the shared numeric bound": {func(d map[string]any) {
+			alphaSection(d)["windows"].(map[string]any)["week"] = map[string]any{
+				"input": int64(maxCountValue) + 1, "output": 1,
+			}
+		}, "bound every stage of this pipeline shares"},
 		"category key with markup": {func(d map[string]any) {
 			categories := alphaSection(d)["categories"].(map[string]any)
 			categories["<img src=x>"] = categories["input"]
@@ -398,14 +451,41 @@ func TestDataRootRefusesHostileDocuments(t *testing.T) {
 			section["categories"] = categories
 		}, "categories"},
 		"window outside the vocabulary": {func(d map[string]any) {
-			alphaSection(d)["windows"].(map[string]any)["month"] = map[string]any{"input": 1, "output": 1}
+			// REPLACED, not added: the set must stay complete, so this
+			// isolates the vocabulary refusal from the completeness one.
+			windows := alphaSection(d)["windows"].(map[string]any)
+			windows["month"] = windows["today"]
+			delete(windows, "today")
 		}, "window key"},
+		"a window omitted": {func(d map[string]any) {
+			delete(alphaSection(d)["windows"].(map[string]any), "week")
+		}, "release-time value beside a runtime series"},
+		"windows omitted entirely": {func(d map[string]any) {
+			delete(alphaSection(d), "windows")
+		}, "release-time value beside a runtime series"},
 		"negative window": {func(d map[string]any) {
 			alphaSection(d)["windows"].(map[string]any)["today"] = map[string]any{"input": -1, "output": 1}
 		}, "negative"},
 		"derived outside the vocabulary": {func(d map[string]any) {
-			alphaSection(d)["derived"].(map[string]any)["lifetime"] = 9999
+			derived := alphaSection(d)["derived"].(map[string]any)
+			derived["lifetime"] = derived["peak-day"]
+			delete(derived, "peak-day")
 		}, "closed vocabulary"},
+		"a derived figure omitted": {func(d map[string]any) {
+			delete(alphaSection(d)["derived"].(map[string]any), "longest-streak")
+		}, "release-time value beside a runtime series"},
+		"derived omitted entirely": {func(d map[string]any) {
+			delete(alphaSection(d), "derived")
+		}, "release-time value beside a runtime series"},
+		"capturedAt omitted": {func(d map[string]any) {
+			delete(betaSection(d), "capturedAt")
+		}, "capturedAt"},
+		"capturedAt malformed": {func(d map[string]any) {
+			betaSection(d)["capturedAt"] = "yesterday"
+		}, "capturedAt"},
+		"capturedAt later than the document carrying it": {func(d map[string]any) {
+			betaSection(d)["capturedAt"] = "2026-08-24T12:00:01Z"
+		}, "later than the document"},
 		"negative derived": {func(d map[string]any) {
 			alphaSection(d)["derived"].(map[string]any)["peak-day"] = -7
 		}, "negative"},
@@ -606,8 +686,6 @@ func TestDataRootRefusesAnOverBudgetEnvelope(t *testing.T) {
 		"input": category, "output": category, "cache-read": category,
 		"cache-write": category, "reasoning": category,
 	}
-	delete(section, "windows")
-	delete(section, "derived")
 	before := state.current.Load()
 	_, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex))
 	if err == nil || !strings.Contains(err.Error(), "over budget") {
@@ -632,7 +710,7 @@ func TestDataRootTreatsAbsentFileAndUnchangedFileAsBenign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first refresh: %v", err)
 	}
-	if _, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, accepted, false, nil); !errors.Is(err, errSeriesUnchanged) {
+	if _, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, FloorState{Instant: accepted}, false, nil); !errors.Is(err, errSeriesUnchanged) {
 		t.Fatalf("unchanged file: got %v, want errSeriesUnchanged", err)
 	}
 }
@@ -660,10 +738,15 @@ func (l *lockedFS) swap(inner fs.FS) {
 // whose virtual clock starts at midnight 2000-01-01 UTC.
 var synctestSnapshot = strings.Replace(dataRootSnapshot, "2026-08-20T00:00:00Z", "1999-12-31T00:00:00Z", 1)
 
-// synctestDocument builds a valid document dated inside the bubble's clock.
+// synctestDocument builds a valid document dated inside the bubble's clock:
+// the export instant AND every source's own capture instant, which must not
+// be later than the document carrying them (2026-08-24 round-3 finding 5).
 func synctestDocument(generatedAt string) map[string]any {
 	document := validDocument()
 	document["generatedAt"] = generatedAt
+	for _, section := range document["sources"].(map[string]any) {
+		section.(map[string]any)["capturedAt"] = generatedAt
+	}
 	return document
 }
 
@@ -752,6 +835,7 @@ func TestDataRootLoopServesRefreshesAndDegrades(t *testing.T) {
 type fakeMarker struct {
 	mu         sync.Mutex
 	instant    time.Time
+	digest     string
 	ok         bool
 	loadErr    error
 	storeErr   error
@@ -760,22 +844,23 @@ type fakeMarker struct {
 
 func (m *fakeMarker) marker() *FloorMarker {
 	return &FloorMarker{
-		Load: func() (time.Time, bool, error) {
+		Load: func() (FloorState, bool, error) {
 			m.mu.Lock()
 			defer m.mu.Unlock()
 			if m.loadErr != nil {
-				return time.Time{}, false, m.loadErr
+				return FloorState{}, false, m.loadErr
 			}
-			return m.instant, m.ok, nil
+			return FloorState{Instant: m.instant, Digest: m.digest}, m.ok, nil
 		},
-		Store: func(instant time.Time) error {
+		Store: func(floor FloorState) error {
 			m.mu.Lock()
 			defer m.mu.Unlock()
 			m.storeCalls++
 			if m.storeErr != nil {
 				return m.storeErr
 			}
-			m.instant = instant
+			m.instant = floor.Instant
+			m.digest = floor.Digest
 			m.ok = true
 			return nil
 		},
@@ -820,10 +905,15 @@ func runMarkeredLoop(t *testing.T, snapshot string, fsys fs.FS, marker *FloorMar
 func TestDataRootFloorSurvivesRestart(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		shared := &fakeMarker{}
+		// Sealed ONCE and reused, because that is what a restart actually
+		// faces: the same bytes still sitting on the mounted volume. Sealing
+		// twice would produce a different ciphertext under a fresh nonce,
+		// which is a different file — see the same-instant case below.
+		pushed := sealDocument(t, synctestDocument("2000-01-01T00:04:00Z"))
 
 		// Process one accepts the 00:04 push and persists the floor.
 		envelope, _, cancel := runMarkeredLoop(t, synctestSnapshot,
-			seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:04:00Z"))), shared.marker())
+			seriesFS(pushed), shared.marker())
 		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:04:00Z" {
 			t.Fatalf("first process: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
 		}
@@ -847,13 +937,30 @@ func TestDataRootFloorSurvivesRestart(t *testing.T) {
 		cancel()
 		synctest.Wait()
 
-		// The restart facing the UNCHANGED file: the exact file the first
-		// process accepted is recovery, not replay — served ok again, so a
+		// The restart facing the UNCHANGED file — the exact bytes the first
+		// process accepted — is recovery, not replay: served ok again, so a
 		// restart never trades freshness for the floor.
 		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot,
-			seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:04:00Z"))), shared.marker())
+			seriesFS(pushed), shared.marker())
 		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:04:00Z" {
 			t.Fatalf("restart did not re-serve the accepted file: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		cancel()
+		synctest.Wait()
+
+		// 2026-08-24 round-3 finding 2. Recovery admits equality with the
+		// floor exactly once per restart, and bound to the INSTANT alone
+		// that door opened for any authentic document sharing it. A
+		// DIFFERENT ciphertext at the same instant — here a fresh seal of a
+		// different payload, which is exactly what an attacker replaying a
+		// captured file under the same key produces — must be refused, and
+		// the marker's recorded digest is what refuses it.
+		different := synctestDocument("2000-01-01T00:04:00Z")
+		alphaSection(different)["derived"].(map[string]any)["peak-day"] = 5
+		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot,
+			seriesFS(sealDocument(t, different)), shared.marker())
+		if envelope.Status != StatusStale {
+			t.Fatalf("restart admitted a different document at the accepted instant: status %q", envelope.Status)
 		}
 		cancel()
 		synctest.Wait()
@@ -931,6 +1038,88 @@ func TestDataRootMarksStaleWhenAnAcceptedFileDisappears(t *testing.T) {
 			t.Fatalf("after recovery: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
 		}
 	})
+}
+
+// TestDataRootReportsProvenanceLossOnTheFirstTickAfterRestart is the
+// 2026-08-24 round-3 finding 6 regression test.
+//
+// The delete-after-serve repair above bound its truthfulness to
+// acceptedInProcess — this process published something, then lost the file.
+// A RESTART resets that flag while the evidence of publication survives in
+// the durable marker, so a pod that booted with a valid persisted floor and
+// no source file served `ok` on its first tick: it claimed a freshness whose
+// document it had just failed to find, and the reviewer observed exactly
+// that. A persisted marker IS proof that a document was published, so an
+// absent source beside one is provenance loss from the first tick.
+//
+// The cold direction is pinned in the same test, because the fix must not
+// make a genuinely first boot noisy: no marker and no file stays `ok`.
+func TestDataRootReportsProvenanceLossOnTheFirstTickAfterRestart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// The restart: a floor persisted by a previous process, and a
+		// mounted root with nothing in it.
+		// Inside the future-skew bound on purpose: a marker AHEAD of the
+		// clock is refused for its own reason, and this test is about the
+		// absent SOURCE, not about a nonsensical floor.
+		published := &fakeMarker{
+			instant: time.Date(2000, 1, 1, 0, 5, 0, 0, time.UTC),
+			digest:  "0000000000000000000000000000000000000000000000000000000000000000",
+			ok:      true,
+		}
+		envelope, data, cancel := runMarkeredLoop(t, synctestSnapshot, fstest.MapFS{}, published.marker())
+		if envelope.Status != StatusStale {
+			t.Fatalf("a restart with a persisted floor and no source served %q on its first tick, want stale", envelope.Status)
+		}
+		// The DATA still stands — only the freshness claim is withdrawn.
+		if data.Sources[0].Series == nil {
+			t.Fatal("the payload was dropped rather than marked stale")
+		}
+		cancel()
+		synctest.Wait()
+
+		// Non-vacuity, and the cold direction: no marker at all, same empty
+		// root, and the panel is legitimately serving its embedded snapshot
+		// before any push has ever happened.
+		cold := &fakeMarker{}
+		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot, fstest.MapFS{}, cold.marker())
+		if envelope.Status != StatusOK {
+			t.Fatalf("a genuine cold boot served %q, want ok", envelope.Status)
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
+// TestCheckedCountArithmeticIsNonVacuous drives the two halves of the
+// numeric contract directly (2026-08-24 round-3 review, finding 9): the
+// shared bound, and the overflow-checked addition that holds even if that
+// bound were ever widened.
+func TestCheckedCountArithmeticIsNonVacuous(t *testing.T) {
+	t.Parallel()
+	for name, value := range map[string]int64{
+		"negative":  -1,
+		"above cap": maxCountValue + 1,
+		"max int64": math.MaxInt64,
+	} {
+		if err := admitCount(value); err == nil {
+			t.Fatalf("%s count was admitted", name)
+		}
+	}
+	for name, value := range map[string]int64{
+		"zero":       0,
+		"one":        1,
+		"exactly at": maxCountValue,
+	} {
+		if err := admitCount(value); err != nil {
+			t.Fatalf("%s count was refused: %v", name, err)
+		}
+	}
+	if sum, ok := addCounts(maxCountValue, maxCountValue); !ok || sum != 2*maxCountValue {
+		t.Fatalf("addCounts(cap, cap) = %d %v", sum, ok)
+	}
+	if _, ok := addCounts(math.MaxInt64, 1); ok {
+		t.Fatal("addCounts wrapped instead of refusing")
+	}
 }
 
 // TestDataRootFloorMarkerFailsClosed pins every marker direction under the
@@ -1032,7 +1221,11 @@ func TestDataRootNeverPublishesAheadOfThePersistedFloor(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		shared := &fakeMarker{}
 		reg, state := usageDataRootRegistry(t, synctestSnapshot)
-		fsys := &lockedFS{inner: seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:02:00Z")))}
+		// Sealed once and reused across the restart below: the file on the
+		// volume does not re-seal itself, and the marker binds the exact
+		// ciphertext it recorded (2026-08-24 round-3 finding 2).
+		published := sealDocument(t, synctestDocument("2000-01-01T00:02:00Z"))
+		fsys := &lockedFS{inner: seriesFS(published)}
 		ctx, cancel := context.WithCancel(context.Background())
 		reg.startDataRoot(ctx, fsys, productionUnsealer(dataRootTestKeyHex), shared.marker(), time.Now)
 
@@ -1071,7 +1264,7 @@ func TestDataRootNeverPublishesAheadOfThePersistedFloor(t *testing.T) {
 		//    have served before this restart never was.
 		shared.failStoring(nil)
 		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot,
-			seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:02:00Z"))), shared.marker())
+			seriesFS(published), shared.marker())
 		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:02:00Z" {
 			t.Fatalf("restart: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
 		}

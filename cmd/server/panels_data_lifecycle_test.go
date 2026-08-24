@@ -76,13 +76,22 @@ func stageSealedSeries(t *testing.T, dir string, labels []string) string {
 	sources := make(map[string]any, len(labels))
 	for _, label := range labels {
 		sources[label] = map[string]any{
-			"series": map[string]any{"startDate": "2026-08-20", "totals": []int64{11, 31}, "recorded": true},
+			// A WHOLE section: its own capture instant plus the complete
+			// window and derived vocabularies, so no release-time figure is
+			// inherited into a payload stamped with a runtime instant
+			// (2026-08-24 round-3 review, finding 5).
+			"capturedAt": generatedAt,
+			"series":     map[string]any{"startDate": "2026-08-20", "totals": []int64{11, 31}, "recorded": true},
 			"categories": map[string]any{
 				"input":      []int64{2, 4},
 				"output":     []int64{3, 7},
 				"cache-read": []int64{6, 20},
 			},
-			"windows": map[string]any{"today": map[string]any{"input": 24, "output": 7}},
+			"windows": map[string]any{
+				"today": map[string]any{"input": 24, "output": 7},
+				"week":  map[string]any{"input": 24, "output": 7},
+			},
+			"derived": map[string]any{"peak-day": 31, "current-streak": 2, "longest-streak": 2},
 		}
 	}
 	document := map[string]any{
@@ -168,9 +177,18 @@ func TestRunServesThePanelsDataLifecycleEndToEnd(t *testing.T) {
 			if len(categories) != 3 || categories[0].(map[string]any)["key"] != "input" {
 				t.Fatalf("served categories %v", categories)
 			}
+			// The COMPLETE window set, in canonical order: a section may no
+			// longer refresh one window and leave the other at its
+			// release-time value (2026-08-24 round-3 review, finding 5).
 			windows := source["windows"].([]any)
-			if len(windows) != 1 || windows[0].(map[string]any)["period"] != "today" {
+			if len(windows) != 2 ||
+				windows[0].(map[string]any)["period"] != "today" ||
+				windows[1].(map[string]any)["period"] != "week" {
 				t.Fatalf("served windows %v", windows)
+			}
+			// And its own capture instant travels with it.
+			if source["capturedAt"] != stagedGeneratedAt {
+				t.Fatalf("served capturedAt %v, want %v", source["capturedAt"], stagedGeneratedAt)
 			}
 			break
 		}

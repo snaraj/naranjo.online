@@ -86,6 +86,15 @@ type Site struct {
 	// SEPARATE root on a separate mount: the data root above stays read-only
 	// in every layer, and this one holds nothing but the floor marker.
 	panelsState *os.Root
+	// panelsFloorNotice is the one-line operator classification of the
+	// persisted replay floor, observed once at StartPanelData and read back
+	// by the composition root for its startup log (2026-08-24 round-3
+	// review, findings 4 and 11: "the panel went stale" and "you rotated the
+	// key, run the reset ceremony" are different situations and must be
+	// legible as different situations). Empty means nothing worth saying.
+	// Nothing depends on it for correctness — the loop re-loads and re-
+	// decides on every tick.
+	panelsFloorNotice string
 }
 
 const (

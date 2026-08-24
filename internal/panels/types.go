@@ -146,6 +146,20 @@ type TokenUsageSource struct {
 	Series *TokenUsageSeries `json:"series,omitempty"`
 	// Insights holds the labeled proportions rendered under the grid.
 	Insights []TokenUsageInsight `json:"insights,omitempty"`
+	// CapturedAt is the RFC 3339 instant THIS source's figures were captured,
+	// present only on a source refreshed from the sealed runtime document
+	// (2026-08-24 round-3 review, finding 5). One envelope carries one
+	// `generatedAt` for the whole payload, and the whole payload is only as
+	// fresh as its oldest constituent — so the envelope reports that oldest
+	// instant and every source says, here, when it was actually measured. A
+	// reader can then see which half of a two-source panel is the older one
+	// instead of inferring a freshness neither field ever promised.
+	//
+	// Additive, exactly like Account, Stats, Series, Insights and the
+	// series' Recorded flag before it: a payload written before this field
+	// existed still decodes and still renders, so the kind stays
+	// token-usage/v1.
+	CapturedAt string `json:"capturedAt,omitempty"`
 }
 
 // TokenUsageStat is one headline tile: a stable key, a display label, a
@@ -1143,7 +1157,60 @@ const (
 	// its series into. The realistic vocabularies hold four or five; the
 	// bound stops a hostile file from inflating the payload with hundreds.
 	maxSeriesCategories = 8
+
+	// maxCountValue is THE upper bound on every count a pushed document
+	// carries, and it is one number three languages agree on (2026-08-24
+	// round-3 review, finding 9). 2^53-1 is the largest integer JavaScript
+	// represents exactly, so a figure this boundary admits is a figure the
+	// browser renders without silently rounding — Number.isSafeInteger on
+	// the frontend and the same bound in the producer's emission guard are
+	// the other two statements of it.
+	//
+	// It is a security bound as well as a rendering one. Category values were
+	// individually authenticated, individually non-negative, and summed with
+	// a plain int64 addition: MaxInt64 + MaxInt64 + 2 wrapped to zero and
+	// passed the partition check against a zero total. Bounding the values
+	// makes maxSeriesCategories of them unable to overflow at all (8 * 2^53
+	// is far below 2^63), and addCounts refuses an overflow independently, so
+	// neither bound is load-bearing alone.
+	maxCountValue = 1<<53 - 1
 )
+
+// windowServeOrder is the canonical order windows are SERVED in, and the
+// complete set a pushed section must carry. Same reasoning as
+// categoryServeOrder: a fixed order keeps every replica's bytes — and so its
+// digest ETag — identical.
+var windowServeOrder = []string{"today", "week"}
+
+// FloorState is what the durable replay floor records: the capture instant of
+// the last PUBLISHED series document, and the SHA-256 of the exact ciphertext
+// that carried it. Both halves are load-bearing (2026-08-24 round-3 review,
+// finding 2).
+//
+// The INSTANT is the monotonic bound: nothing older than it is ever admitted
+// again. It is kept at full precision — an earlier revision serialized it
+// through a second-resolution format, so a floor written from 12:00:00.900
+// came back as 12:00:00 and an authentic document at 12:00:00.100 walked back
+// under it after a restart.
+//
+// The DIGEST is what makes restart recovery a recovery rather than a window.
+// A restarted process must re-admit the one document its predecessor
+// published, which means admitting equality with the floor exactly once; bound
+// to the instant alone, that admitted any other authentic document sharing
+// the instant. Bound to the digest, "the same instant" has to also be "the
+// same bytes".
+//
+// The concrete persistence lives with the composition root, exactly like the
+// Unsealer: this package gains no write capability of its own. See
+// FloorMarker in dataroot.go.
+type FloorState struct {
+	// Instant is the accepted capture instant, at full precision.
+	Instant time.Time
+	// Digest is the lowercase hex SHA-256 of the sealed bytes that set this
+	// floor. Empty on a floor that came from the embedded snapshot, which is
+	// an instant with no ciphertext behind it.
+	Digest string
+}
 
 // usageSeriesWindowKeys is the CLOSED set of window keys a series document
 // may carry, mapped to the periods the panel serves. A closed set because a
@@ -1194,6 +1261,14 @@ type usageSeriesDocument struct {
 
 // usageSeriesSource is one source's captured section.
 type usageSeriesSource struct {
+	// CapturedAt is THIS source's own RFC 3339 capture instant, and it is
+	// required (2026-08-24 round-3 review, finding 5). A merged source is
+	// produced by a separate capture run and can be arbitrarily older than
+	// the export carrying it, so without a per-source instant the combined
+	// document relabelled stale data as current under one `generatedAt`. It
+	// may not be later than the document that carries it, and the envelope's
+	// served instant is the OLDEST of them.
+	CapturedAt string `json:"capturedAt"`
 	// Series is the daily total series; Recorded must be true — this file IS
 	// an out-of-band capture, and a file claiming live provenance is refused.
 	Series usageSeriesSection `json:"series"`
@@ -1201,12 +1276,15 @@ type usageSeriesSource struct {
 	// key. Every category must have exactly the series' length and the
 	// per-day category sum must equal the series total.
 	Categories map[string][]int64 `json:"categories,omitempty"`
-	// Windows optionally carries aggregate windows, keyed by the closed
-	// usageSeriesWindowKeys vocabulary.
-	Windows map[string]usageSeriesWindow `json:"windows,omitempty"`
-	// Derived optionally refreshes the series-derived stat tiles, keyed by
-	// the closed usageSeriesDerivedKeys vocabulary.
-	Derived map[string]int64 `json:"derived,omitempty"`
+	// Windows carries the COMPLETE aggregate window set, keyed by the closed
+	// usageSeriesWindowKeys vocabulary. Required and complete: an omitted
+	// window used to leave the release-time one rendered beside a runtime
+	// series under one instant (2026-08-24 round-3 review, finding 5).
+	Windows map[string]usageSeriesWindow `json:"windows"`
+	// Derived carries the COMPLETE series-derived stat set, keyed by the
+	// closed usageSeriesDerivedKeys vocabulary. Required and complete, for
+	// the same reason Windows is.
+	Derived map[string]int64 `json:"derived"`
 }
 
 // usageSeriesSection mirrors TokenUsageSeries' on-disk form.
