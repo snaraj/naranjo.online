@@ -130,6 +130,52 @@
   --palette-sepia-grid-3: #b98f4a;
   --palette-sepia-grid-4: #d9b676;
 
+  /* The token-usage CATEGORY set: identity colors for the per-day breakdown
+     (input, output, cache read, cache write, reasoning — slots 1..5, fixed
+     per category key so a color follows its entity across every payload;
+     slot 0 is the neutral for any key outside that vocabulary). These are
+     categorical, not a ramp: each chromatic mode's five hues were validated
+     with the dataviz palette checks against that mode's own raised-surface
+     value — lightness band, chroma floor, adjacent-pair CVD separation
+     >= 8, normal-vision separation >= 15, and >= 3:1 contrast — with all
+     six checks passing for light, slate, and sepia.
+
+     The true dark mode is the DELIBERATE exception, exactly as its grid
+     ramp is: the mode's whole design is that the brand mark stays its only
+     chromatic thing, so categories step in lightness over the same
+     white-over-base composite as its surfaces, every step at or above 3:1
+     on the dark card. Lightness steps cannot pass a hue-categorical validator and
+     are not asked to — identity in that mode rides the written label beside
+     every chip and the fixed segment order, never the color alone, which
+     the dataviz floor requires everywhere anyway. */
+  --palette-light-cat-0: #5f6672;
+  --palette-light-cat-1: #2a63b8;
+  --palette-light-cat-2: #96550a;
+  --palette-light-cat-3: #0b8a6a;
+  --palette-light-cat-4: #6d4bb8;
+  --palette-light-cat-5: #a3315e;
+
+  --palette-dark-cat-0: #565656;
+  --palette-dark-cat-1: #6f6f6f;
+  --palette-dark-cat-2: #868686;
+  --palette-dark-cat-3: #a2a2a2;
+  --palette-dark-cat-4: #bebebe;
+  --palette-dark-cat-5: #dadada;
+
+  --palette-slate-cat-0: #5a657e;
+  --palette-slate-cat-1: #3f81d9;
+  --palette-slate-cat-2: #b87e1f;
+  --palette-slate-cat-3: #1f9e7d;
+  --palette-slate-cat-4: #8a68d8;
+  --palette-slate-cat-5: #cf5585;
+
+  --palette-sepia-cat-0: #77685a;
+  --palette-sepia-cat-1: #5c88d8;
+  --palette-sepia-cat-2: #bb7d24;
+  --palette-sepia-cat-3: #2f9e7d;
+  --palette-sepia-cat-4: #8f6ad4;
+  --palette-sepia-cat-5: #d15a88;
+
   /* Stacking order, as tokens rather than magic numbers. The page holds no
      fixed chrome any more — the rail and the docked activity bar are gone, so
      nothing overlays the document and there is no arbitration to do. What
@@ -271,6 +317,12 @@
   --grid-cell-2: var(--color-grid-2);
   --grid-cell-3: var(--color-grid-3);
   --grid-cell-4: var(--color-grid-4);
+  --usage-cat-0: var(--color-cat-0);
+  --usage-cat-1: var(--color-cat-1);
+  --usage-cat-2: var(--color-cat-2);
+  --usage-cat-3: var(--color-cat-3);
+  --usage-cat-4: var(--color-cat-4);
+  --usage-cat-5: var(--color-cat-5);
 
   color-scheme: light;
   --color-surface: var(--palette-light-surface);
@@ -287,6 +339,12 @@
   --color-grid-2: var(--palette-light-grid-2);
   --color-grid-3: var(--palette-light-grid-3);
   --color-grid-4: var(--palette-light-grid-4);
+  --color-cat-0: var(--palette-light-cat-0);
+  --color-cat-1: var(--palette-light-cat-1);
+  --color-cat-2: var(--palette-light-cat-2);
+  --color-cat-3: var(--palette-light-cat-3);
+  --color-cat-4: var(--palette-light-cat-4);
+  --color-cat-5: var(--palette-light-cat-5);
   /* The page's one font stack, as a token: a card's type ramp reads it rather
      than restating it, so the family is chosen in exactly one place. */
   --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -320,6 +378,12 @@
     --color-grid-2: var(--palette-dark-grid-2);
     --color-grid-3: var(--palette-dark-grid-3);
     --color-grid-4: var(--palette-dark-grid-4);
+    --color-cat-0: var(--palette-dark-cat-0);
+    --color-cat-1: var(--palette-dark-cat-1);
+    --color-cat-2: var(--palette-dark-cat-2);
+    --color-cat-3: var(--palette-dark-cat-3);
+    --color-cat-4: var(--palette-dark-cat-4);
+    --color-cat-5: var(--palette-dark-cat-5);
   }
 }
 
@@ -339,6 +403,12 @@
   --color-grid-2: var(--palette-dark-grid-2);
   --color-grid-3: var(--palette-dark-grid-3);
   --color-grid-4: var(--palette-dark-grid-4);
+  --color-cat-0: var(--palette-dark-cat-0);
+  --color-cat-1: var(--palette-dark-cat-1);
+  --color-cat-2: var(--palette-dark-cat-2);
+  --color-cat-3: var(--palette-dark-cat-3);
+  --color-cat-4: var(--palette-dark-cat-4);
+  --color-cat-5: var(--palette-dark-cat-5);
 }
 
 /* Slate remaps the identical slot list onto its own palette — same roles,
@@ -363,6 +433,12 @@
   --color-grid-2: var(--palette-slate-grid-2);
   --color-grid-3: var(--palette-slate-grid-3);
   --color-grid-4: var(--palette-slate-grid-4);
+  --color-cat-0: var(--palette-slate-cat-0);
+  --color-cat-1: var(--palette-slate-cat-1);
+  --color-cat-2: var(--palette-slate-cat-2);
+  --color-cat-3: var(--palette-slate-cat-3);
+  --color-cat-4: var(--palette-slate-cat-4);
+  --color-cat-5: var(--palette-slate-cat-5);
 }
 
 [data-theme="sepia"] {
@@ -381,6 +457,12 @@
   --color-grid-2: var(--palette-sepia-grid-2);
   --color-grid-3: var(--palette-sepia-grid-3);
   --color-grid-4: var(--palette-sepia-grid-4);
+  --color-cat-0: var(--palette-sepia-cat-0);
+  --color-cat-1: var(--palette-sepia-cat-1);
+  --color-cat-2: var(--palette-sepia-cat-2);
+  --color-cat-3: var(--palette-sepia-cat-3);
+  --color-cat-4: var(--palette-sepia-cat-4);
+  --color-cat-5: var(--palette-sepia-cat-5);
 }
 
 * {

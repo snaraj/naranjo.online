@@ -282,6 +282,30 @@ fixture (`internal/panels/testdata/contributions-fragment.html`); a suite pin
 cross-checks the shipped calendar against that fixture, so refreshing the
 calendar means refreshing both together.
 
+### Sealed runtime data (the panels data root)
+
+Between shipped snapshots and live refresh sits a third path with neither's
+costs: the workstation exports the local usage records as a sanitized
+`usage-series/v1` document (`scripts/export_usage_series.py` — the same
+dates-and-integers guard as the capture step, plus per-day category
+breakdowns that must partition each day's total), seals it with AES-256-GCM
+(`cmd/usageseal`), and pushes the ciphertext to a host path the chart
+projects into the pod as a read-only PersistentVolume/PersistentVolumeClaim
+pair. The origin re-reads that file every five minutes, unseals it with
+`PANELS_DATA_KEY` (read at decrypt time only, from a Secret the chart
+references but never contains), strict-decodes it under a 64 KiB cap and a
+monotonic replay floor, and serves the result — so the token-usage panel
+refreshes without a release and without any egress from the cluster.
+
+Fail-closed at every absence: no `PANELS_DATA_ROOT`, no key, no file, or a
+file that is tampered, replayed, oversized, or malformed all leave the last
+good payload serving, with the envelope `status` saying so. The end-to-end
+operator manual — key generation, the forced-command push identity, the
+cluster-side PV ceremony, verification, and the deliberate failure modes —
+is `docs/usage-export.md`; the chart contract is pinned by
+`scripts/ci/chart-storage-pin.sh` in the same CI job as the ingress and
+egress pins.
+
 ### Enabling live refresh (not enabled anywhere today)
 
 Live refresh is off in every deployment this repository describes, and

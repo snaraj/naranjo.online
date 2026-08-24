@@ -70,6 +70,46 @@ media:
 panels:
   refresh:
     enabled: false
+  # The panels data root (issue #142): a read-only mounted directory carrying
+  # ONE sealed (AES-256-GCM) usage-series file, pushed out-of-band from the
+  # workstation that records the usage, decrypted in-process with a key fed
+  # from a Secret, and re-read on a TTL. Unlike `refresh` above this is ON by
+  # default, and the difference is capability reach: refresh grants the
+  # process egress, while this grants a read-only projection of one file with
+  # no network, no host reach beyond the volume, and no credential beyond a
+  # key that decrypts data the site already publishes. Every absence fails
+  # closed at runtime -- no volume, no file, no key, or a tampered file each
+  # leave the panel serving its embedded snapshot -- so the default is safe
+  # precisely because the app refuses everything it cannot authenticate.
+  #
+  # Storage shape (interim until the platform StorageClass design lands): a
+  # statically bound hostPath PersistentVolume/Claim pair. The PVC (with the
+  # Deployment mount and env) reconciles through the normal release; the PV
+  # template below is CLUSTER-scoped and ships default-off because the
+  # release identity (the least-privilege helm reconciler) deliberately holds
+  # no PersistentVolume authority -- hostPath-backed PVs are exactly the
+  # admin-only loophole through restricted pod security, so PV creation stays
+  # an admin ceremony: render this chart's own template with
+  # `persistentVolume.enabled=true` and apply it once with admin credentials.
+  # The claim pins `volumeName` and the PV pins `claimRef`, so neither side
+  # can be captured by a stranger, and `storageClassName` is explicitly ""
+  # on both so no default StorageClass can intercept the binding.
+  data:
+    enabled: true
+    # Host directory backing the PersistentVolume. `type: Directory` -- the
+    # PV mounts only a directory that already exists on the node; creating it
+    # (owner, mode) is part of the same admin ceremony as the PV itself.
+    hostPath: /srv/naranjo-online/panels-data
+    # One name shared by the PV and the PVC, making the statically bound
+    # pair legible as a pair.
+    volumeName: naranjo-online-panels-data
+    # Secret feeding PANELS_DATA_KEY (64 hex characters). Referenced
+    # optional: a missing Secret degrades the panel to its embedded
+    # snapshot; it must never keep the site from scheduling.
+    keySecret: naranjo-online-panels-data
+    capacity: 16Mi
+    persistentVolume:
+      enabled: false
 
 resources:
   requests:

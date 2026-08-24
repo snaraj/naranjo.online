@@ -1,0 +1,57 @@
+{{- /*
+The panels data root's storage pair (issue #142): a statically bound
+hostPath PersistentVolume and its PersistentVolumeClaim. Static binding is
+pinned from BOTH sides — the PV's claimRef names exactly this namespace and
+claim, the claim's volumeName names exactly this PV — and storageClassName
+is explicitly "" on both, so no default StorageClass provisioner can
+intercept the pair and no foreign claim can capture the volume.
+
+The claim reconciles through the normal release. The PersistentVolume is
+cluster-scoped and renders only when persistentVolume.enabled is set: the
+release identity is a least-privilege namespace reconciler that deliberately
+holds no PersistentVolume authority (hostPath-backed PVs are the admin-only
+loophole through restricted pod security), so the PV is applied once by an
+admin from THIS template — the object in the cluster stays the object in
+git — and the flag flips the day the platform grants the reconciler that
+authority. scripts/ci/chart-storage-pin.sh holds every invariant stated
+here, in both enabled and disabled directions.
+*/ -}}
+{{- if .Values.panels.data.enabled }}
+{{- if .Values.panels.data.persistentVolume.enabled }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Values.panels.data.volumeName }}
+  labels:
+    {{- include "naranjo-online.labels" . | nindent 4 }}
+spec:
+  capacity:
+    storage: {{ .Values.panels.data.capacity }}
+  accessModes:
+    - ReadOnlyMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    namespace: {{ .Release.Namespace }}
+    name: {{ .Values.panels.data.volumeName }}
+  hostPath:
+    path: {{ .Values.panels.data.hostPath }}
+    type: Directory
+---
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.panels.data.volumeName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "naranjo-online.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: ""
+  volumeName: {{ .Values.panels.data.volumeName }}
+  resources:
+    requests:
+      storage: {{ .Values.panels.data.capacity }}
+{{- end }}

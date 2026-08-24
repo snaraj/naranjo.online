@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd template for the scheduled usage export (issue #142).
+
+  This TEMPLATE is the committed artifact; the rendered agent is not, because
+  a rendered plist carries absolute workstation paths, which stay out of the
+  repository. scripts/usage-export/install-launchd.sh substitutes the two
+  placeholders — __PUSH_SCRIPT__ (absolute path to push-usage-series.sh) and
+  __LOG_DIR__ (a per-user log directory) — and installs the result under
+  ~/Library/LaunchAgents.
+
+  The job runs hourly and at load. The origin re-reads its sealed file every
+  five minutes, so an hourly capture keeps the panel a bounded hour behind
+  reality without waking the machine needlessly. Failures land in the log
+  files below; the push script's diagnostics are stage names and byte
+  counts, never payload content.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.naranjo-online.usage-export</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PUSH_SCRIPT__</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityBackgroundIO</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/usage-export.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/usage-export.err.log</string>
+</dict>
+</plist>

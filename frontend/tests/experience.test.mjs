@@ -492,6 +492,13 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
     '#2a2a2a', '#545454', '#7f7f7f', '#aaaaaa', '#d9d9d9', // its hueless heatmap
     '#161a23', '#1d222d', '#2a3040', '#566078', '#b9c2d4', // slate ramp
     '#1b1612', '#28221d', '#312a25', '#3e362f', '#736559', '#b79d7e', '#f4eaea', // browntown seeds
+    // The token-usage category sets (issue #142): four modes times six
+    // slots, every value its own hex — including dark's neutral steps,
+    // which the r==g==b sweep above also holds to the mode's no-hue rule.
+    '#5f6672', '#2a63b8', '#96550a', '#0b8a6a', '#6d4bb8', '#a3315e', // light categories
+    '#565656', '#6f6f6f', '#868686', '#a2a2a2', '#bebebe', '#dadada', // dark category steps
+    '#5a657e', '#3f81d9', '#b87e1f', '#1f9e7d', '#8a68d8', '#cf5585', // slate categories
+    '#77685a', '#5c88d8', '#bb7d24', '#2f9e7d', '#8f6ad4', '#d15a88', // sepia categories
   ];
   // The neutrality claim, measured rather than asserted: a true dark whose
   // surfaces carry a hue is the exact defect this mode was added to fix, and

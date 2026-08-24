@@ -44,6 +44,25 @@ func TestPanelsRefreshConfigurationFailsClosed(t *testing.T) {
 	}
 }
 
+// TestPanelsDataConfigurationFailsClosed pins the data-root gate: unset
+// leaves the capability entirely absent, an absolute path passes through
+// untouched, and a relative path refuses the boot instead of being resolved
+// against a working directory nobody chose.
+func TestPanelsDataConfigurationFailsClosed(t *testing.T) {
+	t.Parallel()
+	if root, err := panelsDataConfiguration(""); err != nil || root != "" {
+		t.Errorf("panelsDataConfiguration(\"\") = %q, %v; want empty, nil", root, err)
+	}
+	if root, err := panelsDataConfiguration("/var/lib/panels-data"); err != nil || root != "/var/lib/panels-data" {
+		t.Errorf("panelsDataConfiguration(abs) = %q, %v", root, err)
+	}
+	for _, value := range []string{"relative/dir", "./here", "~", "data"} {
+		if _, err := panelsDataConfiguration(value); err == nil {
+			t.Errorf("panelsDataConfiguration(%q) accepted a relative path", value)
+		}
+	}
+}
+
 func TestListenPort(t *testing.T) {
 	t.Parallel()
 	for name, testCase := range map[string]struct {
