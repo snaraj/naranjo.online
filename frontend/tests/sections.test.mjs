@@ -549,6 +549,25 @@ test('the heavy pictures cost the page no layout shift', () => {
   assert.match(artGallery, /decoding="async"/);
 });
 
+test('the gallery frame cap is pinned at its literal value, independent of computed style', () => {
+  // Daybreak Blue's review of PR #161 found the previous e2e coverage
+  // self-referential: it read getComputedStyle(...).maxHeight from the very
+  // stylesheet under test and derived its OWN expectation from that reading,
+  // so a mutation widening the cap (20rem -> 200rem) moved the expectation
+  // and the rendered behavior together and the suite never noticed. This
+  // test pins the LITERAL value the design actually chose — 20rem, 320px at
+  // this page's unmodified 16px root — straight out of the source text, and
+  // the e2e assertions in rendering-lanes.spec.mjs now hardcode the same
+  // literal 320 rather than reading it back from the DOM, so a widened cap
+  // is a diff against a fixed number in two independent places, not against
+  // itself in one.
+  assert.match(
+    styles,
+    /--card-media-max-block-size:\s*20rem;/,
+    'the gallery cap token must read exactly 20rem — a change here must be a deliberate design edit, verified against the e2e literal too'
+  );
+});
+
 test('no picture entered the repository', async () => {
   // Requirement 11: heavy media never enters git, the bundle, the embed, the
   // image, or a ConfigMap. Eight 4K photographs are the first real test of
