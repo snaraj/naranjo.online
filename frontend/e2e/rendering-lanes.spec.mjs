@@ -1626,6 +1626,11 @@ test('the art feed shows its frames when the origin serves no media', async ({ p
         const box = frame.getBoundingClientRect();
         return { width: Math.round(box.width), height: Math.round(box.height) };
       }),
+      // The tokenized ceiling (issue 157) read off the FIRST frame's own
+      // computed style — every frame shares the one global token, which the
+      // "reserved box" assertion below already proves by requiring every
+      // size to equal the first.
+      mediaCapPx: boxes.length > 0 ? parseFloat(getComputedStyle(boxes[0]).maxHeight) : 0,
       columns: new Set(
         boxes.map((frame) => Math.round(frame.getBoundingClientRect().left))
       ).size,
@@ -1654,9 +1659,16 @@ test('the art feed shows its frames when the origin serves no media', async ({ p
   for (const size of observed.sizes) {
     expect(size, 'the art frames are not all the same reserved box').toEqual(firstBox);
   }
-  /* And the box is the ratio the pictures are: 16:9, held open before a byte
-     of them arrives. */
-  expect(firstBox.width / firstBox.height).toBeCloseTo(16 / 9, 1);
+  /* And the box is the SMALLER of the pictures' 16:9 ratio and the tokenized
+     height cap (issue 157) — at the page's default column width the cap is
+     what actually wins (960px wide at 16:9 asks for 540px; the cap holds it
+     open at less than that), which is the fix for the owner's exact
+     complaint: one frame was filling the screen. */
+  const expectedHeight = Math.min(firstBox.width * (9 / 16), observed.mediaCapPx);
+  expect(
+    firstBox.height,
+    `the art frame is ${firstBox.height}px, not the capped ${expectedHeight.toFixed(1)}px`
+  ).toBeCloseTo(expectedHeight, 0);
 });
 
 /* ===========================================================================
@@ -3386,7 +3398,11 @@ test('every width the handle can reach keeps every section intact', async ({ pag
       const distinct = (values) => new Set(values.map((value) => Math.round(value))).size;
       const frames = [...window.document.querySelectorAll('.art-frame')].map((frame) => {
         const box = frame.getBoundingClientRect();
-        return box.width / box.height;
+        return {
+          width: box.width,
+          height: box.height,
+          cap: parseFloat(getComputedStyle(frame).maxHeight),
+        };
       });
       const root = window.document.documentElement;
       return {
@@ -3446,10 +3462,18 @@ test('every width the handle can reach keeps every section intact', async ({ pag
     expect(state.strips, `the heatmap strips disappeared ${at}`).toBeGreaterThan(0);
     expect(state.navLinks, `the nav lost links ${at}`).toBeGreaterThan(3);
     expect(state.sections, `the page lost a section ${at}`).toBeGreaterThan(3);
-    /* The pictures still reserve the box they will fill. */
+    /* The pictures still reserve the box they will fill: 16:9 below the
+       tokenized cap (issue 157), the cap itself above it — a narrow column
+       still gets the full photograph proportion, and a wide one stops
+       growing the frame instead of reproducing the complaint the cap
+       exists to fix. */
     expect(state.frames.length, `the art feed rendered no frames ${at}`).toBeGreaterThan(0);
-    for (const ratio of state.frames) {
-      expect(ratio, `an art frame is ${ratio.toFixed(2)}:1 ${at}`).toBeCloseTo(16 / 9, 1);
+    for (const frame of state.frames) {
+      const expectedHeight = Math.min(frame.width * (9 / 16), frame.cap);
+      expect(
+        frame.height,
+        `an art frame is ${frame.height.toFixed(1)}px, not the capped ${expectedHeight.toFixed(1)}px ${at}`
+      ).toBeCloseTo(expectedHeight, 0);
     }
   }
 });
