@@ -290,17 +290,51 @@ test('switching the reading mode repaints without moving anything', async ({ pag
     });
 
   const before = await geometry();
-  await openReadingModes(page);
-  await page.getByRole('button', { name: 'Dark', exact: true }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  const after = await geometry();
 
-  /* Assert the switch actually happened before asserting nothing moved —
-     otherwise a toggle that did nothing at all would pass this test
-     perfectly. */
-  expect(after.surface, 'the reading mode changed nothing on screen').not.toBe(before.surface);
-  expect(after.boxes, 'the reading-mode swap moved the page under the reader').toEqual(before.boxes);
-  expect(after.scrollHeight).toBe(before.scrollHeight);
+  /* EVERY stamped mode, not one of them. The floor is that no reading mode
+     moves the page, and a lane that only ever clicked Dark said nothing about
+     the others — which is precisely where a mode added later would land.
+     Each is compared against the ORIGINAL geometry rather than against its
+     predecessor, so a drift that accumulates a fraction at a time cannot hide
+     inside a chain of individually equal steps. */
+  const painted = new Map();
+  for (const [label, id] of [
+    ['Dark', 'dark'],
+    ['Slate', 'slate'],
+    ['Sepia', 'sepia'],
+    ['Light', 'light'],
+  ]) {
+    await openReadingModes(page);
+    await page.getByRole('button', { name: label, exact: true }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', id);
+    const after = await geometry();
+    /* Assert the switch actually happened before asserting nothing moved —
+       otherwise a toggle that did nothing at all would pass this test
+       perfectly. Distinctness across all four is the stronger form of that
+       check: four modes that painted one surface would satisfy a per-step
+       "something changed" comparison while three of them did not exist. */
+    for (const [other, surface] of painted) {
+      expect(after.surface, `${label} paints the same page surface as ${other}`).not.toBe(surface);
+    }
+    painted.set(label, after.surface);
+    expect(after.boxes, `the ${label} swap moved the page under the reader`).toEqual(before.boxes);
+    expect(after.scrollHeight, `the ${label} swap changed the page height`).toBe(before.scrollHeight);
+  }
+
+  /* Auto is the way back, and it is the ABSENCE of a stamp rather than a
+     fifth palette — so what it has to prove is that un-stamping is as free of
+     layout effect as stamping, and that the document returns to exactly the
+     rendering the visitor arrived on. */
+  await openReadingModes(page);
+  await page.getByRole('button', { name: 'Auto', exact: true }).click();
+  await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
+  const unstamped = await geometry();
+  expect(unstamped.boxes, 'returning to auto moved the page under the reader').toEqual(before.boxes);
+  expect(unstamped.scrollHeight).toBe(before.scrollHeight);
+  expect(
+    unstamped.surface,
+    'auto no longer paints what the unstamped document painted on arrival'
+  ).toBe(before.surface);
 });
 
 /* ===========================================================================

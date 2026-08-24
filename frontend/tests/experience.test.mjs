@@ -333,7 +333,7 @@ test('every reading mode paints panels at a legible contrast', () => {
     styleRules.some((rule) => underColorScheme(rule) && declaresThemeToken(rule.body)),
     'no prefers-color-scheme block declares theme tokens; auto-dark would render as light while claiming to follow the device',
   );
-  for (const mode of ['light', 'auto-light', 'auto-dark', 'dark', 'sepia']) {
+  for (const mode of ['light', 'auto-light', 'auto-dark', 'dark', 'slate', 'sepia']) {
     const background = resolve('--panel-surface', mode);
     assert.ok(background, `${mode} has no raised surface to measure against`);
     for (const [hook, floor] of Object.entries(floors)) {
@@ -393,7 +393,7 @@ test('theme tokens are declared in the token layer and nowhere else', () => {
     }
   }
   const declaring = styleRules.filter((rule) => declaresThemeToken(rule.body));
-  assert.ok(declaring.length >= 4, `only ${declaring.length} rules declare theme tokens; the layer cannot have shrunk this far`);
+  assert.ok(declaring.length >= 5, `only ${declaring.length} rules declare theme tokens; the layer is :root plus one block per stamped mode plus the OS mapping, so it cannot have shrunk this far`);
   for (const rule of declaring) {
     assert.ok(
       tokenLayerSelector(rule.selector),
@@ -460,7 +460,7 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
 
   // Each explicit mode is one attribute-scoped block with its color-scheme,
   // remapping the active tokens onto its palette by reference only.
-  for (const theme of ['dark', 'sepia']) {
+  for (const theme of ['dark', 'slate', 'sepia']) {
     assert.match(
       styles,
       new RegExp(`\\[data-theme="${theme}"\\]\\s*\\{[^}]*color-scheme:\\s*dark`),
@@ -481,13 +481,29 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
   // Palette deduplication (review finding): every palette value is written
   // exactly once, as a --palette-* definition; theme blocks and components
   // only reference. The two anchor hexes appear exactly twice because
-  // light's text is dark's surface and vice versa — one occurrence per
+  // light's text is SLATE's surface and vice versa — one occurrence per
   // palette slot, still zero per consumer.
   const uniqueValues = [
     '#efefe8', '#e6e6dd', '#d8d8cd', '#9a9a8e', '#3d434f', // light ramp
-    '#161a23', '#1d222d', '#2a3040', '#566078', '#b9c2d4', // dark ramp
+    // The true dark. Every one of these is a grey — red, green and blue
+    // equal — which is the whole claim the mode makes and the one a repaint
+    // toward navy would have to break to get past here.
+    '#121212', '#1e1e1e', '#2e2e2e', '#383838', '#6c6c6c', '#a0a0a0', '#e0e0e0',
+    '#2a2a2a', '#545454', '#7f7f7f', '#aaaaaa', '#d9d9d9', // its hueless heatmap
+    '#161a23', '#1d222d', '#2a3040', '#566078', '#b9c2d4', // slate ramp
     '#1b1612', '#28221d', '#312a25', '#3e362f', '#736559', '#b79d7e', '#f4eaea', // browntown seeds
   ];
+  // The neutrality claim, measured rather than asserted: a true dark whose
+  // surfaces carry a hue is the exact defect this mode was added to fix, and
+  // a hex list alone cannot see one arriving in a later repaint.
+  for (const [name, value] of Object.entries(paletteLiterals(styles))) {
+    if (!name.startsWith('--palette-dark-')) continue;
+    const [red, green, blue] = [1, 3, 5].map((offset) => value.slice(offset, offset + 2));
+    assert.ok(
+      red === green && green === blue,
+      `${name} is ${value}; the dark mode is the NEUTRAL one, so every channel must agree — a tinted value belongs in slate or sepia`
+    );
+  }
   for (const value of uniqueValues) {
     assert.equal(occurrences(styles, value), 1, `${value} must be defined exactly once`);
   }
@@ -517,10 +533,10 @@ test('theme registry and toggle: named modes, exact cookie grammar, local only',
     assert.doesNotMatch(source, /https?:\/\//, 'theme sources must stay local-origin');
   }
 
-  // Exactly the three registered modes, each carrying a visible name. These
+  // Exactly the four registered modes, each carrying a visible name. These
   // are the STAMPED ids — the ones the origin precomputes a document for —
   // and they are what the Go parity test compares against readingThemes.
-  for (const id of ['light', 'dark', 'sepia']) {
+  for (const id of ['light', 'dark', 'slate', 'sepia']) {
     assert.match(themeRegistry, new RegExp(`id: '${id}', label: '[^']+'`), `registry lacks ${id}`);
   }
 
@@ -530,11 +546,11 @@ test('theme registry and toggle: named modes, exact cookie grammar, local only',
   assert.match(themeRegistry, /'theme=' \+ id \+ '; path=\/; max-age=31536000; samesite=lax'/);
 });
 
-// Auto is the fourth toggle choice and the only one that is NOT a stamped
-// theme: it is the absence of a choice. Modelling it as a stamped id would
-// need a [data-theme="auto"] block restating the whole media query, and a Go
-// variant that cannot be right for two visitors whose devices disagree — so
-// the registry keeps three ids and the menu derives four choices from them.
+// Auto is the one toggle choice that is NOT a stamped theme: it is the
+// absence of a choice. Modelling it as a stamped id would need a
+// [data-theme="auto"] block restating the whole media query, and a Go variant
+// that cannot be right for two visitors whose devices disagree — so the
+// registry keeps four ids and the menu derives five choices from them.
 test('auto is the no-choice choice: derived menu, attribute removed, cookie expired', () => {
   // The menu is DERIVED from the registry, so a theme added above cannot fail
   // to appear in the toggle and the two lists can never disagree.
@@ -543,7 +559,7 @@ test('auto is the no-choice choice: derived menu, attribute removed, cookie expi
 
   // Auto is deliberately outside ThemeId — the type the origin's stamped
   // variants and the cookie contract are keyed on.
-  assert.match(themeRegistry, /export type ThemeId = 'light' \| 'dark' \| 'sepia'/);
+  assert.match(themeRegistry, /export type ThemeId = 'light' \| 'dark' \| 'slate' \| 'sepia'/);
   assert.match(themeRegistry, /export type ModeId = ThemeId \| typeof autoMode/);
 
   // Choosing auto un-stamps the live document AND expires the cookie. Setting
@@ -582,7 +598,7 @@ test('theme toggle: swatch popover, token-pure colors, machine-wired', () => {
   // Swatch colors are references into each theme's own palette tokens —
   // never a third copy of the values (see the dedup pins above) and never a
   // hex anywhere in the component.
-  for (const id of ['light', 'dark', 'sepia']) {
+  for (const id of ['light', 'dark', 'slate', 'sepia']) {
     assert.match(
       themeMenu,
       new RegExp(`background:\\s*var\\(--palette-${id}-surface\\)`),
@@ -911,8 +927,8 @@ test('a reading-mode swap can only repaint, never re-lay-out (issue #26)', () =>
       rule.enclosing.some((at) => at.includes('prefers-color-scheme'))
   );
   assert.ok(
-    swapped.length >= 3,
-    `only ${swapped.length} reading-mode blocks were found; the stylesheet ships three swappable renderings`
+    swapped.length >= 4,
+    `only ${swapped.length} reading-mode blocks were found; the stylesheet ships four swappable renderings — one per stamped mode above light, plus the OS mapping`
   );
   for (const rule of swapped) {
     for (const { property } of declarationsOf(rule.body)) {
@@ -921,5 +937,63 @@ test('a reading-mode swap can only repaint, never re-lay-out (issue #26)', () =>
         `${rule.file}: "${rule.selector}" declares ${property}; a reading mode may only move custom properties and color-scheme, or switching it shifts the layout under the reader`
       );
     }
+  }
+});
+
+/* Every reading mode declares the SAME token set — the guard that turns the
+ * token layer into a contract other code can rely on.
+ *
+ * The failure it forbids is silent rather than loud, which is why it needs a
+ * test at all. A mode that omits one token does not render unstyled; it
+ * inherits :root, which is the LIGHT palette, so a dark mode missing
+ * --color-border paints one light seam and everything else stays dark. The
+ * contrast guard above cannot see it either: that guard resolves the hooks it
+ * measures, and a token nothing measures resolves happily to light's value.
+ *
+ * It matters more the more the page grows. Components read these roles by
+ * name and must never ask which mode is active — a card, a panel or a feed
+ * item that had to branch per theme would need editing every time a mode is
+ * added, which is exactly the coupling the token layer exists to prevent. So
+ * the roles are compared as SETS: adding a role to one mode is fine, adding
+ * it to only one mode is a red build, and the message names both sides. */
+test('every reading mode declares the identical token set', () => {
+  const overrides = styleRules.filter(
+    (rule) =>
+      declaresThemeToken(rule.body) &&
+      (rule.selector.includes('[data-theme') ||
+        rule.enclosing.some((at) => at.includes('prefers-color-scheme')))
+  );
+  const named = overrides.map((rule) => ({
+    name: /\[data-theme="([a-z]+)"\]/.exec(rule.selector)?.[1] ?? 'auto (the OS dark mapping)',
+    properties: [...new Set(declarationsOf(rule.body).map(({ property }) => property))].sort(),
+  }));
+  assert.ok(
+    named.length >= 4,
+    `only ${named.length} token-declaring reading-mode blocks were found; the parity comparison has nothing left to compare`
+  );
+
+  // Every stamped id in the registry owns a block, and no block answers to an
+  // id the registry never registered. Either half alone ships a mode the
+  // other side cannot reach: a cookie the stylesheet ignores, or a palette no
+  // toggle can select.
+  const stamped = named.filter((mode) => !mode.name.startsWith('auto')).map((mode) => mode.name);
+  const registered = [...themeRegistry.matchAll(/id: '([a-z]+)', label: '[^']+'/g)].map(
+    ([, id]) => id
+  );
+  assert.deepEqual(
+    stamped.slice().sort(),
+    registered.filter((id) => id !== 'light').sort(),
+    'the stylesheet and the registry disagree about which reading modes exist; light is the :root default and has no block of its own'
+  );
+
+  const [reference, ...rest] = named;
+  for (const mode of rest) {
+    const missing = reference.properties.filter((name) => !mode.properties.includes(name));
+    const extra = mode.properties.filter((name) => !reference.properties.includes(name));
+    assert.deepEqual(
+      mode.properties,
+      reference.properties,
+      `${mode.name} does not declare the same tokens as ${reference.name} — missing ${missing.length > 0 ? missing.join(', ') : 'nothing'}; extra ${extra.length > 0 ? extra.join(', ') : 'nothing'}. A token a mode omits falls through to the light palette, silently, in that mode only`
+    );
   }
 });

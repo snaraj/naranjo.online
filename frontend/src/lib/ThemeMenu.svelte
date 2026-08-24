@@ -108,8 +108,12 @@
      one round swatch per choice. Each swatch's background IS its mode's page
      surface — read from that mode's own palette tokens, never a second copy
      of the values — with a split light/dark disc for auto, a sun on the light
-     surface, a cratered moon on the dark surface, and a plain dark moon on
-     the sepia surface. Native buttons only; the glyphs are inline SVG. Plain
+     surface, a cratered moon on the true dark, and a plain moon on the two
+     tinted darks, slate and sepia. Those two are told apart by the surface
+     under the glyph, which is the honest distinction: they ARE the same kind
+     of mode at different temperatures, and inventing a third glyph would
+     claim a difference the modes do not have.
+     Native buttons only; the glyphs are inline SVG. Plain
      aria-expanded disclosure semantics on purpose: aria-haspopup would
      announce a menu, but the popover is a group of pressed-state buttons
      (review F4).
@@ -288,6 +292,14 @@
 
   .swatch-dark .crater {
     fill: var(--palette-dark-surface);
+  }
+
+  /* Slate's ink is its own accent, measured at 10.38:1 on its own surface —
+     no mixing needed, unlike sepia below, because the palette already holds
+     a foreground this far from its background. */
+  .swatch-slate {
+    background: var(--palette-slate-surface);
+    color: var(--palette-slate-accent);
   }
 
   /* The base ink is the palette's own accent — the lightest sepia foreground,

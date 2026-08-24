@@ -864,7 +864,7 @@ func TestVisitorPicksAReadingMode(t *testing.T) {
 
 	t.Run("chooses each mode: the stamped variant with its own cache identity", func(t *testing.T) {
 		visitor := session.On(t)
-		for _, theme := range []string{"dark", "sepia", "light"} {
+		for _, theme := range []string{"dark", "sepia", "slate", "light"} {
 			// The toggle writes the cookie; the browser replays the previous
 			// variant's validator. The switch must answer a full 200 of the
 			// new representation, never a 304 into the wrong colors.

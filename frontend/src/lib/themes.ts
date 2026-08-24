@@ -7,7 +7,14 @@
 
 // ThemeId is a registered reading-mode identifier — exactly the values the
 // origin precomputes document variants for and accepts in the theme cookie.
-export type ThemeId = 'light' | 'dark' | 'sepia';
+//
+// Four modes, one light and three dark, and the three darks are told apart by
+// temperature rather than by depth: dark is neutral, slate is cool, sepia is
+// warm. `dark` is the neutral near-black one — the mode a visitor whose
+// device asks for dark also receives, since prefers-color-scheme maps this
+// palette — and `slate` holds the desaturated navy that used to answer to
+// that name, kept as a mode of its own so nobody who liked it loses it.
+export type ThemeId = 'light' | 'dark' | 'slate' | 'sepia';
 
 // Theme names one reading mode for the toggle menu.
 export interface Theme {
@@ -19,6 +26,7 @@ export interface Theme {
 export const themes: readonly Theme[] = [
   { id: 'light', label: 'Light' },
   { id: 'dark', label: 'Dark' },
+  { id: 'slate', label: 'Slate' },
   { id: 'sepia', label: 'Sepia' }
 ];
 

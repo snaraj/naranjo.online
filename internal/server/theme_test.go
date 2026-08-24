@@ -301,7 +301,7 @@ func TestOnlyTheDocumentVariesByCookie(t *testing.T) {
 	}
 }
 
-// TestReadingThemesParity pins the reading-mode id list to exactly the three
+// TestReadingThemesParity pins the reading-mode id list to exactly the four
 // registered modes, because the same list is hand-duplicated in the frontend
 // registry (frontend/src/lib/themes.ts) and its [data-theme] blocks in
 // frontend/src/styles.css, and the sides must never drift silently: an id on
@@ -310,7 +310,7 @@ func TestOnlyTheDocumentVariesByCookie(t *testing.T) {
 // from its side.
 func TestReadingThemesParity(t *testing.T) {
 	t.Parallel()
-	want := []string{"dark", "light", "sepia"}
+	want := []string{"dark", "light", "sepia", "slate"}
 	if !equalStrings(readingThemes, want) {
 		t.Fatalf("readingThemes = %v, want exactly %v; update the registry in frontend/src/lib/themes.ts in the same change", readingThemes, want)
 	}
