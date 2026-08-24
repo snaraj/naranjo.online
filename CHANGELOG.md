@@ -7,6 +7,112 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.35] - 2026-08-24
+
+### Added
+
+- The token-usage panel now consumes SEALED RUNTIME DATA (issue #142): the
+  workstation exports both tools' local usage records as one
+  `usage-series/v1` document — per-day totals plus a per-day CATEGORY
+  breakdown (input, output, cache reads, cache writes) that must partition
+  each day's total — seals it with AES-256-GCM (`cmd/usageseal`, versioned
+  `NJSEAL/1` format bound as AEAD associated data, fresh random nonce per
+  seal, 64-hex-char key refused unless its file is private), and pushes the
+  ciphertext over ssh stdin to a forced-command, `restrict`-ed dedicated key
+  that can write exactly one file. The origin re-reads that file every five
+  minutes through a rooted read-only mount (`PANELS_DATA_ROOT`), unseals
+  with `PANELS_DATA_KEY` read at decrypt time only, strict-decodes under a
+  64 KiB cap with closed window/derived vocabularies and a monotonic
+  `generatedAt` replay floor, and merges into the served panel — so the
+  panel refreshes without a release, and every failure (tamper, replay,
+  wrong key, over-cap, malformed, non-partitioning categories) keeps the
+  last good payload and says so in the envelope status instead of crashing
+  or fabricating. The export step is structurally incapable of spawning or
+  networking: stdlib file reading only, import surface pinned by an AST
+  test against a closed allowlist, and every emission passes through the
+  capture tool's own dates-and-integers guard with counts-only diagnostics.
+- The chart carries the storage as first-class templates under GitOps
+  (owner amendment on #142): TWO static PersistentVolume/
+  PersistentVolumeClaim pairs, each with explicit empty
+  `storageClassName`, `Retain`, `hostPath.type: Directory`, and
+  volumeName/claimRef double-pinning — the DATA pair read-only at BOTH the
+  claim reference and the mount, and the replay-floor STATE pair (the
+  security review's H2 remedy below) explicitly writable at both, on a
+  sibling host directory the push pipeline never touches. The capability
+  defaults OFF (`panels.data.enabled=false`, the review's M6 remedy
+  below): its claims bind statically to admin-provisioned volumes, so a
+  default render carries none of it and a fresh install schedules; the
+  cluster-scoped PV documents default off within the enabled direction and
+  are applied by an operator from the chart's own render, because the
+  namespaced app reconciler holds no PV rights and granting them would
+  bypass the namespace's restricted Pod Security posture. A storage pin
+  script (`scripts/ci/chart-storage-pin.sh`, wired into the chart CI job)
+  renders all four directions (enabled, with-pv, untouched default,
+  explicit disabled) and kills 21 hostile mutations — writable data
+  mounts, read-only state mounts, dropped storageClassName pins, smuggled
+  PVs, moved host paths, reclaim/type weakenings, a state directory nested
+  inside the push directory.
+- The panel's per-source category lens: a second radiogroup slices the
+  heatmap by category, and a composition figure renders each source's
+  share bar with fixed per-category color slots, 2px segment gaps, and
+  written labels beside every chip so identity never rides on color alone.
+  Category palettes are defined per reading mode and hold the dataviz
+  floors (lightness band, chroma floor, CVD and normal-vision separation,
+  ≥3:1 contrast) in light, slate, and sepia; dark stays deliberately
+  achromatic as documented lightness steps. Hostile category labels render
+  inert — the component interpolates text and never markup.
+- Operator tooling and doctrine: `scripts/usage-export/` carries the push
+  pipeline (private scratch, checksum verification of the landed file, a
+  0600-only local configuration OUTSIDE the repository so no host fact
+  enters git), a launchd template plus installer for the hourly schedule,
+  and `docs/usage-export.md` documents the end-to-end design, setup,
+  verification, and deliberate failure modes.
+
+### Security
+
+Findings of the 2026-08-24 adversarial security review of this release's
+head (REQUEST-CHANGES), each fixed with tests that fail against the
+original code:
+
+- H1 — the capture-side sanitizer checked SHAPE where the privacy argument
+  requires MEMBERSHIP: label-shaped private identifiers passed as category
+  keys (and would have rendered publicly), the impossible date 2026-99-99
+  and newline-suffixed dates passed the digit pattern, and negative
+  integers passed the type check. The emission guard now enforces a closed
+  field-name vocabulary, a closed five-key category vocabulary held
+  identical across the capture tool, Go admission
+  (`internal/panels`' `categoryServeOrder` membership), and the frontend's
+  palette slots by a three-way parity pin, real calendar-date parsing with
+  no tolerance for a trailing byte, and non-negative integers, with
+  booleans confined to the `recorded` flag.
+- H2 — the replay floor lived in process memory only, so any restart
+  re-admitted replayed ciphertext newer than the embedded snapshot but
+  older than what had already been accepted. The accepted high-water mark
+  now persists as a sealed marker (same Secret-fed key as the series;
+  storage cannot forge it) in the writable state pair above, loaded
+  fail-safe (absent/corrupt/future markers degrade to the embedded floor,
+  never below; a failed write degrades durability, never serving), with
+  restart simulations at the loop, composition-root, and full-site levels.
+- M4 — the launchd installer anchored the scheduled job to its own
+  directory, so an install from a disposable worktree broke silently at
+  that worktree's cleanup. It now anchors the primary checkout
+  (`NARANJO_USAGE_EXPORT_REPO_DIR` to override), refuses worktree paths
+  outright, and gained a `--render-only` preview.
+- M5 — the push transport trusted resolved ssh client configuration; a
+  multiplexed admin connection could have been joined without
+  re-authenticating the restricted key. The invocation now forces
+  `ControlPath=none`, `ClearAllForwardings=yes`, `ForwardAgent=no`, and
+  `RequestTTY=no` alongside the existing
+  `BatchMode`/`IdentitiesOnly`/`IdentityAgent=none`, proven by a hermetic
+  stub-ssh test asserting per-option membership of the received argv.
+- M6 — `panels.data.enabled=false` silently fell back to the embedded
+  snapshot while the PVC-on/PV-off default left a fresh cluster's pod
+  Pending on an unbindable claim. The lifecycle is now explicit and the
+  defaults schedule everywhere: the capability defaults off, disabling it
+  is a documented as-of-release-snapshot decision stated where the value
+  is set, and enabling it is a deliberate last step after the documented
+  storage ceremony.
+
 ## [0.1.34] - 2026-08-24
 
 ### Added
