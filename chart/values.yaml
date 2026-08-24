@@ -73,14 +73,32 @@ panels:
   # The panels data root (issue #142): a read-only mounted directory carrying
   # ONE sealed (AES-256-GCM) usage-series file, pushed out-of-band from the
   # workstation that records the usage, decrypted in-process with a key fed
-  # from a Secret, and re-read on a TTL. Unlike `refresh` above this is ON by
-  # default, and the difference is capability reach: refresh grants the
-  # process egress, while this grants a read-only projection of one file with
-  # no network, no host reach beyond the volume, and no credential beyond a
-  # key that decrypts data the site already publishes. Every absence fails
-  # closed at runtime -- no volume, no file, no key, or a tampered file each
-  # leave the panel serving its embedded snapshot -- so the default is safe
-  # precisely because the app refuses everything it cannot authenticate.
+  # from a Secret, and re-read on a TTL.
+  #
+  # OFF by default, like `refresh` above, and the lifecycle is EXPLICIT
+  # (2026-08-24 security review, finding M6, both halves):
+  #
+  #   * enabled=false — the DEFAULT and the fresh-install state — serves the
+  #     token-usage panel from its embedded release-time snapshot: honest
+  #     recorded data, as of the release that shipped it, with the
+  #     envelope's own generatedAt saying exactly how old it is. That is a
+  #     DOCUMENTED DECISION an operator reads here before making, not a
+  #     silent fallback discovered after flipping a value off; disabling a
+  #     running deployment means choosing as-of-release data again, and the
+  #     live sealed feed stops being read.
+  #   * enabled=true requires the storage ceremony FIRST (docs/
+  #     usage-export.md: both host directories, both admin-applied PVs, the
+  #     key Secret) because the claims it renders bind statically to
+  #     pre-provisioned volumes. The earlier default — claims on, PVs off —
+  #     left a FRESH cluster's pod Pending on an unbindable claim; defaults
+  #     must never wedge an install, so the capability defaults off and is
+  #     enabled deliberately, last.
+  #
+  # Once enabled, every runtime absence still fails closed -- no volume, no
+  # file, no key, or a tampered file each leave the panel serving its
+  # embedded snapshot -- the capability is a read-only projection of one
+  # file with no network, no host reach beyond the volume, and no
+  # credential beyond a key that decrypts data the site already publishes.
   #
   # Storage shape (interim until the platform StorageClass design lands): a
   # statically bound hostPath PersistentVolume/Claim pair. The PVC (with the
@@ -95,7 +113,7 @@ panels:
   # can be captured by a stranger, and `storageClassName` is explicitly ""
   # on both so no default StorageClass can intercept the binding.
   data:
-    enabled: true
+    enabled: false
     # Host directory backing the PersistentVolume. `type: Directory` -- the
     # PV mounts only a directory that already exists on the node; creating it
     # (owner, mode) is part of the same admin ceremony as the PV itself.
