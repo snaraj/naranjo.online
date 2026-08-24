@@ -706,7 +706,14 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
 - **Perf budgets are tests.** Payload caps ship as pinned suite
   assertions, so a budget regression is a red build, never a
   discussion: the panels API pins `MaxIndexResponseBytes` = 4096 and
-  `MaxPanelResponseBytes` = 32768
+  `MaxPanelResponseBytes` = 131072 — raised from 32768 by the owner on
+  2026-08-24, because full-depth token-usage history structurally reaches
+  98,853 bytes served (115,981 with the v2 models section) and the old gate,
+  chosen before any real content existed, would have refused exactly the
+  documents the sealed-data pipeline exists to deliver. It is now the same
+  number as `seal.MaxSealedBytes`, so one ceiling governs transport and
+  serving alike. A budget the owner revises is still a budget: the bound
+  stays refuse-not-truncate and stays pinned
   (`TestResponsesStayWithinTheOwnerBudgets`,
   `internal/panels/handler_test.go`), and construction/refresh refuse
   over-budget payloads instead of serving them. Every new surface lands

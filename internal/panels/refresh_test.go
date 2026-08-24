@@ -355,7 +355,7 @@ func TestRedirectsAreRefusedAndCredentialStaysHome(t *testing.T) {
 
 // TestOversizedLivePayloadIsRefused pins the structural panel budget on the
 // live path: a mapped payload the budget refuses keeps the last good
-// response serving instead of busting the owner's 32 KiB bound.
+// response serving instead of busting the owner's panel-envelope bound.
 func TestOversizedLivePayloadIsRefused(t *testing.T) {
 	t.Parallel()
 	// The boss list now comes from the UPSTREAM, so the over-budget case is

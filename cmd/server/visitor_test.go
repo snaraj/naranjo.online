@@ -220,8 +220,14 @@ func TestVisitorReadsThePanels(t *testing.T) {
 			if response.StatusCode != http.StatusOK {
 				t.Fatalf("GET %s = %d", path, response.StatusCode)
 			}
-			if size := len(response.Body); size > 32768 {
-				t.Errorf("%s response is %d bytes, over the owner's 32 KiB budget", path, size)
+			// The literal is deliberate, per this file's own rule above:
+			// importing the constant would make the assertion agree with
+			// whatever internal/panels happens to say. The owner raised the
+			// budget from 32 KiB to 128 KiB on 2026-08-24 and this side was
+			// edited consciously to match, which is exactly the conscious
+			// edit the independence is for.
+			if size := len(response.Body); size > 131072 {
+				t.Errorf("%s response is %d bytes, over the owner's 128 KiB budget", path, size)
 			}
 			var envelope visitorPanelEnvelope
 			decodeVisitorJSON(t, response.Body, &envelope)

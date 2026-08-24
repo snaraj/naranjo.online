@@ -41,7 +41,29 @@ const (
 	// envelope. Construction refuses larger bodies by degrading the panel to
 	// unavailable, and the refresh path refuses oversized live payloads by
 	// keeping the last good response, so the budget is structural.
-	MaxPanelResponseBytes = 32 << 10
+	//
+	// RAISED from 32 KiB to 128 KiB by the owner on 2026-08-24: "expand the
+	// response gate if thats the case, we can't be blocked over a gate we
+	// added before we even started developing the real websites."
+	//
+	// The measurement behind it: full-depth token-usage history structurally
+	// maxes at 98,853 bytes served, and 115,981 with the v2 models section
+	// (issue #158's reproducible arithmetic). The 32 KiB gate would therefore
+	// have refused exactly the full-history documents the sealed-data
+	// pipeline exists to deliver — a serve-time outage waiting for real depth
+	// to arrive, produced by a budget chosen before any real content existed.
+	//
+	// 128 KiB is not an arbitrary bigger number: it is the SAME ceiling the
+	// sealed-payload pipeline already enforces at five stages
+	// (seal.MaxSealedBytes), so a document that can be transported can now
+	// also be served, and the pipeline has one ceiling philosophy end to end
+	// instead of a hidden smaller one at the last step.
+	//
+	// This is a budget revision by the budget's owner, not a weakening of a
+	// gate. The bound stays REFUSE-not-truncate at construction and refresh,
+	// stays pinned by TestResponsesStayWithinTheOwnerBudgets, and
+	// MaxIndexResponseBytes is untouched at 4 KiB.
+	MaxPanelResponseBytes = 128 << 10
 )
 
 // Panel kinds are versioned independently of the envelope. A breaking payload
@@ -1135,9 +1157,20 @@ const (
 	//
 	// Raising this from 64 KiB is a unification, not a relaxation: the
 	// merged payload is still separately held to MaxPanelResponseBytes by
-	// the shared preparation path, which is the far tighter gate, and every
-	// stage now refuses the same byte count before doing anything
-	// destructive.
+	// the shared preparation path, and every stage refuses the same byte
+	// count before doing anything destructive.
+	//
+	// That second gate is no longer the FAR TIGHTER one, and saying so would
+	// now be false: the owner raised MaxPanelResponseBytes to this same
+	// 128 KiB on 2026-08-24, precisely so a document the pipeline can carry
+	// is a document the origin can serve. The two checks measure different
+	// bytes, though, and the difference runs the safe way: this one bounds
+	// the SEALED file, while the serve gate bounds the finished panel/v1
+	// ENVELOPE — payload plus framing, minus the AEAD overhead. At the very
+	// top of the range a file at exactly this ceiling can therefore still be
+	// refused at serve time by the envelope's own bytes. That is refusal,
+	// not truncation, and the measured maxima sit far below it: the
+	// structural document seals to 98,958 bytes and serves at 98,853.
 	maxSealedSeriesBytes = 128 << 10
 
 	// dataRootFutureSkew is how far ahead of the local clock a series

@@ -1,7 +1,7 @@
 // handler_test locks the HTTP contract of both panel routes — headers,
 // conditional revalidation, opaque 404s, the read-only method policy — and
 // enforces the owner's performance budgets as tests: the index answer stays
-// within 4 KiB, every panel envelope within 32 KiB, and the numbers
+// within 4 KiB, every panel envelope within 128 KiB, and the numbers
 // themselves are pinned so the budget cannot drift silently.
 package panels
 
@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/snaraj/naranjo.online/internal/seal"
 )
 
 // panelsGet performs one recorded GET against the production registry.
@@ -196,16 +198,31 @@ func TestPanelRoutesRefuseEveryMutatingMethod(t *testing.T) {
 
 // TestResponsesStayWithinTheOwnerBudgets enforces the performance budgets as
 // tests, per the owner's standing priority: the index body at or under
-// 4 KiB, every panel envelope at or under 32 KiB — measured on the exact
+// 4 KiB, every panel envelope at or under 128 KiB — measured on the exact
 // bytes the handler serves — and the budget constants pinned to the numbers
-// the issue set, so neither can drift without a conscious edit here.
+// the owner set, so neither can drift without a conscious edit here.
+//
+// The panel budget moved from 32 KiB to 128 KiB on 2026-08-24 by owner
+// direction; the reasoning and the measurement are recorded at the constant
+// in types.go. The pin below moved WITH it in the same commit, which is the
+// point of pinning a budget rather than merely documenting one: the number
+// cannot change quietly, and changing it is a conscious edit that lands in
+// the diff a reviewer reads.
 func TestResponsesStayWithinTheOwnerBudgets(t *testing.T) {
 	t.Parallel()
 	if MaxIndexResponseBytes != 4096 {
 		t.Errorf("MaxIndexResponseBytes = %d, want the owner's 4 KiB budget", MaxIndexResponseBytes)
 	}
-	if MaxPanelResponseBytes != 32768 {
-		t.Errorf("MaxPanelResponseBytes = %d, want the owner's 32 KiB budget", MaxPanelResponseBytes)
+	if MaxPanelResponseBytes != 131072 {
+		t.Errorf("MaxPanelResponseBytes = %d, want the owner's 128 KiB budget", MaxPanelResponseBytes)
+	}
+	// The serve gate and the transport ceiling are now the SAME number, and
+	// that is the property worth pinning rather than the two values
+	// separately: a document the pipeline can carry is a document the origin
+	// can serve, with no smaller hidden ceiling at the last step.
+	if MaxPanelResponseBytes != seal.MaxSealedBytes {
+		t.Errorf("the panel budget (%d) and the sealed-payload ceiling (%d) have diverged; a document the pipeline transports would be refused at serve time",
+			MaxPanelResponseBytes, seal.MaxSealedBytes)
 	}
 	registry := New()
 	index := panelsGet(t, registry, IndexPath)

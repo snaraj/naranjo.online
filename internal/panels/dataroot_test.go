@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"math"
@@ -669,15 +670,20 @@ func TestDataRootRefusesOversizeBeforeDecryption(t *testing.T) {
 // whose merged envelope would bust the owner's response budget keeps the
 // last good payload: the budget is structural on this path exactly as it is
 // on construction and refresh.
-func TestDataRootRefusesAnOverBudgetEnvelope(t *testing.T) {
-	t.Parallel()
-	reg, state := usageDataRootRegistry(t, dataRootSnapshot)
-	days := 700
+// maximalDocument is the largest document the ORIGIN'S OWN BOUNDS admit: the
+// full 732-day series on both shipped sources, the complete five-key
+// category partition on the one that reports one, and every value at the
+// shared numeric ceiling. Nothing structurally valid can be bigger, which is
+// what makes the two measurements below meaningful rather than arbitrary.
+func maximalDocument() map[string]any {
+	const days = 732
 	totals := make([]int64, days)
 	category := make([]int64, days)
+	betaTotals := make([]int64, days)
 	for index := range totals {
-		totals[index] = 5 * 888888888
-		category[index] = 888888888
+		category[index] = maxCountValue / 5
+		totals[index] = 5 * (maxCountValue / 5)
+		betaTotals[index] = maxCountValue
 	}
 	document := validDocument()
 	section := alphaSection(document)
@@ -686,14 +692,106 @@ func TestDataRootRefusesAnOverBudgetEnvelope(t *testing.T) {
 		"input": category, "output": category, "cache-read": category,
 		"cache-write": category, "reasoning": category,
 	}
+	beta := betaSection(document)
+	beta["series"] = map[string]any{"startDate": "2024-01-01", "totals": betaTotals, "recorded": true}
+	return document
+}
+
+// paddedSnapshot builds a snapshot whose SERVED bytes are large while the
+// pushed document's bytes are untouched, by giving the embedded source many
+// insight rows. That separation is the point: the transport ceiling bounds
+// the sealed FILE, and the serve budget bounds the finished ENVELOPE —
+// payload plus everything the snapshot contributes — so a perfectly
+// admissible file can still produce an envelope that must be refused.
+func paddedSnapshot(t *testing.T, target int) string {
+	t.Helper()
+	const row = `{"label": "%s%04d", "pct": 50, "recorded": true}`
+	insights := make([]string, 0, target/64+1)
+	for len(insights)*64 < target {
+		insights = append(insights, fmt.Sprintf(row, strings.Repeat("p", 56), len(insights)))
+	}
+	return `{
+  "generatedAt": "2026-08-20T00:00:00Z",
+  "data": {"sources": [
+    {"label": "alpha", "windows": [], "stats": [
+      {"key": "lifetime", "label": "Lifetime", "value": 1000, "unit": "tokens", "recorded": true}],
+     "series": {"startDate": "2026-08-10", "totals": [10, 20], "recorded": true},
+     "insights": [` + strings.Join(insights, ",") + `]},
+    {"label": "beta", "windows": []}
+  ]}
+}`
+}
+
+// TestDataRootRefusesAnOverBudgetEnvelope proves the serve budget is still a
+// live gate after the owner raised it from 32 KiB to 128 KiB on 2026-08-24,
+// and proves it at the only place it can now bite.
+//
+// The raise made the naive version of this test VACUOUS, and that is worth
+// stating rather than quietly rewriting: with the serve budget at 128 KiB,
+// no structurally valid pushed document can exceed it on its own, because
+// the 732-day series bound and the shared numeric ceiling cap the maximal
+// document at 87,791 sealed bytes (measured below). A guard no input can
+// trip is not a guard.
+//
+// It can still be tripped, because the two ceilings measure DIFFERENT bytes.
+// The transport ceiling bounds the sealed file; the serve budget bounds the
+// finished envelope, which also carries everything the embedded snapshot
+// contributes. So a file comfortably under the transport ceiling, merged
+// onto a large snapshot, produces an envelope that must be refused — and it
+// is refused, not truncated, with the previous response left serving.
+func TestDataRootRefusesAnOverBudgetEnvelope(t *testing.T) {
+	t.Parallel()
+	reg, state := usageDataRootRegistry(t, paddedSnapshot(t, 30000))
 	before := state.current.Load()
-	_, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex))
+	// The snapshot itself is admissible: construction did not already
+	// degrade the panel, so what follows is genuinely the MERGE being
+	// refused.
+	if size := len(before.response.body); size == 0 || size > MaxPanelResponseBytes {
+		t.Fatalf("the padded snapshot is %d bytes; the test needs an admissible base", size)
+	}
+	sealed := sealDocument(t, maximalDocument())
+	if len(sealed) > maxSealedSeriesBytes {
+		t.Fatalf("the maximal document seals to %d bytes, over the transport ceiling; this case would be refused before the budget is reached", len(sealed))
+	}
+	_, err := refreshDirect(t, reg, state, seriesFS(sealed), productionUnsealer(dataRootTestKeyHex))
 	if err == nil || !strings.Contains(err.Error(), "over budget") {
 		t.Fatalf("over-budget envelope not refused: %v", err)
 	}
 	if state.current.Load() != before {
 		t.Fatal("a refused document still changed the served response")
 	}
+}
+
+// TestTheMaximalDocumentFitsTheRaisedBudget is the measurement that
+// JUSTIFIES the raise, kept as a test so it cannot rot into a claim.
+//
+// The owner's direction (2026-08-24) was "expand the response gate if thats
+// the case, we can't be blocked over a gate we added before we even started
+// developing the real websites", against the finding that full-depth
+// token-usage history would be refused at serve time by the old 32 KiB
+// budget. This asserts both halves of that: the maximal admissible document
+// does NOT fit 32 KiB — so the old gate really would have refused the
+// documents this pipeline exists to deliver — and it does fit the raised
+// one, with the served envelope measured on the exact bytes served.
+func TestTheMaximalDocumentFitsTheRaisedBudget(t *testing.T) {
+	t.Parallel()
+	reg, state := usageDataRootRegistry(t, dataRootSnapshot)
+	sealed := sealDocument(t, maximalDocument())
+	if _, err := refreshDirect(t, reg, state, seriesFS(sealed), productionUnsealer(dataRootTestKeyHex)); err != nil {
+		t.Fatalf("the maximal admissible document was refused: %v", err)
+	}
+	served := len(state.current.Load().response.body)
+	if served <= 32<<10 {
+		t.Fatalf("the maximal document serves in %d bytes, which the OLD 32 KiB budget would have admitted; the premise of the raise is not reproduced here", served)
+	}
+	if served > MaxPanelResponseBytes {
+		t.Fatalf("the maximal document serves in %d bytes, over the %d budget", served, MaxPanelResponseBytes)
+	}
+	if len(sealed) > maxSealedSeriesBytes {
+		t.Fatalf("the maximal document seals to %d bytes, over the %d transport ceiling", len(sealed), maxSealedSeriesBytes)
+	}
+	t.Logf("maximal admissible document: %d sealed bytes, %d served bytes, budget %d",
+		len(sealed), served, MaxPanelResponseBytes)
 }
 
 func TestDataRootTreatsAbsentFileAndUnchangedFileAsBenign(t *testing.T) {
