@@ -61,15 +61,25 @@ const (
 	// test names this constant on failure, the repository's standard
 	// hand-duplication pin.
 	//
-	// The number is measured, not guessed. The structural maximum the origin
-	// can admit is one document covering both shipped snapshot sources, each
-	// at the 732-day series bound with the complete five-key category
-	// vocabulary; compact-encoded and sealed, that measures 98,889 bytes at
-	// ten-digit daily values — an order of magnitude above the shipped
-	// snapshot's own measured peak day. 131,072 leaves 32,183 bytes of
-	// headroom, which is three further decimal digits on every value in the
-	// document: the same maximum still seals to 125,271 bytes at thirteen
-	// digits and only passes the cap at fourteen.
+	// The number is measured, not guessed, and the measurement was REDONE at
+	// the 2026-08-24 round-3 review because the figures below had gone stale
+	// against the document the producer now emits — finding 5 added a
+	// required per-source capturedAt, and the complete window and derived
+	// sections became mandatory rather than optional. The structural maximum
+	// the origin can admit is one document covering both shipped snapshot
+	// sources, each at the 732-day series bound with the complete five-key
+	// category vocabulary and every required section present; compact-encoded
+	// and sealed, that measures 98,958 bytes at ten-digit daily values — an
+	// order of magnitude above the shipped snapshot's own measured peak day.
+	// 131,072 leaves 32,114 bytes of headroom, which is three further decimal
+	// digits on every value in the document: the same maximum still seals to
+	// 125,340 bytes at thirteen digits and only passes the cap at fourteen,
+	// where it reaches 134,134.
+	//
+	// The numbers are no longer transcribed into an assertion. CapParityTest
+	// BUILDS that maximum document from the shipped snapshot's own labels and
+	// the producer's own vocabulary and measures it, so the class of drift
+	// that made this comment wrong cannot recur silently.
 	//
 	// A separate, tighter gate remains downstream: the merged payload must
 	// still fit the panels response budget before it is served, so this

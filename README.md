@@ -314,9 +314,12 @@ costs: the workstation exports the local usage records as a sanitized
 `usage-series/v1` document (`scripts/export_usage_series.py` — the same
 dates-and-integers guard as the capture step, plus per-day category
 breakdowns that must partition each day's total), seals it with AES-256-GCM
-(`cmd/usageseal`), and pushes the ciphertext to a host path the chart
-projects into the pod as a read-only PersistentVolume/PersistentVolumeClaim
-pair. The origin re-reads that file every five minutes, unseals it with
+(`cmd/usageseal`), and pushes the ciphertext over an ssh session that reads
+no configuration file at all — `-F /dev/null`, every option stated
+explicitly, and the resolved configuration checked with `ssh -G` before a
+connection is opened — to a node path the chart projects into the pod as a
+read-only `local` PersistentVolume/PersistentVolumeClaim pair on the
+platform's enumerated StorageClass. The origin re-reads that file every five minutes, unseals it with
 `PANELS_DATA_KEY` (read at decrypt time only, from a Secret the chart
 references but never contains), strict-decodes it under the pipeline's single
 128 KiB sealed-payload ceiling and a monotonic replay floor, and serves the
@@ -330,7 +333,13 @@ floor persists across restarts as a sealed marker in a separate writable
 state volume, so a restarted pod refuses ciphertext older than what any
 previous process published — and that marker is written BEFORE the payload
 is published, so a floor that cannot be persisted refuses the push instead
-of serving ahead of it. The capability defaults OFF in the chart
+of serving ahead of it. An initialization tombstone sits beside the marker,
+so a marker that has been DELETED is distinguishable from a first boot and
+refuses rather than cold-starting on a lowered floor; declaring a cold start
+is an explicit operator ceremony that says in the manual what protection it
+gives up. The floor is single-writer by construction — the state claim is
+`ReadWriteOncePod` and the render refuses more than one replica while the
+capability is on. The capability defaults OFF in the chart
 (`panels.data.enabled=false`): a fresh install schedules with no storage
 ceremony and serves the embedded release-time snapshot — an explicit,
 documented as-of-release state — and enabling the sealed feed is the

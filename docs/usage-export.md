@@ -14,7 +14,8 @@ transcript trees (read-only)
   └─ scripts/export_usage_series.py     dates+ints only, guard-proven
        └─ cmd/usageseal -mode seal      AES-256-GCM, key never in any repo
             └─ ssh (dedicated key) ───────────▶ forced command writes ONE file
-                                                 /srv/naranjo-online/panels-data/
+                                                 /mnt/local-pie-ssd/
+                                                   naranjo-online/panels-data/
                                                    token-usage.series.enc
                                                 └─ static PV/PVC (read-only)
                                                      └─ pod mounts read-only
@@ -71,12 +72,62 @@ keeps the last good payload and says so in the envelope `status`.
   account's `authorized_keys` entry is `restrict` + a forced command that
   writes exactly one file and answers with its checksum. The only bytes that
   ever return are the exit status and that checksum line.
-- **Read-only into the pod.** The chart projects the host directory through
-  a static PersistentVolume/PersistentVolumeClaim pair pinned read-only at
-  both the claim and the mount (`panels.data` in `chart/values.yaml`;
-  validated by `scripts/ci/chart-storage-pin.sh`). The decrypt key arrives
-  only as the `PANELS_DATA_KEY` environment variable from a Secret the chart
-  references but never contains.
+- **The push reads no ssh configuration file.** `-F /dev/null` makes the
+  resolution start from nothing — OpenSSH documents that supplying `-F` also
+  causes the system-wide `ssh_config` to be ignored — and every option the
+  session depends on is stated on the command line, including several that
+  are already defaults, because a default is only a default until a config
+  file moves it (2026-08-24 round-3 review, finding 8).
+
+  Hardening the options someone thought to name is not the same thing, and
+  the difference is measurable rather than theoretical. A consulted config
+  file can contribute parameters the command line never mentions — an extra
+  `IdentityFile`, which ACCUMULATES rather than being overridden, or a
+  `RemoteCommand` — and `scripts/ci/test_usage_export_scripts.py` runs the
+  shipped invocation against a staged hostile config to show exactly that,
+  then again with `-F /dev/null` to show it stops.
+
+  Before connecting, the script asks `ssh -G` what the options actually
+  resolved to and refuses unless the answer matches: exactly one identity
+  and that identity, no `proxycommand`/`proxyjump`/`localcommand`/
+  `controlpath` at all, and the pinned agent, forwarding and host-key
+  settings. The identity check earns its place twice over, because `ssh`
+  silently ignores an `-i` path that does not exist and falls back to the
+  default `~/.ssh` keys.
+- **Read-only into the pod, on the platform's own storage shape.** The chart
+  projects the node directory through a statically bound `local`
+  PersistentVolume/PersistentVolumeClaim pair on the enumerated
+  `local-pie-ssd` StorageClass, pinned read-only at both the claim and the
+  mount, with bounded required nodeAffinity (`panels.data` in
+  `chart/values.yaml`; validated by `scripts/ci/chart-storage-pin.sh`). The
+  decrypt key arrives only as the `PANELS_DATA_KEY` environment variable
+  from a Secret the chart references but never contains.
+
+  This was a hostPath pair with an explicitly empty storageClassName until
+  the 2026-08-24 round-3 review (finding 7). That shape is not merely dated:
+  website-infrastructure #211's storage acceptance denies hostPath outright
+  and admits a persistent volume only as `local` or `csi`, under the
+  enumerated local-volume root, carrying the enumerated class on both
+  objects. **This alignment is not yet confirmed by the platform — #211 is
+  open, and this work remains blocked on its five-part receipt either way.**
+  What changed is the direction of the gap.
+- **One writer, by construction.** `replicaCount` defaults to 1 whenever
+  `panels.data` is enabled, the state claim is `ReadWriteOncePod`, and the
+  render REFUSES `replicaCount > 1` with the capability on (2026-08-24
+  round-3 review, finding 3). The floor marker is a single-writer structure
+  and two pods writing it concurrently is a race whose loser silently lowers
+  the floor. The availability tradeoff is stated in full in
+  `chart/values.yaml`; the short version is that this is one personal site on
+  a one-node cluster, where two replicas always shared the node's fate
+  anyway, and `replicaCount: 2` remains fully supported with
+  `panels.data.enabled: false`.
+- **The two roots are disjoint, in both directions.** The read-only data root
+  and the writable state root may not be equal, and neither may contain the
+  other — checked over NORMALIZED paths, so `/x/data/../data/state`,
+  `/x//data` and `/x/data/` cannot pass as different directories, and the
+  same holds for the two container mount paths. The earlier check compared
+  raw strings in one direction only, which missed both the reverse nesting
+  and every alias (2026-08-24 round-3 review, finding 7).
 - **Strict admission.** The app reads at most the one sealed-byte cap
   documented below, unseals, strict-decodes `usage-series/v1` (unknown
   fields refused, closed window/derived/CATEGORY vocabularies — a pushed
@@ -103,7 +154,7 @@ keeps the last good payload and says so in the envelope `status`.
 - **The replay floor survives restarts, and durable mode fails closed.** The
   floor starts at the embedded snapshot's capture instant and rises with
   every PUBLISHED push; the high-water mark is persisted as a sealed marker
-  file in a SEPARATE writable state volume (`panels.data.stateHostPath`), so
+  file in a SEPARATE writable state volume (`panels.data.statePath`), so
   a restarted pod refuses ciphertext older than what any previous process
   published — not merely older than the shipped snapshot (2026-08-24
   security review, finding H2). The marker is sealed under the same key as
@@ -153,15 +204,27 @@ forced command truncated at 128 KiB, and the origin refused past 64 KiB
 admitted, and an oversized one was truncated, atomically installed over the
 last good file, and only then reported as a checksum mismatch.
 
-The ceiling is measured, not guessed. The structural maximum the origin can
-admit is one document covering both shipped snapshot sources, each at the
-732-day series bound with the complete five-key category vocabulary.
-Compact-encoded and sealed, that measures **98,889 bytes** at ten-digit daily
+The ceiling is measured, not guessed, and the measurement was REDONE at the
+2026-08-24 round-3 review: the figures previously printed here had gone stale
+against the document the producer now emits, because finding 5 made a
+per-source `capturedAt` required and the complete window and derived sections
+mandatory. The structural maximum the origin can admit is one document
+covering both shipped snapshot sources, each at the 732-day series bound with
+the complete five-key category vocabulary and every required section present.
+Compact-encoded and sealed, that measures **98,958 bytes** at ten-digit daily
 values — an order of magnitude above the shipped snapshot's own measured peak
-day of 1,911,380,289. Pretty-printed, the identical document was 196,172
-bytes, so compact output alone roughly halves it. 131,072 leaves 32,183 bytes
-of headroom: the same maximum still seals to 125,271 bytes at thirteen-digit
-values and only crosses the ceiling at fourteen.
+day of 1,911,380,289. Pretty-printed, the identical document is 196,256
+bytes, so compact output alone roughly halves it. 131,072 leaves **32,114
+bytes** of headroom: the same maximum still seals to 125,340 bytes at
+thirteen-digit values and only crosses the ceiling at fourteen, where it
+reaches 134,134.
+
+These figures are no longer transcribed into a test assertion. `CapParityTest`
+BUILDS the maximum document from the shipped snapshot's own labels and the
+producer's own vocabulary and measures it, so the drift that made the previous
+paragraph wrong cannot recur silently — but the prose above is still hand-kept
+and is checked by reading, so treat a disagreement between it and the suite as
+the prose being wrong.
 
 Raising the origin's own read from 64 KiB is therefore a unification of five
 disagreeing numbers, not a weakening. The tighter gate is downstream and
@@ -210,11 +273,45 @@ without truncation.
    USAGESEAL_BIN=$HOME/.local/bin/usageseal
    KEY_FILE=$HOME/.config/naranjo-usage-export/data.key
    SSH_IDENTITY=$HOME/.config/naranjo-usage-export/push_ed25519
-   PUSH_HOST=cluster-host-alias
+   SSH_KNOWN_HOSTS=$HOME/.config/naranjo-usage-export/known_hosts
+   PUSH_HOST=<push-user>@<cluster-host>
    SOURCE_LABEL=first-tool-label
    TRANSCRIPTS=$HOME/.claude/projects
+   # PUSH_PORT=22
    # MERGE_SOURCES=other-label=/path/to/other-series.json
    ```
+
+   **`PUSH_HOST` is a real `user@host`, not an `~/.ssh/config` alias, and
+   `SSH_KNOWN_HOSTS` is required** (2026-08-24 round-3 review, finding 8).
+   The push now runs with `-F /dev/null`, so no configuration file is
+   consulted at all — neither `~/.ssh/config` nor the system-wide one — and
+   every option is stated on the command line. An alias would resolve to
+   nothing, and a bare hostname would fall back to the LOCAL username, which
+   is a different account and very possibly one without the forced command.
+
+   Create the known-hosts file by fetching the host key over a channel you
+   trust and verifying its fingerprint out of band — for example:
+
+   ```sh
+   ssh-keyscan -t ed25519 <cluster-host> > \
+     "$HOME/.config/naranjo-usage-export/known_hosts"
+   ssh-keygen -lf "$HOME/.config/naranjo-usage-export/known_hosts"
+   # compare the fingerprint against the host's own
+   # `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`
+   ```
+
+   `StrictHostKeyChecking=yes` with this file means an unrecognized host key
+   is a refusal, not a prompt and not a silent first-use trust.
+
+   Before it opens a connection the push script asks `ssh -G` what the
+   options above actually RESOLVED to, and refuses unless the answer is
+   exactly what it asked for: one identity and that identity, no
+   `proxycommand`, `proxyjump`, `localcommand` or `controlpath`, and the
+   pinned host-key settings. One measured reason this matters more than it
+   looks: `ssh` SILENTLY IGNORES an `-i` path that does not exist and falls
+   back to the default `~/.ssh` identities, so a mistyped `SSH_IDENTITY`
+   would otherwise authenticate with your ordinary key — quite possibly an
+   admin key, and without the forced command.
 
    `MERGE_SOURCES` is how a second tool's captured series joins the same
    document: point it at that tool's capture output (the capture tool's
@@ -255,26 +352,32 @@ without truncation.
 Placeholders in angle brackets; none of these values belong in this
 repository.
 
-1. **Data directory** — must match the chart's `panels.data.hostPath`
-   default:
+1. **Data directory** — must match the chart's `panels.data.path` default,
+   which lives under the platform's enumerated local-volume root
+   (2026-08-24 round-3 review, finding 7: the chart moved from a hostPath
+   volume, which the platform storage acceptance denies outright, to a
+   `local` volume on the `local-pie-ssd` StorageClass):
 
    ```sh
    sudo install -d -m 0755 -o <push-user> -g <push-group> \
-     /srv/naranjo-online/panels-data
+     /mnt/local-pie-ssd/naranjo-online/panels-data
    ```
 
    World-readable is intended: the payload is ciphertext, and the pod's
    non-root user reads it through the read-only PV.
 
-   **State directory** — must match the chart's `panels.data.stateHostPath`
-   default, a SIBLING of the data directory (never inside it), owned by the
+   **State directory** — must match the chart's `panels.data.statePath`
+   default, a SIBLING of the data directory (never inside it, and never
+   containing it — the chart refuses to render either arrangement, in both
+   directions, comparing normalized paths so an alias cannot slip past),
+   owned by the
    pod's runtime user so the app can persist its sealed replay-floor marker
    (2026-08-24 security review, finding H2; 65532 is the chart's pinned
    `runAsUser`/`runAsGroup`):
 
    ```sh
    sudo install -d -m 0700 -o 65532 -g 65532 \
-     /srv/naranjo-online/panels-state
+     /mnt/local-pie-ssd/naranjo-online/panels-state
    ```
 
    The push pipeline never touches this directory, and the pod never writes
@@ -290,13 +393,14 @@ repository.
    `~/.ssh/authorized_keys` (single line; wrapped here for reading):
 
    ```text
-   restrict,command="t=$(mktemp /srv/naranjo-online/panels-data/.in.XXXXXX) \
+   restrict,command="d=/mnt/local-pie-ssd/naranjo-online/panels-data \
+     && t=$(mktemp \"$d/.in.XXXXXX\") \
      && head -c 131073 > \"$t\" \
      && s=$(wc -c < \"$t\") \
      && if [ \"$s\" -gt 131072 ]; then rm -f \"$t\"; echo over-cap >&2; exit 1; fi \
      && chmod 0644 \"$t\" \
-     && mv \"$t\" /srv/naranjo-online/panels-data/token-usage.series.enc \
-     && sha256sum /srv/naranjo-online/panels-data/token-usage.series.enc" \
+     && mv \"$t\" \"$d/token-usage.series.enc\" \
+     && sha256sum \"$d/token-usage.series.enc\"" \
      ssh-ed25519 <public-key-from-push_ed25519.pub> usage-export-push
    ```
 
@@ -335,9 +439,16 @@ repository.
    read-only DATA volume and the writable replay-floor STATE volume
    (2026-08-24 security review, finding H2):
 
+   Both are `local` volumes and a local volume is node-bound, so the render
+   needs the node name. It is supplied on the command line and never stored
+   in this repository (requirement 12); the chart's default is an empty
+   fail-closed sentinel and rendering a PersistentVolume without it fails
+   the render rather than emitting a volume no scheduler can place.
+
    ```sh
    helm template naranjo-online chart --kube-version v1.36.0 \
      --set panels.data.persistentVolume.enabled=true \
+     --set panels.data.node=<node-name> \
      --show-only chart/templates/panels-data.yaml > /tmp/panels-data.yaml
    # The render carries both PVs and both PVCs. Delete the two
    # PersistentVolumeClaim documents from the file — the claims are the
@@ -387,11 +498,64 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | panel `status: stale` after every push, panel never advances | the document does not cover every shipped source — add the missing `MERGE_SOURCES` entry (see step 4) — or one of its sections is malformed |
 | panel `status: stale`, sealed file gone from the data dir | the runtime document this pod had already served from was deleted or unmounted: the data is retained, the freshness claim is not (2026-08-24 security review, finding 5). Before the FIRST push an absent file is the ordinary cold state and stays `ok` on the embedded snapshot |
 | panel serves embedded snapshot | `panels.data.enabled=false` (the default — the documented as-of-release decision), or no sealed file yet — the shipped state, not an error |
-| floor marker absent in the state dir | a first boot: benign, the floor is the embedded snapshot's, and the first published push writes the marker |
-| floor marker present but corrupt, unauthentic, or future-dated | durable mode refuses the tick and reports `stale` rather than serving on a silently lowered floor; delete the marker file to declare a cold start, and the next tick recovers without a restart |
+| floor marker absent in the state dir, no `token-usage.floor.init` beside it | a first boot: benign, the floor is the embedded snapshot's, and the first published push writes both files |
+| floor marker absent but `token-usage.floor.init` present | the durable floor was INITIALIZED and its marker is now gone — deleted, or lost with the volume. Durable mode refuses the tick and reports `stale` instead of cold-starting on a floor of zero (2026-08-24 round-3 review, finding 4). Recover by pushing a fresh document, or run the reset ceremony below and accept what it costs |
+| floor marker present but corrupt, unauthentic, or future-dated | durable mode refuses the tick and reports `stale` rather than serving on a silently lowered floor. Push a fresh document; if the marker is genuinely unrecoverable, run the reset ceremony below |
+| boot log line `panel=token-usage` describing the floor state | the one operator-facing statement of WHICH state the state directory is in — recovered, rotated, lost, or untrusted. It carries no path, no key, and no payload |
+| floor marker present but sealed under a previous key | the key was rotated without the floor being reset. Durable mode refuses rather than migrating: the marker's key identifier is UNAUTHENTICATED, so honouring it would let anyone who can write the state directory lower the floor by editing a header. Run the reset ceremony below as part of the rotation |
 | panel `status: stale` right after a push, state volume full or read-only | the floor could not be persisted, so the payload was not published; free or remount the state directory and the next tick publishes the same file |
 | pod Pending on the state claim | the state PV or its host directory was not created before enabling `panels.data` — finish the ceremony above |
 
-Rotation: generate a new hex key, update the Secret, restart the deployment,
-replace `data.key`, push again. The old file fails to unseal during the
-overlap and the panel honestly reports `stale` until the next push lands.
+### The floor reset ceremony, and what it costs
+
+There is one supported way to declare a cold start, and it is deliberately
+not "delete a file until the error goes away". An earlier revision of this
+document told operators to delete the marker; that instruction was the
+finding-4 hole written down, because a deleted marker was indistinguishable
+from a first boot and silently reset the replay floor to the embedded
+snapshot's instant.
+
+**Say plainly what it does: it LOWERS the replay protection.** Every sealed
+document whose capture instant is after the embedded snapshot's becomes
+admissible again, so anyone holding a copy of an older push — a backup, a
+stale mount, an intercepted file — can have it accepted as current until a
+newer document arrives. Run it only when the alternative is a panel that
+cannot recover at all, and push a fresh document immediately afterwards so
+the floor climbs back.
+
+```sh
+# On the node, as the operator. BOTH files, together — removing only the
+# marker is the state the origin now refuses on purpose.
+sudo rm -f /mnt/local-pie-ssd/naranjo-online/panels-state/token-usage.floor.enc \
+           /mnt/local-pie-ssd/naranjo-online/panels-state/token-usage.floor.init
+# Then, from the workstation, immediately:
+scripts/usage-export/push-usage-series.sh
+```
+
+No restart is needed: the next tick sees an uninitialized state directory,
+cold-starts on the embedded snapshot's floor, and the fresh push raises it
+again.
+
+### Key rotation
+
+Generate a new hex key, update the Secret, replace `data.key` on the
+workstation, **run the floor reset ceremony above**, restart the deployment,
+and push again.
+
+The reset is part of the ceremony rather than an optional extra. The floor
+marker is sealed under the same key as the series, so after rotation the
+origin cannot open it; it refuses the tick and reports `stale` rather than
+guessing. It deliberately does NOT migrate the marker on its own: the marker
+carries a key identifier in a plain header, that header is outside the AEAD,
+and honouring an unauthenticated header would hand anyone who can write the
+state directory a way to lower the floor by editing one string — reopening
+exactly the hole the initialization tombstone closes.
+
+The rollback window the reset opens is narrower than it looks in this one
+case: documents sealed under the OLD key cannot be opened under the new one
+at all, so they are refused whatever the floor says. What becomes replayable
+is only material already sealed under the NEW key, of which there is none
+until the first post-rotation push — which is why the ceremony ends with one.
+
+During the overlap the old file fails to unseal and the panel honestly
+reports `stale` until the new push lands.

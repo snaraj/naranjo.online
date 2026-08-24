@@ -21,24 +21,30 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   ciphertext over ssh stdin to a forced-command, `restrict`-ed dedicated key
   that can write exactly one file. The origin re-reads that file every five
   minutes through a rooted read-only mount (`PANELS_DATA_ROOT`), unseals
-  with `PANELS_DATA_KEY` read at decrypt time only, strict-decodes under a
-  64 KiB cap with closed window/derived vocabularies and a monotonic
-  `generatedAt` replay floor, and merges into the served panel — so the
+  with `PANELS_DATA_KEY` read at decrypt time only, strict-decodes under the
+  pipeline's single 128 KiB sealed-payload cap with closed window/derived
+  vocabularies and a monotonic `generatedAt` replay floor, and merges into
+  the served panel — so the
   panel refreshes without a release, and every failure (tamper, replay,
   wrong key, over-cap, malformed, non-partitioning categories) keeps the
   last good payload and says so in the envelope status instead of crashing
-  or fabricating. The export step is structurally incapable of spawning or
-  networking: stdlib file reading only, import surface pinned by an AST
-  test against a closed allowlist, and every emission passes through the
-  capture tool's own dates-and-integers guard with counts-only diagnostics.
+  or fabricating. The export step cannot spawn a process or open a network
+  endpoint because the kernel refuses: the scheduled push runs it inside
+  `scripts/usage-export/producer.sb`, a seatbelt profile denying
+  `process-fork` and `network*`, and a workstation without the sandbox
+  refuses to walk raw records at all. Its import surface is additionally
+  pinned by an AST test against a closed allowlist — a REVIEW BOUND, not a
+  capability proof — and every emission passes through the capture tool's
+  own dates-and-integers guard with counts-only diagnostics.
 - The chart carries the storage as first-class templates under GitOps
-  (owner amendment on #142): TWO static PersistentVolume/
-  PersistentVolumeClaim pairs, each with explicit empty
-  `storageClassName`, `Retain`, `hostPath.type: Directory`, and
+  (owner amendment on #142): TWO statically bound `local` PersistentVolume/
+  PersistentVolumeClaim pairs on the platform's enumerated `local-pie-ssd`
+  StorageClass, each with `Retain`, bounded required nodeAffinity, and
   volumeName/claimRef double-pinning — the DATA pair read-only at BOTH the
   claim reference and the mount, and the replay-floor STATE pair (the
-  security review's H2 remedy below) explicitly writable at both, on a
-  sibling host directory the push pipeline never touches. The capability
+  security review's H2 remedy below) explicitly writable at both and
+  `ReadWriteOncePod`, on a sibling node directory the push pipeline never
+  touches. The capability
   defaults OFF (`panels.data.enabled=false`, the review's M6 remedy
   below): its claims bind statically to admin-provisioned volumes, so a
   default render carries none of it and a fresh install schedules; the
@@ -48,10 +54,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   bypass the namespace's restricted Pod Security posture. A storage pin
   script (`scripts/ci/chart-storage-pin.sh`, wired into the chart CI job)
   renders all four directions (enabled, with-pv, untouched default,
-  explicit disabled) and kills 21 hostile mutations — writable data
-  mounts, read-only state mounts, dropped storageClassName pins, smuggled
-  PVs, moved host paths, reclaim/type weakenings, a state directory nested
-  inside the push directory.
+  explicit disabled) and kills 43 hostile mutations — writable data
+  mounts, read-only state mounts, dropped or emptied storageClassName pins,
+  smuggled PVs, moved node paths, a reverted hostPath source, reclaim
+  weakenings, dropped or widened nodeAffinity, a second replica, and every
+  overlap of the two roots and the two mount paths in both directions
+  including dot-dot, duplicated-separator and trailing-separator aliases.
 - The panel's per-source category lens: a second radiogroup slices the
   heatmap by category, and a composition figure renders each source's
   share bar with fixed per-category color slots, 2px segment gaps, and
@@ -112,6 +120,86 @@ original code:
   is a documented as-of-release-snapshot decision stated where the value
   is set, and enabling it is a deliberate last step after the documented
   storage ceremony.
+
+Findings of the ROUND-3 adversarial security review of the same work
+(2026-08-24, REQUEST-CHANGES at `b5cf836`), each fixed with tests that fail
+against the reviewed code and one claim downgraded because the mechanism
+could not carry it:
+
+- 1 — the producer's "structurally incapable of spawning" claim rested on an
+  AST lint over IMPORT NAMES, and `pathlib.os.system(":")` restored the
+  launch callable with the import set unchanged. The boundary moved to the
+  invocation layer: the scheduled push starts the producer inside
+  `scripts/usage-export/producer.sb`, a seatbelt profile denying
+  `process-fork` and `network*`, with no flag or configuration key that runs
+  it unconfined and an outright refusal on a host without the sandbox. The
+  lint stays as a review bound and now SAYS so; the claim is stated as what
+  the kernel enforces, and the profile states its own residual
+  (exec-in-place, which buys nothing because the sandbox is inherited).
+- 2 — the replay-floor marker serialized to whole seconds, so a fractional
+  instant round-tripped LOWER than it was and re-admitted the document it
+  had just accepted. The marker is RFC3339Nano both ways, and restart
+  recovery binds the accepted CIPHERTEXT DIGEST rather than the instant
+  alone, so a different document at the same instant is refused.
+- 3 — the floor was not single-writer. `replicaCount` defaults to 1 while
+  the capability is on, the state claim is `ReadWriteOncePod` rather than
+  node-scoped `ReadWriteOnce`, the render refuses more than one replica, and
+  the marker is written through a unique temp file under an exclusive
+  `flock` with a monotonic compare-and-swap and an fsync of both the file
+  and its parent directory before success is reported. The availability
+  tradeoff is stated where the value is set.
+- 4 — deleting the marker silently reset the floor, and the runbook told
+  operators to do exactly that. An initialization tombstone makes
+  absent-after-initialized distinguishable from a first boot: the origin
+  refuses the tick and reports `stale`. Declaring a cold start is now an
+  explicit ceremony that removes both files and states, in the manual, that
+  it lowers replay protection.
+- 5 — a merge source could carry arbitrarily stale data under one current
+  `generatedAt` and `status: ok`. `--merge-source` requires and validates a
+  per-source capture instant, the combined document exposes per-source
+  freshness, its envelope instant is the OLDEST source's, and sections a
+  source-set-complete document omits are recomputed rather than mixed.
+- 6 — a present accepted marker with an absent source served fresh on the
+  first tick after a restart, because the acceptance fact lived only in
+  process memory. It is persisted, so provenance loss is `stale` from the
+  first tick.
+- 7 — the storage shape was a hostPath pair the platform storage acceptance
+  DENIES (website-infrastructure #211), and the sibling check compared raw
+  strings in one direction. The chart adopts the platform design — `local`
+  volumes under the enumerated root, the enumerated StorageClass on both
+  objects, bounded required nodeAffinity, node name supplied at ceremony
+  time and never stored here — and both root pairs must be disjoint in BOTH
+  directions over normalized paths. #211 is open and this work remains
+  blocked on its five-part receipt regardless.
+- 8 — the push inherited whatever `~/.ssh/config` resolved for a host alias
+  and hardened only the options someone had named. It now runs with
+  `-F /dev/null` (which also excludes the system-wide file), states every
+  option explicitly, requires `user@host` and a pinned known-hosts file, and
+  asks `ssh -G` what actually resolved — refusing before connecting unless
+  the answer carries exactly the one dedicated identity and no
+  `proxycommand`, `proxyjump`, `localcommand` or `controlpath`. That
+  identity check catches a measured hazard: `ssh` silently ignores an `-i`
+  path that does not exist and falls back to the default keys.
+- 9 — one numeric contract now spans all three stages at 2^53-1: checked
+  int64 addition in Go, `MAX_COUNT` in the producer, and
+  `Number.isSafeInteger` in frontend admission, with a running-sum check on
+  the category partition and a three-way parity pin comparing the constants
+  by value.
+- 10 — the producer walked without bounds. Reads are rooted and no-follow
+  with containment re-checked after resolution, and file, entry, line,
+  depth and aggregate-byte ceilings are enforced BEFORE work; failure
+  messages stay path-free.
+- 11 — rotating the key left an unopenable marker. The marker carries a
+  versioned key identifier and refuses rather than migrating, because the
+  header is outside the AEAD and honouring it would let anyone who can write
+  the state directory lower the floor. Rotation is a documented ceremony
+  whose rollback consequence is stated truthfully.
+- Evidence correction: the sealed-payload ceiling figures in
+  `internal/seal/types.go` and `docs/usage-export.md` had gone stale against
+  the document the producer now emits. Re-measured at 98,958 sealed bytes
+  for the structural maximum, 32,114 bytes of headroom, 125,340 at thirteen
+  digits and 134,134 at fourteen; the suite now BUILDS and measures that
+  document instead of asserting a transcribed number.
 
 ## [0.1.34] - 2026-08-24
 
