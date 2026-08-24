@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,35 +118,54 @@ func newUnsealer(lookupEnv func(string) string) func(sealed []byte) ([]byte, err
 
 // newFloorMarker composes the durable replay-floor marker over the writable
 // state root (2026-08-24 review finding H2). The marker is the RFC3339
-// instant of the last accepted series file, sealed under the SAME key as the
+// instant of the last published series file, sealed under the SAME key as the
 // series itself — the key discipline is identical to newUnsealer's: read
-// from the environment at call time, held only for the call. Load fails SAFE
-// on everything (absent, oversized, unauthentic, unparsable → no marker, so
-// the floor stays at the embedded snapshot's — never lower), and Store is
+// from the environment at call time, held only for the call. Store is
 // write-then-rename so a torn write leaves the previous marker, not a
 // corrupt half.
+//
+// Load distinguishes the two states the loop must tell apart (2026-08-24
+// review finding 2). A marker that is genuinely ABSENT is the first boot's
+// benign cold state and reports (zero, false, nil). A marker that EXISTS and
+// cannot be trusted — unreadable, oversized, unauthentic under the shared
+// key, or unparsable — reports an error, and the loop refuses to serve on a
+// silently lowered floor. The earlier "everything degrades to no marker"
+// contract could not express the difference, so a host that corrupted or
+// truncated the marker got the panel's replay protection reset to the
+// embedded snapshot's instant without anybody being told.
 func newFloorMarker(state *os.Root, lookupEnv func(string) string) *panels.FloorMarker {
 	unseal := newUnsealer(lookupEnv)
 	return &panels.FloorMarker{
-		Load: func() (time.Time, bool) {
+		Load: func() (time.Time, bool, error) {
 			file, err := state.Open(panelsFloorMarkerName)
 			if err != nil {
-				return time.Time{}, false
+				if errors.Is(err, fs.ErrNotExist) {
+					// No marker yet: the first boot of a durable
+					// deployment, and the only benign absence.
+					return time.Time{}, false, nil
+				}
+				return time.Time{}, false, errors.New("panels floor marker is unreadable")
 			}
 			defer file.Close()
 			sealed, err := io.ReadAll(io.LimitReader(file, maxFloorMarkerBytes+1))
-			if err != nil || len(sealed) > maxFloorMarkerBytes {
-				return time.Time{}, false
+			if err != nil {
+				return time.Time{}, false, errors.New("panels floor marker is unreadable")
+			}
+			if len(sealed) > maxFloorMarkerBytes {
+				return time.Time{}, false, errors.New("panels floor marker exceeds its byte bound")
 			}
 			plaintext, err := unseal(sealed)
 			if err != nil {
-				return time.Time{}, false
+				// Deliberately not the underlying error: a wrong key, a
+				// tampered byte and a truncated tail are indistinguishable
+				// by design, and none of them may be served through.
+				return time.Time{}, false, errors.New("panels floor marker failed authentication")
 			}
 			instant, err := time.Parse(time.RFC3339, string(plaintext))
 			if err != nil {
-				return time.Time{}, false
+				return time.Time{}, false, errors.New("panels floor marker does not carry an instant")
 			}
-			return instant, true
+			return instant, true, nil
 		},
 		Store: func(instant time.Time) error {
 			keyHex := strings.TrimSpace(lookupEnv(panelsDataKeyEnv))

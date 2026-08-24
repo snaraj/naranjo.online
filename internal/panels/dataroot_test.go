@@ -142,10 +142,11 @@ func fixedNow() time.Time {
 }
 
 // refreshDirect drives one refreshFromDataRoot attempt with the standard
-// floor (the synthetic snapshot's own instant).
+// floor (the synthetic snapshot's own instant) in the documented
+// process-memory mode, where there is no durable floor to commit.
 func refreshDirect(t *testing.T, reg *Registry, state *panelState, fsys fs.FS, unseal Unsealer) (time.Time, error) {
 	t.Helper()
-	return reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, reg.embeddedUsageInstant(state), false)
+	return reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, reg.embeddedUsageInstant(state), false, nil)
 }
 
 // decodeServedUsage decodes the panel's currently served envelope.
@@ -562,7 +563,7 @@ func TestDataRootTreatsAbsentFileAndUnchangedFileAsBenign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first refresh: %v", err)
 	}
-	if _, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, accepted, false); !errors.Is(err, errSeriesUnchanged) {
+	if _, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, accepted, false, nil); !errors.Is(err, errSeriesUnchanged) {
 		t.Fatalf("unchanged file: got %v, want errSeriesUnchanged", err)
 	}
 }
@@ -676,20 +677,27 @@ func TestDataRootLoopServesRefreshesAndDegrades(t *testing.T) {
 // for the durable medium so restart tests can hand "the same persisted
 // state" to a second registry — the second registry IS the restarted
 // process, because a Registry owns all the state a process does here.
+//
+// loadErr models the marker that EXISTS and cannot be trusted, which the
+// absent marker (ok=false, loadErr=nil) must not be confused with.
 type fakeMarker struct {
 	mu         sync.Mutex
 	instant    time.Time
 	ok         bool
+	loadErr    error
 	storeErr   error
 	storeCalls int
 }
 
 func (m *fakeMarker) marker() *FloorMarker {
 	return &FloorMarker{
-		Load: func() (time.Time, bool) {
+		Load: func() (time.Time, bool, error) {
 			m.mu.Lock()
 			defer m.mu.Unlock()
-			return m.instant, m.ok
+			if m.loadErr != nil {
+				return time.Time{}, false, m.loadErr
+			}
+			return m.instant, m.ok, nil
 		},
 		Store: func(instant time.Time) error {
 			m.mu.Lock()
@@ -703,6 +711,21 @@ func (m *fakeMarker) marker() *FloorMarker {
 			return nil
 		},
 	}
+}
+
+// failStoring flips the shared cell into "the durable write fails from now
+// on", modelling the disk that fills after some acceptances have persisted.
+func (m *fakeMarker) failStoring(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.storeErr = err
+}
+
+// persisted reports the currently recorded floor.
+func (m *fakeMarker) persisted() (time.Time, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.instant, m.ok
 }
 
 // runMarkeredLoop starts one registry's loop over the given file and marker
@@ -768,43 +791,157 @@ func TestDataRootFloorSurvivesRestart(t *testing.T) {
 	})
 }
 
-// TestDataRootFloorMarkerFailsSafe pins every degraded marker direction:
-// an unreadable marker leaves the embedded floor (the pre-marker guarantee,
-// so a lost marker can never refuse what a markerless build accepted), a
-// far-future marker is ignored as corrupt rather than allowed to refuse
-// every honest push, and a failing Store degrades durability, never
-// admission or serving.
-func TestDataRootFloorMarkerFailsSafe(t *testing.T) {
+// TestDataRootFloorMarkerFailsClosed pins every marker direction under the
+// 2026-08-24 finding-2 contract. Durable mode is a promise about what
+// survives a restart, so when its own state cannot be read or written the
+// loop refuses the tick and says stale — it never quietly reverts to the
+// embedded floor, which would re-admit everything a previous process had
+// already published past. Only the genuinely ABSENT marker is benign, and
+// only because a first boot has nothing to forget.
+func TestDataRootFloorMarkerFailsClosed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		fsys := seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:02:00Z")))
+		embedded := "1999-12-31T00:00:00Z"
 
-		// Unreadable marker: floor stays the embedded snapshot's, so the
-		// (snapshot-newer) file is accepted exactly as before markers.
-		unreadable := &fakeMarker{ok: false}
-		envelope, _, cancel := runMarkeredLoop(t, synctestSnapshot, fsys, unreadable.marker())
+		// ABSENT marker: the first boot of a durable deployment. The floor
+		// is the embedded snapshot's, the push lands, and the floor persists.
+		absent := &fakeMarker{}
+		envelope, _, cancel := runMarkeredLoop(t, synctestSnapshot, fsys, absent.marker())
 		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:02:00Z" {
+			t.Fatalf("absent marker: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		if instant, ok := absent.persisted(); !ok || !instant.Equal(time.Date(2000, 1, 1, 0, 2, 0, 0, time.UTC)) {
+			t.Fatalf("absent marker: floor persisted as %v %v", instant, ok)
+		}
+		cancel()
+		synctest.Wait()
+
+		// UNREADABLE marker: it exists and cannot be trusted. Refused, the
+		// embedded payload kept, stale said, and nothing written.
+		unreadable := &fakeMarker{loadErr: errors.New("marker unreadable")}
+		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot, fsys, unreadable.marker())
+		if envelope.Status != StatusStale || envelope.GeneratedAt != embedded {
 			t.Fatalf("unreadable marker: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
 		}
-		cancel()
-		synctest.Wait()
-
-		// Far-future marker: ignored as corrupt; the honest push still lands.
-		future := &fakeMarker{instant: time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC), ok: true}
-		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot, fsys, future.marker())
-		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:02:00Z" {
-			t.Fatalf("future marker: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		if unreadable.storeCalls != 0 {
+			t.Fatal("a tick ran on an unresolved durable floor")
 		}
 		cancel()
 		synctest.Wait()
 
-		// Failing Store: the acceptance itself must stand.
+		// FUTURE marker: a floor is only ever written from an instant this
+		// loop already bounded against the clock, so one from the future is
+		// tampering or a clock that moved backwards. Same refusal.
+		future := &fakeMarker{instant: time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC), ok: true}
+		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot, fsys, future.marker())
+		if envelope.Status != StatusStale || envelope.GeneratedAt != embedded {
+			t.Fatalf("future marker: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		if future.storeCalls != 0 {
+			t.Fatal("a tick ran on a future durable floor")
+		}
+		cancel()
+		synctest.Wait()
+
+		// Failing STORE: the commit is the last gate before publication, so
+		// a payload whose floor cannot be persisted is not published at all.
 		broken := &fakeMarker{storeErr: errors.New("disk full")}
 		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot, fsys, broken.marker())
-		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:02:00Z" {
+		if envelope.Status != StatusStale || envelope.GeneratedAt != embedded {
 			t.Fatalf("failing store: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
 		}
 		if broken.storeCalls == 0 {
 			t.Fatal("the store was never attempted")
+		}
+		if _, ok := broken.persisted(); ok {
+			t.Fatal("a failed store still recorded a floor")
+		}
+		cancel()
+		synctest.Wait()
+
+		// A marker at or below the embedded floor adds nothing and is not a
+		// fault: the embedded instant is already the stronger bound.
+		stale := &fakeMarker{instant: time.Date(1999, 12, 30, 0, 0, 0, 0, time.UTC), ok: true}
+		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot, fsys, stale.marker())
+		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:02:00Z" {
+			t.Fatalf("below-embedded marker: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
+// TestDataRootNeverPublishesAheadOfThePersistedFloor is the 2026-08-24
+// review finding 2 regression test, staged as the reviewer staged it.
+//
+// Before the fix, refreshFromDataRoot published the candidate and only then
+// tried to persist the new floor, discarding the error. The reviewer's
+// reproduction: floor persisted at 00:02, the loop accepts and SERVES 00:04
+// while Store returns "disk full", the process restarts, and the older but
+// perfectly authentic 00:02 file is re-admitted as status ok — a rollback of
+// data a visitor had already been served.
+//
+// After the fix the middle state is unrepresentable. The commit runs BEFORE
+// publication, so a payload whose floor cannot be persisted never becomes
+// the served payload: the panel holds 00:02 and says stale, and the restart
+// re-serving 00:02 is recovery of the newest instant that was ever actually
+// published, not a rollback from a newer one.
+func TestDataRootNeverPublishesAheadOfThePersistedFloor(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		shared := &fakeMarker{}
+		reg, state := usageDataRootRegistry(t, synctestSnapshot)
+		fsys := &lockedFS{inner: seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:02:00Z")))}
+		ctx, cancel := context.WithCancel(context.Background())
+		reg.startDataRoot(ctx, fsys, productionUnsealer(dataRootTestKeyHex), shared.marker(), time.Now)
+
+		// 1. The healthy push: served, and its floor durably recorded.
+		synctest.Wait()
+		envelope, _ := decodeServedUsage(t, state)
+		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:02:00Z" {
+			t.Fatalf("first push: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		if instant, ok := shared.persisted(); !ok || !instant.Equal(time.Date(2000, 1, 1, 0, 2, 0, 0, time.UTC)) {
+			t.Fatalf("first push floor: %v %v", instant, ok)
+		}
+
+		// 2. The disk fills, and a newer authentic push arrives. The floor
+		//    cannot advance, so the payload must NOT be published.
+		shared.failStoring(errors.New("disk full"))
+		fsys.swap(seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:04:00Z"))))
+		time.Sleep(dataRootTTL)
+		synctest.Wait()
+		envelope, _ = decodeServedUsage(t, state)
+		if envelope.GeneratedAt == "2000-01-01T00:04:00Z" {
+			t.Fatal("a payload was published ahead of its persisted floor")
+		}
+		if envelope.Status != StatusStale || envelope.GeneratedAt != "2000-01-01T00:02:00Z" {
+			t.Fatalf("uncommittable push: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		if instant, _ := shared.persisted(); !instant.Equal(time.Date(2000, 1, 1, 0, 2, 0, 0, time.UTC)) {
+			t.Fatalf("the failed store moved the floor to %v", instant)
+		}
+		cancel()
+		synctest.Wait()
+
+		// 3. The disk is repaired and the process restarts, facing the older
+		//    authentic 00:02 file. It is the newest instant ever published,
+		//    so re-serving it is recovery — and the 00:04 the old code would
+		//    have served before this restart never was.
+		shared.failStoring(nil)
+		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot,
+			seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:02:00Z"))), shared.marker())
+		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:02:00Z" {
+			t.Fatalf("restart: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		cancel()
+		synctest.Wait()
+
+		// 4. And the rollback proper is still refused after the restart: a
+		//    file older than the persisted floor never serves.
+		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot,
+			seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:01:00Z"))), shared.marker())
+		if envelope.Status != StatusStale || envelope.GeneratedAt == "2000-01-01T00:01:00Z" {
+			t.Fatalf("restart accepted a replay: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
 		}
 		cancel()
 		synctest.Wait()

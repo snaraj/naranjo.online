@@ -210,9 +210,14 @@ func TestPanelsDataRootConfinesReads(t *testing.T) {
 // TestFloorMarkerRoundTripsAcrossRootInstances proves the durable half of
 // the 2026-08-24 review finding H2 fix on a REAL filesystem: a marker stored
 // through one rooted capability is read back by a SEPARATE rooted capability
-// over the same directory — which is exactly what a process restart is — and
-// every corrupt direction loads as "no marker" rather than an error or a
-// wrong instant.
+// over the same directory — which is exactly what a process restart is.
+//
+// It also pins the distinction finding 2 turned on (2026-08-24 review): an
+// ABSENT marker is the benign first boot and loads as (zero, false, nil),
+// while a marker that EXISTS and cannot be trusted — tampered, junk,
+// oversized, wrong key, no key — loads as an ERROR, so the loop refuses to
+// serve on a silently lowered floor instead of treating corruption as a cold
+// start.
 func TestFloorMarkerRoundTripsAcrossRootInstances(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -224,8 +229,8 @@ func TestFloorMarkerRoundTripsAcrossRootInstances(t *testing.T) {
 		t.Fatalf("open first root: %v", err)
 	}
 	writer := newFloorMarker(first, env)
-	if _, ok := writer.Load(); ok {
-		t.Fatal("an empty state directory produced a marker")
+	if _, ok, err := writer.Load(); ok || err != nil {
+		t.Fatalf("an empty state directory must load as the benign absent marker: %v %v", ok, err)
 	}
 	if err := writer.Store(instant); err != nil {
 		t.Fatalf("store: %v", err)
@@ -239,9 +244,9 @@ func TestFloorMarkerRoundTripsAcrossRootInstances(t *testing.T) {
 	}
 	defer second.Close()
 	reader := newFloorMarker(second, env)
-	loaded, ok := reader.Load()
-	if !ok || !loaded.Equal(instant) {
-		t.Fatalf("marker did not survive the root boundary: %v %v", loaded, ok)
+	loaded, ok, err := reader.Load()
+	if !ok || err != nil || !loaded.Equal(instant) {
+		t.Fatalf("marker did not survive the root boundary: %v %v %v", loaded, ok, err)
 	}
 
 	// A later Store REPLACES the marker; the newest instant wins.
@@ -249,12 +254,12 @@ func TestFloorMarkerRoundTripsAcrossRootInstances(t *testing.T) {
 	if err := reader.Store(later); err != nil {
 		t.Fatalf("second store: %v", err)
 	}
-	if loaded, ok = reader.Load(); !ok || !loaded.Equal(later) {
-		t.Fatalf("marker did not advance: %v %v", loaded, ok)
+	if loaded, ok, err = reader.Load(); !ok || err != nil || !loaded.Equal(later) {
+		t.Fatalf("marker did not advance: %v %v %v", loaded, ok, err)
 	}
 
-	// Corrupt directions all load as "no marker": flipped ciphertext,
-	// unsealed junk, oversized bytes, and the wrong key.
+	// Corrupt directions all load as an ERROR — a marker that is there and
+	// unusable, which durable mode must refuse rather than forget.
 	markerPath := filepath.Join(dir, "token-usage.floor.enc")
 	sealed, err := os.ReadFile(markerPath)
 	if err != nil {
@@ -270,8 +275,8 @@ func TestFloorMarkerRoundTripsAcrossRootInstances(t *testing.T) {
 		if err := os.WriteFile(markerPath, bytes, 0o600); err != nil {
 			t.Fatalf("stage %s: %v", name, err)
 		}
-		if _, ok := reader.Load(); ok {
-			t.Fatalf("%s loaded as a marker", name)
+		if _, ok, err := reader.Load(); ok || err == nil {
+			t.Fatalf("%s did not load as an untrusted marker: %v %v", name, ok, err)
 		}
 	}
 	if err := os.WriteFile(markerPath, sealed, 0o600); err != nil {
@@ -280,15 +285,24 @@ func TestFloorMarkerRoundTripsAcrossRootInstances(t *testing.T) {
 	wrongKey := newFloorMarker(second, func(string) string {
 		return strings.Repeat("ff", 32)
 	})
-	if _, ok := wrongKey.Load(); ok {
-		t.Fatal("the wrong key still loaded the marker")
+	if _, ok, err := wrongKey.Load(); ok || err == nil {
+		t.Fatalf("the wrong key did not load as an untrusted marker: %v %v", ok, err)
 	}
 	noKey := newFloorMarker(second, func(string) string { return "" })
-	if _, ok := noKey.Load(); ok {
-		t.Fatal("a missing key still loaded the marker")
+	if _, ok, err := noKey.Load(); ok || err == nil {
+		t.Fatalf("a missing key did not load as an untrusted marker: %v %v", ok, err)
 	}
 	if err := noKey.Store(instant); err == nil {
 		t.Fatal("a missing key still stored a marker")
+	}
+
+	// And the absent marker stays benign after the directory has been used:
+	// removing it is a cold start, not a corruption.
+	if err := os.Remove(markerPath); err != nil {
+		t.Fatalf("remove marker: %v", err)
+	}
+	if _, ok, err := reader.Load(); ok || err != nil {
+		t.Fatalf("a removed marker must load as absent, not untrusted: %v %v", ok, err)
 	}
 }
 

@@ -68,16 +68,32 @@ keeps the last good payload and says so in the envelope `status`.
   must partition the day totals), refuses replays via a monotonic
   `generatedAt` floor, and re-checks the serving byte budget before
   publishing.
-- **The replay floor survives restarts.** The floor starts at the embedded
-  snapshot's capture instant and rises with every accepted push; the
-  accepted high-water mark is persisted as a sealed marker file in a
-  SEPARATE writable state volume (`panels.data.stateHostPath`), so a
-  restarted pod refuses ciphertext older than what any previous process
-  accepted — not merely older than the shipped snapshot (2026-08-24 security
-  review, finding H2). The marker is sealed under the same key as the
-  series, so the host cannot forge it; an absent or corrupt marker degrades
-  to the embedded floor, never lower, and a failed marker write degrades
-  durability, never admission or serving.
+- **The replay floor survives restarts, and durable mode fails closed.** The
+  floor starts at the embedded snapshot's capture instant and rises with
+  every PUBLISHED push; the high-water mark is persisted as a sealed marker
+  file in a SEPARATE writable state volume (`panels.data.stateHostPath`), so
+  a restarted pod refuses ciphertext older than what any previous process
+  published — not merely older than the shipped snapshot (2026-08-24
+  security review, finding H2). The marker is sealed under the same key as
+  the series, so the host cannot forge it.
+
+  Once a state volume is configured, the floor is a promise about what
+  survives a restart, and a promise that cannot be kept is refused rather
+  than downgraded (2026-08-24 security review, finding 2):
+
+  - The marker is written BEFORE the payload is published. A write that
+    fails means the payload is not published at all — the last good payload
+    keeps serving, the envelope says `stale`, and the next five-minute tick
+    retries the same file. The old order (publish, then try to persist,
+    discard the error) let a pod serve an instant no restart could remember,
+    after which an older but perfectly authentic file was re-admitted as
+    fresh.
+  - A marker that is genuinely ABSENT is a first boot and is benign. A
+    marker that EXISTS and cannot be trusted — unreadable, oversized,
+    unauthentic, unparsable, or dated in the future — refuses the tick and
+    reports `stale` instead of quietly reverting to the embedded floor. The
+    load is retried every tick, so repairing or removing the marker recovers
+    the pod without a restart.
 
 ## Workstation setup
 
@@ -175,9 +191,13 @@ repository.
    ```
 
    The push pipeline never touches this directory, and the pod never writes
-   anywhere else. If the directory is missing or unwritable the app still
-   serves — the floor simply stops surviving restarts — but create it with
-   the PV so the durability the review required is real.
+   anywhere else. Two different states, deliberately: a deployment with NO
+   state volume at all (`PANELS_DATA_STATE` unset) runs the documented
+   process-memory mode and keeps serving with a floor that does not survive
+   restarts, while a deployment that HAS one and cannot write to it refuses
+   to publish and reports `stale` — it asked for durability, so it does not
+   silently serve without it (2026-08-24 security review, finding 2). Create
+   the directory with the PV so the durability the review required is real.
 
 2. **Forced-command key** — append ONE line to the push user's
    `~/.ssh/authorized_keys` (single line; wrapped here for reading):
@@ -263,7 +283,9 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | `checksum mismatch after push` | landed bytes differ from sealed bytes — investigate before trusting the panel |
 | panel `status: stale` | the origin refused the newest file (tamper, replay, wrong key, over-cap, malformed) and kept the last good payload |
 | panel serves embedded snapshot | `panels.data.enabled=false` (the default — the documented as-of-release decision), or no sealed file yet — the shipped state, not an error |
-| floor marker absent/corrupt in the state dir | the app falls back to the embedded snapshot's floor — replay protection degrades to the pre-marker guarantee, never below it; the next accepted push rewrites the marker |
+| floor marker absent in the state dir | a first boot: benign, the floor is the embedded snapshot's, and the first published push writes the marker |
+| floor marker present but corrupt, unauthentic, or future-dated | durable mode refuses the tick and reports `stale` rather than serving on a silently lowered floor; delete the marker file to declare a cold start, and the next tick recovers without a restart |
+| panel `status: stale` right after a push, state volume full or read-only | the floor could not be persisted, so the payload was not published; free or remount the state directory and the next tick publishes the same file |
 | pod Pending on the state claim | the state PV or its host directory was not created before enabling `panels.data` — finish the ceremony above |
 
 Rotation: generate a new hex key, update the Secret, restart the deployment,

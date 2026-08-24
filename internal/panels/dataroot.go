@@ -48,31 +48,47 @@ import (
 type Unsealer func(sealed []byte) ([]byte, error)
 
 // FloorMarker persists the replay floor — the capture instant of the last
-// ACCEPTED series file — across process restarts (2026-08-24 review finding
+// PUBLISHED series file — across process restarts (2026-08-24 review finding
 // H2: a floor seeded only from the embedded snapshot and advanced in process
 // memory re-admits, after any restart, every replayed ciphertext newer than
 // the snapshot but older than what was already accepted). The concrete
 // implementation lives with the composition root, exactly like the Unsealer:
 // this package gains no write capability of its own.
 //
-// Every direction fails SAFE and none fails the panel:
-//   - Load returns (instant, true) only for a marker that authenticates and
-//     parses; an absent, unreadable, corrupt, or unauthentic marker is
-//     (zero, false), which leaves the floor at the embedded snapshot's — the
-//     exact pre-marker behavior, never anything weaker.
-//   - A Load instant from the future beyond dataRootFutureSkew is ignored by
-//     the loop as corrupt, so a bad marker can never refuse honest pushes
-//     indefinitely.
-//   - A Store failure is tolerated: the in-memory floor has already risen,
-//     serving continues, and the next acceptance retries the write.
+// DURABLE MODE FAILS CLOSED (2026-08-24 review finding 2). A non-nil marker
+// with both functions set means the deployment asked for a durable floor, and
+// a durable floor that cannot be read or written is a broken guarantee, not a
+// reason to serve anyway on a weaker one:
+//   - Load returns (instant, true, nil) for a marker that authenticates and
+//     parses, (zero, false, nil) for the genuinely ABSENT marker of a first
+//     boot — the benign cold state — and a non-nil error for a marker that
+//     exists but cannot be trusted: unreadable, oversized, unauthentic, or
+//     unparsable. An error refuses acceptance and reports stale, and the loop
+//     retries the load on the next tick so an operator repair recovers
+//     without a restart. It never silently reverts to the embedded floor,
+//     which is exactly the downgrade the review reproduced.
+//   - A Load instant beyond dataRootFutureSkew is refused the same way. A
+//     floor is only ever written from an instant this loop already bounded
+//     against the local clock, so one from the future means the clock moved
+//     backwards or the state was tampered with; serving on a silently lowered
+//     floor would be the weaker of the two failures.
+//   - Store is the COMMIT of an acceptance and runs BEFORE publication. A
+//     Store failure means the payload is not published at all: the last good
+//     payload keeps serving, the envelope says stale, the in-memory floor
+//     does NOT rise, and the next tick retries the same file. Publishing
+//     ahead of the persisted floor is what let a restart re-admit an older
+//     authentic file after a failed write.
 //
-// A nil FloorMarker (or nil field) runs the loop with the process-memory
-// floor only — the documented degraded mode for deployments without a
-// writable state root.
+// A nil FloorMarker (or either field nil) runs the loop with the
+// process-memory floor only — the documented degraded mode for deployments
+// without a writable state root, unchanged by this contract.
 type FloorMarker struct {
-	// Load reads the persisted floor. False means "no usable marker".
-	Load func() (time.Time, bool)
-	// Store durably records a newly accepted capture instant.
+	// Load reads the persisted floor. (zero, false, nil) is the absent
+	// marker of a first boot; a non-nil error is a marker that exists and
+	// cannot be trusted.
+	Load func() (time.Time, bool, error)
+	// Store durably records a newly accepted capture instant. It is the
+	// commit point: its success is what permits publication.
 	Store func(time.Time) error
 }
 
@@ -109,31 +125,35 @@ func (reg *Registry) startDataRoot(ctx context.Context, fsys fs.FS, unseal Unsea
 }
 
 // dataRootLoop re-reads the sealed series on the TTL cadence: an immediate
-// first attempt, then steady dataRootTTL wakes. The accepted-instant floor
+// first attempt, then steady dataRootTTL wakes. The published-instant floor
 // starts at the HIGHER of the embedded snapshot's own generatedAt and the
 // persisted marker's instant, and only ever rises, so a replayed older
 // file — one older than the binary's own snapshot OR older than what a
-// previous process accepted — can never roll the panel back (2026-08-24
+// previous process published — can never roll the panel back (2026-08-24
 // review finding H2: without the marker, a restart forgot every acceptance).
+//
+// In durable mode the floor is resolved from the marker before ANY attempt,
+// and an unreadable or future-dated marker refuses the tick outright instead
+// of quietly reverting to the embedded floor (2026-08-24 review finding 2).
+// Resolution is retried on each tick, so repairing the state directory
+// recovers the loop without a restart.
 //
 // One deliberate asymmetry: when the floor came from the marker, the FIRST
 // acceptance of this process may equal it exactly — that is the very file
-// the previous process accepted, and re-serving it at boot is recovery, not
-// replay. After anything has been accepted in-process, equality is again the
+// the previous process published, and re-serving it at boot is recovery, not
+// replay. After anything has been published in-process, equality is again the
 // ordinary unchanged state between pushes.
 func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys fs.FS, unseal Unsealer, marker *FloorMarker, now func() time.Time) {
 	floor := reg.embeddedUsageInstant(state)
 	floorFromMarker := false
-	if marker != nil && marker.Load != nil {
-		if persisted, ok := marker.Load(); ok &&
-			persisted.After(floor) && !persisted.After(now().Add(dataRootFutureSkew)) {
-			// Fail safe in both directions: a marker at or below the
-			// embedded floor adds nothing, and a marker from the future is
-			// corrupt — ignoring either leaves the embedded floor, which is
-			// exactly the guarantee the process had before markers existed.
-			floor = persisted
-			floorFromMarker = true
-		}
+	// Durable mode needs BOTH halves: a floor that can be read but not
+	// written, or written but not read, is not a floor that survives a
+	// restart. Either missing leaves the documented process-memory mode.
+	durable := marker != nil && marker.Load != nil && marker.Store != nil
+	floorResolved := !durable
+	var commit func(time.Time) error
+	if durable {
+		commit = marker.Store
 	}
 	acceptedInProcess := false
 	timer := time.NewTimer(0)
@@ -147,25 +167,41 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 		if ctx.Err() != nil {
 			return
 		}
+		if !floorResolved {
+			persisted, present, err := marker.Load()
+			switch {
+			case err != nil, present && persisted.After(now().Add(dataRootFutureSkew)):
+				// The deployment asked for a durable floor and the state
+				// backing it is unreadable or nonsensical. Serving on the
+				// embedded floor here would silently re-admit everything a
+				// previous process already published past — the exact
+				// downgrade finding 2 reproduced — so the tick is refused
+				// and the envelope says so. The next tick retries the load.
+				reg.markStale(state)
+				timer.Reset(dataRootTTL)
+				continue
+			case present && persisted.After(floor):
+				// A marker at or below the embedded floor adds nothing: the
+				// embedded instant is already the stronger bound.
+				floor = persisted
+				floorFromMarker = true
+			}
+			floorResolved = true
+		}
 		allowEqual := floorFromMarker && !acceptedInProcess
-		accepted, err := reg.refreshFromDataRoot(state, fsys, unseal, now, floor, allowEqual)
+		accepted, err := reg.refreshFromDataRoot(state, fsys, unseal, now, floor, allowEqual, commit)
 		switch {
 		case err == nil:
 			floor = accepted
 			acceptedInProcess = true
-			if marker != nil && marker.Store != nil {
-				// Tolerated on failure by design: the in-memory floor has
-				// already risen and serving continues; the next acceptance
-				// retries. Durability degrades, admission never does.
-				_ = marker.Store(accepted)
-			}
 		case errors.Is(err, fs.ErrNotExist), errors.Is(err, errSeriesUnchanged):
 			// An absent file is the ordinary cold state before the first
 			// push, and an unchanged file is the ordinary state between
 			// pushes. Neither says anything bad about the data being served.
 		default:
 			// File present but unreadable, unauthentic, malformed, replayed,
-			// or refused: keep serving the last good payload and let the
+			// refused — or accepted but not committable to the durable
+			// floor: keep serving the last good payload and let the
 			// envelope's status say it is no longer fresh.
 			reg.markStale(state)
 		}
@@ -206,12 +242,20 @@ func (reg *Registry) embeddedUsageInstant(state *panelState) time.Time {
 	return instant
 }
 
-// refreshFromDataRoot performs one complete read-validate-merge-swap attempt
-// and returns the accepted capture instant. Every return before the final
-// swap leaves the served payload untouched. allowEqual admits a file whose
-// instant EQUALS the floor — only the loop's first, marker-floored attempt
-// sets it, so a restarted process re-serves exactly what it last accepted.
-func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal Unsealer, now func() time.Time, floor time.Time, allowEqual bool) (time.Time, error) {
+// refreshFromDataRoot performs one complete read-validate-merge-commit-swap
+// attempt and returns the accepted capture instant. Every return before the
+// final swap leaves the served payload untouched. allowEqual admits a file
+// whose instant EQUALS the floor — only the loop's first, marker-floored
+// attempt sets it, so a restarted process re-serves exactly what it last
+// published.
+//
+// commit is the durable floor's write and is the LAST gate before
+// publication (2026-08-24 review finding 2). Ordering is the whole point:
+// publishing first and persisting afterwards means a failed write leaves a
+// process serving an instant no restart can remember, and the next boot
+// re-admits an older authentic file as fresh. A nil commit is the documented
+// process-memory mode, where there is no durable floor to get ahead of.
+func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal Unsealer, now func() time.Time, floor time.Time, allowEqual bool, commit func(time.Time) error) (time.Time, error) {
 	sealed, err := readBoundedFile(fsys, dataRootSeriesName, maxSealedSeriesBytes)
 	if err != nil {
 		return time.Time{}, err
@@ -251,6 +295,14 @@ func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal U
 	})
 	if err != nil {
 		return time.Time{}, err
+	}
+	// Commit the floor, THEN publish. A failed commit publishes nothing: the
+	// caller keeps its floor where it is, the last good payload keeps
+	// serving, and the same file is retried on the next tick.
+	if commit != nil {
+		if err := commit(instant); err != nil {
+			return time.Time{}, fmt.Errorf("data root: the replay floor could not be persisted, so the payload is not published: %w", err)
+		}
 	}
 	state.current.Store(served)
 	reg.rebuildIndex()
