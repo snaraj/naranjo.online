@@ -707,46 +707,190 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
   ).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
 });
 
-test('a panel with no series renders the graph, not a sentence where it goes', async ({ page }) => {
+/* INVERTED by the owner's ruling of 2026-08-24, and the inversion is the
+ * finding. This lane used to REQUIRE the empty grid on the live page: a
+ * `.grid-empty` note reading exactly "series pending" over more than three
+ * hundred placeholder cells. Every cell was honest about itself — absent,
+ * valueless, undated — and the arrangement was still false, because "pending"
+ * is a claim about the future and this source has no daily record to publish.
+ * The panel was holding a graph-shaped box open for data that cannot arrive,
+ * which is a permanent hole rather than the zero-CLS reserve it looked like.
+ *
+ * So the new guarantee is the opposite one, and it is asserted in both
+ * directions because either half alone is satisfied by a page that got it
+ * badly wrong: a site that dropped every heatmap passes "no empty grid", and
+ * the old page passed "the real grid renders".
+ *
+ * The page is judged against the ORIGIN's own payload rather than against
+ * itself. Which sources report a daily series is a fact the API states, so
+ * reading it there and then looking for the matching graph makes the lane
+ * name the offending source by label — instead of inferring what the page
+ * meant to do from what the page did, which is how a rendering test comes to
+ * agree with every regression it was written to catch. */
+test('a source with no series renders no graph, and one with a series still renders all of it', async ({
+  page,
+}) => {
   await visit(page);
-  const observed = await page.evaluate(() => {
-    const notes = [...window.document.querySelectorAll('.grid-empty')];
+  const observed = await page.evaluate(async () => {
+    const panel = window.document.querySelector('[data-panel-id="token-usage"]');
+    if (panel === null) return null;
+    const response = await fetch('/api/panels/token-usage');
+    const envelope = await response.json();
+    const strip = (node) =>
+      Math.round(node.querySelector('.grid-strip').getBoundingClientRect().height);
+    const rendered = {};
+    for (const source of panel.querySelectorAll('.usage-source')) {
+      const block = source.querySelector('.grid-block');
+      rendered[source.querySelector('.usage-source-label').textContent.trim()] = {
+        region: source.querySelector('.usage-activity') !== null,
+        blocks: source.querySelectorAll('.grid-block').length,
+        toggles: source.querySelectorAll('[role="radiogroup"]').length,
+        datapoints: source.querySelectorAll('[data-grid-cell]').length,
+        placeholders: source.querySelectorAll('[data-grid-pending]').length,
+        notes: source.querySelectorAll('.grid-empty').length,
+        /* What a source still has to show for itself once its graph is gone.
+           A block with no figures left would be the hole this ruling was
+           about, moved rather than closed. */
+        tiles: source.querySelectorAll('[data-usage-tile]').length,
+        stripHeight: block === null ? 0 : strip(block),
+      };
+    }
     return {
-      notes: notes.map((node) => node.textContent.trim()),
-      chrome: notes.map((node) => {
-        const block = node.closest('.grid-block');
-        return {
-          placeholders: block.querySelectorAll('[data-grid-pending]').length,
-          datapoints: block.querySelectorAll('[data-grid-cell]').length,
-          stripHeight: Math.round(block.querySelector('.grid-strip').getBoundingClientRect().height),
-        };
-      }),
-      /* The strip a panel WITH data renders, to compare the empty one's
-         geometry against: an empty panel that is a different height from a
-         full one shifts the page the day its series arrives. */
-      filled: [...window.document.querySelectorAll('.grid-block')]
-        .filter((block) => block.querySelector('[data-grid-cell]'))
-        .map((block) => Math.round(block.querySelector('.grid-strip').getBoundingClientRect().height)),
+      /* What the origin SAYS, read from the same API the panel reads. */
+      reported: (envelope?.data?.sources ?? []).map((source) => ({
+        label: source.label,
+        series: Array.isArray(source?.series?.totals) && source.series.totals.length > 0,
+      })),
+      rendered,
+      pending: panel.querySelectorAll('[data-grid-pending]').length,
+      notes: panel.querySelectorAll('.grid-empty').length,
+      /* The other heatmap on the page, and the geometry the shared component
+         guarantees. The graph that STAYED must render in exactly that box:
+         this is the height comparison the retired lane made between an empty
+         grid and a full one, made between two full ones instead. */
+      calendarStrip: (() => {
+        const block = window.document.querySelector('[data-activity-panel] .grid-block');
+        return block === null ? 0 : strip(block);
+      })(),
     };
   });
-  expect(observed.notes.length, 'no panel is in its pending state; this lane proves nothing').toBeGreaterThan(0);
-  for (const note of observed.notes) {
-    expect(note).toBe('series pending');
-    /* The retired copy explained the origin's refresh configuration to a
-       visitor who had asked about tokens. */
-    expect(note).not.toContain('refresh');
+  expect(observed, 'the token panel never painted; this lane proves nothing').not.toBeNull();
+
+  const bare = observed.reported.filter((source) => !source.series);
+  const drawn = observed.reported.filter((source) => source.series);
+  expect(
+    bare.length,
+    'the origin reports a series for every source, so nothing here proves an absent one renders nothing'
+  ).toBeGreaterThan(0);
+  expect(
+    drawn.length,
+    'the origin reports no series at all; a page with no heatmaps would pass the other half for free'
+  ).toBeGreaterThan(0);
+
+  for (const source of bare) {
+    const shown = observed.rendered[source.label];
+    expect(shown, `the origin reports "${source.label}" and the page does not render it`).toBeDefined();
+    /* No grid element in the DOM — not an empty one, not a dimmed one, not a
+       placeholder one. */
+    expect(shown.blocks, `"${source.label}" reports no series and renders a grid anyway`).toBe(0);
+    expect(shown.datapoints, `"${source.label}" rendered datapoints it was never given`).toBe(0);
+    expect(shown.placeholders, `"${source.label}" renders placeholder cells again`).toBe(0);
+    expect(shown.notes, `"${source.label}" renders an empty-grid note again`).toBe(0);
+    /* Nor the heading and lens toggle the graph came with: a three-way toggle
+       over no series is the same hole in different markup. */
+    expect(shown.region, `"${source.label}" kept the graph region around an absent graph`).toBe(
+      false
+    );
+    expect(shown.toggles, `"${source.label}" kept a lens toggle with nothing to re-read`).toBe(0);
+    /* And it is still a complete block rather than something with a hole in
+       it: the figures the source genuinely reports are all still there. */
+    expect(shown.tiles, `"${source.label}" lost its figures along with its graph`).toBeGreaterThan(0);
   }
-  for (const block of observed.chrome) {
-    /* The graph's chrome is there... */
-    expect(block.placeholders, 'the pending panel renders no graph at all').toBeGreaterThan(300);
-    /* ...and contains exactly as many datapoints as the source reported. */
-    expect(block.datapoints, 'the pending panel rendered datapoints it was never given').toBe(0);
-    expect(observed.filled, 'no filled grid to compare against').not.toHaveLength(0);
+
+  for (const source of drawn) {
+    const shown = observed.rendered[source.label];
+    expect(shown, `the origin reports "${source.label}" and the page does not render it`).toBeDefined();
+    expect(shown.region, `"${source.label}" reports a series and renders no graph region`).toBe(true);
     expect(
-      block.stripHeight,
-      'an empty graph is a different height from a full one; the page will shift when data arrives'
-    ).toBe(observed.filled[0]);
+      shown.datapoints,
+      `"${source.label}" reports a series and renders a graph with nothing in it`
+    ).toBeGreaterThan(0);
+    expect(shown.placeholders, `"${source.label}" pads its real series with placeholders`).toBe(0);
+    expect(shown.notes, `"${source.label}" renders an empty-grid note over a real series`).toBe(0);
+    expect(shown.toggles, `"${source.label}" lost the lens toggle for its series`).toBe(1);
+    /* MEASURED, not asserted: the graph that stayed renders in exactly the
+       box the shared component gives the other panel's calendar, so removing
+       the region beside it moved nothing about it. */
+    expect(observed.calendarStrip, 'no second heatmap to measure against').toBeGreaterThan(0);
+    expect(
+      shown.stripHeight,
+      `"${source.label}" renders its graph in a different box from the page's other heatmap`
+    ).toBe(observed.calendarStrip);
   }
+
+  /* Nothing anywhere in this panel is a placeholder. */
+  expect(observed.pending, 'the token panel renders placeholder cells somewhere').toBe(0);
+  expect(observed.notes, 'the token panel renders an empty-grid note somewhere').toBe(0);
+});
+
+/* The other half of the ruling, and the reason the empty state was not simply
+ * deleted from the shared component. A reserve for a payload that is IN
+ * FLIGHT is not the hole this ruling was about: the version-control calendar
+ * fetches after hydration, and the box held for it is exactly the box it
+ * lands in. That is the zero-CLS floor AGENTS.md requires, and it is the one
+ * thing the retired lane was measuring that was worth keeping — so it is
+ * measured here, across a real arrival, instead of between two panels that
+ * never had the same data.
+ *
+ * The payload is delayed deliberately. Served from the embedded snapshot on
+ * localhost it lands within a frame of first paint, so the waiting state is
+ * real but too brief to measure, and a lane that cannot observe the state it
+ * is about proves nothing. */
+test('a panel whose data is still on its way holds exactly the box that data will fill', async ({
+  page,
+}) => {
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    await new Promise((resume) => setTimeout(resume, 1_200));
+    await route.continue();
+  });
+  await page.goto('/');
+  const measure = () =>
+    page.evaluate(() => {
+      const card = window.document.querySelector('[data-activity-panel]');
+      const block = card === null ? null : card.querySelector('.grid-block');
+      if (block === null) return null;
+      const box = (node) => Math.round(node.getBoundingClientRect().height);
+      return {
+        state: block.getAttribute('data-grid-state'),
+        datapoints: block.querySelectorAll('[data-grid-cell]').length,
+        strip: box(block.querySelector('.grid-strip')),
+        block: box(block),
+        card: box(card),
+      };
+    });
+  const state = async () => (await measure())?.state;
+
+  await expect
+    .poll(state, { message: 'the calendar never rendered a waiting state to measure' })
+    .toBe('empty');
+  const waiting = await measure();
+  await expect
+    .poll(state, { message: 'the delayed activity payload never arrived' })
+    .toBe('series');
+  const arrived = await measure();
+
+  /* The reserve carries no data, and the arrival does. Without both, the
+     comparison below is two measurements of the same thing. */
+  expect(waiting.datapoints, 'the waiting state rendered datapoints it was never given').toBe(0);
+  expect(arrived.datapoints, 'the calendar arrived empty; this lane proves nothing').toBeGreaterThan(
+    0
+  );
+  expect(
+    arrived.strip,
+    'the calendar arrived in a different strip from the one held for it'
+  ).toBe(waiting.strip);
+  expect(arrived.block, 'the grid block changed height when its data arrived').toBe(waiting.block);
+  expect(arrived.card, 'the panel changed height when its data arrived').toBe(waiting.card);
 });
 
 test('the popover animates only where motion is welcome', async ({ page }) => {

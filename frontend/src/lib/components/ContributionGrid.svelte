@@ -18,11 +18,21 @@
   this is where the strip STARTS, not a journey the reader takes, so there is
   no motion for a reduced-motion preference to be asked about.
 
-  With no series at all it renders the graph's chrome and says so, instead of
+  With no columns it renders the graph's chrome and says so, instead of
   replacing the graph with a sentence. Every placeholder cell is absent —
   valueless, undated and marked decorative — because a fabricated zero would
   look like a quiet day, and the honest rendering of no data is a graph with
   no data in it.
+
+  That state is a RESERVE FOR A PAYLOAD IN FLIGHT and nothing else, and the
+  distinction is the whole of the owner's ruling of 2026-08-24. It holds open
+  exactly the box the arriving data will fill — measured, in the rendering
+  lanes — so a calendar that lands a moment after first paint lands without
+  moving the page. It is NOT a rendering for a source that has already
+  answered and said it keeps no daily record: nothing is on its way there, and
+  a box held open forever is a permanent hole, not layout stability. A caller
+  that knows there is no series to wait for renders no grid at all — see the
+  token panel, which gates its whole graph region on having columns to draw.
 
   How that state LOOKS is a separate decision from what it contains, and the
   two were conflated until issue 134. The placeholders used to be drawn as

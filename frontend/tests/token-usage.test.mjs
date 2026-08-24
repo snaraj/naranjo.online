@@ -455,15 +455,27 @@ describe('TokenUsagePanel live surface', () => {
     assert.match(component, /min-block-size:\s*2\.75rem/);
   });
 
-  it('renders the activity heatmap through the shared grid component', () => {
+  it('renders the activity heatmap only where there is a series to draw', () => {
     assert.match(component, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
     assert.match(component, /<ContributionGrid/);
-    // A source with no series gets the graph's chrome and an honest note, not
-    // a sentence where the graph belongs (owner directive, issue 127). The
-    // note says what is true of the DATA — no series yet — and nothing about
-    // the origin's refresh configuration, which is not a visitor's business
-    // and was what the retired copy explained to them.
-    assert.match(component, /emptyNote="series pending"/);
+    // INVERTED by the owner's ruling of 2026-08-24. This used to require
+    // `emptyNote="series pending"` — a source with no series got the graph's
+    // chrome and that note. The note was true about the data and false about
+    // the future: this source publishes no daily record, so no series is
+    // pending, and the panel was reserving a graph-shaped box for something
+    // that can never arrive. It now renders no graph region at all, and keeps
+    // every figure the source genuinely reports.
+    assert.doesNotMatch(component, /emptyNote/, 'the panel asks for an empty grid again');
+    assert.doesNotMatch(component, /series pending/, 'the retired "pending" claim is back');
+    // Both halves of the guarantee: the region is gated, and the gated region
+    // is the whole graph — heading, lens toggle and grid together.
+    const region =
+      /\{#if activityColumns\.length > 0\}\s*<section class="usage-activity">([\s\S]*?)<\/section>\s*\{\/if\}/.exec(
+        component
+      );
+    assert.ok(region, 'the graph region is no longer gated on there being columns to draw');
+    assert.match(region[1], /<ContributionGrid/, 'the gate does not contain the graph');
+    assert.match(region[1], /role="radiogroup"/, 'the lens toggle is outside the gate it belongs to');
     assert.doesNotMatch(component, /live refresh is off/);
   });
 });

@@ -762,25 +762,57 @@ test('the grid opens on its newest column and lets history scroll back', () => {
   assert.doesNotMatch(grid, /scroll-behavior|scrollTo\(/, 'the opening position is not a journey');
 });
 
-// A panel with no series renders the graph's CHROME and says the series is
-// pending (owner directive, issue 127) — never the words "no activity series
-// — live refresh is off", which explained the origin's configuration to a
-// visitor. The honesty invariant is what makes this safe: the placeholder is
-// absent cells, so it contains exactly as many datapoints as the source has
-// reported, which is none.
-test('an empty grid renders chrome with no data in it, never zeroes', () => {
-  assert.match(grid, /pendingColumns/, 'the empty grid must render the graph chrome');
+// INVERTED by the owner's ruling of 2026-08-24. This pin used to REQUIRE the
+// empty grid: pendingColumns rendered, the placeholder span exact, more than
+// three hundred cells of chrome under the note "series pending". Every one of
+// those cells was honest about itself — absent, valueless, undated — and the
+// arrangement was still false, because "pending" claimed something was on its
+// way. For the source this was built for, nothing is: it publishes no daily
+// record, so the panel was holding a graph-shaped box open forever.
+//
+// The opposite guarantee, and it has to be exactly as strong as the one it
+// replaces, so BOTH halves are here. A source with nothing to draw renders no
+// graph region at all — not the grid, not the heading, not the lens toggle
+// that would have no series to re-read. A source WITH something to draw
+// renders the whole region, unchanged. Half of this alone is not a guard: a
+// panel that dropped every graph would satisfy the first half perfectly.
+test('a token source with no series renders no graph, and one with a series still renders it', () => {
+  const region =
+    /\{#if activityColumns\.length > 0\}\s*<section class="usage-activity">([\s\S]*?)<\/section>\s*\{\/if\}/.exec(
+      tokenUsage
+    );
+  assert.ok(region, 'the graph region is no longer gated on there being columns to draw');
+  // The gate reads the SAME columns the grid is handed, so the two can never
+  // disagree about whether this source has a graph.
+  assert.match(
+    region[1],
+    /<ContributionGrid\s+columns=\{activityColumns\}/,
+    'the gate and the graph read different things'
+  );
+  // The heading and the lens toggle are inside the gate with it: a "Token
+  // activity" heading over a toggle with nothing to toggle is the same hole
+  // wearing different markup.
+  assert.match(region[1], /Token activity/, 'the heading survived its graph');
+  assert.match(region[1], /role="radiogroup"/, 'the lens toggle survived its series');
+  // And the panel never asks the shared component for its empty treatment.
+  assert.doesNotMatch(tokenUsage, /emptyNote/, 'the panel asks for an empty grid again');
+  assert.doesNotMatch(tokenUsage, /series pending/, 'the retired "pending" claim is back');
+  assert.doesNotMatch(tokenUsage, /pendingColumns/, 'the panel reaches for placeholder columns');
+  // The component KEEPS that treatment, and this is the line between the two
+  // cases rather than an exception to the ruling: the version-control
+  // calendar's payload is genuinely in flight, and its reserve holds exactly
+  // the box the data will fill (measured in the rendering lanes). Deleting it
+  // would trade a permanent hole for a shift on every visit.
+  assert.match(grid, /pendingColumns/, 'the reserve for a payload in flight lost its chrome');
   assert.match(
     grid,
     /<span class="grid-cell" data-grid-pending data-grid-absent="true"><\/span>/,
     'every placeholder cell is absent — no value, no date, no level'
   );
-  // Marked decorative, so a screen reader hears the honest note once rather
-  // than "no data for this day" three hundred and seventy-one times.
   assert.match(grid, /<div class="grid-cells" aria-hidden="true">/);
-  // Out of flow, so the panel is the same height empty and full and the day
-  // a real series arrives nothing moves under the reader.
   assert.match(grid, /\.grid-empty\s*\{[^}]*position:\s*absolute/);
+  // Exactly one caller may ask for it, and it is the one whose data is coming.
+  assert.match(activityBar, /emptyNote=/, 'the calendar stopped labelling its waiting state');
   // The retired sentence must not come back anywhere.
   for (const [name, source] of Object.entries({ grid, tokenUsage, activityBar })) {
     assert.doesNotMatch(
