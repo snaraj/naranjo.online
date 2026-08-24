@@ -357,11 +357,13 @@ function admitInsights(value: unknown): TokenUsageInsight[] | null {
   return insights;
 }
 
-/* categoryKeyPattern is the machine shape a category key must take — the
- * exact rule the origin enforces before serving one. It is deliberately a
- * character-class so narrow that markup, paths, and prose are
- * unrepresentable: a key is a rendering identifier, never copy. */
-const categoryKeyPattern = /^[a-z][a-z0-9-]{0,31}$/;
+/* maxCategories bounds how many categories one series may carry — the same
+ * bound the Go boundary enforces (maxSeriesCategories in
+ * internal/panels/types.go). The closed vocabulary below is already tighter;
+ * this is the structural guard that still holds if the vocabulary is ever
+ * widened, so a payload can never inflate the render with hundreds of
+ * entries. */
+const maxCategories = 8;
 
 /* admitSeries returns the admitted series, undefined when the section is
  * absent, or null when it exists and is malformed. The start date must be a
@@ -387,7 +389,7 @@ function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
   const totals = value.totals as number[];
   const series: TokenUsageSeries = { startDate: value.startDate, totals };
   if (value.categories !== undefined) {
-    const categories = admitCategories(value.categories, totals.length);
+    const categories = admitCategories(value.categories, totals);
     if (categories === null) {
       return null;
     }
@@ -398,15 +400,39 @@ function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
   return series;
 }
 
-/* admitCategories validates the optional per-day breakdown. */
-function admitCategories(value: unknown, days: number): TokenUsageCategory[] | null {
-  if (!Array.isArray(value)) {
+/* admitCategories validates the optional per-day breakdown against the SAME
+ * three rules the Go boundary applies, not a weaker shape check
+ * (2026-08-24 security review, finding 6):
+ *
+ *   1. CLOSED MEMBERSHIP. A key must be one of the canonical accounting
+ *      classes — the keys categorySlots declares, which is the frontend's
+ *      single statement of the vocabulary and is pinned against the capture
+ *      tool and the Go admission list by CategoryVocabularyParityTest. The
+ *      previous check was a label SHAPE (`/^[a-z][a-z0-9-]{0,31}$/`), and
+ *      shape admits far more than the vocabulary does: `private-feature` is
+ *      perfectly label-shaped, and categoryLabel would have humanized it
+ *      into public copy. The origin blocks such a payload today, so this is
+ *      defense in depth — which is exactly what it must be, because the
+ *      claim that hostile keys cannot reach rendering has to survive a
+ *      future boundary regression rather than depend on one.
+ *   2. COUNT. At most maxCategories entries, and no key twice.
+ *   3. PARTITION. The categories must sum to the day's own total on EVERY
+ *      day, so the stacked reading and the plain reading cannot disagree.
+ *      A breakdown that says something different from the graph above it is
+ *      not a smaller error than a missing one.
+ *
+ * Any failing corner refuses the whole payload rather than rendering a
+ * half-true breakdown. */
+function admitCategories(value: unknown, totals: number[]): TokenUsageCategory[] | null {
+  if (!Array.isArray(value) || value.length > maxCategories) {
     return null;
   }
+  const days = totals.length;
   const seen = new Set<string>();
   const categories: TokenUsageCategory[] = [];
+  const sums = new Array<number>(days).fill(0);
   for (const entry of value) {
-    if (!isRecord(entry) || typeof entry.key !== 'string' || !categoryKeyPattern.test(entry.key)) {
+    if (!isRecord(entry) || typeof entry.key !== 'string' || !categorySlots.has(entry.key)) {
       return null;
     }
     if (seen.has(entry.key)) {
@@ -416,7 +442,18 @@ function admitCategories(value: unknown, days: number): TokenUsageCategory[] | n
     if (!Array.isArray(entry.totals) || entry.totals.length !== days || !entry.totals.every(isCount)) {
       return null;
     }
-    categories.push({ key: entry.key, totals: entry.totals as number[] });
+    const dailies = entry.totals as number[];
+    for (let day = 0; day < days; day += 1) {
+      sums[day] += dailies[day];
+    }
+    categories.push({ key: entry.key, totals: dailies });
+  }
+  if (categories.length > 0) {
+    for (let day = 0; day < days; day += 1) {
+      if (sums[day] !== totals[day]) {
+        return null;
+      }
+    }
   }
   return categories;
 }
@@ -473,10 +510,17 @@ export function categoryShares(series: TokenUsageSeries): CategoryShare[] {
   });
 }
 
-/* categorySlot maps a category key to its fixed palette slot. Color follows
- * the ENTITY, never its position in this payload: the canonical vocabulary
- * owns slots 1..5, and a key outside it wears the neutral slot 0 rather
- * than stealing a known category's hue. */
+/* categorySlots is the frontend's single statement of the CLOSED category
+ * vocabulary, and the fixed palette slot each member owns. Two jobs, one
+ * list, on purpose: admission (admitCategories checks membership here) and
+ * color (categorySlot reads the slot here) can then never disagree about
+ * what a category is. The list is pinned against the capture tool's
+ * CATEGORY_KEYS and the Go categoryServeOrder by
+ * CategoryVocabularyParityTest in scripts/ci, so adding an accounting class
+ * is one deliberate edit made in three places together.
+ *
+ * Color follows the ENTITY, never its position in this payload: the
+ * canonical vocabulary owns slots 1..5. */
 const categorySlots: ReadonlyMap<string, number> = new Map([
   ['input', 1],
   ['output', 2],

@@ -545,6 +545,93 @@ describe('category breakdown admission', () => {
       assert.deepEqual(tokenUsageSources(withCategories(categories)), [], name);
     }
   });
+
+  /* 2026-08-24 security review, finding 6. Admission here was SHAPE-only: it
+     accepted any label-shaped key, enforced no count bound, and never
+     rechecked that the categories partition the day. Shape admits far more
+     than the vocabulary does, and the renderer humanizes whatever key it is
+     given, so a label-shaped private identifier would have become public
+     copy. Each case below is refused ONLY by the rule it names. */
+  it('refuses a label-shaped key that is outside the closed vocabulary', () => {
+    for (const key of [
+      'private-feature',
+      'internal-project-name',
+      'audio',
+      'a-client-name',
+      'x'
+    ]) {
+      /* Deliberately a PERFECT partition — 10, 20, 30 against the series'
+         own totals — so nothing but closed membership can refuse it. */
+      assert.deepEqual(
+        tokenUsageSources(withCategories([{ key, totals: [10, 20, 30] }])),
+        [],
+        key
+      );
+    }
+  });
+
+  it('admits every member of the closed vocabulary', () => {
+    /* Non-vacuity for the membership rule: the check is a vocabulary, not a
+       refusal of everything. Five categories, partitioning exactly. */
+    const admitted = tokenUsageSources(
+      withCategories([
+        { key: 'input', totals: [2, 4, 6] },
+        { key: 'output', totals: [2, 4, 6] },
+        { key: 'cache-read', totals: [2, 4, 6] },
+        { key: 'cache-write', totals: [2, 4, 6] },
+        { key: 'reasoning', totals: [2, 4, 6] }
+      ])
+    );
+    assert.equal(admitted.length, 1);
+    assert.equal(admitted[0].series.categories.length, 5);
+  });
+
+  it('refuses a breakdown that does not partition the day', () => {
+    for (const [name, categories] of Object.entries({
+      'sums under the total': [
+        { key: 'input', totals: [1, 2, 3] },
+        { key: 'output', totals: [8, 17, 26] }
+      ],
+      'sums over the total': [
+        { key: 'input', totals: [10, 20, 30] },
+        { key: 'output', totals: [1, 1, 1] }
+      ],
+      'wrong on one day only': [
+        { key: 'input', totals: [1, 2, 3] },
+        { key: 'output', totals: [9, 18, 26] }
+      ],
+      'a lone category short of the total': [{ key: 'input', totals: [1, 2, 3] }]
+    })) {
+      assert.deepEqual(tokenUsageSources(withCategories(categories)), [], name);
+    }
+  });
+
+  it('refuses more categories than the boundary bound allows', () => {
+    const many = Array.from({ length: 9 }, () => ({ key: 'input', totals: [10, 20, 30] }));
+    assert.deepEqual(tokenUsageSources(withCategories(many)), []);
+  });
+
+  it('refuses the reviewer probe: a private key with a broken partition', () => {
+    /* Verbatim from the 2026-08-24 review: totals [10] against a
+       {key:'private-feature', totals:[9]} breakdown was ADMITTED, and the
+       renderer humanized that key into "private feature" on a public page. */
+    assert.deepEqual(
+      tokenUsageSources({
+        sources: [
+          {
+            label: 'alpha',
+            windows: [],
+            series: {
+              startDate: '2026-08-10',
+              totals: [10],
+              categories: [{ key: 'private-feature', totals: [9] }]
+            }
+          }
+        ]
+      }),
+      []
+    );
+  });
 });
 
 describe('category lens helpers', () => {
@@ -599,8 +686,37 @@ describe('category lens helpers', () => {
     assert.equal(categorySlot('cache-read'), 3);
     assert.equal(categorySlot('cache-write'), 4);
     assert.equal(categorySlot('reasoning'), 5);
-    /* Unknown keys wear the neutral slot rather than stealing a hue. */
+  });
+
+  it('keeps the neutral slot as a total function, and unreachable', () => {
+    /* Two halves of one promise, asserted together because the 2026-08-24
+       review found them contradicting each other: the suite specified a
+       neutral slot for an unknown key while the component pins claimed a
+       hostile key could not reach rendering, and shape-only admission meant
+       it could (finding 6).
+
+       categorySlot stays TOTAL — it has a defined answer for any string, so
+       no render can throw or steal a known category's hue — and admission
+       now guarantees it is never asked, because a key outside the closed
+       vocabulary refuses the whole payload. The fallback is defense, not a
+       supported vocabulary slot. */
     assert.equal(categorySlot('audio'), 0);
+    assert.deepEqual(
+      tokenUsageSources({
+        sources: [
+          {
+            label: 'alpha',
+            windows: [],
+            series: {
+              startDate: '2026-08-10',
+              totals: [10, 20, 30],
+              categories: [{ key: 'audio', totals: [10, 20, 30] }]
+            }
+          }
+        ]
+      }),
+      []
+    );
   });
 });
 
