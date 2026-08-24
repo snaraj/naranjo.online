@@ -1,0 +1,62 @@
+;; producer.sb — the OS-enforced capability boundary the usage-series producer
+;; runs inside (issue #142; 2026-08-24 security review, round 3, finding 1).
+;;
+;; WHY THIS FILE EXISTS. The owner's ruling is that the step which walks raw
+;; local transcripts must be STRUCTURALLY unable to start an agent session or
+;; reach a network. Until this file, that claim rested on an AST lint over the
+;; producer's import names. A lint over import NAMES cannot carry it, and the
+;; review proved it with one line: `pathlib` is an admitted import and the
+;; module object it binds re-exports `os`, so `pathlib.os.system(":")` restores
+;; the launch callable while the import surface stays exactly the allowed set
+;; and every producer test stays green. `sys.modules["os"]` is the same hole by
+;; another spelling. Any module that itself imports `os` reopens it, so no
+;; allowlist of import names can ever close it.
+;;
+;; A capability boundary has to be enforced by something that is not the
+;; program's own source. On the workstation that runs this pipeline — the only
+;; machine the producer ever runs on, under launchd — that something is the
+;; kernel's sandbox, applied at the invocation layer by
+;; scripts/usage-export/push-usage-series.sh before the interpreter starts.
+;;
+;; WHAT IT DENIES, and why exactly these two:
+;;
+;;   (deny process-fork)  No new process can be created, by any spelling.
+;;       fork(2), vfork(2), posix_spawn(2) and everything layered on them —
+;;       os.system, os.popen, subprocess, multiprocessing — fail with EPERM.
+;;       This is the owner's "cannot spawn a session" ruling, enforced.
+;;
+;;   (deny network*)      No socket may be opened, bound, or connected, so no
+;;       byte of a transcript can leave over a network from inside this step
+;;       and no vendor API can be called. This is the "no path out" half.
+;;
+;; WHAT IT DELIBERATELY DOES NOT DENY, stated so the claim stays exact:
+;;
+;;   * exec(2) IN PLACE. sandbox-exec must be able to exec the interpreter
+;;     itself, and seatbelt cannot express "allow exactly the first exec".
+;;     Allowing exec by literal path is not portable either: the platform
+;;     interpreter re-execs through a framework stub whose path moves with
+;;     every toolchain and virtual environment, so a path allowlist here
+;;     would be a fail-closed control that breaks the pipeline on a routine
+;;     upgrade — worse than an honest bound. The residual is therefore that
+;;     the producer could REPLACE ITSELF with another program. It cannot gain
+;;     anything by doing so: the sandbox is inherited across exec, so whatever
+;;     it became would still be unable to create a process or open a socket,
+;;     and the export it was supposed to produce simply never appears, which
+;;     the push script reports as a refusal.
+;;   * the filesystem. `(allow default)` is deliberate. Denying by default
+;;     means enumerating everything CPython touches to start — the dyld cache,
+;;     the framework, the standard library, locale data, the temporary
+;;     directory — which drifts with every interpreter release. The privacy
+;;     boundary on what the producer READS and EMITS is a different control,
+;;     enforced in the producer itself (the closed emission vocabulary and
+;;     `assert_only_dates_and_integers`) and by the rooted, no-follow, bounded
+;;     walk. This profile bounds CAPABILITY, not paths.
+;;
+;; Pinned by scripts/ci/test_usage_export_scripts.py: the profile's text is
+;; asserted line for line, the push script is proven to invoke the producer
+;; through it, and on a Darwin host the suite additionally EXECUTES the
+;; boundary and requires a spawn attempt and a connect attempt to fail.
+(version 1)
+(allow default)
+(deny process-fork)
+(deny network*)

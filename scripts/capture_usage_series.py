@@ -93,17 +93,24 @@ doctrine forbids. Keeping the derived three in step with the shipped series is
 the other half of the same rule — a tile that contradicts the graph printed
 under it is the panel disagreeing with itself.
 
-WHAT IT CANNOT DO, structurally. This module's import surface is a CLOSED
-allowlist pinned by its test suite: a file reader, a date library, a JSON
-codec, an argument parser, a pattern matcher, and the interpreter's own
-streams. Nothing here can spawn a process, open a socket, or resolve a name,
-and `os` is deliberately NOT among the imports even though `os.walk` would be
-the obvious way to write the walk — `os` carries `system`, `popen`, `fork`,
-`spawn*` and `exec*`, so admitting it would leave the pin unable to keep its
-own promise. Reading these journals launches nothing: they are inert files,
-and this program never executes the tools that wrote them. A future edit that
-adds an execution or network capability has to defeat an explicit test before
-it can reach a commit.
+WHAT IT CANNOT DO, and what enforces that. When this module runs as the
+scheduled runtime producer it runs inside a kernel sandbox
+(`scripts/usage-export/producer.sb`, applied by the push script) that denies
+`process-fork` and `network*`: no process can be created and no socket can be
+opened for the whole walk, whatever this file's source says. That is the
+capability boundary.
+
+This module's import surface is separately held to a CLOSED allowlist by its
+test suite — a file reader, a date library, a JSON codec, an argument parser,
+a pattern matcher, and the interpreter's own streams — with `os` deliberately
+refused even though `os.walk` would be the obvious way to write the walk. That
+pin bounds the REVIEWED SURFACE and makes a widening a conscious, named edit.
+It is not a proof of capability absence, and the 2026-08-24 round-3 review is
+why this paragraph now says so: `pathlib` is admitted and re-exports `os`, so
+`pathlib.os.system(...)` reaches a launch callable with the import set
+unchanged. Reading these journals launches nothing — they are inert files and
+this program never executes the tools that wrote them — and the sandbox is
+what makes that a guarantee rather than a description.
 
 Dependency-free: Python 3 standard library only, no network, no writes outside
 the snapshot path it is given.

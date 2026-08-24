@@ -81,6 +81,27 @@ EXPORT_SCRIPT="$REPO_DIR/scripts/export_usage_series.py"
 [ -f "$EXPORT_SCRIPT" ] || fail "export script not found under REPO_DIR"
 [ -x "$USAGESEAL_BIN" ] || fail "usageseal binary not executable"
 
+# The producer's capability boundary, and the reason it lives HERE rather than
+# inside the producer (2026-08-24 security review, round 3, finding 1). The
+# owner's ruling is that the step walking raw transcripts must be structurally
+# unable to start a session or reach a network. An AST lint over the producer's
+# IMPORT NAMES cannot carry that claim: `pathlib` is an admitted import whose
+# module object re-exports `os`, so `pathlib.os.system(":")` restores the launch
+# callable with the import set unchanged and every producer test green. The
+# boundary therefore has to come from outside the program, and at the
+# invocation layer it does: the kernel sandbox, applied before the interpreter
+# starts. scripts/usage-export/producer.sb states exactly what it denies and
+# exactly what it does not.
+#
+# Fail-closed, with no override: a workstation without the sandbox does not
+# walk raw records at all. There is no environment variable, flag, or
+# configuration key that runs the producer unconfined — a bypass would make the
+# boundary a suggestion, which is the property the review refused.
+PRODUCER_PROFILE="$REPO_DIR/scripts/usage-export/producer.sb"
+[ -f "$PRODUCER_PROFILE" ] || fail "producer sandbox profile not found under REPO_DIR"
+command -v sandbox-exec >/dev/null 2>&1 \
+    || fail "the producer sandbox is unavailable; raw records are never walked unconfined"
+
 # Private scratch, wiped on every exit path.
 umask 077
 SCRATCH=$(mktemp -d) || fail "cannot create scratch directory"
@@ -89,14 +110,19 @@ trap 'rm -rf "$SCRATCH"' EXIT INT TERM
 PLAIN="$SCRATCH/usage.json"
 SEALED="$SCRATCH/usage.enc"
 
-# 1. Export: stdlib-only, isolated interpreter (-I ignores user site and
-#    environment hooks; -B writes no bytecode). The guard inside the script
-#    is what limits the emission to dates and integers.
+# 1. Export, inside the sandbox declared above: no process can be created and
+#    no socket can be opened for the whole walk, enforced by the kernel rather
+#    than asserted by the walked program's import list. The interpreter is
+#    still isolated (-I ignores user site and environment hooks; -B writes no
+#    bytecode), and the guard inside the script is still what limits the
+#    emission to dates and integers — three independent controls, none of them
+#    load-bearing alone.
 set -- --transcripts "$TRANSCRIPTS" --source "$SOURCE_LABEL" --out "$PLAIN"
 for pair in $MERGE_SOURCES; do
     set -- "$@" --merge-source "$pair"
 done
-/usr/bin/env python3 -I -B "$EXPORT_SCRIPT" "$@" || fail "export refused"
+sandbox-exec -f "$PRODUCER_PROFILE" \
+    /usr/bin/env python3 -I -B "$EXPORT_SCRIPT" "$@" || fail "export refused"
 
 # 2. Seal on this machine, before anything leaves it.
 "$USAGESEAL_BIN" -mode seal -key-file "$KEY_FILE" < "$PLAIN" > "$SEALED" \

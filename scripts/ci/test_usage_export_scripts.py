@@ -16,8 +16,22 @@ that FAILS against the original script:
   the argv the ssh stub actually received — shape ("some -o options were
   passed") is exactly the kind of check that missed the original gap.
 
+The 2026-08-24 round-3 review added one more, and it is the reason
+`ProducerSandboxTest` exists:
+
+* Round-3 finding 1 — the producer's no-spawn/no-network guarantee rested on
+  an AST lint over import NAMES, which cannot carry it (`pathlib` re-exports
+  `os`, so `pathlib.os.system(":")` restored the launch callable with the
+  import set unchanged). The boundary is now the kernel sandbox the push
+  script starts the producer inside. This suite pins the profile's text, pins
+  that the push script actually invokes the producer through it, proves the
+  push refuses outright when the sandbox is unavailable, and on a Darwin host
+  EXECUTES the boundary — a spawn attempt and a connect attempt must fail
+  inside it and succeed outside it, so the pin is behavior, not belief.
+
 The scripts are POSIX sh driven by /bin/sh, and every stub is hermetic: no
-network, no launchd, no real ssh.
+network, no launchd, no real ssh, no real sandbox except in the one Darwin
+test that is explicitly about the real sandbox.
 """
 
 from __future__ import annotations
@@ -32,11 +46,18 @@ import subprocess
 import tempfile
 import unittest
 
+import sys
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPTS = REPO_ROOT / "scripts" / "usage-export"
 INSTALL = SCRIPTS / "install-launchd.sh"
 PUSH = SCRIPTS / "push-usage-series.sh"
 TEMPLATE = SCRIPTS / "com.naranjo-online.usage-export.plist.template"
+PROFILE = SCRIPTS / "producer.sb"
+
+# The capability denials the producer sandbox exists for. Reviewed as a SET:
+# removing either is a red test naming it (2026-08-24 round-3 finding 1).
+REQUIRED_SANDBOX_DENIALS = ("(deny process-fork)", "(deny network*)")
 
 # The complete client-hardening set the push transport must carry
 # (2026-08-24 review finding M5). Reviewed as a SET: removing any one is a
@@ -119,6 +140,23 @@ class PushTransportHardeningTest(unittest.TestCase):
             'rm -f "$payload"\n'
             'printf \'%s received\\n\' "$sum"\n',
         )
+        # The producer sandbox, stubbed so the pipeline runs hermetically on
+        # any host: it records the invocation it was handed and then runs the
+        # wrapped command. What it proves is that the push script routes the
+        # producer THROUGH the sandbox with the shipped profile; the real
+        # boundary's behavior is proven separately, on Darwin, in
+        # ProducerSandboxTest.
+        self.sandbox_args_file = self.scratch / "sandbox-args"
+        write_executable(
+            stub_dir / "sandbox-exec",
+            "#!/bin/sh\n"
+            'for arg in "$@"; do printf \'%s\\n\' "$arg"; done > "$SANDBOX_ARGS_FILE"\n'
+            '[ "$1" = "-f" ] || exit 64\n'
+            "shift 2\n"
+            'exec "$@"\n',
+        )
+        self.stub_dir = stub_dir
+
         seal_stub = self.scratch / "usageseal"
         write_executable(seal_stub, "#!/bin/sh\ncat\n")
 
@@ -143,7 +181,88 @@ class PushTransportHardeningTest(unittest.TestCase):
             "PATH": "%s:%s" % (stub_dir, os.environ.get("PATH", "/usr/bin:/bin")),
             "NARANJO_USAGE_EXPORT_CONFIG": str(self.config),
             "SSH_ARGS_FILE": str(self.args_file),
+            "SANDBOX_ARGS_FILE": str(self.sandbox_args_file),
         }
+
+    def test_the_producer_runs_inside_the_shipped_sandbox_profile(self):
+        # Round-3 finding 1: the boundary is at the INVOCATION layer, so what
+        # has to be proven is the invocation. The producer must be reached
+        # only through sandbox-exec, carrying the profile that ships in this
+        # repository — not a profile assembled at run time, and not a bare
+        # interpreter.
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = self.sandbox_args_file.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(argv[0], "-f")
+        self.assertEqual(pathlib.Path(argv[1]).resolve(), PROFILE.resolve())
+        self.assertIn("export_usage_series.py", "\n".join(argv))
+        # The isolated-interpreter flags survive the wrapping rather than
+        # being traded for it.
+        self.assertIn("-I", argv)
+        self.assertIn("-B", argv)
+
+    def test_a_host_without_the_sandbox_never_walks_raw_records(self):
+        # Fail-closed, proven by absence of work rather than by a message: on
+        # a PATH that resolves everything the pipeline needs EXCEPT the
+        # sandbox, the push refuses before the producer runs — no sealed
+        # payload, no ssh.
+        #
+        # The PATH is curated rather than trimmed because the host running
+        # this suite may itself be a Darwin machine, where the real
+        # sandbox-exec sits in the same system directory as `mktemp` and
+        # `wc`. Every tool is resolved explicitly, so a missing one fails the
+        # test loudly instead of passing it for the wrong reason.
+        bare_dir = self.scratch / "no-sandbox"
+        bare_dir.mkdir()
+        for tool in ("stat", "mktemp", "rm", "wc", "tr", "head", "cut", "env",
+                     "python3", "shasum", "sha256sum"):
+            resolved = shutil.which(tool)
+            if resolved is not None:
+                (bare_dir / tool).symlink_to(resolved)
+        for required in ("stat", "mktemp", "wc", "env", "python3"):
+            self.assertTrue((bare_dir / required).exists(),
+                            "the curated PATH is missing %s" % required)
+        self.assertIsNone(
+            shutil.which("sandbox-exec", path=str(bare_dir)),
+            "the curated PATH still resolves a sandbox",
+        )
+        shutil.copy(self.stub_dir / "ssh", bare_dir / "ssh")
+        (bare_dir / "ssh").chmod(0o755)
+
+        env = dict(self.env)
+        env["PATH"] = str(bare_dir)
+        self.args_file.unlink(missing_ok=True)
+        result = run_script(PUSH, env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("sandbox is unavailable", result.stderr)
+        self.assertIn("never walked unconfined", result.stderr)
+        self.assertFalse(
+            self.args_file.exists(),
+            "the push reached the transport without the producer sandbox",
+        )
+
+    def test_the_push_script_has_no_unconfined_producer_invocation(self):
+        # Structural companion to the behavioral tests above: there is exactly
+        # ONE place the export script is started, and it is the sandboxed one.
+        # A second, unwrapped invocation would satisfy every test that only
+        # observes the happy path.
+        source = PUSH.read_text(encoding="utf-8")
+        invocations = [
+            line.strip()
+            for line in source.splitlines()
+            if "$EXPORT_SCRIPT" in line and not line.lstrip().startswith("#")
+        ]
+        # The guard that the file exists, and the sandboxed run.
+        self.assertEqual(len(invocations), 2, invocations)
+        self.assertTrue(any(line.startswith("[ -f ") for line in invocations))
+        run_line = [line for line in invocations if not line.startswith("[ -f ")][0]
+        self.assertIn("python3", run_line)
+        sandbox_lines = [
+            line for line in source.splitlines()
+            if line.strip().startswith("sandbox-exec ")
+        ]
+        self.assertEqual(len(sandbox_lines), 1, sandbox_lines)
+        self.assertIn('-f "$PRODUCER_PROFILE"', sandbox_lines[0])
 
     def test_the_push_carries_every_hardening_option(self):
         result = run_script(PUSH, env=self.env)
@@ -230,6 +349,86 @@ class PushTransportHardeningTest(unittest.TestCase):
         result = run_script(PUSH, env=self.env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("pushed %d sealed bytes" % cap, result.stdout)
+
+
+class ProducerSandboxTest(unittest.TestCase):
+    """Round-3 finding 1: the capability boundary, pinned and then executed."""
+
+    def setUp(self):
+        self.profile = PROFILE.read_text(encoding="utf-8")
+
+    def test_the_profile_denies_exactly_the_two_claimed_capabilities(self):
+        lines = [
+            line.strip()
+            for line in self.profile.splitlines()
+            if line.strip() and not line.strip().startswith(";;")
+        ]
+        self.assertEqual(lines[0], "(version 1)")
+        for denial in REQUIRED_SANDBOX_DENIALS:
+            self.assertIn(denial, lines, "the profile no longer carries %s" % denial)
+        # Nothing may grant back what the two denials take. Seatbelt takes the
+        # LAST matching rule, so a later allow would silently reopen the hole
+        # the whole boundary exists to close.
+        for index, line in enumerate(lines):
+            if line in REQUIRED_SANDBOX_DENIALS:
+                continue
+            self.assertNotIn("process-fork", line, "line %d re-grants fork" % index)
+            self.assertNotIn("network", line, "line %d re-grants network" % index)
+
+    def test_the_profile_states_its_own_residual(self):
+        # The honest half of the claim. `(allow default)` and the unavoidable
+        # exec allowance are both deliberate, and the file has to say so —
+        # this is the assertion that keeps the round-3 downgrade from being
+        # quietly re-inflated into "structurally incapable of everything".
+        self.assertIn("(allow default)", self.profile)
+        self.assertIn("exec(2) IN PLACE", self.profile)
+        self.assertIn("inherited across exec", self.profile)
+
+    @unittest.skipUnless(sys.platform == "darwin", "the sandbox is a Darwin facility")
+    @unittest.skipUnless(shutil.which("sandbox-exec"), "sandbox-exec is unavailable")
+    def test_the_boundary_actually_refuses_a_spawn_and_a_connect(self):
+        # The probe is the review's own surviving mutant, reduced to its
+        # essence: reach the launch callable through an ALLOWED import, and
+        # reach the network through the standard library. Both must fail
+        # inside the boundary.
+        probe = (
+            "import pathlib, socket\n"
+            "marker = pathlib.Path(__import__('sys').argv[1])\n"
+            "rc = pathlib.os.system('/usr/bin/touch ' + str(marker))\n"
+            "print('spawned' if marker.exists() else 'no-spawn')\n"
+            "try:\n"
+            "    socket.create_connection(('127.0.0.1', 9), timeout=1).close()\n"
+            "    print('connected')\n"
+            "except PermissionError:\n"
+            "    print('no-network')\n"
+            "except OSError:\n"
+            "    print('network-attempted')\n"
+        )
+        scratch = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
+
+        confined = subprocess.run(
+            [
+                "sandbox-exec", "-f", str(PROFILE),
+                sys.executable, "-I", "-B", "-c", probe, str(scratch / "confined"),
+            ],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(confined.returncode, 0, confined.stderr)
+        self.assertIn("no-spawn", confined.stdout)
+        self.assertIn("no-network", confined.stdout)
+        self.assertFalse((scratch / "confined").exists())
+
+        # Non-vacuity: the identical probe OUTSIDE the boundary spawns. An
+        # assertion no input can fail is decorative, and this is the input.
+        free = subprocess.run(
+            [sys.executable, "-I", "-B", "-c", probe, str(scratch / "free")],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(free.returncode, 0, free.stderr)
+        self.assertIn("spawned", free.stdout)
+        self.assertTrue((scratch / "free").exists())
+        self.assertNotIn("no-network", free.stdout)
 
 
 class InstallAnchorTest(unittest.TestCase):

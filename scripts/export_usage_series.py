@@ -46,20 +46,37 @@ malformed merge file refuses the whole run. This is how the second tool's
 reader — which lives in the capture tool, not here — feeds this document
 without this program ever reading that tool's tree itself.
 
-Structurally incapable of spawning anything: standard-library file reading
-only. The import surface is pinned by test (scripts/ci) against a closed
-allowlist, and that allowlist is itself pinned against a refused set, so no
-process-, network-, or loader-capable module can be admitted without a test
-naming the module that got in.
+WHERE THE NO-SPAWN, NO-NETWORK GUARANTEE ACTUALLY COMES FROM — stated
+precisely, because two earlier revisions of this docstring overstated it.
 
-`os` is refused, and that is the load-bearing decision here (2026-08-24
-review finding 1). It is the obvious module for a directory walk and it was
-imported here until that review: it carries `system`, `popen`, `fork`,
-`spawn*` and `exec*`, and an attribute denylist around those spellings does
-not hold — a computed `getattr(os, "sys" + "tem")` reintroduced the launch
-callable with every test still green. Refusing the IMPORT is what makes the
-capability structurally absent rather than merely unspelled, and `pathlib`
-plus the capture tool's own walk do the same job with none of that reach.
+The guarantee is enforced OUTSIDE this program, by the kernel sandbox the
+scheduled job starts it inside: `scripts/usage-export/producer.sb`, applied by
+`scripts/usage-export/push-usage-series.sh` before the interpreter runs. It
+denies `process-fork` and `network*`, so for the whole walk no process can be
+created by any spelling — `os.system`, `os.popen`, `posix_spawn`, and every
+stdlib wrapper layered on them all fail with EPERM — and no network endpoint
+can be opened, bound, or connected. That is a capability the program does not
+have, rather than one it declines to use. (Those module names are spelled
+around deliberately: the pin below also refuses them as literal bytes
+anywhere in this file, and a docstring is bytes.)
+
+The AST pin in `scripts/ci/test_export_usage_series.py` is a REVIEW BOUND, not
+that guarantee, and this is exactly what the 2026-08-24 round-3 review
+established. It holds this file's import surface to a closed allowlist pinned
+against a refused set, so widening the reviewed surface is a conscious edit
+that names the module that got in — genuinely useful, and non-vacuous (adding
+`import os` turns it red). What it CANNOT do is prove a capability absent:
+`pathlib` is on the allowlist and the module object it binds re-exports `os`,
+so `pathlib.os.system(":")` reaches the launch callable with the import set
+unchanged; `sys.modules["os"]` is the same hole spelled differently. Any
+admitted module that itself imports `os` reopens it, so no allowlist of import
+NAMES can ever close it. Read the pin as "the reviewed import surface is this
+and only this", never as "this program cannot spawn".
+
+`os` stays refused on that reviewed surface anyway (2026-08-24 review finding
+1): it is the obvious module for a directory walk, and keeping it out means an
+`os.` call site cannot appear here without an explicit, reviewed widening.
+`pathlib` plus the capture tool's own bounded walk do the same job.
 
     scripts/export_usage_series.py --transcripts DIR --source LABEL \\
         [--merge-source LABEL=FILE] [--out FILE]

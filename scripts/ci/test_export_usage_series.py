@@ -7,11 +7,16 @@ by path so neither directory has to become a package.
 
 Three contracts carry the weight:
 
-* **The import surface is closed.** Owner ruling on issue #142: the export
-  step must be STRUCTURALLY incapable of spawning an agent session or
-  touching a network — proven here against the module's AST, not its
-  behavior, so the capability cannot be reintroduced without turning this
-  file red.
+* **The import surface is closed — and that is a review bound, not the
+  capability guarantee.** The owner's ruling on issue #142 is that the export
+  step must be STRUCTURALLY unable to spawn an agent session or touch a
+  network. What enforces that is the kernel sandbox the scheduled job starts
+  the producer inside (`scripts/usage-export/producer.sb`, pinned in
+  `test_usage_export_scripts.py`). What THIS file pins is the reviewed import
+  surface: a closed allowlist held against a refused set, so widening it is a
+  conscious edit naming the module that got in. The two are not the same
+  claim, and the 2026-08-24 round-3 review is why they are now stated
+  separately — see `ImportSurfaceTest`.
 * **Requirement 12.** The transcript tree is full of prompts, paths, session
   identifiers and branch names; the emission may contain calendar dates and
   non-negative integers under machine-shaped keys, nothing else. The hostile
@@ -139,20 +144,36 @@ def imported_roots(tree):
 
 
 class ImportSurfaceTest(unittest.TestCase):
-    """Owner ruling: structurally incapable of spawning or networking.
+    """The REVIEWED IMPORT SURFACE, held closed — and honest about its limit.
 
-    The enforcement is the capture tool's — the same closed allowlist pinned
-    against the same refused set — because the two producers must be equally
-    incapable or the weaker one is the pipeline's real capability.
+    What this class proves: the producer imports exactly the allowed set, that
+    set is disjoint from a refused set of process/network/loader modules, and
+    the capture tool it imports is held to the same refused set — so the
+    transitive reviewed surface cannot be widened in either file without an
+    edit here that names the module which got in. Adding `import os` turns
+    this class red, so it is not decorative.
 
-    `os` is REFUSED here, and that is the load-bearing change of the
-    2026-08-24 review (finding 1). The earlier pin admitted `os` for its walk
-    and separately denied the literal `os.<spawn>` attribute spellings; a
-    review mutant returning `getattr(os, "sys" + "tem")` reintroduced the
-    launch callable with all 30 exporter tests still green. An attribute
-    denylist cannot bound a module whose attributes can be computed, so the
-    module itself is refused at import level and no spelling of a launch
-    callable can exist.
+    What this class does NOT prove, stated because two earlier revisions
+    claimed it did: that the producer is incapable of spawning a process. A
+    lint over import NAMES cannot establish that. `pathlib` is on the
+    allowlist and the module object it binds re-exports `os`, so
+    `pathlib.os.system(":")` reaches the launch callable with the import set
+    unchanged and every test here green — the exact mutant the 2026-08-24
+    round-3 review flew through. `sys.modules["os"]` is the same hole spelled
+    differently, and any admitted module that itself imports `os` reopens it.
+    `test_the_import_pin_cannot_prove_capability_absence` demonstrates the
+    hole so the limit stays legible, and the capability itself is denied by
+    the kernel sandbox at the invocation layer
+    (`scripts/usage-export/producer.sb`; enforcement pinned, and on Darwin
+    EXECUTED, in `test_usage_export_scripts.py`).
+
+    `os` stays REFUSED on the reviewed surface anyway (2026-08-24 round-2
+    finding 1): an earlier pin admitted `os` for the walk and denied the
+    literal `os.<spawn>` attribute spellings, which a computed
+    `getattr(os, "sys" + "tem")` walked straight past. Keeping the module off
+    the reviewed surface means an `os.` call site cannot appear here without a
+    deliberate widening — a review property, which is what a lint can honestly
+    be.
     """
 
     ALLOWED = frozenset(
@@ -229,6 +250,28 @@ class ImportSurfaceTest(unittest.TestCase):
         )
         self.assertEqual(imported_roots(mutant) & self.REFUSED, {"os"})
         self.assertNotEqual(imported_roots(mutant), set(self.ALLOWED))
+
+    def test_the_import_pin_cannot_prove_capability_absence(self):
+        # The limit of this whole class, pinned so nobody re-derives the
+        # overstatement the 2026-08-24 round-3 review killed. `pathlib` is an
+        # ALLOWED import and its module object re-exports `os`, so the launch
+        # callable is reachable from the exact import set above. If this ever
+        # stops holding, the honest claim in the docstrings changed and both
+        # must be revisited together — which is why it is asserted rather
+        # than merely written down.
+        self.assertIn("pathlib", self.ALLOWED)
+        reachable = getattr(pathlib, "os", None)
+        self.assertIsNotNone(
+            reachable, "pathlib no longer re-exports os; revisit the honest claim")
+        self.assertTrue(
+            callable(getattr(reachable, "system", None)),
+            "the launch callable is reachable through an allowed import; the "
+            "no-spawn guarantee is the sandbox's, never this pin's",
+        )
+        # And the module says so: the producer's own docstring must not claim
+        # the guarantee this pin cannot give.
+        self.assertIn("producer.sb", self.source)
+        self.assertNotIn("Structurally incapable of spawning", self.source)
 
     def test_the_pin_is_reading_a_real_import_surface(self):
         # Non-vacuity: an assertion about a set that turned out to be empty

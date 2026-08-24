@@ -282,11 +282,17 @@ are counts rather than names — a file it cannot read is tallied, never
 identified. `scripts/ci/test_capture_usage_series.py` asserts that directly,
 by walking a fixture tree seeded with paths and identifiers — one per record
 shape — and proving none of them survive into the emission. The same suite
-pins the module's import surface to a closed allowlist, so the capture is
-structurally incapable of spawning a process or opening a socket: `os` is
-refused along with `subprocess`, `socket` and `urllib`, because `os.system`,
-`os.popen` and `os.exec*` would reach straight past a promise. Adding any of
-them turns the suite red before it can turn into a commit.
+pins the module's import surface to a closed allowlist held against a refused
+set, so widening the reviewed surface is a conscious edit naming the module
+that got in; adding one turns the suite red before it can turn into a commit.
+
+That pin is a review bound, not a capability proof, and the difference is
+load-bearing: an allowed import can re-export a refused one, so no allowlist
+of import names can establish that a program cannot spawn. When the runtime
+producer runs, it runs inside a kernel sandbox that denies process creation
+and network access outright (`scripts/usage-export/producer.sb`, applied by
+the scheduled push and refused-if-absent), and that is what carries the
+"cannot start a session, cannot reach a network" guarantee.
 
 **The recent commit list.** The rows are public commits from the repositories
 `internal/panels/config/fetch.json` already names as commit sources, read the

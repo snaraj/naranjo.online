@@ -29,18 +29,34 @@ keeps the last good payload and says so in the envelope `status`.
 
 ## Security properties, stage by stage
 
-- **Capture cannot spawn or connect.** `scripts/export_usage_series.py` is
-  standard-library file reading; its import surface is pinned by an AST test
-  (`scripts/ci/test_export_usage_series.py`) against a closed allowlist that
-  is itself pinned against a refused set, so no process-, network-, or
-  loader-capable module can be admitted without a test naming the module
-  that got in. `os` is on the refused side — it carries `system`, `popen`,
-  `fork`, `spawn*` and `exec*`, and an attribute denylist around those
-  spellings does not hold, because a computed `getattr` rebuilds the
-  callable (2026-08-24 security review, finding 1). The capture tool's own
-  `pathlib` walk does the same job, and the pin covers that transitive
-  surface too. It never executes any agent binary, so a capture can never
-  start a session or spend anything.
+- **Capture cannot spawn or connect — enforced by the kernel, not by a
+  lint.** The push script starts `scripts/export_usage_series.py` inside the
+  sandbox profile `scripts/usage-export/producer.sb`, which denies
+  `process-fork` and `network*`. For the whole walk of the raw records no
+  process can be created by any spelling and no network endpoint can be
+  opened, so a capture can never start a session or spend anything. There is
+  no flag, environment variable, or configuration key that runs the producer
+  unconfined: a workstation without the sandbox refuses to walk raw records
+  at all.
+
+  This replaced an overstatement (2026-08-24 security review, round 3,
+  finding 1). The guarantee used to rest on an AST test
+  (`scripts/ci/test_export_usage_series.py`) pinning the producer's import
+  names to a closed allowlist. That test still runs and still earns its
+  place — it holds the REVIEWED IMPORT SURFACE closed, against a refused set,
+  so widening it is a conscious edit naming the module that got in — but it
+  cannot prove a capability absent: `pathlib` is an allowed import and the
+  module object it binds re-exports `os`, so `pathlib.os.system(":")` reached
+  the launch callable with the import set unchanged and every producer test
+  green. Any admitted module that imports `os` reopens the same hole, so no
+  allowlist of import NAMES can close it.
+
+  The residual is stated in the profile itself and is deliberate: seatbelt
+  cannot express "allow exactly the first exec", so exec-in-place stays
+  possible. It buys nothing — the sandbox is inherited across exec, so
+  whatever the producer replaced itself with would still be unable to create
+  a process or open a network endpoint, and the export it owed simply never
+  appears, which the push reports as a refusal.
 - **Only dates and integers leave the machine.** The export reuses the
   capture tool's `assert_only_dates_and_integers` guard — the same function,
   not a copy — over the complete payload immediately before writing.
