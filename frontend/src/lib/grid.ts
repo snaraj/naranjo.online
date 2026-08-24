@@ -110,11 +110,16 @@ export const pendingWeeks = 53;
  * than as a panel waiting; an outlined empty grid says the same thing in the
  * shape the reader is looking for.
  *
- * Absent is the whole point. An absent cell is drawn as a hole and labelled
- * as having no data — the identical rendering a day outside a real window
- * gets — so this fills a graph with EXACTLY as much information as the source
- * has reported, which is none. A zero would be a datapoint, and inventing one
- * per day for a year would be a doctrine violation with a very tidy look. */
+ * Absent is the whole point. An absent cell carries no value and no date, so
+ * this fills a graph with EXACTLY as much information as the source has
+ * reported, which is none. A zero would be a datapoint, and inventing one per
+ * day for a year would be a doctrine violation with a very tidy look.
+ *
+ * How the component DRAWS these is its own decision and no longer the same
+ * one it makes for a missing day inside a real window: a field of outlined
+ * holes read as a graph that had failed to load (issue 134), so the empty
+ * state is styled as a reserved plate instead. The data these cells carry —
+ * none — is unchanged either way. */
 export function pendingColumns(weeks: number = pendingWeeks): GridCell[][] {
   return Array.from({ length: Math.max(0, weeks) }, () =>
     Array.from({ length: gridRows }, () => ({ value: 0, date: '', absent: true }))

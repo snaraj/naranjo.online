@@ -130,7 +130,7 @@ var (
 	// — no shared code crosses the Go/TypeScript boundary — and the parity
 	// tests on both sides pin the lists against each other. Any cookie value
 	// outside this set fails closed to the unstamped default document.
-	readingThemes = []string{"dark", "light", "sepia"}
+	readingThemes = []string{"dark", "light", "sepia", "slate"}
 	// errUnsafeMediaPath intentionally collapses traversal, hidden files,
 	// symlinks, directories, and reserved internals into the same public 404.
 	errUnsafeMediaPath = errors.New("unsafe media path")

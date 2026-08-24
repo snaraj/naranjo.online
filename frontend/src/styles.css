@@ -19,13 +19,18 @@
  * data-theme changes only custom-property values on the one loaded
  * stylesheet — no layout shift, no asset refetch.
  *
- * The seven slots run surface -> text. Only surface and text render in the
- * current shell (visual parity with the previous light/dark pair); the
- * intermediate light/dark values are placeholder ramps between those two
- * anchors, and sepia is seeded from the wiki's browntown values — all
- * swappable by design when the owner picks final palettes. The two anchor
- * hexes each appear twice below because light's text is dark's surface and
- * vice versa — one occurrence per palette slot, never per consumer. */
+ * The seven slots run surface -> text. Four reading modes fill them — one
+ * light and three dark — and the three darks differ by TEMPERATURE rather
+ * than by depth: dark is neutral, slate is cool, sepia is warm. Dark is the
+ * true one, and "true" is a measurable property here rather than a mood: its
+ * every neutral is white at one fixed opacity composited over a single
+ * near-black base, so red, green and blue are EQUAL in every slot and no
+ * surface, border or ink in the mode can drift toward a hue. Slate holds the
+ * exact values this site used to ship as its only dark — a desaturated navy,
+ * which is a fine reading mode and simply not a dark one — and sepia is
+ * seeded from the wiki's browntown values. The two anchor hexes each appear
+ * twice below because light's text is slate's surface and vice versa — one
+ * occurrence per palette slot, never per consumer. */
 :root {
   --palette-light-surface: #f7f7f2;
   --palette-light-surface-raised: #efefe8;
@@ -35,13 +40,35 @@
   --palette-light-accent: #3d434f;
   --palette-light-text: #10131a;
 
-  --palette-dark-surface: #10131a;
-  --palette-dark-surface-raised: #161a23;
-  --palette-dark-surface-overlay: #1d222d;
-  --palette-dark-border: #2a3040;
-  --palette-dark-border-strong: #566078;
-  --palette-dark-accent: #b9c2d4;
-  --palette-dark-text: #f7f7f2;
+  /* Dark: the true one, derived rather than picked. Every slot is white at
+     one fixed opacity composited over the same near-black base — the two
+     elevation steps at 5% and 12%, then 38% for a boundary, 60% for
+     medium-emphasis ink and 87% for high-emphasis ink — which is where three
+     properties come from at once. Elevation is expressed as LIGHTNESS only,
+     because a composite of one white over one base cannot introduce a hue.
+     Text stops short of pure white on purpose: full white on a near-black
+     surface halates, and that glow is what makes a dark mode tiring instead
+     of restful. And the base is not pure black either, because black leaves
+     elevation nothing to express itself with — every raised surface would
+     have to announce itself with a border instead. */
+  --palette-dark-surface: #121212;
+  --palette-dark-surface-raised: #1e1e1e;
+  --palette-dark-surface-overlay: #2e2e2e;
+  --palette-dark-border: #383838;
+  --palette-dark-border-strong: #6c6c6c;
+  --palette-dark-accent: #a0a0a0;
+  --palette-dark-text: #e0e0e0;
+
+  /* Slate: the cool, desaturated navy this site shipped as its only dark.
+     Not one value here is new — it keeps its own id precisely so that
+     replacing the dark mode costs a visitor who preferred it nothing. */
+  --palette-slate-surface: #10131a;
+  --palette-slate-surface-raised: #161a23;
+  --palette-slate-surface-overlay: #1d222d;
+  --palette-slate-border: #2a3040;
+  --palette-slate-border-strong: #566078;
+  --palette-slate-accent: #b9c2d4;
+  --palette-slate-text: #f7f7f2;
 
   /* Sepia: placeholder palette seeded from the wiki's browntown values. */
   --palette-sepia-surface: #1b1612;
@@ -74,18 +101,28 @@
      is only correct against a dark card. On the light one the identical ramp
      would step toward its own background and the busiest days would read as
      the emptiest, so light steps darker instead. Sepia runs warm to sit in
-     its own palette rather than importing the blue one. */
+     its own palette rather than importing the blue one, and dark runs with
+     no hue at all: it is derived from the same white-over-base composite as
+     its surfaces, so the one chromatic thing in the whole mode stays the
+     brand mark. Restraint is the difference between a dark theme and a dim
+     one, and a heatmap is the easiest place to lose it. */
   --palette-light-grid-0: #dcdcd2;
   --palette-light-grid-1: #a8c4e8;
   --palette-light-grid-2: #6f9fd8;
   --palette-light-grid-3: #3f79c4;
   --palette-light-grid-4: #1c5cab;
 
-  --palette-dark-grid-0: #262b36;
-  --palette-dark-grid-1: #1c5cab;
-  --palette-dark-grid-2: #2a78d6;
-  --palette-dark-grid-3: #5598e7;
-  --palette-dark-grid-4: #86b6ef;
+  --palette-dark-grid-0: #2a2a2a;
+  --palette-dark-grid-1: #545454;
+  --palette-dark-grid-2: #7f7f7f;
+  --palette-dark-grid-3: #aaaaaa;
+  --palette-dark-grid-4: #d9d9d9;
+
+  --palette-slate-grid-0: #262b36;
+  --palette-slate-grid-1: #1c5cab;
+  --palette-slate-grid-2: #2a78d6;
+  --palette-slate-grid-3: #5598e7;
+  --palette-slate-grid-4: #86b6ef;
 
   --palette-sepia-grid-0: #3a322b;
   --palette-sepia-grid-1: #6b4f2a;
@@ -103,35 +140,108 @@
   --layer-base: 0;
   --layer-menu: 30;
 
-  /* The page column: one width for the header and every panel in the stack,
-     so the chrome sits over the cards rather than beside them, and a panel
-     added later inherits the column instead of choosing a width of its own.
+  /* The page column: one width for the header, the name, every section and
+     every panel in the stack, so the chrome sits over the cards rather than
+     beside them and a section added later inherits the column instead of
+     choosing a width of its own.
 
-     It FILLS the viewport (owner directive, issue 127). It used to be a
-     30rem maximum, which is the whole page on a phone and a narrow ribbon
-     down the middle of a desktop with the chrome floating far from the cards
-     it acts on. Filling changes nothing a phone renders — the column was
-     already 100% there, since min(30rem, 100%) resolves to the smaller — and
-     the desktop gets the page instead of a ribbon. A user-chosen width is a
-     later issue, and this token is the one knob it will move.
+     It is a CENTRED COLUMN, wider than the design it replaces (owner
+     directive, issue 134). Three widths have now been asked for and this is
+     the third: a 30rem maximum was a narrow ribbon down the middle of a
+     desktop, filling the viewport tiled the trackers three across, and the
+     owner wants everything stacked in one container that is wider than the
+     ribbon was. 60rem is that container — double the 30rem card the trackers
+     were designed at, so a tracker keeps room to be a table rather than a
+     list, while prose inside it sets its own reading measure instead of
+     running the full width.
 
-     The card minimum is what keeps "fills the viewport" from meaning "one
-     card stretched across a television": the stack tiles at that width, so a
-     card is the size it was designed at and the extra room becomes more
-     cards side by side rather than one wider one. It is a MINIMUM inside a
-     min(), so on a phone it collapses to the column and the stack is one
-     card wide, exactly as before. */
-  --page-column-width: 100%;
-  --page-card-min: 30rem;
+     The consumer wraps it in min(…, 100%), which is what keeps a phone
+     unchanged: min(60rem, 100%) resolves to the viewport on every phone
+     width, so the column is the screen there exactly as it has always been.
+     A user-chosen width is a later issue, and this token is the one knob it
+     will move. */
+  --page-column-width: 60rem;
   --page-gutter: 1rem;
   --page-stack-gap: 0.75rem;
   --page-header-height: 3.5rem;
+
+  /* The feed-card token layer (owner directive, issue 134). The page is
+     becoming a feed of many content types, so the card is a primitive with
+     regions rather than a layout for one kind of thing — and every visual
+     dimension it has is a token declared HERE, once, against the reading-mode
+     tokens above.
+
+     Three properties follow from that arrangement, each of which would
+     otherwise need discipline rather than derivation. Moving one value here
+     moves every card on the page at once. A reading mode restyles the whole
+     feed for free, because no card value is ever a literal color — each
+     resolves through --color-*, so a palette that changes takes the cards
+     with it and no component knows which mode is active. And a ONE-OFF look
+     is a local custom-property override on a single card element, never an
+     edit to the component and never a hardcoded value at the call site.
+
+     Lengths, weights and font stacks are tokens for exactly the same reason
+     the colors are: a card that hardcoded a padding could not be tuned from
+     here, and the page would drift one component at a time. Anything a card
+     may want to vary belongs in this block; if a value is missing, the fix is
+     a new token rather than a literal in a component.
+
+     The compact pair exists because a variant may only REMAP tokens, never
+     restate values: the compact variant points --card-padding at
+     --card-padding-compact, so the tight rhythm is still one number defined
+     in one place. */
+  --card-surface: var(--color-surface-raised);
+  --card-ink: var(--color-text);
+  --card-border-color: var(--color-border);
+  --card-border-width: 1px;
+  --card-border-style: solid;
+  --card-radius: 3px;
+  --card-shadow: none;
+  --card-max-inline-size: none;
+  --card-padding: 0.75rem;
+  --card-padding-compact: 0.5rem;
+  --card-gap: 0.5rem;
+  --card-gap-compact: 0.375rem;
+  --card-header-gap: 0.125rem;
+  --card-body-gap: 0.5rem;
+  --card-meta-gap: 0.25rem 0.875rem;
+  --card-title-family: var(--font-sans);
+  --card-title-size: 1.0625rem;
+  --card-title-weight: 650;
+  --card-title-tracking: -0.01em;
+  --card-title-leading: 1.25;
+  --card-title-ink: var(--card-ink);
+  --card-meta-family: var(--font-sans);
+  --card-meta-size: 0.8125rem;
+  --card-meta-weight: 400;
+  --card-meta-tracking: 0.02em;
+  --card-meta-leading: 1.4;
+  --card-meta-ink: var(--color-accent);
+  --card-body-size: 0.9375rem;
+  --card-body-leading: 1.55;
+  --card-media-aspect: 16 / 9;
+  --card-media-fit: cover;
+  /* The space BETWEEN cards in a feed, as opposed to --card-gap, which is the
+     space between one card's own regions. */
+  --feed-gap: 1rem;
+  /* A comfortable reading measure. The page column is wide because the
+     trackers need the room; prose set to the full width of a tracker card is
+     a line nobody wants to follow back to the start of. */
+  --card-measure: 42rem;
 
   /* The panel theme layer. Every panel component was built "shaped, not
      styled" — each color reads a --panel-* custom property with a
      dark-native fallback, so the theme layer restyles panels by overriding
      variables and never by editing a component. This block is that layer,
      and it is the whole of it.
+
+     Where a panel and a feed card mean the same thing — the raised surface
+     they sit on, their rule, their ink — the panel token now DERIVES from the
+     card token rather than reaching past it to the palette. That is what makes
+     the uniformity real instead of coincidental: one edit above moves the
+     trackers and the feed together, and the two cannot drift into two
+     different greys. The panels' own components are unchanged and still read
+     --panel-*; only where the value comes from moved.
 
      It is written ONCE, against the active --color-* tokens rather than per
      reading mode, so a theme block that remaps the palette moves the panels
@@ -140,17 +250,18 @@
      showed while they were a side rail; now that they are the page, a light
      reading mode with dark cards reads as a bug rather than a style.
 
-     The RuneLite orange survives as the brand mark in all three modes —
+     The RuneLite orange survives as the brand mark in all four modes —
      --color-brand, not --color-accent, so it stays orange rather than
-     dissolving into each palette's neutral. */
-  --panel-surface: var(--color-surface-raised);
+     dissolving into each palette's neutral. In the true dark that is the
+     ONLY chromatic token the mode carries, which is the point of it. */
+  --panel-surface: var(--card-surface);
   --panel-tip-surface: var(--color-surface-overlay);
   --usage-tile-surface: var(--color-surface);
-  --panel-border: var(--color-border);
-  --panel-text: var(--color-text);
+  --panel-border: var(--card-border-color);
+  --panel-text: var(--card-ink);
   /* The accent slot is each palette's mid-tone: dimmer than text, and
-     measured at 8.6:1 / 9.7:1 / 6.1:1 on its own card, so "muted" never
-     means "unreadable". */
+     measured at 8.60:1 light, 6.38:1 dark, 9.73:1 slate and 6.09:1 sepia on
+     its own card, so "muted" never means "unreadable". */
   --panel-muted: var(--color-accent);
   --panel-accent: var(--color-brand);
   --panel-status-ok: var(--color-status-ok);
@@ -176,9 +287,13 @@
   --color-grid-2: var(--palette-light-grid-2);
   --color-grid-3: var(--palette-light-grid-3);
   --color-grid-4: var(--palette-light-grid-4);
+  /* The page's one font stack, as a token: a card's type ramp reads it rather
+     than restating it, so the family is chosen in exactly one place. */
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
   color: var(--color-text);
   background: var(--color-surface);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -224,6 +339,30 @@
   --color-grid-2: var(--palette-dark-grid-2);
   --color-grid-3: var(--palette-dark-grid-3);
   --color-grid-4: var(--palette-dark-grid-4);
+}
+
+/* Slate remaps the identical slot list onto its own palette — same roles,
+   same order, one value each. That sameness is the contract every consuming
+   component depends on: a card, a panel or a feed item reads a role by name
+   and never asks which mode is active, so a mode that declared a shorter
+   list would leave those components silently painting the light palette's
+   value for whatever it dropped. A parity test compares the four lists. */
+[data-theme="slate"] {
+  color-scheme: dark;
+  --color-surface: var(--palette-slate-surface);
+  --color-surface-raised: var(--palette-slate-surface-raised);
+  --color-surface-overlay: var(--palette-slate-surface-overlay);
+  --color-border: var(--palette-slate-border);
+  --color-border-strong: var(--palette-slate-border-strong);
+  --color-accent: var(--palette-slate-accent);
+  --color-text: var(--palette-slate-text);
+  --color-brand: var(--palette-brand-orange);
+  --color-status-ok: var(--palette-status-ok);
+  --color-grid-0: var(--palette-slate-grid-0);
+  --color-grid-1: var(--palette-slate-grid-1);
+  --color-grid-2: var(--palette-slate-grid-2);
+  --color-grid-3: var(--palette-slate-grid-3);
+  --color-grid-4: var(--palette-slate-grid-4);
 }
 
 [data-theme="sepia"] {
@@ -348,6 +487,106 @@ main {
   gap: 2rem;
 }
 
+/* The name and the section nav are one block, so the links sit UNDER the name
+   (owner directive, issue 134) rather than one page-gap away from it. */
+.page-intro {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+  inline-size: 100%;
+}
+
+/* The nav is one row of in-page links. It wraps rather than scrolling: four
+   labels are a comfortable line on any desktop and a tight one on a 320px
+   phone, and a link that has moved off the edge of a row is a link nobody
+   finds. */
+.section-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem 0.5rem;
+}
+
+/* A link, and a touch target. The 44px floor is a MINIMUM on both axes rather
+   than a fixed box: a reader who enlarges their base font gets a bigger
+   target, never a clipped label. The underline stays — these are hyperlinks,
+   the owner asked for hyperlinks, and a nav row that identifies its links by
+   color alone identifies them for fewer readers. */
+.section-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 2.75rem;
+  min-block-size: 2.75rem;
+  padding-inline: 0.5rem;
+  color: var(--color-text);
+  font-size: 0.9375rem;
+  text-underline-offset: 0.2em;
+}
+
+.section-link:hover {
+  color: var(--color-brand);
+}
+
+.section-link:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Every section of the stack takes the column and stacks its own contents.
+   The scroll margin is what the nav links land against: an anchor jump puts
+   the target at the very top edge of the viewport otherwise, with the heading
+   touching the browser chrome. */
+.page-section {
+  display: grid;
+  gap: 0.75rem;
+  inline-size: 100%;
+  scroll-margin-block-start: 1rem;
+}
+
+.section-title {
+  margin: 0;
+  padding-block-end: 0.375rem;
+  border-block-end: 1px solid var(--color-border);
+  font-size: 1.375rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+/* A section that holds more than one thing — Projects holds Art and Coding
+   Projects (owner directive, issue 134) — stacks them the same way the page
+   stacks sections, one level in. */
+.page-subsection {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.subsection-title {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.subsection-intro {
+  margin: 0;
+  max-inline-size: 42rem;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+
+/* The line a section uses to tell the truth about itself — placeholder copy,
+   or a figure captured out of band. It reads the accent token rather than a
+   transparency, so its contrast is measured in every reading mode like every
+   other ink on the page. */
+.section-note {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--color-accent);
+}
+
 /* The stack: one card per tracker, top to bottom, each filling the column.
    Adding a tracker is one mount line in App.svelte — the stack gives it the
    column's width and the gap to its neighbour, so no panel carries page
@@ -365,28 +604,25 @@ main {
   min-inline-size: 0;
 }
 
-/* One column on a phone, as many as fit on a desktop. auto-fill against a
-   card minimum is what makes the same declaration do both: below the
-   minimum there is room for exactly one track, so a phone renders the single
-   full-width column it always did, and a wide viewport fills with cards at
-   the size they were designed at instead of one card stretched across it.
+/* ONE column, at every width (owner directive, issue 134). The stack used to
+   tile as many cards side by side as the viewport fit; the owner wants the
+   trackers stacked on top of each other in a single container, so the track
+   list is one track and a viewport wider than the column becomes margin
+   rather than a second column of cards.
 
-   min(--page-card-min, 100%) is load-bearing, not decoration: a bare 30rem
-   minimum cannot shrink, so a 320px viewport would lay out a 480px track and
-   scroll the body sideways — the exact floor this page is pinned against.
+   minmax(0, 1fr) rather than a bare 1fr, and the difference is the floor this
+   page is pinned against: a grid track's automatic minimum is its MIN-CONTENT,
+   so a card holding a dense table would refuse to shrink and drag the stack
+   past the column, which the body then scrolls sideways to reveal. Zero as the
+   minimum lets the track be exactly the column it is given, and anything
+   genuinely too wide scrolls inside its own panel instead.
 
-   auto-FILL, not auto-fit, and the difference is measurable rather than
-   stylistic: auto-fit collapses tracks that hold no item, so while the panels
-   were still arriving the first card was laid out at the full page width and
-   then snapped to a third of it as its siblings mounted. Every panel inside
-   it re-measured — the contribution calendar was observed opening on the
-   wrong column because of exactly this — and re-laying out a card the visitor
-   is already reading is the layout shift this page is pinned against.
-   auto-fill sizes the tracks from the viewport alone, so a card is the same
-   width before and after its neighbours exist. */
+   Nothing about a phone changes: the stack was already one full-width column
+   at every phone width, because the old tiling rule had room for exactly one
+   track below its card minimum. */
 .panel-stack {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(var(--page-card-min), 100%), 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--page-stack-gap);
   inline-size: 100%;
 }

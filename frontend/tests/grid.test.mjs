@@ -2,6 +2,7 @@
  * lenses, the magnitude bucketing, the column padding, the month axis, and
  * the accessible cell text both panels depend on. */
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
@@ -21,6 +22,11 @@ import {
   toColumns,
   viewValues
 } from '../src/lib/grid.ts';
+
+const grid = await readFile(
+  new URL('../src/lib/components/ContributionGrid.svelte', import.meta.url),
+  'utf8'
+);
 
 test('the three series lenses read one daily series three ways', () => {
   const totals = [1, 2, 3, 4, 5, 6, 7, 10, 0, 0, 0, 0, 0, 0];
@@ -135,8 +141,9 @@ test('the pending graph is chrome with no datapoints in it', () => {
     assert.equal(column.length, gridRows, 'every column is a full week, like the real ones');
     for (const cell of column) {
       // Absent is what makes this honest rather than decorative: an absent
-      // cell is drawn as a hole and labelled as having no data, which is the
-      // identical rendering a day outside a real window gets.
+      // cell carries no value and no date, so it can never be read as a
+      // measurement. How it is DRAWN is the component's decision and is
+      // pinned separately below.
       assert.equal(cell.absent, true);
       assert.equal(cell.value, 0);
       assert.equal(cell.date, '', 'a placeholder day must not claim a date it was never told');
@@ -151,4 +158,50 @@ test('the pending graph is chrome with no datapoints in it', () => {
   // A caller asking for nothing gets nothing, never a negative-length loop.
   assert.deepEqual(pendingColumns(0), []);
   assert.deepEqual(pendingColumns(-3), []);
+});
+
+// How the empty state LOOKS, which is a different question from what it
+// contains and was conflated with it until issue 134: the placeholders were
+// drawn as outlined holes, identically to a missing day inside a real window,
+// so a panel with nothing to plot read as a graph that had failed to load.
+test('the empty graph is styled as a reserved plate, not as a graph of holes', () => {
+  assert.match(
+    grid,
+    /data-grid-state=\{columns\.length > 0 \? 'series' : 'empty'\}/,
+    'the state must be declared on the block, not inferred by a selector'
+  );
+  const emptyCell = /\.grid-block\[data-grid-state='empty'\] \.grid-cell\[data-grid-pending\]\s*\{([^}]*)\}/.exec(grid);
+  assert.ok(emptyCell, 'the empty state gives its placeholder cells no treatment of their own');
+  assert.match(emptyCell[1], /box-shadow:\s*none/, 'the placeholder outlines must be cleared');
+  assert.match(emptyCell[1], /background:\s*var\(--grid-cell-empty/, 'a flat field needs a fill');
+
+  const emptyStrip = /\.grid-block\[data-grid-state='empty'\] \.grid-strip\s*\{([^}]*)\}/.exec(grid);
+  assert.ok(emptyStrip, 'the empty state does not frame its plate');
+  // Load-bearing, and the reason the rule is written the way it is: block-size
+  // is content-box, so a border would add two pixels to the strip's bounding
+  // rectangle and an empty panel would stop being exactly as tall as a full
+  // one — which is the zero-CLS floor and a rendering-lane assertion both.
+  assert.match(emptyStrip[1], /box-shadow:\s*inset/);
+  assert.doesNotMatch(
+    emptyStrip[1],
+    /(?:^|[\s;])border(?:-block|-inline|-top|-bottom|-left|-right)?:/,
+    'a border grows the strip box; the empty and filled panels must be the same height'
+  );
+
+  const emptyLegend = /\.grid-block\[data-grid-state='empty'\] \.grid-legend\s*\{([^}]*)\}/.exec(grid);
+  assert.ok(emptyLegend, 'the magnitude legend still explains a magnitude that is not there');
+  // Hidden, never removed: display:none would take the legend's box out of
+  // flow and shorten the panel, which is the same shift by another route.
+  assert.match(emptyLegend[1], /visibility:\s*hidden/);
+  assert.doesNotMatch(emptyLegend[1], /display:\s*none/);
+
+  const note = /\.grid-empty\s*\{([^}]*)\}/.exec(grid);
+  assert.ok(note, 'the empty note lost its rule');
+  assert.match(note[1], /position:\s*absolute/, 'the note stays out of flow');
+  assert.match(note[1], /text-transform:\s*uppercase/, 'a state reads as a label, not as prose');
+  assert.doesNotMatch(
+    note[1],
+    /font-style:\s*italic/,
+    'italics are the typography of an apology; an unavailable series is a state, not a fault'
+  );
 });

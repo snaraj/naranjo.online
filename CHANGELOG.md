@@ -7,6 +7,52 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.33] - 2026-08-24
+
+### Added
+
+- A true dark mode, and four reading modes total. `dark` is repainted as a
+  neutral near-black ladder — every value white composited over #121212 at a
+  fixed opacity, so no hue is representable, elevation is pure lightness, and
+  text stops short of white — while the desaturated navy that used to answer
+  to the name survives as `slate`. Repainting `dark` in place is what fixes
+  the default: `prefers-color-scheme` maps the dark palette by name, so
+  auto-mode visitors get the true dark rather than navy forever. The heatmap
+  ramp in that mode is hueless, leaving the RuneLite orange the mode's only
+  chromatic token. A parity test requires every mode to declare the identical
+  token set, and the origin precomputes the fourth stamped shell variant.
+- The token-usage heatmap gets a real daily series, derived from the owner's
+  own local transcript records by a stdlib-only capture step that
+  de-duplicates replayed records (42,445 raw vs 35,752 messages), sums per
+  UTC day, and emits nothing but calendar dates and non-negative integers —
+  15 days, 7,333,913,801 tokens, peak 1,911,380,289. Three tiles the mapper
+  derives from a series (peak day, both streaks) are recomputed from it; the
+  streak tiles move to 7/7 because a tile may not contradict the graph
+  printed under it. Nine real commits replace the false "no recent commits"
+  state, and the per-figure "recorded" marker appears only when provenances
+  within a source actually disagree — 100 markers on the served page before,
+  0 after.
+- The page becomes one wide stacked column with named sections — Work,
+  Projects, Trackers, About Me — navigable from under the owner's name, and
+  a reusable feed-card primitive (issue #136): optional header regions that
+  exist and are tested while today's data leaves them empty, four variants,
+  and a 30-token style layer derived from the global palette so every mode
+  restyles the feed for free. The Art section is a single-column feed of
+  eight 4K photographs served by content digest through the media subsystem
+  (nothing enters git); the boss log wraps into three columns and no longer
+  scrolls at any width.
+
+### Removed
+
+- The empty contribution grid for a source with no obtainable daily record
+  (issue #139, owner ruling). A source the payload reports without a series
+  renders no graph region at all — no grid, no toggle, no "series pending"
+  plate — while keeping its tiles and insights; the check is data-driven, so
+  a series arriving via live refresh restores the grid with no code change.
+  The version-control calendar keeps its loading reserve: that payload is
+  genuinely in flight, and the reserve is what holds the page still while it
+  lands.
+
 ## [0.1.32] - 2026-08-23
 
 ### Changed

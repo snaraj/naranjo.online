@@ -9,6 +9,7 @@ import {
   formatUtilization,
   meterFillPct,
   meterSeverity,
+  provenanceIsMixed,
   resetsIn,
   tokenUsageSources
 } from '../src/lib/token-usage.ts';
@@ -345,6 +346,18 @@ describe('extended payload admission', () => {
     }
   });
 
+  it('still admits a series that declares itself a recorded capture', () => {
+    // The origin marks a snapshot-shipped series `recorded`, the same word it
+    // marks a tile with. The flag is additive inside token-usage/v1, so
+    // admission must carry the series through untouched rather than refusing
+    // a field it was not written to expect.
+    const payload = structuredClone(base);
+    payload.sources[0].series.recorded = true;
+    const [source] = tokenUsageSources(payload);
+    assert.equal(source.series.startDate, '2026-08-01');
+    assert.deepEqual(source.series.totals, [1, 2, 3]);
+  });
+
   it('treats a null figure as real information, not a refusal', () => {
     const payload = structuredClone(base);
     payload.sources[0].stats[0].value = null;
@@ -352,6 +365,57 @@ describe('extended payload admission', () => {
     const [source] = tokenUsageSources(payload);
     assert.equal(source.stats[0].value, null);
     assert.equal(source.insights[0].pct, null);
+  });
+});
+
+describe('provenanceIsMixed', () => {
+  const figure = (recorded) => ({ key: 'k', label: 'l', value: 1, unit: 'tokens', recorded });
+
+  it('says nothing to mark when every figure shares one provenance', () => {
+    // Both uniform cases, and they are the two the page is actually in. With
+    // live refresh off every figure is a recorded capture; with every source
+    // fetched every figure is live. Neither needs a per-figure word, because
+    // the word would appear on all of them and separate none of them.
+    assert.equal(
+      provenanceIsMixed({ label: 's', windows: [], stats: [figure(true), figure(true)] }),
+      false
+    );
+    assert.equal(
+      provenanceIsMixed({ label: 's', windows: [], stats: [figure(false), figure(false)] }),
+      false
+    );
+  });
+
+  it('marks by exception the moment a source carries both', () => {
+    // What a successful refresh produces: live tiles overlaid onto the
+    // recorded figures no usage API reports. Here the word earns its space.
+    assert.equal(
+      provenanceIsMixed({ label: 's', windows: [], stats: [figure(true), figure(false)] }),
+      true
+    );
+  });
+
+  it('reads stats and insights as one population', () => {
+    // A source whose tiles all went live while its insights stayed recorded
+    // is mixed, even though neither section is mixed on its own — they render
+    // in the same block and are read against each other.
+    assert.equal(
+      provenanceIsMixed({
+        label: 's',
+        windows: [],
+        stats: [figure(false)],
+        insights: [{ label: 'i', pct: 1, recorded: true }]
+      }),
+      true
+    );
+  });
+
+  it('treats an absent section and an absent flag as unrecorded', () => {
+    assert.equal(provenanceIsMixed({ label: 's', windows: [] }), false);
+    assert.equal(
+      provenanceIsMixed({ label: 's', windows: [], stats: [{ key: 'k', label: 'l', value: 1, unit: 'tokens' }] }),
+      false
+    );
   });
 });
 
@@ -367,10 +431,19 @@ describe('TokenUsagePanel live surface', () => {
     assert.match(component, /class="usage-tile-value">\{formatStatValue\(stat\.value, stat\.unit\)\}/);
   });
 
-  it('marks recorded figures instead of letting them borrow live freshness', () => {
-    assert.match(component, /\{#if stat\.recorded\}/);
-    assert.match(component, /\{#if insight\.recorded\}/);
+  it('marks provenance by exception, never once per figure', () => {
+    // The marker is still here and still says the same thing — what changed
+    // is that it is gated on the source's provenance being MIXED, so a panel
+    // whose figures all came the same way stops repeating the word about a
+    // hundred times on one screen (owner directive, issue 134).
+    assert.match(component, /\{@const mixed = provenanceIsMixed\(source\)\}/);
+    assert.match(component, /\{#if mixed && stat\.recorded\}/);
+    assert.match(component, /\{#if mixed && insight\.recorded\}/);
     assert.match(component, /class="usage-recorded"/);
+    // The ungated forms are what this replaces; either one returning is the
+    // regression, and both are cheap to name exactly.
+    assert.doesNotMatch(component, /\{#if stat\.recorded\}/);
+    assert.doesNotMatch(component, /\{#if insight\.recorded\}/);
   });
 
   it('switches the activity view client-side over one series', () => {
@@ -382,15 +455,27 @@ describe('TokenUsagePanel live surface', () => {
     assert.match(component, /min-block-size:\s*2\.75rem/);
   });
 
-  it('renders the activity heatmap through the shared grid component', () => {
+  it('renders the activity heatmap only where there is a series to draw', () => {
     assert.match(component, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
     assert.match(component, /<ContributionGrid/);
-    // A source with no series gets the graph's chrome and an honest note, not
-    // a sentence where the graph belongs (owner directive, issue 127). The
-    // note says what is true of the DATA — no series yet — and nothing about
-    // the origin's refresh configuration, which is not a visitor's business
-    // and was what the retired copy explained to them.
-    assert.match(component, /emptyNote="series pending"/);
+    // INVERTED by the owner's ruling of 2026-08-24. This used to require
+    // `emptyNote="series pending"` — a source with no series got the graph's
+    // chrome and that note. The note was true about the data and false about
+    // the future: this source publishes no daily record, so no series is
+    // pending, and the panel was reserving a graph-shaped box for something
+    // that can never arrive. It now renders no graph region at all, and keeps
+    // every figure the source genuinely reports.
+    assert.doesNotMatch(component, /emptyNote/, 'the panel asks for an empty grid again');
+    assert.doesNotMatch(component, /series pending/, 'the retired "pending" claim is back');
+    // Both halves of the guarantee: the region is gated, and the gated region
+    // is the whole graph — heading, lens toggle and grid together.
+    const region =
+      /\{#if activityColumns\.length > 0\}\s*<section class="usage-activity">([\s\S]*?)<\/section>\s*\{\/if\}/.exec(
+        component
+      );
+    assert.ok(region, 'the graph region is no longer gated on there being columns to draw');
+    assert.match(region[1], /<ContributionGrid/, 'the gate does not contain the graph');
+    assert.match(region[1], /role="radiogroup"/, 'the lens toggle is outside the gate it belongs to');
     assert.doesNotMatch(component, /live refresh is off/);
   });
 });

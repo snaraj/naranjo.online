@@ -12,17 +12,34 @@
   lenses with no extra payload; and an "Activity insights" list.
 
   Every section is optional and every absence is honest. A figure the origin
-  does not report renders as an explicit dash, a figure captured out of band
-  wears a "recorded" marker instead of borrowing the panel's freshness, and a
-  payload that fails admission renders an empty state, never invented numbers.
+  does not report renders as an explicit dash, and a payload that fails
+  admission renders an empty state, never invented numbers.
 
-  A source with no daily series renders the heatmap's CHROME and says the
-  series is pending (owner directive, issue 127). It used to render a line of
-  text instead, and that line explained the ORIGIN's refresh configuration to
-  a visitor who had asked about tokens — an operator's sentence on a reader's
-  page. The chrome is empty in the literal sense: every cell is absent,
-  valueless and undated, because the honest rendering of no data is a graph
-  with no data in it, and never a graph of zeroes.
+  Provenance is drawn by EXCEPTION rather than on every figure (owner
+  directive, issue 134). The suffix used to render on each tile and each
+  insight — around a hundred repetitions on one screen, every one of them the
+  same word — which is a label that distinguishes nothing. provenanceIsMixed
+  decides per source: figures that all share one provenance carry no marker,
+  because the envelope's status already says where the payload came from;
+  figures that DISAGREE mark the recorded ones, because those are the ones
+  that would otherwise borrow the freshness of the live figures beside them.
+  Nothing left the payload — `recorded` still rides every figure — and the
+  mixed case is exactly what a successful refresh produces.
+
+  A source with no daily series renders NO graph region at all (owner ruling,
+  2026-08-24) — not an empty one, not a dimmed one, not a placeholder one.
+  The two designs before it were both wrong in the same direction. First a
+  line of text where the graph belongs, which explained the ORIGIN's refresh
+  configuration to a visitor who had asked about tokens. Then the graph's
+  chrome under a note calling the series unarrived, which was honest about its
+  cells — every one absent, valueless and undated — and false about its
+  premise, because nothing was on its way. A source that reports no daily
+  record is not waiting for one, and space held for data that can never arrive
+  is a permanent hole rather than layout stability. So the region is gated on
+  there being columns to draw, and a seriesless source keeps every figure it
+  genuinely has — its tiles, its windows, its insights — with no graph on it.
+  (The retired wording is quoted in the tests that pin its absence, so this
+  file cannot be the place it comes back from.)
   The envelope's status rides the shell's badge, and watchPanel keeps the
   whole block current while the tab is visible.
 
@@ -37,6 +54,7 @@
     formatUtilization,
     meterFillPct,
     meterSeverity,
+    provenanceIsMixed,
     resetsIn,
     tokenUsageSources
   } from '../token-usage';
@@ -75,6 +93,14 @@
   function seriesPeak(source: TokenUsageSource): number {
     return source.series ? peakValue(seriesCells(source.series.startDate, source.series.totals)) : 0;
   }
+
+  /* The summary line's day count, read through a helper for the same reason
+     the two above are: the markup asks a source a question and gets an answer
+     for every source, so no branch in the template has to prove a series
+     exists before it may mention one. */
+  function seriesDays(source: TokenUsageSource): number {
+    return source.series ? source.series.totals.length : 0;
+  }
 </script>
 
 {#if envelope}
@@ -84,6 +110,15 @@
         <p class="usage-empty">No usage data available.</p>
       {:else}
         {#each sources as source (source.label)}
+          <!-- Provenance marks are drawn by EXCEPTION, once per source: see
+            provenanceIsMixed. A source whose figures all share one provenance
+            marks none of them. -->
+          {@const mixed = provenanceIsMixed(source)}
+          <!-- The graph's columns, read once per source through the active
+            lens. They are also what DECIDES whether this source has a graph
+            region at all, so the gate below and the graph it guards can never
+            read two different things. -->
+          {@const activityColumns = gridColumns(source)}
           <section class="usage-source">
             <header class="usage-source-head">
               <h3 class="usage-source-label">{source.label}</h3>
@@ -96,9 +131,10 @@
                   <li class="usage-tile" data-usage-tile>
                     <span class="usage-tile-value">{formatStatValue(stat.value, stat.unit)}</span>
                     <span class="usage-tile-label">
-                      {stat.label}{#if stat.recorded}<span class="usage-recorded" title="recorded out of band, not fetched live">
-                          · recorded
-                        </span>{/if}
+                      {stat.label}{#if mixed && stat.recorded}<span
+                          class="usage-recorded"
+                          title="recorded out of band, not fetched live">· recorded</span
+                        >{/if}
                     </span>
                   </li>
                 {/each}
@@ -147,41 +183,47 @@
               </ul>
             {/if}
 
-            <section class="usage-activity">
-              <header class="usage-activity-head">
-                <h4 class="usage-section-title">Token activity</h4>
-                <!-- One radio group, styled as a segmented pill: the choice is
-                  exclusive, so radios carry the right semantics for free. -->
-                <div class="usage-views" role="radiogroup" aria-label="Token activity view">
-                  {#each seriesViews as candidate}
-                    <button
-                      type="button"
-                      class="usage-view"
-                      role="radio"
-                      aria-checked={view === candidate}
-                      onclick={() => (view = candidate)}
-                    >
-                      {candidate}
-                    </button>
-                  {/each}
-                </div>
-              </header>
-              <ContributionGrid
-                columns={gridColumns(source)}
-                noun="token"
-                {view}
-                label={`${source.label} token activity, ${view} view`}
-                emptyNote="series pending"
-              />
-              {#if source.series}
+            <!-- The whole region, heading and lens toggle included, and not
+              merely the graph inside it: a "Token activity" heading over a
+              three-way toggle with nothing to toggle is the hole by another
+              name. A source with no columns to draw renders none of this and
+              reads as what it is — a source that reports figures and no daily
+              record. See the ruling in this file's opening comment. -->
+            {#if activityColumns.length > 0}
+              <section class="usage-activity">
+                <header class="usage-activity-head">
+                  <h4 class="usage-section-title">Token activity</h4>
+                  <!-- One radio group, styled as a segmented pill: the choice
+                    is exclusive, so radios carry the right semantics for
+                    free. -->
+                  <div class="usage-views" role="radiogroup" aria-label="Token activity view">
+                    {#each seriesViews as candidate}
+                      <button
+                        type="button"
+                        class="usage-view"
+                        role="radio"
+                        aria-checked={view === candidate}
+                        onclick={() => (view = candidate)}
+                      >
+                        {candidate}
+                      </button>
+                    {/each}
+                  </div>
+                </header>
+                <ContributionGrid
+                  columns={activityColumns}
+                  noun="token"
+                  {view}
+                  label={`${source.label} token activity, ${view} view`}
+                />
                 <p class="usage-activity-total">
                   {formatTokenCount(seriesTotal(source))} tokens over
-                  {source.series.totals.length}
-                  {source.series.totals.length === 1 ? 'day' : 'days'}, peaking at
+                  {seriesDays(source)}
+                  {seriesDays(source) === 1 ? 'day' : 'days'}, peaking at
                   {formatTokenCount(seriesPeak(source))}
                 </p>
-              {/if}
-            </section>
+              </section>
+            {/if}
 
             {#if source.insights && source.insights.length > 0}
               <section class="usage-insights">
@@ -190,7 +232,7 @@
                   {#each source.insights as insight (insight.label)}
                     <li class="usage-insight">
                       <span class="usage-insight-label">
-                        {insight.label}{#if insight.recorded}<span
+                        {insight.label}{#if mixed && insight.recorded}<span
                             class="usage-recorded"
                             title="recorded out of band, not fetched live">· recorded</span
                           >{/if}

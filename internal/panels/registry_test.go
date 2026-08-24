@@ -147,9 +147,7 @@ func TestTokenUsagePanelKeepsSourceLabelsAsData(t *testing.T) {
 				t.Errorf("source %q insight %q is outside 0-100", source.Label, insight.Label)
 			}
 		}
-		if source.Series != nil {
-			t.Errorf("source %q ships a snapshot activity series; the series is live-only data and must stay absent until a refresh produces one", source.Label)
-		}
+		assertShippedSeriesIsMarkedRecorded(t, source)
 		for _, window := range source.Windows {
 			if window.Period == "" {
 				t.Errorf("source %q has a window without a period", source.Label)
@@ -167,6 +165,124 @@ func TestTokenUsagePanelKeepsSourceLabelsAsData(t *testing.T) {
 	for _, label := range []string{"anthropic", "codex"} {
 		if !labels[label] {
 			t.Errorf("shipped sample lacks the %q data label", label)
+		}
+	}
+}
+
+// assertShippedSeriesIsMarkedRecorded is the NARROWED form of a pin that used
+// to refuse any snapshot-shipped daily series outright. The old rule read "the
+// series is live-only data and must stay absent until a refresh produces one",
+// and it was right about the danger and wrong about the cause. The danger is a
+// series that PASSES ITSELF OFF as live: with PANELS_REFRESH off there is no
+// refresh, so an unmarked snapshot series would render under a panel that
+// looks fresh, and no reader could tell the difference. The cause was never
+// "the bytes came from a file" — the shipped stat tiles have always come from
+// a file — it was the absence of any way to say so.
+//
+// There is a way to say so now (TokenUsageSeries.Recorded), so the pin moves
+// onto the property that still matters and keeps failing closed:
+//
+//   - a shipped series says it is a recorded capture, so it can never borrow
+//     the panel's freshness;
+//   - it is a real series — a parseable start date, at least one day, no
+//     negative day, and inside the span bound the origin itself enforces — so
+//     "recorded" cannot become a licence to ship a shape the live path would
+//     have refused.
+//
+// The other half of the old rule — that a refresh REPLACES this series rather
+// than being shadowed by it — is not a property of the shipped bytes at all
+// and could never be pinned here; it is pinned where the merge happens, by
+// TestALiveRefreshReplacesTheRecordedSeries below. Narrowing this pin without
+// that one would have been a weakening (requirement 4); together they cover
+// strictly more than the sentence they replace. Owner-authorised by issue
+// #134.
+func assertShippedSeriesIsMarkedRecorded(t *testing.T, source TokenUsageSource) {
+	t.Helper()
+	if source.Series == nil {
+		return
+	}
+	if !source.Series.Recorded {
+		t.Errorf("source %q ships an activity series that does not say it was recorded out of band; unmarked, it borrows the panel's freshness and no reader can tell it from a live one", source.Label)
+	}
+	if _, err := time.Parse(dayLayout, source.Series.StartDate); err != nil {
+		t.Errorf("source %q series startDate = %q: %v", source.Label, source.Series.StartDate, err)
+	}
+	if len(source.Series.Totals) == 0 {
+		t.Errorf("source %q ships a series with no days in it", source.Label)
+	}
+	if len(source.Series.Totals) > maxSeriesDays {
+		t.Errorf("source %q ships a %d day series, over the %d day bound the live path refuses", source.Label, len(source.Series.Totals), maxSeriesDays)
+	}
+	for day, total := range source.Series.Totals {
+		if total < 0 {
+			t.Errorf("source %q series day %d is negative", source.Label, day)
+		}
+	}
+}
+
+// TestALiveRefreshReplacesTheRecordedSeries carries the half of the old
+// live-only pin that the narrowed guard above cannot: a recorded series is a
+// FALLBACK, never a shadow. mergeUsagePayload must hand a source that fetched
+// the series the fetch produced — unmarked, because it is live — and must hand
+// a source that did NOT fetch its recorded one, still marked. Swap either and
+// the panel lies in one of the two directions that matter: a stale graph
+// surviving a successful refresh, or a live graph claiming to be a capture.
+func TestALiveRefreshReplacesTheRecordedSeries(t *testing.T) {
+	t.Parallel()
+	envelope := decodePanelEnvelope(t, New(), "token-usage")
+	var payload TokenUsageData
+	if err := decodeStrict(envelope.Data, &payload); err != nil {
+		t.Fatalf("decode token-usage payload: %v", err)
+	}
+	var recordedLabel string
+	var recorded *TokenUsageSeries
+	for _, source := range payload.Sources {
+		if source.Series != nil {
+			recordedLabel, recorded = source.Label, source.Series
+			break
+		}
+	}
+	if recorded == nil {
+		t.Fatal("no shipped source carries a recorded series; this pin has nothing to prove")
+	}
+	spec := &tokenUsageFetchSpec{Sources: make([]usageSourceSpec, 0, len(payload.Sources))}
+	for _, source := range payload.Sources {
+		spec.Sources = append(spec.Sources, usageSourceSpec{Label: source.Label})
+	}
+	// Deliberately unlike the recorded one in both fields, so "replaced" and
+	// "retained" cannot be confused for each other.
+	live := usageMapping{series: &TokenUsageSeries{StartDate: "2020-01-01", Totals: []int64{1, 2, 3}}}
+	merged, allFresh := mergeUsagePayload(spec, map[string]usageMapping{recordedLabel: live}, payload)
+	if allFresh {
+		t.Error("a partly fetched payload reported itself fully fresh")
+	}
+	for _, source := range merged.Sources {
+		if source.Label == recordedLabel {
+			if source.Series == nil || source.Series.StartDate != live.series.StartDate || len(source.Series.Totals) != len(live.series.Totals) {
+				t.Errorf("the fetched source kept %+v; a refresh must replace the recorded series, not be shadowed by it", source.Series)
+			}
+			if source.Series != nil && source.Series.Recorded {
+				t.Error("the live series claims it was recorded out of band")
+			}
+			continue
+		}
+		if source.Series != nil && !source.Series.Recorded {
+			t.Errorf("source %q serves an unmarked series without having fetched one", source.Label)
+		}
+	}
+	// And the source that DID carry a recorded series still serves it when
+	// nothing fetched at all: the fallback path is the whole reason a snapshot
+	// series exists.
+	kept, allFresh := mergeUsagePayload(spec, map[string]usageMapping{}, payload)
+	if allFresh {
+		t.Error("a payload that fetched nothing reported itself fresh")
+	}
+	for _, source := range kept.Sources {
+		if source.Label != recordedLabel {
+			continue
+		}
+		if source.Series == nil || !source.Series.Recorded || source.Series.StartDate != recorded.StartDate {
+			t.Errorf("the unfetched source lost its recorded series: %+v", source.Series)
 		}
 	}
 }

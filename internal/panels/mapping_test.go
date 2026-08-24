@@ -307,6 +307,14 @@ func TestMapUsageSumsBothGrammars(t *testing.T) {
 		report.series.Totals[0] != want[0] || report.series.Totals[1] != want[1] {
 		t.Errorf("usage-report series totals = %v, want %v", report.series.Totals, want)
 	}
+	// A MAPPED series is live by construction and must never claim otherwise.
+	// The flag is what registry_test's narrowed pin reads to tell a shipped
+	// capture from a fetched one, so a mapper that set it would make every
+	// snapshot series indistinguishable from a fresh one and quietly retire
+	// that pin (issue #134).
+	if report.series.Recorded {
+		t.Error("the live mapping marked its series as an out-of-band capture")
+	}
 
 	page, err := mapUsage(shapeUsagePage, []byte(fixtureUsagePage))
 	if err != nil {
@@ -801,8 +809,85 @@ func TestShippedActivitySnapshotAgreesWithTheCapture(t *testing.T) {
 	if len(shipped.Weeks) < 50 {
 		t.Errorf("snapshot ships %d weeks, want the full year the producer fetches", len(shipped.Weeks))
 	}
-	if len(shipped.RecentCommits) != 0 {
-		t.Errorf("snapshot ships %d commit rows; the calendar producer reports none", len(shipped.RecentCommits))
+	// The CALENDAR producer still reports no commit rows, and that is the
+	// property this clause always meant: mapContributions may not invent a
+	// commit list out of a document that carries none. It used to be asserted
+	// on the SHIPPED snapshot, which said something else — that the repository
+	// may never ship a recorded commit list at all — and that reading is what
+	// left the panel telling a reader with two hundred and fifty August
+	// commits that none were reported (issue #134).
+	if len(fromCapture.RecentCommits) != 0 {
+		t.Errorf("the calendar producer invented %d commit rows from a document that carries none", len(fromCapture.RecentCommits))
+	}
+	assertShippedCommitsAreRefreshable(t, shipped)
+}
+
+// assertShippedCommitsAreRefreshable is the replacement for the emptiness
+// clause above: a recorded commit list is admitted, but only on the terms
+// that keep it honest AND keep it replaceable.
+//
+// Complete, dated, newest-first and inside the served ceiling is the honest
+// half. The repo LABEL check is the replaceable half and the load-bearing
+// one: refreshActivity overwrites RecentCommits wholesale from the configured
+// commit sources, so a shipped row naming a repository the config does not
+// know is a row no refresh can ever replace — it would sit on the panel
+// forever, ageing, with no producer able to correct it. commitsAt is what
+// stops the list borrowing the calendar's freshness, so it must be present
+// and never older than the newest row it dates.
+func assertShippedCommitsAreRefreshable(t *testing.T, shipped VCSActivityData) {
+	t.Helper()
+	if len(shipped.RecentCommits) == 0 {
+		return
+	}
+	if len(shipped.RecentCommits) > maxServedCommits {
+		t.Errorf("snapshot ships %d commit rows, over the %d served ceiling", len(shipped.RecentCommits), maxServedCommits)
+	}
+	document, _, err := loadFetchConfig(fetchConfigBytes)
+	if err != nil {
+		t.Fatalf("load the fetch config: %v", err)
+	}
+	configured := map[string]bool{}
+	if document.VCSActivity != nil && document.VCSActivity.Commits != nil {
+		for _, source := range document.VCSActivity.Commits.Sources {
+			configured[source.Repo] = true
+		}
+	}
+	if len(configured) == 0 {
+		t.Fatal("the fetch config names no commit sources; the refreshability pin has nothing to compare against")
+	}
+	var newest, previous time.Time
+	for index, commit := range shipped.RecentCommits {
+		// Reported, never skipped: a row that bailed out here would leave the
+		// previous instant unset and the NEXT row would be accused of being
+		// out of order, which is a second failure about the first one.
+		if commit.Repo == "" || commit.Message == "" {
+			t.Errorf("snapshot commit row %d is incomplete: %+v", index, commit)
+		}
+		if commit.Repo != "" && !configured[commit.Repo] {
+			t.Errorf("snapshot commit row %d names repository %q, which no configured commit source produces; a refresh could never replace it", index, commit.Repo)
+		}
+		at, err := time.Parse(time.RFC3339, commit.At)
+		if err != nil {
+			t.Errorf("snapshot commit row %d at = %q: %v", index, commit.At, err)
+			continue
+		}
+		// Against the row IMMEDIATELY above, not against the newest seen: a
+		// list whose first row is newest but whose middle rows swap would slip
+		// past a running maximum.
+		if index > 0 && at.After(previous) {
+			t.Errorf("snapshot commit row %d is newer than the row above it; the list must read newest first", index)
+		}
+		previous = at
+		if index == 0 || at.After(newest) {
+			newest = at
+		}
+	}
+	readAt, err := time.Parse(time.RFC3339, shipped.CommitsAt)
+	if err != nil {
+		t.Fatalf("snapshot commitsAt = %q: %v; a recorded commit list that cannot date itself borrows the calendar's freshness", shipped.CommitsAt, err)
+	}
+	if readAt.Before(newest) {
+		t.Errorf("snapshot commitsAt %s predates its newest row %s", readAt.Format(time.RFC3339), newest.Format(time.RFC3339))
 	}
 }
 

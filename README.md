@@ -230,10 +230,57 @@ for an allowlisted host is refused rather than followed.
 When a producer fails, the panel keeps its last good data and says so. The
 version-control panel reports both halves separately: the envelope's
 `generatedAt` is the calendar's own fetch instant, `commitsAt` is the commit
-list's, and the envelope is `ok` only when both halves are live. A commit list
-that has never been fetched serves as an empty array with no `commitsAt` at
-all, so "nobody managed to look" can never render as "there are no recent
-commits".
+list's, and the envelope is `ok` only when both halves are live. The two halves
+are captured on their own schedules and the payload says which is which, so a
+commit list read after the calendar it sits under is described rather than
+hidden.
+
+### Refreshing the shipped snapshots
+
+With live refresh off everywhere, the embedded snapshots are what the site
+actually serves, so keeping them true is an operator task rather than a code
+one. Both steps below are read-only, run on the operator's own machine, and
+put only public or aggregate facts into the repository.
+
+**The daily token series.** `scripts/capture_usage_series.py` walks a local
+agent transcript tree — one JSON object per line, each assistant message
+carrying a `usage` object beside an ISO 8601 timestamp — and reduces it to one
+combined token total per UTC calendar day, the same quantity the live mapper
+sums out of the vendor usage API. Standard library only, no network:
+
+    scripts/capture_usage_series.py --transcripts <dir> --source <label>
+    scripts/capture_usage_series.py --transcripts <dir> --source <label> \
+        --snapshot internal/panels/snapshots/token-usage.json
+
+Without `--snapshot` it prints the series and its derived figures so a capture
+can be read before it is committed to anything. With it, the series is spliced
+into that source and the three tiles a daily series DEFINES — the peak day and
+both streaks, the same keys the live mapper computes — are recomputed from it,
+so the tiles and the graph under them cannot disagree. No other tile is
+touched: a lifetime total or a session count is a figure this step cannot
+measure, and overwriting one it cannot measure would be an invention.
+
+Requirement 12 is the whole design of that step. Transcripts contain prompts,
+responses, file names, project directories and session identifiers; the only
+values the program can emit are calendar dates and non-negative integers, a
+guard re-proves that immediately before anything is written, and diagnostics
+are counts rather than names — a file it cannot read is tallied, never
+identified. `scripts/ci/test_capture_usage_series.py` asserts that directly,
+by walking a fixture tree seeded with paths and identifiers and proving none of
+them survive into the emission.
+
+**The recent commit list.** The rows are public commits from the repositories
+`internal/panels/config/fetch.json` already names as commit sources, read the
+way the live producer reads them and written newest first, with `commitsAt`
+recording the instant they were read. Nothing beyond the public repository
+name, the subject line, and the commit instant is captured. A shipped row
+naming a repository no configured source produces would be a row no refresh
+could ever replace, and the panel's own suite refuses one.
+
+The contribution calendar half keeps its own capture instant and its own
+fixture (`internal/panels/testdata/contributions-fragment.html`); a suite pin
+cross-checks the shipped calendar against that fixture, so refreshing the
+calendar means refreshing both together.
 
 ### Enabling live refresh (not enabled anywhere today)
 

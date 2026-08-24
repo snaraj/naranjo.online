@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-23T00:00:00Z",
+  "generatedAt": "2026-08-24T05:45:41Z",
   "data": {
     "sources": [
       {
@@ -44,7 +44,7 @@
           {
             "key": "peak-day",
             "label": "Peak day",
-            "value": null,
+            "value": 1911380289,
             "unit": "tokens",
             "recorded": true
           },
@@ -72,14 +72,14 @@
           {
             "key": "current-streak",
             "label": "Current streak",
-            "value": 9,
+            "value": 7,
             "unit": "days",
             "recorded": true
           },
           {
             "key": "longest-streak",
             "label": "Longest streak",
-            "value": 9,
+            "value": 7,
             "unit": "days",
             "recorded": true
           },
@@ -91,6 +91,27 @@
             "recorded": true
           }
         ],
+        "series": {
+          "startDate": "2026-08-10",
+          "totals": [
+            38112647,
+            627742457,
+            1911380289,
+            581730054,
+            0,
+            0,
+            0,
+            0,
+            465867023,
+            238992961,
+            1869672748,
+            250280850,
+            889936705,
+            116659182,
+            343538885
+          ],
+          "recorded": true
+        },
         "insights": [
           {
             "label": "Opus 5",
