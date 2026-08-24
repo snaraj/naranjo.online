@@ -2810,7 +2810,6 @@ test('each column edge carries a handle, flush with the column and quiet until t
       seen,
       quietInk: root.getPropertyValue('--page-rail-ink').trim(),
       liveInk: root.getPropertyValue('--page-rail-ink-live').trim(),
-      border: root.getPropertyValue('--color-border').trim(),
       quietLine: root.getPropertyValue('--page-rail-line').trim(),
       liveLine: root.getPropertyValue('--page-rail-line-live').trim()
     };
@@ -2834,13 +2833,17 @@ test('each column edge carries a handle, flush with the column and quiet until t
     expect(handle.min).toBeLessThan(handle.now);
     expect(handle.now).toBeLessThan(handle.max);
     expect(handle.now, 'the reported width is not the width on screen').toBeCloseTo(column.width, 0);
-    /* Quiet at rest: the resting mark is the card border token, at the
-       hairline width. */
+    /* Quiet at rest: the idle ink token is transparent by design, so the mark
+       paints NOTHING and the hairline that used to sit on the column edge is
+       gone — only the 44px hit lane remains. The geometry is unaffected: the
+       (invisible) mark still measures the hairline width. */
+    expect(handle.markInk, `the ${handle.edge} handle paints at rest`).toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
     expect(Number.parseFloat(handle.markWidth)).toBeCloseTo(
       Number.parseFloat(measured.quietLine),
       1
     );
   }
+  expect(measured.quietInk, 'the idle rail ink token is no longer transparent').toBe('transparent');
   expect(
     new Set(measured.seen.map((handle) => handle.label)).size,
     'both handles answer to the same name'

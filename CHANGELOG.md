@@ -7,6 +7,18 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.35] - 2026-08-24
+
+### Fixed
+
+- The `ColumnHandles` resize rails no longer paint a visible hairline at
+  rest. `--page-rail-ink` (the idle mark) resolves to `transparent` instead
+  of `var(--color-border)`, so the 44px hit lane stays exactly where it was
+  but nothing draws inside it until a pointer or a focus ring arrives;
+  `--page-rail-ink-live` (the brand-ink hover/focus/drag mark) and every
+  rail geometry token are unchanged. One token, all four reading modes
+  uniformly, no theme branching (#155).
+
 ## [0.1.34] - 2026-08-24
 
 ### Added
