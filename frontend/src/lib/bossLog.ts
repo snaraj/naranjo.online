@@ -7,6 +7,7 @@
  * internal/panels/types.go: the hiscores legitimately return no figure, and
  * null is data that must survive the round trip. */
 
+import { skillSlug } from './bossIcons.ts';
 import { formatWhole } from './grid.ts';
 import type { BossLogEntry, BossLogSkill } from './panels';
 
@@ -52,10 +53,52 @@ export function skillLabel(skill: BossLogSkill): string {
   return parts.join(', ');
 }
 
-/* panelSummary is the rail's subtitle: the account name plus what the payload
- * actually contains. It counts the rows served rather than any number this
- * file knows, so an upstream that adds a skill or a boss is reported, and an
- * empty section says zero instead of quietly disappearing. */
-export function panelSummary(account: string, skills: number, bosses: number): string {
-  return `${account} · ${formatWhole(skills)} skills · ${formatWhole(bosses)} bosses`;
+/* The hiscores' first row is the account total, and it is named like a skill
+ * without being one: its "level" is the sum of every level, its xp the sum of
+ * every xp, its rank the overall rank. It is identified by the same slug rule
+ * the icon files are named by (an overall.png already ships), so this file
+ * spells the name once and matches it the way every other row is matched. */
+const overallRowSlug = 'overall';
+
+/* One cell of the skills grid that is a total rather than a skill. */
+export interface SkillSummaryCell {
+  /* Stable key for the keyed each block; never rendered. */
+  key: string;
+  /* The short label the cell shows, sized to fit the narrowest column. */
+  label: string;
+  /* The full name the accessible label and tooltip carry. */
+  name: string;
+  /* The rendered figure, through the same nullable renderers as every
+   * other cell — a total the hiscores do not report says so. */
+  value: string;
+}
+
+/* skillSummary is the answer to the grid's trailing gap. Twenty-five skills
+ * in three columns leave the last row two cells short, and two blank tiles at
+ * the end of a dense table read as missing data rather than as the end of the
+ * table. The account's own totals fill them: Total XP and overall Rank, both
+ * already in the payload's Overall row and neither shown anywhere else — the
+ * grid renders that row's LEVEL and drops its other two figures.
+ *
+ * Nothing is invented to fill a hole: a payload with no Overall row returns
+ * no cells and the gap simply comes back, which is the honest outcome and a
+ * loud one — a paired test fails the moment the row count and the cell count
+ * stop tiling the grid, so an upstream that adds a skill is a conscious edit
+ * here rather than a blank tile in production. */
+export function skillSummary(skills: BossLogSkill[]): SkillSummaryCell[] {
+  const overall = skills.find((skill) => skillSlug(skill.name) === overallRowSlug);
+  if (!overall) {
+    return [];
+  }
+  return [
+    { key: 'total-xp', label: 'XP', name: 'Total XP', value: tally(overall.xp) },
+    { key: 'overall-rank', label: 'Rank', name: 'Overall rank', value: rankLabel(overall.rank) }
+  ];
+}
+
+/* summaryLabel is the accessible text one total carries: the short visible
+ * label is what fits a 320px column, and the full name is what a reader who
+ * cannot see the grid it sits in needs. */
+export function summaryLabel(cell: SkillSummaryCell): string {
+  return `${cell.name}: ${cell.value}`;
 }

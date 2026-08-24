@@ -1,9 +1,10 @@
 // config.go loads the embedded fetch configuration and assembles the builtin
 // panel list from it. Everything vendor-specific — endpoint URLs, source
-// labels, credential env-var names, the outbound host allowlist — arrives
-// here as strictly decoded DATA from config/fetch.json; the Go source stays
-// vendor-neutral, and any config fault degrades a panel to its snapshot
-// default instead of failing construction.
+// labels, panel headings, credential env-var names, the outbound host
+// allowlist — arrives here as strictly decoded DATA from config/fetch.json;
+// the Go source stays vendor-neutral, and any config fault degrades a panel
+// to its snapshot default and its neutral title instead of failing
+// construction.
 
 package panels
 
@@ -37,6 +38,7 @@ func buildBuiltinPanels() []panelDefinition {
 	if err != nil {
 		return definitions
 	}
+	applyTitles(definitions, document.Titles)
 	for index, upgrade := range []struct {
 		fallback SnapshotSource
 		specs    panelFetchSpecs
@@ -53,6 +55,29 @@ func buildBuiltinPanels() []panelDefinition {
 		}
 	}
 	return definitions
+}
+
+// applyTitles overlays the configured display headings onto the panel list,
+// in place, keyed by panel id.
+//
+// Headings are data because a heading is display copy the OWNER chooses, and
+// what they choose may be the name of a service — which this package's source
+// may never spell, so that swapping where a panel's data comes from stays a
+// data edit and the compiled binary carries no coupling to any vendor
+// (doctrine_test's vendor pin). Identity is untouched: the id and kind are the
+// panel's stable public contract and no config entry can move them.
+//
+// Two non-choices are treated as no override, both deliberately: an id with no
+// entry, and an entry that is empty. A blank heading is a rendering defect
+// rather than a decision, so the neutral title the panel list declares stands
+// in every case config does not clearly replace it — including the case where
+// config never loaded at all, since the caller returns before reaching here.
+func applyTitles(definitions []panelDefinition, titles map[string]string) {
+	for index, definition := range definitions {
+		if title, ok := titles[definition.id]; ok && title != "" {
+			definitions[index].title = title
+		}
+	}
 }
 
 // loadFetchConfig strictly decodes the embedded fetch configuration and

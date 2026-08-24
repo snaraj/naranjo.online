@@ -559,6 +559,68 @@ func TestLoadFetchConfigFailsClosed(t *testing.T) {
 	}
 }
 
+// TestPanelHeadingsComeFromConfigData pins the heading path introduced for the
+// owner's panel rename: a display title the owner chooses may name a service,
+// and this package's source may not spell one, so the chosen string lives in
+// config data and is applied by panel id.
+//
+// The assertions deliberately name no vendor and no copy. They compare the
+// SERVED title against the CONFIGURED one, so the pin keeps holding when the
+// owner renames a panel again, and it goes red the moment the overlay stops
+// being applied — at which point the served title falls back to the neutral
+// Go literal and stops matching config.
+func TestPanelHeadingsComeFromConfigData(t *testing.T) {
+	t.Parallel()
+	document, _, err := loadFetchConfig(fetchConfigBytes)
+	if err != nil {
+		t.Fatalf("shipped config refused: %v", err)
+	}
+	if len(document.Titles) == 0 {
+		t.Fatal("the shipped config chooses no heading; this pin has nothing to protect")
+	}
+	for id, want := range document.Titles {
+		found := false
+		for _, definition := range builtinPanels {
+			if definition.id != id {
+				continue
+			}
+			found = true
+			if definition.title != want {
+				t.Errorf("panel %q serves the heading %q, want the configured %q", id, definition.title, want)
+			}
+		}
+		if !found {
+			// A heading configured for an id no panel carries is a typo that
+			// would otherwise do nothing at all, silently.
+			t.Errorf("config chooses a heading for %q, which is not a panel", id)
+		}
+	}
+	for _, definition := range builtinPanels {
+		if definition.title == "" {
+			t.Errorf("panel %q serves a blank heading", definition.id)
+		}
+	}
+	// The overlay's two non-choices, driven directly: an id nothing carries,
+	// and an entry that is empty. Both must leave the neutral title standing —
+	// a blank heading is a rendering defect, never a decision.
+	definitions := []panelDefinition{{id: "first", title: "neutral"}, {id: "second", title: "other"}}
+	applyTitles(definitions, nil)
+	applyTitles(definitions, map[string]string{"first": "", "absent": "ignored"})
+	if definitions[0].title != "neutral" || definitions[1].title != "other" {
+		t.Errorf("a blank or unmatched heading changed the panel list: %+v", definitions)
+	}
+	applyTitles(definitions, map[string]string{"first": "chosen"})
+	if definitions[0].title != "chosen" {
+		t.Errorf("the configured heading was not applied: %q", definitions[0].title)
+	}
+	if definitions[1].title != "other" {
+		t.Errorf("applying one panel's heading changed another's: %q", definitions[1].title)
+	}
+	if definitions[0].id != "first" || definitions[1].id != "second" {
+		t.Errorf("a heading override moved a panel's identity: %+v", definitions)
+	}
+}
+
 // contributionsFixture is a REAL captured contribution-calendar document,
 // reduced twice and in exactly two ways, both stated here because a fixture
 // nobody can audit is worth nothing:

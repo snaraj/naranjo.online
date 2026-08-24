@@ -488,6 +488,14 @@ type fetchConfigDocument struct {
 	InitialBackoffSeconds int `json:"initialBackoffSeconds"`
 	// MaxBackoffMinutes caps retry delay growth in minutes.
 	MaxBackoffMinutes int `json:"maxBackoffMinutes"`
+	// Titles overrides a panel's served heading by panel id. It exists
+	// because a heading is display copy the owner chooses, and the owner may
+	// choose the name of a service — which this package's source may never
+	// spell (doctrine_test's vendor pin), so that swapping where a panel's
+	// data comes from stays a data edit. An id with no entry keeps the
+	// neutral title the panel list declares, and so does every panel if this
+	// file fails to load at all.
+	Titles map[string]string `json:"titles"`
 	// BossLog configures the boss-log panel's live fetch, if any.
 	BossLog *bossLogFetchSpec `json:"bossLog"`
 	// TokenUsage configures the token-usage panel's live fetch, if any.

@@ -2,6 +2,15 @@
   calendar, the window totals and current streak, and the latest commits — all
   from the vcs-activity/v1 panel served same-origin by internal/panels.
 
+  The heading is whatever the ORIGIN calls this panel, and the owner's rename
+  (issue 127) landed there rather than here for a reason worth stating: the
+  name the owner chose is the name of a service, and neither this file nor
+  the Go package may spell one — both are pinned against it, so that swapping
+  where the data comes from is a data edit and never a code edit. The origin
+  reads the title from its own config data and serves it on the envelope; the
+  fallback below is the neutral name, used only when no envelope has arrived
+  yet.
+
   The calendar renders through ContributionGrid, the same component the token
   panel's activity heatmap uses, so the two grids cannot drift. Shaped, not
   styled, like every panel: colors and metrics read custom properties with

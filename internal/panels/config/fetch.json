@@ -5,6 +5,7 @@
   "maxBytes": 524288,
   "initialBackoffSeconds": 60,
   "maxBackoffMinutes": 15,
+  "titles": { "vcs-activity": "GitHub" },
   "bossLog": {
     "endpoint": "https://secure.runescape.com/m=hiscore_oldschool/index_lite.json?player=Roll+The+J",
     "account": "Roll The J",

@@ -104,7 +104,7 @@
   }
 </script>
 
-<!-- The wiki's toggle, minimally: a compact moon button opening a popover of
+<!-- The wiki's toggle, minimally: a compact moon icon opening a popover of
      one round swatch per choice. Each swatch's background IS its mode's page
      surface — read from that mode's own palette tokens, never a second copy
      of the values — with a split light/dark disc for auto, a sun on the light
@@ -133,7 +133,7 @@
     onclick={onTriggerClick}
     onkeydown={onTriggerKeydown}
   >
-    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
       <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" fill="currentColor" />
     </svg>
   </button>
