@@ -369,6 +369,22 @@ jobs:
             source_match=false
           fi
           expected_attestations=()
+          # These bytes were NOT built by this run: reaching this branch means
+          # an earlier publisher attempt for this same source SHA already
+          # pushed the tag, and the retry is deciding whether that artifact is
+          # exactly what it would publish. GITHUB_RUN_ID is therefore the WRONG
+          # binding here -- it would classify every recoverable retry `burned`
+          # -- so the run identity is read once, from the first platform's
+          # predicate, and then required of every platform: the two per-platform
+          # predicates can no longer name different runs, and the shell's
+          # extraction is only a candidate, since the contract re-derives the
+          # complete `<source>/actions/runs/<id>[/attempts/<n>]` form and denies
+          # anything else. The external anchor for these bytes is the cosign
+          # certificate identity checked below (this workflow on refs/heads/main)
+          # plus the exact `vcs.revision` binding inside the SIGNED predicate,
+          # which the statement-set comparison below weighs byte for byte
+          # (issue #137).
+          builder_run_id=''
           for platform in "${required_platforms[@]}"; do
             predicate="${RUNNER_TEMP}/existing-${platform//\//-}.json"
             statement="${RUNNER_TEMP}/existing-${platform//\//-}.statement.json"
@@ -378,11 +394,20 @@ jobs:
               source_match=false
               continue
             fi
+            if [ -z "${builder_run_id}" ]; then
+              if ! builder_id="$(jq -er '.runDetails.builder.id' "${predicate}")"; then
+                source_match=false
+                continue
+              fi
+              builder_run_id="${builder_id#"${source}/actions/runs/"}"
+              builder_run_id="${builder_run_id%%/*}"
+            fi
             if ! python3 -I -B scripts/ci/release_contract.py attestation-statement \
               --predicate "${predicate}" --output "${statement}" \
               --predicate-output "${modified_predicate}" \
               --image "${IMAGE}" --digest "${digest}" --source "${source}" \
-              --revision "${SOURCE_SHA}" --platform "${platform}"; then
+              --revision "${SOURCE_SHA}" --platform "${platform}" \
+              --builder-run-id "${builder_run_id}"; then
               source_match=false
               continue
             fi
@@ -508,6 +533,14 @@ jobs:
         # embeds the predicate verbatim instead of dropping anything. The
         # final decision is made only from cosign's cryptographically
         # verified output, never from an unauthenticated download count.
+        #
+        # The builder-run argument binds the SLSA builder identity to THIS
+        # run (issue #137). These bytes were produced by the buildx step two
+        # steps above, inside this very job, so GITHUB_RUN_ID is the
+        # authoritative answer and the contract compares the predicate's
+        # builder ID against it exactly -- `/actions/runs/<other>` from any
+        # other run of any workflow in this repository now denies, where the
+        # old prefix match accepted every one of them.
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
         if: steps.image_state.outputs.state == 'absent'
@@ -537,7 +570,8 @@ jobs:
               --predicate "${predicate}" --output "${statement}" \
               --predicate-output "${modified_predicate}" \
               --image "${IMAGE}" --digest "${DIGEST}" --source "${source}" \
-              --revision "${SOURCE_SHA}" --platform "${platform}"
+              --revision "${SOURCE_SHA}" --platform "${platform}" \
+              --builder-run-id "${GITHUB_RUN_ID}"
             statements+=("${statement}")
             modified_predicates+=("${modified_predicate}")
             expected_attestations+=(--expected "${platform}=${statement}")

@@ -46,6 +46,21 @@ GITHUB_ACTIONS_BOT_ID = 41898282
 INTOTO_STATEMENT_TYPE = "https://in-toto.io/Statement/v0.1"
 SLSA_PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
 DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
+# An Actions run ID is a positive decimal integer with no leading zero, sign,
+# separator, or surrounding space -- the same shape the publisher already
+# demands of its dispatched main and CodeQL run IDs
+# (`[[ "${MAIN_RUN_ID}" =~ ^[1-9][0-9]*$ ]]`).
+ACTIONS_RUN_ID_RE = re.compile(r"[1-9][0-9]*")
+# BuildKit writes the builder identity as the run URL with the ATTEMPT
+# appended: `.../actions/runs/<id>/attempts/<n>`, measured on this
+# repository's own published provenance sampled from v0.1.2 through v0.1.32,
+# every one of them `/attempts/1`. The bare run URL is accepted too, because
+# the run is the identity a caller can prove and the attempt is a sub-index
+# of that same run -- a re-run of one publisher run stays bound to it. What
+# is NOT accepted is anything else after the run: the suffix is matched by
+# pattern, never skipped over, so `/attempts/0`, `/attempts/`,
+# `/attempts/1/anything`, `/jobs/5`, or a bare trailing slash all deny.
+BUILDER_ATTEMPT_SUFFIX = r"(?:/attempts/[1-9][0-9]*)?"
 # The fail-closed value the COMMITTED chart carries. It is a syntactically
 # valid digest -- it satisfies values.schema.json and the gate's render
 # assertion -- that no registry can ever resolve, so a chart installed with it
@@ -1883,6 +1898,7 @@ def build_attestation_statement(
     source: str,
     revision: str,
     platform: str,
+    builder_run_id: str,
 ) -> dict[str, object]:
     """Bind one embedded BuildKit predicate to an exact signed release member."""
     match = DIGEST_RE.fullmatch(digest)
@@ -1893,6 +1909,10 @@ def build_attestation_statement(
         raise ContractError("attestation image or source identity is malformed")
     if not re.fullmatch(r"linux/[a-z0-9_-]+", platform):
         raise ContractError("attestation platform identity is malformed")
+    if not isinstance(builder_run_id, str) or not ACTIONS_RUN_ID_RE.fullmatch(builder_run_id):
+        raise ContractError(
+            "attestation builder run ID must be a positive decimal Actions run ID"
+        )
 
     normalized = copy.deepcopy(dict(predicate))
     build = _object(normalized.get("buildDefinition"), "SLSA buildDefinition")
@@ -1901,8 +1921,21 @@ def build_attestation_statement(
     metadata = _object(run.get("metadata"), "SLSA metadata")
     buildkit = _object(metadata.get("buildkit_metadata"), "BuildKit metadata")
     vcs = _object(buildkit.get("vcs"), "BuildKit vcs metadata")
-    if not isinstance(builder.get("id"), str) or not builder["id"].startswith(source + "/actions/runs/"):
-        raise ContractError("embedded predicate builder is not this repository's Actions run")
+    # The builder identity is bound to ONE run, not to the repository: a prefix
+    # match on `<source>/actions/runs/` is satisfied by every run of every
+    # workflow in this repository, forever, and never reads the digits that say
+    # WHICH run produced these bytes (issue #137). The comparison is anchored on
+    # both ends, so neither a different run (`/runs/124`) nor a longer run ID
+    # sharing this one's leading digits (`/runs/1234`) nor trailing junk after
+    # the attempt can satisfy it.
+    builder_id = builder.get("id")
+    if not isinstance(builder_id, str) or not re.fullmatch(
+        re.escape(f"{source}/actions/runs/{builder_run_id}") + BUILDER_ATTEMPT_SUFFIX,
+        builder_id,
+    ):
+        raise ContractError(
+            "embedded predicate builder does not name this repository's exact Actions run"
+        )
     if vcs.get("source") != source or vcs.get("revision") != revision:
         raise ContractError("embedded predicate source or revision is foreign")
 
@@ -2117,6 +2150,7 @@ def _parser() -> argparse.ArgumentParser:
     statement.add_argument("--source", required=True)
     statement.add_argument("--revision", required=True)
     statement.add_argument("--platform", required=True)
+    statement.add_argument("--builder-run-id", required=True)
     attestations = commands.add_parser("attestation-set")
     attestations.add_argument("--verified", type=Path, required=True)
     attestations.add_argument("--expected", action="append", required=True)
@@ -2312,6 +2346,7 @@ def main(argv: list[str] | None = None) -> int:
                 source=args.source,
                 revision=args.revision,
                 platform=args.platform,
+                builder_run_id=args.builder_run_id,
             )
             args.output.write_text(json.dumps(statement, sort_keys=True) + "\n", encoding="utf-8")
             # cosign's `attest --predicate` consumes ONLY the bare predicate,

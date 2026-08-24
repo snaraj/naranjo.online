@@ -208,18 +208,37 @@ jobs:
               --platform "${platform}" >/dev/null
           done
           expected_attestations=()
+          # The audit re-binds a release published by an EARLIER run, and the
+          # canonical manifest records `main_run_id` -- the PR-gate run on main,
+          # not the publisher run that built the image -- so no recorded field
+          # names the builder. The run identity is therefore read
+          # once from the first platform's predicate and required of every
+          # platform, while the contract re-derives the complete
+          # `<source>/actions/runs/<id>[/attempts/<n>]` form from that candidate
+          # and denies any other spelling. What anchors it externally is the
+          # cosign certificate identity verified below plus the exact
+          # statement-set comparison that follows it, which weighs these
+          # reconstructed statements byte for byte against the
+          # cryptographically verified ones (issue #137).
+          builder_run_id=''
           for platform in ${expected_platforms}; do
             predicate="${RUNNER_TEMP}/audit-${platform//\//-}.json"
             statement="${RUNNER_TEMP}/audit-${platform//\//-}.statement.json"
             modified_predicate="${RUNNER_TEMP}/audit-${platform//\//-}.predicate.json"
             docker buildx imagetools inspect "${IMAGE}@${image_digest}" \
               --format "{{ json (index .Provenance \"${platform}\").SLSA }}" > "${predicate}"
+            if [ -z "${builder_run_id}" ]; then
+              builder_id="$(jq -er '.runDetails.builder.id' "${predicate}")"
+              builder_run_id="${builder_id#"https://github.com/${GITHUB_REPOSITORY}/actions/runs/"}"
+              builder_run_id="${builder_run_id%%/*}"
+            fi
             python3 -I -B scripts/ci/release_contract.py attestation-statement \
               --predicate "${predicate}" --output "${statement}" \
               --predicate-output "${modified_predicate}" \
               --image "${IMAGE}" --digest "${image_digest}" \
               --source "https://github.com/${GITHUB_REPOSITORY}" \
-              --revision "${source_sha}" --platform "${platform}"
+              --revision "${source_sha}" --platform "${platform}" \
+              --builder-run-id "${builder_run_id}"
             expected_attestations+=(--expected "${platform}=${statement}")
           done
           verified="${RUNNER_TEMP}/audit-verified-attestations.json"
