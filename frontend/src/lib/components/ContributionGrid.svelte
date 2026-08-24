@@ -20,9 +20,18 @@
 
   With no series at all it renders the graph's chrome and says so, instead of
   replacing the graph with a sentence. Every placeholder cell is absent —
-  valueless, undated, drawn as a hole and marked decorative — because a panel
-  waiting for data must look like a panel waiting for data, and a fabricated
-  zero would look like a quiet day. -->
+  valueless, undated and marked decorative — because a fabricated zero would
+  look like a quiet day, and the honest rendering of no data is a graph with
+  no data in it.
+
+  How that state LOOKS is a separate decision from what it contains, and the
+  two were conflated until issue 134. The placeholders used to be drawn as
+  holes, identically to a missing day inside a real window, which made an
+  empty panel read as a graph that failed to load. They now render as one
+  flat, even field inside a framed plate, under a label set as a state rather
+  than as an apology, with the magnitude legend hidden because there is no
+  magnitude to explain — see the empty treatment in the styles below. Not one
+  datapoint moved. -->
 <script lang="ts">
   import {
     cellLabel,
@@ -110,7 +119,10 @@
   });
 </script>
 
-<div class="grid-block">
+<!-- The state is on the block rather than inferred by a selector, so the
+  empty treatment below is one attribute a reader can see in the DOM instead
+  of a rule that fires on the absence of something. -->
+<div class="grid-block" data-grid-state={columns.length > 0 ? 'series' : 'empty'}>
   <!-- The strip clips wide windows behind its own horizontal scrollbar, and a
     scrollable region is keyboard-reachable only when focusable, so the
     tabindex is deliberate. -->
@@ -282,14 +294,57 @@
   /* Centred over the chrome it describes, out of flow, so the panel's height
      is identical empty and full. It covers the whole block rather than
      claiming the strip's height for itself: a second copy of that number
-     would be a second thing to keep in step with the first. */
+     would be a second thing to keep in step with the first.
+
+     Set as a label rather than as an apology. The italic it used to wear is
+     the typography of a caveat, and a source that has no daily record is not
+     a fault the reader needs apologising to about — it is a state the panel
+     is deliberately in. Small caps with letter spacing read as a state; a
+     line of italics reads as something that went wrong. */
   .grid-empty {
     position: absolute;
     inset: 0;
     margin: 0;
     display: grid;
     place-items: center;
-    font-style: italic;
+    font-size: var(--panel-badge-size, 0.6875rem);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
     color: var(--panel-muted, rgb(158, 158, 158));
+  }
+
+  /* The empty treatment, and the reason it is a treatment at all: with no
+     series the strip used to be three hundred and seventy-one outlined
+     squares — every one of them the rendering a MISSING DAY inside a real
+     window gets — which reads as a graph that failed to load rather than as a
+     panel with nothing to plot (owner directive, issue 134).
+
+     Nothing about the information changes: the cells stay absent, valueless,
+     undated and hidden from assistive technology, so the block still contains
+     exactly as many datapoints as the source has reported, which is none. What
+     changes is that they stop impersonating holes. A flat, even, near-invisible
+     field inside a framed plate is a reserved space; a field of outlines is a
+     grid missing its data. Neutral greys on purpose, so the treatment holds in
+     every reading mode without the token layer having to know about it.
+
+     The legend goes with them. A less-to-more ramp explains a magnitude
+     encoding, and there is no magnitude here to encode — but it keeps its box
+     rather than being removed, because the panel's height must not depend on
+     whether its series has arrived. */
+  .grid-block[data-grid-state='empty'] .grid-cell[data-grid-pending] {
+    background: var(--grid-cell-empty, rgba(128, 128, 128, 0.1));
+    box-shadow: none;
+  }
+
+  /* An inset shadow, never a border: a border would grow the strip's box by
+     two pixels and the empty panel would stop being exactly as tall as the
+     full one. */
+  .grid-block[data-grid-state='empty'] .grid-strip {
+    box-shadow: inset 0 0 0 1px var(--grid-empty-frame, rgba(128, 128, 128, 0.2));
+    border-radius: var(--grid-empty-radius, 6px);
+  }
+
+  .grid-block[data-grid-state='empty'] .grid-legend {
+    visibility: hidden;
   }
 </style>

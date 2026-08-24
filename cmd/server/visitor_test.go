@@ -433,6 +433,11 @@ type visitorTokenUsageStat struct {
 type visitorTokenUsageSeries struct {
 	StartDate string  `json:"startDate"`
 	Totals    []int64 `json:"totals"`
+	// Recorded is the series' own provenance flag, carrying exactly what it
+	// carries on a stat tile: this series was captured out of band rather than
+	// fetched, and says so instead of borrowing the panel's freshness. Live
+	// mapping never sets it.
+	Recorded bool `json:"recorded"`
 }
 
 type visitorTokenUsageInsight struct {
@@ -524,8 +529,26 @@ func TestVisitorChecksTokenUsage(t *testing.T) {
 			// snapshot carries the figures that were actually recorded and
 			// leaves the rest empty rather than inventing numbers. What a
 			// present section must satisfy is pinned below.
+			// A shipped series is admitted now (issue #134) — the local
+			// transcript record is a real measurement — on the one condition
+			// that made the old blanket refusal look right: it must SAY it was
+			// recorded out of band. Unmarked, a reader could not tell it from
+			// a live one on a boot that has no live path at all.
 			if source.Series != nil {
-				t.Errorf("source %q ships a snapshot activity series; the series is live-only data", source.Label)
+				if !source.Series.Recorded {
+					t.Errorf("source %q ships an activity series that does not declare itself recorded; on this boot nothing is live and an unmarked series is indistinguishable from one", source.Label)
+				}
+				if len(source.Series.Totals) == 0 {
+					t.Errorf("source %q ships a series with no days in it", source.Label)
+				}
+				if _, err := time.Parse("2006-01-02", source.Series.StartDate); err != nil {
+					t.Errorf("source %q series startDate = %q: %v", source.Label, source.Series.StartDate, err)
+				}
+				for day, total := range source.Series.Totals {
+					if total < 0 {
+						t.Errorf("source %q series day %d is negative", source.Label, day)
+					}
+				}
 			}
 			for _, stat := range source.Stats {
 				if stat.Key == "" || stat.Label == "" || stat.Unit == "" {
@@ -574,6 +597,11 @@ type visitorActivityPayload struct {
 	// genuine quiet days.
 	EndDate       string                  `json:"endDate"`
 	RecentCommits []visitorActivityCommit `json:"recentCommits"`
+	// CommitsAt is the commit list's OWN instant. The two halves of this
+	// payload are read on different budgets, so a list that borrowed the
+	// calendar's generatedAt could claim to have been read before the commits
+	// in it happened.
+	CommitsAt string `json:"commitsAt"`
 }
 
 type visitorActivityCommit struct {
@@ -662,14 +690,30 @@ func TestVisitorSeesTheActivityStrip(t *testing.T) {
 				}
 			}
 		}
-		// The contribution calendar carries no commit rows, so an empty list
-		// is the honest state; rows that DO appear must be complete and dated.
+		// The contribution calendar carries no commit rows of its own, so the
+		// list is either empty or a separately captured one; rows that DO
+		// appear must be complete, dated, and dated BY the list's own instant
+		// rather than by the calendar's, which is what commitsAt is for.
+		var newest time.Time
 		for i, commit := range payload.RecentCommits {
 			if commit.Repo == "" || commit.Message == "" {
 				t.Errorf("commit %d incomplete: %+v", i, commit)
 			}
-			if _, err := time.Parse(time.RFC3339, commit.At); err != nil {
+			at, err := time.Parse(time.RFC3339, commit.At)
+			if err != nil {
 				t.Errorf("commit %d at = %q: %v", i, commit.At, err)
+				continue
+			}
+			if at.After(newest) {
+				newest = at
+			}
+		}
+		if len(payload.RecentCommits) > 0 {
+			readAt, err := time.Parse(time.RFC3339, payload.CommitsAt)
+			if err != nil {
+				t.Errorf("commitsAt = %q: %v; a commit list that cannot date itself borrows the calendar's instant", payload.CommitsAt, err)
+			} else if readAt.Before(newest) {
+				t.Errorf("commitsAt %s predates the newest row it carries, %s", readAt.Format(time.RFC3339), newest.Format(time.RFC3339))
 			}
 		}
 	})

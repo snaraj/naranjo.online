@@ -12,9 +12,19 @@
   lenses with no extra payload; and an "Activity insights" list.
 
   Every section is optional and every absence is honest. A figure the origin
-  does not report renders as an explicit dash, a figure captured out of band
-  wears a "recorded" marker instead of borrowing the panel's freshness, and a
-  payload that fails admission renders an empty state, never invented numbers.
+  does not report renders as an explicit dash, and a payload that fails
+  admission renders an empty state, never invented numbers.
+
+  Provenance is drawn by EXCEPTION rather than on every figure (owner
+  directive, issue 134). The suffix used to render on each tile and each
+  insight — around a hundred repetitions on one screen, every one of them the
+  same word — which is a label that distinguishes nothing. provenanceIsMixed
+  decides per source: figures that all share one provenance carry no marker,
+  because the envelope's status already says where the payload came from;
+  figures that DISAGREE mark the recorded ones, because those are the ones
+  that would otherwise borrow the freshness of the live figures beside them.
+  Nothing left the payload — `recorded` still rides every figure — and the
+  mixed case is exactly what a successful refresh produces.
 
   A source with no daily series renders the heatmap's CHROME and says the
   series is pending (owner directive, issue 127). It used to render a line of
@@ -37,6 +47,7 @@
     formatUtilization,
     meterFillPct,
     meterSeverity,
+    provenanceIsMixed,
     resetsIn,
     tokenUsageSources
   } from '../token-usage';
@@ -84,6 +95,10 @@
         <p class="usage-empty">No usage data available.</p>
       {:else}
         {#each sources as source (source.label)}
+          <!-- Provenance marks are drawn by EXCEPTION, once per source: see
+            provenanceIsMixed. A source whose figures all share one provenance
+            marks none of them. -->
+          {@const mixed = provenanceIsMixed(source)}
           <section class="usage-source">
             <header class="usage-source-head">
               <h3 class="usage-source-label">{source.label}</h3>
@@ -96,9 +111,10 @@
                   <li class="usage-tile" data-usage-tile>
                     <span class="usage-tile-value">{formatStatValue(stat.value, stat.unit)}</span>
                     <span class="usage-tile-label">
-                      {stat.label}{#if stat.recorded}<span class="usage-recorded" title="recorded out of band, not fetched live">
-                          · recorded
-                        </span>{/if}
+                      {stat.label}{#if mixed && stat.recorded}<span
+                          class="usage-recorded"
+                          title="recorded out of band, not fetched live">· recorded</span
+                        >{/if}
                     </span>
                   </li>
                 {/each}
@@ -190,7 +206,7 @@
                   {#each source.insights as insight (insight.label)}
                     <li class="usage-insight">
                       <span class="usage-insight-label">
-                        {insight.label}{#if insight.recorded}<span
+                        {insight.label}{#if mixed && insight.recorded}<span
                             class="usage-recorded"
                             title="recorded out of band, not fetched live">· recorded</span
                           >{/if}

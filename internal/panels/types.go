@@ -195,6 +195,18 @@ type TokenUsageSeries struct {
 	StartDate string `json:"startDate"`
 	// Totals holds one combined input-plus-output token count per day.
 	Totals []int64 `json:"totals"`
+	// Recorded carries the same provenance meaning it carries on a stat tile:
+	// this series came from a dated out-of-band capture rather than the live
+	// feed, and says so instead of borrowing a freshness it does not have.
+	// The live mapping never sets it, so the flag is also the mechanical
+	// difference between a shipped series and a fetched one — which is the
+	// property registry_test's narrowed pin now guards.
+	//
+	// Additive, exactly like Account, Stats, Series and Insights before it: a
+	// payload written before this field existed still decodes and still
+	// renders, so the kind stays token-usage/v1. Minting a new kind version is
+	// for a BREAKING reshape, and an optional flag is not one.
+	Recorded bool `json:"recorded,omitempty"`
 }
 
 // TokenUsageInsight is one labeled proportion under the activity grid.

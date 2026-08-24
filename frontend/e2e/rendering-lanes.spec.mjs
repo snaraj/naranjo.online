@@ -120,34 +120,54 @@ test('wide panel content scrolls inside its own container', async ({ page }) => 
   await page.setViewportSize({ width: phoneWidths[0], height: 720 });
   await settled(page);
   /* The floor is not "nothing is ever too wide" — a year of contributions
-     genuinely is. It is that anything too wide scrolls in ITS OWN box. So
-     every element wider than the viewport must sit inside an ancestor that
-     scrolls, and the page must not be that ancestor (asserted above). */
+     genuinely is. It is that anything too wide is HELD by its own box, and
+     that the page is never the box that holds it (asserted above).
+
+     Held has two forms, and the lane originally knew only one. A year of
+     contribution columns is held by SCROLLING: the content stays reachable
+     and the strip takes the sideways movement. A commit subject on a 320px
+     phone is held by CLIPPING: `overflow: hidden` with `text-overflow:
+     ellipsis`, the full text on the title attribute — and its scrollWidth
+     still reports the untruncated line, so it measures as wide even though
+     nothing of it is anywhere to be seen. Counting that as an escape was
+     wrong twice over: a clipped box cannot make the document scroll (which
+     is the floor, proven independently in the test above), and the panel is
+     deliberately truncating rather than accidentally overflowing.
+
+     So both are containment, and both buckets are asserted: nothing escapes,
+     and something is still held by scrolling — which keeps the SCROLL half of
+     the floor from quietly becoming a page of clipped boxes. */
   const wide = await page.evaluate(() => {
-    const scrolls = (node) => {
-      const overflow = getComputedStyle(node).overflowX;
-      return overflow === 'auto' || overflow === 'scroll';
-    };
-    const contained = [];
+    const overflowOf = (node) => getComputedStyle(node).overflowX;
+    const scrolls = (node) => ['auto', 'scroll'].includes(overflowOf(node));
+    const clips = (node) => ['hidden', 'clip'].includes(overflowOf(node));
+    const scrolled = [];
+    const clipped = [];
     const escaping = [];
     for (const node of window.document.querySelectorAll('body *')) {
       if (node.scrollWidth <= window.document.documentElement.clientWidth) continue;
       const name = `${node.tagName.toLowerCase()}.${node.className}`;
-      let held = false;
+      let held = null;
       for (let parent = node; parent instanceof HTMLElement; parent = parent.parentElement) {
-        if (scrolls(parent)) held = true;
+        if (scrolls(parent)) held = 'scrolled';
+        else if (clips(parent) && held === null) held = 'clipped';
       }
-      (held ? contained : escaping).push(name);
+      if (held === 'scrolled') scrolled.push(name);
+      else if (held === 'clipped') clipped.push(name);
+      else escaping.push(name);
     }
-    return { contained, escaping };
+    return { scrolled, clipped, escaping };
   });
-  expect(wide.escaping, 'content wider than the phone with no scrolling ancestor').toEqual([]);
+  expect(
+    wide.escaping,
+    'content wider than the phone that neither scrolls nor is clipped by an ancestor'
+  ).toEqual([]);
   /* And the check is not vacuous: this page really does render content wider
      than a 320px phone — the contribution grids — so a run that finds none has
      stopped rendering the thing the floor is about. */
   expect(
-    wide.contained.length,
-    'nothing on the page is wider than the narrowest phone any more; this lane no longer proves containment'
+    wide.scrolled.length,
+    'nothing on the page is held by a scrolling box any more; this lane no longer proves scroll containment'
   ).toBeGreaterThan(0);
 });
 
@@ -446,11 +466,20 @@ test('every strip opens on its newest data and scrolls back for history', async 
     }))
   );
   expect(strips.length, 'the page renders no heatmaps; this lane proves nothing').toBeGreaterThan(0);
-  for (const strip of strips) {
-    /* Non-vacuity first: a strip with nothing to scroll cannot demonstrate
-       WHERE it opens, and at this width every one of them has a year of
-       columns in a phone-wide box. */
-    expect(strip.max, `"${strip.label}" has nothing to scroll at 390px`).toBeGreaterThan(0);
+  /* Non-vacuity, moved off the individual strip and onto the page. A strip
+     with nothing to scroll cannot demonstrate WHERE it opens — but "nothing
+     to scroll" stopped meaning "the panel is broken" the day a source shipped
+     a series SHORTER than its own box: two weeks of daily totals is a real
+     recorded window that simply fits, and demanding it overflow would be
+     demanding the panel pad it with days it never measured. So a short strip
+     is skipped, and the lane still insists that at least one strip on the
+     page has history to scroll back through. */
+  const anchorable = strips.filter((strip) => strip.max > 0);
+  expect(
+    anchorable.length,
+    'every heatmap fits its box at 390px, so none of them can show where it opens'
+  ).toBeGreaterThan(0);
+  for (const strip of anchorable) {
     expect(
       strip.scrollLeft,
       `"${strip.label}" opens ${strip.max - strip.scrollLeft}px short of its newest column`

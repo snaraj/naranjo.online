@@ -483,6 +483,53 @@
     ],
     "endDate": "2026-08-20",
     "streak": 1,
-    "recentCommits": []
+    "recentCommits": [
+      {
+        "repo": "naranjo.online",
+        "message": "release(0.1.31): the experience batch, delivered linear (supersedes #131) (#132)",
+        "at": "2026-08-24T04:58:24Z"
+      },
+      {
+        "repo": "lidersea.com",
+        "message": "ci(rendering-lanes): stage-2 three-engine browser smoke + 0.1.28 (supersedes #106) (#108)",
+        "at": "2026-08-24T04:48:29Z"
+      },
+      {
+        "repo": "website-infrastructure",
+        "message": "conventions: add lane-crossing declaration field to PR template (#94) (#207)",
+        "at": "2026-08-24T04:37:41Z"
+      },
+      {
+        "repo": "lidersea.com",
+        "message": "ci(test): classify-step isolation hardening + 0.1.27 (supersedes #105) (#107)",
+        "at": "2026-08-24T04:24:08Z"
+      },
+      {
+        "repo": "lidersea.com",
+        "message": "docs: correct review identity, package layout, and the retired ruleset (#104)",
+        "at": "2026-08-24T03:58:11Z"
+      },
+      {
+        "repo": "website-infrastructure",
+        "message": "security(flux-rbac): repair anonymous release proof - Codex 5.6 Sol Ultra (#206)",
+        "at": "2026-08-23T21:15:44Z"
+      },
+      {
+        "repo": "website-infrastructure",
+        "message": "security(flux-rbac): add release-bound convergence transaction - Codex 5.6 Sol Ultra (#205)",
+        "at": "2026-08-23T09:18:30Z"
+      },
+      {
+        "repo": "naranjo.online",
+        "message": "feat(panels): the token-usage detail the source tools report (#124)",
+        "at": "2026-08-22T22:58:33Z"
+      },
+      {
+        "repo": "naranjo.online",
+        "message": "The page becomes one centered tracker stack, and its controls stop drifting; release 0.1.29 (#119)",
+        "at": "2026-08-22T22:33:59Z"
+      }
+    ],
+    "commitsAt": "2026-08-24T05:46:03Z"
   }
 }

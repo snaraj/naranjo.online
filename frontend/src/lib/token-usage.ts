@@ -182,6 +182,33 @@ export function formatStatValue(value: number | null, unit: TokenStatUnit): stri
   return formatTokenCount(value);
 }
 
+/* provenanceIsMixed decides whether a source needs per-figure provenance
+ * marks at all, and it is the whole of the answer to a real reading problem:
+ * every tile and every insight carried a "recorded" suffix, which came to
+ * about a hundred repetitions on one screen, all of them saying the same
+ * thing. The owner's instruction was blunt — obviously it is, remove it.
+ *
+ * What the marker is FOR is distinguishing figures, and a label that appears
+ * on every figure distinguishes none of them. So the rule becomes: mark by
+ * exception. A source whose figures all share one provenance says nothing per
+ * figure, because there is nothing to tell apart — the panel's own status
+ * already carries where the payload came from. A source whose figures DISAGREE
+ * marks the recorded ones, because those are the figures that would otherwise
+ * borrow the freshness of the live ones beside them, which is exactly the
+ * borrowing the panel doctrine forbids.
+ *
+ * That mixed state is not hypothetical: it is what mergeUsagePayload produces
+ * the moment a refresh succeeds, overlaying live tiles onto the recorded ones
+ * a usage API cannot report. The marker appears precisely when it earns its
+ * space, and the provenance data itself is untouched in the payload. */
+export function provenanceIsMixed(source: TokenUsageSource): boolean {
+  const figures: Array<{ recorded?: boolean }> = [...(source.stats ?? []), ...(source.insights ?? [])];
+  return (
+    figures.some((figure) => figure.recorded === true) &&
+    figures.some((figure) => figure.recorded !== true)
+  );
+}
+
 /* tokenUsageSources is the component's admission gate, mirroring the strict
  * decode doctrine the origin applies before serving: only the exact
  * token-usage/v1 payload shape is rendered, and any malformed corner — a
