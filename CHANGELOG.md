@@ -7,6 +7,134 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.34] - 2026-08-24
+
+### Added
+
+- A second record shape for the local usage capture, and with it a real daily
+  series for the second token-usage source — the first honest answer to the
+  hurdle recorded in #139. `scripts/capture_usage_series.py` gains
+  `--format running-totals`: a shape whose records carry a session's RUNNING
+  cumulative total rather than one message's own usage. The running figure
+  repeats on every event, so a record's contribution is how far that total
+  advanced since the record before it, attributed to the record's own UTC day.
+  Measured over a frozen copy of the owner's tree — the same read that
+  produced the shipped bytes, because the live journal grows while it is being
+  measured: 313 journals, 26,663 accounting records, of which 900 are repeats
+  that bill nothing and 11 are mid-file restarts. Summing the per-turn deltas
+  beside the running total overstates the 2,957,327,402 token truth by
+  97,637,009 (+3.3%); taking one final total per journal understates it by
+  251,254,408 (-8.5%), because every restart discards the session's first
+  half. The advance walk is exact.
+- An import-surface pin on the capture module (owner ruling 2 of #142), in the
+  style of the panels' zero-egress doctrine test: the parsed module's imports
+  must equal a closed allowlist, and `os` is refused alongside `subprocess`,
+  `socket` and `urllib` — `os.system`, `os.popen` and `os.exec*` would reach
+  straight past a promise — so the capture is structurally incapable of
+  spawning a session or opening a socket. The walk moved from `os.walk` to
+  `pathlib` to make that possible.
+- Rendering lanes for the strip's look, its responsiveness across the whole
+  range of the page-column token, and the escaping of payload strings, plus a
+  layout-shift ledger attributed to the panel that owns it.
+- One hover-detail primitive for the OSRS panel, and both grids render it.
+  A fine pointer gets a detail anchored to the CURSOR — rAF-throttled to one
+  placement per frame, viewport-clamped and edge-flipped so no position can
+  drag the document sideways — while a finger or the keyboard, which have no
+  cursor, get it centred over the tile with a tap to toggle; the split is a
+  capability question (`matchMedia` plus the event's own `pointerType`),
+  never a user-agent string. The skill tiles' bare `title=` tooltips are
+  gone, replaced by the same primitive the boss tiles use, and every visual
+  dimension of the detail reads a `--tip-*` token derived from the panel's
+  own, so a reading mode restyles it for free.
+- The reader drags the feed column to the width that reads best. Two mirrored
+  44px grab lanes sit just outside the column's edges; Pointer Events with
+  capture survive the pointer leaving the lane, moves are rAF-throttled with
+  bounds measured once at the grab, and the keyboard drives the WAI-ARIA
+  Window Splitter pattern (focusable `role="separator"`, arrows, Home/End,
+  double-click reset). No width can break the page: the browser clamps the
+  column against its bound tokens AND the available space, the script clamps
+  against the same tokens before a byte reaches a declaration, and the stored
+  preference is hostile input by doctrine — a strict bare-decimal grammar,
+  a finite check, then the clamp, so no string from storage ever becomes CSS.
+  Bounds are 18rem (exactly the 320px phone's column) to 100rem; the handles
+  render only where there is room for them, and no stored width is in force
+  on a phone at all.
+
+### Changed
+
+- The contribution strip is sized to the columns it draws instead of to a
+  fixed year. At 1280px the two token graphs go from a 938px box holding 36px
+  of cells to a 127px box; the version-control calendar keeps every one of its
+  53 columns and its 686px. The floor is ten columns, which is the first count
+  whose box carries the less/more key printed under it (123.38px, identical in
+  all three engines). The box is a maximum rather than a width, so a narrow
+  screen still shrinks it and the strip still scrolls inside itself.
+- Both shipped series refreshed from today's capture. The three tiles a daily
+  series defines are recomputed from it and every other recorded figure is
+  left as its own capture left it.
+- The reading-mode swatches are redrawn in the chrome-icon grammar. The
+  filled 44px disc, its rim and the chosen ring are gone: a swatch is a bare
+  44px hit area around an 18px line glyph at the header icons' own stroke,
+  translucent at rest and at full presence when pointed at, focused or
+  chosen, with the palette moved INSIDE the glyph and selection marked by an
+  underline bar as well as presence. Two new tokens
+  (`--chrome-icon-glyph-size`, `--chrome-icon-stroke`) state what the two
+  families share and the swatch tokens derive from them, so they cannot
+  drift apart; the sepia `color-mix()` is retired with the disc it existed
+  to dim.
+- Five Dependabot updates land as one superseding batch (#143–#147): svelte
+  5.56.9→5.56.10, vite 8.2.1→8.2.2, the github/codeql-action init+analyze
+  group 4.37.7→4.37.8, actions/upload-artifact 4.6.2→7.0.1 (major; the one
+  call site keeps its zipped-artifact behavior — `archive` defaults to true
+  and is untouched), and docker/setup-buildx-action 4.2.0→4.3.0. Every
+  target SHA was verified against its upstream tag or commit, and the
+  remaining singletons were confirmed genuine singletons rather than a
+  version-locked pair Dependabot split. The release-contract suite's
+  hardcoded audit binding for setup-buildx-action follows the bump — its
+  v4.2.0 expectation predates this branch and fails the Python battery
+  against the bumped workflows on its own.
+- AGENTS.md's "Shared machines contend" bullet now records the port rule the
+  wave measured: browser-lane runs on a shared machine set `SITE_PORT` to a
+  private port, because `frontend/playwright.config.mjs` defaults to 8080
+  with `reuseExistingServer` outside CI, and cross-lane servers twice
+  answered another lane's probes.
+
+### Fixed
+
+- The reserve held for the version-control calendar and the calendar that
+  lands in it are now pinned to each other from both sides — `pendingWeeks` in
+  `frontend/src/lib/grid.ts` and the shipped payload in
+  `internal/panels/registry_test.go`, each naming the other. A sized box makes
+  that equality load-bearing: were the two to drift, the calendar would change
+  width on arrival. Measured across a real arrival: 0 layout shift attributed
+  to the panel.
+- The lane proving a seriesless source renders no graph no longer depends on
+  the owner's records happening to be missing one. It stages the absence from
+  the origin's own envelope, so it went on proving the rule the day a real
+  series arrived for the second source instead of failing its own non-vacuity
+  check.
+- The boss detail no longer opens a full row away from the cursor that asked
+  for it: the per-cell anchoring is deleted with its containment job kept —
+  the detail is `position: fixed`, so it sits outside the document's
+  scrollable overflow by construction and viewport clamping contains it at
+  every edge instead of only the inline ones.
+
+### Security
+
+- The release contract's SLSA builder-identity check is anchored to the
+  authoritative run instead of a prefix every run of every workflow satisfies.
+  `build_attestation_statement` takes a required `builder_run_id`, itself
+  validated as a positive decimal Actions run ID so no composite can be
+  escaped into the expected string; the prefix test becomes an anchored
+  `re.fullmatch` against `<source>/actions/runs/<run id>` with an optional
+  `/attempts/<n>`; the CLI gains a required `--builder-run-id`;
+  `release-publisher.yml` binds a freshly built image to `GITHUB_RUN_ID`
+  while the reused-image path and `release-audit.yml` re-derive the run
+  identity from the first platform's predicate and require it of every
+  platform. Probed in both directions against the published v0.1.32
+  provenance: the true run ID passes, a different run, the PR-gate run, a
+  composite, and an empty ID all deny.
+
 ## [0.1.33] - 2026-08-24
 
 ### Added
