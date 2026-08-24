@@ -16,6 +16,7 @@ test go red before it can make a commit go public.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
@@ -54,6 +55,64 @@ def transcript_line(**overrides):
     }
     record.update(overrides)
     return json.dumps(record)
+
+
+def running_line(running, stamp="2026-08-23T12:00:00.000Z", last=None, **overrides):
+    """One realistic running-totals record, equally full of things to leak.
+
+    `running` is the session's cumulative figure at this point; `last` is the
+    turn's own delta, which the reader must NEVER sum — it is carried here
+    precisely so a test can prove that summing it is what the reader refuses
+    to do.
+    """
+    record = {
+        "timestamp": stamp,
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": {
+                "total_token_usage": {
+                    "input_tokens": running,
+                    "cached_input_tokens": running,
+                    "cache_write_input_tokens": running,
+                    "output_tokens": 0,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": running,
+                },
+                "last_token_usage": {
+                    "input_tokens": running if last is None else last,
+                    "cached_input_tokens": 0,
+                    "cache_write_input_tokens": 0,
+                    "output_tokens": 0,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": running if last is None else last,
+                },
+                "model_context_window": 258400,
+            },
+        },
+    }
+    record.update(overrides)
+    return json.dumps(record)
+
+
+def session_meta_line():
+    """The header record a session journal opens with, and its whole leak set."""
+    return json.dumps(
+        {
+            "timestamp": "2026-08-23T11:59:00.000Z",
+            "type": "session_meta",
+            "payload": {
+                "session_id": "99999999-8888-7777-6666-555555555555",
+                "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "cwd": "/home/someone/work/a-private-project",
+                "git": {"branch": "someone/secret-feature"},
+                "originator": "a-private-tool",
+                "base_instructions": {
+                    "text": "a sentence nobody outside this machine may read"
+                },
+            },
+        }
+    )
 
 
 class UsageTotalTest(unittest.TestCase):
@@ -134,6 +193,341 @@ class ReduceLineTest(unittest.TestCase):
         ):
             with self.subTest(line=line[:24]):
                 self.assertIsNone(self.reduce(line))
+
+
+class RunningTotalTest(unittest.TestCase):
+    def test_reads_the_whole_and_never_re_sums_the_parts(self):
+        # The cache and reasoning fields are SUBSETS of input and output in
+        # this record shape, so a reader that added them up would count the
+        # same tokens two and three times. The fixture makes that visible:
+        # every subset field equals the whole.
+        self.assertEqual(
+            capture_usage_series.running_total(
+                {
+                    "input_tokens": 90,
+                    "cached_input_tokens": 90,
+                    "cache_write_input_tokens": 90,
+                    "output_tokens": 10,
+                    "reasoning_output_tokens": 10,
+                    "total_tokens": 100,
+                }
+            ),
+            100,
+        )
+
+    def test_a_missing_or_unusable_total_advances_nothing(self):
+        for usage in ({}, {"total_tokens": "many"}, {"total_tokens": 1.5}, {"total_tokens": -4}):
+            with self.subTest(usage=usage):
+                self.assertEqual(capture_usage_series.running_total(usage), 0)
+
+    def test_a_boolean_is_not_a_token(self):
+        self.assertEqual(capture_usage_series.running_total({"total_tokens": True}), 0)
+
+
+class ReduceRunningLineTest(unittest.TestCase):
+    def reduce(self, line):
+        return capture_usage_series.reduce_running_line(line)
+
+    def test_reduces_a_record_to_a_day_and_its_running_total(self):
+        self.assertEqual(self.reduce(running_line(500)), ("2026-08-23", 500))
+
+    def test_the_day_comes_from_the_record_and_never_from_the_clock(self):
+        # A session started before midnight local time is journalled under
+        # the day it STARTED, while its records happen after midnight UTC.
+        # Reading the day off anything but the record's own instant would put
+        # a whole evening's work on the wrong cell.
+        self.assertEqual(
+            self.reduce(running_line(500, stamp="2026-08-24T03:51:18.443Z")),
+            ("2026-08-24", 500),
+        )
+
+    def test_skips_everything_that_is_not_a_running_total_record(self):
+        for line in (
+            "",
+            "   ",
+            "{not json",
+            "[1, 2, 3]",
+            session_meta_line(),
+            json.dumps({"timestamp": "2026-08-23T12:00:00Z"}),
+            json.dumps({"timestamp": "2026-08-23T12:00:00Z", "payload": "token_count"}),
+            json.dumps({"timestamp": "2026-08-23T12:00:00Z", "payload": {"info": "lots"}}),
+            json.dumps({"timestamp": "2026-08-23T12:00:00Z", "payload": {"info": {}}}),
+            json.dumps({"payload": {"info": {"total_token_usage": {"total_tokens": 1}}}}),
+            json.dumps(
+                {
+                    "timestamp": 17,
+                    "payload": {"info": {"total_token_usage": {"total_tokens": 1}}},
+                }
+            ),
+            json.dumps(
+                {
+                    "timestamp": "yesterday",
+                    "payload": {"info": {"total_token_usage": {"total_tokens": 1}}},
+                }
+            ),
+        ):
+            with self.subTest(line=line[:40]):
+                self.assertIsNone(self.reduce(line))
+
+
+class RunningTotalsWalkTest(unittest.TestCase):
+    """The replay trap, proven on a fixture that inflates under naive summing."""
+
+    def walk(self, files):
+        counters = capture_usage_series.new_counters()
+        with tempfile.TemporaryDirectory() as root:
+            for name, lines in files.items():
+                path = pathlib.Path(root) / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            pairs = list(capture_usage_series.read_running_totals(root, counters))
+        return pairs, counters
+
+    def test_a_repeated_accounting_bills_nothing(self):
+        # 100, then 300, then THE SAME 300 emitted a second time for one
+        # turn, then 600. The truth is 600 tokens. Summing the per-turn
+        # deltas beside them gives 100+200+200+300 = 800; summing the running
+        # totals themselves gives 1300. Both are the failure this walk is
+        # built to refuse, and both are larger than the truth.
+        pairs, counters = self.walk(
+            {
+                "day/session.jsonl": [
+                    running_line(100, last=100),
+                    running_line(300, last=200),
+                    running_line(300, last=200),
+                    running_line(600, last=300),
+                ]
+            }
+        )
+        self.assertEqual(sum(total for _day, total in pairs), 600)
+        self.assertEqual(counters["duplicates"], 1)
+        self.assertEqual(counters["restarts"], 0)
+
+    def test_a_restarted_accounting_keeps_everything_before_it(self):
+        # A session that resets its own running total mid-file. The record
+        # shows the restarting value IS that turn's own usage, so the truth
+        # is 300 + 120 = 420. Taking one final total per file would report
+        # 120 and lose the whole first half of the session.
+        pairs, counters = self.walk(
+            {
+                "day/session.jsonl": [
+                    running_line(100),
+                    running_line(300),
+                    running_line(50),
+                    running_line(120),
+                ]
+            }
+        )
+        self.assertEqual(sum(total for _day, total in pairs), 420)
+        self.assertEqual(counters["restarts"], 1)
+
+    def test_each_file_opens_its_own_accounting(self):
+        # Every journal in the record starts at zero, so a session resumed
+        # into a new file must not re-bill the history it inherited.
+        pairs, _counters = self.walk(
+            {
+                "day/first.jsonl": [running_line(100), running_line(400)],
+                "day/second.jsonl": [running_line(100), running_line(250)],
+            }
+        )
+        self.assertEqual(sum(total for _day, total in pairs), 650)
+
+    def test_a_session_that_crosses_midnight_splits_across_its_two_days(self):
+        # The directory a journal lives in is the LOCAL day it started on, so
+        # it is not the day its records happened on and is never read. This
+        # fixture puts a UTC-24th record inside a 23rd directory on purpose.
+        pairs, _counters = self.walk(
+            {
+                "2026/08/23/session.jsonl": [
+                    running_line(100, stamp="2026-08-23T23:30:00.000Z"),
+                    running_line(450, stamp="2026-08-24T00:30:00.000Z"),
+                ]
+            }
+        )
+        self.assertEqual(pairs, [("2026-08-23", 100), ("2026-08-24", 350)])
+
+    def test_a_file_that_reports_nothing_usable_contributes_nothing(self):
+        pairs, counters = self.walk(
+            {"day/session.jsonl": [session_meta_line(), "not json at all"]}
+        )
+        self.assertEqual(pairs, [])
+        self.assertEqual(counters["files"], 1)
+        self.assertEqual(counters["counted"], 0)
+
+
+class RunningTotalsCaptureTest(unittest.TestCase):
+    """Requirement 12 again, against the second reader's own hostile tree."""
+
+    def test_a_session_walk_emits_dates_and_integers_and_nothing_else(self):
+        with tempfile.TemporaryDirectory() as root:
+            nested = os.path.join(root, "2026", "08", "23")
+            os.makedirs(nested)
+            name = "rollout-2026-08-23T20-51-18-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl"
+            with open(os.path.join(nested, name), "w", encoding="utf-8") as handle:
+                handle.write(session_meta_line() + "\n")
+                handle.write(running_line(60, stamp="2026-08-23T20:00:00.000Z") + "\n")
+                handle.write(running_line(60, stamp="2026-08-23T20:01:00.000Z") + "\n")
+                handle.write(running_line(200, stamp="2026-08-25T04:00:00.000Z") + "\n")
+                handle.write("a line that is not JSON at all\n")
+            with open(os.path.join(nested, "notes.txt"), "w", encoding="utf-8") as handle:
+                handle.write(running_line(9_000_000) + "\n")  # not .jsonl: never read
+
+            series, derived, counters = capture_usage_series.capture(
+                root, capture_usage_series.FORMAT_RUNNING_TOTALS
+            )
+
+        self.assertEqual(
+            series, {"startDate": "2026-08-23", "totals": [60, 0, 140], "recorded": True}
+        )
+        self.assertEqual(derived, {"peak-day": 140, "current-streak": 1, "longest-streak": 1})
+        self.assertEqual(counters["files"], 1)
+        self.assertEqual(counters["duplicates"], 1)
+        self.assertEqual(counters["counted"], 2)
+
+        # The whole emission, re-read as text: not one identifier, path,
+        # branch name, session id or sentence from the journal may appear.
+        emitted = json.dumps({"series": series, "derived": derived, "counters": counters})
+        for leak in (
+            "a-private-project",
+            "someone",
+            "secret-feature",
+            "a-private-tool",
+            "rollout",
+            "99999999-8888-7777-6666-555555555555",
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "nobody outside this machine",
+        ):
+            with self.subTest(leak=leak):
+                self.assertNotIn(leak, emitted)
+
+
+class CaptureFormatTest(unittest.TestCase):
+    def test_the_default_shape_is_the_message_reader(self):
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(root, "session.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(transcript_line() + "\n")
+            series, _derived, _counters = capture_usage_series.capture(root)
+        self.assertEqual(series["totals"], [135])
+
+    def test_each_shape_reads_only_its_own_records(self):
+        # The two record shapes share a tree walk and nothing else. A journal
+        # of one shape read as the other must find no usage at all rather
+        # than a partial number nobody can trace.
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(root, "session.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(transcript_line() + "\n")
+            with self.assertRaises(CaptureError):
+                capture_usage_series.capture(root, capture_usage_series.FORMAT_RUNNING_TOTALS)
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(root, "session.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(running_line(100) + "\n")
+            with self.assertRaises(CaptureError):
+                capture_usage_series.capture(root, capture_usage_series.FORMAT_MESSAGES)
+
+    def test_an_unknown_shape_is_refused_rather_than_guessed(self):
+        with self.assertRaises(CaptureError):
+            capture_usage_series.capture("/nowhere", "whatever-the-tool-writes")
+
+
+class ImportSurfaceTest(unittest.TestCase):
+    """Owner ruling 2 (issue #142), made structural rather than promised.
+
+    The capture must be INCAPABLE of spawning an agent session or reaching
+    the network, and the enforcement is the same kind the panels' zero-egress
+    doctrine test applies to Go: the module's import surface is a closed
+    allowlist, read out of the parsed source rather than out of prose.
+
+    `os` is on the refused list and that is the load-bearing decision here.
+    It is the obvious module for a directory walk, it was in this file until
+    this pin existed, and it carries `system`, `popen`, `fork`, `spawn*` and
+    `exec*` — so an allowlist that admitted it could not keep the promise the
+    ruling makes. `pathlib` does the same walk with none of that reach.
+    """
+
+    ALLOWED = frozenset(
+        {"__future__", "argparse", "datetime", "json", "pathlib", "re", "sys"}
+    )
+
+    # Not an exhaustive index of the standard library — it does not need to
+    # be, because the allowlist above already refuses everything not named in
+    # it. This list exists so the ALLOWLIST ITSELF cannot be widened to admit
+    # one of these without a test naming the module that got in.
+    REFUSED = frozenset(
+        {
+            "asyncio",
+            "concurrent",
+            "ctypes",
+            "ftplib",
+            "http",
+            "importlib",
+            "multiprocessing",
+            "os",
+            "pickle",
+            "platform",
+            "posix",
+            "pty",
+            "runpy",
+            "select",
+            "shutil",
+            "signal",
+            "smtplib",
+            "socket",
+            "socketserver",
+            "ssl",
+            "subprocess",
+            "threading",
+            "urllib",
+            "webbrowser",
+            "xmlrpc",
+        }
+    )
+
+    # Builtins that turn data into code. None needs an import, so the import
+    # allowlist alone would not see them coming.
+    REFUSED_BUILTINS = frozenset({"__import__", "breakpoint", "compile", "eval", "exec"})
+
+    def setUp(self):
+        self.tree = ast.parse(_MODULE_PATH.read_text(encoding="utf-8"))
+
+    def imported_roots(self):
+        roots = set()
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    roots.add(alias.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom):
+                # A relative import has no module name and would pull in a
+                # sibling file this allowlist has never seen; it reads as the
+                # empty root and is refused by the comparison below.
+                roots.add((node.module or "").split(".")[0])
+        return roots
+
+    def test_the_import_surface_is_exactly_the_allowlist(self):
+        # Equality, not containment: the allowlist is CLOSED, so an import
+        # arriving and an import leaving are both changes a reader must see.
+        self.assertEqual(self.imported_roots(), set(self.ALLOWED))
+
+    def test_the_allowlist_admits_nothing_that_can_spawn_or_connect(self):
+        # Guards the allowlist against itself. Without this, widening the set
+        # above by one line would make every other assertion here pass.
+        self.assertEqual(self.ALLOWED & self.REFUSED, set())
+
+    def test_no_refused_module_is_imported_under_any_spelling(self):
+        self.assertEqual(self.imported_roots() & self.REFUSED, set())
+
+    def test_the_capture_never_turns_data_into_code(self):
+        called = {
+            node.func.id
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        self.assertEqual(called & self.REFUSED_BUILTINS, set())
+
+    def test_the_pin_is_reading_a_real_import_surface(self):
+        # Non-vacuity: an assertion about a set that turned out to be empty
+        # would pass for the wrong reason forever.
+        self.assertIn("json", self.imported_roots())
+        self.assertGreater(len(self.imported_roots()), 3)
 
 
 class UTCDayTest(unittest.TestCase):

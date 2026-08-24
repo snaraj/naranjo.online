@@ -334,6 +334,14 @@ func TestShippedUsageTilesSurviveALiveMergeWithoutDoubling(t *testing.T) {
 	}
 }
 
+// calendarWeeks is the number of columns the contribution calendar ships, and
+// the frontend's `pendingWeeks` is the same number written on the other side
+// of the wire (frontend/src/lib/grid.ts). It is duplicated by hand rather than
+// derived, exactly like reservedMediaSegments, because the two live in
+// different languages; each side pins it and each failure names the other
+// file.
+const calendarWeeks = 53
+
 // TestVCSActivityPanelShipsARenderableGraph pins the vcs-activity shape the
 // contribution graph needs: seven-day weeks, a plausible total, a streak,
 // and dated recent commits.
@@ -346,8 +354,16 @@ func TestVCSActivityPanelShipsARenderableGraph(t *testing.T) {
 	}
 	// A real calendar covers a year of columns; a handful of weeks means the
 	// panel is back to a hand-made sample.
-	if len(payload.Weeks) < 50 {
-		t.Errorf("graph ships %d weeks, want a full year of columns", len(payload.Weeks))
+	//
+	// EXACTLY a year, and the exactness is the parity half of a zero-CLS
+	// contract rather than fussiness. The frontend grid sizes a block to the
+	// columns it draws, and it holds `pendingWeeks` columns of chrome open
+	// while this payload is in flight; if the two numbers ever disagree, the
+	// calendar changes width the moment its data lands and the reserve stops
+	// being a reserve. frontend/src/lib/grid.ts pins pendingWeeks to the same
+	// 53 from its side and names this test when it fails.
+	if len(payload.Weeks) != calendarWeeks {
+		t.Errorf("graph ships %d weeks, want exactly %d; pendingWeeks in frontend/src/lib/grid.ts reserves that many columns for it and the two must move together", len(payload.Weeks), calendarWeeks)
 	}
 	if _, err := time.Parse("2006-01-02", payload.EndDate); err != nil {
 		t.Errorf("endDate = %q: %v; without it the padded trailing week is indistinguishable from real quiet days", payload.EndDate, err)

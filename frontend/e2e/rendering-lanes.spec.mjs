@@ -296,11 +296,20 @@ test('switching the reading mode repaints without moving anything', async ({ pag
   const geometry = () =>
     page.evaluate(() => {
       const boxes = {};
+      const round = ({ x, y, width, height }) =>
+        [x, y, width, height].map((value) => Math.round(value * 100) / 100);
       for (const selector of ['#app', '.page-header', 'main', 'h1', '.panel-stack']) {
         const node = window.document.querySelector(selector);
         if (node === null) continue;
-        const { x, y, width, height } = node.getBoundingClientRect();
-        boxes[selector] = [x, y, width, height].map((value) => Math.round(value * 100) / 100);
+        boxes[selector] = round(node.getBoundingClientRect());
+      }
+      /* Every heatmap block by name, not just the first. A graph is now sized
+         to the columns it draws out of the cell-metric custom properties, and
+         a reading mode is allowed to restyle those cells but never to resize
+         them — so the four modes are exactly where that rule is tested. */
+      for (const block of window.document.querySelectorAll('.grid-block')) {
+        const label = block.querySelector('.grid-strip')?.getAttribute('aria-label') ?? 'grid';
+        boxes[`grid:${label}`] = round(block.getBoundingClientRect());
       }
       return {
         boxes,
@@ -519,6 +528,399 @@ test('every strip opens on its newest data and scrolls back for history', async 
   }
 });
 
+/* The strip is as wide as its data, and no wider (issue #141, residual risk 2:
+ * "the Anthropic grid reads small — fifteen days is three columns in a strip
+ * sized for 53, hard against the left edge").
+ *
+ * Measured rather than asserted, because the whole claim is geometric: the
+ * box, the cells inside it, and the key under it are three real rectangles an
+ * engine produced, and the rule is a relationship between them. Both
+ * directions ride here, and neither is redundant. A block that claimed a year
+ * whatever it drew is the defect that was reported. A block that shrank to its
+ * data everywhere — the obvious over-correction — would take the version
+ * control calendar down with it, and that calendar genuinely has a year of
+ * columns to show. So the lane insists a short graph is short AND that the
+ * long one is untouched, in the same measurement. */
+test('every graph is exactly as wide as the columns it draws', async ({ page }) => {
+  await visit(page);
+  const observed = await page.evaluate(() => {
+    const width = (node) => Math.round(node.getBoundingClientRect().width * 100) / 100;
+    return [...window.document.querySelectorAll('.grid-block')].map((block) => {
+      const strip = block.querySelector('.grid-strip');
+      const cells = block.querySelector('.grid-cells');
+      const legend = block.querySelector('.grid-legend');
+      const cell = cells.querySelector('.grid-cell');
+      const gap = parseFloat(getComputedStyle(cells).columnGap || '0');
+      /* The legend's INTRINSIC width: it is a nowrap flex row, so its own
+         box tells you nothing about whether its contents fit inside it. */
+      const legendChildren = [...legend.children];
+      const legendGap = parseFloat(getComputedStyle(legend).columnGap || '0');
+      const legendWidth =
+        legendChildren.reduce((sum, child) => sum + child.getBoundingClientRect().width, 0) +
+        legendGap * Math.max(0, legendChildren.length - 1) +
+        legendChildren.reduce((sum, child) => {
+          const style = getComputedStyle(child);
+          return (
+            sum +
+            parseFloat(style.marginInlineStart || '0') +
+            parseFloat(style.marginInlineEnd || '0')
+          );
+        }, 0);
+      return {
+        label: strip.getAttribute('aria-label'),
+        state: block.getAttribute('data-grid-state'),
+        claimed: Number(block.getAttribute('data-grid-columns')),
+        /* Counted off the DOM, never read back off the same attribute the
+           claim came from: a lane that compared an attribute with itself
+           would agree with any value at all. */
+        drawn: Math.ceil(cells.querySelectorAll('.grid-cell').length / 7),
+        cellSize: width(cell),
+        gap,
+        block: width(block),
+        strip: width(strip),
+        cells: width(cells),
+        available: width(block.parentElement),
+        legend: Math.round(legendWidth * 100) / 100,
+      };
+    });
+  });
+  expect(observed.length, 'the page renders no heatmaps; this lane proves nothing').toBeGreaterThan(
+    0
+  );
+
+  /* Non-vacuity, and the reason the two halves cannot be written as one
+     assertion: the page must be showing BOTH a graph short enough to be
+     floored and a graph long enough to keep a year, or one of the two
+     directions below is being proved against no example. */
+  const short = observed.filter((grid) => grid.drawn < grid.claimed);
+  const long = observed.filter((grid) => grid.drawn >= 52);
+  expect(
+    short.length,
+    'no graph on the page is short enough to exercise the floor'
+  ).toBeGreaterThan(0);
+  expect(long.length, 'no year-wide graph is on the page to prove it was not shrunk').toBe(1);
+
+  for (const grid of observed) {
+    const expected = grid.claimed * (grid.cellSize + grid.gap) - grid.gap;
+    /* Never wider than what it claims — the reported defect. */
+    expect(
+      grid.block,
+      `"${grid.label}" draws ${grid.drawn} columns and occupies ${grid.block}px, ${expected}px of box`
+    ).toBeLessThanOrEqual(expected + subPixel);
+    /* ...and it takes that whole width unless the card it sits in is
+       narrower, in which case the strip scrolls inside itself rather than
+       taking the page's scrollbar sideways with it. */
+    expect(
+      grid.block,
+      `"${grid.label}" is ${grid.block}px inside ${grid.available}px of card, short of its ${expected}px`
+    ).toBeGreaterThanOrEqual(Math.min(expected, grid.available) - subPixel);
+    /* The claim covers the data: a box narrower than its own cells would
+       clip a series the panel says it is showing. */
+    expect(
+      expected,
+      `"${grid.label}" claims ${grid.claimed} columns for ${grid.drawn} columns of cells`
+    ).toBeGreaterThanOrEqual(grid.cells - subPixel);
+    expect(grid.claimed, `"${grid.label}" claims fewer columns than it draws`).toBeGreaterThanOrEqual(
+      grid.drawn
+    );
+    /* The floor is the block's own furniture, measured per engine rather
+       than taken from the source constant: the less/more key printed under
+       every graph has to fit in the graph's box. */
+    expect(
+      grid.block,
+      `"${grid.label}" is ${grid.block}px wide and its less/more key needs ${grid.legend}px`
+    ).toBeGreaterThanOrEqual(Math.min(grid.legend, grid.available) - subPixel);
+    /* And the strip fills the block, so the frame drawn around an empty
+       plate is the frame around the box the data will land in. */
+    expect(grid.strip, `"${grid.label}" strip and block disagree about their width`).toBeCloseTo(
+      grid.block,
+      1
+    );
+  }
+});
+
+/* Re-serves the origin's own token-usage envelope with one source's series
+ * replaced, so a lane can put a series of any length on the real page without
+ * inventing a payload shape. `edit` receives the decoded envelope and mutates
+ * it in place; everything it leaves alone is what the origin actually served.
+ * Must be installed before the first navigation, so the panel's own fetch and
+ * any read-back see the identical bytes. */
+async function stageUsagePayload(page, edit) {
+  await page.route('**/api/panels/token-usage', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    edit(envelope);
+    const body = JSON.stringify(envelope);
+    /* The origin's own headers, MINUS the length of the body it sent. Passing
+       the upstream response through verbatim carries its content-length with
+       it, and an edited envelope is a different number of bytes — a longer one
+       arrives truncated and unparseable, which reads in a lane as "the page
+       did not render it" and is really "the lane did not serve it". */
+    const headers = { ...response.headers() };
+    for (const name of Object.keys(headers)) {
+      if (name.toLowerCase() === 'content-length') delete headers[name];
+    }
+    await route.fulfill({ status: response.status(), headers, body });
+  });
+}
+
+/* A synthetic daily series of `days` days, ending today. Values ramp so the
+ * five-level magnitude ramp has something to quantize; the shape is what the
+ * lane is about, not the numbers. */
+function syntheticSeries(days) {
+  const start = new Date();
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+  return {
+    startDate: start.toISOString().slice(0, 10),
+    totals: Array.from({ length: days }, (_, day) => (day % 5) * 1000 + 1),
+    recorded: true,
+  };
+}
+
+/* LOOK, at every length a real series can be (owner directive, 2026-08-24).
+ * Sizing a box to its data is only an improvement if the box's GRAMMAR
+ * survives the short end: the same cell, the same gap, the legend in the same
+ * place. A strip that quietly shrank its cells to fill a floor, or that let
+ * its key drift off the end at one day and not at fifty-three, would pass
+ * every width assertion in this file and still look broken on the page. So
+ * the four shapes are rendered on the real page and compared to each other. */
+test('the strip keeps its grammar at every series length', async ({ page }) => {
+  const shapes = [1, 15, 31, 371];
+  const measured = [];
+  for (const days of shapes) {
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await stageUsagePayload(page, (envelope) => {
+      const sources = envelope?.data?.sources ?? [];
+      expect(sources.length, 'the origin serves no usage source to restage').toBeGreaterThan(0);
+      sources[0].series = syntheticSeries(days);
+    });
+    await visit(page);
+    measured.push({
+      days,
+      ...(await page.evaluate(() => {
+        const block = window.document.querySelector('.usage-source .grid-block');
+        const rect = (node) => node.getBoundingClientRect();
+        const cells = block.querySelector('.grid-cells');
+        const legend = block.querySelector('.grid-legend');
+        const cell = cells.querySelector('.grid-cell');
+        const round = (value) => Math.round(value * 100) / 100;
+        return {
+          claimed: Number(block.getAttribute('data-grid-columns')),
+          drawn: Math.ceil(cells.querySelectorAll('.grid-cell').length / 7),
+          cell: round(rect(cell).width),
+          cellHeight: round(rect(cell).height),
+          gap: round(parseFloat(getComputedStyle(cells).columnGap || '0')),
+          rows: getComputedStyle(cells).gridTemplateRows.split(' ').length,
+          block: round(rect(block).width),
+          /* Placement, measured as the offset of the key's END edge from the
+             block's END edge: the legend is right-aligned under the graph, and
+             "right-aligned" is a relationship, not a width. */
+          legendOffset: round(rect(block).right - rect(legend).right),
+          legendTop: round(rect(legend).top - rect(block).top),
+          strip: round(rect(block.querySelector('.grid-strip')).height),
+        };
+      })),
+    });
+  }
+
+  const [first, ...rest] = measured;
+  for (const shape of measured) {
+    expect(shape.drawn, `a ${shape.days} day series drew ${shape.drawn} columns`).toBe(
+      Math.ceil(shape.days / 7)
+    );
+    expect(shape.claimed, `a ${shape.days} day series claims fewer columns than it drew`)
+      .toBeGreaterThanOrEqual(shape.drawn);
+    expect(shape.rows, `a ${shape.days} day series stopped being seven days tall`).toBe(7);
+  }
+  for (const shape of rest) {
+    /* The grammar: identical cell, identical gap, identical row height,
+       identical legend placement. A floor may change the BOX; it may not
+       change the drawing. */
+    expect(shape.cell, `the cell resized between 1 day and ${shape.days} days`).toBe(first.cell);
+    expect(shape.cellHeight, `the cell height moved at ${shape.days} days`).toBe(first.cellHeight);
+    expect(shape.gap, `the gap moved at ${shape.days} days`).toBe(first.gap);
+    expect(shape.strip, `the strip changed height at ${shape.days} days`).toBe(first.strip);
+    expect(
+      shape.legendOffset,
+      `the less/more key sits ${shape.legendOffset}px from the block edge at ${shape.days} days and ${first.legendOffset}px at 1 day`
+    ).toBe(first.legendOffset);
+    expect(shape.legendTop, `the key changed row at ${shape.days} days`).toBe(first.legendTop);
+  }
+  /* Non-vacuity: the four shapes must not all have produced the same box, or
+     the comparisons above are four measurements of one rendering. */
+  expect(
+    new Set(measured.map((shape) => shape.block)).size,
+    'every series length produced the same box; the sizing is not reading its data'
+  ).toBeGreaterThan(1);
+  /* And the long one is genuinely long — a year of columns still gets a year
+     of columns, which is the direction an over-correction would break. */
+  const year = measured.at(-1);
+  expect(year.claimed, 'a year-long series no longer claims a year of columns').toBe(53);
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+/* RESPONSIVENESS (owner directive, 2026-08-24). The page column is a single
+ * token and a parallel lane is making it user-continuous, so this lane tests
+ * the token's RANGE rather than its current value: whatever width the reader
+ * ends up choosing, a data-sized strip must stay inside its card, keep its
+ * scroll inside itself, and never take the document sideways. The token is
+ * driven from the outside exactly as a user control would drive it — this
+ * lane knows nothing about how that control is built. */
+test('the strip survives the whole range of the page column token', async ({ page }) => {
+  await visit(page);
+  const declared = await page.evaluate(() =>
+    getComputedStyle(window.document.documentElement).getPropertyValue('--page-column-width').trim()
+  );
+  expect(declared, 'the page column token is not declared; this lane drives nothing').not.toBe('');
+
+  for (const width of ['20rem', '32rem', '48rem', '60rem', '90rem', '140rem']) {
+    await page.evaluate((value) => {
+      window.document.documentElement.style.setProperty('--page-column-width', value);
+    }, width);
+    await settled(page);
+    const observed = await page.evaluate(() => ({
+      scrollWidth: window.document.documentElement.scrollWidth,
+      clientWidth: window.document.documentElement.clientWidth,
+      grids: [...window.document.querySelectorAll('.grid-block')].map((block) => {
+        const strip = block.querySelector('.grid-strip');
+        const cells = block.querySelector('.grid-cells');
+        return {
+          label: strip.getAttribute('aria-label'),
+          block: Math.round(block.getBoundingClientRect().width * 100) / 100,
+          card: Math.round(block.parentElement.getBoundingClientRect().width * 100) / 100,
+          cells: Math.round(cells.getBoundingClientRect().width * 100) / 100,
+          overflowing: strip.scrollWidth > strip.clientWidth,
+          height: Math.round(block.getBoundingClientRect().height * 100) / 100,
+        };
+      }),
+    }));
+    expect(
+      observed.scrollWidth,
+      `a ${width} page column scrolls the document sideways (${observed.scrollWidth} > ${observed.clientWidth})`
+    ).toBeLessThanOrEqual(observed.clientWidth + subPixel);
+    expect(observed.grids.length, `no heatmap rendered at a ${width} page column`).toBeGreaterThan(0);
+    for (const grid of observed.grids) {
+      expect(
+        grid.block,
+        `"${grid.label}" is ${grid.block}px inside a ${grid.card}px card at a ${width} page column`
+      ).toBeLessThanOrEqual(grid.card + subPixel);
+      /* Wider content than box is legal — that is what the strip's own
+         scroller is for — but only ever inside the strip. */
+      if (grid.cells > grid.block + subPixel) {
+        expect(
+          grid.overflowing,
+          `"${grid.label}" overflows its box at a ${width} page column without scrolling inside itself`
+        ).toBe(true);
+      }
+      expect(
+        grid.height,
+        `"${grid.label}" changed height at a ${width} page column; the block-size reserve is not width-independent`
+      ).toBeCloseTo(observed.grids[0].height, 1);
+    }
+  }
+  await page.evaluate(() =>
+    window.document.documentElement.style.removeProperty('--page-column-width')
+  );
+});
+
+/* SECURITY of the rendered surface (owner directive, 2026-08-24). The series
+ * and its labels travel from a capture file on the owner's machine, through a
+ * snapshot in the repository, to the origin, to this DOM. Source labels pass
+ * through admission as data on purpose — the panel knows no vendor, so it
+ * cannot enumerate the labels it will be asked to render — which makes "as
+ * TEXT, never as markup" the property that has to hold. Svelte escapes
+ * interpolations, so this lane is proving the component never left that path:
+ * no {@html}, no innerHTML, no attribute that becomes a script.
+ *
+ * The start date is the other half and it fails the other way: it is matched
+ * against a calendar-date pattern at admission, so a hostile one is not
+ * rendered safely — it is not rendered at all, and it takes the whole payload
+ * with it. Both halves run here, in that order, because they are the two ways
+ * a string from that file can end up on a screen. */
+test('a hostile label reaches the page as text and never as markup', async ({ page }) => {
+  const hostile = '<img src=x onerror="window.__pwned = true">';
+  const hostileAccount = '</h3><script>window.__pwned = true</script>';
+
+  await stageUsagePayload(page, (envelope) => {
+    const sources = envelope?.data?.sources ?? [];
+    expect(sources.length, 'the origin serves no usage source to restage').toBeGreaterThan(0);
+    sources[0].label = hostile;
+    sources[0].account = hostileAccount;
+    /* A WELL-FORMED series beside the hostile labels: this half is about what
+       a rendered string does, so the payload has to be one the panel renders. */
+    sources[0].series = { startDate: '2026-08-10', totals: [1, 2, 3], recorded: true };
+  });
+  await visit(page);
+  const observed = await page.evaluate(
+    ([label, account]) => {
+      const panel = window.document.querySelector('[data-panel-id="token-usage"]');
+      const heads = [...panel.querySelectorAll('.usage-source-label')].map((node) => ({
+        text: node.textContent,
+        children: node.children.length,
+      }));
+      return {
+        pwned: window.__pwned === undefined ? 'clean' : 'executed',
+        injected: panel.querySelectorAll('img, script, iframe, object, embed').length,
+        heads,
+        matchesLabel: heads.some((head) => head.text === label),
+        matchesAccount: [...panel.querySelectorAll('.usage-account')].some(
+          (node) => node.textContent === account
+        ),
+        /* The graph the hostile source DOES get: a real series, drawn from
+           strings that never became markup. */
+        graphs: panel.querySelectorAll('.grid-block').length,
+      };
+    },
+    [hostile, hostileAccount]
+  );
+
+  expect(observed.pwned, 'a payload string executed in the page').toBe('clean');
+  expect(observed.injected, 'a payload string created elements in the panel').toBe(0);
+  /* Rendered, and rendered VERBATIM: a lane that only checked "nothing
+     executed" would pass on a panel that silently dropped the label. */
+  expect(observed.matchesLabel, 'the hostile label did not render as its own literal text').toBe(
+    true
+  );
+  expect(
+    observed.matchesAccount,
+    'the hostile account did not render as its own literal text'
+  ).toBe(true);
+  for (const head of observed.heads) {
+    expect(head.children, 'a source heading grew element children from its payload string').toBe(0);
+  }
+  expect(observed.graphs, 'the staged payload rendered no graph; this half proved nothing')
+    .toBeGreaterThan(0);
+
+  /* The other half: a start date that is not a calendar date. The grid does
+     day arithmetic on that string, so admission refuses the WHOLE payload
+     rather than rendering the parts of it that happened to parse — and the
+     panel says so instead of showing a partial one. */
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await stageUsagePayload(page, (envelope) => {
+    const sources = envelope?.data?.sources ?? [];
+    sources[0].series = { startDate: '"><script>window.__pwned = true</script>', totals: [1] };
+  });
+  await visit(page);
+  const refused = await page.evaluate(() => {
+    const panel = window.document.querySelector('[data-panel-id="token-usage"]');
+    return {
+      pwned: window.__pwned === undefined ? 'clean' : 'executed',
+      injected: panel.querySelectorAll('img, script, iframe, object, embed').length,
+      sources: panel.querySelectorAll('.usage-source').length,
+      graphs: panel.querySelectorAll('.grid-block').length,
+      empty: panel.querySelector('.usage-empty')?.textContent ?? '',
+    };
+  });
+  expect(refused.pwned, 'a malformed start date executed in the page').toBe('clean');
+  expect(refused.injected, 'a malformed start date created elements in the panel').toBe(0);
+  expect(refused.sources, 'a payload with a malformed series rendered part of itself anyway').toBe(
+    0
+  );
+  expect(refused.graphs, 'a payload with a malformed series still drew a graph').toBe(0);
+  expect(refused.empty, 'a refused payload renders no honest empty state').not.toBe('');
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
 test('the boss log is three columns that never scroll, and its detail sits on its tile', async ({
   page,
 }) => {
@@ -726,10 +1128,32 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
  * reading it there and then looking for the matching graph makes the lane
  * name the offending source by label — instead of inferring what the page
  * meant to do from what the page did, which is how a rendering test comes to
- * agree with every regression it was written to catch. */
+ * agree with every regression it was written to catch.
+ *
+ * One source's series is STAGED away rather than waited for, and that is a
+ * repair, not a shortcut. The lane needs a seriesless source and a serialised
+ * one on the same screen; it used to get both by accident, because the
+ * shipped snapshot happened to carry a series for one source and none for the
+ * other. The day a real capture landed for the second source (issue #140) the
+ * lane went red on its own non-vacuity check — with nothing wrong with the
+ * page. A guarantee about how the page treats an absent series must not
+ * depend on the owner's usage records happening to be missing one, so the
+ * absence is now produced from the origin's OWN envelope, one field deleted
+ * from one source. Everything else on the wire is the origin's real payload,
+ * and the assertions still name sources by the label the API gave them. */
 test('a source with no series renders no graph, and one with a series still renders all of it', async ({
   page,
 }) => {
+  /* Staged before the first navigation so the panel's own fetch and the
+     read-back below see the identical envelope. */
+  await stageUsagePayload(page, (envelope) => {
+    const sources = envelope?.data?.sources ?? [];
+    expect(
+      sources.length,
+      'the origin serves fewer than two usage sources; this lane cannot show one of each'
+    ).toBeGreaterThan(1);
+    delete sources[0].series;
+  });
   await visit(page);
   const observed = await page.evaluate(async () => {
     const panel = window.document.querySelector('[data-panel-id="token-usage"]');
@@ -780,11 +1204,11 @@ test('a source with no series renders no graph, and one with a series still rend
   const drawn = observed.reported.filter((source) => source.series);
   expect(
     bare.length,
-    'the origin reports a series for every source, so nothing here proves an absent one renders nothing'
+    'no source reports an absent series even with one staged away; the panel is reading something other than the payload'
   ).toBeGreaterThan(0);
   expect(
     drawn.length,
-    'the origin reports no series at all; a page with no heatmaps would pass the other half for free'
+    'every source lost its series; a page with no heatmaps would pass the other half for free'
   ).toBeGreaterThan(0);
 
   for (const source of bare) {
@@ -853,6 +1277,34 @@ test('a panel whose data is still on its way holds exactly the box that data wil
     await new Promise((resume) => setTimeout(resume, 1_200));
     await route.continue();
   });
+  /* The engine's own layout-shift ledger, started before the navigation so it
+     is recording across the arrival rather than after it. Only Chromium
+     implements the entry type; the box comparisons below are the measurement
+     that runs everywhere, and this is the corroborating one where it exists.
+     (Owner directive, 2026-08-24: keep the reservation MEASURED.) */
+  await page.addInitScript(() => {
+    window.__shifts = { supported: false, page: 0, calendar: 0 };
+    const types = window.PerformanceObserver?.supportedEntryTypes ?? [];
+    if (!types.includes('layout-shift')) return;
+    window.__shifts.supported = true;
+    new window.PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (entry.hadRecentInput) continue;
+        window.__shifts.page += entry.value;
+        /* Attributed, because the whole page is loading during this window
+           and every other panel is arriving too. A ledger that summed the
+           document would be a measurement of the page's load, and the claim
+           under test is about ONE box. The engine names the nodes that
+           moved; only a shift naming something inside the activity panel is
+           this reserve's to answer for. */
+        const card = window.document.querySelector('[data-activity-panel]');
+        const ours = [...(entry.sources ?? [])].some(
+          (source) => source.node && card !== null && card.contains(source.node)
+        );
+        if (ours) window.__shifts.calendar += entry.value;
+      }
+    }).observe({ type: 'layout-shift', buffered: true });
+  });
   await page.goto('/');
   const measure = () =>
     page.evaluate(() => {
@@ -860,12 +1312,22 @@ test('a panel whose data is still on its way holds exactly the box that data wil
       const block = card === null ? null : card.querySelector('.grid-block');
       if (block === null) return null;
       const box = (node) => Math.round(node.getBoundingClientRect().height);
+      /* Width joined height here the day a block started sizing itself to
+         its column count. Before that the box was a year wide whatever it
+         held, so only its height could move; now the reserve and the arrival
+         have to agree about BOTH axes or the calendar re-lays out under the
+         reader the moment its payload lands. */
+      const across = (node) => Math.round(node.getBoundingClientRect().width);
       return {
         state: block.getAttribute('data-grid-state'),
+        columns: Number(block.getAttribute('data-grid-columns')),
         datapoints: block.querySelectorAll('[data-grid-cell]').length,
         strip: box(block.querySelector('.grid-strip')),
+        stripWidth: across(block.querySelector('.grid-strip')),
         block: box(block),
+        blockWidth: across(block),
         card: box(card),
+        cardWidth: across(card),
       };
     });
   const state = async () => (await measure())?.state;
@@ -891,6 +1353,60 @@ test('a panel whose data is still on its way holds exactly the box that data wil
   ).toBe(waiting.strip);
   expect(arrived.block, 'the grid block changed height when its data arrived').toBe(waiting.block);
   expect(arrived.card, 'the panel changed height when its data arrived').toBe(waiting.card);
+
+  /* The inline axis, which a sized block is the reason to measure. The
+     reserve claims a year of columns and the calendar that lands in it has a
+     year of columns, so the width is identical — and it is identical because
+     both numbers are pinned to each other (pendingWeeks in
+     frontend/src/lib/grid.ts, TestVCSActivityPanelShipsARenderableGraph in
+     internal/panels/registry_test.go), not because they happen to match
+     today. */
+  expect(
+    arrived.columns,
+    'the calendar arrived with a different column count from the reserve held for it'
+  ).toBe(waiting.columns);
+  expect(arrived.stripWidth, 'the strip changed width when its data arrived').toBe(
+    waiting.stripWidth
+  );
+  expect(arrived.blockWidth, 'the grid block changed width when its data arrived').toBe(
+    waiting.blockWidth
+  );
+  expect(arrived.cardWidth, 'the panel changed width when its data arrived').toBe(waiting.cardWidth);
+  /* Non-vacuity for the pair above: a calendar that arrived one column wide
+     would satisfy "the two agree" by shrinking the reserve to match. */
+  expect(arrived.columns, 'the calendar no longer covers a year of columns').toBe(53);
+
+  /* SPEED: the sizing must settle in one pass. A box computed from a custom
+     property that is itself written by the component is exactly the shape that
+     can oscillate — width changes, observer fires, width changes back — and an
+     oscillation is invisible in a single measurement. So the box is sampled
+     across ten consecutive frames AFTER the arrival and every sample must be
+     the same number. */
+  const frames = await page.evaluate(async () => {
+    const block = window.document.querySelector('[data-activity-panel] .grid-block');
+    const samples = [];
+    for (let frame = 0; frame < 10; frame += 1) {
+      await new Promise((paint) => window.requestAnimationFrame(paint));
+      samples.push(Math.round(block.getBoundingClientRect().width * 100) / 100);
+    }
+    return samples;
+  });
+  expect(
+    new Set(frames).size,
+    `the calendar box settled on ${[...new Set(frames)].join(', ')} across ten frames`
+  ).toBe(1);
+
+  /* And the engine's own ledger, where it keeps one. The calendar's own
+     reserve must answer for exactly nothing; the page figure rides alongside
+     it as context, since the rest of the stack is still arriving in this
+     window and is not this panel's to account for. */
+  const shifts = await page.evaluate(() => window.__shifts);
+  if (shifts.supported) {
+    expect(
+      shifts.calendar,
+      `the reserved calendar accounted for ${shifts.calendar} of layout shift on arrival (page total across the load: ${shifts.page})`
+    ).toBe(0);
+  }
 });
 
 test('the popover animates only where motion is welcome', async ({ page }) => {

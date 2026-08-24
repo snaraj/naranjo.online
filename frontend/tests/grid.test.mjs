@@ -11,6 +11,7 @@ import {
   formatWhole,
   gridLevel,
   gridLevels,
+  gridMinColumns,
   gridRows,
   isSeriesView,
   monthTicks,
@@ -19,6 +20,7 @@ import {
   pendingWeeks,
   seriesCells,
   seriesViews,
+  stripColumns,
   toColumns,
   viewValues
 } from '../src/lib/grid.ts';
@@ -136,7 +138,19 @@ test('thousands grouping is locale-independent', () => {
 test('the pending graph is chrome with no datapoints in it', () => {
   const columns = pendingColumns();
   assert.equal(columns.length, pendingWeeks, 'the empty graph is a year wide, like the real one');
-  assert.ok(pendingWeeks >= 52, 'a graph narrower than a year would not read as the same graph');
+  // Parity pin, and it became load-bearing the day a block started sizing
+  // itself to its column count: the reserve and the payload that lands in it
+  // must be the SAME number of columns, or the calendar changes width on
+  // arrival and the zero-CLS floor is gone. The other side of this number is
+  // TestVCSActivityPanelShipsARenderableGraph in
+  // internal/panels/registry_test.go, which pins the shipped calendar to
+  // exactly 53 weeks and names this constant when it fails. Move one and the
+  // other goes red.
+  assert.equal(
+    pendingWeeks,
+    53,
+    'the reserve must stay exactly as wide as the shipped calendar; see internal/panels/registry_test.go'
+  );
   for (const column of columns) {
     assert.equal(column.length, gridRows, 'every column is a full week, like the real ones');
     for (const cell of column) {
@@ -158,6 +172,114 @@ test('the pending graph is chrome with no datapoints in it', () => {
   // A caller asking for nothing gets nothing, never a negative-length loop.
   assert.deepEqual(pendingColumns(0), []);
   assert.deepEqual(pendingColumns(-3), []);
+});
+
+// How WIDE a graph is drawn (issue #141, residual risk 2). The box used to be
+// a year wide whatever it held, so a fifteen-day series was three columns
+// against the left edge of fifty-three columns of nothing. Both directions are
+// pinned here because either alone is satisfied by a page that got it wrong: a
+// block that always claims 53 passes "never narrower than the minimum", and a
+// block that always claims 1 passes "never wider than its data".
+test('a graph claims the columns it draws, never more, and never collapses', () => {
+  // The direction the owner reported: more box than series.
+  assert.equal(stripColumns(3), gridMinColumns, 'a short series must not claim a year of columns');
+  assert.equal(stripColumns(53), 53, 'a full calendar keeps every column it draws');
+  assert.equal(
+    stripColumns(pendingWeeks),
+    pendingWeeks,
+    'the reserved chrome claims exactly the columns it renders'
+  );
+  for (const drawn of [11, 12, 26, 40, 53, 104]) {
+    assert.equal(stripColumns(drawn), drawn, `a ${drawn} column graph must be ${drawn} columns wide`);
+  }
+
+  // The other direction: a claim is never smaller than what is drawn, so a
+  // graph can never be clipped by its own box.
+  for (const drawn of [1, 2, 3, 9, 10, 11, 53]) {
+    assert.ok(
+      stripColumns(drawn) >= drawn,
+      `a ${drawn} column graph may not be drawn into a narrower box`
+    );
+  }
+
+  // The floor is the block's own furniture, not a preference: it is the first
+  // count whose strip carries the less/more key printed under it (measured at
+  // 123.38px in all three engines, and re-measured per engine in the
+  // rendering lanes). Nine columns is 114px and would spill it.
+  assert.equal(gridMinColumns, 10);
+  assert.ok(gridMinColumns * (0.625 + 0.1875) - 0.1875 >= 123.38 / 16, 'the floor must carry the legend');
+  assert.ok(
+    (gridMinColumns - 1) * (0.625 + 0.1875) - 0.1875 < 123.38 / 16,
+    'the floor is the SMALLEST count that carries the legend; a larger one is padding'
+  );
+
+  // Nothing a caller can pass produces a box that is not a box.
+  for (const rogue of [0, -4, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(stripColumns(rogue), gridMinColumns, `${String(rogue)} columns must still draw a graph`);
+  }
+  assert.equal(stripColumns(3.9), gridMinColumns, 'a fractional column count never widens the box');
+});
+
+// The component half: the number above has to reach the stylesheet, and the
+// stylesheet has to spend it on a CAP rather than a width — a fixed width
+// would push a year of columns past a 320px viewport and take the page's own
+// scrollbar sideways with it, which is a stage-1 floor.
+test('the block is sized from the columns it rendered, as a cap', () => {
+  assert.match(
+    grid,
+    /stripColumns\(columns\.length > 0 \? columns\.length : chrome\.length\)/,
+    'the width must come from the columns actually drawn, not from a constant'
+  );
+  assert.match(grid, /style:--grid-columns=\{claimedColumns\}/, 'the count never reaches the stylesheet');
+  const block = /\.grid-block \{([^}]*)\}/.exec(grid);
+  assert.ok(block, 'the grid block lost its rule');
+  assert.match(
+    block[1],
+    /max-inline-size:\s*calc\(\s*var\(--grid-columns/,
+    'the size must be a maximum, so a narrow screen still shrinks it'
+  );
+  assert.doesNotMatch(
+    block[1],
+    /(?:^|[\s;])inline-size:/,
+    'a fixed inline size would overflow a 320px viewport instead of scrolling inside the strip'
+  );
+  // The box and the cells must be laid out from the SAME cell metrics, or a
+  // token change resizes one and not the other.
+  for (const token of ['--grid-cell-size, 0.625rem', '--grid-cell-gap, 0.1875rem']) {
+    assert.ok(block[1].includes(token), `the box computes its width from a different ${token}`);
+  }
+});
+
+// The series arrives from a capture file on the owner's machine, through a
+// snapshot, through the origin, into this DOM — so every string on that path
+// has to reach the page as TEXT and never as markup (owner directive,
+// 2026-08-24). The browser lane proves the rendered result; this proves the
+// two places the component could leave the escaped path, which is where such
+// a regression is actually written.
+test('payload strings reach the grid as text, never as markup', () => {
+  // The one label a cell carries is built here, and it must hand back what it
+  // was given rather than sanitising it — a helper that stripped markup would
+  // hide the bug the escaping is there to prevent, and would silently corrupt
+  // a legitimate label containing an angle bracket.
+  const hostile = '<img src=x onerror="window.pwned=1">';
+  assert.equal(
+    cellLabel({ value: 7, date: '2026-08-12' }, hostile),
+    `7 ${hostile}s on 2026-08-12`,
+    'the cell label must carry the payload string verbatim'
+  );
+  assert.ok(cellLabel({ value: 1, date: hostile }, 'token').includes(hostile));
+
+  // ...and the component must never take a raw-HTML route with it. Both
+  // spellings, because one is Svelte's and one is the DOM's.
+  assert.doesNotMatch(grid, /\{@html/, 'the grid renders a payload string as raw HTML');
+  assert.doesNotMatch(grid, /innerHTML|insertAdjacentHTML|outerHTML/, 'the grid writes markup by hand');
+  // The cell text reaches the DOM through attribute bindings, which Svelte
+  // escapes; pinning the spelling keeps a later edit from hand-rolling one.
+  // Anchored on the attribute boundary, not on the substring: `data-title=`
+  // ends in `title=` and would satisfy a loose match while the cell had lost
+  // its tooltip entirely (a surviving mutant, caught by the kill matrix).
+  assert.match(grid, /\saria-label=\{text\}/);
+  assert.match(grid, /\stitle=\{text\}/);
 });
 
 // How the empty state LOOKS, which is a different question from what it
