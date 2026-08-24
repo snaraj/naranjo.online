@@ -388,10 +388,23 @@ func parseFloorPayload(plaintext []byte) (panels.FloorState, error) {
 	return panels.FloorState{Instant: instant, Digest: lines[1]}, nil
 }
 
-// validFloorDigest admits exactly a lowercase hex SHA-256.
+// validFloorDigest admits exactly a lowercase hex SHA-256, and the LOWERCASE
+// half is enforced rather than assumed. encoding/hex decodes either case, so
+// the check that used to stand here admitted an uppercase spelling of a
+// digest the writer can never produce — and since acceptance compares this
+// string against hex.EncodeToString's lowercase output, such a marker would
+// have parsed cleanly and then refused every document forever, for a reason
+// nothing reported. Refusing it here says what is wrong, at the point it is
+// wrong, and keeps one digest to one spelling.
 func validFloorDigest(value string) bool {
 	if len(value) != sha256.Size*2 {
 		return false
+	}
+	for index := 0; index < len(value); index++ {
+		char := value[index]
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
 	}
 	decoded, err := hex.DecodeString(value)
 	return err == nil && len(decoded) == sha256.Size

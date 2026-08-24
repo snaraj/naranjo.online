@@ -753,3 +753,85 @@ func TestPanelsFloorNoticeClassifiesTheStateDirectory(t *testing.T) {
 		}
 	}
 }
+
+// TestFloorPayloadRefusesEveryMalformedShape drives the sealed marker's
+// plaintext parser directly. Its inputs arrive already AUTHENTICATED — the
+// AEAD has accepted them — so the only thing that can put a malformed one
+// here is a bug in the writer or a future format change, and refusing is
+// what keeps that from being read as a lower floor.
+func TestFloorPayloadRefusesEveryMalformedShape(t *testing.T) {
+	t.Parallel()
+	digest := strings.Repeat("ab", 32)
+	for name, payload := range map[string]string{
+		"empty":                      "",
+		"instant only":               "2026-08-24T12:00:00Z\n",
+		"three lines":                "2026-08-24T12:00:00Z\n" + digest + "\nextra\n",
+		"unparsable instant":         "yesterday\n" + digest + "\n",
+		"digest too short":           "2026-08-24T12:00:00Z\n" + strings.Repeat("ab", 31) + "\n",
+		"digest not hex":             "2026-08-24T12:00:00Z\n" + strings.Repeat("zz", 32) + "\n",
+		"digest uppercase hex":       "2026-08-24T12:00:00Z\n" + strings.Repeat("AB", 32) + "\n",
+		"instant and digest swapped": digest + "\n2026-08-24T12:00:00Z\n",
+	} {
+		if _, err := parseFloorPayload([]byte(payload)); err == nil {
+			t.Errorf("%s payload was accepted as a floor", name)
+		}
+	}
+	// Non-vacuity: the shape the writer actually produces is admitted, with
+	// its fractional precision intact.
+	instant := "2026-08-24T12:00:00.9Z"
+	state, err := parseFloorPayload([]byte(instant + "\n" + digest + "\n"))
+	if err != nil {
+		t.Fatalf("the writer's own shape was refused: %v", err)
+	}
+	if state.Instant.Format(time.RFC3339Nano) != instant || state.Digest != digest {
+		t.Fatalf("parsed %v / %q", state.Instant, state.Digest)
+	}
+}
+
+// TestPanelsFloorNoticeReachesTheCompositionRoot pins the accessor the
+// server exposes to cmd/server, not just the classifier beneath it: a
+// notice computed at start must still be readable afterwards, because the
+// composition root logs it once and the loop itself stays silent.
+func TestPanelsFloorNoticeReachesTheCompositionRoot(t *testing.T) {
+	t.Parallel()
+	site, err := New(testsupport.FrontendFS())
+	if err != nil {
+		t.Fatalf("new site: %v", err)
+	}
+	defer site.Close()
+	// Nothing started yet: no notice to give.
+	if notice := site.PanelsFloorNotice(); notice != "" {
+		t.Fatalf("an unstarted site reported %q", notice)
+	}
+
+	dataDir := t.TempDir()
+	stateDir := t.TempDir()
+	env := func(name string) string {
+		if name == panelsDataKeyEnv {
+			return panelsDataTestKeyHex
+		}
+		return ""
+	}
+	root, err := openPanelsDataRoot(stateDir)
+	if err != nil {
+		t.Fatalf("open state root: %v", err)
+	}
+	floor := floorState(time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC), "accepted")
+	if err := newFloorMarker(root, env).Store(floor); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	root.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := site.StartPanelData(ctx, dataDir, stateDir, env); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	notice := site.PanelsFloorNotice()
+	if !strings.Contains(notice, "recovered at") {
+		t.Fatalf("a started site with a healthy floor reported %q", notice)
+	}
+	if strings.Contains(notice, stateDir) || strings.Contains(notice, panelsDataTestKeyHex) {
+		t.Fatalf("the notice leaked a path or key: %q", notice)
+	}
+}
