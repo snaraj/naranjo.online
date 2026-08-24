@@ -7,6 +7,28 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.36] - 2026-08-24
+
+### Added
+
+- A root `Makefile` for local development: `make run` builds the frontend
+  and launches the real server in the foreground (`PORT` overridable,
+  default 8080); `make dev` builds the backend to a real binary, launches
+  it in the background under a captured PID with a trap on
+  `EXIT`/`INT`/`TERM`, then runs Vite's HMR dev server in the foreground —
+  never a backgrounded `go run`, whose child process survives the parent's
+  death and orphans the listening port. `make deps` is guarded by a
+  `node_modules` sentinel so `npm ci` only reruns when `package-lock.json`
+  is newer; `make help` is the default target. Lets the owner preview the
+  site on localhost and give live feedback while a UI lane is in flight
+  (issue #164).
+- `frontend/vite.config.ts` gains a dev-server-only `server` block:
+  `host: '127.0.0.1'` and a `/api` proxy to the locally built backend on
+  `DEV_API_PORT` (default 8080, set by `make dev`), so hot-reload editing
+  can see real panel data. `vite build` never reads this block; a
+  before/after production-build digest comparison proved the output
+  byte-identical.
+
 ## [0.1.35] - 2026-08-24
 
 ### Fixed
