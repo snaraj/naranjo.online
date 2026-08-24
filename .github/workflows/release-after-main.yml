@@ -163,11 +163,17 @@ jobs:
               # release-window revalidates the ENTIRE mainline VERSION
               # machine and recovers the last exact patch boundary, whose
               # commit is the first mainline commit after the recovered base.
-              # Re-classifying that boundary -> head gap proves every commit
-              # since the retained release is documentation, from pure git,
-              # with no tag-timing dependency at all. Tag and Release
-              # integrity for that retained version is separately and
-              # continuously proven by the scheduled release audit.
+              # That boundary is where the anchor-advance walk below STARTS,
+              # not what the cumulative re-classification is measured from:
+              # the proof runs from the ADVANCED anchor to the head, so what
+              # it establishes is that the gap the walk leaves behind is
+              # documentation — from pure git, with no tag-timing dependency
+              # at all. The boundary-to-anchor prefix the walk consumes is
+              # genuine artifact history that already released, deliberately
+              # excluded from that classification rather than proved by it.
+              # Tag and Release integrity for that retained version is
+              # separately and continuously proven by the scheduled release
+              # audit.
               window="$(python3 -I -B scripts/ci/release_contract.py release-window \
                 --repository . --head "${COMPLETED_SHA}")"
               window_base="$(jq -er '.base_sha' <<<"${window}")"
