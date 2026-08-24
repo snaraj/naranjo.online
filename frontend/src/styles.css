@@ -200,19 +200,21 @@
 
   /* The resize rails. --page-rail-size is a HIT LANE, not a visible object:
      44px of grab area reserved beside each column edge, the same floor every
-     other control on this page clears. The visible mark is the hairline, one
-     card border wide, which is why it reads as part of the page rather than
-     as chrome bolted onto it — and why it can afford to be almost invisible
-     until a pointer or a focus ring arrives.
+     other control on this page clears. The quiet state paints NOTHING — no
+     hairline sits at the column edge until a pointer or a focus ring arrives
+     — because a mark that is always there reads as a border the page never
+     asked for, not as a control waiting to be found. The 44px lane is still
+     exactly where it was; only the resting paint is gone.
 
      The inks resolve through the reading-mode roles like every other color
-     here: the quiet state is the same rule a card draws its border with, and
-     the live state is the brand mark that already answers for hover on the
-     nav links and the icon controls. No reading mode knows this rail exists. */
+     here: the quiet state is transparent in every mode, so a control that
+     nobody is touching is invisible everywhere at once, and the live state
+     is the same brand mark that already answers for hover on the nav links
+     and the icon controls. No reading mode knows this rail exists. */
   --page-rail-size: 2.75rem;
   --page-rail-line: 2px;
   --page-rail-line-live: 4px;
-  --page-rail-ink: var(--color-border);
+  --page-rail-ink: transparent;
   --page-rail-ink-live: var(--color-brand);
 
   /* The feed-card token layer (owner directive, issue 134). The page is
