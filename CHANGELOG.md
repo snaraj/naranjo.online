@@ -7,6 +7,64 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.31] - 2026-08-23
+
+### Added
+
+- Browser-emulated rendering lanes in CI (issue #26, stage 2): a separate
+  SHA-pinned workflow drives the shipped binary through Chromium, WebKit, and
+  Gecko at phone viewports - viewport contract, touch and text floors measured
+  after layout, no sideways scroll from 320px with the menu open, reduced
+  motion in both directions, zero layout shift across theme switches, and an
+  origin lane that watches every request the page makes. `@playwright/test` is
+  pinned exactly (1.62.1), declares no install scripts, and the browser
+  binaries enter neither git nor the image.
+- App-side zero-secret panel refresh (issue #79): the egress-guarded fetcher
+  resolves each destination once, admits it against a refusal list, speaks
+  port 443 only, refuses redirects, and spends a per-attempt budget - while
+  `PANELS_REFRESH` stays default-off, so shipping the code changes no runtime
+  behavior until the owner's separate enablement decision (the cluster-side
+  egress allowance remains deferred to the platform lane).
+- Release-contract hardening (issues #93, #106, #110, #128): settings pins
+  now refuse the bool/int lookalike in both directions; requirement 10's
+  twice-corrected two-denial-mode wording is sliced between once-only anchors
+  and pinned positively, with relocation unable to rescue a mutated original;
+  the first fixture whose advance walk separates anchor from boundary proves
+  the cumulative proof classifies from the advanced anchor; and the PR
+  template's reviewer signature line now matches the contract's, with the
+  blank-receipt denial pinned to the guard that actually issues it.
+- Experience pass one (issue #127): the "Samuel Naranjo" header, icon-only
+  top-right chrome, full-width desktop layout with mobile untouched, OSRS
+  Total XP and Rank in the grid, the boss log as a horizontal side-scroller
+  with the icons locked in, the panel renamed GitHub with the calendar
+  anchored to today and scrolling left, and the token panels rendering the
+  GitHub-style contribution grid instead of a refresh-state message.
+
+### Changed
+
+- Reviewer independence in the receipt validator is actor-based (issue #64):
+  the posting actor must be byte-exactly `snaraj-agent-reviews[bot]`, the
+  signature line remains content, and the textual same-lane rule is retired.
+- Both token-usage sources are refreshed from the owner's own 2026-08-23
+  usage screens, and the recorded peak-day tiles take the live mapper's key
+  so a refresh replaces them in place instead of doubling them. The anthropic
+  peak-day total serves null - the capture reports a date, not a figure - and
+  both activity graphs stay empty, because a bucketed intensity ramp is not a
+  per-day series and inventing one is not an option.
+- The HSTS ownership comment in `server.go` reflects the measured two-layer
+  reality (issue #115), and the no-artifact documentation is corrected in two
+  places where prose had drifted from the shipped classifier (issue #109).
+- The RSN line and the staleness badge no longer render (issue #127): the
+  displayed name was personal information the owner chose to withdraw, and
+  the badge restated a provenance the panel envelope already carries.
+
+### Fixed
+
+- `formatDuration` gains its day step, so a session past twenty-four hours
+  reads `1d 17h 55m` instead of making the reader divide `41h 55m`.
+- The contribution grid no longer clips at fixed block sizes (issue #127's
+  delivered defect fix).
+
 ## [0.1.30] - 2026-08-22
 
 ### Changed
@@ -172,9 +230,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   orchestrator re-derives from git itself. The PR gate publishes its verdict
   for the exact pushed range as a run artifact; the orchestrator requires it
   from the run it already binds, re-derives the class independently, and for a
-  no-artifact range additionally re-proves the entire boundary-commit-to-head
-  gap as documentation. An absent verdict, a foreign class, or any mismatch
-  fails the job red. There is no third path and no toggle.
+  no-artifact range additionally re-proves as documentation the gap an
+  anchor-advance walk leaves behind — from the advanced anchor to the merged
+  head, not from the boundary commit, since the prefix the walk consumed is
+  genuine artifact history that already released. An absent verdict, a foreign
+  class, or any mismatch fails the job red. There is no third path and no
+  toggle.
 
 ## [0.1.26] - 2026-08-21
 

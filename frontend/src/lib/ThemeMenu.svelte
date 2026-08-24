@@ -104,7 +104,7 @@
   }
 </script>
 
-<!-- The wiki's toggle, minimally: a compact moon button opening a popover of
+<!-- The wiki's toggle, minimally: a compact moon icon opening a popover of
      one round swatch per choice. Each swatch's background IS its mode's page
      surface — read from that mode's own palette tokens, never a second copy
      of the values — with a split light/dark disc for auto, a sun on the light
@@ -133,7 +133,7 @@
     onclick={onTriggerClick}
     onkeydown={onTriggerKeydown}
   >
-    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
       <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" fill="currentColor" />
     </svg>
   </button>
@@ -290,12 +290,27 @@
     fill: var(--palette-dark-surface);
   }
 
+  /* The base ink is the palette's own accent — the lightest sepia foreground,
+     unmistakable on the sepia surface in every engine that ever shipped. It
+     is not decoration: color-mix() is the one function here that a browser
+     within this site's support window may not know (Safari before 16.2,
+     Firefox before 113), and an unknown function does not fall back to
+     something duller, it invalidates the declaration. The glyph would then
+     inherit the PAGE's text color, which in the light reading mode is
+     near-black on a near-black swatch — an invisible moon, and no test that
+     reads the mixed value would see it. */
   .swatch-sepia {
     background: var(--palette-sepia-surface);
-    /* Still a dark-brown moon, but mixed one step toward the accent so the
-       glyph clears WCAG 1.4.11's 3:1 with real margin (≈4.4:1) on the sepia
-       surface — tokens only, no restated value (review F4). */
-    color: color-mix(in srgb, var(--palette-sepia-border-strong) 60%, var(--palette-sepia-accent));
+    color: var(--palette-sepia-accent);
+  }
+
+  /* Still a dark-brown moon, but mixed one step toward the accent so the
+     glyph clears WCAG 1.4.11's 3:1 with real margin (≈4.4:1) on the sepia
+     surface — tokens only, no restated value (review F4). */
+  @supports (color: color-mix(in srgb, currentColor 50%, transparent)) {
+    .swatch-sepia {
+      color: color-mix(in srgb, var(--palette-sepia-border-strong) 60%, var(--palette-sepia-accent));
+    }
   }
 
   .swatch[aria-pressed='true'] {

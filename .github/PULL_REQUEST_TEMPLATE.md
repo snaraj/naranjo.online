@@ -38,7 +38,7 @@ Closes #<!-- same-repository issue number -->
 - Immutable-release + strict required-checks/no-bypass settings receipt: pending/exact
 - Independent normal-comment verdict has exactly one `HEAD: <exact reviewed 40-lowercase-hex>`,
   one `VERDICT: APPROVE` or `VERDICT: REQUEST-CHANGES`, mutation and claim-audit
-  evidence, and final `- <distinct context> (adversarial reviewer)`: pending
+  evidence, and final `- <Agent> (adversarial reviewer)`: pending
 - Main Worker exact-head bounded receipt (normal comment with exact
   `HEAD: <40-lowercase-hex>`, `ROLE: MAIN-WORKER`, `VERDICT: PASS`,
   `SCOPE: architecture,merge-order,authority,settings,base-freshness,required-checks`,

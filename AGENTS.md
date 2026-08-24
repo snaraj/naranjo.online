@@ -334,14 +334,26 @@ Neither gets a different protocol.)
 
 **Reviewer independence.** The reviewer is a different agent or context
 than the author — a fresh session of the same vendor qualifies; a
-different lane is better. The reviewer works in a disposable worktree at
-the PR head, stays read-only toward the author's workspace, reverts every
-experiment, and removes the worktree afterward.
+different lane is better. Independence is established by the POSTING
+ACTOR, never by signature wording: a verdict receipt is posted by the
+`snaraj-agent-reviews[bot]` GitHub App — a principal distinct from the
+account that authors and pushes branches, and one granted Contents
+write in no repository, so a compromised review lane can never alter
+what it reviews. The signature line is lane provenance, content rather
+than identity, so any current or future model name is valid there and
+this contract pins no model roster. No rule compares the reviewer's
+name to the author's: that textual same-lane denial retired with issue
+#64, because a reviewer satisfies it by writing a different-looking
+signature — evidence that the reviewer can type, and nothing else.
+Same-lane review is therefore permitted and stays legible, and the
+actor is what a reader verifies. The reviewer works in a disposable
+worktree at the PR head, stays read-only toward the author's workspace,
+reverts every experiment, and removes the worktree afterward.
 
-**Exact-head receipt.** Review identity is textual because agents share the
-owner's GitHub account; it is not a claim of separate GitHub principals. The
-reviewer posts one normal PR comment in this exact shape (replacing every
-placeholder):
+**Exact-head receipt.** The receipt binds one exact head, and the bot
+actor above is what makes it a second party rather than a self-approval.
+The reviewer posts one normal PR comment in this exact shape (replacing
+every placeholder):
 
 ```text
 HEAD: <40-lowercase-hex>
@@ -669,6 +681,14 @@ included; it is the same battery CI enforces:
     gitleaks git --no-banner --redact --max-target-megabytes=2 .
     gitleaks dir --no-banner --redact .
 
+The rendering-lane smoke matrix is its own workflow and its own local command,
+because it needs browser engines rather than only Node. Run it for any change
+that touches layout, the stylesheet, or a component's rendered shape:
+
+    cd frontend && npm run build && \
+      npx playwright install chromium firefox webkit && \
+      npm run test:browsers                     # frontend rendering changes
+
 The full local gate does not substitute for the server boundary. Automatic
 release work additionally requires the owner-observed, value-only receipt in
 `docs/release-governance.md`; because the current branch has no authority to
@@ -727,6 +747,19 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   single-commit `badges` branch. Badge numbers are CI-computed, never
   hand-edited; the badge publishes the identical number the gate
   enforced.
+- **browser-lanes.yml** — pull requests, `main` pushes, manual dispatch:
+  the rendering-lane smoke matrix (issue #26 stage 2). One job installs the
+  exact pinned `@playwright/test` from the committed lockfile, restores the
+  engine cache keyed on that version, and runs five projects against the real
+  Go binary on localhost. It holds `contents: read` and nothing else, receives
+  no secret, and publishes nothing. Deliberately NOT a job in `pr-gate.yml`:
+  the release publisher authorizes against that workflow's exact job
+  inventory. One honest limit: the engine builds arrive from Playwright's CDN
+  over TLS and are not checksum-verified the way
+  `scripts/ci/install-tools.sh` verifies every other third-party binary,
+  because no per-build digest is published to verify against — what is pinned
+  is the exact runner version, whose tarball integrity IS in the lockfile and
+  which selects the engine revisions.
 - **codeql.yml** — pull requests, `main` pushes, weekly cron.
 - **release-after-main.yml** — success-only exact-SHA main-CI completion;
   performs no publication mutation and explicitly dispatches the publisher
@@ -790,9 +823,31 @@ and tests re-derive per repository (requirement 5):
   never `100vh`; `@supports` fallbacks so rails and grids degrade
   gracefully; no horizontal body scroll at ≥ 320px (wide content
   scrolls inside its own container); `prefers-reduced-motion`
-  respected; autoplaying video is `playsinline` and muted. Stage 2 —
-  browser-emulated smoke lanes in CI — is an owner decision, gated in
-  that issue.
+  respected; autoplaying video is `playsinline` and muted.
+  Every floor is pinned where it is DECIDED — in the declarations,
+  swept across `styles.css` and every component `<style>` alike, since
+  a stylesheet-only sweep is blind to most of its own subject. Two of
+  those pins are structural rather than textual and carry the load:
+  a progressive value (a dynamic viewport unit, `env()`, `color-mix()`)
+  must have a fallback under it, either an earlier plain declaration of
+  the same property or an `@supports` block whose base sits outside the
+  guard — because an unsupported value is DROPPED, so an unguarded one
+  degrades to nothing rather than to less; and a reading-mode block may
+  declare only custom properties and `color-scheme`, which is what makes
+  the zero-CLS theme switch structural instead of a promise.
+- **Rendering lanes, stage 2** (issue #26; owner-approved 2026-08-23
+  jointly with the sibling repository): `browser-lanes.yml` drives the
+  built binary through Chromium (Chrome and Edge), Firefox and WebKit
+  (Safari and every iOS browser), each at a desktop viewport plus an
+  Android and an iPhone one, asserting the same floors as MEASURED
+  boxes, computed styles and emulated preferences. It is a separate
+  workflow on purpose: the publisher authorizes releases against
+  `pr-gate.yml`'s exact job inventory, and a rendering smoke lane must
+  not touch a release-authorization surface. The two halves answer
+  different questions and neither replaces the other — a source pin
+  binds the next build on every engine including the ones no runner
+  has, a lane proves this build survived a real cascade — so a floor
+  lands with both.
 - **Zero CLS.** Theme switches and async data arrivals cause no layout
   shift; space for late content is reserved up front.
 - **Honest states.** Empty, loading, disabled, and unavailable states

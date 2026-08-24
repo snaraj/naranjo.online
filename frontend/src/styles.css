@@ -105,8 +105,24 @@
 
   /* The page column: one width for the header and every panel in the stack,
      so the chrome sits over the cards rather than beside them, and a panel
-     added later inherits the column instead of choosing a width of its own. */
-  --page-column-width: 30rem;
+     added later inherits the column instead of choosing a width of its own.
+
+     It FILLS the viewport (owner directive, issue 127). It used to be a
+     30rem maximum, which is the whole page on a phone and a narrow ribbon
+     down the middle of a desktop with the chrome floating far from the cards
+     it acts on. Filling changes nothing a phone renders — the column was
+     already 100% there, since min(30rem, 100%) resolves to the smaller — and
+     the desktop gets the page instead of a ribbon. A user-chosen width is a
+     later issue, and this token is the one knob it will move.
+
+     The card minimum is what keeps "fills the viewport" from meaning "one
+     card stretched across a television": the stack tiles at that width, so a
+     card is the size it was designed at and the extra room becomes more
+     cards side by side rather than one wider one. It is a MINIMUM inside a
+     min(), so on a phone it collapses to the column and the stack is one
+     card wide, exactly as before. */
+  --page-column-width: 100%;
+  --page-card-min: 30rem;
   --page-gutter: 1rem;
   --page-stack-gap: 0.75rem;
   --page-header-height: 3.5rem;
@@ -243,10 +259,37 @@ body,
    unit measures the TALLEST the viewport ever gets, so on a phone showing its
    toolbars a full-height box is taller than the screen and the bottom of the
    page sits under the browser chrome; dvh tracks the space actually
-   available. A frontend test refuses the static spelling anywhere in this
-   file, which is why it is described here rather than written. */
-body {
-  min-height: 100dvh;
+   available. A frontend test refuses the static spelling anywhere in the
+   stylesheet AND in every component <style>, which is why it is described
+   here rather than written.
+
+   The upgrade is guarded because an unsupported unit does not degrade, it
+   DISAPPEARS: a browser too old for dvh drops the whole declaration and the
+   box keeps whatever height it had. So the base is stated first — the
+   min-height: 100% chain above already reaches the viewport through <html> —
+   and the dynamic unit is an enhancement on top of it. Every progressive
+   feature on this page is written that way, and a test refuses an unguarded
+   one. */
+@supports (min-height: 100dvh) {
+  body {
+    min-height: 100dvh;
+  }
+}
+
+/* Text-entry controls never render below 16px. Below that threshold iOS
+   Safari zooms the whole page in when the field takes focus, throwing the
+   layout the visitor was reading off the screen — and it does not zoom back
+   out. max() keeps a reader's own enlarged base size (1rem follows it) while
+   flooring the PHYSICAL size at the 16px the threshold is written in, so
+   honouring the preference and clearing the floor are not in tension. The
+   site ships no form control yet: this is the rule the first one inherits,
+   and the pin refuses a smaller font-size on a text-entry control anywhere in
+   the tree. */
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: max(1rem, 16px);
 }
 
 /* The page is one centered column: the header row, then the panel stack. It
@@ -258,12 +301,26 @@ body {
 
    The insets are the page's, not each component's: with no fixed elements
    left, one padding rule here clears the notch and the home indicator for
-   everything inside. */
+   everything inside.
+
+   Base first, inset-aware second, for the same reason the viewport unit is
+   guarded: a browser that does not understand env() drops the ENTIRE
+   declaration rather than the unknown part of it, so an unguarded inset
+   padding is not "no notch handling", it is NO PADDING — text flush against
+   both edges of a 320px screen. The base states the gutter that must always
+   be there; the guarded block widens it to whatever the device reports. */
 #app {
   display: grid;
   justify-items: center;
-  padding-inline: max(var(--page-gutter), env(safe-area-inset-left)) max(var(--page-gutter), env(safe-area-inset-right));
-  padding-block: max(0px, env(safe-area-inset-top)) calc(2rem + env(safe-area-inset-bottom));
+  padding-inline: var(--page-gutter);
+  padding-block: 0 2rem;
+}
+
+@supports (padding: env(safe-area-inset-top)) {
+  #app {
+    padding-inline: max(var(--page-gutter), env(safe-area-inset-left)) max(var(--page-gutter), env(safe-area-inset-right));
+    padding-block: max(0px, env(safe-area-inset-top)) calc(2rem + env(safe-area-inset-bottom));
+  }
 }
 
 /* The header and the hero both take the column's width so the controls sit
@@ -308,8 +365,28 @@ main {
   min-inline-size: 0;
 }
 
+/* One column on a phone, as many as fit on a desktop. auto-fill against a
+   card minimum is what makes the same declaration do both: below the
+   minimum there is room for exactly one track, so a phone renders the single
+   full-width column it always did, and a wide viewport fills with cards at
+   the size they were designed at instead of one card stretched across it.
+
+   min(--page-card-min, 100%) is load-bearing, not decoration: a bare 30rem
+   minimum cannot shrink, so a 320px viewport would lay out a 480px track and
+   scroll the body sideways — the exact floor this page is pinned against.
+
+   auto-FILL, not auto-fit, and the difference is measurable rather than
+   stylistic: auto-fit collapses tracks that hold no item, so while the panels
+   were still arriving the first card was laid out at the full page width and
+   then snapped to a third of it as its siblings mounted. Every panel inside
+   it re-measured — the contribution calendar was observed opening on the
+   wrong column because of exactly this — and re-laying out a card the visitor
+   is already reading is the layout shift this page is pinned against.
+   auto-fill sizes the tracks from the viewport alone, so a card is the same
+   width before and after its neighbours exist. */
 .panel-stack {
   display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--page-card-min), 100%), 1fr));
   gap: var(--page-stack-gap);
   inline-size: 100%;
 }
@@ -326,10 +403,21 @@ h1 {
 }
 
 /* The shared shape of every page-level icon control — the reading-mode
-   trigger and the refresh button beside it. Defined once, here, because two
-   controls that sit side by side and are meant to read as siblings cannot be
-   allowed to drift apart in two component stylesheets. 2.75rem = 44px: the
-   minimum comfortable touch target. */
+   trigger and the refresh beside it. Defined once, here, because two controls
+   that sit side by side and are meant to read as siblings cannot be allowed
+   to drift apart in two component stylesheets.
+
+   They are ICONS, not buttons (owner directive, issue 127): no disc, no
+   border, no fill. Each used to wear a bordered circle on a raised surface,
+   which made two small controls the loudest objects on an otherwise quiet
+   page. What survives the chrome removal is the part that is not decoration:
+   the box stays 2.75rem = 44px on both axes, because that is the minimum
+   comfortable touch target and a bare glyph is no easier to hit than a
+   framed one. The visible glyph inside it is 18px; the other 26 are hit area.
+
+   With no surface to shade, the hover and open states move to the ink — the
+   brand token, which is a defined color in every reading mode rather than a
+   translucency that depends on what is behind it. */
 .icon-button {
   inline-size: 2.75rem;
   block-size: 2.75rem;
@@ -337,16 +425,14 @@ h1 {
   place-items: center;
   padding: 0;
   cursor: pointer;
-  border-radius: 50%;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface-raised);
+  border: 0;
+  background: none;
   color: var(--color-text);
 }
 
 .icon-button:hover,
 .icon-button[aria-expanded='true'] {
-  background: var(--color-surface-overlay);
-  border-color: var(--color-border-strong);
+  color: var(--color-brand);
 }
 
 .icon-button:focus-visible {
