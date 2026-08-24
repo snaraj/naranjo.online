@@ -918,7 +918,7 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-test('the boss log is three columns that never scroll, and its detail sits on its tile', async ({
+test('the boss log is three columns that never scroll', async ({
   page,
 }) => {
   await visit(page);
@@ -964,65 +964,14 @@ test('the boss log is three columns that never scroll, and its detail sits on it
   /* The owner locked the vendored art exactly as it renders, so the lane
      counts what actually painted rather than trusting the markup. */
   expect(table.icons, 'the boss table rendered no icons').toBeGreaterThan(50);
-
-  /* The detail belongs to the tile it describes now that no scroller clips
-     it: it is drawn directly above its OWN cell rather than at one fixed
-     readout position that would be twenty rows away from most of them. */
-  await page.locator('.boss-cell').first().hover();
-  const tip = await page.evaluate(() => {
-    const cell = window.document.querySelector('.boss-cell');
-    const node = cell.querySelector('.boss-tip');
-    const shown = node.getBoundingClientRect();
-    return {
-      visibility: getComputedStyle(node).visibility,
-      bottom: shown.bottom,
-      height: shown.height,
-      cellTop: cell.getBoundingClientRect().top,
-      pageScrolls:
-        window.document.documentElement.scrollWidth >
-        window.document.documentElement.clientWidth,
-    };
-  });
-  expect(tip.visibility, 'the boss detail does not appear on hover').toBe('visible');
-  expect(tip.height, 'the boss detail rendered with no height').toBeGreaterThan(0);
-  expect(tip.bottom, 'the boss detail is not drawn above its own tile').toBeLessThanOrEqual(
-    tip.cellTop + 1
-  );
-  expect(tip.pageScrolls, 'the detail made the page scroll sideways').toBe(false);
-
-  /* And the containment rule that replaced the scroller's clipping, measured
-     where it decides: the LAST column at the NARROWEST viewport. A detail is
-     wider than a tile, so a start-anchored one in the third column hangs past
-     the card — and with no clipping ancestor left, that drags the document
-     sideways, which is the floor this page is pinned against. */
-  await page.setViewportSize({ width: phoneWidths[0], height: 720 });
-  await settled(page);
-  await page.locator('.boss-cell').nth(2).hover();
-  const edge = await page.evaluate(() => {
-    const cell = window.document.querySelectorAll('.boss-cell')[2];
-    const node = cell.querySelector('.boss-tip');
-    const card = window.document.querySelector('.boss-grid').closest('.panel-shell');
-    const shown = node.getBoundingClientRect();
-    const frame = card.getBoundingClientRect();
-    return {
-      visibility: getComputedStyle(node).visibility,
-      left: shown.left,
-      right: shown.right,
-      cardLeft: frame.left,
-      cardRight: frame.right,
-      pageScrolls:
-        window.document.documentElement.scrollWidth >
-        window.document.documentElement.clientWidth,
-    };
-  });
-  expect(edge.visibility, 'the last column detail does not appear on hover').toBe('visible');
-  expect(
-    edge.right,
-    `the last column detail reaches ${edge.right}px past a card ending at ${edge.cardRight}px`
-  ).toBeLessThanOrEqual(edge.cardRight + subPixel);
-  expect(edge.left).toBeGreaterThanOrEqual(edge.cardLeft - subPixel);
-  expect(edge.pageScrolls, 'the last column detail made the page scroll sideways').toBe(false);
 });
+
+/* The detail this table used to draw itself is now the page's one hover-detail
+   primitive, anchored to the VIEWPORT rather than to a grid cell, and it has
+   its own battery at the end of this file — including the containment floor
+   this test used to carry: nothing the detail does may make the page scroll
+   sideways at 320px. That floor did not move, it got stronger; it is now
+   measured at every viewport edge rather than only the inline ones. */
 
 test('the page names its owner, carries no badges, and wears no button chrome', async ({ page }) => {
   await visit(page);
@@ -1916,4 +1865,748 @@ test('the reading-mode popover fits the narrowest phone this site supports', asy
     `the popover is ${observed.width}px wide in a ${observed.viewport}px viewport`
   ).toBeLessThan(observed.viewport - gutterPx);
   expect(observed.columnEnd - observed.right).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
+});
+
+/* ===========================================================================
+ * The hover detail (owner directive, 2026-08-24)
+ *
+ * Two complaints, one root fix. The detail "spawns anchored to its grid cell",
+ * so hovering a tile near the end of a row put the readout a full row away
+ * from the cursor — "confusing and weird" — and the skill tiles never got the
+ * designed readout at all, only the browser's own `title=` tooltip. There is
+ * one primitive now, both grids render it, and on a pointer that HAS a cursor
+ * it follows one.
+ *
+ * These lanes measure the part no source pin can: what an engine did with it.
+ * The distances below are taken from the SYNTHETIC POINTER POSITION rather
+ * than from the tile, because the reported defect was a distance from the
+ * pointer — a suite that measures a tile can watch the box land a row away
+ * and call it correct. The arithmetic those distances come from is executed
+ * separately in tests/tooltip.test.mjs; neither half replaces the other.
+ * ======================================================================== */
+
+/* The two placement tokens, read from the page. The lanes measure against the
+   same numbers the primitive places by, so retuning the feel from the token
+   layer retunes the assertions with it instead of breaking them. */
+async function tipTokens(page) {
+  return page.evaluate(() => {
+    const style = getComputedStyle(window.document.documentElement);
+    const px = (name) => Number(style.getPropertyValue(name).trim().replace('px', ''));
+    return { gap: px('--tip-pointer-gap'), margin: px('--tip-edge-margin') };
+  });
+}
+
+/* Whether THIS engine, at THIS viewport, reports a pointer worth following.
+   The capability, never the project name: a lane that branched on which
+   browser it is would be asserting the configuration rather than the page. */
+const followsPointer = (page) =>
+  page.evaluate(() => window.matchMedia('(hover: hover) and (pointer: fine)').matches);
+
+/* One tile's detail, measured where the engine actually put it. */
+function detailBox(page, selector, index) {
+  return page.evaluate(
+    ([css, at]) => {
+      const cell = window.document.querySelectorAll(css)[at];
+      const node = cell.querySelector('.cell-tip');
+      const box = node.getBoundingClientRect();
+      const tile = cell.getBoundingClientRect();
+      const root = window.document.documentElement;
+      const style = getComputedStyle(node);
+      /* Hit-testing the box's own centre. A detail that follows the cursor is
+         the one element on the page that must be transparent to it: one that
+         could be hovered would take the pointer off the tile that opened it,
+         close itself, and hand the pointer back — forever. */
+      const under = window.document.elementFromPoint(
+        Math.round(box.left + box.width / 2),
+        Math.round(box.top + box.height / 2)
+      );
+      return {
+        open: node.getAttribute('data-tip-open'),
+        visibility: style.visibility,
+        left: box.left,
+        top: box.top,
+        right: box.right,
+        bottom: box.bottom,
+        width: box.width,
+        height: box.height,
+        text: node.textContent.replace(/\s+/g, ' ').trim(),
+        catchesPointer: under === node || node.contains(under),
+        tile: { left: tile.left, top: tile.top, right: tile.right, bottom: tile.bottom },
+        viewport: { width: root.clientWidth, height: root.clientHeight },
+        scrollWidth: root.scrollWidth,
+        clientWidth: root.clientWidth,
+      };
+    },
+    [selector, index]
+  );
+}
+
+/* A tile's box once it has STOPPED MOVING. Some of the placements below need
+   a tile at a specific edge of the screen, which means scrolling the page by
+   hand — and a hand-rolled scroll is where the engines stop agreeing. WebKit
+   scrolls asynchronously: window.scrollBy updates the document's scroll
+   position immediately while the visual viewport settles a frame later, so a
+   rect read straight afterwards can be a frame stale, and a synthetic pointer
+   aimed at it lands on the neighbouring tile and enters nothing at all.
+   (MEASURED: one run in roughly three, WebKit only, and only on the
+   hand-scrolled cases — Playwright's own scrollIntoViewIfNeeded already waits
+   for this.) Polling for two agreeing frames is the wait that ends when the
+   page is actually still. */
+async function settledBox(page, locator) {
+  let previous = null;
+  await expect
+    .poll(
+      async () => {
+        await page.evaluate(() => new Promise((frame) => requestAnimationFrame(frame)));
+        const box = await locator.boundingBox();
+        const still =
+          previous !== null &&
+          Math.abs(box.x - previous.x) < subPixel &&
+          Math.abs(box.y - previous.y) < subPixel;
+        previous = box;
+        return still;
+      },
+      { message: 'the tile never stopped moving', timeout: 5_000 }
+    )
+    .toBe(true);
+  return previous;
+}
+
+/* Put a tile under the pointer and return where the pointer went. Playwright's
+   own hover() aims at a tile's centre; several assertions below need a
+   specific corner of one, so the move is explicit. */
+async function hoverAt(page, selector, index, place) {
+  const tile = page.locator(selector).nth(index);
+  await tile.scrollIntoViewIfNeeded();
+  const box = await tile.boundingBox();
+  const at = place(box);
+  /* Leave whatever the pointer was on first. A detail opens on the ENTER,
+     and an engine sends no enter for a pointer that is already inside the
+     element — so a lane that moved straight from one measurement to the next
+     could be reading a tile it never actually entered. (MEASURED: WebKit at
+     390px, where the second viewport in a sweep put the cursor inside the
+     same tile it had just left.) */
+  await page.mouse.move(0, 0);
+  await page.mouse.move(at.x, at.y);
+  return at;
+}
+
+test('the detail opens beside the cursor, follows it, and never catches it', async ({ page }) => {
+  await visit(page);
+  test.skip(!(await followsPointer(page)), 'no fine pointer here; the anchored branch is measured below');
+  const { gap } = await tipTokens(page);
+
+  /* Both grids, because the owner's second complaint was that only one of
+     them had a designed readout. Identical measurement, identical result, is
+     what "aligned" means once one component renders both. */
+  for (const [selector, index] of [
+    ['.boss-cell', 5],
+    ['.skill-cell', 4],
+  ]) {
+    const at = await hoverAt(page, selector, index, (box) => ({
+      x: Math.round(box.x + box.width / 2),
+      y: Math.round(box.y + box.height / 2),
+    }));
+    const shown = await detailBox(page, selector, index);
+    expect(shown.open, `${selector} did not open its detail on hover`).toBe('true');
+    expect(shown.visibility, `${selector} opened an invisible detail`).toBe('visible');
+    expect(shown.height, `${selector} rendered a detail with no height`).toBeGreaterThan(0);
+    /* THE measurement. One gap from the pointer on both axes — not from the
+       tile, not from the column, not from the row. */
+    expect(shown.left - at.x, `${selector}: the detail is ${shown.left - at.x}px from the pointer`).toBeCloseTo(gap, 0);
+    expect(shown.top - at.y, `${selector}: the detail is ${shown.top - at.y}px below the pointer`).toBeCloseTo(gap, 0);
+    /* And the same fact stated the way the defect was reported, so the
+       regression is legible rather than arithmetic: the box cannot be a row
+       away from the cursor, whatever the tile's own size is. */
+    const away = Math.hypot(shown.left - at.x, shown.top - at.y);
+    const row = shown.tile.bottom - shown.tile.top;
+    expect(away, `${selector}: the detail opened ${Math.round(away)}px away — more than one tile height`).toBeLessThan(row);
+    expect(shown.catchesPointer, `${selector}: the detail can receive the pointer, so it will flicker`).toBe(false);
+  }
+
+  /* The hybrid case, which no project in this matrix is: a machine that
+     answers the media query as a fine pointer AND has a touchscreen. A
+     finger there must not open a box that then tries to follow a cursor
+     nobody is holding, and the EVENT is what knows it was a finger. Synthetic
+     because it is the only way to ask this engine that question. */
+  await page.mouse.move(0, 0);
+  const finger = await page.evaluate(async ([css, at]) => {
+    const cell = window.document.querySelectorAll(css)[at];
+    const node = cell.querySelector('.cell-tip');
+    const box = cell.getBoundingClientRect();
+    cell.dispatchEvent(
+      new PointerEvent('pointerenter', {
+        clientX: Math.round(box.left + 4),
+        clientY: Math.round(box.top + 4),
+        bubbles: true,
+        pointerType: 'touch',
+      })
+    );
+    /* A frame, deliberately: reading straight back reads the attribute the
+       reveal has not written yet and passes whatever the code did, which is
+       an assertion that cannot fail. */
+    await new Promise((frame) => requestAnimationFrame(frame));
+    return {
+      open: node.getAttribute('data-tip-open'),
+      visibility: getComputedStyle(node).visibility,
+    };
+  }, ['.boss-cell', 7]);
+  expect(
+    finger.open,
+    'a finger opened the following branch; on a touchscreen laptop that box would chase a cursor that is not there'
+  ).toBe('false');
+  expect(finger.visibility, 'a finger made a following detail visible').toBe('hidden');
+
+  /* HOW FAST it appears, measured rather than asserted (owner directive,
+     2026-08-24). The owner praised the old readout's responsiveness and
+     asked for it to be kept, so "immediately" needs a number: the box is
+     PLACED in the same task as the pointer event — synchronously, before the
+     handler returns — and it is VISIBLE before the frame that follows that
+     event paints, which is what makes zero animation frames the honest
+     figure rather than a rounding of one. */
+  const latency = await page.evaluate(
+    async ([css, at, gapPx]) => {
+      const cell = window.document.querySelectorAll(css)[at];
+      const node = cell.querySelector('.cell-tip');
+      cell.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true, pointerType: 'mouse' }));
+      await new Promise((frame) => requestAnimationFrame(frame));
+      const box = cell.getBoundingClientRect();
+      const spot = { x: Math.round(box.left + 4), y: Math.round(box.top + box.height / 2) };
+      cell.dispatchEvent(
+        new PointerEvent('pointerenter', {
+          clientX: spot.x,
+          clientY: spot.y,
+          bubbles: true,
+          pointerType: 'mouse',
+        })
+      );
+      /* Read before yielding: this is the same task the event ran in. */
+      const placed = node.style.getPropertyValue('--tip-x');
+      let frames = 0;
+      /* One microtask turn is where the reveal lands. Counting FRAMES is the
+         question a reader can feel, so the loop counts those and the answer
+         must be none of them. */
+      await null;
+      while (getComputedStyle(node).visibility !== 'visible' && frames < 8) {
+        await new Promise((frame) => requestAnimationFrame(frame));
+        frames += 1;
+      }
+      return { placed, expected: `${spot.x + gapPx}px`, frames, visible: getComputedStyle(node).visibility };
+    },
+    ['.boss-cell', 5, gap]
+  );
+  expect(
+    latency.placed,
+    'the detail is not placed in the same task as the pointer event that opened it'
+  ).toBe(latency.expected);
+  expect(latency.visible, 'the detail never became visible').toBe('visible');
+  expect(
+    latency.frames,
+    `the detail took ${latency.frames} animation frames to appear; it must be visible before the next one paints`
+  ).toBe(0);
+
+  /* A multi-step move: the box re-anchors on every one of them rather than
+     being placed once where the pointer entered. */
+  const start = await hoverAt(page, '.boss-cell', 5, (box) => ({
+    x: Math.round(box.x + 4),
+    y: Math.round(box.y + box.height / 2),
+  }));
+  for (const step of [2, 6, 10, 14]) {
+    await page.mouse.move(start.x + step, start.y);
+    const moved = await detailBox(page, '.boss-cell', 5);
+    expect(
+      moved.left - (start.x + step),
+      `the detail lagged ${moved.left - (start.x + step) - gap}px behind step ${step} of the move`
+    ).toBeCloseTo(gap, 0);
+  }
+});
+
+test('a flood of pointer moves costs one placement per frame, using the newest position', async ({
+  page,
+}) => {
+  await visit(page);
+  test.skip(!(await followsPointer(page)), 'no fine pointer here; there is nothing to follow');
+  const { gap } = await tipTokens(page);
+  const at = await hoverAt(page, '.boss-cell', 5, (box) => ({
+    x: Math.round(box.x + 4),
+    y: Math.round(box.y + box.height / 2),
+  }));
+
+  /* A pointer reports far more moves than a display can draw. Every one of
+     them would otherwise be a style write, so the handler coalesces into one
+     placement per animation frame — and this measures BOTH halves of that
+     claim, because each half has its own way of being wrong.
+
+     The flood is dispatched synchronously, inside one task, so no frame can
+     run in the middle of it. If the handler placed the box directly, the
+     position would already have moved by the time the loop ends; it must not
+     have. And a MutationObserver counts the style-attribute writes, which is
+     what separates "one placement" from "forty placements that happen to
+     agree" — the shape a lost throttle guard takes. */
+  const flood = await page.evaluate(
+    async ([sel, at, x, y]) => {
+      const cell = window.document.querySelectorAll(sel)[at];
+      const node = cell.querySelector('.cell-tip');
+      const placed = () => node.style.getPropertyValue('--tip-x');
+      const before = placed();
+      let delivered = 0;
+      const observer = new MutationObserver((records) => {
+        delivered += records.length;
+      });
+      observer.observe(node, { attributes: true, attributeFilter: ['style'] });
+      /* Count the frames the page ASKS FOR as well as the writes it makes.
+         The two catch different regressions and one of them hides the other:
+         a handler that schedules a frame per event still writes once, because
+         the first callback consumes the queued position and the rest find
+         nothing to do — so the page looks right while it registers forty
+         callbacks per flick of the wrist. Only this counter sees that. */
+      const nativeFrame = window.requestAnimationFrame;
+      let scheduled = 0;
+      window.requestAnimationFrame = (callback) => {
+        scheduled += 1;
+        return nativeFrame.call(window, callback);
+      };
+      const moves = 40;
+      for (let step = 1; step <= moves; step += 1) {
+        cell.dispatchEvent(
+          new PointerEvent('pointermove', {
+            clientX: x + step,
+            clientY: y,
+            bubbles: true,
+            pointerType: 'mouse',
+          })
+        );
+      }
+      window.requestAnimationFrame = nativeFrame;
+      const during = placed();
+      const midFlood = observer.takeRecords().length;
+      await new Promise((settle) => requestAnimationFrame(() => requestAnimationFrame(settle)));
+      const after = placed();
+      const writes = delivered + midFlood + observer.takeRecords().length;
+      observer.disconnect();
+      return { before, during, after, midFlood, writes, scheduled, moves, last: x + moves };
+    },
+    ['.boss-cell', 5, at.x, at.y]
+  );
+
+  expect(
+    flood.during,
+    `${flood.moves} pointer moves placed the detail synchronously; the frame throttle is gone`
+  ).toBe(flood.before);
+  expect(flood.midFlood, 'a style write landed inside the flood, before any frame ran').toBe(0);
+  expect(
+    flood.writes,
+    `${flood.moves} pointer moves produced ${flood.writes} style writes; the throttle coalesces them into one`
+  ).toBe(1);
+  expect(
+    flood.scheduled,
+    `${flood.moves} pointer moves scheduled ${flood.scheduled} animation frames; the guard coalesces them into one`
+  ).toBe(1);
+  /* Coalescing must never mean lagging: the one placement that runs uses the
+     LAST position reported, not the first one it happened to see. */
+  expect(
+    flood.after,
+    `the frame placed the detail at ${flood.after} for a pointer that ended at ${flood.last}px`
+  ).toBe(`${flood.last + gap}px`);
+});
+
+test('the detail flips and clamps at every viewport edge and never grows the document', async ({
+  page,
+}) => {
+  await visit(page);
+  test.skip(!(await followsPointer(page)), 'no fine pointer here; the anchored branch is measured below');
+  const { gap, margin } = await tipTokens(page);
+
+  /* The narrowest viewport this site supports, and the tile that decides:
+     one in the LAST column, scrolled so its bottom edge is at the bottom of
+     the screen. Pointing at its far corner asks the box to go past two edges
+     at once, which is exactly the placement the retired per-column anchoring
+     could not express and the reason the document used to grow sideways. */
+  await page.setViewportSize({ width: phoneWidths[0], height: 640 });
+  await settled(page);
+  const lastColumn = await page.evaluate(() => {
+    const cells = [...window.document.querySelectorAll('.boss-cell')];
+    const rightmost = Math.max(...cells.map((cell) => Math.round(cell.getBoundingClientRect().right)));
+    return cells.findLastIndex(
+      (cell) => Math.round(cell.getBoundingClientRect().right) === rightmost
+    );
+  });
+  expect(lastColumn, 'no tile sits in the last column; this lane proves nothing').toBeGreaterThan(0);
+
+  const corner = page.locator('.boss-cell').nth(lastColumn);
+  await corner.scrollIntoViewIfNeeded();
+  await corner.evaluate((cell) => {
+    const box = cell.getBoundingClientRect();
+    window.scrollBy(0, box.bottom - window.document.documentElement.clientHeight + 2);
+  });
+  const box = await settledBox(page, corner);
+  /* Two pixels inside the tile's far corner, floored. One pixel is not a
+     safety margin: a tile's edges land on fractional pixels in every engine,
+     so `right - 1` rounds OUTSIDE the tile often enough to matter, and a
+     pointer outside the tile sends no enter — a lane that silently measured
+     a detail nobody opened. (MEASURED: WebKit, one pixel low.) */
+  const at = {
+    x: Math.floor(box.x + box.width) - 2,
+    y: Math.floor(box.y + box.height) - 2,
+  };
+  await page.mouse.move(0, 0);
+  await page.mouse.move(at.x, at.y);
+  const edge = await detailBox(page, '.boss-cell', lastColumn);
+
+  expect(edge.open, 'the corner tile did not open its detail').toBe('true');
+  /* Flipped, not merely clamped. A clamped box near the end edge sits ON the
+     cursor and covers the tile being pointed at; a flipped one is on the
+     other side of it. Both axes, in one placement. */
+  expect(
+    edge.right,
+    `the detail runs to ${Math.round(edge.right)}px on the end side of a cursor at ${at.x}px`
+  ).toBeLessThanOrEqual(at.x - gap + subPixel);
+  expect(
+    edge.bottom,
+    `the detail runs to ${Math.round(edge.bottom)}px below a cursor at ${at.y}px`
+  ).toBeLessThanOrEqual(at.y - gap + subPixel);
+  /* And inside every edge of the viewport, which is the containment the old
+     per-column anchoring provided on the inline axis alone. */
+  expect(edge.left, 'the detail reaches past the start edge').toBeGreaterThanOrEqual(margin - subPixel);
+  expect(edge.top, 'the detail reaches past the top edge').toBeGreaterThanOrEqual(margin - subPixel);
+  expect(edge.right, 'the detail reaches past the end edge').toBeLessThanOrEqual(
+    edge.viewport.width - margin + subPixel
+  );
+  expect(edge.bottom, 'the detail reaches past the bottom edge').toBeLessThanOrEqual(
+    edge.viewport.height - margin + subPixel
+  );
+  /* THE floor. A fixed box is outside the document's scrollable overflow, so
+     this is structural rather than lucky — and it is measured while the box
+     is open at the worst corner of the narrowest screen, which is where the
+     arrangement it replaced failed. */
+  expect(
+    edge.scrollWidth,
+    `the detail grew the document to ${edge.scrollWidth}px inside a ${edge.clientWidth}px viewport`
+  ).toBe(edge.clientWidth);
+
+  /* And the case where CLAMPING rather than flipping is what decides, which
+     the corner above cannot reach: an 86px box beside a cursor near the end
+     edge of a 320px screen fits on the other side of it with room to spare,
+     so the clamp never runs. It runs when the box is WIDE — the longest boss
+     names produce one about 216px wide at this width — because then the flip
+     puts its start edge off the screen and only the clamp catches it.
+     Removing the clamp and keeping the flip therefore passes every assertion
+     above and fails this one. */
+  const widest = await page.evaluate(() => {
+    const cells = [...window.document.querySelectorAll('.boss-cell')];
+    let index = 0;
+    let width = 0;
+    cells.forEach((cell, at) => {
+      const box = cell.querySelector('.cell-tip').getBoundingClientRect();
+      if (box.width > width) {
+        width = box.width;
+        index = at;
+      }
+    });
+    return { index, width };
+  });
+  const wide = page.locator('.boss-cell').nth(widest.index);
+  await wide.scrollIntoViewIfNeeded();
+  const wideBox = await settledBox(page, wide);
+  const aim = {
+    x: Math.floor(wideBox.x + wideBox.width) - 2,
+    y: Math.round(wideBox.y + wideBox.height / 2),
+  };
+  /* Both preconditions, asserted rather than assumed: if the payload's names
+     ever shrink past the point where the clamp decides anything, this lane
+     says so instead of quietly proving nothing. */
+  expect(
+    aim.x + gap + widest.width,
+    `the widest detail (${Math.round(widest.width)}px) still fits beside a cursor at ${aim.x}px, so nothing flips`
+  ).toBeGreaterThan(phoneWidths[0] - margin);
+  expect(
+    aim.x - gap - widest.width,
+    `the widest detail (${Math.round(widest.width)}px) fits on the other side too, so nothing clamps`
+  ).toBeLessThan(margin);
+  await page.mouse.move(0, 0);
+  await page.mouse.move(aim.x, aim.y);
+  const clamped = await detailBox(page, '.boss-cell', widest.index);
+  expect(clamped.open, 'the widest tile did not open its detail').toBe('true');
+  expect(
+    clamped.left,
+    `a flip put the widest detail at ${Math.round(clamped.left)}px and nothing pulled it back to the start edge`
+  ).toBeCloseTo(margin, 0);
+  expect(clamped.scrollWidth, 'the clamped detail grew the document').toBe(clamped.clientWidth);
+
+  /* The other corner: a tile at the very top of the screen, where the box
+     must clamp rather than flip off the top. */
+  const first = page.locator('.boss-cell').first();
+  await first.scrollIntoViewIfNeeded();
+  await first.evaluate((cell) => {
+    window.scrollBy(0, cell.getBoundingClientRect().top - 1);
+  });
+  const head = await settledBox(page, first);
+  await page.mouse.move(0, 0);
+  await page.mouse.move(Math.ceil(head.x) + 2, Math.ceil(head.y) + 2);
+  const top = await detailBox(page, '.boss-cell', 0);
+  expect(top.open, 'the top tile did not open its detail').toBe('true');
+  expect(top.top, 'the detail reaches past the top edge').toBeGreaterThanOrEqual(margin - subPixel);
+  expect(top.left, 'the detail reaches past the start edge').toBeGreaterThanOrEqual(margin - subPixel);
+  expect(top.scrollWidth, 'the detail grew the document at the top edge').toBe(top.clientWidth);
+
+  /* Every column width between the phone floor and a desktop. The page column
+     is a token and a later lane makes it adjustable, so a detail that only
+     behaved at 320 and 1280 would be a detail that behaves at two of the
+     widths a reader can produce. */
+  for (const width of [phoneWidths[0], phoneWidths[2], 768, 1280]) {
+    await page.setViewportSize({ width, height: 720 });
+    await settled(page);
+    const spot = await hoverAt(page, '.boss-cell', 5, (tile) => ({
+      x: Math.round(tile.x + tile.width / 2),
+      y: Math.round(tile.y + tile.height / 2),
+    }));
+    const shown = await detailBox(page, '.boss-cell', 5);
+    expect(shown.open, `the detail did not open at ${width}px`).toBe('true');
+    expect(shown.left, `the detail reaches past the start edge at ${width}px`).toBeGreaterThanOrEqual(margin - subPixel);
+    expect(shown.right, `the detail reaches past the end edge at ${width}px`).toBeLessThanOrEqual(
+      width - margin + subPixel
+    );
+    expect(
+      Math.abs(shown.left - spot.x),
+      `the detail sits ${Math.round(Math.abs(shown.left - spot.x))}px from the pointer at ${width}px`
+    ).toBeLessThanOrEqual(gap + shown.width);
+    expect(shown.scrollWidth, `the detail grew the document at ${width}px`).toBe(shown.clientWidth);
+  }
+});
+
+test('a tap opens the detail over its own tile, and a second tap closes it', async ({ page }) => {
+  await visit(page);
+  test.skip(await followsPointer(page), 'this engine reports a cursor; the following branch is measured above');
+  const { gap, margin } = await tipTokens(page);
+
+  /* No cursor, so nothing to follow: the box anchors to the TILE, which is
+     the arrangement the pointer branch replaced and the correct one here. A
+     finger covers the tile it is on, so the box goes above it. */
+  const tile = page.locator('.boss-cell').nth(5);
+  await tile.scrollIntoViewIfNeeded();
+  await tile.tap();
+  const shown = await detailBox(page, '.boss-cell', 5);
+  expect(shown.open, 'a tap opened no detail').toBe('true');
+  expect(shown.visibility, 'a tap opened an invisible detail').toBe('visible');
+  expect(
+    shown.bottom,
+    `the detail runs to ${Math.round(shown.bottom)}px over a tile that starts at ${Math.round(shown.tile.top)}px`
+  ).toBeLessThanOrEqual(shown.tile.top - gap + subPixel);
+  /* Centred on the tile it describes, within the clamping the edges impose. */
+  const tileCentre = (shown.tile.left + shown.tile.right) / 2;
+  const boxCentre = (shown.left + shown.right) / 2;
+  expect(
+    Math.abs(boxCentre - tileCentre),
+    `the detail is centred ${Math.round(Math.abs(boxCentre - tileCentre))}px away from its tile`
+  ).toBeLessThanOrEqual(shown.viewport.width);
+  expect(shown.left, 'the detail reaches past the start edge').toBeGreaterThanOrEqual(margin - subPixel);
+  expect(shown.right, 'the detail reaches past the end edge').toBeLessThanOrEqual(
+    shown.viewport.width - margin + subPixel
+  );
+  expect(shown.scrollWidth, 'the detail grew the document on a phone').toBe(shown.clientWidth);
+
+  /* A finger has no "away", so the tap is a TOGGLE: the same tile again
+     closes it, and there is no state in which a reader is stuck with a box
+     they cannot dismiss. */
+  await tile.tap();
+  const closed = await detailBox(page, '.boss-cell', 5);
+  expect(closed.open, 'a second tap left the detail open').toBe('false');
+  expect(closed.visibility, 'a second tap left the detail visible').toBe('hidden');
+});
+
+test('keyboard focus opens the detail on both grids', async ({ page }) => {
+  await visit(page);
+  const { gap, margin } = await tipTokens(page);
+
+  /* A real Tab, not a programmatic focus: :focus-visible is what separates a
+     keyboard reader from a click, and only a genuine keyboard interaction
+     sets it. Focusing the PREVIOUS tile and pressing Tab is what makes that
+     affordable — the alternative is ninety-odd tab stops from the top of the
+     page. */
+  for (const [selector, index] of [
+    ['.boss-cell', 5],
+    ['.skill-cell', 4],
+  ]) {
+    const tile = page.locator(selector).nth(index);
+    await tile.scrollIntoViewIfNeeded();
+    await tile.evaluate((cell) => cell.previousElementSibling.focus());
+    await page.keyboard.press('Tab');
+    const focused = await page.evaluate(
+      ([css, at]) => window.document.activeElement === window.document.querySelectorAll(css)[at],
+      [selector, index]
+    );
+    expect(focused, `Tab did not land on ${selector} #${index}`).toBe(true);
+    const shown = await detailBox(page, selector, index);
+    expect(shown.open, `${selector} does not open its detail for a keyboard`).toBe('true');
+    expect(shown.visibility, `${selector} opened an invisible detail for a keyboard`).toBe('visible');
+    /* Anchored to the tile, because a keyboard has no cursor to anchor to —
+       the same branch a finger takes, from the same primitive. Above it by
+       preference, below it when the tile is too near the top of the screen
+       for the box to fit above, and never ON it either way: a readout drawn
+       over the thing it describes is the arrangement a flip exists to
+       prevent, and which side it lands on depends on where the browser's own
+       focus scrolling left the tile. */
+    const clear =
+      shown.bottom <= shown.tile.top - gap + subPixel ||
+      shown.top >= shown.tile.bottom + gap - subPixel;
+    expect(
+      clear,
+      `${selector}: the keyboard detail (${Math.round(shown.top)}–${Math.round(shown.bottom)}) overlaps its own tile (${Math.round(shown.tile.top)}–${Math.round(shown.tile.bottom)})`
+    ).toBe(true);
+    expect(shown.left, `${selector}: the keyboard detail reaches past the start edge`).toBeGreaterThanOrEqual(
+      margin - subPixel
+    );
+    expect(shown.right, `${selector}: the keyboard detail reaches past the end edge`).toBeLessThanOrEqual(
+      shown.viewport.width - margin + subPixel
+    );
+    expect(shown.scrollWidth, `${selector}: the keyboard detail grew the document`).toBe(
+      shown.clientWidth
+    );
+  }
+});
+
+test('the skill detail and the boss detail are the same object, measured', async ({ page }) => {
+  await visit(page);
+
+  /* The owner's second complaint, measured rather than eyeballed: the skill
+     readout must not merely resemble the boss one, it must BE it. Every value
+     below is read from the engine's computed style, and every one of them
+     also has to resolve from a token — a raw length would pass a parity
+     check and still be the drift issue #136 rule 5 forbids. */
+  const measure = ([css, at]) => {
+    const node = window.document.querySelectorAll(css)[at].querySelector('.cell-tip');
+    const box = getComputedStyle(node);
+    const title = getComputedStyle(node.querySelector('.cell-tip-name'));
+    const row = getComputedStyle(node.querySelectorAll('span')[1]);
+    return {
+      padding: [box.paddingTop, box.paddingRight, box.paddingBottom, box.paddingLeft].join(' '),
+      radius: box.borderTopLeftRadius,
+      border: `${box.borderTopWidth} ${box.borderTopStyle} ${box.borderTopColor}`,
+      background: box.backgroundColor,
+      ink: box.color,
+      size: box.fontSize,
+      leading: box.lineHeight,
+      gap: box.rowGap,
+      pointerEvents: box.pointerEvents,
+      position: box.position,
+      titleInk: title.color,
+      titleWeight: title.fontWeight,
+      rowInk: row.color,
+      rows: node.querySelectorAll('span').length,
+    };
+  };
+  const boss = await page.evaluate(measure, ['.boss-cell', 5]);
+  const skill = await page.evaluate(measure, ['.skill-cell', 4]);
+
+  for (const property of [
+    'padding',
+    'radius',
+    'border',
+    'background',
+    'ink',
+    'size',
+    'leading',
+    'gap',
+    'pointerEvents',
+    'position',
+    'titleInk',
+    'titleWeight',
+    'rowInk',
+  ]) {
+    expect(
+      skill[property],
+      `the skill detail's ${property} is "${skill[property]}" where the boss detail's is "${boss[property]}"`
+    ).toBe(boss[property]);
+  }
+  /* Non-vacuity: a parity check between two empty boxes proves nothing, so
+     both must actually carry a heading and labelled rows. */
+  expect(boss.rows, 'the boss detail rendered no rows').toBeGreaterThan(2);
+  expect(skill.rows, 'the skill detail rendered no rows').toBeGreaterThan(2);
+  /* The heading is the panel layer's one chromatic token and the rows are
+     not, which is the visual grammar the owner called the reference. */
+  expect(boss.titleInk, 'the detail heading is painted in the body ink').not.toBe(boss.ink);
+  expect(boss.rowInk, 'a detail row is painted in the heading colour').toBe(boss.ink);
+
+  /* And every one of those numbers resolves from the token layer rather than
+     being stated in the component: moving a token moves both details, which
+     is what makes the parity above a property instead of a coincidence. */
+  const fromTokens = await page.evaluate(() => {
+    const style = getComputedStyle(window.document.documentElement);
+    const node = window.document.querySelector('.cell-tip');
+    const box = getComputedStyle(node);
+    const read = (name) => style.getPropertyValue(name).trim();
+    return {
+      declaredPadding: read('--tip-padding'),
+      computedPadding: `${box.paddingTop} ${box.paddingRight}`,
+      declaredRadius: read('--tip-radius'),
+      computedRadius: box.borderTopLeftRadius,
+      declaredSize: read('--tip-size'),
+      computedSize: box.fontSize,
+    };
+  });
+  /* 0.375rem 0.5rem at the 16px root the page ships is 6px 8px; the lane
+     resolves the declaration rather than restating the pixels, so retuning
+     the token retunes the check. */
+  const rem = (value) => `${Number(value.replace('rem', '')) * 16}px`;
+  const [blockPad, inlinePad] = fromTokens.declaredPadding.split(/\s+/);
+  expect(fromTokens.computedPadding, 'the detail padding is not the token').toBe(
+    `${rem(blockPad)} ${rem(inlinePad)}`
+  );
+  expect(fromTokens.computedRadius, 'the detail radius is not the token').toBe(
+    fromTokens.declaredRadius
+  );
+  expect(fromTokens.computedSize, 'the detail type size is not the token').toBe(
+    rem(fromTokens.declaredSize)
+  );
+});
+
+test('a hostile row name reaches the detail as text and nothing else', async ({ page }) => {
+  /* Detail content is PAYLOAD — boss and skill names arrive over the network
+     from the origin's hiscore snapshot — so "it renders as text" is a
+     security property, not a formatting one. The origin's own data is well
+     behaved, which is exactly why it cannot demonstrate this: the response is
+     intercepted and one name replaced with markup that would be loud if it
+     ever executed. */
+  const hostile = '<img src=x onerror="window.__tipEscaped = true">';
+  await page.route('**/api/panels/boss-log', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.bosses[0].name = hostile;
+    envelope.data.skills[0].name = hostile;
+    await route.fulfill({ response, json: envelope });
+  });
+  await visit(page);
+
+  const rendered = await page.evaluate(
+    (text) => {
+      const tips = [...window.document.querySelectorAll('.cell-tip')];
+      const carrying = tips.filter((node) => node.textContent.includes(text));
+      return {
+        carrying: carrying.length,
+        elements: carrying.flatMap((node) => [...node.querySelectorAll('*')].map((n) => n.tagName)),
+        images: window.document.querySelectorAll('img[src="x"]').length,
+        executed: window.__tipEscaped === true,
+        labels: [...window.document.querySelectorAll('[aria-label]')].filter((n) =>
+          n.getAttribute('aria-label').includes(text)
+        ).length,
+      };
+    },
+    hostile
+  );
+
+  /* One boss tile and one skill tile carry it, as literal text. */
+  expect(rendered.carrying, 'the hostile name never reached a detail; this lane proves nothing').toBe(2);
+  /* Nothing it contained became an element, anywhere. */
+  expect(rendered.images, 'the payload name became a real <img> in the document').toBe(0);
+  expect(rendered.executed, 'markup from the payload executed').toBe(false);
+  /* And the only elements inside those details are the primitive's own spans:
+     the payload contributed text nodes and no structure at all. */
+  expect(
+    [...new Set(rendered.elements)],
+    'a detail carrying payload text contains an element the primitive did not render'
+  ).toEqual(['SPAN']);
+  /* The same text also lands in the tile's accessible name, and is inert
+     there too — the aria-label path is a second place a payload reaches the
+     DOM and it must be no different. */
+  expect(rendered.labels, 'the hostile name never reached an accessible name').toBe(2);
 });

@@ -272,6 +272,39 @@
   --grid-cell-3: var(--color-grid-3);
   --grid-cell-4: var(--color-grid-4);
 
+  /* The hover-detail token layer. The detail that hangs off a tile is one
+     primitive (lib/components/DetailTip.svelte), so like the card above it
+     every dimension it has is a token declared once here — including the two
+     the BEHAVIOUR reads, because how far the box sits from the cursor and how
+     close it may come to a screen edge are as much part of how it feels as its
+     padding is. --tip-pointer-gap and --tip-edge-margin are declared in px on
+     purpose: lib/tooltip.ts reads them at runtime and its parser accepts that
+     one unit, and tipMetricsFallback there is pinned against these two values
+     by a test that names both files. */
+  --tip-surface: var(--panel-tip-surface);
+  --tip-ink: var(--panel-text);
+  --tip-title-ink: var(--panel-accent);
+  --tip-title-weight: 650;
+  --tip-border-color: var(--panel-border);
+  --tip-border-width: 1px;
+  --tip-border-style: solid;
+  --tip-radius: 3px;
+  --tip-padding: 0.375rem 0.5rem;
+  --tip-gap: 0.125rem;
+  --tip-size: 0.6875rem;
+  --tip-leading: 1.35;
+  --tip-max-inline-size: min(14rem, calc(100vw - 1.5rem));
+  --tip-pointer-gap: 12px;
+  --tip-edge-margin: 4px;
+  /* The position a detail holds before a pointer has ever placed it. It is a
+     token rather than a var() fallback in the component so that block can
+     carry no raw length at all — which is what lets a test insist on it. */
+  --tip-x: 0px;
+  --tip-y: 0px;
+  /* Above the page, below the reading-mode menu, which is the one thing on
+     the page that must still be reachable while a detail is showing. */
+  --tip-layer: 20;
+
   color-scheme: light;
   --color-surface: var(--palette-light-surface);
   --color-surface-raised: var(--palette-light-surface-raised);

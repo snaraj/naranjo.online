@@ -2,8 +2,20 @@
   laid out the way the RuneLite hiscore panel lays one out: a dense grid of
   skill cells first — small icon, right-aligned level, and the account's two
   totals filling the last row — then the boss tallies below in the SAME three
-  columns, each an icon beside a right-aligned, thousands-separated kill count
-  with a hover/focus detail carrying the full name, the rank, and the score.
+  columns, each an icon beside a right-aligned, thousands-separated kill count.
+
+  EVERY tile in both grids now carries the same detail, through the same
+  primitive (DetailTip, issue 136 rule 1). It had two, and only one of them
+  was designed: the boss tiles had the styled readout — the row's name in the
+  brand orange over labelled figures — while the skill tiles had a bare
+  `title=` attribute, which is the browser's own tooltip and looks like
+  whichever operating system is drawing it. The owner asked for the two to be
+  aligned, so the attribute is gone (it would double-tooltip beside a real
+  one) and both grids render DetailTip with content built by the pure
+  builders in lib/bossLog.ts. The detail also follows the CURSOR now on a
+  pointer that has one, rather than opening over the tile's own column; the
+  reasoning, and how the containment the column anchoring provided is kept,
+  is in lib/tooltip.ts.
 
   The boss table does not scroll (owner directive, issue 134): "it doesn't need
   scrolling if it just goes down in columns of 3". It has now been all three
@@ -16,14 +28,6 @@
   by a very narrow card truncates with an ellipsis and keeps its full figure in
   the cell's accessible name and its detail, because a silently clipped number
   is a wrong number.
-
-  Removing the scroller is also what puts the detail back on the tile it
-  describes. It had to move out to a wrapper while the strip scrolled — an
-  absolutely positioned box is clipped by an overflow ancestor in its
-  containing-block chain, so a cell-anchored detail on the strip's top row was
-  cut in half by the strip's own edge — and with no overflow ancestor left, the
-  cell is the correct anchor again. In a table that wraps down the card, one
-  fixed readout at the top would be nowhere near the twentieth row.
 
   The account name is deliberately NOT rendered (owner directive, issue 127):
   the RSN is personal information, and a panel does not need to name whose
@@ -41,11 +45,21 @@
   declare their box and load lazily, so nothing shifts as data or images
   arrive. -->
 <script lang="ts">
+  import DetailTip from './DetailTip.svelte';
   import PanelShell from './PanelShell.svelte';
   import { watchPanel } from '../panels';
   import type { BossLogData, PanelEnvelope } from '../panels';
   import { bossInitials, bossSlug, skillSlug } from '../bossIcons';
-  import { cellLabel, rankLabel, skillLabel, skillSummary, summaryLabel, tally } from '../bossLog.ts';
+  import {
+    bossDetail,
+    cellLabel,
+    skillDetail,
+    skillLabel,
+    skillSummary,
+    summaryDetail,
+    summaryLabel,
+    tally
+  } from '../bossLog.ts';
 
   /* The icon files under assets/icons become content-hashed URLs at build
      time. Keyed by slug: the row lists stay data, adding an icon is a file
@@ -87,11 +101,11 @@
      row yields no cells at all instead of two empty ones. */
   const summary = $derived(skillSummary(skills));
 
-  /* tally, rankLabel, cellLabel, skillLabel, skillSummary, and summaryLabel
-     live in lib/bossLog.ts: a null tally, an unranked row, and a total the
-     hiscores do not report are the renderings that carry real meaning here,
-     and they are executed by tests there rather than pattern-matched in this
-     file's source. */
+  /* tally, cellLabel, skillLabel, skillSummary, summaryLabel and the three
+     detail builders live in lib/bossLog.ts: a null tally, an unranked row, a
+     total the hiscores do not report, and the labelled rows both grids share
+     are the renderings that carry real meaning here, and they are executed by
+     tests there rather than pattern-matched in this file's source. */
 </script>
 
 <PanelShell
@@ -104,7 +118,12 @@
     {#if skills.length > 0}
       <ul class="skill-grid" aria-label="Skill levels">
         {#each skills as skill (skill.name)}
-          <li class="skill-cell" aria-label={skillLabel(skill)} title={skillLabel(skill)}>
+          <!-- Focusable for the same reason a boss tile is, and now for the
+            SAME detail: a tile whose readout a mouse can reach and a keyboard
+            cannot is the half-implemented state this round removed. There is
+            no action to perform, so a button would be the wrong semantics. -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <li class="skill-cell" tabindex="0" aria-label={skillLabel(skill)}>
             {#if skillIcons.has(skillSlug(skill.name))}
               <img
                 class="skill-icon"
@@ -119,15 +138,18 @@
               <span class="skill-icon boss-glyph" aria-hidden="true">{bossInitials(skill.name)}</span>
             {/if}
             <span class="skill-level">{tally(skill.level)}</span>
+            <DetailTip detail={skillDetail(skill)} />
           </li>
         {/each}
         <!-- The account's totals, filling the last row's gap. They are cells
           of the same grid, not a caption under it, because the gap is what
           they exist to close. -->
         {#each summary as cell (cell.key)}
-          <li class="skill-cell skill-summary" aria-label={summaryLabel(cell)} title={summaryLabel(cell)}>
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <li class="skill-cell skill-summary" tabindex="0" aria-label={summaryLabel(cell)}>
             <span class="skill-summary-label" aria-hidden="true">{cell.label}</span>
             <span class="skill-level skill-summary-value">{cell.value}</span>
+            <DetailTip detail={summaryDetail(cell)} />
           </li>
         {/each}
       </ul>
@@ -141,9 +163,9 @@
       tab stop that scrolls nothing is a stop that does nothing. -->
     <ul class="boss-grid" aria-label="Boss tallies">
       {#each data.bosses as boss (boss.name)}
-        <!-- Cells take keyboard focus solely so the tooltip's
-          :focus-visible reveal matches its :hover reveal; there is no
-          action to perform, so a button would be the wrong semantics. -->
+        <!-- Cells take keyboard focus solely so the detail's keyboard reveal
+          matches its hover reveal; there is no action to perform, so a
+          button would be the wrong semantics. -->
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <li
           class="boss-cell"
@@ -165,14 +187,7 @@
             <span class="boss-icon boss-glyph" aria-hidden="true">{bossInitials(boss.name)}</span>
           {/if}
           <span class="boss-kc">{tally(boss.kc)}</span>
-          <span class="boss-tip" role="tooltip" aria-hidden="true">
-            <span class="boss-tip-name">{boss.name}</span>
-            <span>KC: {tally(boss.kc)}</span>
-            <span>Rank: {rankLabel(boss.rank)}</span>
-            {#if boss.score !== undefined && boss.score !== null}
-              <span>Score: {tally(boss.score)}</span>
-            {/if}
-          </span>
+          <DetailTip detail={bossDetail(boss)} />
         </li>
       {/each}
     </ul>
@@ -266,20 +281,19 @@
     color: var(--panel-muted, rgb(158, 158, 158));
   }
 
-  /* The cell is the tooltip's containing block again. It could not be while
-     the table scrolled — an absolutely positioned box is clipped by an
-     overflow ancestor in its containing-block chain, so a cell-anchored
-     detail on the scroller's top row was cut in half by the scroller's own
-     edge — and with the overflow gone there is nothing left to clip it. In a
-     table that wraps down the card, this is also the only anchor that works:
-     one readout fixed to the table's top edge would be twenty rows away from
-     the tile a reader is pointing at. */
+  /* No containing block here any more, deliberately. The detail is anchored
+     to the VIEWPORT rather than to whichever tile spawned it (see
+     lib/tooltip.ts) — which is what lets it follow the cursor, and what makes
+     it impossible for it to grow the document or be clipped by an ancestor.
+     A relative position on this rule would be inert, and inert declarations
+     are how the next reader concludes the tip is still cell-anchored. */
   .boss-cell {
-    position: relative;
     block-size: var(--boss-cell-height, 2.125rem);
   }
 
-  .boss-cell:focus-visible {
+  /* Both grids' tiles are focus stops now, so both wear the same ring. */
+  .boss-cell:focus-visible,
+  .skill-cell:focus-visible {
     outline: 1px solid var(--panel-accent, rgb(220, 138, 0));
     outline-offset: -1px;
   }
@@ -346,63 +360,13 @@
     font-size: 0.625rem;
   }
 
-  /* The detail reads out directly above the tile it describes.
-
-     It is anchored per COLUMN, and that is a containment rule rather than a
-     stylistic one: the tip is wider than a cell, so a start-anchored one in
-     the last column would extend past the card's end edge — and an absolutely
-     positioned box with no clipping ancestor drags the DOCUMENT sideways when
-     it does, which is the floor this page is pinned against at 320px. The
-     first column opens toward the end edge, the last opens toward the start
-     edge, and the middle one opens from its own centre; the three-column grid
-     is fixed, so nth-child names the column exactly. */
-  .boss-tip {
-    position: absolute;
-    inset-block-end: calc(100% + 0.25rem);
-    inset-inline-start: 0;
-    z-index: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
-    /* The tip is wider than the tile it describes, which used to push the
-       table's scroll width past the card and cut the leading digits off
-       every visible row. It is bounded to the viewport and claims no
-       minimum, so it fits the narrowest phone this site supports. */
-    inline-size: max-content;
-    max-inline-size: min(12rem, calc(100vw - 3rem));
-    padding: 0.375rem 0.5rem;
-    background: var(--panel-tip-surface, rgb(23, 23, 23));
-    border: 1px solid var(--panel-border, rgb(23, 23, 23));
-    border-radius: 3px;
-    font-size: 0.6875rem;
-    color: var(--panel-text, rgb(230, 230, 230));
-    visibility: hidden;
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  /* The middle column opens from its own centre, the last from its end edge;
-     both keep a 12rem detail inside a 320px card. */
-  .boss-cell:nth-child(3n + 2) .boss-tip {
-    inset-inline-start: 50%;
-    transform: translateX(-50%);
-  }
-
-  .boss-cell:nth-child(3n) .boss-tip {
-    inset-inline-start: auto;
-    inset-inline-end: 0;
-  }
-
-  .boss-cell:hover .boss-tip,
-  .boss-cell:focus-visible .boss-tip {
-    visibility: visible;
-    opacity: 1;
-  }
-
-  .boss-tip-name {
-    font-weight: 650;
-    color: var(--panel-accent, rgb(220, 138, 0));
-  }
+  /* Every rule that drew, positioned or revealed a detail is GONE from this
+     file rather than overridden — no absolute box, no per-column nth-child
+     anchoring, no hover reveal, no tip type ramp — because there is one
+     detail primitive now and this component is one of its two callers. The
+     containment those column rules provided is not lost: it is held by
+     viewport clamping in lib/tooltip.ts, at every edge instead of only the
+     inline ones, and MEASURED at 320px by the browser lanes. */
 
   .boss-note {
     margin: 0;
