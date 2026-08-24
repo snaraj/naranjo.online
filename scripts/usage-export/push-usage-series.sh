@@ -51,7 +51,12 @@ CONFIG="${NARANJO_USAGE_EXPORT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/naranjo
 [ -f "$CONFIG" ] || fail "no configuration at the expected location"
 # The configuration names key-material paths and the push destination;
 # require it private outright rather than reasoning about partial modes.
-config_mode=$(stat -f '%Lp' "$CONFIG" 2>/dev/null || stat -c '%a' "$CONFIG")
+# GNU stat is probed FIRST: BSD-first probing is unsound because GNU stat
+# also accepts -f (filesystem status), where a foreign format code still
+# exits 0 with junk output, so the GNU fallback never ran on Linux and
+# every mode was refused. BSD stat rejects -c outright, which makes this
+# order unambiguous on both platforms.
+config_mode=$(stat -c '%a' "$CONFIG" 2>/dev/null || stat -f '%Lp' "$CONFIG")
 case "$config_mode" in
     600|400|0600|0400) ;;
     *) fail "configuration must be private (chmod 600)" ;;
