@@ -1583,6 +1583,58 @@ test('every section the nav names is on the page, and its link reaches it', asyn
   }
 });
 
+test('the nav link is quiet at rest and marks itself the moment intent shows (issue 157)', async ({
+  page,
+}) => {
+  await visit(page);
+  const link = page.locator('.section-link').first();
+  await link.scrollIntoViewIfNeeded();
+
+  const idle = await link.evaluate((node) => getComputedStyle(node).textDecorationLine);
+  expect(idle, 'the nav link carries an idle underline; the owner asked for it gone').toBe('none');
+
+  await link.hover();
+  const hovered = await link.evaluate((node) => getComputedStyle(node).textDecorationLine);
+  expect(hovered, 'hover must mark the link somehow now that idle carries no mark').toBe('underline');
+
+  /* Keyboard focus keeps the site's own ring — a real Tab from a throwaway
+     starting point, the same pattern this file uses everywhere else it
+     proves :focus-visible rather than merely programmatic focus. The reading
+     mode's own trigger is the last control the page header holds (it is
+     deliberately LAST, PageHeader.svelte says why), so one real Tab from it
+     is the cheapest way to reach the first nav link without walking every
+     stop from the top of the document. */
+  await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
+  await page.keyboard.press('Tab');
+  const focused = await page.evaluate(() => {
+    const el = window.document.activeElement;
+    const style = getComputedStyle(el);
+    return {
+      tag: el.tagName,
+      isSectionLink: el.classList.contains('section-link'),
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+    };
+  });
+  /* The CAPABILITY, never the project name: some engines' default keyboard
+     configuration omits plain links from the tab order entirely (desktop
+     Safari's own default "text boxes and lists only" setting, which
+     WebKit's automation build mirrors here) — measured by checking what Tab
+     actually reached. The idle/hover assertions above already covered the
+     part that engine setting does not gate; there is nothing left to Tab
+     onto where it is true. */
+  test.skip(
+    focused.tag !== 'A',
+    "this engine's default keyboard configuration does not include plain links in the tab order (matches desktop Safari's own default) — nothing left to measure"
+  );
+  expect(
+    focused.isSectionLink,
+    'Tab from the reading-mode trigger did not land on the first nav link'
+  ).toBe(true);
+  expect(focused.outlineStyle, 'the nav link lost its focus ring').not.toBe('none');
+  expect(parseFloat(focused.outlineWidth), 'the nav link focus ring has zero width').toBeGreaterThan(0);
+});
+
 test('the art feed shows its frames when the origin serves no media', async ({ page }) => {
   await visit(page);
   /* The lanes run the binary with media disabled (playwright.config.mjs), so
