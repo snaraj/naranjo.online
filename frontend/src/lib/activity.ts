@@ -10,6 +10,7 @@
 
 import { addDays, type GridCell } from './grid.ts';
 import type { VCSActivityData } from './panels';
+import { projectHost, projectHostLabel } from './projects.ts';
 
 /* The registry identifier the activity strip loads; the one place the id is
  * spelled on the frontend. */
@@ -103,4 +104,80 @@ export function activityCells(activity: VCSActivityData): GridCell[] {
     const date = addDays(activity.endDate as string, offset);
     return offset > 0 ? { value: 0, date, absent: true } : { value, date };
   });
+}
+
+/* Outbound navigation for the recent-commits rows (issue 157). Every entry
+ * becomes real navigation, but only from fields the payload actually proves:
+ * the repository slug, and — when the commit's own subject line carries
+ * one — the pull-request number a squash merge writes at the end of it
+ * ("… (#123)", this very repository's own convention). There is no commit
+ * SHA in VCSCommit above, and this module does not widen that wire contract
+ * to invent one: a commit whose subject resolves no PR renders its title as
+ * plain text rather than link to an address nobody served.
+ *
+ * Every href below is CONSTRUCTED from a validated field, never interpolated
+ * from the raw string: a repo slug that fails the pattern, or a subject
+ * whose trailing parenthetical is not a clean positive integer, produces
+ * `null`, and the caller renders plain text instead of an anchor. The host
+ * itself is imported from projects.ts rather than spelled a second time —
+ * that module already names the owner's account once, on purpose, and this
+ * import keeps that true. */
+
+/* The character set the host actually accepts for a repository name: ASCII
+ * letters, digits, dots, hyphens and underscores, 1-100 characters, and
+ * never starting with anything outside that set. A repo string that fails
+ * this can carry a quote, a scheme, a path segment, or whitespace, so
+ * admission happens BEFORE any href is built, never after. */
+const repoSlugPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+
+export function isValidRepoSlug(repo: string): boolean {
+  return repoSlugPattern.test(repo);
+}
+
+/* The repository's own address, or null when the slug does not validate. */
+export function commitRepoUrl(repo: string): string | null {
+  return isValidRepoSlug(repo) ? `${projectHost}/${repo}` : null;
+}
+
+/* The accessible name a repo-name link carries — the same shape
+ * projectLinkLabel already gives the Coding Projects feed's own outbound
+ * links, so a reader hears one convention for "this leaves the page"
+ * everywhere on the page. */
+export function commitRepoLinkLabel(repo: string): string {
+  return `${repo} on ${projectHostLabel}, opens in a new tab`;
+}
+
+/* The trailing "(#123)" a squash-merged subject line carries. Anchored at
+ * the very end of the string so an incidental parenthetical mid-sentence can
+ * never be mistaken for one, and admitting only a clean positive integer
+ * with no leading zero and no runaway digit string — "(#007)", "(#12e3)"
+ * and "(#0)" all fail closed to null rather than guess at what was meant. */
+const pullRequestPattern = /\(#([1-9]\d{0,6})\)\s*$/;
+
+export function commitPullRequestNumber(message: string): number | null {
+  const match = pullRequestPattern.exec(message);
+  if (match === null) {
+    return null;
+  }
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+/* The commit entry's own destination: its pull request when the subject
+ * resolves one and the repo validates, otherwise null. There is no commit
+ * SHA in this payload to fall back to, so a commit with no resolvable PR
+ * renders as plain text — a stated limitation (PR body, issue 157) rather
+ * than a fabricated link to a resource nobody addressed. */
+export function commitEntryUrl(commit: { repo: string; message: string }): string | null {
+  const repo = commitRepoUrl(commit.repo);
+  if (repo === null) {
+    return null;
+  }
+  const pr = commitPullRequestNumber(commit.message);
+  return pr === null ? null : `${repo}/pull/${pr}`;
+}
+
+/* The accessible name a resolvable commit-title link carries. */
+export function commitEntryLinkLabel(message: string): string {
+  return `${message}, pull request, opens in a new tab`;
 }

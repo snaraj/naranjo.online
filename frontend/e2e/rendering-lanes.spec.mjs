@@ -1355,6 +1355,171 @@ test('a panel whose data is still on its way holds exactly the box that data wil
   }
 });
 
+/* Outbound navigation for the recent-commits rows (issue 157), measured
+ * against a real render rather than only against the pure functions in
+ * tests/activity.test.mjs. The origin's own data is well behaved, which is
+ * exactly why it cannot demonstrate the hostile half: the response is
+ * intercepted and its rows replaced — one with a payload shape a raw
+ * interpolation would have turned into a working (and in one case
+ * executable) href, the other with a genuine reference. */
+test('a hostile commit row renders as text and never becomes a live link', async ({ page }) => {
+  const hostileRepo = 'evil.example" onmouseover="window.__activityEscaped = true';
+  const unresolvedPR = 'release (#12e3)'; // not a clean trailing integer
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.recentCommits = [
+      { repo: hostileRepo, message: 'a merge (#1)', at: '2026-08-01T00:00:00Z' },
+      { repo: 'naranjo.online', message: unresolvedPR, at: '2026-08-01T00:00:00Z' },
+    ];
+    await route.fulfill({ response, json: envelope });
+  });
+  await visit(page);
+
+  const rendered = await page.evaluate(() => {
+    const rows = [...window.document.querySelectorAll('.activity-commit')];
+    const repoCell = rows[0]?.querySelector('.activity-commit-repo');
+    const messageCell = rows[1]?.querySelector('.activity-commit-message');
+    return {
+      repoTag: repoCell?.tagName ?? null,
+      repoText: repoCell?.textContent ?? null,
+      messageTag: messageCell?.tagName ?? null,
+      messageText: messageCell?.textContent ?? null,
+      anchors: rows.flatMap((row) =>
+        [...row.querySelectorAll('a')].map((a) => a.getAttribute('href'))
+      ),
+      escaped: window.__activityEscaped === true,
+    };
+  });
+
+  /* The hostile repo reached the DOM as literal text in a plain <span> —
+     never an anchor, and the string it carries never executed. */
+  expect(rendered.repoTag, 'the hostile repo row disappeared; this lane proves nothing').toBe('SPAN');
+  expect(rendered.repoText).toContain(hostileRepo);
+  expect(rendered.escaped, 'the hostile repo string executed').toBe(false);
+
+  /* The second row's repo is genuine, so the guard is scoped per FIELD
+     rather than blanking a whole row the moment anything about it looks
+     wrong — its title still renders as plain text because "(#12e3)" is not
+     a resolvable PR reference. */
+  expect(rendered.messageTag, 'the unresolved-PR title row disappeared').toBe('SPAN');
+  expect(rendered.messageText).toContain(unresolvedPR);
+
+  /* And no anchor ANYWHERE in either row carries the hostile payload — not
+     merely "these two cells are spans", but "nothing built a link out of
+     this payload at all", which is what closes off a raw-interpolation
+     regression landing somewhere this test did not think to look. */
+  for (const href of rendered.anchors) {
+    expect(href, `an anchor carries the hostile payload: ${href}`).not.toContain('evil.example');
+    expect(href, `an anchor carries the hostile payload: ${href}`).not.toContain('onmouseover');
+  }
+});
+
+test('a resolvable commit row is real, keyboard-reachable navigation', async ({ page }) => {
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.recentCommits = [
+      {
+        repo: 'naranjo.online',
+        message: 'release(0.1.34): six-lane integration bundle (#152)',
+        at: '2026-08-24T00:00:00Z',
+      },
+    ];
+    await route.fulfill({ response, json: envelope });
+  });
+  await visit(page);
+
+  const messageLink = page.locator('.activity-commit-message').first();
+  await messageLink.scrollIntoViewIfNeeded();
+
+  const attrs = await page.evaluate(() => {
+    const row = window.document.querySelector('.activity-commit');
+    const repo = row.querySelector('.activity-commit-repo');
+    const message = row.querySelector('.activity-commit-message');
+    const read = (el) => ({
+      tag: el.tagName,
+      href: el.getAttribute('href'),
+      target: el.getAttribute('target'),
+      rel: el.getAttribute('rel'),
+      label: el.getAttribute('aria-label'),
+    });
+    return { repo: read(repo), message: read(message) };
+  });
+
+  expect(attrs.repo.tag).toBe('A');
+  expect(attrs.repo.href).toBe('https://github.com/snaraj/naranjo.online');
+  expect(attrs.repo.target).toBe('_blank');
+  expect(attrs.repo.rel).toBe('noopener noreferrer');
+  expect(attrs.repo.label).toContain('opens in a new tab');
+
+  expect(attrs.message.tag).toBe('A');
+  expect(attrs.message.href).toBe('https://github.com/snaraj/naranjo.online/pull/152');
+  expect(attrs.message.target).toBe('_blank');
+  expect(attrs.message.rel).toBe('noopener noreferrer');
+  expect(attrs.message.label).toContain('opens in a new tab');
+
+  /* MEASURED keyboard reachability, following this file's own pattern for
+     :focus-visible (a real Tab, not a programmatic focus, is what a
+     keyboard reader actually produces): focus the title link as a
+     throwaway starting point, Shift+Tab onto the repo link to check it,
+     then Tab back onto the title link to check that one too — both stops
+     are reached by a genuine key press. */
+  await messageLink.evaluate((el) => el.focus());
+  await page.keyboard.press('Shift+Tab');
+  const repoFocus = await page.evaluate(() => {
+    const el = window.document.activeElement;
+    const style = getComputedStyle(el);
+    return {
+      tag: el.tagName,
+      isRepoLink: el.classList.contains('activity-commit-repo'),
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+    };
+  });
+  /* The CAPABILITY, never the project name: some engines' default keyboard
+     configuration omits plain links from the tab order entirely (this is
+     desktop Safari's own default "text boxes and lists only" setting, which
+     WebKit's automation build mirrors) — measured here by checking what Tab
+     actually reached rather than assumed from which engine this is. Where
+     that is true there is nothing about THIS link for a Tab press to prove;
+     the attribute assertions above already covered the part that engine
+     setting does not gate. */
+  test.skip(
+    repoFocus.tag !== 'A',
+    "this engine's default keyboard configuration does not include plain links in the tab order (matches desktop Safari's own default) — nothing left to measure"
+  );
+  expect(repoFocus.isRepoLink, 'Shift+Tab from the title link did not land on the repo link').toBe(
+    true
+  );
+  expect(repoFocus.outlineStyle, 'the repo link has no visible keyboard focus ring').not.toBe('none');
+  expect(
+    parseFloat(repoFocus.outlineWidth),
+    'the repo link focus ring has zero width'
+  ).toBeGreaterThan(0);
+
+  await page.keyboard.press('Tab');
+  const messageFocus = await page.evaluate(() => {
+    const el = window.document.activeElement;
+    const style = getComputedStyle(el);
+    return {
+      isMessageLink: el.classList.contains('activity-commit-message'),
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+    };
+  });
+  expect(messageFocus.isMessageLink, 'Tab from the repo link did not land on the title link').toBe(
+    true
+  );
+  expect(messageFocus.outlineStyle, 'the title link has no visible keyboard focus ring').not.toBe(
+    'none'
+  );
+  expect(
+    parseFloat(messageFocus.outlineWidth),
+    'the title link focus ring has zero width'
+  ).toBeGreaterThan(0);
+});
+
 test('the popover animates only where motion is welcome', async ({ page }) => {
   await visit(page);
   await openReadingModes(page);
