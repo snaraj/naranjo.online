@@ -127,7 +127,36 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/* isCount is the LAST stage of one numeric contract that spans three
+ * languages, and all three admit exactly the same set (2026-08-24 round-3
+ * review finding 9). The producer bounds every counter at MAX_COUNT
+ * (scripts/capture_usage_series.py), the server refuses a category total or
+ * sum outside maxCountValue (internal/panels/types.go), and this admits only
+ * what both of those can have produced. 2^53 - 1 is the largest integer
+ * JavaScript represents exactly, so a value above it has ALREADY lost
+ * precision by the time it reaches here — 9007199254740993 parses as
+ * ...992, and two different producer totals become one indistinguishable
+ * number. Number.isFinite admitted that silently, and admitted 1.5 and -0.5
+ * as counts besides. Number.isSafeInteger refuses the lot: non-integers,
+ * values past the exact-representation boundary, NaN and both infinities.
+ * The countBound export below pins the shared ceiling so the parity test can
+ * compare it against the Go and Python constants by value. */
+export const countBound = Number.MAX_SAFE_INTEGER;
+
 function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/* isRate admits the two payload fields the server declares *float64 rather
+ * than int64 — a window's utilizationPct and an insight's pct. They are
+ * NOT counts: a percentage is a rate, and 36.4 is a correct value for one,
+ * so the integer contract above would refuse real data. Splitting them out
+ * is what lets isCount tighten at all; before this the single predicate had
+ * to stay loose enough for the fractional cases, which is exactly how
+ * fractional and precision-losing token totals got in. No upper bound is
+ * asserted on purpose: utilization above 100 is a real overage reading, and
+ * inventing a ceiling here would refuse a truthful number. */
+function isRate(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
@@ -254,7 +283,7 @@ export function tokenUsageSources(data: unknown): TokenUsageSource[] {
       if (!isCount(entry.inputTokens) || !isCount(entry.outputTokens)) {
         return [];
       }
-      if (entry.utilizationPct !== undefined && !isCount(entry.utilizationPct)) {
+      if (entry.utilizationPct !== undefined && !isRate(entry.utilizationPct)) {
         return [];
       }
       if (entry.resetsAt !== undefined && typeof entry.resetsAt !== 'string') {
@@ -342,7 +371,7 @@ function admitInsights(value: unknown): TokenUsageInsight[] | null {
     if (!isRecord(entry) || typeof entry.label !== 'string' || entry.label === '') {
       return null;
     }
-    if (entry.pct !== null && !isCount(entry.pct)) {
+    if (entry.pct !== null && !isRate(entry.pct)) {
       return null;
     }
     if (entry.recorded !== undefined && typeof entry.recorded !== 'boolean') {
@@ -444,7 +473,22 @@ function admitCategories(value: unknown, totals: number[]): TokenUsageCategory[]
     }
     const dailies = entry.totals as number[];
     for (let day = 0; day < days; day += 1) {
-      sums[day] += dailies[day];
+      /* CHECKED summation, the frontend end of finding 9's one numeric
+       * contract. Go refuses an int64 category sum that overflows and
+       * Python refuses a counter past MAX_COUNT; here the hazard is
+       * different in kind but identical in effect. JavaScript addition
+       * does not overflow — it silently stops being exact, so eight
+       * admissible categories can sum past 2^53-1 and land on a number
+       * that is merely NEAR the truth. The equality check below would
+       * then be comparing two approximations, and could pass on a
+       * document whose parts do not actually add up. Refusing the moment
+       * the running sum leaves the exact range keeps the comparison
+       * meaningful instead of decorative. */
+      const running = sums[day] + dailies[day];
+      if (!Number.isSafeInteger(running)) {
+        return null;
+      }
+      sums[day] = running;
     }
     categories.push({ key: entry.key, totals: dailies });
   }

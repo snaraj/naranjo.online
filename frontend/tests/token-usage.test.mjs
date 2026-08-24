@@ -6,6 +6,7 @@ import {
   categoryLabel,
   categoryShares,
   categorySlot,
+  countBound,
   formatDuration,
   formatStatValue,
   formatTokenCount,
@@ -756,5 +757,98 @@ describe('category breakdown surface', () => {
        category KEY cannot even reach the renderer (admission refuses it —
        proven above). */
     assert.doesNotMatch(component, /\{@html/);
+  });
+});
+
+/* Finding 9 of the 2026-08-24 round-3 review: the frontend was the loose end
+ * of a numeric contract the other two stages enforce. Number.isFinite admits
+ * 1.5, admits 1e300, and admits 9007199254740993 — which is not even the
+ * number that was written, because it does not exist in JavaScript. These
+ * cases are the exact inputs that used to be admitted. */
+describe('count admission holds the shared numeric contract', () => {
+  const window = (patch) => ({
+    sources: [{ label: 'fixture', windows: [{ period: 'week', inputTokens: 1, outputTokens: 1, ...patch }] }]
+  });
+
+  it('admits the largest value every stage agrees about', () => {
+    const admitted = tokenUsageSources(window({ inputTokens: countBound }));
+    assert.equal(admitted.length, 1);
+    assert.equal(admitted[0].windows[0].inputTokens, countBound);
+  });
+
+  it('refuses a count one past the exact-representation boundary', () => {
+    /* countBound + 1 and countBound + 2 are the SAME double, so a payload
+     * carrying either arrives indistinguishable from the other. Serving a
+     * figure the origin did not produce is the doctrine violation the
+     * panels contract names by hand; refusing is the honest state. */
+    assert.equal(countBound + 1, countBound + 2);
+    assert.deepEqual(tokenUsageSources(window({ inputTokens: countBound + 1 })), []);
+    assert.deepEqual(tokenUsageSources(window({ outputTokens: 1e300 })), []);
+  });
+
+  it('refuses a fractional count', () => {
+    assert.deepEqual(tokenUsageSources(window({ inputTokens: 1.5 })), []);
+    assert.deepEqual(tokenUsageSources(window({ outputTokens: -0.5 })), []);
+  });
+
+  it('refuses NaN and both infinities', () => {
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      assert.deepEqual(tokenUsageSources(window({ inputTokens: value })), [], String(value));
+    }
+  });
+
+  it('still admits a fractional utilization, which is a rate and not a count', () => {
+    /* The tightening above must not swallow the two *float64 fields the
+     * origin genuinely serves. 36.4 is a correct utilizationPct and 58.7 is
+     * a correct insight pct; refusing them would blank a truthful panel. */
+    const admitted = tokenUsageSources(window({ utilizationPct: 36.4 }));
+    assert.equal(admitted.length, 1);
+    assert.equal(admitted[0].windows[0].utilizationPct, 36.4);
+    const insight = tokenUsageSources({
+      sources: [{ label: 'fixture', windows: [], insights: [{ label: 'cache read', pct: 58.7 }] }]
+    });
+    assert.equal(insight[0].insights[0].pct, 58.7);
+  });
+
+  it('refuses a rate that is not a number at all', () => {
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      assert.deepEqual(tokenUsageSources(window({ utilizationPct: value })), [], String(value));
+    }
+  });
+
+  it('refuses a series total outside the shared range', () => {
+    const series = (totals) => ({
+      sources: [{ label: 'fixture', windows: [], series: { startDate: '2026-08-10', totals } }]
+    });
+    assert.equal(tokenUsageSources(series([1, countBound])).length, 1);
+    assert.deepEqual(tokenUsageSources(series([1, countBound + 1])), []);
+    assert.deepEqual(tokenUsageSources(series([1, 2.5])), []);
+  });
+
+  it('refuses a category partition whose running sum leaves the exact range', () => {
+    /* Each part is admissible on its own and the declared total is
+     * admissible too; only the SUM leaves the range. Unchecked, the
+     * addition would land on an approximation and the equality below it
+     * would be comparing two numbers neither of which is the truth. */
+    const half = Math.floor(countBound / 2) + 1;
+    const payload = {
+      sources: [
+        {
+          label: 'fixture',
+          windows: [],
+          series: {
+            startDate: '2026-08-10',
+            totals: [countBound],
+            categories: [
+              { key: 'input', totals: [half] },
+              { key: 'output', totals: [half] }
+            ]
+          }
+        }
+      ]
+    };
+    assert.ok(Number.isSafeInteger(half) && Number.isSafeInteger(countBound));
+    assert.ok(!Number.isSafeInteger(half + half));
+    assert.deepEqual(tokenUsageSources(payload), []);
   });
 });
