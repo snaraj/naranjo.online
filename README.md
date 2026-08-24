@@ -366,6 +366,14 @@ requires all of the following, together:
    (issue #79); it never means removing the deny. Until that lands, setting
    `panels.refresh.enabled` buys nothing but failed attempts.
 
+One panel is claimed rather than refreshed when both capabilities are on.
+With `PANELS_DATA_ROOT` set, the sealed data root OWNS the token-usage panel:
+the live path starts no loop for it and never reaches its credentialed
+endpoints, so the credential-free sealed feed is the only producer writing
+it, and the pod logs that decision once at startup. Every OTHER
+refresh-backed panel is unaffected — enabling the sealed feed never silently
+disables the rest (2026-08-24 security review, finding 8).
+
 **Cluster enablement is a separate owner-reviewed step** (standing audit item
 S2) covering the Secret material, the egress policy, and the review of what
 the origin is then permitted to talk to. Nothing in this repository performs
