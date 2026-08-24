@@ -15,19 +15,28 @@ name: Browser lanes
 # the origin under test is this repository's own Go binary on localhost, and
 # no external service receives anything. See "Zero-spend guardrails" in
 # AGENTS.md.
+#
+# Pull requests and manual dispatch only, deliberately: `main` is merged by
+# squash or rebase with merge commits disabled, so the tree that lands is the
+# tree these engines already rendered on the pull-request head, and this lane
+# reads nothing outside that tree -- no branch name, no event payload, no
+# release state. A repeat run on the merge measures the same bytes a second
+# time, delays nothing but itself and the release orchestration behind it, and
+# would report a failure only after merge authority had already been
+# exercised. Nothing is weakened: this lane gates no release and is not a
+# required check (that is a ruleset decision belonging to the owner), and
+# `workflow_dispatch` keeps `main` itself re-measurable on demand.
 
 on:
   pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions: {}
 
 concurrency:
-  # Same shape as the PR gate: a PR synchronization may cancel its own older
-  # run, while every main push keeps its unique run id so no merge can erase
-  # another merge's result.
+  # Same shape as the PR gate: a pull-request synchronization may cancel its
+  # own older run, while a manual dispatch falls back to its unique run id so
+  # one re-measurement can never cancel another.
   group: browser-lanes-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 

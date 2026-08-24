@@ -56,8 +56,13 @@ with only Actions/content read access. That job
 GETs the run by ID and requires the exact repository and head repository,
 workflow name and path, `push` event, completed/success state, `main` branch,
 and source SHA. It also GETs the exact run's complete job inventory and requires
-exactly successful `application`, `chart`, `container`, `coverage-badges`, and
-`security` jobs plus the context-appropriate skipped `dependency-review` job.
+exactly successful `application`, `chart`, `coverage-badges`, and `security`
+jobs plus the two context-appropriate skipped jobs, `container` and
+`dependency-review`, both of which run on pull requests only. Those two are
+pinned in the skipped direction as strictly as the rest are in the successful
+one: a `container` job reporting success on a main push means its
+pull-request condition is gone, and the inventory refuses that run rather than
+authorizing a release against a changed gate.
 Workflow-level success alone is insufficient. In the same bounded authorization
 window it resolves the separate `codeql.yml` `push` run for that exact source
 SHA, then requires exactly the two completed/success matrix jobs `analyze (go,

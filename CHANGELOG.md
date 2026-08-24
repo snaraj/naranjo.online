@@ -7,6 +7,38 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.32] - 2026-08-23
+
+### Changed
+
+- The duplicated post-merge container build is gone (issue #133). The PR
+  gate's `container` job now carries `if: github.event_name == 'pull_request'`,
+  the same condition `dependency-review` has always carried. It remains a
+  REQUIRED pull-request check, so nothing merges without it; what is removed
+  is only its second, cache-less execution on the main push - 598 seconds of
+  a 601-second run that gated nothing. Merges are squash-or-rebase with merge
+  commits disabled under a strict required-check ruleset, so the tree that
+  lands is necessarily the tree the required check just built, and the
+  Dockerfile takes no build argument and no git metadata and digest-pins every
+  base, making the image a pure function of that tree. The bytes that actually
+  ship are still built, scanned, signed, and attested inside the publisher's
+  privileged job. `EXPECTED_MAIN_JOBS` records the resulting `skipped`
+  conclusion and now refuses a `success` there as well, so silently dropping
+  the condition denies the release rather than quietly rebuilding after merge
+  authority was already exercised.
+- The browser-lane smoke matrix runs on pull requests and manual dispatch
+  only, for the same reason: it reads nothing outside the tree, gates no
+  release, and is not a required check, so a repeat run on the merge measured
+  identical bytes and delayed the release path behind it. `workflow_dispatch`
+  keeps `main` re-measurable on demand.
+
+### Removed
+
+- The README's `Browser lanes` main-branch badge. With the push trigger gone
+  the badge would freeze on its last historical main run and keep asserting a
+  status for trees it never measured; the adjacent prose now states where the
+  lane actually runs.
+
 ## [0.1.31] - 2026-08-23
 
 ### Added

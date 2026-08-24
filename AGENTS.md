@@ -740,15 +740,27 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   `--kube-version v1.36.0`; the numeric VERSION ↔ numeric chart `version` ↔
   numeric `appVersion` ↔ plain-v chart `image.tag` four-way lock, plus a render
   assertion that the emitted reference still carries a full digest),
-  `container` (both production
-  architectures built, never published).
+  `container` (PRs only, like `dependency-review`; both production
+  architectures built, never published). `container` remains a REQUIRED
+  pull-request check: what it no longer does is rebuild the identical tree a
+  second time on the main push, where it gated nothing — squash/rebase-only
+  merges under strict required checks land the exact tree it already built,
+  and the released bytes are still built, scanned, signed and attested by
+  `release-publisher.yml`. `EXPECTED_MAIN_JOBS` in
+  `scripts/ci/release_contract.py` therefore expects `container` and
+  `dependency-review` `skipped` on a main push and the other four
+  successful, exact in both directions.
 - **coverage-badges** — `main` pushes only: recomputes both coverages
   with the gate's own recipe and force-updates the generated
   single-commit `badges` branch. Badge numbers are CI-computed, never
   hand-edited; the badge publishes the identical number the gate
   enforced.
-- **browser-lanes.yml** — pull requests, `main` pushes, manual dispatch:
-  the rendering-lane smoke matrix (issue #26 stage 2). One job installs the
+- **browser-lanes.yml** — pull requests and manual dispatch (no `main` push
+  trigger, for the same reason `container` has none: the merged tree is the
+  tree these engines already rendered, and this lane reads nothing outside
+  that tree, so a repeat run measures identical bytes after merge authority
+  has been exercised): the rendering-lane smoke matrix (issue #26 stage 2).
+  One job installs the
   exact pinned `@playwright/test` from the committed lockfile, restores the
   engine cache keyed on that version, and runs five projects against the real
   Go binary on localhost. It holds `contents: read` and nothing else, receives
