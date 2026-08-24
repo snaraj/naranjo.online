@@ -5,10 +5,42 @@ WHY THIS EXISTS. The token-usage panel's daily heatmap needs one combined
 token total per calendar day. The previous capture was a screenshot of a
 vendor dashboard, which shows BUCKETED INTENSITY rather than per-day totals,
 so the series could not be reconstructed from it without inventing numbers.
-The agent tool that produces the usage, however, already writes the raw
-figures locally: one JSON object per line, each assistant message carrying a
-`message.usage` object beside an ISO 8601 `timestamp`. Summing those is a
-RECORDED measurement, not a reconstruction.
+The agent tools that produce the usage, however, already write the raw
+figures locally: one JSON object per line, beside an ISO 8601 `timestamp`.
+Summing those is a RECORDED measurement, not a reconstruction.
+
+TWO RECORD SHAPES, ONE SERIES. The tools journal the same arithmetic in two
+different ways, so the walk is parameterised by shape (`--format`) and
+everything downstream — the day index, the streak arithmetic, the emission
+guard, the splice — is shared:
+
+  * `messages` — each line is one billed message carrying its own
+    `message.usage` object. The tool REPLAYS earlier messages into later
+    files on resume or fork, so the same billed message appears many times
+    across the tree; identity de-duplication on the message/request id pair
+    is what keeps a day from roughly doubling.
+
+  * `running-totals` — each line may carry `payload.info.total_token_usage`,
+    a RUNNING CUMULATIVE for the session so far, which repeats on every
+    event. Naive summation multiplies the truth. The contribution of one
+    record is therefore how far the running total ADVANCED since the
+    previous record in the same file, attributed to that record's own UTC
+    day — so a session spanning midnight splits across the two days it
+    really happened on, exactly like the message shape does.
+
+    Three cases exhaust the record, and all three are measured rather than
+    assumed. The total ADVANCES on a real turn (the ordinary case). It
+    REPEATS when the tool emits the same accounting twice for one turn —
+    those records bill nothing and contribute zero, which is precisely the
+    replay trap. And it RESTARTS from a lower figure when a session resets
+    its own accounting mid-file; the record shows the restarting value is
+    that turn's own usage, so the contribution is the new total itself. A
+    reader that instead took one final total per file would silently lose
+    everything before each restart.
+
+    A record whose running total is absent or unusable advances nothing, so
+    a shape change in the journal degrades to a loud refusal — no records
+    found — rather than to a quietly wrong number.
 
 WHAT LEAVES THE WALK — this is the whole security argument, and requirement 12
 of AGENTS.md is absolute about it. The transcripts contain prompts, responses,
@@ -27,11 +59,19 @@ named, because an error string carrying a path is a leak with a friendly face.
 before anything is written or printed, so a future edit that starts carrying a
 project name has to defeat an explicit check rather than slip past review.
 
-WHAT IT COMPUTES, and why it matches the live mapper exactly. A day's total is
-`input_tokens + output_tokens + cache_read_input_tokens +
-cache_creation_input_tokens`, which is the same quantity
-`internal/panels/mapping.go` sums out of the vendor usage API (uncached input
-plus both cache classes, plus output). Days are UTC, like the mapper's. The
+WHAT IT COMPUTES, and why it matches the live mapper exactly. Under the
+`messages` shape a day's total is `input_tokens + output_tokens +
+cache_read_input_tokens + cache_creation_input_tokens`, which is the same
+quantity `internal/panels/mapping.go` sums out of the vendor usage API
+(uncached input plus both cache classes, plus output) — those four fields are
+DISJOINT in that record shape. Under `running-totals` the record's own
+`total_tokens` is that same whole: measured across the owner's tree,
+`total_tokens` equals `input_tokens + output_tokens` on every well-formed
+record, while `cached_input_tokens`, `cache_write_input_tokens` and
+`reasoning_output_tokens` are SUBSETS of those two rather than additions to
+them — so adding them would count the same tokens two and three times. The
+two shapes therefore report the same measurement: every token the tool
+processed. Days are UTC, like the mapper's. The
 series runs contiguously from the oldest recorded day to the newest, with
 zeros for days inside that window the record has nothing for — again the
 mapper's own rule, and the reason the series never extends past the days the
@@ -53,10 +93,23 @@ doctrine forbids. Keeping the derived three in step with the shipped series is
 the other half of the same rule — a tile that contradicts the graph printed
 under it is the panel disagreeing with itself.
 
+WHAT IT CANNOT DO, structurally. This module's import surface is a CLOSED
+allowlist pinned by its test suite: a file reader, a date library, a JSON
+codec, an argument parser, a pattern matcher, and the interpreter's own
+streams. Nothing here can spawn a process, open a socket, or resolve a name,
+and `os` is deliberately NOT among the imports even though `os.walk` would be
+the obvious way to write the walk — `os` carries `system`, `popen`, `fork`,
+`spawn*` and `exec*`, so admitting it would leave the pin unable to keep its
+own promise. Reading these journals launches nothing: they are inert files,
+and this program never executes the tools that wrote them. A future edit that
+adds an execution or network capability has to defeat an explicit test before
+it can reach a commit.
+
 Dependency-free: Python 3 standard library only, no network, no writes outside
 the snapshot path it is given.
 
     scripts/capture_usage_series.py --transcripts DIR --source LABEL \
+        [--format messages|running-totals] \
         [--snapshot internal/panels/snapshots/token-usage.json]
 
 With no `--snapshot` the series and its derived figures print to stdout as
@@ -68,7 +121,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
-import os
+import pathlib
 import re
 import sys
 
@@ -94,6 +147,26 @@ USAGE_FIELDS = (
     "cache_creation_input_tokens",
 )
 
+# The record shapes the walk knows how to read, named for what the record
+# CONTAINS rather than for the tool that wrote it: a shape is a journal
+# format, and a format that acquires a vendor's name in code is a coupling
+# nobody asked for.
+FORMAT_MESSAGES = "messages"
+FORMAT_RUNNING_TOTALS = "running-totals"
+RECORD_FORMATS = (FORMAT_MESSAGES, FORMAT_RUNNING_TOTALS)
+
+# Where a running-totals record keeps its cumulative figure, and the single
+# field inside it that is the whole. Measured on the owner's tree: this field
+# equals input plus output on every well-formed record, and the cache and
+# reasoning fields beside it are subsets of those two — see the module
+# docstring. Reading the whole rather than re-summing the parts is also what
+# keeps the reader correct for records that report only the aggregate.
+RUNNING_USAGE_KEY = "total_token_usage"
+RUNNING_TOTAL_FIELD = "total_tokens"
+
+# The one file extension either shape is journalled in.
+RECORD_SUFFIX = ".jsonl"
+
 # Mirrors maxSeriesDays in internal/panels/types.go. A span past this is
 # refused here rather than shipped and refused at load, because a snapshot the
 # origin will not serve is worse than no snapshot at all.
@@ -118,11 +191,43 @@ class CaptureError(Exception):
 
 def new_counters():
     """The tally a walk reports instead of naming anything it read."""
-    return {"files": 0, "unreadable": 0, "lines": 0, "counted": 0, "duplicates": 0}
+    return {
+        "files": 0,
+        "unreadable": 0,
+        "lines": 0,
+        "counted": 0,
+        "duplicates": 0,
+        "restarts": 0,
+    }
+
+
+def record_paths(root):
+    """Every journal file under root, in one deterministic order.
+
+    Sorted because two runs over the same tree must produce the same series,
+    and because the running-totals shape reads each file as a SEQUENCE — an
+    order that varied by filesystem would make the walk's arithmetic vary
+    with it.
+    """
+    return sorted(
+        path
+        for path in pathlib.Path(root).rglob("*" + RECORD_SUFFIX)
+        if path.is_file()
+    )
+
+
+def open_record_file(path, counters):
+    """Open one journal file, or tally it as unreadable and return None."""
+    try:
+        return path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        # Counted, never named: see the module docstring.
+        counters["unreadable"] += 1
+        return None
 
 
 def read_records(root, counters):
-    """Yield (day, total) pairs from every transcript under root.
+    """Yield (day, total) pairs from every message-shaped record under root.
 
     Every value this generator produces is already reduced to a date and an
     integer; the parsed record itself never escapes the loop body. Files that
@@ -130,25 +235,61 @@ def read_records(root, counters):
     `counters`, never named.
     """
     seen = set()
-    for directory, _subdirectories, names in os.walk(root):
-        for name in sorted(names):
-            if not name.endswith(".jsonl"):
-                continue
-            counters["files"] += 1
-            path = os.path.join(directory, name)
-            try:
-                handle = open(path, "r", encoding="utf-8", errors="replace")
-            except OSError:
-                # Counted, never named: see the module docstring.
-                counters["unreadable"] += 1
-                continue
-            with handle:
-                for line in handle:
-                    counters["lines"] += 1
-                    reduced = reduce_line(line, seen, counters)
-                    if reduced is not None:
-                        counters["counted"] += 1
-                        yield reduced
+    for path in record_paths(root):
+        counters["files"] += 1
+        handle = open_record_file(path, counters)
+        if handle is None:
+            continue
+        with handle:
+            for line in handle:
+                counters["lines"] += 1
+                reduced = reduce_line(line, seen, counters)
+                if reduced is not None:
+                    counters["counted"] += 1
+                    yield reduced
+
+
+def read_running_totals(root, counters):
+    """Yield (day, advance) pairs from every running-totals record under root.
+
+    The running total is per FILE — every journal in the owner's tree opens
+    its own accounting at zero — so the high-water mark resets at each file
+    and a session's history is never counted twice because a later session
+    resumed it.
+
+    The three cases in the module docstring, made operational. `advance`
+    is the distance the running total moved, so a record that repeats the
+    previous accounting contributes nothing and a record that restarts a
+    lower accounting contributes its own new total. Both are tallied so the
+    diagnostics say how much of the walk was replay and how much was a
+    restart, without naming a single file.
+    """
+    for path in record_paths(root):
+        counters["files"] += 1
+        handle = open_record_file(path, counters)
+        if handle is None:
+            continue
+        previous = 0
+        with handle:
+            for line in handle:
+                counters["lines"] += 1
+                reduced = reduce_running_line(line)
+                if reduced is None:
+                    continue
+                day, running = reduced
+                if running == previous:
+                    counters["duplicates"] += 1
+                    continue
+                if running > previous:
+                    advance = running - previous
+                else:
+                    counters["restarts"] += 1
+                    advance = running
+                previous = running
+                if advance <= 0:
+                    continue
+                counters["counted"] += 1
+                yield day, advance
 
 
 def reduce_line(line, seen, counters):
@@ -190,6 +331,57 @@ def reduce_line(line, seen, counters):
     if day is None:
         return None
     return day, usage_total(usage)
+
+
+def reduce_running_line(line):
+    """Reduce one running-totals line to (day, running total), or None.
+
+    No de-duplication set here, and that is the point of the shape: identity
+    is not what protects this walk from a replay, ARITHMETIC is. A repeated
+    accounting reports the same cumulative figure, so it advances the total
+    by nothing wherever it appears and however often — which is a stronger
+    guarantee than an identity check, because it needs no identifier to be
+    present, unique, or stable.
+    """
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(record, dict):
+        return None
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        return None
+    running = info.get(RUNNING_USAGE_KEY)
+    if not isinstance(running, dict):
+        return None
+    stamp = record.get("timestamp")
+    if not isinstance(stamp, str):
+        return None
+    day = utc_day(stamp)
+    if day is None:
+        return None
+    return day, running_total(running)
+
+
+def running_total(usage):
+    """The cumulative figure one running-totals record reports, or 0.
+
+    Booleans are rejected for the same reason `usage_total` rejects them, and
+    a missing or malformed field reads as no advance rather than as a guess:
+    a walk that found nothing refuses loudly in `daily_series`, which is the
+    honest failure for a journal whose shape has changed.
+    """
+    value = usage.get(RUNNING_TOTAL_FIELD)
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return 0
 
 
 def utc_day(stamp):
@@ -311,10 +503,19 @@ def assert_only_dates_and_integers(value, where="emission"):
     raise CaptureError("%s carries a value that is neither a date nor an integer" % where)
 
 
-def capture(root):
-    """Walk the transcripts and return (series, derived, counters)."""
+def capture(root, record_format=FORMAT_MESSAGES):
+    """Walk the transcripts and return (series, derived, counters).
+
+    The shape decides only HOW a record becomes a (day, integer) pair. Every
+    step after that — the contiguous day index, the streak arithmetic, and
+    the emission guard below — is the same code for both, so a second reader
+    can never acquire a second privacy contract.
+    """
+    if record_format not in RECORD_FORMATS:
+        raise CaptureError("unknown record format")
     counters = new_counters()
-    series = daily_series(read_records(root, counters))
+    reader = read_records if record_format == FORMAT_MESSAGES else read_running_totals
+    series = daily_series(reader(root, counters))
     derived = derived_figures(series)
     # Both halves are proven clean before either is printed or written.
     assert_only_dates_and_integers(series, "series")
@@ -385,6 +586,13 @@ def parse_arguments(argv):
         help="the token-usage source label the series belongs to",
     )
     parser.add_argument(
+        "--format",
+        dest="record_format",
+        choices=RECORD_FORMATS,
+        default=FORMAT_MESSAGES,
+        help="the record shape the tree is journalled in",
+    )
+    parser.add_argument(
         "--snapshot",
         help="snapshot file to splice the series into; prints to stdout when omitted",
     )
@@ -393,25 +601,26 @@ def parse_arguments(argv):
 
 def main(argv=None):
     arguments = parse_arguments(sys.argv[1:] if argv is None else argv)
-    root = os.path.expanduser(arguments.transcripts)
-    if not os.path.isdir(root):
+    root = pathlib.Path(arguments.transcripts).expanduser()
+    if not root.is_dir():
         # The path is the operator's own argument, so echoing it back leaks
         # nothing they did not just type; it still is not written anywhere.
         print("no such transcript directory", file=sys.stderr)
         return 2
     try:
-        series, derived, counters = capture(root)
+        series, derived, counters = capture(root, arguments.record_format)
     except CaptureError as error:
         print(str(error), file=sys.stderr)
         return 1
     print(
-        "files=%d unreadable=%d lines=%d counted=%d duplicates=%d days=%d"
+        "files=%d unreadable=%d lines=%d counted=%d duplicates=%d restarts=%d days=%d"
         % (
             counters.get("files", 0),
             counters.get("unreadable", 0),
             counters.get("lines", 0),
             counters.get("counted", 0),
             counters.get("duplicates", 0),
+            counters.get("restarts", 0),
             len(series["totals"]),
         ),
         file=sys.stderr,

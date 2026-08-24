@@ -431,7 +431,12 @@ def sbom_registry_fixture() -> dict[str, object]:
     }
 
 
-def embedded_predicate(source: str, revision: str, marker: str) -> dict[str, object]:
+BUILDER_RUN_ID = "123"
+
+
+def embedded_predicate(
+    source: str, revision: str, marker: str, builder_id: object | None = None
+) -> dict[str, object]:
     return {
         "buildDefinition": {
             "buildType": "https://mobyproject.org/buildkit@v1",
@@ -439,7 +444,13 @@ def embedded_predicate(source: str, revision: str, marker: str) -> dict[str, obj
             "internalParameters": {},
         },
         "runDetails": {
-            "builder": {"id": source + "/actions/runs/123"},
+            "builder": {
+                "id": (
+                    f"{source}/actions/runs/{BUILDER_RUN_ID}"
+                    if builder_id is None
+                    else builder_id
+                )
+            },
             "metadata": {"buildkit_metadata": {"vcs": {"source": source, "revision": revision}}},
         },
     }
@@ -2709,6 +2720,7 @@ class AttestationSetTests(unittest.TestCase):
                 source=self.SOURCE,
                 revision=self.REVISION,
                 platform=platform,
+                builder_run_id=BUILDER_RUN_ID,
             )
             for platform in self.PLATFORMS
         }
@@ -2764,7 +2776,191 @@ class AttestationSetTests(unittest.TestCase):
                     source=self.SOURCE,
                     revision=self.REVISION,
                     platform="linux/amd64",
+                    builder_run_id=BUILDER_RUN_ID,
                 )
+
+
+class AttestationBuilderRunBindingTests(unittest.TestCase):
+    """Issue #137: the SLSA builder identity must name ONE authoritative run.
+
+    The shipped check was
+    `builder["id"].startswith(source + "/actions/runs/")`, which every run of
+    every workflow in this repository satisfies forever -- the digits after
+    the prefix were never read. Every neighbouring identity in the same
+    function is bound exactly (digest full-matched, revision through
+    require_sha, platform re.fullmatch-ed, vcs compared with !=), so the
+    builder was the one loose outlier.
+
+    Restoring that prefix match turns
+    test_a_different_run_in_this_repository_denies and
+    test_a_longer_run_id_sharing_the_leading_digits_denies red; replacing the
+    anchored full match with `startswith(expected)` still leaves the second
+    of those red, and dropping the `/attempts/<n>` pattern in favour of
+    ignoring everything after the run ID turns
+    test_unexpected_suffixes_after_the_exact_run_deny red.
+    """
+
+    IMAGE = "ghcr.io/owner/site"
+    DIGEST = "sha256:" + "b" * 64
+    SOURCE = "https://github.com/owner/site"
+    REVISION = "a" * 40
+    PLATFORM = "linux/amd64"
+    # Shape measured in this repository's own published provenance: every
+    # release from v0.1.2 to v0.1.32 carries
+    # `https://github.com/snaraj/naranjo.online/actions/runs/<id>/attempts/1`,
+    # and that <id> is the release-publisher run that ran `docker buildx
+    # build`, not the PR-gate run the manifest records as `main_run_id`.
+    RUN_ID = "32697375411"
+
+    def build(self, builder_id: object, *, builder_run_id: object = RUN_ID) -> dict[str, object]:
+        return RC.build_attestation_statement(
+            embedded_predicate(self.SOURCE, self.REVISION, self.PLATFORM, builder_id),
+            image=self.IMAGE,
+            digest=self.DIGEST,
+            source=self.SOURCE,
+            revision=self.REVISION,
+            platform=self.PLATFORM,
+            builder_run_id=builder_run_id,
+        )
+
+    def test_the_exact_run_is_accepted_bare_and_with_the_measured_attempt_suffix(self):
+        for builder_id in (
+            f"{self.SOURCE}/actions/runs/{self.RUN_ID}",
+            f"{self.SOURCE}/actions/runs/{self.RUN_ID}/attempts/1",
+            f"{self.SOURCE}/actions/runs/{self.RUN_ID}/attempts/2",
+            f"{self.SOURCE}/actions/runs/{self.RUN_ID}/attempts/17",
+        ):
+            with self.subTest(builder_id=builder_id):
+                statement = self.build(builder_id)
+                # Accepted AND carried through unchanged: the binding reads the
+                # builder identity, it never rewrites it into something the
+                # signed predicate would not contain.
+                self.assertEqual(
+                    statement["predicate"]["runDetails"]["builder"]["id"], builder_id
+                )
+
+    def test_a_different_run_in_this_repository_denies(self):
+        # The mutant that survived the prefix match: same repository, same
+        # workflow family, wrong run.
+        for other in ("32697375412", "1", "9" * 20):
+            with self.subTest(other=other), self.assertRaises(RC.ContractError):
+                self.build(f"{self.SOURCE}/actions/runs/{other}")
+
+    def test_a_longer_run_id_sharing_the_leading_digits_denies(self):
+        # Kills a half-fix that anchors only the left side with
+        # startswith(f"{source}/actions/runs/{run_id}").
+        for suffix in ("9", "0", "12"):
+            with self.subTest(suffix=suffix), self.assertRaises(RC.ContractError):
+                self.build(f"{self.SOURCE}/actions/runs/{self.RUN_ID}{suffix}")
+
+    def test_a_truncated_run_id_denies(self):
+        with self.assertRaises(RC.ContractError):
+            self.build(f"{self.SOURCE}/actions/runs/{self.RUN_ID[:-1]}")
+
+    def test_the_same_run_id_in_a_foreign_repository_denies(self):
+        for foreign in (
+            "https://github.com/attacker/site",
+            "https://github.com/owner/site-mirror",
+            "https://github.com/owner",
+        ):
+            with self.subTest(foreign=foreign), self.assertRaises(RC.ContractError):
+                self.build(f"{foreign}/actions/runs/{self.RUN_ID}")
+
+    def test_unexpected_suffixes_after_the_exact_run_deny(self):
+        base = f"{self.SOURCE}/actions/runs/{self.RUN_ID}"
+        for suffix in (
+            "/",
+            "/attempts",
+            "/attempts/",
+            "/attempts/0",
+            "/attempts/01",
+            "/attempts/-1",
+            "/attempts/1.0",
+            "/attempts/one",
+            "/attempts/1/",
+            "/attempts/1/jobs/2",
+            "/attempts/1 ",
+            "/ATTEMPTS/1",
+            "/jobs/5",
+            "?attempt=1",
+            "#attempts/1",
+            " ",
+        ):
+            with self.subTest(suffix=suffix), self.assertRaises(RC.ContractError):
+                self.build(base + suffix)
+
+    def test_a_prefixed_or_non_string_builder_identity_denies(self):
+        exact = f"{self.SOURCE}/actions/runs/{self.RUN_ID}"
+        for builder_id in (
+            None,
+            123,
+            ["", exact],
+            {"url": exact},
+            " " + exact,
+            "\n" + exact,
+            exact + "\n",
+            f"https://evil.invalid/?u={exact}",
+        ):
+            with self.subTest(builder_id=builder_id), self.assertRaises(RC.ContractError):
+                self.build(builder_id)
+
+    def test_a_malformed_builder_run_id_argument_denies(self):
+        exact = f"{self.SOURCE}/actions/runs/{self.RUN_ID}"
+        for argument in (
+            "",
+            "0",
+            "0123",
+            "abc",
+            "123abc",
+            " 123",
+            "123 ",
+            "+123",
+            "-123",
+            "1_2",
+            "1e3",
+            "12.0",
+            "١٢٣",
+            "123\n",
+            None,
+            123,
+            True,
+        ):
+            with self.subTest(argument=argument), self.assertRaises(RC.ContractError):
+                self.build(exact, builder_run_id=argument)
+
+    def test_a_run_id_argument_carrying_path_separators_denies(self):
+        # The shape check on the ARGUMENT is load-bearing, not cosmetic:
+        # without it this composite is escaped straight into the expected
+        # string and matches the predicate exactly, so a caller could bind the
+        # builder identity to any path it liked instead of to one run.
+        composite = f"{self.RUN_ID}/attempts/1"
+        with self.assertRaises(RC.ContractError):
+            self.build(
+                f"{self.SOURCE}/actions/runs/{composite}", builder_run_id=composite
+            )
+
+    def test_both_denials_name_the_builder_binding(self):
+        exact = f"{self.SOURCE}/actions/runs/{self.RUN_ID}"
+        with self.assertRaises(RC.ContractError) as wrong_run:
+            self.build(f"{self.SOURCE}/actions/runs/32697375412")
+        with self.assertRaises(RC.ContractError) as wrong_argument:
+            self.build(exact, builder_run_id="not-a-run")
+        self.assertIn("builder", str(wrong_run.exception))
+        self.assertIn("exact Actions run", str(wrong_run.exception))
+        self.assertIn("builder run ID", str(wrong_argument.exception))
+
+    def test_the_run_identity_is_required_by_signature(self):
+        # A caller that forgets the binding must fail loudly rather than fall
+        # back to a repository-wide prefix match.
+        with self.assertRaises(TypeError):
+            RC.build_attestation_statement(
+                embedded_predicate(self.SOURCE, self.REVISION, self.PLATFORM),
+                image=self.IMAGE,
+                digest=self.DIGEST,
+                source=self.SOURCE,
+                revision=self.REVISION,
+                platform=self.PLATFORM,
+            )
 
 
 class AttestationStatementCLITests(unittest.TestCase):
@@ -2787,7 +2983,14 @@ class AttestationStatementCLITests(unittest.TestCase):
     REVISION = "c" * 40
     PLATFORM = "linux/amd64"
 
-    def invoke(self, temporary: str, *, include_predicate_output: bool = True) -> tuple[int, Path, Path]:
+    def invoke(
+        self,
+        temporary: str,
+        *,
+        include_predicate_output: bool = True,
+        include_builder_run_id: bool = True,
+        builder_run_id: str = BUILDER_RUN_ID,
+    ) -> tuple[int, Path, Path]:
         predicate_path = Path(temporary) / "predicate.json"
         predicate_path.write_text(
             json.dumps(embedded_predicate(self.SOURCE, self.REVISION, self.PLATFORM)),
@@ -2802,6 +3005,8 @@ class AttestationStatementCLITests(unittest.TestCase):
         ]
         if include_predicate_output:
             arguments += ["--predicate-output", str(predicate_output_path)]
+        if include_builder_run_id:
+            arguments += ["--builder-run-id", builder_run_id]
         arguments += [
             "--image", self.IMAGE,
             "--digest", self.DIGEST,
@@ -2809,7 +3014,8 @@ class AttestationStatementCLITests(unittest.TestCase):
             "--revision", self.REVISION,
             "--platform", self.PLATFORM,
         ]
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        self.stderr = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(self.stderr):
             code = RC.main(arguments)
         return code, output_path, predicate_output_path
 
@@ -2857,6 +3063,32 @@ class AttestationStatementCLITests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertTrue(predicate_output_path.exists())
             self.assertGreater(predicate_output_path.stat().st_size, 0)
+
+    def test_missing_builder_run_id_flag_exits_two(self):
+        # Issue #137: the run binding is required, never defaulted -- an
+        # optional flag would let a caller silently fall back to the old
+        # repository-wide prefix behaviour.
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(SystemExit) as failure:
+                self.invoke(temporary, include_builder_run_id=False)
+            self.assertEqual(failure.exception.code, 2)
+
+    def test_a_foreign_run_id_denies_and_writes_no_statement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            code, output_path, predicate_output_path = self.invoke(
+                temporary, builder_run_id="124"
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("builder", self.stderr.getvalue())
+            self.assertFalse(output_path.exists())
+            self.assertFalse(predicate_output_path.exists())
+
+    def test_a_malformed_run_id_argument_denies_before_the_predicate_is_read(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            code, output_path, _ = self.invoke(temporary, builder_run_id="123; rm -rf /")
+            self.assertEqual(code, 1)
+            self.assertIn("builder run ID", self.stderr.getvalue())
+            self.assertFalse(output_path.exists())
 
 
 class GitTransitionTests(unittest.TestCase):
@@ -4233,7 +4465,9 @@ class ExistingImageShellPathTests(unittest.TestCase):
             return f"/{normalized[0].lower()}/{normalized[3:]}"
         return normalized
 
-    def execute(self, block: str) -> tuple[subprocess.CompletedProcess[str], str]:
+    def execute(
+        self, block: str, *, arm64_builder_id: str | None = None
+    ) -> tuple[subprocess.CompletedProcess[str], str]:
         source = "https://github.com/owner/site"
         revision = "a" * 40
         with tempfile.TemporaryDirectory(dir=ROOT, prefix=".release-shell-") as temporary:
@@ -4258,7 +4492,12 @@ class ExistingImageShellPathTests(unittest.TestCase):
                     + hashlib.sha256(sbom_fixture["statements"][platform]).hexdigest()
                 )
             for architecture in ("amd64", "arm64"):
-                predicate = embedded_predicate(source, revision, f"linux/{architecture}")
+                predicate = embedded_predicate(
+                    source,
+                    revision,
+                    f"linux/{architecture}",
+                    arm64_builder_id if architecture == "arm64" else None,
+                )
                 (runner / f"fixture-{architecture}.json").write_text(
                     json.dumps(predicate), encoding="utf-8"
                 )
@@ -4293,6 +4532,9 @@ jq() {
       ;;
     'keys[]')
       "${TEST_PYTHON}" -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")); sys.stdout.buffer.write(("\n".join(value.keys())+"\n").encode("utf-8"))' "${input}"
+      ;;
+    '.runDetails.builder.id')
+      "${TEST_PYTHON}" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["runDetails"]["builder"]["id"])' "${input}"
       ;;
     '.[$platform].subject_digest'|'.[$platform].attestation_digest')
       "${TEST_PYTHON}" -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")); field=sys.argv[3].rsplit(".",1)[-1]; print(value[sys.argv[2]][field])' "${input}" "${platform}" "${expression}"
@@ -4409,6 +4651,38 @@ cosign() {
                 killed, _output = self.execute(mutant)
                 self.assertNotEqual(killed.returncode, 0, killed.stdout + killed.stderr)
                 self.assertIn("existing image state: burned", killed.stdout)
+
+    def test_platform_predicates_naming_different_builder_runs_are_burned(self):
+        # Issue #137, executed rather than read: the reuse path reads the run
+        # identity ONCE, from the first platform's predicate, and requires it of
+        # every platform. Two predicates that disagree about which run built
+        # them are no longer a reusable image -- before this change both
+        # satisfied the same repository-wide prefix and classified `complete`.
+        block = self.workflow_run_block("Classify an absent, complete, or burned image tag")
+        source = "https://github.com/owner/site"
+        for name, builder_id in (
+            ("different run in this repository", f"{source}/actions/runs/999"),
+            ("run ID extended with more digits", f"{source}/actions/runs/{BUILDER_RUN_ID}9"),
+            ("foreign repository", f"https://github.com/attacker/site/actions/runs/{BUILDER_RUN_ID}"),
+            ("unexpected suffix after the run", f"{source}/actions/runs/{BUILDER_RUN_ID}/jobs/4"),
+            ("attempt zero", f"{source}/actions/runs/{BUILDER_RUN_ID}/attempts/0"),
+        ):
+            with self.subTest(arm64_builder=name):
+                killed, _output = self.execute(block, arm64_builder_id=builder_id)
+                self.assertNotEqual(killed.returncode, 0, killed.stdout + killed.stderr)
+                self.assertIn("existing image state: burned", killed.stdout)
+
+    def test_the_measured_attempt_suffix_still_classifies_complete(self):
+        # Both directions: BuildKit's real spelling on both platforms is the
+        # accepted one, so the strengthened check cannot deny a genuine reuse.
+        block = self.workflow_run_block("Classify an absent, complete, or burned image tag")
+        completed, output = self.execute(
+            block,
+            arm64_builder_id=f"https://github.com/owner/site/actions/runs/{BUILDER_RUN_ID}/attempts/1",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("existing image state: complete", completed.stdout)
+        self.assertIn("state=complete\n", output)
 
 
 class ChartDigestEmbedShellPathTests(unittest.TestCase):
@@ -7544,7 +7818,7 @@ class WorkflowStructureTests(unittest.TestCase):
             "persist-credentials: false",
             "fetch-depth: 0",
             "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
-            "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0",
+            "docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0",
             "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2",
             '"repos/${GITHUB_REPOSITORY}/releases/latest"',
             "manifest-record",
@@ -7564,6 +7838,13 @@ class WorkflowStructureTests(unittest.TestCase):
             "cosign verify-attestation --type slsaprovenance1 --output json",
             "attestation-statement",
             "--predicate-output",
+            # Issue #137: the audit re-derives the same builder binding. It
+            # audits a release built by an earlier run and the canonical
+            # manifest records `main_run_id` (the PR-gate run), never the
+            # publisher run, so the run identity is read once from the
+            # predicate and required of every platform.
+            '--builder-run-id "${builder_run_id}"',
+            "jq -er '.runDetails.builder.id'",
             "attestation-set",
             'git archive "${source_sha}" chart | tar -x -C "${expected_source}"',
             'diff -ru --no-dereference "${expected_tree}/${chart_name}" "${published_tree}/${chart_name}"',
@@ -7786,6 +8067,15 @@ class WorkflowStructureTests(unittest.TestCase):
             "terminal-tag-object.json",
             "terminal-release.json",
             "terminal-release-manifest.json",
+            # Issue #137: the SLSA builder identity is bound to the run that
+            # actually produced the bytes. The freshly built image is bound to
+            # THIS run; the reused image cannot be (it was built by an earlier
+            # attempt for the same source SHA, and GITHUB_RUN_ID there would
+            # classify every recoverable retry `burned`), so its run identity is
+            # read from the predicate and required of every platform.
+            '--builder-run-id "${GITHUB_RUN_ID}"',
+            '--builder-run-id "${builder_run_id}"',
+            "jq -er '.runDetails.builder.id'",
         ):
             if required not in publisher:
                 raise ValueError(f"publisher lost exact release wiring: {required}")
@@ -7794,6 +8084,7 @@ class WorkflowStructureTests(unittest.TestCase):
             "attestation-set",
             "cosign verify-attestation --type slsaprovenance1 --output json",
             "--predicate-output",
+            "--builder-run-id",
         ):
             if publisher.count(repeated) < 2:
                 raise ValueError(f"publisher must use {repeated} for both existing and new images")
@@ -8572,6 +8863,33 @@ class WorkflowStructureTests(unittest.TestCase):
         ):
             with self.subTest(gate_order_mutant=mutant_name), self.assertRaises(ValueError):
                 self.require_exact_release_wiring(orchestrator, mutation)
+        # Issue #137: the builder-identity binding is wiring, not decoration.
+        # Deleting it from either call site, or pointing the freshly built
+        # image at a run that did not build it, must be caught here.
+        for mutant_name, mutation in (
+            (
+                "new-image binding deleted",
+                publisher.replace(' \\\n              --builder-run-id "${GITHUB_RUN_ID}"', "", 1),
+            ),
+            (
+                "reused-image binding deleted",
+                publisher.replace(' \\\n              --builder-run-id "${builder_run_id}"', "", 1),
+            ),
+            (
+                "reused-image run identity never read from the predicate",
+                publisher.replace("jq -er '.runDetails.builder.id'", "jq -er '.buildDefinition'", 1),
+            ),
+            (
+                "new image bound to the PR-gate run instead of its own",
+                publisher.replace(
+                    '--builder-run-id "${GITHUB_RUN_ID}"',
+                    '--builder-run-id "${MAIN_RUN_ID}"',
+                    1,
+                ),
+            ),
+        ):
+            with self.subTest(builder_run_mutant=mutant_name), self.assertRaises(ValueError):
+                self.require_exact_release_wiring(orchestrator, mutation)
         for forbidden in (
             "tag-state",
             "gh api --method POST",
@@ -8788,6 +9106,16 @@ class WorkflowStructureTests(unittest.TestCase):
             # already caught (see the "publisher" --predicate-output pin
             # above). Proven closed: this mutant must now go red too.
             (gate, publisher, audit.replace("--predicate-output", "", 1), installer),
+            # Issue #137: the same closure for the builder-run binding -- the
+            # audit must keep re-deriving it, and must keep reading it from the
+            # predicate rather than inventing one.
+            (gate, publisher, audit.replace("--builder-run-id", "", 1), installer),
+            (
+                gate,
+                publisher,
+                audit.replace("jq -er '.runDetails.builder.id'", "jq -er '.buildDefinition'", 1),
+                installer,
+            ),
             (gate, publisher, audit.replace("diff -ru --no-dereference", "true #", 1), installer),
             (gate, publisher, audit + "\n      contents: write\n", installer),
             (gate, publisher, audit + "\n      gh api --method POST foreign\n", installer),

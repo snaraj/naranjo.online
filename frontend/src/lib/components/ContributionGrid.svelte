@@ -10,6 +10,23 @@
   horizontal scroll, so a wide window scrolls inside the panel and never
   shifts the page.
 
+  Its INLINE size is its data, and used not to be. The box was a year wide
+  whatever it held, so a fifteen-day series was three columns pinned to the
+  left edge of fifty-three columns of nothing, which reads as a graph that
+  lost its data rather than as a short one (issue #141, residual risk 2). The
+  block now claims exactly the columns it draws — floored at gridMinColumns,
+  because a one-column strip is not a graph either — and the calendar, which
+  genuinely has a year of them, is unchanged by the same rule. The cap is a
+  maximum rather than a width, so a narrow screen still shrinks it and the
+  strip still scrolls inside itself.
+
+  Sizing to content and reserving space are not in tension here, and the
+  reason is arithmetic rather than luck: the empty state's chrome is one year
+  wide and the calendar that lands in it is one year wide, so the arrival
+  changes no dimension. Both sides of that equality are pinned — pendingWeeks
+  in lib/grid.ts and the shipped calendar in the origin's own test — and the
+  rendering lanes measure the box across a real arrival.
+
   It opens on the NEWEST data (owner directive, issue 127). Cells run oldest
   first, so a strip that opens where its content starts opens on January and
   hides everything the visitor came to see off the right edge; the strip is
@@ -50,6 +67,7 @@
     monthTicks,
     peakValue,
     pendingColumns,
+    stripColumns,
     type GridCell,
     type SeriesView
   } from '../grid';
@@ -74,6 +92,18 @@
   const peak = $derived(peakValue(columns.flat()));
   const ticks = $derived(showMonths ? monthTicks(columns) : []);
   const chrome = pendingColumns();
+
+  /* The block's width, in columns, handed to the stylesheet as a number so
+     the geometry is decided once — here, from the columns actually drawn —
+     instead of being a constant the CSS guesses at. The empty state sizes
+     itself to the chrome it renders for exactly the same reason the series
+     state sizes itself to its data: whichever is on screen, the box is the
+     box its contents need. And because the chrome is one year wide and the
+     calendar that replaces it is one year wide, that arrival changes no
+     dimension at all. */
+  const claimedColumns = $derived(
+    stripColumns(columns.length > 0 ? columns.length : chrome.length)
+  );
 
   let strip = $state<HTMLDivElement>();
   /* Bookkeeping, deliberately NOT reactive: these record what has already
@@ -132,7 +162,12 @@
 <!-- The state is on the block rather than inferred by a selector, so the
   empty treatment below is one attribute a reader can see in the DOM instead
   of a rule that fires on the absence of something. -->
-<div class="grid-block" data-grid-state={columns.length > 0 ? 'series' : 'empty'}>
+<div
+  class="grid-block"
+  data-grid-state={columns.length > 0 ? 'series' : 'empty'}
+  data-grid-columns={claimedColumns}
+  style:--grid-columns={claimedColumns}
+>
   <!-- The strip clips wide windows behind its own horizontal scrollbar, and a
     scrollable region is keyboard-reachable only when focusable, so the
     tabindex is deliberate. -->
@@ -201,6 +236,24 @@
     display: flex;
     flex-direction: column;
     gap: var(--grid-gap, 0.25rem);
+    /* The block is exactly as wide as the columns it draws: n cells and the
+       n-1 gaps between them. A CAP rather than a width, so the box still
+       shrinks on a narrow screen and the strip scrolls inside it — a fixed
+       width here would push a year of columns past a 320px viewport and take
+       the page's own scrollbar sideways with it.
+
+       --grid-columns is written by the component from the columns it
+       actually rendered (see claimedColumns), so the box cannot claim a
+       series that is not there. The two custom properties below are the same
+       ones the cells and the month axis are laid out with, and the fallbacks
+       repeat theirs, so the box and its contents can never be computed from
+       two different cell sizes. Nothing here reads a reading-mode token: the
+       four modes restyle a grid and none of them resizes one. */
+    max-inline-size: calc(
+      var(--grid-columns, 53) *
+        (var(--grid-cell-size, 0.625rem) + var(--grid-cell-gap, 0.1875rem)) -
+        var(--grid-cell-gap, 0.1875rem)
+    );
   }
 
   /* 7 cell rows plus their 6 gaps measure 5.5rem, the month axis 0.75rem, and

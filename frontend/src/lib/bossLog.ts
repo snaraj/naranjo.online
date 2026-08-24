@@ -10,6 +10,7 @@
 import { skillSlug } from './bossIcons.ts';
 import { formatWhole } from './grid.ts';
 import type { BossLogEntry, BossLogSkill } from './panels';
+import type { TipDetail } from './tooltip.ts';
 
 /* The rendering for a figure the hiscores do not report. It is deliberately
  * NOT "0": zero kills and no reported figure are different claims, and a
@@ -101,4 +102,50 @@ export function skillSummary(skills: BossLogSkill[]): SkillSummaryCell[] {
  * cannot see the grid it sits in needs. */
 export function summaryLabel(cell: SkillSummaryCell): string {
   return `${cell.name}: ${cell.value}`;
+}
+
+/* The three detail builders. They exist so the two grids cannot drift into
+ * two presentations of the same idea: each returns the SAME shape — a name
+ * and a list of labelled rows — which lib/components/DetailTip.svelte renders
+ * identically, so "the skill detail looks like the boss detail" is a property
+ * of the data rather than of two style blocks somebody kept in step.
+ *
+ * They are also where the nullable hiscore fields are decided ONE more time
+ * rather than one more way: every figure goes through tally and rankLabel
+ * above, so an unreported number reads "--" in the detail exactly as it does
+ * in the tile and in the accessible name.
+ *
+ * Row names and values are DATA all the way to the DOM — the primitive
+ * interpolates them as text — so nothing here escapes anything, and nothing
+ * needs to. */
+export function bossDetail(boss: BossLogEntry): TipDetail {
+  const rows = [
+    { label: 'KC', value: tally(boss.kc) },
+    { label: 'Rank', value: rankLabel(boss.rank) }
+  ];
+  if (boss.score !== undefined && boss.score !== null) {
+    rows.push({ label: 'Score', value: tally(boss.score) });
+  }
+  return { name: boss.name, rows };
+}
+
+export function skillDetail(skill: BossLogSkill): TipDetail {
+  const rows = [
+    { label: 'Level', value: tally(skill.level) },
+    { label: 'Rank', value: rankLabel(skill.rank) }
+  ];
+  /* xp is optional on the payload rather than nullable, so a row the
+     hiscores never sent gets no line at all — the same rule the boss score
+     follows, and the reason both are the last row rather than the middle. */
+  if (skill.xp !== undefined && skill.xp !== null) {
+    rows.push({ label: 'XP', value: tally(skill.xp) });
+  }
+  return { name: skill.name, rows };
+}
+
+/* The totals cell carries one figure, and the SHORT label it shows in a
+ * 320px column is the one that names it here — the full name is the detail's
+ * heading, which is exactly the room the tile did not have. */
+export function summaryDetail(cell: SkillSummaryCell): TipDetail {
+  return { name: cell.name, rows: [{ label: cell.label, value: cell.value }] };
 }

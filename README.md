@@ -243,14 +243,28 @@ one. Both steps below are read-only, run on the operator's own machine, and
 put only public or aggregate facts into the repository.
 
 **The daily token series.** `scripts/capture_usage_series.py` walks a local
-agent transcript tree — one JSON object per line, each assistant message
-carrying a `usage` object beside an ISO 8601 timestamp — and reduces it to one
-combined token total per UTC calendar day, the same quantity the live mapper
-sums out of the vendor usage API. Standard library only, no network:
+agent transcript tree — one JSON object per line, beside an ISO 8601
+timestamp — and reduces it to one combined token total per UTC calendar day,
+the same quantity the live mapper sums out of the vendor usage API. Standard
+library only, no network:
 
     scripts/capture_usage_series.py --transcripts <dir> --source <label>
     scripts/capture_usage_series.py --transcripts <dir> --source <label> \
+        --format running-totals
+    scripts/capture_usage_series.py --transcripts <dir> --source <label> \
         --snapshot internal/panels/snapshots/token-usage.json
+
+`--format` names the RECORD SHAPE the tree is journalled in, because the tools
+write the same arithmetic two different ways. `messages` (the default) is one
+billed message per line carrying its own usage; the same message is replayed
+into later files when a session resumes or forks, so it is de-duplicated on
+its message and request identifiers. `running-totals` is a cumulative figure
+for the session so far, repeated on every event; summing those multiplies the
+truth, so the contribution of one record is how far the running total ADVANCED
+since the record before it, attributed to its own UTC day. A repeat advances
+nothing; a session that restarts its accounting mid-file contributes its new
+total, which is that turn's own usage. Both shapes then share one day index,
+one set of streak arithmetic, and one emission guard.
 
 Without `--snapshot` it prints the series and its derived figures so a capture
 can be read before it is committed to anything. With it, the series is spliced
@@ -266,8 +280,13 @@ values the program can emit are calendar dates and non-negative integers, a
 guard re-proves that immediately before anything is written, and diagnostics
 are counts rather than names — a file it cannot read is tallied, never
 identified. `scripts/ci/test_capture_usage_series.py` asserts that directly,
-by walking a fixture tree seeded with paths and identifiers and proving none of
-them survive into the emission.
+by walking a fixture tree seeded with paths and identifiers — one per record
+shape — and proving none of them survive into the emission. The same suite
+pins the module's import surface to a closed allowlist, so the capture is
+structurally incapable of spawning a process or opening a socket: `os` is
+refused along with `subprocess`, `socket` and `urllib`, because `os.system`,
+`os.popen` and `os.exec*` would reach straight past a promise. Adding any of
+them turns the suite red before it can turn into a commit.
 
 **The recent commit list.** The rows are public commits from the repositories
 `internal/panels/config/fetch.json` already names as commit sources, read the

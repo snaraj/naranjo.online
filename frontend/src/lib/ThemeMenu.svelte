@@ -105,14 +105,37 @@
 </script>
 
 <!-- The wiki's toggle, minimally: a compact moon icon opening a popover of
-     one round swatch per choice. Each swatch's background IS its mode's page
-     surface — read from that mode's own palette tokens, never a second copy
-     of the values — with a split light/dark disc for auto, a sun on the light
-     surface, a cratered moon on the true dark, and a plain moon on the two
-     tinted darks, slate and sepia. Those two are told apart by the surface
-     under the glyph, which is the honest distinction: they ARE the same kind
-     of mode at different temperatures, and inventing a third glyph would
-     claim a difference the modes do not have.
+     one swatch per choice.
+
+     The swatches are LINE ICONS, like the two header controls they sit under
+     (owner directive, 2026-08-24). They used to be 2.75rem filled discs, each
+     rimmed and — when chosen — ringed again two pixels thick, which made the
+     five quietest choices on the page its heaviest objects and read as
+     nothing like the small translucent glyphs above them. What they are now
+     is one grammar, shared with those glyphs and derived from their tokens
+     rather than restating them: the same painted box
+     (--chrome-icon-glyph-size), the same line weight (--chrome-icon-stroke),
+     no disc, no border, no fill, and the same brand-ink hover.
+
+     A swatch still has to say which palette it selects, so the palette moved
+     INSIDE the glyph instead of behind it. Every glyph is one shape drawn
+     twice over: the outline is the PAGE's own ink, which is what keeps the
+     mark legible on the popover in all four reading modes and is the family
+     trait it shares with the chrome; the enclosed area is that MODE's own
+     surface token; and the detail inside — the moon's craters — is that
+     mode's own ink. Nothing here is a second copy of a palette value.
+
+     Auto splits its circle down the middle between the two surfaces it
+     chooses between, light wears the sun, and the three darks wear the same
+     moon. Those three are told apart by their craters' temperature —
+     neutral, cool, warm — which is the honest distinction, because they ARE
+     the same kind of mode at different temperatures and inventing a third
+     shape would claim a difference the modes do not have. The craters used to
+     mark the true dark alone; at the chrome's icon size they are also the
+     only place a dark mode's INK can be shown, and all three have one, so
+     withholding them from two of the modes would have hidden the very value
+     that tells those two apart.
+
      Native buttons only; the glyphs are inline SVG. Plain
      aria-expanded disclosure semantics on purpose: aria-haspopup would
      announce a menu, but the popover is a group of pressed-state buttons
@@ -161,37 +184,40 @@
         onkeydown={onSwatchKeydown}
       >
         {#if mode.id === 'auto'}
-          <!-- Two half-discs, each drawn in the ink of the half it sits on,
-            so the glyph previews both palettes at once and every half of it
-            is high-contrast against its own background. -->
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-            <path class="auto-half-light" d="M12 3.4A8.6 8.6 0 0 0 12 20.6Z" />
-            <path class="auto-half-dark" d="M12 3.4A8.6 8.6 0 0 1 12 20.6Z" />
+          <!-- Auto owns no palette: it is whichever of the two the device
+            asks for, so its glyph is one circle split down the middle
+            between those two page surfaces, outlined in the page's own ink
+            like every other glyph here. -->
+          <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">
+            <path class="auto-half-light" d="M12 3A9 9 0 0 0 12 21Z" />
+            <path class="auto-half-dark" d="M12 3A9 9 0 0 1 12 21Z" />
+            <circle class="chip-edge" cx="12" cy="12" r="9" />
           </svg>
         {:else if mode.id === 'light'}
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-            <circle cx="12" cy="12" r="4.6" fill="currentColor" />
-            <g stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-              <line x1="12" y1="1.6" x2="12" y2="4.4" />
-              <line x1="12" y1="19.6" x2="12" y2="22.4" />
-              <line x1="1.6" y1="12" x2="4.4" y2="12" />
-              <line x1="19.6" y1="12" x2="22.4" y2="12" />
-              <line x1="4.65" y1="4.65" x2="6.6" y2="6.6" />
-              <line x1="17.4" y1="17.4" x2="19.35" y2="19.35" />
-              <line x1="17.4" y1="6.6" x2="19.35" y2="4.65" />
-              <line x1="4.65" y1="19.35" x2="6.6" y2="17.4" />
+          <!-- The sun's body is the palette chip — filled with light's own
+            page surface — and its rays are line work in the page's ink, at
+            the same weight the refresh glyph beside it is drawn in. -->
+          <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">
+            <g class="ray">
+              <line x1="12" y1="1.9" x2="12" y2="4.2" />
+              <line x1="12" y1="19.8" x2="12" y2="22.1" />
+              <line x1="1.9" y1="12" x2="4.2" y2="12" />
+              <line x1="19.8" y1="12" x2="22.1" y2="12" />
+              <line x1="4.86" y1="4.86" x2="6.49" y2="6.49" />
+              <line x1="17.51" y1="17.51" x2="19.14" y2="19.14" />
+              <line x1="17.51" y1="6.49" x2="19.14" y2="4.86" />
+              <line x1="4.86" y1="19.14" x2="6.49" y2="17.51" />
             </g>
-          </svg>
-        {:else if mode.id === 'dark'}
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" fill="currentColor" />
-            <circle class="crater" cx="9.2" cy="9.6" r="1.3" />
-            <circle class="crater" cx="12" cy="15" r="1.7" />
-            <circle class="crater" cx="7.4" cy="13.6" r="0.9" />
+            <circle class="chip" cx="12" cy="12" r="5" />
           </svg>
         {:else}
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" fill="currentColor" />
+          <!-- One moon for all three darks, filled with that mode's own page
+            surface and cratered in that mode's own ink — neutral for the
+            true dark, cool for slate, warm for sepia. -->
+          <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">
+            <path class="chip" d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" />
+            <circle class="crater" cx="9.3" cy="15.2" r="2.5" />
+            <circle class="crater" cx="13.2" cy="17.4" r="1.7" />
           </svg>
         {/if}
       </button>
@@ -222,8 +248,8 @@
        on top of it. */
     z-index: var(--layer-menu, 30);
     display: flex;
-    gap: 0.5rem;
-    padding: 0.5rem;
+    gap: var(--swatch-gap);
+    padding: var(--swatch-popover-padding);
     border: 1px solid var(--color-border);
     border-radius: 1.875rem;
     background: var(--color-surface-raised);
@@ -246,88 +272,154 @@
     }
   }
 
-  /* Each swatch previews its own palette: the background is that mode's page
-     surface token and the glyph color one of its foreground tokens — values
-     referenced from styles.css, never duplicated here. 2.75rem = 44px: the
-     minimum comfortable touch target. */
+  /* A swatch is a bare icon, exactly like the two controls in the header:
+     no disc, no border, no fill, and 2.75rem = 44px of hit area around a
+     glyph that paints a fraction of it. The 44px is written as a literal
+     rather than read from a token on purpose — the touch-floor walk in
+     tests/experience.test.mjs measures the declaration, and it can only
+     measure a length it can read, so routing this one through var() would
+     switch off the guard that protects it.
+
+     Translucent at rest and fully present when addressed, which is the same
+     move the chrome makes with its ink: nothing about the box changes, so
+     hovering or choosing a mode repaints and never reflows. */
   .swatch {
-    width: 2.75rem;
-    height: 2.75rem;
+    position: relative;
+    inline-size: 2.75rem;
+    block-size: 2.75rem;
     display: grid;
     place-items: center;
     padding: 0;
     cursor: pointer;
-    border-radius: 50%;
-    border: 1px solid var(--color-border-strong);
+    border: 0;
+    background: none;
+    color: var(--color-text);
+    opacity: var(--swatch-rest-opacity);
   }
 
-  /* Auto has no palette of its own — it is whichever of the two the visitor's
-     device asks for — so its swatch shows both, split down the middle, and
-     each half of the glyph is drawn in the ink that belongs to its side. */
-  .swatch-auto {
-    background: linear-gradient(
-      90deg,
-      var(--palette-light-surface) 0 50%,
-      var(--palette-dark-surface) 50% 100%
-    );
+  /* Full presence for the mode already chosen and for whichever one is being
+     addressed — never MORE than the chrome's, which is why the active value
+     is a token rather than a number written here. */
+  .swatch:hover,
+  .swatch:focus-visible,
+  .swatch[aria-pressed='true'] {
+    opacity: var(--swatch-active-opacity);
   }
 
-  .swatch-auto .auto-half-light {
-    fill: var(--palette-light-text);
+  /* ...and the chrome's own answer to a pointer, on the chrome's own token:
+     the ink becomes the brand mark, which is a defined color in every reading
+     mode rather than a translucency that depends on what is behind it. It
+     moves the OUTLINE and the chosen-mode bar; the palette enclosed by the
+     glyph is data and never recolors. */
+  .swatch:hover,
+  .swatch:focus-visible {
+    color: var(--color-brand);
   }
 
-  .swatch-auto .auto-half-dark {
-    fill: var(--palette-dark-text);
-  }
-
-  .swatch-light {
-    background: var(--palette-light-surface);
-    color: var(--palette-light-accent);
-  }
-
-  .swatch-dark {
-    background: var(--palette-dark-surface);
-    color: var(--palette-dark-accent);
-  }
-
-  .swatch-dark .crater {
-    fill: var(--palette-dark-surface);
-  }
-
-  /* Slate's ink is its own accent, measured at 10.38:1 on its own surface —
-     no mixing needed, unlike sepia below, because the palette already holds
-     a foreground this far from its background. */
-  .swatch-slate {
-    background: var(--palette-slate-surface);
-    color: var(--palette-slate-accent);
-  }
-
-  /* The base ink is the palette's own accent — the lightest sepia foreground,
-     unmistakable on the sepia surface in every engine that ever shipped. It
-     is not decoration: color-mix() is the one function here that a browser
-     within this site's support window may not know (Safari before 16.2,
-     Firefox before 113), and an unknown function does not fall back to
-     something duller, it invalidates the declaration. The glyph would then
-     inherit the PAGE's text color, which in the light reading mode is
-     near-black on a near-black swatch — an invisible moon, and no test that
-     reads the mixed value would see it. */
-  .swatch-sepia {
-    background: var(--palette-sepia-surface);
-    color: var(--palette-sepia-accent);
-  }
-
-  /* Still a dark-brown moon, but mixed one step toward the accent so the
-     glyph clears WCAG 1.4.11's 3:1 with real margin (≈4.4:1) on the sepia
-     surface — tokens only, no restated value (review F4). */
-  @supports (color: color-mix(in srgb, currentColor 50%, transparent)) {
-    .swatch-sepia {
-      color: color-mix(in srgb, var(--palette-sepia-border-strong) 60%, var(--palette-sepia-accent));
+  @media (prefers-reduced-motion: no-preference) {
+    .swatch {
+      transition:
+        opacity 120ms ease-out,
+        color 120ms ease-out;
     }
   }
 
-  .swatch[aria-pressed='true'] {
-    border-color: var(--color-accent);
-    box-shadow: 0 0 0 2px var(--color-accent);
+  /* The painted glyph is the chrome's, to the pixel: the size and the line
+     weight are the shared tokens, so a change to the header icons carries
+     the swatches with it instead of leaving them behind. */
+  .glyph {
+    inline-size: var(--swatch-glyph-size);
+    block-size: var(--swatch-glyph-size);
+  }
+
+  /* One shape, drawn twice over. The outline is the PAGE's ink — the only
+     ink guaranteed legible on the popover in all four reading modes, and the
+     reason a swatch needs no disc behind it to be seen — and the enclosed
+     area is the mode's own page surface. */
+  .chip,
+  .chip-edge,
+  .ray {
+    stroke: currentColor;
+    stroke-width: var(--swatch-stroke);
+    stroke-linejoin: round;
+  }
+
+  .chip-edge,
+  .ray {
+    fill: none;
+  }
+
+  .ray {
+    stroke-linecap: round;
+  }
+
+  .crater,
+  .auto-half-light,
+  .auto-half-dark {
+    stroke: none;
+  }
+
+  .swatch-auto .auto-half-light {
+    fill: var(--palette-light-surface);
+  }
+
+  .swatch-auto .auto-half-dark {
+    fill: var(--palette-dark-surface);
+  }
+
+  .swatch-light .chip {
+    fill: var(--palette-light-surface);
+  }
+
+  .swatch-dark .chip {
+    fill: var(--palette-dark-surface);
+  }
+
+  .swatch-dark .crater {
+    fill: var(--palette-dark-accent);
+  }
+
+  .swatch-slate .chip {
+    fill: var(--palette-slate-surface);
+  }
+
+  /* Slate's craters are its own accent, measured at 10.38:1 on its own
+     surface — the palette already holds a foreground this far from its
+     background, and a 3px mark needs every bit of it. */
+  .swatch-slate .crater {
+    fill: var(--palette-slate-accent);
+  }
+
+  .swatch-sepia .chip {
+    fill: var(--palette-sepia-surface);
+  }
+
+  /* Sepia's accent, unmixed, at 7.09:1 on sepia's own surface. It used to be
+     mixed one step darker so a 44px moon would not shout; the moon is 18px
+     now and its craters are 3px, and a mark that small needs the palette's
+     brightest ink rather than a dimmed one. Dropping the mix also drops this
+     component's only color-mix() — a function a browser inside this site's
+     support window may not know, which does not degrade but INVALIDATES the
+     declaration it sits in — so the @supports fallback it needed goes with
+     it. The page still uses one elsewhere (the usage meter's track), guarded
+     the other legal way, by a plain declaration of the same property above
+     it; the progressive-feature pin covers both forms and still has a
+     subject. */
+  .swatch-sepia .crater {
+    fill: var(--palette-sepia-accent);
+  }
+
+  /* The chosen mode, marked by SHAPE rather than by color alone (the dataviz
+     floor): a bar under its glyph. It is a pseudo-element, so it occupies no
+     space in the row and choosing a mode cannot move the one beside it. */
+  .swatch[aria-pressed='true']::after {
+    content: '';
+    position: absolute;
+    inset-block-end: var(--swatch-mark-inset);
+    inline-size: var(--swatch-mark-size);
+    block-size: var(--swatch-mark-thickness);
+    border-radius: var(--swatch-mark-thickness);
+    background: currentColor;
   }
 
   .swatch:focus-visible {

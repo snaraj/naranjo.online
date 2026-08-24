@@ -101,8 +101,47 @@ export function toColumns(cells: GridCell[]): GridCell[][] {
 
 /* The width of an empty graph, in columns: one year, the same window the
  * contribution calendar covers, so a panel still waiting for its series
- * renders the same shaped box the panel beside it renders full. */
+ * renders the same shaped box the panel beside it renders full.
+ *
+ * That "same shaped box" is now LOAD-BEARING rather than decorative, because
+ * a block is sized to its own column count (see stripColumns). The reserve
+ * and the arrival must therefore be the same number of columns or the
+ * calendar resizes the moment its payload lands, which is the zero-CLS floor
+ * breaking. The origin's shipped calendar is pinned to exactly this many
+ * weeks by TestVCSActivityPanelShipsARenderableGraph in
+ * internal/panels/registry_test.go, and this constant is pinned to the same
+ * number from this side; the two must move together. */
 export const pendingWeeks = 53;
+
+/* The narrowest a graph may be drawn, in columns.
+ *
+ * Sizing a strip to its data is the whole point (issue #141, residual risk
+ * 2): fifteen days is three columns, and three columns hard against the left
+ * edge of a box built for fifty-three read as a graph that had lost its data
+ * rather than as a short one. But "sized to its data" taken literally
+ * collapses a one-day series to a single ten-pixel column with the less/more
+ * key hanging off its side, so there is a floor, and the floor is not a taste
+ * judgement: it is the width the block's own furniture needs. The less/more
+ * key under every graph measures 123.38px in all three engines, so ten
+ * columns (127px) is the first count that carries it and nine (114px) is not
+ * — the key would spill out of the block's start edge, which is the same
+ * defect one step smaller. The rendering lanes MEASURE that per engine rather
+ * than trusting this arithmetic. */
+export const gridMinColumns = 10;
+
+/* stripColumns is the width a grid block claims, in columns: exactly the
+ * columns it draws, floored at gridMinColumns. Pure, so a node test can drive
+ * it and a browser lane can measure what it produced.
+ *
+ * A block never claims MORE columns than it draws. That direction is the one
+ * the owner reported, and it is the one a regression would take: a fixed
+ * fifty-three is a claim about a series nobody has. */
+export function stripColumns(drawn: number): number {
+  if (!Number.isFinite(drawn) || drawn <= 0) {
+    return gridMinColumns;
+  }
+  return Math.max(gridMinColumns, Math.trunc(drawn));
+}
 
 /* pendingColumns is the graph's CHROME with no data in it: every cell absent,
  * valueless and undated. It exists because "no series yet" was rendering as a

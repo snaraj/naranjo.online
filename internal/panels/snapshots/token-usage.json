@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-24T05:45:41Z",
+  "generatedAt": "2026-08-24T08:10:21Z",
   "data": {
     "sources": [
       {
@@ -108,7 +108,7 @@
             250280850,
             889936705,
             116659182,
-            343538885
+            694645396
           ],
           "recorded": true
         },
@@ -150,7 +150,7 @@
           {
             "key": "peak-day",
             "label": "Peak day",
-            "value": 3000000000,
+            "value": 1032914341,
             "unit": "tokens",
             "recorded": true
           },
@@ -178,14 +178,14 @@
           {
             "key": "current-streak",
             "label": "Current streak",
-            "value": 4,
+            "value": 5,
             "unit": "days",
             "recorded": true
           },
           {
             "key": "longest-streak",
             "label": "Longest streak",
-            "value": 11,
+            "value": 5,
             "unit": "days",
             "recorded": true
           },
@@ -197,6 +197,27 @@
             "recorded": true
           }
         ],
+        "series": {
+          "startDate": "2026-08-10",
+          "totals": [
+            17236490,
+            0,
+            0,
+            0,
+            0,
+            0,
+            18393,
+            0,
+            0,
+            0,
+            498209,
+            258673090,
+            1025755735,
+            1032914341,
+            622231144
+          ],
+          "recorded": true
+        },
         "insights": [
           {
             "label": "Max reasoning",

@@ -28,7 +28,7 @@ jobs:
       - name: Install checksum-verified tools
         run: ./scripts/ci/install-tools.sh
       - name: Set up Buildx for embedded provenance inspection
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
@@ -208,18 +208,37 @@ jobs:
               --platform "${platform}" >/dev/null
           done
           expected_attestations=()
+          # The audit re-binds a release published by an EARLIER run, and the
+          # canonical manifest records `main_run_id` -- the PR-gate run on main,
+          # not the publisher run that built the image -- so no recorded field
+          # names the builder. The run identity is therefore read
+          # once from the first platform's predicate and required of every
+          # platform, while the contract re-derives the complete
+          # `<source>/actions/runs/<id>[/attempts/<n>]` form from that candidate
+          # and denies any other spelling. What anchors it externally is the
+          # cosign certificate identity verified below plus the exact
+          # statement-set comparison that follows it, which weighs these
+          # reconstructed statements byte for byte against the
+          # cryptographically verified ones (issue #137).
+          builder_run_id=''
           for platform in ${expected_platforms}; do
             predicate="${RUNNER_TEMP}/audit-${platform//\//-}.json"
             statement="${RUNNER_TEMP}/audit-${platform//\//-}.statement.json"
             modified_predicate="${RUNNER_TEMP}/audit-${platform//\//-}.predicate.json"
             docker buildx imagetools inspect "${IMAGE}@${image_digest}" \
               --format "{{ json (index .Provenance \"${platform}\").SLSA }}" > "${predicate}"
+            if [ -z "${builder_run_id}" ]; then
+              builder_id="$(jq -er '.runDetails.builder.id' "${predicate}")"
+              builder_run_id="${builder_id#"https://github.com/${GITHUB_REPOSITORY}/actions/runs/"}"
+              builder_run_id="${builder_run_id%%/*}"
+            fi
             python3 -I -B scripts/ci/release_contract.py attestation-statement \
               --predicate "${predicate}" --output "${statement}" \
               --predicate-output "${modified_predicate}" \
               --image "${IMAGE}" --digest "${image_digest}" \
               --source "https://github.com/${GITHUB_REPOSITORY}" \
-              --revision "${source_sha}" --platform "${platform}"
+              --revision "${source_sha}" --platform "${platform}" \
+              --builder-run-id "${builder_run_id}"
             expected_attestations+=(--expected "${platform}=${statement}")
           done
           verified="${RUNNER_TEMP}/audit-verified-attestations.json"

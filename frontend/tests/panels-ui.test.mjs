@@ -17,6 +17,21 @@ import {
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
+// Strip /* */ and <!-- --> comments to a fixed point, not in one pass: deleting
+// a match can butt adjacent characters together into a delimiter the same sweep
+// already stepped past, so a lone regex replace is incomplete (this is exactly
+// what CodeQL's js/incomplete-multi-character-sanitization flags). Looping until
+// the text stops changing leaves no reconstituted delimiter behind. Test-only —
+// it runs over repository source read off disk and its output feeds assert.
+const stripComments = (text) => {
+  let prev;
+  do {
+    prev = text;
+    text = text.replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, '');
+  } while (text !== prev);
+  return text;
+};
+
 // The container image builds the frontend from a stage that holds ONLY the
 // frontend tree (Dockerfile: COPY frontend/ ./), so repo-level files do not
 // exist there. The two cross-tree pins below are therefore capability-gated
@@ -46,6 +61,7 @@ const [
   tokenUsage,
   styles,
   themeMenu,
+  detailTip,
 ] = await Promise.all([
   read('../src/App.svelte'),
   read('../src/lib/components/PanelShell.svelte'),
@@ -62,6 +78,7 @@ const [
   read('../src/lib/components/TokenUsagePanel.svelte'),
   read('../src/styles.css'),
   read('../src/lib/ThemeMenu.svelte'),
+  read('../src/lib/components/DetailTip.svelte'),
 ]);
 
 // Like the experience suite, these are structural regex pins over source:
@@ -123,10 +140,21 @@ test('the panels are one centered column, not a rail', () => {
 // column is required to be bigger than. The specific number stays free — only
 // the floor it has to clear is asserted.
 test('the page is one centred column, wider than the ribbon it replaced', () => {
-  const column = /--page-column-width:\s*([\d.]+)rem;/.exec(styles);
+  // The shipped width moved behind a name when the reader gained a handle on
+  // it (owner directive, 2026-08-24): --page-column-width is the knob a drag
+  // writes as an inline style, so the width the page SHIPS at needs a token of
+  // its own that an override cannot reach — which is also the width a
+  // double-click returns to. Both halves are pinned, because a base token that
+  // nothing referenced would leave the column free to ship at anything.
+  const column = /--page-column-base:\s*([\d.]+)rem;/.exec(styles);
   assert.ok(
     column,
     'the page column must be a fixed maximum width again, not a viewport fill; the owner asked for one centred container'
+  );
+  assert.match(
+    styles,
+    /--page-column-width:\s*var\(--page-column-base\);/,
+    'the knob the drag writes must default to the shipped column, or the two can disagree'
   );
   // 30rem was the pre-127 ribbon, and the trackers are still designed at that
   // width — a column that did not clear it would be the ribbon under a new
@@ -330,11 +358,37 @@ test('no page chrome floats over the document', () => {
     styles
   })) {
     assert.doesNotMatch(
-      source,
+      // Comment-blind, for the reason experience.test.mjs records about its
+      // own raw-text pins: prose is not a declaration. A comment EXPLAINING
+      // that a detail elsewhere is fixed tripped this pin, and a comment
+      // could equally have hidden a real one from a stricter reader.
+      stripComments(source),
       /position:\s*fixed/,
       `${name} floats over the page again; fixed chrome is what made the controls drift`
     );
   }
+  /* ONE narrow, named exception, stated here where the owner will read it:
+     the hover-detail primitive (owner directive, 2026-08-24). It is fixed so
+     it can follow the cursor, and fixed positioning is what makes its
+     containment structural — a fixed box sits outside the document's
+     scrollable overflow, so no position it takes can drag the page sideways,
+     which is the 320px floor the retired per-column anchoring existed to
+     protect.
+
+     It is not chrome and cannot become chrome, and these are the conditions
+     that say so rather than a promise that it will not: it reserves no
+     gutter, it cannot receive the pointer, and it is invisible until a
+     reader asks for it. Its position is measured against every viewport edge
+     by the browser lanes, including the no-sideways-scroll floor at 320px. */
+  const tipStyles = /<style[^>]*>([\s\S]*?)<\/style>/.exec(detailTip)[1];
+  assert.match(tipStyles, /position:\s*fixed/, 'the detail is no longer fixed; this exception is stale and should go');
+  assert.match(tipStyles, /pointer-events:\s*none/, 'fixed chrome that can take the pointer is chrome');
+  assert.match(tipStyles, /visibility:\s*hidden/, 'a fixed box that is always visible is chrome');
+  assert.doesNotMatch(
+    stripComments(detailTip),
+    /--page-[a-z-]*gutter|reserve/,
+    'the detail reserves page space; a transient overlay must cost the layout nothing'
+  );
   // With nothing floating there is nothing to reserve space for, so the
   // gutter tokens that existed only to hold space open must stay gone.
   assert.doesNotMatch(styles, /--page-activity-gutter|--panel-activity-reserve/);
@@ -405,7 +459,17 @@ test('the page header is two plain icons in the top-end corner', () => {
 test('boss log renders the dense fixed-cell table with tooltips and -- tallies', () => {
   assert.match(bossLog, /block-size:\s*var\(--boss-cell-height/, 'cells must keep a fixed height (no CLS)');
   assert.match(bossLog, /tally\(boss\.kc\)/, 'tallies must go through the tested renderer');
-  assert.match(bossLog, /rankLabel\(boss\.rank\)/, 'ranks must go through the tested renderer');
+  // The rank is rendered by the detail now, and the detail is built by
+  // bossDetail — which runs tally and rankLabel itself and is executed row by
+  // row in tests/tooltip.test.mjs, including the unranked and no-figure
+  // cases. The pin follows the renderer rather than staying where it used to
+  // live: what it has always guarded is that no figure is formatted here.
+  assert.match(bossLog, /bossDetail\(boss\)/, 'ranks must go through the tested renderer');
+  assert.doesNotMatch(
+    bossLog,
+    /toLocaleString|Intl\.NumberFormat/,
+    'a figure is being formatted in the component instead of by the tested renderers'
+  );
   // Three columns wrapping downward, and NO scroll region (owner directive,
   // issue 134: "it doesn't need scrolling if it just goes down in columns of
   // 3"). The table has now been all three arrangements — a tall vertical
@@ -438,47 +502,19 @@ test('boss log renders the dense fixed-cell table with tooltips and -- tallies',
   // The fill variant existed only to claim the retired rail's height; a card
   // in the stack grows to its content, so it must not come back.
   assert.doesNotMatch(shell, /panel-shell-fill/, 'the rail-filling variant must stay retired');
-  assert.match(bossLog, /role="tooltip"/);
-  assert.match(bossLog, /:hover\s+\.boss-tip/);
-  assert.match(bossLog, /:focus-visible\s+\.boss-tip/);
-  // The tooltip is what actually cut the leading digits off the old table: a
-  // minimum width inside a ~90px cell pushed the grid's scroll width past
-  // the card. A viewport-width threshold cannot catch that — the offending
-  // value was 9rem, comfortably under the 320px floor — so the MECHANISM is
-  // pinned: the tip is bounded by the viewport and claims no minimum.
-  //
-  // Its containing block is the CELL again. It had to move out to a wrapper
-  // while the table scrolled, because an absolutely positioned box is clipped
-  // by an overflow ancestor in its containing-block chain; with the scroller
-  // gone there is nothing to clip it, and a table that wraps down the card
-  // has no single readout position that is near the tile a reader is
-  // pointing at.
-  assert.match(
-    bossLog,
-    /\.boss-cell\s*\{[^}]*position:\s*relative/,
-    'the cell must be the tip’s containing block, so the detail appears on the tile it describes'
-  );
-  assert.match(
-    bossLog,
-    /\.boss-tip\s*\{[^}]*max-inline-size:\s*min\(/,
-    'the tip must be bounded by the viewport'
-  );
+  // The detail moved OUT of this component (owner directive, 2026-08-24):
+  // there is one hover-detail primitive now, DetailTip, and both grids render
+  // it. Its own pins — the fixed anchor, the viewport clamping that replaced
+  // the per-column anchoring, the absent minimum width, the token layer —
+  // live in tests/tooltip.test.mjs beside the arithmetic they guard, and the
+  // browser lanes measure all of it at 320px. What stays pinned HERE is that
+  // this component still delegates rather than growing its own again.
   assert.doesNotMatch(
     bossLog,
-    /\.boss-tip\s*\{[^}]*min-inline-size/,
-    'a tip wider than its cell claims space the card does not have'
+    /role="tooltip"|boss-tip|nth-child\(3n/,
+    'the boss log grew a second tooltip implementation; there is one primitive and it is DetailTip'
   );
-  // Anchoring the tip per COLUMN is the containment rule that replaces the
-  // scroller's clipping: a tip is wider than a cell, so a start-anchored one
-  // in the last column extends past the card's end edge — and with no
-  // clipping ancestor left, that drags the DOCUMENT sideways, which is the
-  // floor this repository is pinned against at 320px. First column opens
-  // toward the end edge, last column toward the start edge.
-  assert.match(
-    bossLog,
-    /\.boss-cell:nth-child\(3n\)\s+\.boss-tip\s*\{[^}]*inset-inline-end:\s*0/,
-    'the last column’s detail must open toward the start edge, or it hangs off the card'
-  );
+  assert.match(bossLog, /<DetailTip detail=\{bossDetail\(boss\)\} \/>/);
   assert.match(bossLog, /tabindex="0"/, 'cells must be focusable for the tooltip');
   assert.match(bossLog, /aria-label=\{cellLabel\(boss\)\}/);
   // Data flows only through the shared layer and shell; the sole
@@ -523,12 +559,19 @@ test('the skills grid mirrors the hiscore panel and renders levels honestly', ()
   assert.match(bossLog, /width="18"\s+height="18"/, 'skill icons must declare their box (no CLS)');
   assert.match(bossLog, /tally\(skill\.level\)/, 'levels must go through the tested renderer');
   assert.match(bossLog, /aria-label=\{skillLabel\(skill\)\}/);
-  assert.match(bossLog, /title=\{skillLabel\(skill\)\}/);
+  // The bare `title=` attribute the skills used to carry is GONE. It was the
+  // browser's own tooltip — unstyled, half a second late, a different shape
+  // per operating system — and beside the real detail these tiles now render
+  // it would simply double-tooltip. Its absence is pinned across every tile
+  // in tests/tooltip.test.mjs; this is the skill half said where the skill
+  // grid is described.
+  assert.match(bossLog, /<DetailTip detail=\{skillDetail\(skill\)\} \/>/);
   assert.match(bossLog, /skillSlug/);
   // The totals are cells of the same grid, keyed and labelled like the rest,
   // so the last row ends flush instead of trailing two blank tiles.
   assert.match(bossLog, /\{#each summary as cell \(cell\.key\)\}/);
-  assert.match(bossLog, /<li class="skill-cell skill-summary" aria-label=\{summaryLabel\(cell\)\} title=\{summaryLabel\(cell\)\}>/);
+  assert.match(bossLog, /<li class="skill-cell skill-summary" tabindex="0" aria-label=\{summaryLabel\(cell\)\}>/);
+  assert.match(bossLog, /<DetailTip detail=\{summaryDetail\(cell\)\} \/>/);
   assert.match(bossLog, /const summary = \$derived\(skillSummary\(skills\)\)/, 'the totals must be derived from the payload');
   // One line, whatever the width: a wrapped nine-digit figure in a 1.625rem
   // cell spills over the row below it.

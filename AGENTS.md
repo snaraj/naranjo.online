@@ -555,7 +555,11 @@ lane whether or not any vendor-specific tooling is present.
 - **Shared machines contend.** Heavy suites in several worktrees compete for CPU
   and load-sensitive tests can flake under contention. Treat a contention flake
   as an environment finding — name it, rerun it, never weaken the test — and
-  stagger the heaviest batteries when many lanes run at once.
+  stagger the heaviest batteries when many lanes run at once. Browser-lane runs
+  on a shared machine must also set `SITE_PORT` to a private port, because
+  `frontend/playwright.config.mjs` defaults to 8080 with `reuseExistingServer`
+  outside CI, and cross-lane servers were measured twice in one wave
+  (2026-08-24) answering another lane's probes.
 
 ## Working a change end to end
 

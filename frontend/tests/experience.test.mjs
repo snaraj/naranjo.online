@@ -574,11 +574,11 @@ test('auto is the no-choice choice: derived menu, attribute removed, cookie expi
 });
 
 // The toggle is the wiki's, minimally: a labeled moon button opening a
-// popover of one swatch per mode, each swatch's background being that
-// theme's OWN page-surface token, with an inline-SVG glyph — sun on light,
-// cratered moon on dark, plain moon on sepia. No icon assets, no hex copies.
-// These pins cover DOM wiring only; the open/select/close/reopen behavior is
-// EXECUTED against src/lib/disclosure.ts in toggle.test.mjs.
+// popover of one swatch per mode, each swatch an inline-SVG line icon whose
+// enclosed area is that theme's OWN page-surface token — split circle on
+// auto, sun on light, cratered moon on the three darks. No icon assets, no
+// hex copies. These pins cover DOM wiring only; the open/select/close/reopen
+// behavior is EXECUTED against src/lib/disclosure.ts in toggle.test.mjs.
 test('theme toggle: swatch popover, token-pure colors, machine-wired', () => {
   // Trigger: a labeled plain-disclosure button with an inline moon glyph.
   // Deliberately NO aria-haspopup: it would announce a menu, but the popover
@@ -597,28 +597,33 @@ test('theme toggle: swatch popover, token-pure colors, machine-wired', () => {
 
   // Swatch colors are references into each theme's own palette tokens —
   // never a third copy of the values (see the dedup pins above) and never a
-  // hex anywhere in the component.
+  // hex anywhere in the component. The palette lives INSIDE the glyph now
+  // (owner directive, 2026-08-24: the swatches are line icons like the
+  // header chrome, not filled discs), so the mode's surface is the shape's
+  // fill rather than the button's background — and the button must carry no
+  // background at all, which is the half of this that the owner rejected.
   for (const id of ['light', 'dark', 'slate', 'sepia']) {
     assert.match(
       themeMenu,
-      new RegExp(`background:\\s*var\\(--palette-${id}-surface\\)`),
-      `the ${id} swatch background must be that theme's own surface token`
+      new RegExp(`\\.swatch-${id} \\.chip \\{\\s*fill: var\\(--palette-${id}-surface\\)`),
+      `the ${id} swatch glyph must be filled with that theme's own surface token`
+    );
+  }
+  // ...and each dark mode's INK is its craters, which is what tells the three
+  // apart — neutral, cool, warm. A mode whose craters lost their own accent
+  // becomes indistinguishable from its neighbour at this size.
+  for (const id of ['dark', 'slate', 'sepia']) {
+    assert.match(
+      themeMenu,
+      new RegExp(`\\.swatch-${id} \\.crater \\{\\s*fill: var\\(--palette-${id}-accent\\)`),
+      `the ${id} swatch craters must be that theme's own accent token`
     );
   }
 
-  // Auto has no palette of its own, so its swatch previews BOTH — split down
-  // the middle — and each half of the glyph is drawn in the ink belonging to
-  // its own side, which is what keeps every half of it legible.
-  assert.match(
-    themeMenu,
-    /linear-gradient\(\s*90deg,\s*var\(--palette-light-surface\) 0 50%,\s*var\(--palette-dark-surface\) 50% 100%\s*\)/,
-    'the auto swatch must preview both palettes from their own surface tokens'
-  );
-  assert.match(themeMenu, /\.auto-half-light \{\s*fill: var\(--palette-light-text\)/);
-  assert.match(themeMenu, /\.auto-half-dark \{\s*fill: var\(--palette-dark-text\)/);
-  // The sepia glyph clears WCAG 1.4.11 with margin by mixing two sepia
-  // tokens — still no restated value (review F4).
-  assert.match(themeMenu, /color-mix\(in srgb, var\(--palette-sepia-border-strong\) 60%, var\(--palette-sepia-accent\)\)/);
+  // Auto has no palette of its own, so its glyph previews BOTH — one circle
+  // split down the middle between the two page surfaces it chooses between.
+  assert.match(themeMenu, /\.swatch-auto \.auto-half-light \{\s*fill: var\(--palette-light-surface\)/);
+  assert.match(themeMenu, /\.swatch-auto \.auto-half-dark \{\s*fill: var\(--palette-dark-surface\)/);
   // ({#each …} starts with three hex-class letters, hence the full-token form.)
   assert.doesNotMatch(
     themeMenu,
@@ -995,5 +1000,162 @@ test('every reading mode declares the identical token set', () => {
       reference.properties,
       `${mode.name} does not declare the same tokens as ${reference.name} — missing ${missing.length > 0 ? missing.join(', ') : 'nothing'}; extra ${extra.length > 0 ? extra.join(', ') : 'nothing'}. A token a mode omits falls through to the light palette, silently, in that mode only`
     );
+  }
+});
+
+/* ===========================================================================
+ * The chrome-icon family (owner directive, 2026-08-24)
+ *
+ * "These icons are not matching the small, sleek, translucid, appearance of
+ * the parent icons, they should not look this overwhelming." The reading-mode
+ * popover's five swatches were 2.75rem filled discs, each rimmed and — when
+ * chosen — ringed a further two pixels, sitting directly under two 18px line
+ * glyphs that wear no chrome at all. They are one family now, and these pins
+ * are what stops the two halves of it drifting apart again.
+ *
+ * The drift they guard is a real one rather than a theoretical one, because
+ * the family is expressed in two different places: the header icons carry
+ * their size and line weight as SVG ATTRIBUTES, which no custom property can
+ * reach, while the swatches read tokens. So the attributes are read back out
+ * of the chrome components here and compared with the tokens the swatches
+ * consume — and the browser lanes measure the same pair in a real engine.
+ * ======================================================================== */
+
+// The chrome's own glyph, as the markup states it: the size attribute both
+// header icons carry, and the line weight the stroked one is drawn at.
+const chromeGlyphAttributes = (source) => {
+  const svg = /<svg[^>]*>/.exec(source);
+  assert.ok(svg, 'a chrome control renders no inline SVG at all');
+  return {
+    width: Number(/\bwidth="([\d.]+)"/.exec(svg[0])?.[1]),
+    height: Number(/\bheight="([\d.]+)"/.exec(svg[0])?.[1]),
+  };
+};
+
+// One rule from one file, by exact selector. Fails loudly rather than
+// returning undefined: a rule this pin cannot find is a rule it cannot
+// measure, which is precisely where an undersized or re-chromed swatch hides.
+const ruleNamed = (file, selector) => {
+  const found = sweptRules.find((rule) => rule.file === file && rule.selector === selector);
+  assert.ok(found, `${file} no longer declares "${selector}"; this pin has lost its subject`);
+  return found;
+};
+
+const declaredValue = (rule, property) =>
+  declarationsOf(rule.body).find((declaration) => declaration.property === property)?.value;
+
+test('the reading-mode swatches are drawn in the header chrome grammar', () => {
+  const menuFile = 'lib/ThemeMenu.svelte';
+  const tokens = tokensFor('light');
+
+  /* The shared grammar, resolved through however many var() hops the token
+     layer takes. A token that stopped resolving would fail inside
+     resolveToken rather than quietly comparing undefined to undefined. */
+  const glyphSize = resolveToken('--swatch-glyph-size', tokens);
+  const strokeWidth = resolveToken('--swatch-stroke', tokens);
+  assert.equal(
+    glyphSize,
+    resolveToken('--chrome-icon-glyph-size', tokens),
+    'the swatch glyph no longer derives from the chrome glyph token; the two families can now drift'
+  );
+  assert.equal(
+    strokeWidth,
+    resolveToken('--chrome-icon-stroke', tokens),
+    'the swatch line weight no longer derives from the chrome stroke token'
+  );
+
+  /* ...and the tokens are the truth about the chrome, not a hopeful copy of
+     it. Both header icons state their painted size as an attribute, so the
+     attribute is what this compares against: a chrome glyph resized in the
+     markup and nowhere else is exactly the drift the owner's complaint was
+     made of, in the opposite direction. */
+  const glyphPx = lengthInPx(glyphSize);
+  assert.ok(glyphPx !== null, `--chrome-icon-glyph-size is "${glyphSize}", which this pin cannot measure`);
+  for (const file of ['lib/components/RefreshAll.svelte', menuFile]) {
+    const painted = chromeGlyphAttributes(componentSources[file]);
+    assert.equal(
+      painted.width,
+      glyphPx,
+      `${file} paints its chrome glyph at ${painted.width}px while the shared token says ${glyphPx}px`
+    );
+    assert.equal(painted.height, glyphPx, `${file} paints a chrome glyph that is not square`);
+  }
+  const chromeStroke = /stroke-width="([\d.]+)"/.exec(componentSources['lib/components/RefreshAll.svelte']);
+  assert.ok(chromeStroke, 'the refresh glyph is no longer a stroked line icon; the family has no line weight left to share');
+  assert.equal(
+    Number(chromeStroke[1]),
+    Number(strokeWidth),
+    `the refresh glyph is drawn at ${chromeStroke[1]} while the shared token says ${strokeWidth}`
+  );
+
+  /* The swatch wears the chrome's absence of chrome. Each of these is one
+     innocent-looking declaration away from returning, and together they are
+     what the owner actually rejected: a disc, a rim, a fill, and a ring. */
+  const swatch = ruleNamed(menuFile, '.swatch');
+  assert.equal(declaredValue(swatch, 'border'), '0', 'a swatch wears a border again');
+  assert.equal(declaredValue(swatch, 'background'), 'none', 'a swatch wears a fill again');
+  for (const rule of sweptRules.filter((entry) => entry.file === menuFile)) {
+    if (!selectorParts(rule.selector).some((part) => part.startsWith('.swatch'))) continue;
+    for (const { property, value } of declarationsOf(rule.body)) {
+      assert.ok(
+        !/^(border-radius|box-shadow)$/.test(property) || rule.selector.includes('::after'),
+        `${rule.selector} paints ${property}: ${value}; the swatches are line icons, not discs`
+      );
+      assert.ok(
+        !(property === 'background' && value.startsWith('var(')) || rule.selector.includes('::after'),
+        `${rule.selector} paints a surface behind a swatch again`
+      );
+    }
+  }
+
+  /* The 44px hit area survives the shrink — that is the whole point of
+     shrinking only what is PAINTED — and it stays a literal so the
+     touch-floor walk above can keep measuring it. */
+  assert.equal(declaredValue(swatch, 'inline-size'), '2.75rem');
+  assert.equal(declaredValue(swatch, 'block-size'), '2.75rem');
+  assert.equal(
+    lengthInPx(declaredValue(swatch, 'inline-size')) / glyphPx > 2,
+    true,
+    'the painted glyph has grown to most of its own hit area again'
+  );
+
+  // Translucent at rest, fully present when pointed at or chosen: the
+  // swatch's answer to the chrome's ink change, and the reason the popover
+  // reads as quiet rather than as five objects demanding attention.
+  const rest = Number(resolveToken('--swatch-rest-opacity', tokens));
+  const active = Number(resolveToken('--swatch-active-opacity', tokens));
+  assert.ok(rest > 0 && rest < active, `a swatch rests at ${rest} against an active ${active}`);
+  assert.equal(declaredValue(swatch, 'opacity'), 'var(--swatch-rest-opacity)');
+
+  /* Selection is never color alone (the dataviz floor). The chosen mode
+     carries a bar under its glyph, drawn by a pseudo-element so that
+     choosing a mode repaints without moving the swatch beside it. */
+  const chosen = ruleNamed(menuFile, ".swatch[aria-pressed='true']::after");
+  assert.equal(declaredValue(chosen, 'content'), "''");
+  assert.equal(declaredValue(chosen, 'position'), 'absolute');
+  for (const property of ['inline-size', 'block-size']) {
+    const value = declaredValue(chosen, property);
+    assert.match(
+      value ?? '',
+      /^var\(--swatch-mark-/,
+      `the chosen-mode mark sizes its ${property} as "${value}"; every dimension here is a token`
+    );
+    assert.ok(
+      Number.parseFloat(resolveToken(/var\((--[a-z-]+)\)/.exec(value)[1], tokens)) > 0,
+      `the chosen-mode mark resolves to no ${property}, so selection is carried by color alone`
+    );
+  }
+
+  /* Every dimension the component states is a token — no raw px, no raw
+     line weight, no second copy of a size that styles.css already owns. The
+     44px hit box is the one deliberate literal, for the reason above. */
+  for (const rule of sweptRules.filter((entry) => entry.file === menuFile)) {
+    for (const { property, value } of declarationsOf(rule.body)) {
+      if (!/^(inline-size|block-size|stroke-width|opacity|gap|padding)$/.test(property)) continue;
+      assert.ok(
+        value.startsWith('var(') || value === '2.75rem' || value === '0',
+        `${rule.selector} sets ${property}: ${value}; a dimension here is a token with a global default`
+      );
+    }
   }
 });

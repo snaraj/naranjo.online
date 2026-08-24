@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -492,6 +493,30 @@ func usageFetchSource(t *testing.T) *FetchSource {
 	return source
 }
 
+// shippedSeries returns the recorded daily series one source ships in the
+// snapshot a registry was built from, or fails the test when that source
+// carries none. It exists so a refresh assertion can compare against the
+// exact recorded bytes rather than against "not nil", which is a property
+// the merge could satisfy with the wrong series entirely.
+func shippedSeries(t *testing.T, registry *Registry, label string) *TokenUsageSeries {
+	t.Helper()
+	var payload TokenUsageData
+	if err := decodeStrict(decodePanelEnvelope(t, registry, "token-usage").Data, &payload); err != nil {
+		t.Fatalf("decode token-usage payload: %v", err)
+	}
+	for _, source := range payload.Sources {
+		if source.Label != label {
+			continue
+		}
+		if source.Series == nil {
+			t.Fatalf("source %q ships no recorded series for this pin to compare against", label)
+		}
+		return source.Series
+	}
+	t.Fatalf("the shipped snapshot carries no source labelled %q", label)
+	return nil
+}
+
 // TestUsageRefreshSkipsUnkeyedSourcesAndMerges proves the credential
 // contract: a source whose env var is unset is skipped — its snapshot
 // section keeps serving — a partly fetched panel is honestly stale, a fully
@@ -503,6 +528,15 @@ func TestUsageRefreshSkipsUnkeyedSourcesAndMerges(t *testing.T) {
 		{id: "token-usage", kind: KindTokenUsage, title: "Token usage", source: usageFetchSource(t)},
 	})
 	state := registry.byID["token-usage"]
+	// The recorded series the unkeyed source ships, read BEFORE any refresh
+	// runs. The assertion below used to be "the unkeyed source has no series
+	// at all", which was true only for as long as that source happened to
+	// ship none — an accident of the snapshot, not a property of the merge.
+	// Now that both sources carry a recorded capture, the property that
+	// actually matters is stateable and strictly stronger: the unkeyed
+	// source keeps ITS OWN recorded series, byte for byte, and never
+	// acquires the one the keyed source just fetched.
+	recordedSeries := shippedSeries(t, registry, "codex")
 
 	t.Run("no keys: nothing fetched, snapshot keeps serving", func(t *testing.T) {
 		if err := registry.refreshPanel(t.Context(), state, poisonedDoer{t: t}, func(string) string { return "" }); err == nil {
@@ -537,14 +571,28 @@ func TestUsageRefreshSkipsUnkeyedSourcesAndMerges(t *testing.T) {
 			t.Errorf("fetched source carries no activity series: %+v", payload.Sources[0].Series)
 		}
 		// The unkeyed source keeps its recorded snapshot section verbatim —
-		// the account handle and the figures no usage API reports — and gains
-		// no live series it never fetched.
+		// the account handle, the figures no usage API reports, and its own
+		// recorded daily capture — while gaining nothing the keyed source
+		// fetched. Both halves are checked, because either alone passes for
+		// the wrong reason: a source that lost its capture satisfies "did not
+		// acquire the fetched one", and a source that took the fetched series
+		// satisfies "still has a series".
 		unkeyed := payload.Sources[1]
 		if unkeyed.Account == "" || len(unkeyed.Stats) == 0 || len(unkeyed.Insights) == 0 {
 			t.Errorf("unkeyed source lost its recorded snapshot section: %+v", unkeyed)
 		}
-		if unkeyed.Series != nil {
-			t.Errorf("unkeyed source acquired a series it never fetched: %+v", unkeyed.Series)
+		if unkeyed.Series == nil {
+			t.Fatalf("unkeyed source lost the recorded series it ships")
+		}
+		if !unkeyed.Series.Recorded {
+			t.Errorf("the unkeyed source's series stopped saying it was recorded out of band")
+		}
+		if !reflect.DeepEqual(*unkeyed.Series, *recordedSeries) {
+			t.Errorf("unkeyed series = %+v, want the recorded capture %+v", *unkeyed.Series, *recordedSeries)
+		}
+		if fetchedSeries := payload.Sources[0].Series; fetchedSeries != nil &&
+			reflect.DeepEqual(*unkeyed.Series, *fetchedSeries) {
+			t.Errorf("unkeyed source acquired the series the keyed source fetched: %+v", *unkeyed.Series)
 		}
 	})
 
