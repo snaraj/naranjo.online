@@ -228,10 +228,19 @@
      whether it renders as <a> or <span> (the validated-vs-fallback branch),
      so both variants of a cell claim the same 44px box and the same vertical
      centering, and a row never changes height depending on which branch a
-     given entry took. */
+     given entry took. min-inline-size covers the OTHER axis the block-size
+     fix left open (issue 157 follow-up): a valid one-character repo slug —
+     "a" is admitted by isValidRepoSlug — has almost no intrinsic content
+     width, and the grid's auto column sizes to that content absent a floor,
+     so the shortest admitted slug rendered a ~7px-wide anchor even though
+     the row's height already cleared 44px. The floor sits well under
+     max-inline-size, so it only ever WIDENS a column that content already
+     starves; every realistic repo name is wider than 2.75rem on its own and
+     is unaffected. */
   .activity-commit-repo {
     color: var(--activity-repo, var(--panel-accent, rgb(220, 138, 0)));
     max-inline-size: 9rem;
+    min-inline-size: 2.75rem;
     min-block-size: 2.75rem;
     line-height: 2.75rem;
     overflow: hidden;

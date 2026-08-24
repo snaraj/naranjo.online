@@ -1607,6 +1607,41 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
   await popup.close();
 });
 
+test('the shortest admitted repo slug still clears the touch floor on both axes (issue 157)', async ({
+  page,
+}) => {
+  /* Daybreak Blue's review of PR #161 measured this exact probe: a
+     one-character repo slug — "a" is admitted by isValidRepoSlug, the
+     shortest string the pattern accepts — rendered a 6.625px-wide anchor
+     even though the row already cleared the 44px touch floor on its BLOCK
+     axis. max-inline-size alone bounds the upper end of
+     .activity-commit-repo; nothing bounded the lower end until
+     min-inline-size was added (ActivityBar.svelte), so a column sized
+     purely to this content's own width. */
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.recentCommits = [
+      { repo: 'a', sha: '', message: 'fix: shortest admitted slug (#1)', at: '2026-08-24T00:00:00Z' },
+    ];
+    await route.fulfill({ response, json: envelope });
+  });
+  await visit(page);
+
+  const repoLink = page.locator('.activity-commit-repo').first();
+  await repoLink.scrollIntoViewIfNeeded();
+  const box = await repoLink.boundingBox();
+  expect(box, 'the shortest admitted repo slug rendered no box at all').not.toBeNull();
+  expect(
+    box.width,
+    `the repo link is ${box.width.toFixed(2)}px wide, under the ${touchFloorPx}px touch floor`
+  ).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+  expect(
+    box.height,
+    `the repo link is ${box.height.toFixed(2)}px tall, under the ${touchFloorPx}px touch floor`
+  ).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+});
+
 test('the popover animates only where motion is welcome', async ({ page }) => {
   await visit(page);
   await openReadingModes(page);
