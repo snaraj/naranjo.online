@@ -1,16 +1,30 @@
 #!/usr/bin/env python3
 """Whole-render storage pin for the panels data root (issue #142).
 
-WHY THIS EXISTS. The data root mounts host bytes into the serving pod. Every
+WHY THIS EXISTS. The data root mounts node bytes into the serving pod. Every
 safety property of that mount is a rendered FACT — read-only at both the
-claim reference and the mount, a hostPath that names exactly the reviewed
-directory and refuses to create it, static binding pinned from both sides,
-an explicit empty storageClassName so no default provisioner can intercept
-the pair, a Retain reclaim policy, and an environment root that equals the
-mount path — and a fact a template edit can move is a fact this gate must
-hold. The disabled direction is pinned with equal force: a render with the
-capability off must contain NONE of the objects, so the capability cannot
-half-exist.
+claim reference and the mount, a `local` volume naming exactly the reviewed
+directory under the enumerated local-volume root, static binding pinned from
+both sides, the enumerated storageClassName named on BOTH objects, bounded
+required nodeAffinity, a Retain reclaim policy, and an environment root that
+equals the mount path — and a fact a template edit can move is a fact this
+gate must hold. The disabled direction is pinned with equal force: a render
+with the capability off must contain NONE of the objects, so the capability
+cannot half-exist.
+
+WHAT CHANGED IN THE 2026-08-24 ROUND-3 REVIEW (findings 3 and 7). The volumes
+were hostPath with an explicitly empty storageClassName. website-infrastructure
+#211's storage acceptance denies hostPath outright and admits only enumerated
+classes, so the chart adopted the platform shape and this pin moved with it:
+it now requires `local` and refuses a hostPath source, requires the enumerated
+class rather than the empty one, and requires nodeAffinity to be REQUIRED,
+singular, operator In, with a non-empty value. Two further holes closed here:
+the state pair is ReadWriteOncePod (ReadWriteOnce admits several pods on one
+node — exactly what a one-node cluster produces), and the sibling check runs
+in BOTH directions over NORMALIZED paths, for the node directories and the
+container mount paths alike. The old check compared raw strings in one
+direction only, so `/x/data/../data/state` and a data root nested inside the
+writable state root both passed.
 
 HOW IT READS THE RENDER. Through chart_render_census's own document reader —
 the fail-closed YAML-subset reader issue #86 built precisely so no second,
@@ -25,17 +39,19 @@ MODES (stdin is always one complete multi-document render):
                    plus the exact pair of PersistentVolumes.
   disabled      -- the capability-off render: none of it.
 
-Facts arrive on the command line (--host-path, --volume-name, --key-secret,
---capacity, --state-host-path, --state-volume-name, --state-capacity,
---namespace, --mount-path, --state-mount-path) so the expectation is stated
-by the CALLER — scripts/ci/chart-storage-pin.sh reads values.yaml, the
-single source the deployment-provider contract designates — never re-derived
-from the very template under test.
+Facts arrive on the command line (--path, --volume-name, --key-secret,
+--capacity, --state-path, --state-volume-name, --state-capacity,
+--namespace, --mount-path, --state-mount-path, --storage-class,
+--local-root, --node) so the expectation is stated by the CALLER —
+scripts/ci/chart-storage-pin.sh reads values.yaml, the single source the
+deployment-provider contract designates — never re-derived from the very
+template under test.
 """
 
 from __future__ import annotations
 
 import argparse
+import posixpath
 import sys
 from pathlib import Path
 
@@ -81,6 +97,45 @@ def _named(entries, name: str) -> list[dict]:
     return [e for e in entries or [] if isinstance(e, dict) and e.get("name") == name]
 
 
+def _normal(path: str) -> str:
+    """The one normalization every path comparison in this module goes
+    through. posixpath.normpath collapses duplicate separators, resolves .
+    and .. lexically, and drops a trailing separator, so the three spellings
+    that used to defeat the old raw-string check — /x/data/, /x//data and
+    /x/data/../data — all reduce to the single directory the kernel would
+    open. Comparing anything but normalized forms is comparing spellings."""
+    return posixpath.normpath(path)
+
+
+def _require_disjoint(a_name: str, a: str, b_name: str, b: str) -> None:
+    """Neither path may BE the other, nor contain the other, either way.
+
+    The two roots carry opposite trust: one is the pushed sealed series,
+    mounted read-only in every layer, and the other is the origin's single
+    writable surface. Overlap in EITHER direction collapses that separation —
+    a writable root inside the read-only projection lets the origin write into
+    what it must only read, and a read-only root inside the writable one is
+    the identical breach stated backwards. The old check tested one direction
+    with a raw prefix, so it missed both the reverse case and every alias.
+
+    The ancestor test appends an explicit separator on purpose: without it,
+    /x/panels-data-two reads as a child of /x/panels-data and the pin refuses
+    a perfectly good sibling while still missing real nesting elsewhere."""
+    left, right = _normal(a), _normal(b)
+    if left == right:
+        raise StoragePinError(
+            "%s and %s resolve to the same directory (%s); the read-only projection "
+            "and the writable surface may never be the same place" % (a_name, b_name, left))
+    if right.startswith(left.rstrip("/") + "/"):
+        raise StoragePinError(
+            "%s (%s) sits inside %s (%s); the writable surface may never live within "
+            "the read-only projection" % (b_name, right, a_name, left))
+    if left.startswith(right.rstrip("/") + "/"):
+        raise StoragePinError(
+            "%s (%s) sits inside %s (%s); the read-only projection may never live "
+            "within the writable surface" % (a_name, left, b_name, right))
+
+
 def check_disabled(objects: list[dict], facts: argparse.Namespace) -> None:
     """A disabled render carries no trace of the capability."""
     for kind in ("PersistentVolume", "PersistentVolumeClaim"):
@@ -117,12 +172,22 @@ def _check_claim_common(claim: dict, facts: argparse.Namespace, name: str,
     spec = claim.get("spec") or {}
     if spec.get("accessModes") != [access_mode]:
         raise StoragePinError("claim %s's access mode is not exactly %s" % (name, access_mode))
-    if "storageClassName" not in spec or spec.get("storageClassName") != "":
+    if spec.get("storageClassName") != facts.storage_class:
         raise StoragePinError(
-            "claim %s must carry an EXPLICIT empty storageClassName; an omitted one "
-            "lets the default StorageClass capture the claim" % name)
+            "claim %s must name the enumerated StorageClass %s; an omitted name lets "
+            "the default StorageClass capture the claim, and the empty name this "
+            "replaced only excluded a default provisioner rather than binding the "
+            "pair to the class the platform admits" % (name, facts.storage_class))
     if spec.get("volumeName") != name:
         raise StoragePinError("claim %s does not pin volumeName to itself" % name)
+    # website-infrastructure #211 SR-12 and SR-15: a claim that names a data
+    # source or a volume-attributes class is asking the platform to do
+    # something other than bind the exact pre-provisioned volume above it.
+    for forbidden in ("dataSource", "dataSourceRef", "volumeAttributesClassName"):
+        if forbidden in spec:
+            raise StoragePinError(
+                "claim %s carries %s; a statically bound claim must ask for nothing "
+                "but the volume it names" % (name, forbidden))
     requests = (spec.get("resources") or {}).get("requests") or {}
     if requests.get("storage") != capacity:
         raise StoragePinError("claim %s does not request the declared capacity" % name)
@@ -139,12 +204,30 @@ def check_claims(objects: list[dict], facts: argparse.Namespace) -> None:
     _check_claim_common(_one_claim(objects, facts.volume_name), facts,
                         facts.volume_name, "ReadOnlyMany", facts.capacity)
     _check_claim_common(_one_claim(objects, facts.state_volume_name), facts,
-                        facts.state_volume_name, "ReadWriteOnce", facts.state_capacity)
+                        facts.state_volume_name, "ReadWriteOncePod", facts.state_capacity)
 
 
 def check_deployment_wiring(objects: list[dict], facts: argparse.Namespace) -> None:
     deployment = _deployment(objects)
     container = _container(deployment)
+
+    # Single writer by construction (round-3 finding 3). ReadWriteOncePod on
+    # the state claim is the enforcement; this is the render-time statement of
+    # the same fact, so a replica count that WOULD race the floor marker fails
+    # here rather than as a mysteriously Pending second pod. The two are not
+    # redundant: the claim binds the cluster, this binds the chart, and the
+    # chart is what review reads.
+    replicas = (deployment.get("spec") or {}).get("replicas")
+    if replicas != 1:
+        raise StoragePinError(
+            "the data-root render declares %r replicas; the replay-floor state is a "
+            "single-writer surface and this capability renders only at 1" % (replicas,))
+
+    # The container mount paths must be disjoint for the same reason the node
+    # directories are: a writable mount inside a read-only mount point is a
+    # writable window into it.
+    _require_disjoint("the data mount path", facts.mount_path,
+                      "the state mount path", facts.state_mount_path)
 
     roots = _named(container.get("env"), "PANELS_DATA_ROOT")
     if len(roots) != 1 or roots[0].get("value") != facts.mount_path:
@@ -220,14 +303,15 @@ def _one_volume(objects: list[dict], name: str) -> dict:
 
 
 def _check_volume_common(volume: dict, facts: argparse.Namespace, name: str,
-                         access_mode: str, capacity: str, host_path: str) -> None:
+                         access_mode: str, capacity: str, path: str) -> None:
     spec = volume.get("spec") or {}
     if spec.get("accessModes") != [access_mode]:
         raise StoragePinError("PV %s's access mode is not exactly %s" % (name, access_mode))
     if spec.get("persistentVolumeReclaimPolicy") != "Retain":
         raise StoragePinError("PV %s's reclaim policy must be Retain" % name)
-    if "storageClassName" not in spec or spec.get("storageClassName") != "":
-        raise StoragePinError("PV %s must carry an EXPLICIT empty storageClassName" % name)
+    if spec.get("storageClassName") != facts.storage_class:
+        raise StoragePinError(
+            "PV %s must name the enumerated StorageClass %s" % (name, facts.storage_class))
     if (spec.get("capacity") or {}).get("storage") != capacity:
         raise StoragePinError("PV %s does not declare the expected capacity" % name)
     claim_ref = spec.get("claimRef") or {}
@@ -235,13 +319,66 @@ def _check_volume_common(volume: dict, facts: argparse.Namespace, name: str,
         raise StoragePinError(
             "PV %s's claimRef must pin the pair: namespace %s, name %s"
             % (name, facts.namespace, name))
-    rendered = spec.get("hostPath") or {}
-    if rendered.get("path") != host_path:
-        raise StoragePinError("PV %s's hostPath is not the reviewed %s" % (name, host_path))
-    if rendered.get("type") != "Directory":
+    # website-infrastructure #211 SR-2: hostPath is denied outright. It is the
+    # admin-only loophole through restricted pod security, which is exactly
+    # why the shape this replaced needed a manual admin ceremony to exist at
+    # all. Naming it here rather than only checking for `local` means a
+    # regression reports the actual reason it is refused.
+    if "hostPath" in spec:
         raise StoragePinError(
-            "PV %s's hostPath type must be Directory — it mounts only a directory an "
-            "admin already created, never creates one" % name)
+            "PV %s declares a hostPath; the platform storage acceptance denies hostPath "
+            "volumes outright — a local volume under the enumerated root is the "
+            "admitted shape" % name)
+    if "mountOptions" in spec:
+        raise StoragePinError("PV %s declares mountOptions; the enumerated shape carries none" % name)
+    local = spec.get("local")
+    if not isinstance(local, dict):
+        raise StoragePinError(
+            "PV %s must declare a `local` volume source; it is one of the two sources "
+            "the platform admits, and the only one this chart provisions" % name)
+    if local.get("path") != path:
+        raise StoragePinError("PV %s's local path is not the reviewed %s" % (name, path))
+    if not _normal(path).startswith(_normal(facts.local_root).rstrip("/") + "/"):
+        raise StoragePinError(
+            "PV %s's local path must live strictly under the enumerated local-volume "
+            "root %s" % (name, facts.local_root))
+    # A local volume is node-bound by definition: without REQUIRED
+    # nodeAffinity the scheduler has nothing to place the pod against, and a
+    # `preferred` affinity would be a suggestion where the platform demands a
+    # constraint. Bounded means bounded — one term, one expression, operator
+    # In, exactly the reviewed node — because a wider match is a volume that
+    # can bind on a machine nobody provisioned the directory on.
+    affinity = spec.get("nodeAffinity")
+    if not isinstance(affinity, dict) or "required" not in affinity:
+        raise StoragePinError(
+            "PV %s must carry REQUIRED nodeAffinity; a local volume without one is "
+            "unplaceable, and a preferred one is a suggestion" % name)
+    if set(affinity) != {"required"}:
+        raise StoragePinError(
+            "PV %s's nodeAffinity must carry nothing but `required`" % name)
+    terms = (affinity["required"] or {}).get("nodeSelectorTerms")
+    if not isinstance(terms, list) or len(terms) != 1:
+        raise StoragePinError(
+            "PV %s must carry exactly one nodeSelectorTerm; alternatives widen the "
+            "set of nodes the volume may bind on" % name)
+    expressions = (terms[0] or {}).get("matchExpressions")
+    if not isinstance(expressions, list) or len(expressions) != 1:
+        raise StoragePinError("PV %s must carry exactly one matchExpression" % name)
+    expression = expressions[0] or {}
+    if expression.get("key") != "kubernetes.io/hostname":
+        raise StoragePinError(
+            "PV %s must select its node by kubernetes.io/hostname" % name)
+    if expression.get("operator") != "In":
+        raise StoragePinError(
+            "PV %s's node selector must use operator In; Exists and NotIn match sets "
+            "of nodes rather than the one node the directory exists on" % name)
+    values = expression.get("values")
+    if not isinstance(values, list) or len(values) != 1 or not values[0]:
+        raise StoragePinError(
+            "PV %s's node selector must carry exactly one non-empty value" % name)
+    if facts.node and values[0] != facts.node:
+        raise StoragePinError(
+            "PV %s is bound to node %r, not the stated %r" % (name, values[0], facts.node))
 
 
 def check_volumes(objects: list[dict], facts: argparse.Namespace) -> None:
@@ -252,18 +389,11 @@ def check_volumes(objects: list[dict], facts: argparse.Namespace) -> None:
             "the with-pv render must carry exactly two PersistentVolumes "
             "(data and state); found %d" % len(volumes))
     _check_volume_common(_one_volume(objects, facts.volume_name), facts,
-                         facts.volume_name, "ReadOnlyMany", facts.capacity, facts.host_path)
+                         facts.volume_name, "ReadOnlyMany", facts.capacity, facts.path)
     _check_volume_common(_one_volume(objects, facts.state_volume_name), facts,
-                         facts.state_volume_name, "ReadWriteOnce", facts.state_capacity,
-                         facts.state_host_path)
-    # The state directory must be a genuine SIBLING: never the push
-    # directory itself, and never nested inside it, so the origin's one
-    # writable surface can never reach the pushed series file.
-    if facts.state_host_path == facts.host_path or facts.state_host_path.startswith(
-            facts.host_path.rstrip("/") + "/"):
-        raise StoragePinError(
-            "the state hostPath must be a sibling of the data hostPath, never the push "
-            "directory or inside it")
+                         facts.state_volume_name, "ReadWriteOncePod", facts.state_capacity,
+                         facts.state_path)
+    _require_disjoint("the data path", facts.path, "the state path", facts.state_path)
 
 
 def run(mode: str, text: str, facts: argparse.Namespace) -> None:
@@ -284,16 +414,22 @@ def run(mode: str, text: str, facts: argparse.Namespace) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("enabled", "with-pv", "disabled"))
-    parser.add_argument("--host-path", required=True)
+    parser.add_argument("--path", required=True)
+    parser.add_argument("--storage-class", required=True)
+    parser.add_argument("--local-root", required=True)
+    parser.add_argument("--node", default="")
     parser.add_argument("--volume-name", required=True)
     parser.add_argument("--key-secret", required=True)
     parser.add_argument("--capacity", required=True)
-    parser.add_argument("--state-host-path", required=True)
+    parser.add_argument("--state-path", required=True)
     parser.add_argument("--state-volume-name", required=True)
     parser.add_argument("--state-capacity", required=True)
     parser.add_argument("--namespace", required=True)
-    parser.add_argument("--mount-path", default="/var/lib/panels-data")
-    parser.add_argument("--state-mount-path", default="/var/lib/panels-state")
+    # No defaults: the mount paths are values-file facts now (round-3 finding
+    # 7), and a default here would let the caller stop stating them while the
+    # template moved underneath.
+    parser.add_argument("--mount-path", required=True)
+    parser.add_argument("--state-mount-path", required=True)
     facts = parser.parse_args(argv)
     try:
         run(facts.mode, sys.stdin.read(), facts)

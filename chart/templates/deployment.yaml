@@ -16,9 +16,11 @@ spec:
     type: RollingUpdate
     rollingUpdate:
       # The namespace quota is pods:2 / limits.memory 256Mi. At
-      # replicaCount's default and schema maximum of 2 (values.schema.json
-      # allows 1..2 so the workload can scale down for dev use — owner
-      # directive 2026-08-19), steady state already consumes the whole
+      # replicaCount's schema maximum of 2 (values.schema.json allows 1..2;
+      # the DEFAULT moved to 1 in the 2026-08-24 round-3 review so the
+      # replay-floor state is single-writer by construction — see
+      # chart/values.yaml, which states the availability tradeoff in full),
+      # steady state already consumes the whole
       # quota, so any surge pod is quota-rejected and wedges the rollout
       # permanently (cluster-proven during the lidersea.com v0.1.16
       # deploy — the controller scaled the OLD ReplicaSet to 2 first to
@@ -75,22 +77,26 @@ spec:
               value: {{ .Values.panels.refresh.enabled | quote }}
             {{- /* The panels data root (issue #142): rendered only when the
             capability is enabled, so a disabled render is byte-identical to
-            the chart before the capability existed. The path here must equal
-            the volumeMount path below; scripts/ci/chart-storage-pin.sh
-            fails the render if the two ever drift. The key reference is
+            the chart before the capability existed. Both this value and the
+            volumeMount below come from the SAME values key, so they cannot
+            drift by editing one of two literals (round-3 finding 7); the
+            geometry itself — normalized, disjoint in both directions — is
+            validated by naranjo-online.panelsDataPaths, and
+            scripts/ci/chart-storage-pin.sh holds the rendered result. The key reference is
             optional on purpose: a missing Secret degrades the panel to its
             embedded snapshot (the app fails closed on every unreadable
             input) and must never keep the site from scheduling. */}}
             {{- if .Values.panels.data.enabled }}
+            {{- include "naranjo-online.panelsDataPaths" . }}
             - name: PANELS_DATA_ROOT
-              value: "/var/lib/panels-data"
+              value: {{ .Values.panels.data.mountPath | quote }}
             {{- /* The replay-floor state root (2026-08-24 review finding
             H2): where the app persists the sealed floor marker so a restart
             cannot re-admit replayed ciphertext. Must equal the writable
             state volumeMount path below; the storage pin fails the render
             if the two drift. */}}
             - name: PANELS_DATA_STATE
-              value: "/var/lib/panels-state"
+              value: {{ .Values.panels.data.stateMountPath | quote }}
             - name: PANELS_DATA_KEY
               valueFrom:
                 secretKeyRef:
@@ -136,7 +142,7 @@ spec:
               mountPath: /tmp
             {{- if .Values.panels.data.enabled }}
             - name: panels-data
-              mountPath: /var/lib/panels-data
+              mountPath: {{ .Values.panels.data.mountPath }}
               readOnly: true
             {{- /* The state mount is the pod's ONE writable projection
             (2026-08-24 review finding H2): explicitly readOnly: false at
@@ -147,7 +153,7 @@ spec:
             quietly lose the durable floor) or the data mount flips
             writable. */}}
             - name: panels-state
-              mountPath: /var/lib/panels-state
+              mountPath: {{ .Values.panels.data.stateMountPath }}
               readOnly: false
             {{- end }}
       volumes:

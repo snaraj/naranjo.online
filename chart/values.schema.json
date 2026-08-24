@@ -100,19 +100,39 @@
         },
         "data": {
           "type": "object",
-          "description": "The panels data root (issue #142): a read-only statically bound hostPath PV/PVC pair carrying one sealed usage-series file. Every field is required so a values file cannot half-describe the capability: the decision and every fact it depends on are explicit, and a disabled render emits none of the objects.",
+          "description": "The panels data root (issue #142): a read-only statically bound local PV/PVC pair on the platform StorageClass, carrying one sealed usage-series file, plus its writable replay-floor sibling. Every field is required so a values file cannot half-describe the capability: the decision and every fact it depends on are explicit, and a disabled render emits none of the objects. The hostPath shape it replaced is one website-infrastructure #211 denies outright (round-3 finding 7).",
           "additionalProperties": false,
-          "required": ["enabled", "hostPath", "volumeName", "keySecret", "capacity", "stateHostPath", "stateVolumeName", "stateCapacity", "persistentVolume"],
+          "required": ["enabled", "storageClass", "localVolumeRoot", "node", "path", "mountPath", "volumeName", "keySecret", "capacity", "statePath", "stateMountPath", "stateVolumeName", "stateCapacity", "persistentVolume"],
           "properties": {
             "enabled": {
               "type": "boolean",
               "default": false,
               "description": "Render both claims, the mounts, and the PANELS_DATA_ROOT / PANELS_DATA_STATE / PANELS_DATA_KEY wiring. Off by default (2026-08-24 review finding M6): false serves the embedded release-time snapshot — an explicit, documented as-of-release decision, not a silent fallback — and true requires the pre-provisioned PVs and host directories of docs/usage-export.md first, because defaults that render claims against absent volumes leave a fresh cluster's pod Pending. Enable deliberately, last."
             },
-            "hostPath": {
+            "storageClass": {
               "type": "string",
-              "description": "Absolute node directory backing the PersistentVolume (hostPath type Directory: it must already exist on the node).",
-              "pattern": "^/[^\\s]*[^/\\s]$"
+              "description": "The platform StorageClass named on BOTH the PersistentVolume and its claim. It provisions nothing (kubernetes.io/no-provisioner); naming it binds the pair to the enumerated class, where the empty class it replaced merely excluded a default provisioner. website-infrastructure #211's acceptance admits only enumerated classes.",
+              "pattern": "^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$"
+            },
+            "localVolumeRoot": {
+              "type": "string",
+              "description": "The platform's enumerated local-volume root. Every path below must live strictly under it or the render fails, so a path the platform would deny never reaches the platform.",
+              "pattern": "^(/[A-Za-z0-9_][A-Za-z0-9._-]*)+$"
+            },
+            "node": {
+              "type": "string",
+              "description": "The node this local volume is bound to, rendered as a bounded required nodeAffinity (operator In, exactly one non-empty value). Empty is the shipped fail-closed sentinel: a node name is a private host fact (requirement 12) that never enters this repository, and rendering the PersistentVolume without it fails the render rather than emitting a volume no scheduler can place.",
+              "pattern": "^$|^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$"
+            },
+            "path": {
+              "type": "string",
+              "description": "Directory backing the PersistentVolume, strictly under localVolumeRoot. It must already exist on the node; creating it is part of the admin ceremony. Absolute, already-normalized path. The pattern forbids an empty segment (//), a trailing separator, and any segment beginning with a dot — so '.' and '..' cannot appear at all. That is the schema half of round-3 finding 7: an alias of a reviewed directory is not the reviewed directory, and a string comparison cannot tell them apart. _helpers.tpl holds the other half, refusing overlap between the two roots in both directions after normalization.",
+              "pattern": "^(/[A-Za-z0-9_][A-Za-z0-9._-]*)+$"
+            },
+            "mountPath": {
+              "type": "string",
+              "description": "Where the pod sees the data volume, and the exact value of PANELS_DATA_ROOT. Held in values rather than hardcoded in the template so the storage pin reads its expectation from the designated binding point instead of the template under test.",
+              "pattern": "^(/[A-Za-z0-9_][A-Za-z0-9._-]*)+$"
             },
             "volumeName": {
               "type": "string",
@@ -126,12 +146,17 @@
             },
             "capacity": {
               "$ref": "#/definitions/memoryQuantity",
-              "description": "Declared PV capacity and PVC request. Static hostPath binding does not meter it; it exists because both objects require the field and the two must agree."
+              "description": "Declared PV capacity and PVC request. Static local binding does not meter it; it exists because both objects require the field and the two must agree."
             },
-            "stateHostPath": {
+            "statePath": {
               "type": "string",
-              "description": "Absolute node directory backing the replay-floor state PersistentVolume (2026-08-24 review finding H2). A SEPARATE sibling of hostPath — never the push directory itself — writable by the pod's runtime user, created in the same admin ceremony (hostPath type Directory: it must already exist on the node).",
-              "pattern": "^/[^\\s]*[^/\\s]$"
+              "description": "Directory backing the replay-floor state PersistentVolume (2026-08-24 review finding H2), strictly under localVolumeRoot. A SEPARATE sibling of path — never the push directory, never inside it, and never containing it — writable by the pod's runtime user, created in the same admin ceremony. Absolute, already-normalized path. The pattern forbids an empty segment (//), a trailing separator, and any segment beginning with a dot — so '.' and '..' cannot appear at all. That is the schema half of round-3 finding 7: an alias of a reviewed directory is not the reviewed directory, and a string comparison cannot tell them apart. _helpers.tpl holds the other half, refusing overlap between the two roots in both directions after normalization.",
+              "pattern": "^(/[A-Za-z0-9_][A-Za-z0-9._-]*)+$"
+            },
+            "stateMountPath": {
+              "type": "string",
+              "description": "Where the pod sees the writable state volume, and the exact value of PANELS_DATA_STATE. Must not overlap mountPath in either direction; the render refuses it if it does.",
+              "pattern": "^(/[A-Za-z0-9_][A-Za-z0-9._-]*)+$"
             },
             "stateVolumeName": {
               "type": "string",
@@ -150,7 +175,7 @@
                 "enabled": {
                   "type": "boolean",
                   "default": false,
-                  "description": "Also render the cluster-scoped PersistentVolume. Off by default because the release reconciles through a least-privilege namespace identity that deliberately holds no PersistentVolume authority (hostPath PVs are the admin-only loophole through restricted pod security); the PV is applied once by an admin from this chart's own template, and this flag flips the day the platform grants the reconciler that authority."
+                  "description": "Also render the two cluster-scoped PersistentVolumes. Off by default because the release reconciles through a least-privilege namespace identity that deliberately holds no PersistentVolume authority; the PVs are applied once by an admin from this chart's own template — with panels.data.node supplied on the command line, since the node name never enters this repository — and this flag flips the day the platform grants the reconciler that authority."
                 }
               }
             }

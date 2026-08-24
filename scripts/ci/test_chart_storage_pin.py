@@ -10,6 +10,12 @@ caller facts). The render carries TWO statically bound pairs since the
 pushed sealed series and the writable STATE pair for the replay-floor
 marker, and this suite pins both — including that only the state side may
 ever be writable.
+
+The 2026-08-24 round-3 review moved the fixtures onto the platform storage
+shape (findings 3 and 7): `local` volumes on the enumerated StorageClass with
+bounded required nodeAffinity, a ReadWriteOncePod state pair, a single
+replica, and disjointness proven in BOTH directions over normalized paths.
+The refusals that shape adds are pinned here alongside the ones it kept.
 """
 
 from __future__ import annotations
@@ -30,11 +36,14 @@ SPEC.loader.exec_module(PIN)
 
 def facts(**overrides) -> SimpleNamespace:
     values = dict(
-        host_path="/srv/example/panels-data",
+        path="/mnt/example-root/panels-data",
+        storage_class="example-class",
+        local_root="/mnt/example-root",
+        node="example-node",
         volume_name="example-panels-data",
         key_secret="example-panels-data",
         capacity="16Mi",
-        state_host_path="/srv/example/panels-state",
+        state_path="/mnt/example-root/panels-state",
         state_volume_name="example-panels-state",
         state_capacity="1Mi",
         namespace="default",
@@ -58,7 +67,7 @@ metadata:
 spec:
   accessModes:
     - ReadOnlyMany
-  storageClassName: ""
+  storageClassName: example-class
   volumeName: example-panels-data
   resources:
     requests:
@@ -74,8 +83,8 @@ metadata:
   namespace: default
 spec:
   accessModes:
-    - ReadWriteOnce
-  storageClassName: ""
+    - ReadWriteOncePod
+  storageClassName: example-class
   volumeName: example-panels-state
   resources:
     requests:
@@ -94,13 +103,20 @@ spec:
   accessModes:
     - ReadOnlyMany
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: ""
+  storageClassName: example-class
   claimRef:
     namespace: default
     name: example-panels-data
-  hostPath:
-    path: /srv/example/panels-data
-    type: Directory
+  local:
+    path: /mnt/example-root/panels-data
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - example-node
 """
 
 STATE_VOLUME = """\
@@ -113,15 +129,22 @@ spec:
   capacity:
     storage: 1Mi
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteOncePod
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: ""
+  storageClassName: example-class
   claimRef:
     namespace: default
     name: example-panels-state
-  hostPath:
-    path: /srv/example/panels-state
-    type: Directory
+  local:
+    path: /mnt/example-root/panels-state
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - example-node
 """
 
 DEPLOYMENT = """\
@@ -131,6 +154,7 @@ kind: Deployment
 metadata:
   name: example
 spec:
+  replicas: 1
   template:
     spec:
       containers:
@@ -182,6 +206,19 @@ spec:
 
 CLAIMS = CLAIM + STATE_CLAIM
 VOLUMES = VOLUME + STATE_VOLUME
+
+# The exact bounded nodeAffinity block both volumes carry, so a test can
+# remove it wholesale without re-spelling it.
+AFFINITY = """\
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - example-node
+"""
 
 
 class StoragePinAcceptsTheGoodRenders(unittest.TestCase):
@@ -275,25 +312,81 @@ class StoragePinRefusesHostileRenders(unittest.TestCase):
             "            claimName: example-panels-state\n            readOnly: true")
         self.reject("enabled", CLAIMS + mutated, "readOnly: false")
 
-    def test_claim_without_explicit_storage_class(self):
-        mutated = CLAIM.replace('  storageClassName: ""\n', "")
-        self.reject("enabled", mutated + STATE_CLAIM + DEPLOYMENT, "EXPLICIT empty storageClassName")
+    def test_claim_without_a_storage_class(self):
+        mutated = CLAIM.replace("  storageClassName: example-class\n", "")
+        self.reject("enabled", mutated + STATE_CLAIM + DEPLOYMENT, "enumerated StorageClass")
+
+    def test_claim_with_the_empty_storage_class_this_replaced(self):
+        # The pre-round-3 shape. An empty class excludes a DEFAULT provisioner
+        # and nothing else; it does not bind the claim to the one class the
+        # platform admits, so the render would be refused on arrival.
+        mutated = CLAIM.replace("storageClassName: example-class", 'storageClassName: ""')
+        self.reject("enabled", mutated + STATE_CLAIM + DEPLOYMENT, "enumerated StorageClass")
+
+    def test_claim_asking_for_more_than_the_volume_it_names(self):
+        for field in ("dataSource", "dataSourceRef", "volumeAttributesClassName"):
+            mutated = CLAIM.replace(
+                "  volumeName: example-panels-data\n",
+                "  volumeName: example-panels-data\n  %s: something\n" % field)
+            self.reject("enabled", mutated + STATE_CLAIM + DEPLOYMENT, field)
 
     def test_state_claim_access_mode_widened(self):
-        mutated = STATE_CLAIM.replace("- ReadWriteOnce", "- ReadWriteMany")
-        self.reject("enabled", CLAIM + mutated + DEPLOYMENT, "ReadWriteOnce")
+        mutated = STATE_CLAIM.replace("- ReadWriteOncePod", "- ReadWriteMany")
+        self.reject("enabled", CLAIM + mutated + DEPLOYMENT, "ReadWriteOncePod")
 
-    def test_pv_host_path_moved(self):
-        mutated = VOLUME.replace("path: /srv/example/panels-data", "path: /etc")
+    def test_state_claim_relaxed_to_node_scoped_single_writer(self):
+        # ReadWriteOnce READS as single-writer and is not one: it admits any
+        # number of pods on a single node, which on a one-node cluster is
+        # every pod. The floor marker needs one writer, not one node.
+        mutated = STATE_CLAIM.replace("- ReadWriteOncePod", "- ReadWriteOnce")
+        self.reject("enabled", CLAIM + mutated + DEPLOYMENT, "ReadWriteOncePod")
+
+    def test_a_second_replica_racing_the_floor(self):
+        mutated = DEPLOYMENT.replace("  replicas: 1", "  replicas: 2")
+        self.reject("enabled", CLAIMS + mutated, "single-writer")
+
+    def test_an_unstated_replica_count(self):
+        mutated = DEPLOYMENT.replace("  replicas: 1\n", "")
+        self.reject("enabled", CLAIMS + mutated, "single-writer")
+
+    def test_pv_local_path_moved(self):
+        mutated = VOLUME.replace("path: /mnt/example-root/panels-data", "path: /mnt/example-root/elsewhere")
         self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "reviewed")
 
-    def test_state_pv_host_path_moved(self):
-        mutated = STATE_VOLUME.replace("path: /srv/example/panels-state", "path: /etc")
+    def test_state_pv_local_path_moved(self):
+        mutated = STATE_VOLUME.replace("path: /mnt/example-root/panels-state", "path: /mnt/example-root/elsewhere")
         self.reject("with-pv", CLAIMS + VOLUME + mutated + DEPLOYMENT, "reviewed")
 
-    def test_pv_type_weakened(self):
-        mutated = VOLUME.replace("type: Directory", "type: DirectoryOrCreate")
-        self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "Directory")
+    def test_pv_reverted_to_the_denied_host_path_shape(self):
+        mutated = VOLUME.replace("  local:", "  hostPath:")
+        self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "denies hostPath")
+
+    def test_pv_carrying_both_sources(self):
+        mutated = VOLUME.replace(
+            "  local:\n    path: /mnt/example-root/panels-data\n",
+            "  local:\n    path: /mnt/example-root/panels-data\n"
+            "  hostPath:\n    path: /mnt/example-root/panels-data\n")
+        self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "denies hostPath")
+
+    def test_pv_with_no_volume_source_at_all(self):
+        mutated = VOLUME.replace(
+            "  local:\n    path: /mnt/example-root/panels-data\n", "")
+        self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "`local` volume source")
+
+    def test_pv_local_path_outside_the_enumerated_root(self):
+        mutated = VOLUME.replace("path: /mnt/example-root/panels-data", "path: /etc/panels-data")
+        outside = facts(path="/etc/panels-data")
+        self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT,
+                    "strictly under", outside)
+
+    def test_pv_storage_class_emptied(self):
+        mutated = VOLUME.replace("storageClassName: example-class", 'storageClassName: ""')
+        self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "enumerated StorageClass")
+
+    def test_pv_declaring_mount_options(self):
+        mutated = VOLUME.replace(
+            "  local:\n", "  mountOptions:\n    - ro\n  local:\n")
+        self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "mountOptions")
 
     def test_pv_reclaim_weakened(self):
         mutated = VOLUME.replace("Retain", "Delete")
@@ -307,20 +400,123 @@ class StoragePinRefusesHostileRenders(unittest.TestCase):
         mutated = VOLUME.replace("    name: example-panels-data", "    name: another-claim")
         self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "claimRef")
 
+    # --- nodeAffinity: a local volume is node-bound, so the binding must be
+    # a CONSTRAINT and a narrow one. Every widening below is a volume that
+    # can bind on a machine nobody provisioned the directory on.
+
+    def test_pv_without_node_affinity(self):
+        mutated = VOLUME.replace(AFFINITY, "")
+        self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "REQUIRED nodeAffinity")
+
+    def test_pv_with_only_a_preferred_affinity(self):
+        mutated = VOLUME.replace("  nodeAffinity:\n    required:", "  nodeAffinity:\n    preferred:")
+        self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "REQUIRED nodeAffinity")
+
+    def test_pv_with_a_preferred_affinity_beside_the_required_one(self):
+        mutated = VOLUME.replace(
+            "  nodeAffinity:\n    required:",
+            "  nodeAffinity:\n    preferred: []\n    required:")
+        self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "nothing but `required`")
+
+    def test_pv_with_alternative_node_selector_terms(self):
+        mutated = VOLUME.replace(
+            "                - example-node\n",
+            "                - example-node\n"
+            "        - matchExpressions:\n"
+            "            - key: kubernetes.io/hostname\n"
+            "              operator: In\n"
+            "              values:\n"
+            "                - another-node\n")
+        self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "exactly one nodeSelectorTerm")
+
+    def test_pv_node_selector_operator_widened(self):
+        for operator in ("Exists", "NotIn"):
+            mutated = VOLUME.replace("operator: In", "operator: %s" % operator)
+            self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "operator In")
+
+    def test_pv_node_selector_keyed_off_the_hostname(self):
+        mutated = VOLUME.replace("key: kubernetes.io/hostname", "key: example.io/anything")
+        self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "kubernetes.io/hostname")
+
+    def test_pv_node_selector_listing_several_nodes(self):
+        mutated = VOLUME.replace(
+            "                - example-node\n",
+            "                - example-node\n                - another-node\n")
+        self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "one non-empty value")
+
+    def test_pv_bound_to_a_node_nobody_provisioned(self):
+        mutated = VOLUME.replace("- example-node", "- another-node")
+        self.reject("with-pv", CLAIMS + mutated + STATE_VOLUME + DEPLOYMENT, "not the stated")
+
+    # --- disjointness, in BOTH directions, over NORMALIZED paths (round-3
+    # finding 7). The pre-round-3 check compared raw strings in one
+    # direction, so it caught only the first of these five.
+
     def test_state_directory_nested_inside_the_push_directory(self):
-        # The one refusal driven by FACTS rather than the render: a state
-        # directory inside the push directory hands the origin's writable
-        # surface a path to the pushed series file, whatever the render says.
-        nested = facts(state_host_path="/srv/example/panels-data/state")
+        nested = facts(state_path="/mnt/example-root/panels-data/state")
         volume = STATE_VOLUME.replace(
-            "path: /srv/example/panels-state", "path: /srv/example/panels-data/state")
-        self.reject("with-pv", CLAIMS + VOLUME + volume + DEPLOYMENT, "sibling", nested)
+            "path: /mnt/example-root/panels-state", "path: /mnt/example-root/panels-data/state")
+        self.reject("with-pv", CLAIMS + VOLUME + volume + DEPLOYMENT,
+                    "may never live within the read-only projection", nested)
+
+    def test_push_directory_nested_inside_the_state_directory(self):
+        # The direction the old one-way check missed entirely. It is the same
+        # breach: the read-only projection sits inside the surface the origin
+        # may write, so the origin can reach the pushed series file.
+        nested = facts(path="/mnt/example-root/panels-state/inner")
+        volume = VOLUME.replace(
+            "path: /mnt/example-root/panels-data", "path: /mnt/example-root/panels-state/inner")
+        self.reject("with-pv", CLAIMS + volume + STATE_VOLUME + DEPLOYMENT,
+                    "may never live within the writable surface", nested)
 
     def test_state_directory_equal_to_the_push_directory(self):
-        equal = facts(state_host_path="/srv/example/panels-data")
+        equal = facts(state_path="/mnt/example-root/panels-data")
         volume = STATE_VOLUME.replace(
-            "path: /srv/example/panels-state", "path: /srv/example/panels-data")
-        self.reject("with-pv", CLAIMS + VOLUME + volume + DEPLOYMENT, "sibling", equal)
+            "path: /mnt/example-root/panels-state", "path: /mnt/example-root/panels-data")
+        self.reject("with-pv", CLAIMS + VOLUME + volume + DEPLOYMENT,
+                    "same directory", equal)
+
+    def test_an_alias_of_the_push_directory(self):
+        # Three spellings the kernel resolves to the push directory and a raw
+        # string comparison calls different. Each must be refused.
+        for alias in (
+            "/mnt/example-root/panels-data/../panels-data",
+            "/mnt/example-root//panels-data",
+            "/mnt/example-root/panels-data/",
+        ):
+            aliased = facts(state_path=alias)
+            volume = STATE_VOLUME.replace("path: /mnt/example-root/panels-state", "path: %s" % alias)
+            self.reject("with-pv", CLAIMS + VOLUME + volume + DEPLOYMENT,
+                        "same directory", aliased)
+
+    def test_an_alias_that_nests_inside_the_push_directory(self):
+        alias = "/mnt/example-root/panels-state/../panels-data/state"
+        aliased = facts(state_path=alias)
+        volume = STATE_VOLUME.replace("path: /mnt/example-root/panels-state", "path: %s" % alias)
+        self.reject("with-pv", CLAIMS + VOLUME + volume + DEPLOYMENT,
+                    "may never live within the read-only projection", aliased)
+
+    def test_a_sibling_that_merely_shares_a_prefix_is_accepted(self):
+        # The vacuity guard for everything above: a pin that refuses this is
+        # not strict, it is broken, and the ancestor test is written with an
+        # explicit separator precisely so this passes.
+        sibling = facts(state_path="/mnt/example-root/panels-data-two")
+        volume = STATE_VOLUME.replace(
+            "path: /mnt/example-root/panels-state", "path: /mnt/example-root/panels-data-two")
+        PIN.run("with-pv", CLAIMS + VOLUME + volume + DEPLOYMENT, sibling)
+
+    def test_state_mount_nested_inside_the_data_mount(self):
+        nested = facts(state_mount_path="/var/lib/panels-data/state")
+        mutated = DEPLOYMENT.replace("/var/lib/panels-state", "/var/lib/panels-data/state")
+        self.reject("enabled", CLAIMS + mutated,
+                    "may never live within the read-only projection", nested)
+
+    def test_data_mount_nested_inside_the_state_mount(self):
+        nested = facts(mount_path="/var/lib/panels-state/inner")
+        mutated = DEPLOYMENT.replace("/var/lib/panels-data\n", "/var/lib/panels-state/inner\n")
+        mutated = mutated.replace('value: "/var/lib/panels-data"', 'value: "/var/lib/panels-state/inner"')
+        self.reject("enabled", CLAIMS + mutated,
+                    "may never live within the writable surface", nested)
 
     def test_mandatory_key_secret(self):
         mutated = DEPLOYMENT.replace("optional: true", "optional: false")
@@ -340,11 +536,16 @@ class StoragePinCommandLine(unittest.TestCase):
     def run_main(self, mode: str, text: str) -> int:
         argv = [
             mode,
-            "--host-path", FACTS.host_path,
+            "--path", FACTS.path,
+            "--mount-path", FACTS.mount_path,
+            "--storage-class", FACTS.storage_class,
+            "--local-root", FACTS.local_root,
+            "--node", FACTS.node,
             "--volume-name", FACTS.volume_name,
             "--key-secret", FACTS.key_secret,
             "--capacity", FACTS.capacity,
-            "--state-host-path", FACTS.state_host_path,
+            "--state-path", FACTS.state_path,
+            "--state-mount-path", FACTS.state_mount_path,
             "--state-volume-name", FACTS.state_volume_name,
             "--state-capacity", FACTS.state_capacity,
             "--namespace", FACTS.namespace,

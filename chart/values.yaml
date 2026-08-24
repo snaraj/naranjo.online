@@ -1,8 +1,33 @@
-# Default 2 for availability; 1..2 accepted so the workload can scale down/up
-# freely as a dev environment (owner directive 2026-08-19). The maximum is the
-# namespace quota's real budget (pods: 2, limits.memory 256Mi = 2x128Mi), not
-# rigidity — raising it starts with the quota, not this schema.
-replicaCount: 2
+# Default 1; 1..2 accepted so the workload can scale up/down freely as a dev
+# environment (owner directive 2026-08-19). The maximum is the namespace
+# quota's real budget (pods: 2, limits.memory 256Mi = 2x128Mi), not rigidity —
+# raising it starts with the quota, not this schema.
+#
+# The default MOVED from 2 to 1 in the 2026-08-24 round-3 review (finding 3),
+# and the tradeoff is stated here rather than buried, because it is the
+# owner's call and not the chart's:
+#
+#   WHAT IS GIVEN UP. At 1 replica a pod restart is a brief outage instead of
+#   a hidden one. In practice the difference is small and was already small:
+#   this is one personal site on a ONE-NODE cluster, so both replicas always
+#   landed on the same machine and shared its fate — 2 replicas survived a pod
+#   eviction, never a node reboot, a disk fault, or a power cut. The rollout
+#   strategy below is maxSurge 0 / maxUnavailable 1, which drops to one
+#   serving pod during every upgrade anyway.
+#
+#   WHAT IS GAINED. Single-writer BY CONSTRUCTION for the replay-floor state
+#   (issue #142). The floor marker is one file guarding against replayed
+#   sealed payloads; two pods writing it concurrently is a race whose loser
+#   silently lowers the floor. The state claim below is ReadWriteOncePod and
+#   the panels-data render refuses replicaCount > 1 outright, so the unsafe
+#   configuration cannot be expressed rather than merely being avoided.
+#
+#   WHAT UNDOES IT. Nothing here: raising the default back to 2 requires the
+#   floor to become a genuinely multi-writer structure (a lease, or state that
+#   is not per-pod), not a values edit. Setting replicaCount: 2 with
+#   panels.data.enabled: false remains fully supported and unchanged — the
+#   refusal is scoped to the capability that needs the invariant.
+replicaCount: 1
 deploymentReady: false
 
 image:
@@ -100,24 +125,59 @@ panels:
   # file with no network, no host reach beyond the volume, and no
   # credential beyond a key that decrypts data the site already publishes.
   #
-  # Storage shape (interim until the platform StorageClass design lands): a
-  # statically bound hostPath PersistentVolume/Claim pair. The PVC (with the
-  # Deployment mount and env) reconciles through the normal release; the PV
-  # template below is CLUSTER-scoped and ships default-off because the
-  # release identity (the least-privilege helm reconciler) deliberately holds
-  # no PersistentVolume authority -- hostPath-backed PVs are exactly the
-  # admin-only loophole through restricted pod security, so PV creation stays
-  # an admin ceremony: render this chart's own template with
-  # `persistentVolume.enabled=true` and apply it once with admin credentials.
-  # The claim pins `volumeName` and the PV pins `claimRef`, so neither side
-  # can be captured by a stranger, and `storageClassName` is explicitly ""
-  # on both so no default StorageClass can intercept the binding.
+  # Storage shape: a statically bound `local` PersistentVolume/Claim pair on
+  # the platform's own StorageClass. This REPLACED a static hostPath pair
+  # with an empty storageClassName in the 2026-08-24 round-3 review (finding
+  # 7), because that shape is not merely dated — it is one the platform's
+  # storage policy REJECTS. website-infrastructure #211's acceptance denies
+  # hostPath volumes outright (a hostPath PV is the admin-only loophole
+  # through restricted pod security, which is exactly why the old shape had
+  # to ship its PV behind a manual admin ceremony), and admits a persistent
+  # volume only when it is `local` or `csi`, under the enumerated local
+  # volume root, carrying the enumerated StorageClass on BOTH the volume and
+  # the claim, with bounded required nodeAffinity. Shipping the old shape
+  # would have meant shipping something the platform would refuse on arrival.
+  #
+  # THIS ALIGNMENT IS NOT YET CONFIRMED BY THE PLATFORM: #211 is open, and
+  # this PR remains blocked on its five-part receipt regardless of what the
+  # chart renders. What changed is the direction of the gap — the chart now
+  # renders what the platform design says it will admit, so the receipt
+  # confirms rather than contradicts it.
+  #
+  # The PV template stays CLUSTER-scoped and default-off: the release
+  # identity (the least-privilege helm reconciler) deliberately holds no
+  # PersistentVolume authority. PV creation remains an admin ceremony —
+  # render this chart's own template with `persistentVolume.enabled=true` and
+  # apply it once with admin credentials — so the object in the cluster stays
+  # the object in git. The claim pins `volumeName` and the PV pins
+  # `claimRef`, so neither side can be captured by a stranger.
   data:
     enabled: false
-    # Host directory backing the PersistentVolume. `type: Directory` -- the
-    # PV mounts only a directory that already exists on the node; creating it
-    # (owner, mode) is part of the same admin ceremony as the PV itself.
-    hostPath: /srv/naranjo-online/panels-data
+    # The platform StorageClass, named on BOTH the volume and the claim. It
+    # provisions nothing (kubernetes.io/no-provisioner); naming it is what
+    # binds this pair to the enumerated class instead of leaving an empty
+    # class that only excludes a DEFAULT provisioner.
+    storageClass: local-pie-ssd
+    # The enumerated local-volume root. Every path below must live strictly
+    # under it; _helpers.tpl fails the render otherwise, so a path the
+    # platform would deny never reaches the platform.
+    localVolumeRoot: /mnt/local-pie-ssd
+    # The node this local volume is bound to, as a REQUIRED nodeAffinity
+    # value. Empty is a fail-closed sentinel and is the shipped default: a
+    # node name is a private host fact (requirement 12) and never enters this
+    # repository, so the admin ceremony supplies it with --set. Rendering the
+    # PersistentVolume without it fails the render rather than emitting an
+    # unbound-anywhere volume.
+    node: ""
+    # Directory backing the PersistentVolume, under localVolumeRoot. It must
+    # already exist on the node; creating it (owner, mode) is part of the
+    # same admin ceremony as the PV itself.
+    path: /mnt/local-pie-ssd/naranjo-online/panels-data
+    # Where the pod sees it. Kept in values rather than hardcoded in the
+    # template so the storage pin reads the expectation from this file — the
+    # single designated binding point — instead of from the template it is
+    # testing.
+    mountPath: /var/lib/panels-data
     # One name shared by the PV and the PVC, making the statically bound
     # pair legible as a pair.
     volumeName: naranjo-online-panels-data
@@ -127,7 +187,7 @@ panels:
     keySecret: naranjo-online-panels-data
     capacity: 16Mi
     # The replay-floor STATE pair (2026-08-24 security review, finding H2):
-    # a second statically bound hostPath PV/PVC, WRITABLE by the pod, holding
+    # a second statically bound local PV/PVC, WRITABLE by the pod, holding
     # exactly one sealed marker file — the capture instant of the last
     # ACCEPTED series file — so the replay floor survives a restart instead
     # of resetting to the embedded snapshot's. It is deliberately a SEPARATE
@@ -138,8 +198,15 @@ panels:
     # marker, in a directory the push pipeline never touches. The marker is
     # sealed under the same key as the series, so storage that can write the
     # state directory still cannot forge a floor; an absent or corrupt
-    # marker degrades to the embedded floor, never lower.
-    stateHostPath: /srv/naranjo-online/panels-state
+    # marker no longer degrades silently — see the tombstone in
+    # internal/server/panelsdata.go (round-3 finding 4).
+    #
+    # SIBLING, NEVER NESTED, in either direction: _helpers.tpl refuses a
+    # render where these two roots (or the two mount paths) are equal or
+    # where either contains the other, comparing NORMALIZED paths so an
+    # alias cannot slip past a string prefix test (round-3 finding 7).
+    statePath: /mnt/local-pie-ssd/naranjo-online/panels-state
+    stateMountPath: /var/lib/panels-state
     stateVolumeName: naranjo-online-panels-state
     stateCapacity: 1Mi
     persistentVolume:

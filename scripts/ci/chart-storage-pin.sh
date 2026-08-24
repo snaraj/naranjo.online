@@ -8,9 +8,10 @@
 #   claims): exactly TWO PersistentVolumeClaims — the
 #   read-only DATA claim carrying the pushed sealed series, and the writable
 #   replay-floor STATE claim (2026-08-24 security review, finding H2) — each
-#   pinned to its PersistentVolume by name with an EXPLICIT empty
-#   storageClassName (an omitted one would let the default StorageClass
-#   capture the claim), ReadOnlyMany/ReadWriteOnce respectively, at the
+#   pinned to its PersistentVolume by name and to the enumerated
+#   storageClassName (an omitted name would let the default StorageClass
+#   capture the claim; the empty name this replaced merely excluded a default
+#   provisioner), ReadOnlyMany/ReadWriteOncePod respectively, at the
 #   declared capacities; the Deployment mounts the data claim readOnly at
 #   BOTH the claim reference and the volumeMount, mounts the state claim
 #   EXPLICITLY writable at both (a silently read-only state root loses the
@@ -20,11 +21,13 @@
 #   the release identity deliberately holds no PV authority.
 #
 #   with-pv (panels.data.persistentVolume.enabled=true, the admin ceremony):
-#   additionally exactly TWO PersistentVolumes — each hostPath at its
-#   reviewed path with type Directory (mounts only what an admin already
-#   created), Retain, explicit empty storageClassName, a claimRef pinning
-#   each pair from the volume side too, and the state directory a genuine
-#   sibling of the push directory, never inside it.
+#   additionally exactly TWO PersistentVolumes — each a `local` volume at its
+#   reviewed path strictly under the enumerated local-volume root (hostPath
+#   is refused outright: website-infrastructure #211 denies it), Retain, the
+#   enumerated storageClassName, bounded REQUIRED nodeAffinity (one term, one
+#   expression, operator In, one non-empty value), a claimRef pinning each
+#   pair from the volume side too, and the two directories disjoint in BOTH
+#   directions after normalization.
 #
 #   disabled — proven for BOTH the untouched DEFAULT render (the
 #   fresh-install schedulability pin: nothing renders that could leave a
@@ -69,13 +72,22 @@ print(match.group(1).strip("'\""))
 PY
 }
 
-HOST_PATH="$(read_value hostPath)"
+DATA_PATH="$(read_value path)"
+MOUNT_PATH="$(read_value mountPath)"
+STORAGE_CLASS="$(read_value storageClass)"
+LOCAL_ROOT="$(read_value localVolumeRoot)"
 VOLUME_NAME="$(read_value volumeName)"
 KEY_SECRET="$(read_value keySecret)"
 CAPACITY="$(read_value capacity)"
-STATE_HOST_PATH="$(read_value stateHostPath)"
+STATE_PATH="$(read_value statePath)"
+STATE_MOUNT_PATH="$(read_value stateMountPath)"
 STATE_VOLUME_NAME="$(read_value stateVolumeName)"
 STATE_CAPACITY="$(read_value stateCapacity)"
+# The node name never enters this repository (requirement 12): values.yaml
+# ships an empty fail-closed sentinel, so the admin ceremony supplies one and
+# so does this gate. A local PersistentVolume cannot render without it, which
+# is itself one of the mutants below.
+PIN_NODE=pin-node
 RELEASE=smoke
 NAMESPACE=default
 
@@ -85,11 +97,16 @@ render() {
 
 pin() {
   python3 -I -B scripts/ci/chart_storage_pin.py "$1" \
-    --host-path "${HOST_PATH}" \
+    --path "${DATA_PATH}" \
+    --mount-path "${MOUNT_PATH}" \
+    --storage-class "${STORAGE_CLASS}" \
+    --local-root "${LOCAL_ROOT}" \
+    --node "${PIN_NODE}" \
     --volume-name "${VOLUME_NAME}" \
     --key-secret "${KEY_SECRET}" \
     --capacity "${CAPACITY}" \
-    --state-host-path "${STATE_HOST_PATH}" \
+    --state-path "${STATE_PATH}" \
+    --state-mount-path "${STATE_MOUNT_PATH}" \
     --state-volume-name "${STATE_VOLUME_NAME}" \
     --state-capacity "${STATE_CAPACITY}" \
     --namespace "${NAMESPACE}"
@@ -97,7 +114,8 @@ pin() {
 
 enabled_render="$(render --set panels.data.enabled=true)"
 with_pv_render="$(render --set panels.data.enabled=true \
-  --set panels.data.persistentVolume.enabled=true)"
+  --set panels.data.persistentVolume.enabled=true \
+  --set panels.data.node="${PIN_NODE}")"
 default_render="$(render)"
 disabled_render="$(render --set panels.data.enabled=false)"
 
@@ -108,7 +126,7 @@ echo "chart-storage-pin: (a) enabled render: both claims + wiring (data ro, stat
 
 printf '%s' "${with_pv_render}" | pin with-pv ||
   fail "the with-pv render violates the storage pin"
-echo "chart-storage-pin: (b) admin render: the exact pair of hostPath PersistentVolumes"
+echo "chart-storage-pin: (b) admin render: the exact pair of local PersistentVolumes, node-pinned"
 
 printf '%s' "${default_render}" | pin disabled ||
   fail "the DEFAULT render carries capability objects; a fresh install must never wait on admin volumes (review M6)"
@@ -122,7 +140,7 @@ echo "chart-storage-pin: (d) explicit disabled render: no claim, no volume, no w
 # the checker red. sed operates on the RENDER, so what is proven is that the
 # checker catches the outcome, whatever template edit might produce it.
 mutation_count=0
-minimum_mutations=19
+minimum_mutations=43
 
 mutate_must_fail() {
   local description="$1" mode="$2" expression="$3" source="$4"
@@ -133,13 +151,16 @@ mutate_must_fail() {
 }
 
 mutate_must_fail "volumeMount flipped writable" enabled \
-  '/mountPath: \/var\/lib\/panels-data/,/readOnly/ s/readOnly: true/readOnly: false/' \
+  '/mountPath: '"${MOUNT_PATH//\//\\/}"'/,/readOnly/ s/readOnly: true/readOnly: false/' \
   "${enabled_render}"
 mutate_must_fail "claim reference flipped writable" enabled \
   '/persistentVolumeClaim:/,/readOnly/ s/readOnly: true/readOnly: false/' \
   "${enabled_render}"
 mutate_must_fail "claim storageClassName dropped" enabled \
-  '/storageClassName: ""/d' \
+  '/storageClassName: '"${STORAGE_CLASS}"'/d' \
+  "${enabled_render}"
+mutate_must_fail "claim storageClassName emptied — the shape #211 refuses" enabled \
+  's/storageClassName: '"${STORAGE_CLASS}"'/storageClassName: ""/' \
   "${enabled_render}"
 mutate_must_fail "claim unpinned from its volume" enabled \
   's/volumeName: '"${VOLUME_NAME}"'/volumeName: somebody-elses-volume/' \
@@ -148,7 +169,7 @@ mutate_must_fail "claim renamed away from the pair" enabled \
   's/name: '"${VOLUME_NAME}"'$/name: renamed-claim/' \
   "${enabled_render}"
 mutate_must_fail "env root diverges from the mount" enabled \
-  's|value: "/var/lib/panels-data"|value: "/var/lib/other"|' \
+  's|value: "'"${MOUNT_PATH}"'"|value: "/var/lib/other"|' \
   "${enabled_render}"
 mutate_must_fail "key secret made mandatory" enabled \
   's/optional: true/optional: false/' \
@@ -159,11 +180,23 @@ mutate_must_fail "access mode widened" enabled \
 mutate_must_fail "a PV smuggled into the default render" enabled \
   's/kind: PersistentVolumeClaim/kind: PersistentVolume/' \
   "${enabled_render}"
-mutate_must_fail "hostPath moved off the reviewed directory" with-pv \
-  's|path: '"${HOST_PATH}"'|path: /etc|' \
+mutate_must_fail "local path moved off the reviewed directory" with-pv \
+  's|path: '"${DATA_PATH}"'|path: /etc|' \
   "${with_pv_render}"
-mutate_must_fail "hostPath type weakened to DirectoryOrCreate" with-pv \
-  's/type: Directory$/type: DirectoryOrCreate/' \
+mutate_must_fail "local source swapped back to hostPath — the denied shape" with-pv \
+  's/^  local:/  hostPath:/' \
+  "${with_pv_render}"
+mutate_must_fail "PV storageClassName emptied" with-pv \
+  's/storageClassName: '"${STORAGE_CLASS}"'/storageClassName: ""/' \
+  "${with_pv_render}"
+mutate_must_fail "nodeAffinity dropped — a local volume nothing can place" with-pv \
+  '/^  nodeAffinity:/,/^                - '"${PIN_NODE}"'$/d' \
+  "${with_pv_render}"
+mutate_must_fail "node selector operator widened to Exists" with-pv \
+  's/operator: In/operator: Exists/' \
+  "${with_pv_render}"
+mutate_must_fail "node selector bound to a node nobody provisioned" with-pv \
+  's/- '"${PIN_NODE}"'$/- some-other-node/' \
   "${with_pv_render}"
 mutate_must_fail "reclaim policy weakened to Delete" with-pv \
   's/persistentVolumeReclaimPolicy: Retain/persistentVolumeReclaimPolicy: Delete/' \
@@ -178,48 +211,140 @@ mutate_must_fail "capability objects surviving a disabled render" disabled \
 # The replay-floor STATE pair's own battery (2026-08-24 review finding H2):
 # the writable direction is pinned as hard as the read-only one.
 mutate_must_fail "state mount flipped read-only" enabled \
-  '/mountPath: \/var\/lib\/panels-state/,/readOnly/ s/readOnly: false/readOnly: true/' \
+  '/mountPath: '"${STATE_MOUNT_PATH//\//\\/}"'/,/readOnly/ s/readOnly: false/readOnly: true/' \
   "${enabled_render}"
 mutate_must_fail "state claim reference flipped read-only" enabled \
   '/claimName: '"${STATE_VOLUME_NAME}"'/,/readOnly/ s/readOnly: false/readOnly: true/' \
   "${enabled_render}"
 mutate_must_fail "state env diverges from the state mount" enabled \
-  's|value: "/var/lib/panels-state"|value: "/var/lib/other-state"|' \
+  's|value: "'"${STATE_MOUNT_PATH}"'"|value: "/var/lib/other-state"|' \
   "${enabled_render}"
 mutate_must_fail "state claim unpinned from its volume" enabled \
   's/volumeName: '"${STATE_VOLUME_NAME}"'/volumeName: somebody-elses-volume/' \
   "${enabled_render}"
-mutate_must_fail "state access mode widened" enabled \
-  's/- ReadWriteOnce/- ReadWriteMany/' \
+mutate_must_fail "state access mode widened to ReadWriteMany" enabled \
+  's/- ReadWriteOncePod/- ReadWriteMany/' \
   "${enabled_render}"
-mutate_must_fail "state PV hostPath moved off the reviewed directory" with-pv \
-  's|path: '"${STATE_HOST_PATH}"'|path: /etc|' \
+# ReadWriteOnce is the SPECIFIC weakening round-3 finding 3 names: it reads
+# as single-writer and is not one. It admits any number of pods on a single
+# node, which is every pod on a one-node cluster.
+mutate_must_fail "state access mode relaxed to node-scoped ReadWriteOnce" enabled \
+  's/- ReadWriteOncePod/- ReadWriteOnce/' \
+  "${enabled_render}"
+mutate_must_fail "a second replica racing the floor marker" enabled \
+  's/^  replicas: 1$/  replicas: 2/' \
+  "${enabled_render}"
+mutate_must_fail "state PV local path moved off the reviewed directory" with-pv \
+  's|path: '"${STATE_PATH}"'|path: /etc|' \
   "${with_pv_render}"
 
-# The sibling refusal cannot be reached by mutating the render alone — the
-# expected paths arrive as caller facts — so it is proven with hostile
-# VALUES: a state directory nested inside the push directory must refuse
-# even when the render and the stated facts agree with each other.
-mutation_count=$((mutation_count + 1))
-nested_render="$(render \
-  --set panels.data.enabled=true \
-  --set panels.data.persistentVolume.enabled=true \
-  --set panels.data.stateHostPath="${HOST_PATH}/state")"
-if printf '%s' "${nested_render}" | \
-  python3 -I -B scripts/ci/chart_storage_pin.py with-pv \
-    --host-path "${HOST_PATH}" \
+echo "chart-storage-pin: (e) render mutation battery held"
+
+# The disjointness refusals need hostile FACTS, not a hostile render: the
+# expected paths arrive from values.yaml, so a render alone cannot express
+# them. Round-3 finding 7 asks for both directions and for aliases, so both
+# guards are proven separately.
+#
+# (e1) The TEMPLATE refuses the geometry outright — nothing renders at all.
+# This is the guard that protects a real deployment, since a chart that
+# refuses to render cannot be applied.
+render_must_fail() {
+  local description="$1"
+  shift
+  mutation_count=$((mutation_count + 1))
+  if render --set panels.data.enabled=true "$@" >/dev/null 2>&1; then
+    fail "surviving mutant: ${description}"
+  fi
+}
+
+render_must_fail "state directory nested inside the push directory" \
+  --set panels.data.statePath="${DATA_PATH}/state"
+render_must_fail "push directory nested inside the state directory" \
+  --set panels.data.path="${STATE_PATH}/inner"
+render_must_fail "state directory aliased onto the push directory" \
+  --set panels.data.statePath="${DATA_PATH}"
+render_must_fail "state mount nested inside the data mount" \
+  --set panels.data.stateMountPath="${MOUNT_PATH}/state"
+render_must_fail "data mount nested inside the state mount" \
+  --set panels.data.mountPath="${STATE_MOUNT_PATH}/inner"
+render_must_fail "a dot-dot alias of the push directory" \
+  --set panels.data.statePath="${DATA_PATH}/../panels-data/state"
+render_must_fail "a duplicated-separator alias of the push directory" \
+  --set panels.data.path="${LOCAL_ROOT}//naranjo-online/panels-data"
+render_must_fail "a trailing-separator alias of the push directory" \
+  --set panels.data.path="${DATA_PATH}/"
+render_must_fail "a local path outside the enumerated volume root" \
+  --set panels.data.path=/etc/naranjo-online
+render_must_fail "a local path AT the enumerated volume root" \
+  --set panels.data.path="${LOCAL_ROOT}"
+render_must_fail "a second replica beside the single-writer floor" \
+  --set replicaCount=2
+render_must_fail "a node-bound volume with no node" \
+  --set panels.data.persistentVolume.enabled=true
+
+# A sibling that merely SHARES A PREFIX is not nesting, and refusing it would
+# be a pin that cannot be satisfied rather than one that catches anything.
+render --set panels.data.enabled=true \
+  --set panels.data.statePath="${DATA_PATH}-two" >/dev/null ||
+  fail "the disjointness guard refuses a legitimate prefix-sharing sibling"
+
+# (e2) The PIN refuses the same geometry even when the render and the stated
+# facts AGREE with each other — the case a template edit could otherwise walk
+# past, since the template guard and the pin are the same idea implemented
+# twice on purpose.
+pin_with_paths() {
+  local mode="$1" data="$2" state="$3" mount="$4" state_mount="$5"
+  python3 -I -B scripts/ci/chart_storage_pin.py "${mode}" \
+    --path "${data}" \
+    --mount-path "${mount}" \
+    --storage-class "${STORAGE_CLASS}" \
+    --local-root "${LOCAL_ROOT}" \
+    --node "${PIN_NODE}" \
     --volume-name "${VOLUME_NAME}" \
     --key-secret "${KEY_SECRET}" \
     --capacity "${CAPACITY}" \
-    --state-host-path "${HOST_PATH}/state" \
+    --state-path "${state}" \
+    --state-mount-path "${state_mount}" \
     --state-volume-name "${STATE_VOLUME_NAME}" \
     --state-capacity "${STATE_CAPACITY}" \
-    --namespace "${NAMESPACE}" >/dev/null 2>&1; then
-  fail "surviving mutant: state directory nested inside the push directory"
-fi
+    --namespace "${NAMESPACE}"
+}
+
+facts_must_fail() {
+  local description="$1" mode="$2" source="$3"
+  shift 3
+  mutation_count=$((mutation_count + 1))
+  if printf '%s' "${source}" | pin_with_paths "${mode}" "$@" >/dev/null 2>&1; then
+    fail "surviving mutant: ${description}"
+  fi
+}
+
+nested_state_render="$(printf '%s' "${with_pv_render}" |
+  sed "s|path: ${STATE_PATH}\$|path: ${DATA_PATH}/state|")"
+facts_must_fail "state path nested inside the data path, render and facts agreeing" \
+  with-pv "${nested_state_render}" \
+  "${DATA_PATH}" "${DATA_PATH}/state" "${MOUNT_PATH}" "${STATE_MOUNT_PATH}"
+
+nested_data_render="$(printf '%s' "${with_pv_render}" |
+  sed "s|path: ${DATA_PATH}\$|path: ${STATE_PATH}/inner|")"
+facts_must_fail "data path nested inside the state path, render and facts agreeing" \
+  with-pv "${nested_data_render}" \
+  "${STATE_PATH}/inner" "${STATE_PATH}" "${MOUNT_PATH}" "${STATE_MOUNT_PATH}"
+
+alias_state_render="$(printf '%s' "${with_pv_render}" |
+  sed "s|path: ${STATE_PATH}\$|path: ${DATA_PATH}/../panels-data|")"
+facts_must_fail "an alias of the data path that a raw string compare calls different" \
+  with-pv "${alias_state_render}" \
+  "${DATA_PATH}" "${DATA_PATH}/../panels-data" "${MOUNT_PATH}" "${STATE_MOUNT_PATH}"
+
+facts_must_fail "state mount nested inside the data mount, facts agreeing" \
+  enabled "${enabled_render}" \
+  "${DATA_PATH}" "${STATE_PATH}" "${MOUNT_PATH}" "${MOUNT_PATH}"
+
+echo "chart-storage-pin: (f) disjointness proven in both directions, template and pin, with aliases"
 
 [ "${mutation_count}" -ge "${minimum_mutations}" ] ||
   fail "only ${mutation_count} mutations ran; at least ${minimum_mutations} are required. Mutations are added, never removed."
-echo "chart-storage-pin: (e) mutation battery held (${mutation_count} mutants, all caught)"
+echo "chart-storage-pin: (g) mutation battery held (${mutation_count} mutants, all caught)"
 
 echo "chart-storage-pin: the data root renders read-only, pinned, and absent by default and when disabled"
