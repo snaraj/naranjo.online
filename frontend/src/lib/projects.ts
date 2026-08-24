@@ -42,7 +42,10 @@ export const projectHostLabel = 'GitHub';
 
 /* The owner's account, and the only remote origin this repository's frontend
  * source spells. Every project URL is this plus the repository name, so the
- * host is written once and a row cannot point somewhere else by typo. */
+ * host is written once and a row cannot point somewhere else by typo. The
+ * recent-commits feed's outbound links (lib/activity.ts, issue 157) import
+ * this constant rather than writing a second one, which is what keeps the
+ * claim in this comment true as a second consumer arrives. */
 export const projectHost = 'https://github.com/snaraj';
 
 /* The ISO date these counts were read on. Rendered by the section, so the

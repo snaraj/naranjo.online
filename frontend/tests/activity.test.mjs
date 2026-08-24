@@ -2,8 +2,19 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { describe, it, test } from 'node:test';
 
-import { activityCells, activityPanelId, parseVCSActivity } from '../src/lib/activity.ts';
+import {
+  activityCells,
+  activityPanelId,
+  commitEntryLinkLabel,
+  commitEntryUrl,
+  commitPullRequestNumber,
+  commitRepoLinkLabel,
+  commitRepoUrl,
+  isValidRepoSlug,
+  parseVCSActivity
+} from '../src/lib/activity.ts';
 import { toColumns } from '../src/lib/grid.ts';
+import { projectHost, projectHostLabel } from '../src/lib/projects.ts';
 
 // A well-formed vcs-activity/v1 payload in the exact shape internal/panels
 // serves; tests clone and break one field at a time so every admission rule
@@ -169,6 +180,126 @@ describe('activityCells', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Outbound navigation (issue 157) — every href is CONSTRUCTED from a
+// validated field, never interpolated from the raw payload string. Each
+// table below is a hostile-input suite: the "reject" rows are exactly the
+// shapes a raw `${projectHost}/${repo}` (or an unanchored PR-number regex)
+// would have happily turned into a link, so a reversion to unvalidated
+// interpolation flips one of these from null to a real string and the
+// assertion catches it — this IS the mutation kill matrix for this guard,
+// not merely a smoke check.
+// ---------------------------------------------------------------------------
+
+describe('isValidRepoSlug / commitRepoUrl', () => {
+  it('admits the host repository-name character set', () => {
+    for (const repo of [
+      'naranjo.online',
+      'website-infrastructure',
+      'lidersea.com',
+      'foobar2000-lyricsbuddy',
+      'a',
+      '123',
+      'A.b-C_d',
+      'a'.repeat(100)
+    ]) {
+      assert.equal(isValidRepoSlug(repo), true, `${JSON.stringify(repo)} should validate`);
+      assert.equal(commitRepoUrl(repo), `${projectHost}/${repo}`);
+    }
+  });
+
+  it('rejects every shape that could break out of the href it would build', () => {
+    const hostile = [
+      '',
+      ' ',
+      'a b',
+      'a/b',
+      '../etc',
+      '.git',
+      '-repo',
+      '_repo',
+      'repo"',
+      'repo<script>',
+      'javascript:alert(1)',
+      'a"onmouseover="x',
+      'evil.com/x',
+      'a\nb',
+      'a\tb',
+      'répo', // an accented character outside the host's ASCII set
+      'a'.repeat(101) // one past the character ceiling
+    ];
+    for (const repo of hostile) {
+      assert.equal(isValidRepoSlug(repo), false, `${JSON.stringify(repo)} must not validate`);
+      assert.equal(
+        commitRepoUrl(repo),
+        null,
+        `${JSON.stringify(repo)} must never become a URL — a non-null result here means the ` +
+          'validator was bypassed and the raw string reached an href'
+      );
+    }
+  });
+
+  it('carries the same "opens in a new tab" convention the Coding Projects feed already uses', () => {
+    assert.equal(
+      commitRepoLinkLabel('naranjo.online'),
+      `naranjo.online on ${projectHostLabel}, opens in a new tab`
+    );
+  });
+});
+
+describe('commitPullRequestNumber', () => {
+  it('reads the trailing "(#N)" a squash-merged subject carries', () => {
+    assert.equal(commitPullRequestNumber('release(0.1.34): six-lane bundle (#152)'), 152);
+    assert.equal(commitPullRequestNumber('fix bug (#1)'), 1);
+    assert.equal(commitPullRequestNumber('docs: x (#9999999)'), 9_999_999);
+  });
+
+  it('returns null for every subject that is not a clean trailing reference', () => {
+    const nonNumeric = [
+      'fixture: subject line', // no parenthetical at all
+      'fix bug (#0)', // GitHub PR numbers start at 1
+      'fix bug (#007)', // leading zero — not how the host writes one
+      'fix bug (#12e3)', // not a pure integer
+      'fix bug (#-5)', // not a positive integer
+      'fix bug (#12) trailing text', // not anchored at the end
+      'fix bug (#123456789)', // past the digit ceiling
+      'fix bug (#1' // unterminated
+    ];
+    for (const message of nonNumeric) {
+      assert.equal(
+        commitPullRequestNumber(message),
+        null,
+        `${JSON.stringify(message)} must not resolve a PR number`
+      );
+    }
+  });
+});
+
+describe('commitEntryUrl', () => {
+  it('builds the pull-request URL only when BOTH the repo and the PR number validate', () => {
+    assert.equal(
+      commitEntryUrl({ repo: 'naranjo.online', message: 'release (#152)' }),
+      `${projectHost}/naranjo.online/pull/152`
+    );
+  });
+
+  it('renders as plain text (returns null) when the repo is hostile, even with a real PR number', () => {
+    assert.equal(commitEntryUrl({ repo: 'evil.com/x', message: 'release (#152)' }), null);
+  });
+
+  it('renders as plain text (returns null) when no PR number resolves, even with a valid repo', () => {
+    assert.equal(commitEntryUrl({ repo: 'naranjo.online', message: 'fixture: subject line' }), null);
+    assert.equal(commitEntryUrl({ repo: 'naranjo.online', message: 'release (#12e3)' }), null);
+  });
+
+  it('states the "pull request, opens in a new tab" accessible name', () => {
+    assert.equal(
+      commitEntryLinkLabel('release (#152)'),
+      'release (#152), pull request, opens in a new tab'
+    );
+  });
+});
+
 const [component, appShell, helpers, grid] = await Promise.all([
   readFile(new URL('../src/lib/components/ActivityBar.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
@@ -238,7 +369,11 @@ test('the strip owns fixed geometry and its own overflow', () => {
   // Fixed block sizes per region: data arriving never shifts layout.
   assert.match(grid, /\.grid-strip \{[^}]*block-size: 7rem/);
   assert.match(component, /\.activity-totals \{[^}]*block-size: 1\.25rem/);
-  assert.match(component, /\.activity-commits \{[^}]*block-size: 5\.625rem/);
+  // Five rows at the 44px touch floor (issue 157): every commit row carries
+  // two real links now, so the fixed reservation grew from 5.625rem to
+  // 13.75rem (5 * 2.75rem) rather than staying a decorative-text height.
+  assert.match(component, /\.activity-commits \{[^}]*block-size: 13\.75rem/);
+  assert.match(component, /\.activity-commit \{[^}]*min-block-size: 2\.75rem/);
   // A wide window scrolls inside the strip, never the page.
   assert.match(grid, /\.grid-strip \{[^}]*overflow-x: auto/);
   // The panel is an ordinary block in the page's stack. It used to dock to
@@ -250,6 +385,46 @@ test('the strip owns fixed geometry and its own overflow', () => {
   assert.match(component, /\.activity-bar \{[^}]*display: block/);
   assert.doesNotMatch(component, /position: fixed/, 'the panel must not dock again');
   assert.doesNotMatch(component, /--page-activity-gutter/, 'a card reserves no gutter');
+});
+
+test('every commit-row href is built from the validated helpers, never raw interpolation', () => {
+  // The structural half of the mutation guard above: even if a hostile
+  // payload could somehow slip past the pure-function tests, this pins that
+  // the COMPONENT never has a second, unvalidated way to build a link. A
+  // mutation that inlined `href={`${projectHost}/${commit.repo}`}` (or any
+  // other direct interpolation of a commit field into an href) would match
+  // this pattern and fail the assertion below.
+  assert.doesNotMatch(
+    component,
+    /href=\{[^}]*commit\.(?:repo|message)[^}]*\}/,
+    'a commit field must never be interpolated directly into an href — go through the const below'
+  );
+  // Both hrefs are bound once, from the imported validators, before the
+  // markup ever reads them.
+  assert.match(component, /\{@const repoHref = commitRepoUrl\(commit\.repo\)\}/);
+  assert.match(component, /\{@const entryHref = commitEntryUrl\(commit\)\}/);
+  assert.match(component, /href=\{repoHref\}/);
+  assert.match(component, /href=\{entryHref\}/);
+  // A row the validators reject falls back to a plain <span> carrying the
+  // same escaped interpolation — never a link, never markup.
+  assert.match(component, /\{#if repoHref\}/);
+  assert.match(component, /<span class="activity-commit-repo">\{commit\.repo\}<\/span>/);
+  assert.match(component, /\{#if entryHref\}/);
+  assert.match(
+    component,
+    /<span class="activity-commit-message" title=\{commit\.message\}>\{commit\.message\}<\/span>/
+  );
+  // Text, never markup: this component must never reach for {@html} anywhere,
+  // now that two of its fields are payload-controlled link targets.
+  assert.doesNotMatch(component, /\{@html/, 'commit fields must never render as markup');
+  // Both outbound links close the same way: a new tab that says so, and the
+  // two attributes the threat model requires on anything leaving the page.
+  const targetBlank = component.match(/target="_blank"/g) ?? [];
+  const relSafe = component.match(/rel="noopener noreferrer"/g) ?? [];
+  assert.equal(targetBlank.length, 2, 'both the repo and the title anchor must open a new tab');
+  assert.equal(relSafe.length, 2, 'both anchors must carry rel="noopener noreferrer"');
+  assert.match(component, /aria-label=\{commitRepoLinkLabel\(commit\.repo\)\}/);
+  assert.match(component, /aria-label=\{commitEntryLinkLabel\(commit\.message\)\}/);
 });
 
 test('activity sources stay local-origin and provider-neutral', () => {
