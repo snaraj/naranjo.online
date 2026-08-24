@@ -132,6 +132,14 @@ keeps the last good payload and says so in the envelope `status`.
    `~/Library/Logs/naranjo-online-usage-export/`. One manual run first is
    good practice: `scripts/usage-export/push-usage-series.sh`.
 
+   The installed job is anchored to the PRIMARY checkout
+   (`~/code/naranjo.online` by default; override with
+   `NARANJO_USAGE_EXPORT_REPO_DIR`), never to wherever the installer itself
+   happens to live — an install performed from a disposable worktree used
+   to break silently at that worktree's cleanup (2026-08-24 security
+   review, finding M4), and a worktree path is now refused outright.
+   `--render-only` previews the exact plist without touching launchd.
+
 ## Cluster host setup (one-time, by an operator)
 
 Placeholders in angle brackets; none of these values belong in this
