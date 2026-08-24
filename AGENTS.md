@@ -427,7 +427,7 @@ review and post a normal PR comment in this exact shape:
 
     HEAD: <40-lowercase-hex>
     ROLE: MAIN-WORKER
-    VERDICT: PASS
+    VERDICT: PASS | BLOCK
     SCOPE: architecture,merge-order,authority,settings,base-freshness,required-checks
 
     - <distinct context> (Main Worker)
@@ -436,7 +436,7 @@ The scope is closed to architecture,
 merge order, authority, settings, base freshness, and required checks. It does
 not repeat the line-level adversarial review, operate live infrastructure,
 change settings, grant merge authority, or substitute for the independent
-exact-head APPROVE receipt. `BLOCKED`, missing/extra fields, a different head,
+exact-head APPROVE receipt. `BLOCK`, missing/extra fields, a different head,
 a non-distinct context, or any later author push is not a receipt; the Main
 Worker must re-run the bounded check at the new exact head.
 
@@ -450,8 +450,12 @@ Worker must re-run the bounded check at the new exact head.
 - **Labels.** One taxonomy, identical names/colors/meanings across all
   three repositories: `production-readiness`, `conventions`, `security`,
   `tests`, `ci`, `docs`, `release`, `fix`, `provider-neutrality`,
-  `delivery-lane`, `features`, `requires-review`. New labels are added to
-  all three at once.
+  `delivery-lane`, `features`, `requires-review`,
+  `cybersecurity-review-requested` (routing label for the security-specialist
+  fleet — must not be removed until the security verdict clears),
+  `daybreak-blue`, `priority-high`, `inprogress`, `dependencies` (auto-applied
+  by Dependabot; no `labels:` key exists in `dependabot.yml`). New labels are
+  added to all three at once.
 - **`requires-review` — the review-readiness signal.** `requires-review` is
   PR-head-only. The author applies it only when the exact PR head, body,
   commits, and evidence are author-complete. Its absence means the author PR is
@@ -525,9 +529,17 @@ lane whether or not any vendor-specific tooling is present.
   ceremony reads. No agent builds, edits, or checks out a branch there. It may
   lag `origin/main` harmlessly: every actor works from `origin/main` after its
   own `git fetch origin`, never from a local `main`.
-- **One worktree per acting context, named for its lane.** Executors run
+- **One worktree per acting context, named for its lane.** The preferred
+  grammar for new branches is `<lane>-<effort>/<issue#>-<topic>` (e.g.
+  `sonnet5-med/155-rail-idle-ink`), carrying the dispatched reasoning effort
+  (`low | med | high | max`) and the tracking issue; `<lane>` is parsed by
+  longest match against the repository-registered label set, then the
+  `-<effort>` suffix. Executors run
+  `git worktree add .claude/worktrees/<lane>-<effort>-<issue#>-<topic> -b
+  <lane>-<effort>/<issue#>-<topic> origin/main`. The legacy
   `git worktree add .claude/worktrees/<lane>-<topic> -b <lane>/<topic>
-  origin/main`. The directory and the branch carry the SAME lane, because the
+  origin/main` form remains accepted during the transition. Either way, the
+  directory and the branch carry the SAME lane, because the
   cleanup rule below depends on ownership being legible to every other agent.
   A worktree whose name and branch disagree, or a branch with no lane prefix,
   is a contract violation.
@@ -570,8 +582,16 @@ The complete delivery loop, each step gated by the sections around it:
    owner, set a milestone. Never apply or interpret `requires-review` on the
    issue; use an explicit normal comment when its specification needs review.
 2. **Branch from `origin/main`** after `git fetch origin`; branch names
-   are lane-prefixed (`<lane>/<topic>`, e.g. `sonnet5/contracts-0.1.13`,
-   `opus5/panels-fix`). One writer per branch, always —
+   are lane-prefixed. The preferred grammar for new branches is
+   `<lane>-<effort>/<issue#>-<topic>` (e.g. `sonnet5-med/155-rail-idle-ink`,
+   `fable5-high/142-usage-export`), carrying the dispatched reasoning effort
+   (`low | med | high | max`) and the tracking issue number; `<lane>` is
+   parsed by longest match against the repository-registered label set
+   (`fable5`, `5.6-sol`, `opus5`, `opus4.8`, `sonnet5`), then the
+   `-<effort>` suffix. A branch with genuinely no issue states why in its PR
+   body. The legacy form (`<lane>/<topic>`, e.g. `sonnet5/contracts-0.1.13`,
+   `opus5/panels-fix`) remains accepted during the transition. One writer
+   per branch, always —
    a branch that is not yours is a branch you never push to. Reserve the exact
    next patch from that base when the change touches any artifact surface; a
    documentation-only change (requirement 10's closed allowlist) reserves no
@@ -929,8 +949,9 @@ Structural promises of the panels subsystem, pinned by
   publish the gate's own numbers, and prose never advertises a
   capability or deployment state that does not exist yet.
 - **Attribution for third-party assets.** Every third-party asset lands
-  with its reviewed license (`frontend/src/assets/fonts/` carries
-  webfont licenses). Where Jagex game art or intellectual property is
+  with its reviewed license; any webfont lands together with its license
+  in `frontend/src/assets/fonts/` (currently a placeholder `.gitkeep` —
+  no webfont has shipped yet). Where Jagex game art or intellectual property is
   used — the OSRS boss-log panel — the exact Fan Content Policy notice
   accompanies it, word for word, pinned by a frontend test wherever it
   renders:
