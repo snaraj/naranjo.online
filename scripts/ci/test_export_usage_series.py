@@ -705,6 +705,112 @@ class MainTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(stdout)["schema"], "usage-series/v1")
 
+    def test_the_emission_is_compact(self):
+        # 2026-08-24 review finding 4: the document was pretty-printed with
+        # indent=2, which roughly DOUBLED every measurement for whitespace
+        # nobody reads — the file is sealed immediately and never seen. Both
+        # emission paths must produce the identical compact bytes plus one
+        # terminating newline.
+        with tempfile.TemporaryDirectory() as scratch:
+            root = os.path.join(scratch, "transcripts")
+            self.tree(root)
+            out = os.path.join(scratch, "usage.json")
+            code, stdout, _stderr = self.run_main(
+                ["--transcripts", root, "--source", "alpha", "--out", out]
+            )
+            self.assertEqual(code, 0)
+            written = pathlib.Path(out).read_text(encoding="utf-8")
+            code, stdout, _stderr = self.run_main(
+                ["--transcripts", root, "--source", "alpha"]
+            )
+        self.assertEqual(code, 0)
+        document = json.loads(written)
+        expected = json.dumps(document, separators=(",", ":")) + "\n"
+        self.assertEqual(written, expected)
+        # The stdout path only differs in the capture instant it stamps.
+        self.assertNotIn("\n  ", stdout)
+        self.assertNotIn(": ", stdout)
+        self.assertTrue(stdout.endswith("}\n"))
+
+    def test_a_document_over_the_payload_ceiling_is_refused_before_it_is_written(self):
+        # The producer half of the one-ceiling contract (2026-08-24 review
+        # finding 4). The origin caps the SEALED file, sealing adds exactly
+        # SEAL_OVERHEAD, so a document past the plaintext bound is one
+        # nothing downstream could ever admit — and pushing it would leave
+        # the panel silently frozen instead of loudly refused. Two merge
+        # sources at the 732-day bound with the full category vocabulary and
+        # very large daily values build a real over-ceiling document; no
+        # constant is patched, so the shipped number is the one under test.
+        days = capture.MAX_SERIES_DAYS
+        value = 10**16 - 1
+        section = {
+            "series": {
+                "startDate": "2024-01-01",
+                "totals": [value * 5] * days,
+                "recorded": True,
+            },
+            "categories": {
+                key: [value] * days for key in capture.CATEGORY_KEYS
+            },
+        }
+        with tempfile.TemporaryDirectory() as scratch:
+            root = os.path.join(scratch, "transcripts")
+            self.tree(root)
+            merges = []
+            for key in ("beta", "gamma"):
+                path = os.path.join(scratch, key + ".json")
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(section, handle)
+                merges += ["--merge-source", key + "=" + path]
+            out = os.path.join(scratch, "usage.json")
+            code, stdout, stderr = self.run_main(
+                ["--transcripts", root, "--source", "alpha", "--out", out] + merges
+            )
+            self.assertEqual(code, 1, "an over-ceiling document was not refused")
+            self.assertFalse(
+                os.path.exists(out),
+                "a refused document still wrote its output file",
+            )
+        self.assertEqual(stdout, "")
+        self.assertIn("byte bound", stderr)
+        self.assertNotIn(scratch, stderr)
+
+    def test_a_document_inside_the_payload_ceiling_is_emitted(self):
+        # Non-vacuity for the bound above: the same shape one source smaller
+        # is comfortably inside the ceiling and must still be produced, so
+        # the guard is a real edge rather than a blanket refusal.
+        days = capture.MAX_SERIES_DAYS
+        value = 10**9 - 1
+        section = {
+            "series": {
+                "startDate": "2024-01-01",
+                "totals": [value * 5] * days,
+                "recorded": True,
+            },
+            "categories": {
+                key: [value] * days for key in capture.CATEGORY_KEYS
+            },
+        }
+        with tempfile.TemporaryDirectory() as scratch:
+            root = os.path.join(scratch, "transcripts")
+            self.tree(root)
+            merge = os.path.join(scratch, "beta.json")
+            with open(merge, "w", encoding="utf-8") as handle:
+                json.dump(section, handle)
+            out = os.path.join(scratch, "usage.json")
+            code, _stdout, _stderr = self.run_main(
+                [
+                    "--transcripts", root, "--source", "alpha",
+                    "--merge-source", "beta=" + merge, "--out", out,
+                ]
+            )
+            self.assertEqual(code, 0)
+            emitted = pathlib.Path(out).read_bytes()
+        self.assertLessEqual(
+            len(emitted), export_usage_series.MAX_PLAINTEXT_BYTES
+        )
+        self.assertGreater(len(emitted), 10000, "the fixture is not exercising a large document")
+
     def test_missing_tree_and_malformed_arguments_fail_closed(self):
         with tempfile.TemporaryDirectory() as root:
             self.tree(root)

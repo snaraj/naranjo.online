@@ -735,6 +735,126 @@ class CategoryVocabularyParityTest(unittest.TestCase):
         )
 
 
+class CapParityTest(unittest.TestCase):
+    """The payload ceiling is ONE fact spelled in five places.
+
+    Producer, sealer, transport, receiver and origin each enforce it, and
+    before the 2026-08-24 security review (finding 4) they enforced five
+    DIFFERENT numbers: a valid export could be sealed and pushed and never
+    admitted, and an oversized one was truncated by the receiver, installed
+    over the last good file, and only then reported as a checksum mismatch.
+    Each pin failure names the other files, exactly as the category
+    vocabulary's parity pin does.
+
+    The canonical statement is `MaxSealedBytes` in internal/seal/types.go;
+    internal/panels restates it because its zero-egress doctrine pin forbids
+    importing that package, and the shell script and the operator manual
+    restate it because neither can read a Go constant.
+    """
+
+    REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+    def go_cap(self):
+        import re
+
+        source = (self.REPO_ROOT / "internal/seal/types.go").read_text(encoding="utf-8")
+        match = re.search(r"MaxSealedBytes = (\d+) << (\d+)", source)
+        self.assertIsNotNone(match, "internal/seal/types.go carries no MaxSealedBytes")
+        return int(match.group(1)) << int(match.group(2))
+
+    def test_the_canonical_cap_is_the_measured_ceiling(self):
+        # Non-vacuity, and the one place the measurement is asserted rather
+        # than described: the structural maximum the origin can admit
+        # measures 98,889 sealed bytes, so the ceiling must exceed it with
+        # real headroom while staying a bound rather than an open door.
+        cap = self.go_cap()
+        self.assertEqual(cap, 131072)
+        self.assertGreater(cap, 98889)
+
+    def test_matches_the_origin_admission_cap(self):
+        import re
+
+        source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
+        match = re.search(r"maxSealedSeriesBytes = (\d+) << (\d+)", source)
+        self.assertIsNotNone(match, "internal/panels/types.go carries no maxSealedSeriesBytes")
+        self.assertEqual(
+            int(match.group(1)) << int(match.group(2)),
+            self.go_cap(),
+            "maxSealedSeriesBytes in internal/panels/types.go and MaxSealedBytes in "
+            "internal/seal/types.go must state the identical ceiling",
+        )
+
+    def test_matches_the_exporter(self):
+        import re
+
+        source = (self.REPO_ROOT / "scripts/export_usage_series.py").read_text(encoding="utf-8")
+        cap = re.search(r"MAX_SEALED_BYTES = (\d+) \* 1024", source)
+        overhead = re.search(r"SEAL_OVERHEAD = (\d+)", source)
+        self.assertIsNotNone(cap, "scripts/export_usage_series.py carries no MAX_SEALED_BYTES")
+        self.assertIsNotNone(overhead, "scripts/export_usage_series.py carries no SEAL_OVERHEAD")
+        self.assertEqual(
+            int(cap.group(1)) * 1024,
+            self.go_cap(),
+            "MAX_SEALED_BYTES in scripts/export_usage_series.py and MaxSealedBytes in "
+            "internal/seal/types.go must state the identical ceiling",
+        )
+        # The overhead is what turns the sealed ceiling into the producer's
+        # plaintext bound, so it is pinned against the Go format too.
+        seal_source = (self.REPO_ROOT / "internal/seal/types.go").read_text(encoding="utf-8")
+        magic = re.search(r'magic = "([^"]+)"', seal_source)
+        nonce = re.search(r"nonceBytes = (\d+)", seal_source)
+        tag = re.search(r"tagBytes = (\d+)", seal_source)
+        self.assertIsNotNone(magic, "internal/seal/types.go carries no magic")
+        self.assertEqual(
+            int(overhead.group(1)),
+            len(magic.group(1)) + int(nonce.group(1)) + int(tag.group(1)),
+            "SEAL_OVERHEAD in scripts/export_usage_series.py must equal Overhead in "
+            "internal/seal/types.go (magic + nonce + tag)",
+        )
+
+    def test_matches_the_push_script(self):
+        import re
+
+        source = (
+            self.REPO_ROOT / "scripts/usage-export/push-usage-series.sh"
+        ).read_text(encoding="utf-8")
+        match = re.search(r"^MAX_SEALED_BYTES=(\d+)$", source, re.MULTILINE)
+        self.assertIsNotNone(
+            match, "scripts/usage-export/push-usage-series.sh carries no MAX_SEALED_BYTES"
+        )
+        self.assertEqual(
+            int(match.group(1)),
+            self.go_cap(),
+            "MAX_SEALED_BYTES in scripts/usage-export/push-usage-series.sh and "
+            "MaxSealedBytes in internal/seal/types.go must state the identical ceiling",
+        )
+
+    def test_matches_the_documented_forced_command_and_manual(self):
+        import re
+
+        cap = self.go_cap()
+        source = (self.REPO_ROOT / "docs/usage-export.md").read_text(encoding="utf-8")
+
+        # The receiver reads cap+1 so an over-cap payload is a DECISION about
+        # the real size, never a truncation, and refuses before any rename.
+        self.assertIn("head -c %d " % (cap + 1), source,
+                      "the documented forced command must read one byte past the ceiling")
+        self.assertIn('-gt %d ' % cap, source,
+                      "the documented forced command must refuse past the ceiling")
+        refusal = source.index("echo over-cap")
+        rename = source.index("&& mv ")
+        self.assertLess(refusal, rename,
+                        "the documented forced command must refuse BEFORE it renames over the last good file")
+
+        # And the operator manual states the same number in prose, so the
+        # ceiling an operator reads cannot drift from the one enforced.
+        self.assertIn(
+            "%s sealed bytes" % format(cap, ","),
+            source,
+            "docs/usage-export.md must state the ceiling in prose",
+        )
+
+
 class CaptureTest(unittest.TestCase):
     def test_a_walk_emits_dates_and_integers_and_nothing_else(self):
         with tempfile.TemporaryDirectory() as root:

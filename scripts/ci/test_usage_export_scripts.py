@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import shutil
 import stat
 import subprocess
@@ -181,6 +182,54 @@ class PushTransportHardeningTest(unittest.TestCase):
         result = run_script(PUSH, env=self.env)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("private", result.stderr)
+
+    def test_an_over_ceiling_payload_never_opens_the_connection(self):
+        # Finding 4 (2026-08-24 security review): the push checked only that
+        # the sealed payload was non-empty, so an over-ceiling payload
+        # reached the host, where the forced command TRUNCATED it and
+        # installed the truncated bytes over the last good file before
+        # anything noticed. The transport stage now refuses first, and the
+        # proof is that the ssh stub is never invoked at all.
+        cap = int(
+            re.search(
+                r"^MAX_SEALED_BYTES=(\d+)$",
+                PUSH.read_text(encoding="utf-8"),
+                re.MULTILINE,
+            ).group(1)
+        )
+        # A sealer stub that emits one byte past the ceiling, whatever it is
+        # handed: the bound under test is the transport's, not the sealer's.
+        write_executable(
+            self.scratch / "usageseal",
+            "#!/bin/sh\ncat >/dev/null\nhead -c %d /dev/zero\n" % (cap + 1),
+        )
+        self.args_file.unlink(missing_ok=True)
+        result = run_script(PUSH, env=self.env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("over the %d byte bound" % cap, result.stderr)
+        self.assertIn("nothing was pushed", result.stderr)
+        self.assertFalse(
+            self.args_file.exists(),
+            "ssh was invoked for a payload the pipeline had already refused",
+        )
+
+    def test_a_payload_exactly_at_the_ceiling_is_pushed(self):
+        # Non-vacuity for the bound above: the boundary itself is admitted,
+        # so the refusal is an edge rather than a blanket denial.
+        cap = int(
+            re.search(
+                r"^MAX_SEALED_BYTES=(\d+)$",
+                PUSH.read_text(encoding="utf-8"),
+                re.MULTILINE,
+            ).group(1)
+        )
+        write_executable(
+            self.scratch / "usageseal",
+            "#!/bin/sh\ncat >/dev/null\nhead -c %d /dev/zero\n" % cap,
+        )
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("pushed %d sealed bytes" % cap, result.stdout)
 
 
 class InstallAnchorTest(unittest.TestCase):

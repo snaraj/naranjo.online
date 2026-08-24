@@ -123,15 +123,59 @@ func TestRunRefusesMalformedKeyContents(t *testing.T) {
 	}
 }
 
+// TestRunRefusesOversizedInput pins the pipeline's single payload ceiling at
+// this stage, in BOTH directions and at the exact boundary (2026-08-24
+// review finding 4). Sealing measures the ceiling in plaintext, opening
+// measures it in sealed bytes, and the two differ by exactly seal.Overhead —
+// which is what makes "one cap" true across a boundary that changes the
+// byte count.
 func TestRunRefusesOversizedInput(t *testing.T) {
 	t.Parallel()
 	keyPath := writeKeyFile(t, testKeyHex, 0o600)
+
+	// Seal: one byte past the largest plaintext that still fits the ceiling.
 	var stdout, stderr bytes.Buffer
-	oversized := bytes.NewReader(bytes.Repeat([]byte{'a'}, maxInputBytes+1))
+	oversized := bytes.NewReader(bytes.Repeat([]byte{'a'}, seal.MaxPlaintextBytes+1))
 	if code := run([]string{"-key-file", keyPath}, oversized, &stdout, &stderr); code != 1 {
-		t.Fatalf("exit %d, want 1", code)
+		t.Fatalf("seal oversize: exit %d, want 1", code)
 	}
 	if !strings.Contains(stderr.String(), "byte bound") {
 		t.Fatalf("stderr %q does not name the byte bound", stderr.String())
+	}
+
+	// Seal: exactly at the cap is ACCEPTED, and the sealed result lands on
+	// the ceiling exactly — the non-vacuity proof that the plaintext bound
+	// is derived from the sealed one rather than merely near it.
+	stdout.Reset()
+	stderr.Reset()
+	atCap := bytes.NewReader(bytes.Repeat([]byte{'a'}, seal.MaxPlaintextBytes))
+	if code := run([]string{"-key-file", keyPath}, atCap, &stdout, &stderr); code != 0 {
+		t.Fatalf("seal at cap: exit %d stderr %q, want 0", code, stderr.String())
+	}
+	if stdout.Len() != seal.MaxSealedBytes {
+		t.Fatalf("a plaintext at the cap sealed to %d bytes, want exactly %d", stdout.Len(), seal.MaxSealedBytes)
+	}
+
+	// Open: one byte past the ceiling, measured in sealed bytes. It never
+	// reaches authentication — the bound refuses first.
+	sealedAtCap := bytes.Clone(stdout.Bytes())
+	stdout.Reset()
+	stderr.Reset()
+	tooBig := bytes.NewReader(append(bytes.Clone(sealedAtCap), 'a'))
+	if code := run([]string{"-key-file", keyPath, "-mode", "open"}, tooBig, &stdout, &stderr); code != 1 {
+		t.Fatalf("open oversize: exit %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "byte bound") {
+		t.Fatalf("open stderr %q does not name the byte bound", stderr.String())
+	}
+
+	// Open: exactly at the ceiling round-trips.
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"-key-file", keyPath, "-mode", "open"}, bytes.NewReader(sealedAtCap), &stdout, &stderr); code != 0 {
+		t.Fatalf("open at cap: exit %d stderr %q, want 0", code, stderr.String())
+	}
+	if stdout.Len() != seal.MaxPlaintextBytes {
+		t.Fatalf("opening a sealed payload at the cap yielded %d bytes, want %d", stdout.Len(), seal.MaxPlaintextBytes)
 	}
 }

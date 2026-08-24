@@ -44,6 +44,43 @@ const (
 	// shorter cannot even hold an empty plaintext and is refused before any
 	// cryptographic work.
 	Overhead = len(magic) + nonceBytes + tagBytes
+
+	// MaxSealedBytes is THE payload ceiling for this pipeline, in SEALED
+	// bytes, and every stage enforces this one number: the exporter refuses
+	// a document that would not seal within it, cmd/usageseal refuses input
+	// that would not fit it, the push script refuses before opening the ssh
+	// connection, the documented forced command reads one byte past it and
+	// refuses before renaming over the last good file, and the origin's
+	// data-root read caps at it.
+	//
+	// It lives here because internal/seal is the ONE boundary both halves of
+	// the pipeline already share, so producer and consumer cannot drift to
+	// different ceilings by editing different files. internal/panels cannot
+	// import this package — its zero-egress doctrine pin holds it to a
+	// stdlib-only import surface — so it restates the number and a parity
+	// test names this constant on failure, the repository's standard
+	// hand-duplication pin.
+	//
+	// The number is measured, not guessed. The structural maximum the origin
+	// can admit is one document covering both shipped snapshot sources, each
+	// at the 732-day series bound with the complete five-key category
+	// vocabulary; compact-encoded and sealed, that measures 98,889 bytes at
+	// ten-digit daily values — an order of magnitude above the shipped
+	// snapshot's own measured peak day. 131,072 leaves 32,183 bytes of
+	// headroom, which is three further decimal digits on every value in the
+	// document: the same maximum still seals to 125,271 bytes at thirteen
+	// digits and only passes the cap at fourteen.
+	//
+	// A separate, tighter gate remains downstream: the merged payload must
+	// still fit the panels response budget before it is served, so this
+	// ceiling bounds allocation and transport, and never promises that
+	// everything under it can be served.
+	MaxSealedBytes = 128 << 10
+
+	// MaxPlaintextBytes is the same ceiling expressed for the producing side:
+	// the largest plaintext that still seals within MaxSealedBytes, since
+	// sealing adds exactly Overhead bytes.
+	MaxPlaintextBytes = MaxSealedBytes - Overhead
 )
 
 // ErrKeyFormat reports a key that is not exactly KeyHexChars hex characters.

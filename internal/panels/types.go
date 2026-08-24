@@ -1085,11 +1085,30 @@ const (
 	// minutes behind a push at negligible read cost.
 	dataRootTTL = 5 * time.Minute
 
-	// maxSealedSeriesBytes caps one sealed series file read. The real file
-	// is a few kilobytes; the cap bounds a hostile or corrupted volume long
-	// before allocation, and the decoded payload is separately held to
-	// MaxPanelResponseBytes by the shared preparation path.
-	maxSealedSeriesBytes = 64 << 10
+	// maxSealedSeriesBytes caps one sealed series file read, and it is THE
+	// pipeline's single payload ceiling rather than this stage's private
+	// one. Before the 2026-08-24 review five stages disagreed — the exporter
+	// pretty-printed with no cap at all, the sealer accepted 1 MiB, the push
+	// script checked only "not empty", the documented forced command
+	// TRUNCATED to 128 KiB with `head -c`, and this read refused past
+	// 64 KiB — so a valid 732-day export could be sealed, pushed, and never
+	// admitted, while an oversized one was truncated, atomically installed
+	// over the last good file, and only then reported as a checksum mismatch
+	// (finding 4).
+	//
+	// The value is stated once in internal/seal.MaxSealedBytes, where the
+	// producer half reads it, together with the measurement behind it. This
+	// package cannot import that one — its zero-egress doctrine pin holds
+	// every production file to a stdlib-only import surface — so the number
+	// is restated here and TestSealedSeriesCapParity fails naming both
+	// files if they ever diverge.
+	//
+	// Raising this from 64 KiB is a unification, not a relaxation: the
+	// merged payload is still separately held to MaxPanelResponseBytes by
+	// the shared preparation path, which is the far tighter gate, and every
+	// stage now refuses the same byte count before doing anything
+	// destructive.
+	maxSealedSeriesBytes = 128 << 10
 
 	// dataRootFutureSkew is how far ahead of the local clock a series
 	// file's generatedAt may sit before it is refused as nonsense. Clock

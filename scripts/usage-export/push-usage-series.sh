@@ -102,8 +102,21 @@ done
 "$USAGESEAL_BIN" -mode seal -key-file "$KEY_FILE" < "$PLAIN" > "$SEALED" \
     || fail "sealing refused"
 
+# THE payload ceiling, in SEALED bytes — one number every stage enforces
+# (2026-08-24 security review, finding 4). Stated in Go at
+# internal/seal/types.go (MaxSealedBytes), restated in
+# scripts/export_usage_series.py, in the forced command in
+# docs/usage-export.md, and here; pinned across all five by CapParityTest in
+# scripts/ci/test_capture_usage_series.py. Checking only "not empty" here let
+# an over-cap payload reach the host, where the forced command's `head -c`
+# TRUNCATED it and installed the truncated bytes over the last good file
+# before anything noticed. The connection is not opened at all now.
+MAX_SEALED_BYTES=131072
+
 sealed_bytes=$(wc -c < "$SEALED" | tr -d ' ')
 [ "$sealed_bytes" -gt 0 ] || fail "sealed payload is empty"
+[ "$sealed_bytes" -le "$MAX_SEALED_BYTES" ] \
+    || fail "sealed payload is $sealed_bytes bytes, over the $MAX_SEALED_BYTES byte bound; nothing was pushed"
 
 if command -v shasum >/dev/null 2>&1; then
     local_sum=$(shasum -a 256 "$SEALED" | cut -d' ' -f1)

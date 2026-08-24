@@ -101,6 +101,49 @@ keeps the last good payload and says so in the envelope `status`.
     load is retried every tick, so repairing or removing the marker recovers
     the pod without a restart.
 
+## The payload ceiling — one number, five stages
+
+The pipeline enforces exactly one payload ceiling, **131,072 sealed bytes
+(128 KiB)**, at every stage:
+
+| Stage | What it does with the ceiling |
+| --- | --- |
+| `scripts/export_usage_series.py` | emits COMPACT JSON and refuses a document that would not seal within the ceiling — before sealing, before the wire |
+| `cmd/usageseal` | refuses stdin past the ceiling: in `seal` mode measured as plaintext (ceiling minus the 36-byte AEAD overhead), in `open` mode as sealed bytes |
+| `scripts/usage-export/push-usage-series.sh` | refuses an over-cap sealed file before the ssh connection is opened |
+| the forced command (above) | reads one byte PAST the ceiling and refuses before any rename, so an over-cap push never displaces the last good file |
+| the origin (`internal/panels`) | reads at most the ceiling, refusing rather than truncating |
+
+The number is stated in `internal/seal/types.go` (`MaxSealedBytes`), restated
+in the four places above, and pinned across all five by `CapParityTest` in
+`scripts/ci/test_capture_usage_series.py` — the same hand-duplication pin the
+repository uses for the category vocabulary.
+
+**Why 128 KiB, and why it is not a relaxation.** Before the 2026-08-24
+security review the five stages disagreed: the exporter pretty-printed with
+no cap, the sealer accepted 1 MiB, the push checked only "not empty", the
+forced command truncated at 128 KiB, and the origin refused past 64 KiB
+(finding 4). A valid export could therefore be sealed and pushed and never
+admitted, and an oversized one was truncated, atomically installed over the
+last good file, and only then reported as a checksum mismatch.
+
+The ceiling is measured, not guessed. The structural maximum the origin can
+admit is one document covering both shipped snapshot sources, each at the
+732-day series bound with the complete five-key category vocabulary.
+Compact-encoded and sealed, that measures **98,889 bytes** at ten-digit daily
+values — an order of magnitude above the shipped snapshot's own measured peak
+day of 1,911,380,289. Pretty-printed, the identical document was 196,172
+bytes, so compact output alone roughly halves it. 131,072 leaves 32,183 bytes
+of headroom: the same maximum still seals to 125,271 bytes at thirteen-digit
+values and only crosses the ceiling at fourteen.
+
+Raising the origin's own read from 64 KiB is therefore a unification of five
+disagreeing numbers, not a weakening. The tighter gate is downstream and
+unchanged: the merged payload must still fit the panels response budget
+(`MaxPanelResponseBytes`) before it is served, so a document under this
+ceiling is not promised to be servable — only to be transported and parsed
+without truncation.
+
 ## Workstation setup
 
 1. **Build the sealer** from the repository root:
@@ -222,7 +265,9 @@ repository.
 
    ```text
    restrict,command="t=$(mktemp /srv/naranjo-online/panels-data/.in.XXXXXX) \
-     && head -c 131072 > \"$t\" \
+     && head -c 131073 > \"$t\" \
+     && s=$(wc -c < \"$t\") \
+     && if [ \"$s\" -gt 131072 ]; then rm -f \"$t\"; echo over-cap >&2; exit 1; fi \
      && chmod 0644 \"$t\" \
      && mv \"$t\" /srv/naranjo-online/panels-data/token-usage.series.enc \
      && sha256sum /srv/naranjo-online/panels-data/token-usage.series.enc" \
@@ -230,10 +275,23 @@ repository.
    ```
 
    `restrict` disables forwarding, PTY, X11, and agent access; the forced
-   command ignores whatever the client asked for, bounds the write to
-   128 KiB (double the app's own 64 KiB admission cap), lands it with an
-   atomic rename, and answers with the checksum the push script verifies.
-   This key can do nothing else on the host.
+   command ignores whatever the client asked for. It reads **one byte past**
+   the 131,072-byte ceiling and REFUSES anything larger, deleting its
+   staging file and exiting nonzero **before** the rename — so an over-cap
+   push never displaces the last good file. That ordering is the fix for
+   the 2026-08-24 security review's finding 4: the earlier line read
+   `head -c 131072`, which silently TRUNCATED an oversized payload, renamed
+   the truncated bytes over the last good file, and only then reported a
+   checksum mismatch — destroying a working file to report a failure. Under
+   the cap it lands the bytes with an atomic rename and answers with the
+   checksum the push script verifies.
+
+   Note what each side proves. The host verifies SIZE before it installs
+   anything and reports the landed file's checksum, which the workstation
+   compares against what it sealed; the host holds no key and therefore
+   cannot — and must not be able to — verify the AEAD. That verification is
+   the origin's, and a file that fails it leaves the panel on its last good
+   payload reporting `stale`. This key can do nothing else on the host.
 
 3. **Decrypt-key Secret** in the site's namespace, from the same hex string
    as the workstation's `data.key` (name and key must match the chart's

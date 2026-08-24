@@ -519,6 +519,27 @@ func TestDataRootRefusesCryptographicFaults(t *testing.T) {
 	}
 }
 
+// TestSealedSeriesCapParity pins this package's copy of the pipeline's
+// single payload ceiling against the shared constant the producer half
+// enforces. internal/panels cannot import internal/seal — the zero-egress
+// doctrine pin holds every production file here to a stdlib-only import
+// surface — so the number is hand-duplicated, and this is the repository's
+// standard parity pin for exactly that situation: a failure names both
+// files, because a producer and a consumer with different ceilings is the
+// disagreement the 2026-08-24 review's finding 4 was about.
+func TestSealedSeriesCapParity(t *testing.T) {
+	t.Parallel()
+	if maxSealedSeriesBytes != seal.MaxSealedBytes {
+		t.Fatalf("maxSealedSeriesBytes in internal/panels/types.go is %d but MaxSealedBytes in internal/seal/types.go is %d; the pipeline's payload ceiling is ONE number and both files must state it",
+			maxSealedSeriesBytes, seal.MaxSealedBytes)
+	}
+	// Non-vacuity: the constant is a real bound, not a zero that would make
+	// every comparison against it pass.
+	if maxSealedSeriesBytes <= 0 {
+		t.Fatalf("the sealed-series cap is %d", maxSealedSeriesBytes)
+	}
+}
+
 // TestDataRootRefusesOversizeBeforeDecryption pins the byte cap AND its
 // position: an oversized file is refused before a single cryptographic or
 // parsing operation touches it.

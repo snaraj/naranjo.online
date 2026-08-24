@@ -24,6 +24,13 @@ counts, never paths. The schema marker and the capture instant are attached
 AFTER the guarded payload, mirroring how the capture tool attaches its
 generatedAt after its own assertion.
 
+THE PAYLOAD CEILING. The document is emitted COMPACT and refused if it would
+not seal within the one ceiling every stage of this pipeline enforces (see
+MAX_SEALED_BYTES below). Producing a document the origin can never admit is
+not a smaller failure than producing a wrong one — it is a panel that
+silently stops advancing — so the refusal happens here, before sealing and
+before anything reaches the wire.
+
 THE CATEGORY PARTITION. A day's total is the sum of the four usage fields,
 and the four categories ARE those fields, so the categories partition the
 total by construction — and the origin refuses any document where they do
@@ -92,6 +99,26 @@ WEEK_DAYS = 7
 # Source keys must be label-shaped: lowercase, machine-safe, bounded. The
 # same shape the emission guard enforces for every field name.
 MAX_SOURCE_KEY_LENGTH = 32
+
+# THE payload ceiling, in SEALED bytes — one number every stage of the
+# pipeline enforces (2026-08-24 review finding 4). Stated in Go at
+# internal/seal/types.go (MaxSealedBytes/Overhead), restated here and in
+# scripts/usage-export/push-usage-series.sh and docs/usage-export.md, and
+# pinned across all five by CapParityTest in
+# scripts/ci/test_capture_usage_series.py.
+#
+# This program produces PLAINTEXT, so it refuses at the plaintext bound: the
+# sealer adds exactly SEAL_OVERHEAD bytes, so a document that would not seal
+# within the ceiling must fail HERE rather than be sealed and pushed to an
+# origin that can never admit it. Emission is compact for the same reason —
+# indentation multiplied the same measurement by roughly two for nothing that
+# ever reaches a human eye.
+MAX_SEALED_BYTES = 128 * 1024
+SEAL_OVERHEAD = 36
+MAX_PLAINTEXT_BYTES = MAX_SEALED_BYTES - SEAL_OVERHEAD
+
+# Compact separators: no spaces after the item and key separators.
+COMPACT_SEPARATORS = (",", ":")
 
 
 def read_category_records(root, counters):
@@ -446,13 +473,26 @@ def main(argv=None):
         "generatedAt": now.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "sources": sources,
     }
+    # The emitted text INCLUDING its terminating newline is what the sealer
+    # reads, so that is exactly what the bound measures.
+    emitted = json.dumps(document, separators=COMPACT_SEPARATORS) + "\n"
+    payload = emitted.encode("utf-8")
+    if len(payload) > MAX_PLAINTEXT_BYTES:
+        # Refused HERE, before sealing and before the wire: the origin caps
+        # the SEALED file at MAX_SEALED_BYTES, and sealing adds exactly
+        # SEAL_OVERHEAD, so a document past this bound is one nothing
+        # downstream could ever admit (2026-08-24 review finding 4).
+        print(
+            "the document is %d bytes, over the %d byte bound the pipeline enforces"
+            % (len(payload), MAX_PLAINTEXT_BYTES),
+            file=sys.stderr,
+        )
+        return 1
     if arguments.out is None:
-        json.dump(document, sys.stdout, indent=2)
-        sys.stdout.write("\n")
+        sys.stdout.write(emitted)
         return 0
-    with open(arguments.out, "w", encoding="utf-8") as handle:
-        json.dump(document, handle, indent=2)
-        handle.write("\n")
+    with pathlib.Path(arguments.out).open("w", encoding="utf-8") as handle:
+        handle.write(emitted)
     return 0
 
 
