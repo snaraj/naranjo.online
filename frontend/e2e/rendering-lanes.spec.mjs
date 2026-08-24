@@ -23,6 +23,17 @@ const textEntryFloorPx = 16;
 // The comfortable minimum for a finger, in CSS pixels.
 const touchFloorPx = 44;
 
+/* The gallery frame's height ceiling (issue 157): 20rem at this page's
+ * unmodified 16px root, the literal value tests/sections.test.mjs pins
+ * against the stylesheet's own text. A gallery-cap assertion below compares
+ * a MEASURED box against this fixed number, never against
+ * getComputedStyle(frame).maxHeight read back from the same page — Daybreak
+ * Blue's review of PR #161 proved that self-referential shape lets a
+ * 20rem -> 200rem mutation survive undetected, because the expectation and
+ * the rendered behavior move together when both derive from the one
+ * (mutated) token. */
+const galleryFrameCapPx = 320;
+
 /* Sub-pixel tolerance for a MEASURED box. Layout arithmetic lands on
  * fractional pixels in every engine (a hairline border, a scaled viewport),
  * so a box that should be exactly 44 can be reported as 43.999998. The
@@ -1783,11 +1794,6 @@ test('the art feed shows its frames when the origin serves no media', async ({ p
         const box = frame.getBoundingClientRect();
         return { width: Math.round(box.width), height: Math.round(box.height) };
       }),
-      // The tokenized ceiling (issue 157) read off the FIRST frame's own
-      // computed style — every frame shares the one global token, which the
-      // "reserved box" assertion below already proves by requiring every
-      // size to equal the first.
-      mediaCapPx: boxes.length > 0 ? parseFloat(getComputedStyle(boxes[0]).maxHeight) : 0,
       columns: new Set(
         boxes.map((frame) => Math.round(frame.getBoundingClientRect().left))
       ).size,
@@ -1820,12 +1826,33 @@ test('the art feed shows its frames when the origin serves no media', async ({ p
      height cap (issue 157) — at the page's default column width the cap is
      what actually wins (960px wide at 16:9 asks for 540px; the cap holds it
      open at less than that), which is the fix for the owner's exact
-     complaint: one frame was filling the screen. */
-  const expectedHeight = Math.min(firstBox.width * (9 / 16), observed.mediaCapPx);
+     complaint: one frame was filling the screen. galleryFrameCapPx is the
+     literal cap value, never read back from this page's own computed style
+     (see its declaration for why that self-reference is exactly the defect
+     Daybreak Blue's review found). */
+  const uncapped169Height = firstBox.width * (9 / 16);
+  const expectedHeight = Math.min(uncapped169Height, galleryFrameCapPx);
   expect(
     firstBox.height,
     `the art frame is ${firstBox.height}px, not the capped ${expectedHeight.toFixed(1)}px`
   ).toBeCloseTo(expectedHeight, 0);
+  /* The cap must be doing real work somewhere, not coincidentally matching
+     the uncapped ratio — but this test runs across every project, including
+     the phone emulations, whose own viewport genuinely renders a frame
+     under 360px wide (MEASURED: 356-359px), where 16:9 alone never reaches
+     320px and the cap is correctly inert. Gating on the frame's own
+     MEASURED width — a layout fact independent of whatever the height-cap
+     token currently says — rather than on the project name (this file's own
+     capability-over-project-name doctrine) restricts the strict-inequality
+     proof to viewports wide enough to exercise it, without ever weakening
+     what it proves there: on a desktop-width frame this still fails exactly
+     as hard against the 20rem -> 200rem mutant. */
+  if (firstBox.width * (9 / 16) > galleryFrameCapPx) {
+    expect(
+      uncapped169Height,
+      `the frame is ${firstBox.width}px wide, too narrow at this viewport to prove the cap engages`
+    ).toBeGreaterThan(galleryFrameCapPx);
+  }
 });
 
 /* ===========================================================================
@@ -3555,11 +3582,7 @@ test('every width the handle can reach keeps every section intact', async ({ pag
       const distinct = (values) => new Set(values.map((value) => Math.round(value))).size;
       const frames = [...window.document.querySelectorAll('.art-frame')].map((frame) => {
         const box = frame.getBoundingClientRect();
-        return {
-          width: box.width,
-          height: box.height,
-          cap: parseFloat(getComputedStyle(frame).maxHeight),
-        };
+        return { width: box.width, height: box.height };
       });
       const root = window.document.documentElement;
       return {
@@ -3623,10 +3646,22 @@ test('every width the handle can reach keeps every section intact', async ({ pag
        tokenized cap (issue 157), the cap itself above it — a narrow column
        still gets the full photograph proportion, and a wide one stops
        growing the frame instead of reproducing the complaint the cap
-       exists to fix. */
+       exists to fix. galleryFrameCapPx is the literal cap value, never the
+       page's own computed style (see its declaration for why) — this is
+       what makes the assertion below independent, rather than the
+       self-referential shape Daybreak Blue's review of PR #161 found: a
+       mutation that widened the token could no longer widen its own
+       expectation along with it.
+       (This viewport is the narrow "rails" one the handle needs to exist at
+       all — MEASURED: even the widest column this sweep can reach keeps the
+       art card's own max-inline-size under ~569px, so the uncapped 16:9
+       height here never clears 320px by a comfortable margin. The
+       unambiguous "the cap is doing real work, not coincidentally equal to
+       the uncapped ratio" proof lives in the dedicated single-frame test
+       above instead, at a viewport wide enough to make that margin real.) */
     expect(state.frames.length, `the art feed rendered no frames ${at}`).toBeGreaterThan(0);
     for (const frame of state.frames) {
-      const expectedHeight = Math.min(frame.width * (9 / 16), frame.cap);
+      const expectedHeight = Math.min(frame.width * (9 / 16), galleryFrameCapPx);
       expect(
         frame.height,
         `an art frame is ${frame.height.toFixed(1)}px, not the capped ${expectedHeight.toFixed(1)}px ${at}`
