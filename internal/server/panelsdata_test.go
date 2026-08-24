@@ -26,22 +26,27 @@ import (
 const panelsDataTestKeyHex = "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf"
 
 // sealSeriesFile stages one sealed usage-series document in dir under the
-// production file name. The document targets the REAL embedded snapshot's
-// first source label, read from the served payload rather than spelled here.
-func sealSeriesFile(t *testing.T, dir, label, generatedAt string) {
+// production file name. The document covers EVERY label the REAL embedded
+// snapshot ships, read off the served payload rather than spelled here — a
+// document that refreshed only some of them is refused as partial
+// (2026-08-24 review finding 7), so a complete one is what this suite must
+// stage to exercise the serving path at all.
+func sealSeriesFile(t *testing.T, dir string, labels []string, generatedAt string) {
 	t.Helper()
+	sources := make(map[string]any, len(labels))
+	for _, label := range labels {
+		sources[label] = map[string]any{
+			"series": map[string]any{"startDate": "2026-08-18", "totals": []int64{3, 4}, "recorded": true},
+			"categories": map[string]any{
+				"input":  []int64{1, 1},
+				"output": []int64{2, 3},
+			},
+		}
+	}
 	document := map[string]any{
 		"schema":      "usage-series/v1",
 		"generatedAt": generatedAt,
-		"sources": map[string]any{
-			label: map[string]any{
-				"series": map[string]any{"startDate": "2026-08-18", "totals": []int64{3, 4}, "recorded": true},
-				"categories": map[string]any{
-					"input":  []int64{1, 1},
-					"output": []int64{2, 3},
-				},
-			},
-		},
+		"sources":     sources,
 	}
 	plaintext, err := json.Marshal(document)
 	if err != nil {
@@ -76,9 +81,10 @@ func servedTokenUsage(t *testing.T, site *Site) map[string]any {
 	return envelope
 }
 
-// firstSourceLabel reads the first token-usage source label off the served
-// payload, so this suite never spells a data label in source.
-func firstSourceLabel(t *testing.T, site *Site) string {
+// shippedSourceLabels reads EVERY token-usage source label off the served
+// payload, so this suite never spells a data label in source and stays
+// correct when the shipped snapshot gains or loses a source.
+func shippedSourceLabels(t *testing.T, site *Site) []string {
 	t.Helper()
 	envelope := servedTokenUsage(t, site)
 	data, ok := envelope["data"].(map[string]any)
@@ -89,11 +95,15 @@ func firstSourceLabel(t *testing.T, site *Site) string {
 	if !ok || len(sources) == 0 {
 		t.Fatal("token-usage payload carries no sources")
 	}
-	label, ok := sources[0].(map[string]any)["label"].(string)
-	if !ok || label == "" {
-		t.Fatal("first source carries no label")
+	labels := make([]string, 0, len(sources))
+	for _, source := range sources {
+		label, ok := source.(map[string]any)["label"].(string)
+		if !ok || label == "" {
+			t.Fatal("a shipped source carries no label")
+		}
+		labels = append(labels, label)
 	}
-	return label
+	return labels
 }
 
 func TestStartPanelDataServesASealedSeriesEndToEnd(t *testing.T) {
@@ -105,7 +115,7 @@ func TestStartPanelDataServesASealedSeriesEndToEnd(t *testing.T) {
 	defer site.Close()
 	dir := t.TempDir()
 	generatedAt := time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
-	sealSeriesFile(t, dir, firstSourceLabel(t, site), generatedAt)
+	sealSeriesFile(t, dir, shippedSourceLabels(t, site), generatedAt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -346,8 +356,8 @@ func TestStartPanelDataFloorSurvivesProcessRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	label := firstSourceLabel(t, site1)
-	sealSeriesFile(t, dataDir, label, acceptedAt)
+	labels := shippedSourceLabels(t, site1)
+	sealSeriesFile(t, dataDir, labels, acceptedAt)
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	if err := site1.StartPanelData(ctx1, dataDir, stateDir, env); err != nil {
 		t.Fatalf("first StartPanelData: %v", err)
@@ -364,7 +374,7 @@ func TestStartPanelDataFloorSurvivesProcessRestart(t *testing.T) {
 	// Process two, facing a ROLLED-BACK file: refused, stale said. Without
 	// the persisted floor this file (newer than the embedded snapshot) was
 	// accepted after every restart.
-	sealSeriesFile(t, dataDir, label, rolledBackAt)
+	sealSeriesFile(t, dataDir, labels, rolledBackAt)
 	site2, err := New(testsupport.FrontendFS())
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -384,7 +394,7 @@ func TestStartPanelDataFloorSurvivesProcessRestart(t *testing.T) {
 
 	// Process three, facing the UNCHANGED accepted file: recovery, not
 	// replay — served ok again at the accepted instant.
-	sealSeriesFile(t, dataDir, label, acceptedAt)
+	sealSeriesFile(t, dataDir, labels, acceptedAt)
 	site3, err := New(testsupport.FrontendFS())
 	if err != nil {
 		t.Fatalf("New: %v", err)

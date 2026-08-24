@@ -35,7 +35,12 @@
 #                   a machine-local fact, so it lives in the config, not here)
 # and may define:
 #   MERGE_SOURCES   space-separated KEY=FILE pairs for further tools'
-#                   captured series (e.g. the second tool's capture output)
+#                   captured series (e.g. the second tool's capture output).
+#                   REQUIRED whenever the origin's embedded snapshot ships
+#                   more than one source: a document whose source set does
+#                   not EQUAL the shipped set is refused whole, because one
+#                   envelope status cannot describe two ages of data
+#                   (2026-08-24 security review, finding 7).
 #
 # Exit status is nonzero on any failure; diagnostics never include payload
 # content. Stage names and byte counts only.

@@ -389,6 +389,17 @@ func (reg *Registry) loadSnapshotUsageData(state *panelState) (TokenUsageData, e
 // totals, session counts, insights) is left exactly as the snapshot shipped
 // it, still marked recorded. Any invalid section refuses the WHOLE document:
 // a partial merge would serve a payload nobody produced.
+//
+// The document's source set must EQUAL the shipped set (2026-08-24 review
+// finding 7). Accepting any nonempty subset and backfilling the rest from
+// the embedded snapshot produced a payload whose envelope was stamped `ok`
+// at the pushed document's instant while part of it was release-time data of
+// an entirely different age — the envelope's single `status` and
+// `generatedAt` describe the WHOLE payload, so they can only be honest when
+// the whole payload came from the same push. A document that refreshes some
+// sources and not others is refused with the reason, and the panel keeps its
+// last good payload; the alternative, per-source provenance and a derived
+// aggregate status, is a payload-shape change and not this repair.
 func mergeSeriesDocument(document usageSeriesDocument, fallback TokenUsageData) (TokenUsageData, error) {
 	if len(document.Sources) == 0 {
 		return TokenUsageData{}, errors.New("data root: the document carries no sources")
@@ -400,6 +411,11 @@ func mergeSeriesDocument(document usageSeriesDocument, fallback TokenUsageData) 
 	for label := range document.Sources {
 		if _, ok := byLabel[label]; !ok {
 			return TokenUsageData{}, errors.New("data root: the document names a source the snapshot does not ship")
+		}
+	}
+	for label := range byLabel {
+		if _, ok := document.Sources[label]; !ok {
+			return TokenUsageData{}, errors.New("data root: the document does not refresh every shipped source; a partial document cannot be served as one current payload")
 		}
 	}
 	merged := TokenUsageData{Sources: make([]TokenUsageSource, len(fallback.Sources))}

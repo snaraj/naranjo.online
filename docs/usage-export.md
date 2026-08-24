@@ -61,13 +61,19 @@ keeps the last good payload and says so in the envelope `status`.
   validated by `scripts/ci/chart-storage-pin.sh`). The decrypt key arrives
   only as the `PANELS_DATA_KEY` environment variable from a Secret the chart
   references but never contains.
-- **Strict admission.** The app reads at most 64 KiB of sealed bytes,
-  unseals, strict-decodes `usage-series/v1` (unknown fields refused, closed
-  window/derived/CATEGORY vocabularies — a pushed file can never mint a
-  category label; the five accounting classes are the whole set — categories
-  must partition the day totals), refuses replays via a monotonic
-  `generatedAt` floor, and re-checks the serving byte budget before
-  publishing.
+- **Strict admission.** The app reads at most the one sealed-byte cap
+  documented below, unseals, strict-decodes `usage-series/v1` (unknown
+  fields refused, closed window/derived/CATEGORY vocabularies — a pushed
+  file can never mint a category label; the five accounting classes are the
+  whole set — categories must partition the day totals), refuses replays via
+  a monotonic `generatedAt` floor, and re-checks the serving byte budget
+  before publishing.
+- **A document is whole or it is refused.** Its source set must EQUAL the
+  set the embedded snapshot ships (2026-08-24 security review, finding 7).
+  The envelope carries ONE `status` and ONE `generatedAt` for the whole
+  payload, so a document refreshing some sources and not others cannot be
+  described honestly by either; it is refused with that reason and the panel
+  keeps its last good payload.
 - **The replay floor survives restarts, and durable mode fails closed.** The
   floor starts at the embedded snapshot's capture instant and rises with
   every PUBLISHED push; the high-water mark is persisted as a sealed marker
@@ -144,6 +150,18 @@ keeps the last good payload and says so in the envelope `status`.
    `MERGE_SOURCES` is how a second tool's captured series joins the same
    document: point it at that tool's capture output (the capture tool's
    stdout shape). The export validates and re-guards whatever it merges.
+
+   **It is REQUIRED whenever the shipped snapshot carries more than one
+   source.** The origin admits a document only when its source set EQUALS
+   the set the embedded snapshot ships (2026-08-24 security review,
+   finding 7). One envelope carries one `status` and one `generatedAt` for
+   the whole payload, so a document that refreshed one source and left the
+   other at release-time data could not be described honestly by either
+   field — the origin used to backfill the omitted source from the snapshot
+   and stamp the result wholly current. A partial document is now refused
+   with that reason and the panel keeps its last good payload, so the
+   symptom of a missing `MERGE_SOURCES` entry is `status: stale`, never a
+   payload that quietly mixes two ages.
 
 5. **Install the schedule**:
 
@@ -282,6 +300,7 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | `push refused` | ssh transport failed; nothing landed |
 | `checksum mismatch after push` | landed bytes differ from sealed bytes — investigate before trusting the panel |
 | panel `status: stale` | the origin refused the newest file (tamper, replay, wrong key, over-cap, malformed) and kept the last good payload |
+| panel `status: stale` after every push, panel never advances | the document does not cover every shipped source — add the missing `MERGE_SOURCES` entry (see step 4) — or one of its sections is malformed |
 | panel `status: stale`, sealed file gone from the data dir | the runtime document this pod had already served from was deleted or unmounted: the data is retained, the freshness claim is not (2026-08-24 security review, finding 5). Before the FIRST push an absent file is the ordinary cold state and stays `ok` on the embedded snapshot |
 | panel serves embedded snapshot | `panels.data.enabled=false` (the default — the documented as-of-release decision), or no sealed file yet — the shipped state, not an error |
 | floor marker absent in the state dir | a first boot: benign, the floor is the embedded snapshot's, and the first published push writes the marker |

@@ -88,9 +88,16 @@ func productionUnsealer(hexKey string) Unsealer {
 }
 
 // validDocument is the mutation base: one complete, correct series document
-// for the alpha source. Tests mutate copies of it to build each hostile
-// variant, so every refusal test starts from a document that provably
-// passes.
+// covering EVERY source the synthetic snapshot ships. Tests mutate copies of
+// it to build each hostile variant, so every refusal test starts from a
+// document that provably passes.
+//
+// Both labels are present because a document must refresh the whole shipped
+// set (2026-08-24 review finding 7): one envelope carries one status and one
+// generatedAt for the whole payload, so a document that refreshed alpha and
+// left beta at release-time data could not be described honestly by either.
+// beta's section is deliberately minimal — a series and nothing else — since
+// categories, windows and derived tiles are all optional per source.
 func validDocument() map[string]any {
 	return map[string]any{
 		"schema":      "usage-series/v1",
@@ -107,6 +114,9 @@ func validDocument() map[string]any {
 					"week":  map[string]any{"input": 4, "output": 8},
 				},
 				"derived": map[string]any{"peak-day": 7, "current-streak": 1, "longest-streak": 1},
+			},
+			"beta": map[string]any{
+				"series": map[string]any{"startDate": "2026-08-18", "totals": []int64{2, 3}, "recorded": true},
 			},
 		},
 	}
@@ -215,9 +225,16 @@ func TestDataRootReplacesTheSeriesAndDerivedTiles(t *testing.T) {
 	if len(alpha.Insights) != 1 {
 		t.Fatal("insights must survive the merge untouched")
 	}
-	// The untouched source is exactly the snapshot's.
-	if data.Sources[1].Label != "beta" || data.Sources[1].Series != nil {
-		t.Fatalf("beta changed: %+v", data.Sources[1])
+	// EVERY shipped source is refreshed by the same push, which is what
+	// makes one envelope status and one generatedAt honest for the whole
+	// payload (2026-08-24 review finding 7). beta's minimal section proves
+	// categories, windows and derived stay optional per source.
+	beta := data.Sources[1]
+	if beta.Label != "beta" || beta.Series == nil || beta.Series.StartDate != "2026-08-18" || len(beta.Series.Totals) != 2 {
+		t.Fatalf("beta series not replaced: %+v", beta.Series)
+	}
+	if !beta.Series.Recorded || beta.Series.Categories != nil {
+		t.Fatalf("beta series provenance or categories wrong: %+v", beta.Series)
 	}
 	if size := len(state.current.Load().response.body); size > MaxPanelResponseBytes {
 		t.Fatalf("served envelope is %d bytes, over the %d budget", size, MaxPanelResponseBytes)
@@ -301,6 +318,17 @@ func TestDataRootRefusesHostileDocuments(t *testing.T) {
 			delete(sources, "alpha")
 		}, "source the snapshot does not ship"},
 		"no sources": {func(d map[string]any) { d["sources"] = map[string]any{} }, "no sources"},
+		// 2026-08-24 review finding 7: the checked-in happy path used to
+		// PROVE this state — alpha refreshed, beta left at release-time
+		// data, and the whole envelope stamped ok at the pushed instant. A
+		// document that does not refresh the shipped set cannot be described
+		// by one status and one generatedAt, so it is refused entirely.
+		"partial document, one shipped source omitted": {func(d map[string]any) {
+			delete(d["sources"].(map[string]any), "beta")
+		}, "every shipped source"},
+		"partial document, the other source omitted": {func(d map[string]any) {
+			delete(d["sources"].(map[string]any), "alpha")
+		}, "every shipped source"},
 		"live-claiming series": {func(d map[string]any) {
 			alphaSection(d)["series"].(map[string]any)["recorded"] = false
 		}, "recorded provenance"},

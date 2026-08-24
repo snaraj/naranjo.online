@@ -34,9 +34,11 @@ var panelsDataLifecycleKeyHex = func() string {
 }()
 
 // embeddedUsageFacts reads the shipped snapshot the binary embeds — the same
-// file, from source — so the test can address a real source label and know
-// the embedded capture instant without spelling either in code.
-func embeddedUsageFacts(t *testing.T) (label, generatedAt string) {
+// file, from source — so the test can address the real source labels and know
+// the embedded capture instant without spelling either in code. EVERY label
+// is returned, because a document must refresh the complete shipped set to
+// be admitted at all (2026-08-24 review finding 7).
+func embeddedUsageFacts(t *testing.T) (labels []string, generatedAt string) {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "internal", "panels", "snapshots", "token-usage.json"))
 	if err != nil {
@@ -56,28 +58,37 @@ func embeddedUsageFacts(t *testing.T) (label, generatedAt string) {
 	if len(document.Data.Sources) == 0 {
 		t.Fatal("embedded snapshot has no sources")
 	}
-	return document.Data.Sources[0].Label, document.GeneratedAt
+	for _, source := range document.Data.Sources {
+		if source.Label == "" {
+			t.Fatal("embedded snapshot carries an unlabeled source")
+		}
+		labels = append(labels, source.Label)
+	}
+	return labels, document.GeneratedAt
 }
 
-// stageSealedSeries seals one two-day series with a category partition into
-// dir under the production file name and returns its capture instant.
-func stageSealedSeries(t *testing.T, dir, label string) string {
+// stageSealedSeries seals one complete document — a two-day series with a
+// category partition for every shipped source — into dir under the
+// production file name and returns its capture instant.
+func stageSealedSeries(t *testing.T, dir string, labels []string) string {
 	t.Helper()
 	generatedAt := time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
+	sources := make(map[string]any, len(labels))
+	for _, label := range labels {
+		sources[label] = map[string]any{
+			"series": map[string]any{"startDate": "2026-08-20", "totals": []int64{11, 31}, "recorded": true},
+			"categories": map[string]any{
+				"input":      []int64{2, 4},
+				"output":     []int64{3, 7},
+				"cache-read": []int64{6, 20},
+			},
+			"windows": map[string]any{"today": map[string]any{"input": 24, "output": 7}},
+		}
+	}
 	document := map[string]any{
 		"schema":      "usage-series/v1",
 		"generatedAt": generatedAt,
-		"sources": map[string]any{
-			label: map[string]any{
-				"series": map[string]any{"startDate": "2026-08-20", "totals": []int64{11, 31}, "recorded": true},
-				"categories": map[string]any{
-					"input":      []int64{2, 4},
-					"output":     []int64{3, 7},
-					"cache-read": []int64{6, 20},
-				},
-				"windows": map[string]any{"today": map[string]any{"input": 24, "output": 7}},
-			},
-		},
+		"sources":     sources,
 	}
 	plaintext, err := json.Marshal(document)
 	if err != nil {
@@ -129,9 +140,9 @@ func drainRun(t *testing.T, runResult <-chan error) {
 
 func TestRunServesThePanelsDataLifecycleEndToEnd(t *testing.T) {
 	requireBuiltFrontend(t)
-	label, embeddedGeneratedAt := embeddedUsageFacts(t)
+	labels, embeddedGeneratedAt := embeddedUsageFacts(t)
 	dir := t.TempDir()
-	stagedGeneratedAt := stageSealedSeries(t, dir, label)
+	stagedGeneratedAt := stageSealedSeries(t, dir, labels)
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	// Direction one: capability configured — the sealed file is decrypted,
