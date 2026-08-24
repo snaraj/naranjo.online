@@ -297,11 +297,13 @@
      handle.
 
      Quiet until touched, which is what "seamless" has to mean for a control
-     that is always on screen: the resting mark is one hairline the width of a
-     card's border, drawn in the same token a card's border uses, so it reads
-     as the page's own edge rather than as a widget parked next to it. The
-     44px lane around it is invisible and is the whole reason the hairline can
-     afford to be that thin. */
+     that is always on screen: at rest the mark paints NOTHING, because the
+     ink token resolves to transparent, so there is no hairline sitting on
+     the column edge for a reader who is not interacting with it. The 44px
+     lane around it is still fully reserved and still invisible; the live
+     mark — hover or keyboard focus, in the brand ink every other hover on
+     this page answers in — is the only paint this control ever puts on the
+     page. */
   .column-handle {
     -webkit-user-select: none;
     user-select: none;
