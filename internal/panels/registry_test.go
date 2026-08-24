@@ -171,6 +171,53 @@ func TestTokenUsagePanelKeepsSourceLabelsAsData(t *testing.T) {
 	}
 }
 
+// TestShippedUsageTilesSurviveALiveMergeWithoutDoubling pins the one contract
+// that binds the recorded snapshot to the live mapper: a recorded tile naming
+// a figure the live feed ALSO computes must carry that live feed's key.
+//
+// mergeStats overlays live tiles onto recorded ones BY KEY, so a recorded tile
+// keyed "peak" and a live tile keyed "peak-day" are two different figures as
+// far as the merge can tell — it keeps the recorded one and appends the live
+// one, and the panel renders the same figure twice under the same caption.
+// That is invisible today only because live refresh is off; it would appear on
+// the first refreshed load, which is the worst moment to discover it.
+//
+// The pin runs the merge production runs — the shipped snapshot against every
+// tile mapUsage can produce, with mapUsage's own labels — and demands that the
+// result name each key once and each caption once. A duplicate caption is the
+// reader-visible symptom; a duplicate key is the mechanism.
+func TestShippedUsageTilesSurviveALiveMergeWithoutDoubling(t *testing.T) {
+	t.Parallel()
+	envelope := decodePanelEnvelope(t, New(), "token-usage")
+	var payload TokenUsageData
+	if err := decodeStrict(envelope.Data, &payload); err != nil {
+		t.Fatalf("decode token-usage payload: %v", err)
+	}
+	// The values are irrelevant here and deliberately distinct: what is under
+	// test is which tiles survive the merge, never what they hold.
+	current, longest, peak, windowTotal := int64(3), int64(5), int64(7), int64(11)
+	live := []TokenUsageStat{
+		{Key: statCurrentStreak, Label: "Current streak", Value: &current, Unit: UnitDays},
+		{Key: statLongestStreak, Label: "Longest streak", Value: &longest, Unit: UnitDays},
+		{Key: statPeakDay, Label: "Peak day", Value: &peak, Unit: UnitTokens},
+		{Key: statWindowTotal, Label: "Window tokens", Value: &windowTotal, Unit: UnitTokens},
+	}
+	for _, source := range payload.Sources {
+		keys := make(map[string]bool, len(source.Stats)+len(live))
+		labels := make(map[string]bool, len(source.Stats)+len(live))
+		for _, stat := range mergeStats(source.Stats, live) {
+			if keys[stat.Key] {
+				t.Errorf("source %q merges to two tiles keyed %q", source.Label, stat.Key)
+			}
+			keys[stat.Key] = true
+			if labels[stat.Label] {
+				t.Errorf("source %q merges to two tiles captioned %q; a recorded tile naming a live-computable figure must carry the live key so the refresh replaces it in place", source.Label, stat.Label)
+			}
+			labels[stat.Label] = true
+		}
+	}
+}
+
 // TestVCSActivityPanelShipsARenderableGraph pins the vcs-activity shape the
 // contribution graph needs: seven-day weeks, a plausible total, a streak,
 // and dated recent commits.

@@ -254,7 +254,10 @@ describe('stat tiles', () => {
     assert.equal(formatStatValue(2_900_000_000, 'tokens'), '2.9B');
     assert.equal(formatStatValue(4, 'days'), '4 days');
     assert.equal(formatStatValue(1, 'days'), '1 day');
-    assert.equal(formatStatValue(80_880, 'seconds'), '22h 28m');
+    assert.equal(formatStatValue(80_940, 'seconds'), '22h 29m');
+    // The first shipped figure past a day. It must read the way the source
+    // tool reports it, not as the hour count a reader has to divide.
+    assert.equal(formatStatValue(150_900, 'seconds'), '1d 17h 55m');
     // A tally is grouped but never abbreviated: the tile exists to show the
     // figure, and "17.1K" is not the figure.
     assert.equal(formatStatValue(25, 'count'), '25');
@@ -277,6 +280,12 @@ describe('stat tiles', () => {
     assert.equal(formatDuration(3599), '59m');
     assert.equal(formatDuration(3600), '1h 0m');
     assert.equal(formatDuration(3660), '1h 1m');
+    // The day boundary, from both sides. A figure one second short of a day
+    // must stay in hours, and the first day must not swallow its remainder.
+    assert.equal(formatDuration(86_399), '23h 59m');
+    assert.equal(formatDuration(86_400), '1d 0h 0m');
+    assert.equal(formatDuration(150_900), '1d 17h 55m');
+    assert.equal(formatDuration(2 * 86_400 + 60), '2d 0h 1m');
   });
 });
 
