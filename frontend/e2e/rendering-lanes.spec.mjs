@@ -268,28 +268,25 @@ test('the page keeps its gutters and its dynamic height in this engine', async (
   ).toBeCloseTo(observed.viewportHeight, 0);
 });
 
-test('the sepia swatch stays legible whatever the engine can mix', async ({ page }) => {
-  await visit(page);
-  await openReadingModes(page);
-  const swatch = page.getByRole('button', { name: 'Sepia', exact: true });
-  const painted = await swatch.evaluate((node) => ({
-    mixes: CSS.supports('color: color-mix(in srgb, currentColor 50%, transparent)'),
-    ink: getComputedStyle(node).color,
-    surface: getComputedStyle(node).backgroundColor,
-    pageInk: getComputedStyle(window.document.documentElement).color,
-  }));
-  /* The failure this guards is invisible rather than ugly: without a base
-     declaration under the color-mix, an engine that cannot mix drops the whole
-     thing and the glyph inherits the PAGE's ink — near-black on a near-black
-     swatch. So the ink must be the swatch's own, and it must clear WCAG
-     1.4.11's 3:1 for a non-text indicator either way. */
-  expect(painted.ink, 'the sepia glyph fell back to the page ink').not.toBe(painted.pageInk);
-  const ratio = contrastRatio(painted.ink, painted.surface);
-  expect(
-    ratio,
-    `the sepia glyph sits at ${ratio.toFixed(2)}:1 on its own swatch (color mixing ${painted.mixes ? 'supported' : 'unsupported'} here)`
-  ).toBeGreaterThanOrEqual(3);
-});
+/* SUPERSEDED by "every swatch still says which palette it selects, in every
+ * reading mode" at the end of this file, and superseded rather than deleted
+ * so the reason is on the record.
+ *
+ * This lane guarded a color-mix() that no longer exists. It measured one
+ * thing — that the sepia glyph had not fallen back to the PAGE's ink, which
+ * would have been near-black on a near-black disc — and under the restyle of
+ * 2026-08-24 that assertion inverts: the swatches are line icons now, the
+ * palette moved inside the glyph, and the page's own ink is deliberately what
+ * every outline is drawn in, because it is the one ink guaranteed legible on
+ * the popover in all four reading modes. Keeping the lane would have pinned
+ * the design it replaced.
+ *
+ * What it was actually FOR — the sepia swatch stays legible — is now measured
+ * for all five swatches in all five reading modes, for the outline against
+ * the popover and for each dark mode's craters against their own moon. The
+ * sepia case is one row of that lane instead of a lane of its own, and the
+ * color-mix it was written around is gone: sepia's craters read its accent
+ * token directly, unmixed, at 7.09:1 on sepia's own surface. */
 
 test('switching the reading mode repaints without moving anything', async ({ page }) => {
   await visit(page);
@@ -1546,4 +1543,377 @@ test('the art feed shows its frames when the origin serves no media', async ({ p
   /* And the box is the ratio the pictures are: 16:9, held open before a byte
      of them arrives. */
   expect(firstBox.width / firstBox.height).toBeCloseTo(16 / 9, 1);
+});
+
+/* ===========================================================================
+ * The chrome-icon family (owner directive, 2026-08-24)
+ *
+ * "These icons are not matching the small, sleek, translucid, appearance of
+ * the parent icons, they should not look this overwhelming." The complaint is
+ * about two things being drawn at different scales in the same corner of the
+ * page, which makes it a MEASUREMENT rather than an opinion: the swatches
+ * painted 44px of filled disc plus a 2px ring, the header icons above them
+ * painted an 18px line glyph inside an identical 44px box that stayed empty.
+ *
+ * So these lanes measure the two families against each other in a real
+ * engine. The source pins in tests/experience.test.mjs bind the tokens and
+ * the chrome's SVG attributes together; only an engine can say what the
+ * cascade, the viewBox and the scaling actually produced.
+ * ======================================================================== */
+
+/* The popover reveals with a 120ms slide, so a box measured the instant it
+ * opens is a box measured part-way through that slide — which reads as a
+ * layout shift of a fraction of a pixel and is nothing of the kind. Every
+ * measurement below waits for the engine's OWN animation set to finish
+ * instead of for a duration, so a reader who asked for less motion (no
+ * animation at all) waits for nothing. */
+const openedAndStill = async (page) => {
+  await openReadingModes(page);
+  await page
+    .locator('#reading-mode-menu')
+    .evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
+};
+
+/* What the browser painted for each member of the family: the box the finger
+ * gets, the box the eye gets, the line weight, and whether anything was drawn
+ * around it. The reader runs whole inside page.evaluate rather than being
+ * serialised into it — the origin serves a strict Content-Security-Policy and
+ * a helper injected as source text would need eval() to come back to life. */
+const readFamily = (page) =>
+  page.evaluate(() => {
+    const painted = (node) => {
+      const style = getComputedStyle(node);
+      const glyph = node.querySelector('svg');
+      const glyphBox = glyph === null ? null : glyph.getBoundingClientRect();
+      const stroked = node.querySelector('.chip, .ray, .chip-edge, .refresh-glyph path');
+      const hit = node.getBoundingClientRect();
+      return {
+        label: node.getAttribute('aria-label'),
+        pressed: node.getAttribute('aria-pressed') === 'true',
+        hit: { width: hit.width, height: hit.height },
+        glyph: glyphBox === null ? null : { width: glyphBox.width, height: glyphBox.height },
+        strokeWidth:
+          stroked === null ? null : Number.parseFloat(getComputedStyle(stroked).strokeWidth),
+        opacity: Number.parseFloat(style.opacity),
+        borderWidth: Number.parseFloat(style.borderTopWidth),
+        radius: Number.parseFloat(style.borderTopLeftRadius),
+        background: style.backgroundColor,
+        ink: style.color,
+      };
+    };
+    return {
+      chrome: [...window.document.querySelectorAll('.icon-button')].map(painted),
+      swatches: [...window.document.querySelectorAll('.swatch')].map(painted),
+    };
+  });
+
+test('a reading-mode swatch is painted at the same scale as the chrome icons beside it', async ({
+  page,
+}) => {
+  await visit(page);
+  await openedAndStill(page);
+  const { chrome, swatches } = await readFamily(page);
+  expect(chrome.length, 'the page chrome is not two icons').toBe(2);
+  expect(swatches.length, 'the popover renders no swatches').toBe(5);
+  expect(
+    swatches.filter((swatch) => swatch.pressed).length,
+    'the popover shows no chosen mode; the rest/active split below would prove nothing'
+  ).toBe(1);
+
+  /* The reference, measured rather than assumed: both header icons must agree
+     with each other, or "the parent grammar" is not one thing. */
+  const [reference] = chrome;
+  for (const icon of chrome) {
+    expect(icon.glyph, `"${icon.label}" paints no glyph`).not.toBeNull();
+    expect(icon.glyph.width, `the two chrome icons paint different glyph widths`).toBeCloseTo(
+      reference.glyph.width,
+      1
+    );
+    expect(icon.glyph.height).toBeCloseTo(reference.glyph.height, 1);
+  }
+  /* The chrome's line weight comes from the stroked one; the filled moon has
+     none, so it is read from the refresh glyph and it must be a real number. */
+  const chromeStroke = chrome.map((icon) => icon.strokeWidth).find((width) => width > 0);
+  expect(chromeStroke, 'no chrome icon is drawn as a stroked line icon any more').toBeGreaterThan(0);
+
+  for (const swatch of swatches) {
+    /* The eye gets the chrome's glyph — this is the whole complaint, and the
+       arrangement the owner rejected fails it by 44 against 18. */
+    expect(swatch.glyph, `"${swatch.label}" paints no glyph`).not.toBeNull();
+    expect(
+      swatch.glyph.width,
+      `"${swatch.label}" paints ${swatch.glyph.width}px of glyph beside a ${reference.glyph.width}px chrome icon`
+    ).toBeCloseTo(reference.glyph.width, 1);
+    expect(swatch.glyph.height).toBeCloseTo(reference.glyph.height, 1);
+    /* ...at the chrome's line weight. */
+    expect(
+      swatch.strokeWidth,
+      `"${swatch.label}" is drawn at ${swatch.strokeWidth} against the chrome's ${chromeStroke}`
+    ).toBeCloseTo(chromeStroke, 2);
+    /* ...wearing the chrome's absence of chrome: no disc, no rim, no fill. */
+    expect(swatch.borderWidth, `"${swatch.label}" wears a border`).toBe(0);
+    expect(swatch.radius, `"${swatch.label}" wears a disc`).toBe(0);
+    expect(swatch.background, `"${swatch.label}" wears a fill`).toMatch(
+      /rgba\(0, 0, 0, 0\)|transparent/
+    );
+    /* ...and translucent at rest, which is the "translucid" half of the
+       directive: an unchosen swatch sits behind the chrome rather than
+       shouting over it, and the chosen one comes forward to exactly the
+       chrome's own presence — never past it. */
+    if (swatch.pressed) {
+      expect(
+        swatch.opacity,
+        `the chosen "${swatch.label}" is painted at ${swatch.opacity} against chrome at ${reference.opacity}`
+      ).toBe(reference.opacity);
+    } else {
+      expect(
+        swatch.opacity,
+        `"${swatch.label}" rests at ${swatch.opacity} against chrome at ${reference.opacity}`
+      ).toBeLessThan(reference.opacity);
+      expect(swatch.opacity).toBeGreaterThan(0);
+    }
+    /* The finger still gets the full target: only the paint shrank. */
+    expect(swatch.hit.width, `"${swatch.label}" is ${swatch.hit.width}px wide`).toBeGreaterThanOrEqual(
+      touchFloorPx - subPixel
+    );
+    expect(swatch.hit.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+    expect(
+      swatch.hit.width / swatch.glyph.width,
+      `"${swatch.label}" paints ${swatch.glyph.width}px inside a ${swatch.hit.width}px target; the disc is back`
+    ).toBeGreaterThan(2);
+  }
+});
+
+test('pointing at a swatch changes its presence and nothing else', async ({ page, isMobile }) => {
+  test.skip(Boolean(isMobile), 'a touch device has no hover state to measure');
+  await visit(page);
+  await openedAndStill(page);
+  const geometry = () =>
+    page.evaluate(() => {
+      const box = (node) => {
+        const { x, y, width, height } = node.getBoundingClientRect();
+        return [x, y, width, height].map((value) => Math.round(value * 100) / 100);
+      };
+      return {
+        popover: box(window.document.querySelector('#reading-mode-menu')),
+        swatches: [...window.document.querySelectorAll('.swatch')].map(box),
+        glyphs: [...window.document.querySelectorAll('.swatch svg')].map(box),
+      };
+    });
+  const before = await geometry();
+
+  /* The reference first: the chrome answers a pointer by moving its ink to
+     the brand token, and this reads that answer off the chrome ITSELF rather
+     than from a variable name — so the comparison below is between two
+     rendered colors and cannot pass by both sides agreeing about a token
+     neither of them paints. */
+  const refresh = page.getByRole('button', { name: 'Refresh all trackers' });
+  const chromeRest = await refresh.evaluate((node) => getComputedStyle(node).color);
+  await refresh.hover();
+  await expect
+    .poll(() => refresh.evaluate((node) => getComputedStyle(node).color), {
+      message: 'pointing at a chrome icon no longer moves its ink; there is no family hover left',
+    })
+    .not.toBe(chromeRest);
+  const chromeHover = await refresh.evaluate((node) => getComputedStyle(node).color);
+
+  /* An UNCHOSEN swatch, deliberately: the chosen one is already at full
+     presence, so hovering it would prove nothing about the state change. */
+  const swatch = page.locator('.swatch[aria-pressed="false"]').first();
+  const rest = await swatch.evaluate((node) => getComputedStyle(node).opacity);
+  expect(Number.parseFloat(rest), 'an unchosen swatch already rests at full presence').toBeLessThan(1);
+
+  await swatch.hover();
+  /* Presence and ink are what change, and both are repaints. The polls run to
+     the SETTLED value rather than to "something different", because the
+     transition passes through every value in between and a first sample
+     lands part-way along it. Neither poll is vacuous: the swatch measurably
+     rests below full presence (asserted above) and the chrome measurably
+     moves its ink (asserted above). */
+  await expect
+    .poll(() => swatch.evaluate((node) => getComputedStyle(node).opacity), {
+      message: 'pointing at a swatch does not bring it to the chrome’s own presence',
+    })
+    .toBe('1');
+  await expect
+    .poll(() => swatch.evaluate((node) => getComputedStyle(node).color), {
+      message: 'a pointed-at swatch never reaches the ink the chrome beside it paints',
+    })
+    .toBe(chromeHover);
+
+  const moved = await geometry();
+  expect(moved, 'pointing at a swatch moved the popover under the pointer').toEqual(before);
+});
+
+test('choosing a reading mode marks it by shape, and moves nothing', async ({ page }) => {
+  await visit(page);
+  await openedAndStill(page);
+  const marks = () =>
+    page.evaluate(() => {
+      const box = (node) => {
+        const { x, y, width, height } = node.getBoundingClientRect();
+        return [x, y, width, height].map((value) => Math.round(value * 100) / 100);
+      };
+      return {
+        popover: box(window.document.querySelector('#reading-mode-menu')),
+        swatches: [...window.document.querySelectorAll('.swatch')].map(box),
+        /* The chosen-mode mark, measured as a painted box rather than read
+           off a class: a pseudo-element with no content and no size would
+           satisfy every source pin and show the reader nothing. */
+        marked: [...window.document.querySelectorAll('.swatch')].map((node) => {
+          const after = getComputedStyle(node, '::after');
+          return {
+            label: node.getAttribute('aria-label'),
+            pressed: node.getAttribute('aria-pressed') === 'true',
+            drawn: after.content !== 'none' && after.content !== 'normal',
+            width: Number.parseFloat(after.width) || 0,
+            height: Number.parseFloat(after.height) || 0,
+          };
+        }),
+      };
+    });
+
+  const before = await marks();
+  /* Exactly one mode is chosen at a time, and the mark follows the choice. */
+  const chosenBefore = before.marked.filter((swatch) => swatch.drawn);
+  expect(chosenBefore.length, 'exactly one reading mode must carry the chosen mark').toBe(1);
+  expect(chosenBefore[0].pressed, 'the mark is not on the pressed swatch').toBe(true);
+  expect(
+    chosenBefore[0].width * chosenBefore[0].height,
+    `the chosen mark on "${chosenBefore[0].label}" is painted at ${chosenBefore[0].width}x${chosenBefore[0].height}; selection is carried by color alone`
+  ).toBeGreaterThan(0);
+
+  await page.getByRole('button', { name: 'Sepia', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'sepia');
+  await openedAndStill(page);
+  const after = await marks();
+  const chosenAfter = after.marked.filter((swatch) => swatch.drawn);
+  expect(chosenAfter.length, 'exactly one reading mode must carry the chosen mark').toBe(1);
+  expect(chosenAfter[0].label, 'the chosen mark did not follow the choice').toBe('Sepia');
+  expect(chosenAfter[0].width).toBeCloseTo(chosenBefore[0].width, 1);
+  expect(chosenAfter[0].height).toBeCloseTo(chosenBefore[0].height, 1);
+  /* And the mark costs no space: the row it sits in is the row it sat in. */
+  expect(after.popover, 'choosing a reading mode resized the popover').toEqual(before.popover);
+  expect(after.swatches, 'choosing a reading mode moved the swatches').toEqual(before.swatches);
+});
+
+test('every swatch still says which palette it selects, in every reading mode', async ({ page }) => {
+  await visit(page);
+  const read = async () => {
+    await openedAndStill(page);
+    return page.evaluate(() => {
+      const popover = window.document.querySelector('#reading-mode-menu');
+      return {
+        surface: getComputedStyle(popover).backgroundColor,
+        swatches: [...window.document.querySelectorAll('.swatch')].map((node) => {
+          const shape = node.querySelector('.chip, .chip-edge');
+          const halves = [...node.querySelectorAll('.auto-half-light, .auto-half-dark')];
+          return {
+            label: node.getAttribute('aria-label'),
+            /* The outline is the PAGE's ink — the one ink guaranteed legible
+               on the popover in every mode, and the reason the swatch needs
+               no disc behind it to be seen. */
+            outline: getComputedStyle(shape).stroke,
+            /* The palette: what the shape encloses, and what is drawn inside
+               it. */
+            fill: [...halves, ...node.querySelectorAll('.chip')].map(
+              (part) => getComputedStyle(part).fill
+            ),
+            ink: [...node.querySelectorAll('.crater')].map((part) => getComputedStyle(part).fill),
+          };
+        }),
+      };
+    });
+  };
+
+  /* Opened once: every iteration below leaves the popover open, because the
+     measurement is the last thing it does. Opening it again would toggle it
+     shut. */
+  await openedAndStill(page);
+  for (const [label, id] of [
+    ['Auto', null],
+    ['Light', 'light'],
+    ['Dark', 'dark'],
+    ['Slate', 'slate'],
+    ['Sepia', 'sepia'],
+  ]) {
+    await page.getByRole('button', { name: label, exact: true }).click();
+    if (id === null) {
+      await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
+    } else {
+      await expect(page.locator('html')).toHaveAttribute('data-theme', id);
+    }
+    const painted = await read();
+    const seen = new Map();
+    for (const swatch of painted.swatches) {
+      /* WCAG 1.4.11: the swatch is a non-text indicator, so the mark that
+         carries its silhouette clears 3:1 against what it is drawn on. The
+         palette inside it deliberately does not have to — a light swatch on a
+         light popover is SUPPOSED to disappear into it, which is exactly what
+         the outline is for. */
+      const ratio = contrastRatio(swatch.outline, painted.surface);
+      expect(
+        ratio,
+        `in ${label} mode the "${swatch.label}" swatch outlines itself at ${ratio.toFixed(2)}:1 on the popover`
+      ).toBeGreaterThanOrEqual(3);
+      expect(swatch.fill.length, `"${swatch.label}" encloses no palette at all`).toBeGreaterThan(0);
+      /* Every dark mode's ink is its craters, and the craters have to be
+         legible on the moon they sit on or the three darks are one swatch
+         drawn three times. */
+      for (const ink of swatch.ink) {
+        const onOwnSurface = contrastRatio(ink, swatch.fill[0]);
+        expect(
+          onOwnSurface,
+          `in ${label} mode the "${swatch.label}" craters sit at ${onOwnSurface.toFixed(2)}:1 on their own moon`
+        ).toBeGreaterThanOrEqual(3);
+      }
+      /* No two swatches paint the same thing. This is the requirement the
+         shrink could most easily have broken: three near-black surfaces at
+         18px are one shape unless each carries its own ink. */
+      const signature = JSON.stringify([swatch.fill, swatch.ink]);
+      expect(
+        seen.get(signature),
+        `in ${label} mode "${swatch.label}" is painted identically to "${seen.get(signature)}"`
+      ).toBeUndefined();
+      seen.set(signature, swatch.label);
+    }
+  }
+});
+
+test('the reading-mode popover fits the narrowest phone this site supports', async ({ page }) => {
+  await visit(page);
+  await page.setViewportSize({ width: phoneWidths[0], height: 720 });
+  await settled(page);
+  await openReadingModes(page);
+  const observed = await page.evaluate(() => {
+    const popover = window.document.querySelector('#reading-mode-menu');
+    const box = popover.getBoundingClientRect();
+    const root = window.document.documentElement;
+    return {
+      width: Math.round(box.width * 100) / 100,
+      left: box.left,
+      right: box.right,
+      viewport: root.clientWidth,
+      scrollWidth: root.scrollWidth,
+      columnEnd: window.document.querySelector('main').getBoundingClientRect().right,
+    };
+  });
+  /* Inside the viewport on both edges, and not by making the page scroll to
+     reveal it — an open popover that pushes the document sideways breaks the
+     320px floor exactly as any other overflow would. */
+  expect(observed.left, `the popover starts at ${observed.left}px`).toBeGreaterThanOrEqual(0);
+  expect(
+    observed.right,
+    `the popover reaches ${observed.right}px in a ${observed.viewport}px viewport`
+  ).toBeLessThanOrEqual(observed.viewport + subPixel);
+  expect(observed.scrollWidth, 'the open popover made the page scroll sideways').toBeLessThanOrEqual(
+    observed.viewport
+  );
+  /* And it is genuinely narrower than the row it hangs from, with room to
+     spare — the measurement the shrink was for. */
+  expect(
+    observed.width,
+    `the popover is ${observed.width}px wide in a ${observed.viewport}px viewport`
+  ).toBeLessThan(observed.viewport - gutterPx);
+  expect(observed.columnEnd - observed.right).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
 });

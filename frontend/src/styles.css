@@ -291,6 +291,48 @@
      than restating it, so the family is chosen in exactly one place. */
   --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
+  /* The chrome-icon grammar (owner directive, 2026-08-24). The page's two
+     header controls are LINE ICONS — a small glyph inside a 44px hit area,
+     no disc, no border, no fill — and the reading-mode swatches are meant to
+     be read as their siblings. They were not: each swatch was a 2.75rem
+     filled disc wearing a 1px rim and, when chosen, a further 2px ring, so
+     the quietest control on the page rendered its five choices as the
+     loudest objects on it. The grammar the two share is stated here, once,
+     rather than restated in each component, and the swatch derives its own
+     dimensions from it below.
+
+     Two of these describe values the header icons carry as SVG attributes
+     (`width="18"`, `stroke-width="2.2"`), which is the one place a token
+     cannot reach — an attribute is markup, not a declaration. So the pins in
+     tests/experience.test.mjs read those attributes back out of the chrome
+     components and compare them to these tokens, and the browser lanes
+     measure the two families against each other in a real engine: the
+     duplication is legal because drift in either direction is a red build.
+
+     The 44px hit box is deliberately NOT a token. It is pinned as a literal
+     in both control rules by the touch-floor walk, which can only measure a
+     length it can read — routing it through var() would blind the guard that
+     protects it, which is a weakening dressed as tidiness. */
+  --chrome-icon-glyph-size: 18px;
+  --chrome-icon-stroke: 2.2;
+  --swatch-glyph-size: var(--chrome-icon-glyph-size);
+  --swatch-stroke: var(--chrome-icon-stroke);
+  /* Translucent at rest, full presence when pointed at, chosen, or focused —
+     the swatch's own dimension rather than the chrome's, and the reason it
+     has one: a swatch carries a filled palette preview, which is heavier ink
+     than a line glyph, so it sits back until it is addressed. */
+  --swatch-rest-opacity: 0.7;
+  --swatch-active-opacity: 1;
+  --swatch-gap: 0.25rem;
+  --swatch-popover-padding: 0.25rem;
+  /* The chosen mode's non-color mark: a bar under its glyph, so selection is
+     legible without reading a color (the dataviz floor) and in every reading
+     mode. It is drawn by a pseudo-element, so choosing a mode repaints and
+     never reflows. */
+  --swatch-mark-size: 0.5rem;
+  --swatch-mark-thickness: 0.125rem;
+  --swatch-mark-inset: 0.375rem;
+
   color: var(--color-text);
   background: var(--color-surface);
   font-family: var(--font-sans);
