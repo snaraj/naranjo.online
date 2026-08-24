@@ -892,10 +892,15 @@ func TestActivityRefreshServesLiveCommits(t *testing.T) {
 	if envelope.Status != StatusOK {
 		t.Fatalf("status = %q, want ok with both producers healthy", envelope.Status)
 	}
+	// commitDocument assigns each repository's rows sha 0x1, 0x2, … in the
+	// order passed to it (see its definition below); first-repo's two rows
+	// and second-repo's one row each start that count over at 1, so the
+	// SHAs below mirror the fixture rather than assert something the
+	// fixture builder does not actually produce.
 	want := []VCSCommit{
-		{Repo: "first-repo", Message: "feat(panels): the newest thing", At: "2026-08-23T09:00:00Z"},
-		{Repo: "second-repo", Message: "docs: the middle thing", At: "2026-08-22T09:00:00Z"},
-		{Repo: "first-repo", Message: "fix(panels): the older thing", At: "2026-08-21T09:00:00Z"},
+		{Repo: "first-repo", SHA: fixtureSHA(1), Message: "feat(panels): the newest thing", At: "2026-08-23T09:00:00Z"},
+		{Repo: "second-repo", SHA: fixtureSHA(1), Message: "docs: the middle thing", At: "2026-08-22T09:00:00Z"},
+		{Repo: "first-repo", SHA: fixtureSHA(2), Message: "fix(panels): the older thing", At: "2026-08-21T09:00:00Z"},
 	}
 	if len(payload.RecentCommits) != len(want) {
 		t.Fatalf("served %d commits, want %d: %+v", len(payload.RecentCommits), len(want), payload.RecentCommits)

@@ -30,8 +30,9 @@
   and a wide window scrolls inside the grid, never the page.
 
   Every commit row is real navigation now (issue 157). The repo name links to
-  the repository, and the subject links to its pull request when the subject
-  resolves one — both hrefs come from lib/activity.ts's validated builders,
+  the repository, and the subject links to its trailing "(#N)" reference when
+  the subject resolves one, else to the commit's own permalink when its SHA
+  validates — every href comes from lib/activity.ts's validated builders,
   never from interpolating the payload's own strings, so a row this document
   cannot vouch for renders as the plain text it always was rather than as a
   link nobody addressed. Text stays text either way: neither branch below
@@ -43,10 +44,12 @@
   import {
     activityCells,
     activityPanelId,
-    commitEntryLinkLabel,
-    commitEntryUrl,
+    commitReferenceLinkLabel,
+    commitReferenceUrl,
     commitRepoLinkLabel,
     commitRepoUrl,
+    commitShaLinkLabel,
+    commitShaUrl,
     parseVCSActivity
   } from '../activity';
   import { formatWhole, toColumns } from '../grid';
@@ -109,7 +112,8 @@
         {:else}
           {#each commits as commit}
             {@const repoHref = commitRepoUrl(commit.repo)}
-            {@const entryHref = commitEntryUrl(commit)}
+            {@const referenceHref = commitReferenceUrl(commit)}
+            {@const shaHref = referenceHref ? null : commitShaUrl(commit)}
             <li class="activity-commit">
               {#if repoHref}
                 <a
@@ -122,14 +126,23 @@
               {:else}
                 <span class="activity-commit-repo">{commit.repo}</span>
               {/if}
-              {#if entryHref}
+              {#if referenceHref}
                 <a
                   class="activity-commit-message"
-                  href={entryHref}
+                  href={referenceHref}
                   target="_blank"
                   rel="noopener noreferrer"
                   title={commit.message}
-                  aria-label={commitEntryLinkLabel(commit.message)}
+                  aria-label={commitReferenceLinkLabel(commit.message)}
+                >{commit.message}</a>
+              {:else if shaHref}
+                <a
+                  class="activity-commit-message"
+                  href={shaHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={commit.message}
+                  aria-label={commitShaLinkLabel(commit.message, commit.sha)}
                 >{commit.message}</a>
               {:else}
                 <span class="activity-commit-message" title={commit.message}>{commit.message}</span>

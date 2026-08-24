@@ -1050,8 +1050,14 @@ func commitRow(sha, message, date string) string {
 func fixtureSHA(n int) string { return fmt.Sprintf("%040x", n) }
 
 // TestMapCommitsReadsARealisticDocument is the mapper's happy path: the real
-// upstream row shape in, exactly three served facts out — and the repo label
+// upstream row shape in, exactly four served facts out — and the repo label
 // is the CALLER's, so a document that tried to name a repository could not.
+// SHA is asserted explicitly (issue 157 follow-up): mapCommits already
+// validated entry.SHA through isCommitIdentity a few lines above where this
+// row is built, and the row must actually carry that value rather than
+// silently drop it the way it did before the frontend needed a commit-URL
+// fallback — a regression here would be invisible to every check above
+// because none of them reads got.SHA.
 func TestMapCommitsReadsARealisticDocument(t *testing.T) {
 	t.Parallel()
 	document := "[" + strings.Join([]string{
@@ -1065,8 +1071,11 @@ func TestMapCommitsReadsARealisticDocument(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("mapped %d rows, want 2", len(rows))
 	}
-	if got := rows[0].row; got.Repo != "fixture-repo" || got.Message != "feat(panels): a subject line" || got.At != "2026-08-23T09:00:00Z" {
+	if got := rows[0].row; got.Repo != "fixture-repo" || got.SHA != fixtureSHA(1) || got.Message != "feat(panels): a subject line" || got.At != "2026-08-23T09:00:00Z" {
 		t.Errorf("row 0 = %+v", got)
+	}
+	if got := rows[1].row.SHA; got != fixtureSHA(2) {
+		t.Errorf("row 1 sha = %q, want %q", got, fixtureSHA(2))
 	}
 	// An offset instant is normalized to UTC, so every served row is directly
 	// comparable and the frontend never has to reason about zones.
@@ -1186,7 +1195,7 @@ func TestMergeCommitsOrdersNewestFirstAndHoldsTheCap(t *testing.T) {
 			at := time.Date(2026, 8, day, 12, 0, 0, 0, time.UTC)
 			rows = append(rows, datedCommit{
 				at:  at,
-				row: VCSCommit{Repo: repo, Message: fmt.Sprintf("%s day %d", repo, day), At: at.Format(time.RFC3339)},
+				row: VCSCommit{Repo: repo, SHA: fixtureSHA(day), Message: fmt.Sprintf("%s day %d", repo, day), At: at.Format(time.RFC3339)},
 			})
 		}
 		return rows

@@ -5,11 +5,14 @@ import { describe, it, test } from 'node:test';
 import {
   activityCells,
   activityPanelId,
-  commitEntryLinkLabel,
-  commitEntryUrl,
   commitPullRequestNumber,
+  commitReferenceLinkLabel,
+  commitReferenceUrl,
   commitRepoLinkLabel,
   commitRepoUrl,
+  commitShaLinkLabel,
+  commitShaUrl,
+  isValidCommitSha,
   isValidRepoSlug,
   parseVCSActivity
 } from '../src/lib/activity.ts';
@@ -27,7 +30,12 @@ const goodActivity = {
   ],
   streak: 9,
   recentCommits: [
-    { repo: 'fixture-repo', message: 'fixture: subject line', at: '2026-08-11T00:12:00Z' }
+    {
+      repo: 'fixture-repo',
+      sha: '0123456789abcdef0123456789abcdef01234567',
+      message: 'fixture: subject line',
+      at: '2026-08-11T00:12:00Z'
+    }
   ]
 };
 
@@ -40,6 +48,22 @@ describe('parseVCSActivity', () => {
     assert.equal(activity.weeks.length, 2);
     assert.deepEqual(activity.weeks[0], [0, 2, 4, 1, 0, 3, 5]);
     assert.equal(activity.recentCommits[0].repo, 'fixture-repo');
+    assert.equal(activity.recentCommits[0].sha, '0123456789abcdef0123456789abcdef01234567');
+  });
+
+  it('admits an empty sha as truthful absence, unlike an empty repo', () => {
+    // The embedded snapshot predates the SHA field and legitimately serves
+    // "" for every one of its rows (internal/panels/snapshots/vcs-activity.json).
+    // repo requires non-empty because the server never legitimately serves
+    // one blank; sha does not, because an old row genuinely has none. The
+    // shape check here is TYPE only — value validation for the URL these
+    // rows might build lives at use time, in isValidCommitSha.
+    const activity = parseVCSActivity({
+      ...goodActivity,
+      recentCommits: [{ repo: 'fixture-repo', sha: '', message: 'm', at: 't' }]
+    });
+    assert.notEqual(activity, null);
+    assert.equal(activity.recentCommits[0].sha, '');
   });
 
   it('admits the degenerate empty window', () => {
@@ -74,6 +98,8 @@ describe('parseVCSActivity', () => {
       { ...goodActivity, recentCommits: [{ repo: 'r', at: 't' }] },
       { ...goodActivity, recentCommits: [{ repo: 'r', message: 7, at: 't' }] },
       { ...goodActivity, recentCommits: [{ repo: 'r', message: 'm', at: 12 }] },
+      { ...goodActivity, recentCommits: [{ repo: 'r', message: 'm', at: 't' }] }, // sha entirely absent
+      { ...goodActivity, recentCommits: [{ repo: 'r', sha: 40, message: 'm', at: 't' }] }, // sha not a string
       { ...goodActivity, endDate: 7 },
       { ...goodActivity, endDate: '2026-08-11T00:00:00Z' },
       { ...goodActivity, endDate: '11/08/2026' },
@@ -275,27 +301,84 @@ describe('commitPullRequestNumber', () => {
   });
 });
 
-describe('commitEntryUrl', () => {
-  it('builds the pull-request URL only when BOTH the repo and the PR number validate', () => {
+describe('commitReferenceUrl', () => {
+  it('builds an /issues/N destination — never /pull/N — only when BOTH the repo and the number validate', () => {
+    // /issues/N rather than /pull/N is deliberate (issue 157, Daybreak
+    // Blue's review, finding 1): the subject's trailing "(#N)" proves only
+    // that this repository's own squash-merge convention wrote a number
+    // there, never that N specifically names a pull request. GitHub's own
+    // issue/PR numbering makes /issues/N land on exactly the right page
+    // either way (it redirects to /pull/N when N is a pull request), so
+    // this destination is correct without asserting more than the payload
+    // can prove.
     assert.equal(
-      commitEntryUrl({ repo: 'naranjo.online', message: 'release (#152)' }),
-      `${projectHost}/naranjo.online/pull/152`
+      commitReferenceUrl({ repo: 'naranjo.online', message: 'release (#152)' }),
+      `${projectHost}/naranjo.online/issues/152`
     );
   });
 
-  it('renders as plain text (returns null) when the repo is hostile, even with a real PR number', () => {
-    assert.equal(commitEntryUrl({ repo: 'evil.com/x', message: 'release (#152)' }), null);
+  it('renders as plain text (returns null) when the repo is hostile, even with a real reference number', () => {
+    assert.equal(commitReferenceUrl({ repo: 'evil.com/x', message: 'release (#152)' }), null);
   });
 
-  it('renders as plain text (returns null) when no PR number resolves, even with a valid repo', () => {
-    assert.equal(commitEntryUrl({ repo: 'naranjo.online', message: 'fixture: subject line' }), null);
-    assert.equal(commitEntryUrl({ repo: 'naranjo.online', message: 'release (#12e3)' }), null);
+  it('renders as plain text (returns null) when no reference number resolves, even with a valid repo', () => {
+    assert.equal(commitReferenceUrl({ repo: 'naranjo.online', message: 'fixture: subject line' }), null);
+    assert.equal(commitReferenceUrl({ repo: 'naranjo.online', message: 'release (#12e3)' }), null);
   });
 
-  it('states the "pull request, opens in a new tab" accessible name', () => {
+  it('states a NEUTRAL "reference, opens in a new tab" accessible name, never "pull request"', () => {
+    // The label must not claim more than commitReferenceUrl itself proves —
+    // see its own comment for why "pull request" would be an overstatement.
     assert.equal(
-      commitEntryLinkLabel('release (#152)'),
-      'release (#152), pull request, opens in a new tab'
+      commitReferenceLinkLabel('release (#152)'),
+      'release (#152), reference, opens in a new tab'
+    );
+    assert.doesNotMatch(commitReferenceLinkLabel('release (#152)'), /pull request/);
+  });
+});
+
+describe('isValidCommitSha / commitShaUrl', () => {
+  const validSha = '0123456789abcdef0123456789abcdef01234567';
+
+  it('admits exactly 40 lowercase hex digits, matching internal/panels/mapping.go\'s isCommitIdentity', () => {
+    assert.equal(isValidCommitSha(validSha), true);
+    assert.equal(
+      commitShaUrl({ repo: 'naranjo.online', sha: validSha }),
+      `${projectHost}/naranjo.online/commit/${validSha}`
+    );
+  });
+
+  it('rejects every shape that is not a real commit identity', () => {
+    const hostile = [
+      '', // the truthful-absence case every pre-existing snapshot row carries
+      ' ',
+      validSha.slice(0, 39), // one short
+      `${validSha}0`, // one long
+      validSha.toUpperCase(), // the server writes lowercase only
+      `${validSha.slice(0, 33)}"onmouseover="x`, // injection attempt shaped like a real prefix
+      'not-hex-at-all-'.padEnd(40, 'g'),
+      `${validSha}\n`,
+      `../${validSha}`
+    ];
+    for (const sha of hostile) {
+      assert.equal(isValidCommitSha(sha), false, `${JSON.stringify(sha)} must not validate`);
+      assert.equal(
+        commitShaUrl({ repo: 'naranjo.online', sha }),
+        null,
+        `${JSON.stringify(sha)} must never become a URL — a non-null result here means the ` +
+          'validator was bypassed and the raw string reached an href'
+      );
+    }
+  });
+
+  it('renders as plain text (returns null) when the repo is hostile, even with a valid sha', () => {
+    assert.equal(commitShaUrl({ repo: 'evil.com/x', sha: validSha }), null);
+  });
+
+  it('states the "commit <short sha>, opens in a new tab" accessible name, using the 7-digit short form', () => {
+    assert.equal(
+      commitShaLinkLabel('release notes', validSha),
+      `release notes, commit ${validSha.slice(0, 7)}, opens in a new tab`
     );
   });
 });
@@ -392,39 +475,51 @@ test('every commit-row href is built from the validated helpers, never raw inter
   // payload could somehow slip past the pure-function tests, this pins that
   // the COMPONENT never has a second, unvalidated way to build a link. A
   // mutation that inlined `href={`${projectHost}/${commit.repo}`}` (or any
-  // other direct interpolation of a commit field into an href) would match
-  // this pattern and fail the assertion below.
+  // other direct interpolation of a commit field — repo, message, OR the
+  // newer sha — into an href) would match this pattern and fail the
+  // assertion below.
   assert.doesNotMatch(
     component,
-    /href=\{[^}]*commit\.(?:repo|message)[^}]*\}/,
+    /href=\{[^}]*commit\.(?:repo|message|sha)[^}]*\}/,
     'a commit field must never be interpolated directly into an href — go through the const below'
   );
-  // Both hrefs are bound once, from the imported validators, before the
-  // markup ever reads them.
+  // Every href is bound once, from the imported validators, before the
+  // markup ever reads it. The message cell tries its reference destination
+  // first and its SHA-permalink destination only once that resolves to
+  // null (shaHref is computed FROM referenceHref's own nullness, never
+  // independently, so the two branches can never both fire for one row).
   assert.match(component, /\{@const repoHref = commitRepoUrl\(commit\.repo\)\}/);
-  assert.match(component, /\{@const entryHref = commitEntryUrl\(commit\)\}/);
+  assert.match(component, /\{@const referenceHref = commitReferenceUrl\(commit\)\}/);
+  assert.match(component, /\{@const shaHref = referenceHref \? null : commitShaUrl\(commit\)\}/);
   assert.match(component, /href=\{repoHref\}/);
-  assert.match(component, /href=\{entryHref\}/);
+  assert.match(component, /href=\{referenceHref\}/);
+  assert.match(component, /href=\{shaHref\}/);
   // A row the validators reject falls back to a plain <span> carrying the
   // same escaped interpolation — never a link, never markup.
   assert.match(component, /\{#if repoHref\}/);
   assert.match(component, /<span class="activity-commit-repo">\{commit\.repo\}<\/span>/);
-  assert.match(component, /\{#if entryHref\}/);
+  assert.match(component, /\{#if referenceHref\}/);
+  assert.match(component, /\{:else if shaHref\}/);
   assert.match(
     component,
     /<span class="activity-commit-message" title=\{commit\.message\}>\{commit\.message\}<\/span>/
   );
   // Text, never markup: this component must never reach for {@html} anywhere,
-  // now that two of its fields are payload-controlled link targets.
+  // now that three of its fields are payload-controlled link targets.
   assert.doesNotMatch(component, /\{@html/, 'commit fields must never render as markup');
-  // Both outbound links close the same way: a new tab that says so, and the
-  // two attributes the threat model requires on anything leaving the page.
+  // All three outbound-link branches close the same way: a new tab that says
+  // so, and the two attributes the threat model requires on anything
+  // leaving the page. Only one of the message cell's two branches ever
+  // renders for a given row, but both exist in the SOURCE, so the static
+  // count is three (repo, reference, sha) even though a rendered row shows
+  // at most two anchors.
   const targetBlank = component.match(/target="_blank"/g) ?? [];
   const relSafe = component.match(/rel="noopener noreferrer"/g) ?? [];
-  assert.equal(targetBlank.length, 2, 'both the repo and the title anchor must open a new tab');
-  assert.equal(relSafe.length, 2, 'both anchors must carry rel="noopener noreferrer"');
+  assert.equal(targetBlank.length, 3, 'all three anchor branches must open a new tab');
+  assert.equal(relSafe.length, 3, 'all three anchor branches must carry rel="noopener noreferrer"');
   assert.match(component, /aria-label=\{commitRepoLinkLabel\(commit\.repo\)\}/);
-  assert.match(component, /aria-label=\{commitEntryLinkLabel\(commit\.message\)\}/);
+  assert.match(component, /aria-label=\{commitReferenceLinkLabel\(commit\.message\)\}/);
+  assert.match(component, /aria-label=\{commitShaLinkLabel\(commit\.message, commit\.sha\)\}/);
 });
 
 test('activity sources stay local-origin and provider-neutral', () => {

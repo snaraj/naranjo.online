@@ -26,10 +26,19 @@ function isCount(value: unknown): value is number {
 
 /* parseVCSActivity admits only payloads carrying the exact shape the strip
  * renders: non-negative totals and streak, week columns of exactly seven
- * non-negative counts, commit rows of repo/message/at strings, and — when
- * present — an endDate that is a plain calendar date. Anything else returns
- * null and the panel renders its honest empty state; a data fault degrades
- * one panel, never the page. */
+ * non-negative counts, commit rows of repo/sha/message/at strings, and —
+ * when present — an endDate that is a plain calendar date. Anything else
+ * returns null and the panel renders its honest empty state; a data fault
+ * degrades one panel, never the page.
+ *
+ * sha is checked for TYPE only here, never for shape or non-emptiness —
+ * unlike repo, which the server never legitimately serves blank. The
+ * embedded snapshot predates the SHA field and truthfully serves "" for
+ * every one of its rows; rejecting the whole payload over that would turn
+ * an honest gap in old data into an outage of the whole commit list. The
+ * 40-lowercase-hex shape check lives at USE time (isValidCommitSha), the
+ * same layering isValidRepoSlug already uses for repo: a single row with a
+ * malformed value loses only that row's own capability, never the page. */
 export function parseVCSActivity(document: unknown): VCSActivityData | null {
   if (!isRecord(document)) {
     return null;
@@ -54,6 +63,7 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
       !isRecord(commit) ||
       typeof commit.repo !== 'string' ||
       commit.repo.length === 0 ||
+      typeof commit.sha !== 'string' ||
       typeof commit.message !== 'string' ||
       typeof commit.at !== 'string'
     ) {
@@ -66,6 +76,7 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
     streak,
     recentCommits: recentCommits.map((commit) => ({
       repo: (commit as { repo: string }).repo,
+      sha: (commit as { sha: string }).sha,
       message: (commit as { message: string }).message,
       at: (commit as { at: string }).at
     }))
@@ -108,20 +119,36 @@ export function activityCells(activity: VCSActivityData): GridCell[] {
 
 /* Outbound navigation for the recent-commits rows (issue 157). Every entry
  * becomes real navigation, but only from fields the payload actually proves:
- * the repository slug, and — when the commit's own subject line carries
- * one — the pull-request number a squash merge writes at the end of it
- * ("… (#123)", this very repository's own convention). There is no commit
- * SHA in VCSCommit above, and this module does not widen that wire contract
- * to invent one: a commit whose subject resolves no PR renders its title as
- * plain text rather than link to an address nobody served.
+ * the repository slug always; the title's destination is either the
+ * trailing "(#N)" a squash merge writes at the end of the subject ("…
+ * (#123)", this very repository's own convention), or — when no such
+ * reference resolves — the commit's own validated SHA, carried through the
+ * wire contract precisely so this fallback has something real to point at
+ * (VCSCommit.sha in panels.ts, mirroring internal/panels/mapping.go, which
+ * validates the identical 40-lowercase-hex shape before this module ever
+ * sees it).
+ *
+ * The "(#N)" destination is deliberately /issues/N, never /pull/N, and the
+ * accessible name calls it a "reference", never a "pull request": this
+ * module can prove the SUBJECT carries a trailing number in the squash-merge
+ * convention, but nothing here — or anywhere this frontend can reach without
+ * a new outbound call this origin's zero-egress doctrine forbids for a
+ * decorative link — confirms N actually names a pull request rather than an
+ * issue. The host's own numbering answers that ambiguity for us: issues and
+ * pull requests share one sequence per repository, and /issues/N redirects
+ * to /pull/N when N is a pull request, so the visitor still lands on exactly
+ * the right page either way. Saying anything more specific than "reference"
+ * would be a claim this module cannot back up.
  *
  * Every href below is CONSTRUCTED from a validated field, never interpolated
- * from the raw string: a repo slug that fails the pattern, or a subject
- * whose trailing parenthetical is not a clean positive integer, produces
- * `null`, and the caller renders plain text instead of an anchor. The host
- * itself is imported from projects.ts rather than spelled a second time —
- * that module already names the owner's account once, on purpose, and this
- * import keeps that true. */
+ * from the raw string: a repo slug that fails the pattern, a subject whose
+ * trailing parenthetical is not a clean positive integer, or a SHA that is
+ * not 40 lowercase hex digits (including the empty string the embedded
+ * snapshot's pre-existing rows still carry) all produce `null` for their own
+ * branch, and the caller falls through to the next candidate or, with none
+ * left, renders plain text. The host itself is imported from projects.ts
+ * rather than spelled a second time — that module already names the owner's
+ * account once, on purpose, and this import keeps that true. */
 
 /* The character set the host actually accepts for a repository name: ASCII
  * letters, digits, dots, hyphens and underscores, 1-100 characters, and
@@ -163,21 +190,53 @@ export function commitPullRequestNumber(message: string): number | null {
   return Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
-/* The commit entry's own destination: its pull request when the subject
- * resolves one and the repo validates, otherwise null. There is no commit
- * SHA in this payload to fall back to, so a commit with no resolvable PR
- * renders as plain text — a stated limitation (PR body, issue 157) rather
- * than a fabricated link to a resource nobody addressed. */
-export function commitEntryUrl(commit: { repo: string; message: string }): string | null {
+/* The commit's "(#N)" reference destination: /issues/N (never /pull/N — see
+ * the block comment above) when the repo validates and the subject resolves
+ * a trailing reference number, otherwise null. */
+export function commitReferenceUrl(commit: { repo: string; message: string }): string | null {
   const repo = commitRepoUrl(commit.repo);
   if (repo === null) {
     return null;
   }
   const pr = commitPullRequestNumber(commit.message);
-  return pr === null ? null : `${repo}/pull/${pr}`;
+  return pr === null ? null : `${repo}/issues/${pr}`;
 }
 
-/* The accessible name a resolvable commit-title link carries. */
-export function commitEntryLinkLabel(message: string): string {
-  return `${message}, pull request, opens in a new tab`;
+/* The accessible name a "(#N)" reference link carries. Deliberately neutral
+ * — "reference", never "pull request" — because the payload proves only
+ * that the subject carries this repository's own trailing-number
+ * convention, not that the number specifically names a pull request. */
+export function commitReferenceLinkLabel(message: string): string {
+  return `${message}, reference, opens in a new tab`;
+}
+
+/* The commit identity's own shape: 40 lowercase hex digits, matching
+ * internal/panels's isCommitIdentity exactly. The embedded snapshot's
+ * pre-existing rows still serve the empty string here — a legitimate,
+ * truthful absence — and this fails it closed exactly like every other
+ * shape that is not a real commit identity. */
+const commitShaPattern = /^[0-9a-f]{40}$/;
+
+export function isValidCommitSha(sha: string): boolean {
+  return commitShaPattern.test(sha);
+}
+
+/* The commit's own permalink — the fallback destination used only once
+ * commitReferenceUrl has already returned null for the same commit. Null
+ * when the repo or the SHA fails to validate, in which case the entry
+ * renders as plain text rather than link to an address nobody served. */
+export function commitShaUrl(commit: { repo: string; sha: string }): string | null {
+  const repo = commitRepoUrl(commit.repo);
+  if (repo === null || !isValidCommitSha(commit.sha)) {
+    return null;
+  }
+  return `${repo}/commit/${commit.sha}`;
+}
+
+/* The accessible name a commit-permalink link carries. The short form — the
+ * leading 7 hex digits — is the host's own convention for a human-readable
+ * commit reference; the href commitShaUrl builds always carries the
+ * validated full 40, this label's slice is display-only. */
+export function commitShaLinkLabel(message: string, sha: string): string {
+  return `${message}, commit ${sha.slice(0, 7)}, opens in a new tab`;
 }

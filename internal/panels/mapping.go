@@ -335,7 +335,7 @@ func mapCommits(raw []byte, repo string, now time.Time) ([]datedCommit, error) {
 		}
 		rows = append(rows, datedCommit{
 			at:  at,
-			row: VCSCommit{Repo: repo, Message: subject, At: at.UTC().Format(time.RFC3339)},
+			row: VCSCommit{Repo: repo, SHA: entry.SHA, Message: subject, At: at.UTC().Format(time.RFC3339)},
 		})
 	}
 	return rows, nil

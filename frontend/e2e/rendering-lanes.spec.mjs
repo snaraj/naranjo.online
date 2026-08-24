@@ -1365,12 +1365,19 @@ test('a panel whose data is still on its way holds exactly the box that data wil
 test('a hostile commit row renders as text and never becomes a live link', async ({ page }) => {
   const hostileRepo = 'evil.example" onmouseover="window.__activityEscaped = true';
   const unresolvedPR = 'release (#12e3)'; // not a clean trailing integer
+  const hostileSha = '0000000000000000000000000000000000000001" onmouseover="window.__activityShaEscaped = true';
   await page.route('**/api/panels/vcs-activity', async (route) => {
     const response = await route.fetch();
     const envelope = await response.json();
     envelope.data.recentCommits = [
-      { repo: hostileRepo, message: 'a merge (#1)', at: '2026-08-01T00:00:00Z' },
-      { repo: 'naranjo.online', message: unresolvedPR, at: '2026-08-01T00:00:00Z' },
+      { repo: hostileRepo, sha: '', message: 'a merge (#1)', at: '2026-08-01T00:00:00Z' },
+      { repo: 'naranjo.online', sha: '', message: unresolvedPR, at: '2026-08-01T00:00:00Z' },
+      // Third row (issue 157 follow-up): a valid repo, no resolvable PR
+      // reference, AND a hostile SHA shaped to break out of an href if it
+      // were ever raw-interpolated. This is the SHA-fallback's own hostile
+      // probe, mirroring the repo probe above rather than merely trusting
+      // isValidCommitSha by inference.
+      { repo: 'naranjo.online', sha: hostileSha, message: unresolvedPR, at: '2026-08-01T00:00:00Z' },
     ];
     await route.fulfill({ response, json: envelope });
   });
@@ -1380,15 +1387,19 @@ test('a hostile commit row renders as text and never becomes a live link', async
     const rows = [...window.document.querySelectorAll('.activity-commit')];
     const repoCell = rows[0]?.querySelector('.activity-commit-repo');
     const messageCell = rows[1]?.querySelector('.activity-commit-message');
+    const shaMessageCell = rows[2]?.querySelector('.activity-commit-message');
     return {
       repoTag: repoCell?.tagName ?? null,
       repoText: repoCell?.textContent ?? null,
       messageTag: messageCell?.tagName ?? null,
       messageText: messageCell?.textContent ?? null,
+      shaMessageTag: shaMessageCell?.tagName ?? null,
+      shaMessageText: shaMessageCell?.textContent ?? null,
       anchors: rows.flatMap((row) =>
         [...row.querySelectorAll('a')].map((a) => a.getAttribute('href'))
       ),
       escaped: window.__activityEscaped === true,
+      shaEscaped: window.__activityShaEscaped === true,
     };
   });
 
@@ -1401,19 +1412,51 @@ test('a hostile commit row renders as text and never becomes a live link', async
   /* The second row's repo is genuine, so the guard is scoped per FIELD
      rather than blanking a whole row the moment anything about it looks
      wrong — its title still renders as plain text because "(#12e3)" is not
-     a resolvable PR reference. */
+     a resolvable PR reference, and its SHA is the empty string (no
+     fallback destination either). */
   expect(rendered.messageTag, 'the unresolved-PR title row disappeared').toBe('SPAN');
   expect(rendered.messageText).toContain(unresolvedPR);
 
-  /* And no anchor ANYWHERE in either row carries the hostile payload — not
-     merely "these two cells are spans", but "nothing built a link out of
-     this payload at all", which is what closes off a raw-interpolation
+  /* The third row's SHA fails isValidCommitSha (a real 40-hex prefix
+     followed by an injection attempt is still not 40 hex digits), so the
+     fallback refuses it exactly like the repo/PR guards refuse their own
+     hostile shapes — plain text, never a link, never executed. */
+  expect(rendered.shaMessageTag, 'the hostile-SHA title row disappeared').toBe('SPAN');
+  expect(rendered.shaMessageText).toContain(unresolvedPR);
+  expect(rendered.shaEscaped, 'the hostile SHA string executed').toBe(false);
+
+  /* And no anchor ANYWHERE in any row carries a hostile payload — not
+     merely "these cells are spans", but "nothing built a link out of this
+     payload at all", which is what closes off a raw-interpolation
      regression landing somewhere this test did not think to look. */
   for (const href of rendered.anchors) {
     expect(href, `an anchor carries the hostile payload: ${href}`).not.toContain('evil.example');
     expect(href, `an anchor carries the hostile payload: ${href}`).not.toContain('onmouseover');
   }
 });
+
+/* Independent capability probe (issue 157 follow-up, correcting a finding in
+ * Daybreak Blue's review of PR #161): whether this engine's default keyboard
+ * configuration EVER moves focus onto a plain <a href> at all, measured
+ * against the page's FIRST NAV LINK — reached by one real Tab from the page
+ * header's own last control — which has nothing to do with the commit list
+ * this file's commit-row test uses it to gate. That independence is the
+ * whole point: the PREVIOUS version of that test derived its WebKit skip
+ * from the very Tab press it used to check the repo link's own
+ * reachability, so an `inert` attribute added to the commit list and a
+ * genuine engine limitation looked identical — both landed the check on a
+ * non-'A' element, and both took the skip branch. Measuring the capability
+ * here, against a control the commit list cannot affect, means a mutation
+ * that breaks JUST the commit list can never be masked as "this engine
+ * skips links." Desktop Safari's own default keyboard configuration is
+ * "Text boxes and lists only" and omits plain links from the tab order
+ * entirely; WebKit's automation build mirrors that setting, which is the
+ * true case this probe still legitimately reports. */
+async function engineTabsToPlainLinks(page) {
+  await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
+  await page.keyboard.press('Tab');
+  return page.evaluate(() => window.document.activeElement.tagName === 'A');
+}
 
 test('a resolvable commit row is real, keyboard-reachable navigation', async ({ page }) => {
   await page.route('**/api/panels/vcs-activity', async (route) => {
@@ -1422,6 +1465,7 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
     envelope.data.recentCommits = [
       {
         repo: 'naranjo.online',
+        sha: '',
         message: 'release(0.1.34): six-lane integration bundle (#152)',
         at: '2026-08-24T00:00:00Z',
       },
@@ -1453,20 +1497,37 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
   expect(attrs.repo.rel).toBe('noopener noreferrer');
   expect(attrs.repo.label).toContain('opens in a new tab');
 
+  /* /issues/152, never /pull/152, and "reference" rather than "pull
+     request" in the accessible name: the subject's trailing "(#152)" proves
+     only that this repository's squash-merge convention wrote a number
+     there, never that GitHub confirms it names a pull request specifically
+     (issue 157, Daybreak Blue's review, finding 1). GitHub's own issue/PR
+     numbering answers the ambiguity for us — /issues/N redirects to /pull/N
+     when N is a pull request — so the destination is still exactly right. */
   expect(attrs.message.tag).toBe('A');
-  expect(attrs.message.href).toBe('https://github.com/snaraj/naranjo.online/pull/152');
+  expect(attrs.message.href).toBe('https://github.com/snaraj/naranjo.online/issues/152');
   expect(attrs.message.target).toBe('_blank');
   expect(attrs.message.rel).toBe('noopener noreferrer');
   expect(attrs.message.label).toContain('opens in a new tab');
+  expect(attrs.message.label).toContain('reference');
+  expect(
+    attrs.message.label,
+    'the accessible name asserts a fact the payload never proved'
+  ).not.toContain('pull request');
 
-  /* MEASURED keyboard reachability, following this file's own pattern for
-     :focus-visible (a real Tab, not a programmatic focus, is what a
-     keyboard reader actually produces): focus the title link as a
-     throwaway starting point, Shift+Tab onto the repo link to check it,
-     then Tab back onto the title link to check that one too — both stops
-     are reached by a genuine key press. */
-  await messageLink.evaluate((el) => el.focus());
-  await page.keyboard.press('Shift+Tab');
+  const engineTabsLinks = await engineTabsToPlainLinks(page);
+
+  /* This row's own natural tab-order boundary: .grid-strip is
+     ContributionGrid's ONE focusable region (the calendar's individual
+     cells carry no tabindex of their own), and it sits immediately before
+     the commit list in both the DOM and the tab order — the same "focus a
+     known preceding control, then real Tab" shape the nav test below uses,
+     anchored on a control that is neither of the two links this test
+     checks. Scoped to [data-activity-panel] because TokenUsagePanel renders
+     the identical ContributionGrid component for its own heatmap and would
+     otherwise make '.grid-strip' ambiguous. */
+  await page.locator('[data-activity-panel] .grid-strip').evaluate((node) => node.focus());
+  await page.keyboard.press('Tab');
   const repoFocus = await page.evaluate(() => {
     const el = window.document.activeElement;
     const style = getComputedStyle(el);
@@ -1477,21 +1538,16 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
       outlineWidth: style.outlineWidth,
     };
   });
-  /* The CAPABILITY, never the project name: some engines' default keyboard
-     configuration omits plain links from the tab order entirely (this is
-     desktop Safari's own default "text boxes and lists only" setting, which
-     WebKit's automation build mirrors) — measured here by checking what Tab
-     actually reached rather than assumed from which engine this is. Where
-     that is true there is nothing about THIS link for a Tab press to prove;
-     the attribute assertions above already covered the part that engine
-     setting does not gate. */
   test.skip(
-    repoFocus.tag !== 'A',
-    "this engine's default keyboard configuration does not include plain links in the tab order (matches desktop Safari's own default) — nothing left to measure"
+    !engineTabsLinks,
+    "this engine's default keyboard configuration does not include plain links in the tab order, measured independently against the page's own nav link (matches desktop Safari's own default) — nothing left to measure here"
   );
-  expect(repoFocus.isRepoLink, 'Shift+Tab from the title link did not land on the repo link').toBe(
-    true
-  );
+  /* From here the engine is INDEPENDENTLY proven capable of tabbing to
+     plain links, so failing to reach the repo link is a real regression,
+     never a platform quirk — this is exactly the assertion the `inert`
+     mutant on the commit list must now fail. */
+  expect(repoFocus.tag, 'a real Tab from the strip did not land on any anchor at all').toBe('A');
+  expect(repoFocus.isRepoLink, 'a real Tab from the strip did not land on the repo link').toBe(true);
   expect(repoFocus.outlineStyle, 'the repo link has no visible keyboard focus ring').not.toBe('none');
   expect(
     parseFloat(repoFocus.outlineWidth),
@@ -1518,6 +1574,26 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
     parseFloat(messageFocus.outlineWidth),
     'the title link focus ring has zero width'
   ).toBeGreaterThan(0);
+
+  /* ACTIVATION, not merely attributes (issue 157, Daybreak Blue's review,
+     finding 3): a real Enter keypress on the now-focused title link must
+     actually trigger the navigation its href promises — target="_blank"
+     opens a new page, intercepted and fulfilled locally so this proof never
+     makes a real outbound request to github.com. Matching markup with no
+     working key handler would pass every assertion above and still leave a
+     keyboard reader stranded; this is what rules that out. */
+  await page.context().route('https://github.com/**', (route) =>
+    route.fulfill({ status: 200, contentType: 'text/plain', body: 'ok' })
+  );
+  const [popup] = await Promise.all([
+    page.context().waitForEvent('page'),
+    page.keyboard.press('Enter'),
+  ]);
+  await popup.waitForLoadState('domcontentloaded').catch(() => {});
+  expect(popup.url(), 'Enter on the focused title link did not navigate to its own href').toBe(
+    attrs.message.href
+  );
+  await popup.close();
 });
 
 test('the popover animates only where motion is welcome', async ({ page }) => {
@@ -1597,6 +1673,30 @@ test('the nav link is quiet at rest and marks itself the moment intent shows (is
   const hovered = await link.evaluate((node) => getComputedStyle(node).textDecorationLine);
   expect(hovered, 'hover must mark the link somehow now that idle carries no mark').toBe('underline');
 
+  /* Independent capability probe, corrected after Daybreak Blue's review of
+     PR #161 found the same self-derived-skip defect here as in the
+     commit-row test above: the earlier version's WebKit skip came from the
+     very Tab press it used to check the nav link's OWN reachability, so a
+     regression that broke just the nav link's tabbability would look
+     identical to a genuine engine limitation. The nav link cannot probe
+     itself, so this walks PAST every nav link instead — Work and the Art
+     gallery both carry zero focusable elements of their own between the nav
+     and the Coding Projects feed (a fact this exploits rather than assumes:
+     if that ever stops being true, this walk lands somewhere unexpected and
+     the assertion below fails loudly rather than skipping quietly) — to
+     the feed's first project link: a plain anchor with nothing to do with
+     the nav. */
+  const navCount = await page.locator('.section-link').count();
+  await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
+  for (let step = 0; step < navCount + 1; step += 1) {
+    await page.keyboard.press('Tab');
+  }
+  const probe = await page.evaluate(() => {
+    const el = window.document.activeElement;
+    return { tag: el.tagName, isProjectLink: el.classList.contains('project-link') };
+  });
+  const engineTabsLinks = probe.tag === 'A' && probe.isProjectLink;
+
   /* Keyboard focus keeps the site's own ring — a real Tab from a throwaway
      starting point, the same pattern this file uses everywhere else it
      proves :focus-visible rather than merely programmatic focus. The reading
@@ -1616,23 +1716,28 @@ test('the nav link is quiet at rest and marks itself the moment intent shows (is
       outlineWidth: style.outlineWidth,
     };
   });
-  /* The CAPABILITY, never the project name: some engines' default keyboard
-     configuration omits plain links from the tab order entirely (desktop
-     Safari's own default "text boxes and lists only" setting, which
-     WebKit's automation build mirrors here) — measured by checking what Tab
-     actually reached. The idle/hover assertions above already covered the
-     part that engine setting does not gate; there is nothing left to Tab
-     onto where it is true. */
   test.skip(
-    focused.tag !== 'A',
-    "this engine's default keyboard configuration does not include plain links in the tab order (matches desktop Safari's own default) — nothing left to measure"
+    !engineTabsLinks,
+    "this engine's default keyboard configuration does not include plain links in the tab order, measured independently against the Coding Projects feed's own first link (matches desktop Safari's own default) — nothing left to measure here"
   );
+  /* From here the engine is INDEPENDENTLY proven capable of tabbing to
+     plain links, so failing to reach the nav link is a real regression,
+     never a platform quirk. */
   expect(
     focused.isSectionLink,
     'Tab from the reading-mode trigger did not land on the first nav link'
   ).toBe(true);
   expect(focused.outlineStyle, 'the nav link lost its focus ring').not.toBe('none');
   expect(parseFloat(focused.outlineWidth), 'the nav link focus ring has zero width').toBeGreaterThan(0);
+
+  /* ACTIVATION, not merely attributes: a real Enter keypress on the focused
+     nav link must actually bring its target section into view — this is an
+     in-page anchor, so activation is a scroll rather than a navigation
+     event, and matching markup with no working key handler would pass
+     every assertion above while leaving a keyboard reader stranded. */
+  const targetId = await page.evaluate(() => window.document.activeElement.getAttribute('href'));
+  await page.keyboard.press('Enter');
+  await expect(page.locator(targetId)).toBeInViewport();
 });
 
 test('the art feed shows its frames when the origin serves no media', async ({ page }) => {
