@@ -52,11 +52,22 @@ var allowedProductionImports = map[string]bool{
 }
 
 // allowedEgressImports extends the base surface for the egress file only:
-// URL handling for allowlist enforcement and the environment read that
-// injects credentials at fetch time.
+// URL handling for allowlist enforcement, the environment read that injects
+// credentials at fetch time, and — added with issue #79's destination guard —
+// the two packages needed to decide whether a resolved address may be
+// connected to at all.
+//
+// The widening is deliberately in the narrow direction. net and net/netip
+// buy the egress file the ability to resolve a name and refuse the answer;
+// they are NOT added to allowedProductionImports, so every other production
+// file remains unable to name an address, let alone reach one. A future edit
+// that needs them elsewhere is a conscious change to the list ABOVE, and a
+// different security review.
 var allowedEgressImports = map[string]bool{
-	"net/url": true,
-	"os":      true,
+	"net":       true,
+	"net/netip": true,
+	"net/url":   true,
+	"os":        true,
 }
 
 // forbiddenHTTPSelectors is the client half of net/http: constructing or

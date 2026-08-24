@@ -1,5 +1,5 @@
 {
-  "hosts": ["secure.runescape.com", "github.com", "api.anthropic.com", "api.openai.com"],
+  "hosts": ["secure.runescape.com", "github.com", "api.github.com", "api.anthropic.com", "api.openai.com"],
   "ttlMinutes": 5,
   "timeoutSeconds": 10,
   "maxBytes": 524288,
@@ -9,6 +9,8 @@
     "endpoint": "https://secure.runescape.com/m=hiscore_oldschool/index_lite.json?player=Roll+The+J",
     "account": "Roll The J",
     "maxBytes": 65536,
+    "contentType": "application/json",
+    "minIntervalMinutes": 15,
     "excludeActivities": [
       "Grid Points",
       "League Points",
@@ -35,7 +37,30 @@
   "vcsActivity": {
     "endpoint": "https://github.com/users/snaraj/contributions",
     "headers": { "Accept": "text/html" },
-    "maxBytes": 524288
+    "maxBytes": 524288,
+    "contentType": "text/html",
+    "minIntervalMinutes": 15,
+    "commits": {
+      "headers": { "Accept": "application/json" },
+      "maxBytes": 131072,
+      "contentType": "application/json",
+      "minIntervalMinutes": 10,
+      "max": 9,
+      "sources": [
+        {
+          "repo": "naranjo.online",
+          "endpoint": "https://api.github.com/repos/snaraj/naranjo.online/commits?per_page=3"
+        },
+        {
+          "repo": "lidersea.com",
+          "endpoint": "https://api.github.com/repos/snaraj/lidersea.com/commits?per_page=3"
+        },
+        {
+          "repo": "website-infrastructure",
+          "endpoint": "https://api.github.com/repos/snaraj/website-infrastructure/commits?per_page=3"
+        }
+      ]
+    }
   },
   "tokenUsage": {
     "sources": [

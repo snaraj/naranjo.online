@@ -293,6 +293,139 @@ func countFromLabel(label, id string) (int, error) {
 	return count, nil
 }
 
+// mapCommits maps ONE repository's public commit document onto dated panel
+// rows. The document is read through the commitListEntry projection rather
+// than decodeStrict — see that type for why the exception is narrow and why it
+// is the stronger privacy posture — so the whole gate lives in the value
+// checks below. Every one of them refuses the WHOLE document rather than
+// dropping a row, because a document that half-parses is drift, and a
+// half-parsed commit list looks exactly like a quiet week.
+//
+// The repo label is the caller's, never the document's: an upstream that could
+// name the repository could attribute a stranger's commit to the owner.
+func mapCommits(raw []byte, repo string, now time.Time) ([]datedCommit, error) {
+	var entries []commitListEntry
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, fmt.Errorf("commit document for %s: %w", repo, err)
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("commit document for %s reports no commits at all", repo)
+	}
+	if len(entries) > maxCommitDocumentItems {
+		return nil, fmt.Errorf("commit document for %s carries %d rows, over the %d bound", repo, len(entries), maxCommitDocumentItems)
+	}
+	rows := make([]datedCommit, 0, len(entries))
+	for _, entry := range entries {
+		// The identity check is what makes the projection fail closed. An
+		// unrelated JSON array decodes into zero-valued entries without error;
+		// a 40-hex identity is the cheapest thing no unrelated document has.
+		if !isCommitIdentity(entry.SHA) {
+			return nil, fmt.Errorf("commit document for %s: a row carries no commit identity", repo)
+		}
+		subject, err := commitSubject(entry.Commit.Message)
+		if err != nil {
+			return nil, fmt.Errorf("commit document for %s: %w", repo, err)
+		}
+		at, err := time.Parse(time.RFC3339, entry.Commit.Author.Date)
+		if err != nil {
+			return nil, fmt.Errorf("commit document for %s: commit instant %q: %w", repo, entry.Commit.Author.Date, err)
+		}
+		if at.After(now.Add(maxCommitFutureSkew)) || at.Before(now.Add(-maxCommitAge)) {
+			return nil, fmt.Errorf("commit document for %s: commit instant %s is outside the plausible window", repo, at.UTC().Format(time.RFC3339))
+		}
+		rows = append(rows, datedCommit{
+			at:  at,
+			row: VCSCommit{Repo: repo, Message: subject, At: at.UTC().Format(time.RFC3339)},
+		})
+	}
+	return rows, nil
+}
+
+// isCommitIdentity reports whether s is a full lowercase hexadecimal commit
+// identity. Case matters: the upstream writes lowercase, and accepting other
+// spellings would accept documents that are not the one being modeled.
+func isCommitIdentity(s string) bool {
+	if len(s) != shaHexDigits {
+		return false
+	}
+	for _, digit := range s {
+		switch {
+		case digit >= '0' && digit <= '9', digit >= 'a' && digit <= 'f':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// commitSubject reduces a commit message to the single line a panel row
+// renders. Three refusals and one truncation, each chosen deliberately:
+//
+//   - An empty subject is refused. Every real commit has one, and a row with
+//     no text is exactly what a silently mis-parsed document produces.
+//   - Control characters are refused rather than stripped. A subject carrying
+//     them is not a subject, and quietly repairing hostile input is how the
+//     repair becomes the vulnerability.
+//   - The replacement rune is refused. Ranging a Go string yields it for every
+//     byte that is not valid UTF-8, so this one check covers both a
+//     mis-encoded document and the rare literal U+FFFD — without reaching for
+//     an import outside this package's reviewed zero-egress surface.
+//   - A long subject is TRUNCATED with a visible marker rather than refused,
+//     because length alone is not hostility and refusing would lose a real
+//     commit over a verbose one.
+func commitSubject(message string) (string, error) {
+	subject, _, _ := strings.Cut(message, "\n")
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return "", errors.New("a row carries no commit subject")
+	}
+	runes := make([]rune, 0, len(subject))
+	for _, symbol := range subject {
+		if symbol < 0x20 || symbol == 0x7f {
+			return "", errors.New("a commit subject carries control characters")
+		}
+		if symbol == '�' {
+			return "", errors.New("a commit subject is not valid UTF-8")
+		}
+		runes = append(runes, symbol)
+	}
+	if len(runes) > maxCommitMessageRunes {
+		return string(runes[:maxCommitMessageRunes]) + "…", nil
+	}
+	return string(runes), nil
+}
+
+// mergeCommits orders rows newest first across every repository and truncates
+// to the smaller of the configured limit and maxServedCommits. The sort is a
+// bounded insertion — a handful of rows, no import, and stable for equal
+// instants, so two commits sharing a second keep the order their documents
+// gave them.
+func mergeCommits(dated []datedCommit, limit int) []VCSCommit {
+	if limit <= 0 || limit > maxServedCommits {
+		limit = maxServedCommits
+	}
+	ordered := make([]datedCommit, 0, limit)
+	for _, candidate := range dated {
+		at := len(ordered)
+		for at > 0 && ordered[at-1].at.Before(candidate.at) {
+			at--
+		}
+		if at >= limit {
+			continue
+		}
+		if len(ordered) < limit {
+			ordered = append(ordered, datedCommit{})
+		}
+		copy(ordered[at+1:], ordered[at:])
+		ordered[at] = candidate
+	}
+	rows := make([]VCSCommit, 0, len(ordered))
+	for _, entry := range ordered {
+		rows = append(rows, entry.row)
+	}
+	return rows
+}
+
 // mapUsage maps one source's upstream usage document into everything the
 // panel renders from live data: the today/week windows, the daily activity
 // series behind the grid, and the stat tiles a series can honestly support.

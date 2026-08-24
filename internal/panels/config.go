@@ -90,27 +90,79 @@ func validateBossLogSpec(spec *bossLogFetchSpec) error {
 			return errors.New("boss-log fetch spec: empty excluded activity name")
 		}
 	}
+	return validateRefreshInterval("boss-log fetch spec", spec.MinIntervalMinutes)
+}
+
+// validateRefreshInterval bounds one declared rate budget. Zero means the spec
+// declares none and the loop's cadence governs; any declared value has to sit
+// inside the reviewed band, so neither a typo of 0.5 rounded to nothing nor a
+// stray 100000 can reach the scheduler.
+func validateRefreshInterval(what string, minutes int) error {
+	if minutes == 0 {
+		return nil
+	}
+	interval := time.Duration(minutes) * time.Minute
+	if minutes < 0 || interval < minEndpointInterval || interval > maxEndpointInterval {
+		return fmt.Errorf("%s: minIntervalMinutes %d is outside the reviewed %v..%v band", what, minutes, minEndpointInterval, maxEndpointInterval)
+	}
 	return nil
 }
 
 // validateVCSActivitySpec rejects a version-control fetch spec missing its
-// endpoint, and — the load-bearing part — refuses any request header outside
-// vcsActivityHeaderAllowlist.
-//
-// The spec carries no credential FIELD, but that alone proved nothing: a
-// header map is a general escape hatch, and "Authorization: Bearer ..." in
-// config data would have sent a credential from a producer this repository
-// documents as public and unauthenticated. Restricting the header names to
-// the one this producer actually needs makes that unrepresentable instead of
-// merely undocumented; widening the list is a conscious edit here and a
-// different security review.
+// endpoint, carrying a header outside the public-producer allowlist, naming a
+// cadence outside the reviewed band, or describing a malformed commit half.
+// Both halves of this panel are public and unauthenticated, so both go through
+// the same rules — a new producer must not arrive with looser ones.
 func validateVCSActivitySpec(spec *vcsActivityFetchSpec) error {
 	if spec.Endpoint == "" {
 		return errors.New("vcs-activity fetch spec: endpoint is required")
 	}
-	for name := range spec.Headers {
+	if err := validateVCSHeaders("vcs-activity fetch spec", spec.Headers); err != nil {
+		return err
+	}
+	if err := validateRefreshInterval("vcs-activity fetch spec", spec.MinIntervalMinutes); err != nil {
+		return err
+	}
+	return validateVCSCommitsSpec(spec.Commits)
+}
+
+// validateVCSCommitsSpec applies the SAME public-producer rules to the commit
+// half: no credential-bearing header, a bounded cadence, a bounded row count,
+// and a labeled endpoint for every source. An absent spec is valid — the
+// panel simply serves no commit list.
+func validateVCSCommitsSpec(spec *vcsCommitsFetchSpec) error {
+	if spec == nil {
+		return nil
+	}
+	if len(spec.Sources) == 0 {
+		return errors.New("vcs-commits fetch spec: no sources")
+	}
+	for _, source := range spec.Sources {
+		if source.Repo == "" || source.Endpoint == "" {
+			return errors.New("vcs-commits fetch spec: every source needs a repo label and an endpoint")
+		}
+	}
+	if err := validateVCSHeaders("vcs-commits fetch spec", spec.Headers); err != nil {
+		return err
+	}
+	if spec.Max <= 0 || spec.Max > maxServedCommits {
+		return fmt.Errorf("vcs-commits fetch spec: max %d is outside (0, %d]", spec.Max, maxServedCommits)
+	}
+	return validateRefreshInterval("vcs-commits fetch spec", spec.MinIntervalMinutes)
+}
+
+// validateVCSHeaders refuses any request header outside
+// vcsActivityHeaderAllowlist. The spec carries no credential FIELD, but that
+// alone proved nothing: a header map is a general escape hatch, and an
+// "Authorization: Bearer ..." entry in config data would have sent a
+// credential from producers this repository documents as public and
+// unauthenticated. Restricting the header NAMES to the one these producers
+// actually need makes that unrepresentable instead of merely undocumented;
+// widening the list is a conscious edit and a different security review.
+func validateVCSHeaders(what string, headers map[string]string) error {
+	for name := range headers {
 		if !vcsActivityHeaderAllowed(name) {
-			return fmt.Errorf("vcs-activity fetch spec: header %q is not permitted; this producer is public and sends no credential", name)
+			return fmt.Errorf("%s: header %q is not permitted; this producer is public and sends no credential", what, name)
 		}
 	}
 	return nil
