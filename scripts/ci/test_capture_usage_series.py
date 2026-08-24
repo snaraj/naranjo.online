@@ -616,6 +616,65 @@ class EmissionGuardTest(unittest.TestCase):
                 with self.assertRaises(CaptureError):
                     capture_usage_series.assert_only_dates_and_integers({leak: 1})
 
+    def test_refuses_a_label_shaped_key_outside_the_closed_vocabulary(self):
+        # MEMBERSHIP, not shape (2026-08-24 review finding H1). Every key
+        # here satisfies KEY_PATTERN — the original guard admitted all of
+        # them, and each would have rendered publicly as panel copy.
+        for leak in ("private-feature", "internal-project-name", "clientname", "acme-migration"):
+            with self.subTest(leak=leak):
+                with self.assertRaises(CaptureError):
+                    capture_usage_series.assert_only_dates_and_integers({leak: 1})
+                with self.assertRaises(CaptureError):
+                    # Nested exactly where a hostile merge file would put it.
+                    capture_usage_series.assert_only_dates_and_integers(
+                        {"categories": {leak: [1, 2]}}
+                    )
+
+    def test_admits_extra_keys_only_when_the_caller_declares_them(self):
+        payload = {"my-source": {"series": {"startDate": "2026-08-10", "totals": [1], "recorded": True}}}
+        with self.assertRaises(CaptureError):
+            capture_usage_series.assert_only_dates_and_integers(payload)
+        capture_usage_series.assert_only_dates_and_integers(
+            payload, extra_keys=frozenset({"my-source"})
+        )
+
+    def test_refuses_an_impossible_calendar_date(self):
+        # Shape says yes, the calendar says no (2026-08-24 review finding
+        # H1: 2026-99-99 passed the digit pattern).
+        for leak in ("2026-99-99", "2026-02-30", "2026-13-01", "2026-00-10", "0000-00-00"):
+            with self.subTest(leak=leak):
+                with self.assertRaises(CaptureError):
+                    capture_usage_series.assert_only_dates_and_integers({"totals": [leak]})
+
+    def test_refuses_a_newline_suffixed_date(self):
+        # re.match with `$` tolerates exactly one trailing newline; the
+        # guard must not (2026-08-24 review finding H1).
+        for leak in ("2026-08-10\n", "2026-08-10 ", " 2026-08-10", "2026-08-10\t"):
+            with self.subTest(leak=repr(leak)):
+                with self.assertRaises(CaptureError):
+                    capture_usage_series.assert_only_dates_and_integers({"totals": [leak]})
+
+    def test_refuses_negative_integers(self):
+        # Every emitted figure is a count (2026-08-24 review finding H1:
+        # isinstance(int) admitted any sign).
+        for leak in (-1, -1000):
+            with self.subTest(leak=leak):
+                with self.assertRaises(CaptureError):
+                    capture_usage_series.assert_only_dates_and_integers({"totals": [leak]})
+
+    def test_admits_booleans_only_under_the_recorded_flag(self):
+        capture_usage_series.assert_only_dates_and_integers({"recorded": True})
+        for payload in ({"totals": [True]}, {"peak-day": False}):
+            with self.subTest(payload=payload):
+                with self.assertRaises(CaptureError):
+                    capture_usage_series.assert_only_dates_and_integers(payload)
+
+    def test_valid_calendar_day_is_membership_in_the_real_calendar(self):
+        for good in ("2026-08-10", "2024-02-29", "1999-12-31"):
+            self.assertTrue(capture_usage_series.valid_calendar_day(good), good)
+        for bad in ("2026-99-99", "2023-02-29", "2026-08-10\n", "2026-8-10", "20260810", 5, None):
+            self.assertFalse(capture_usage_series.valid_calendar_day(bad), repr(bad))
+
     def test_refuses_a_value_that_is_neither_a_date_nor_an_integer(self):
         for leak in (1.5, None, object()):
             with self.subTest(leak=repr(leak)):
@@ -631,6 +690,49 @@ class EmissionGuardTest(unittest.TestCase):
             self.assertIn("totals", str(error))
         else:
             self.fail("the guard admitted a path")
+
+
+class CategoryVocabularyParityTest(unittest.TestCase):
+    """The closed category vocabulary is ONE fact spelled in three places.
+
+    scripts/capture_usage_series.py CATEGORY_KEYS (the capture-side guard),
+    internal/panels/types.go categoryServeOrder (origin admission and serve
+    order), and frontend/src/lib/token-usage.ts categorySlots (the fixed
+    palette slots). A key admitted by one side and refused by another is a
+    pipeline that disagrees with itself, so each pin failure names the other
+    files (2026-08-24 review finding H1 closed the vocabulary; this keeps it
+    closed IN STEP).
+    """
+
+    REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+    def test_matches_the_go_admission_vocabulary(self):
+        source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
+        import re
+
+        match = re.search(r"categoryServeOrder = \[\]string\{([^}]*)\}", source)
+        self.assertIsNotNone(match, "internal/panels/types.go carries no categoryServeOrder")
+        go_keys = tuple(re.findall(r'"([^"]+)"', match.group(1)))
+        self.assertEqual(
+            go_keys,
+            capture_usage_series.CATEGORY_KEYS,
+            "categoryServeOrder in internal/panels/types.go and CATEGORY_KEYS in "
+            "scripts/capture_usage_series.py must stay identical, in order",
+        )
+
+    def test_matches_the_frontend_palette_slots(self):
+        source = (self.REPO_ROOT / "frontend/src/lib/token-usage.ts").read_text(encoding="utf-8")
+        import re
+
+        match = re.search(r"categorySlots[^(]*\(\[([^\]]*(?:\][^\]]*)*?)\]\);", source, re.DOTALL)
+        self.assertIsNotNone(match, "frontend/src/lib/token-usage.ts carries no categorySlots")
+        ts_keys = tuple(re.findall(r"\['([^']+)',\s*\d+\]", match.group(1)))
+        self.assertEqual(
+            ts_keys,
+            capture_usage_series.CATEGORY_KEYS,
+            "categorySlots in frontend/src/lib/token-usage.ts and CATEGORY_KEYS in "
+            "scripts/capture_usage_series.py must stay identical, in order",
+        )
 
 
 class CaptureTest(unittest.TestCase):

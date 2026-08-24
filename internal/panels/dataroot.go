@@ -354,7 +354,7 @@ func admitSeriesCategories(categories map[string][]int64, totals []int64) ([]Tok
 	sums := make([]int64, len(totals))
 	for key, values := range categories {
 		if !validCategoryKey(key) {
-			return nil, errors.New("category key is not a lowercase identifier")
+			return nil, errors.New("category key is outside the closed category vocabulary")
 		}
 		if len(values) != len(totals) {
 			return nil, fmt.Errorf("category %q covers %d days; the series covers %d", key, len(values), len(totals))
@@ -374,52 +374,36 @@ func admitSeriesCategories(categories map[string][]int64, totals []int64) ([]Tok
 	return orderCategories(categories), nil
 }
 
-// validCategoryKey admits exactly the machine-shaped keys the format
-// documents: 1..32 characters, a lowercase letter first, then lowercase
-// letters, digits, or hyphens. Checked by hand so this file needs no regexp
-// import; a key that fails can never carry markup, prose, or a path.
+// validCategoryKey admits exactly the CLOSED category vocabulary — the keys
+// categoryServeOrder declares, and nothing else. Membership, not shape: the
+// original shape check admitted any lowercase identifier, so a label-shaped
+// private identifier (`private-feature`) passed admission and rendered
+// publicly through the frontend's category labels (2026-08-24 review finding
+// H1). The vocabulary is the panel's accounting classes; a new class is a
+// deliberate edit of categoryServeOrder on BOTH ends of the pipe, never
+// something a pushed file can mint.
 func validCategoryKey(key string) bool {
-	if len(key) == 0 || len(key) > 32 {
-		return false
-	}
-	for index := 0; index < len(key); index++ {
-		c := key[index]
-		switch {
-		case c >= 'a' && c <= 'z':
-		case index > 0 && (c == '-' || (c >= '0' && c <= '9')):
-		default:
-			return false
+	for _, allowed := range categoryServeOrder {
+		if key == allowed {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
-// orderCategories fixes the served order: the canonical preference list
-// first, then any remaining keys alphabetically (insertion-sorted by hand —
-// the count is bounded tiny). Deterministic order keeps every replica's
-// bytes, and therefore its digest ETag, identical.
+// orderCategories fixes the served order to the canonical vocabulary list.
+// Admission has already proven every key a member of categoryServeOrder
+// (validCategoryKey is a closed membership check), so walking that list IS
+// the complete, deterministic order — every replica's bytes, and therefore
+// its digest ETag, stay identical. The earlier alphabetical tail for
+// out-of-vocabulary keys is gone with the vocabulary that admitted them
+// (2026-08-24 review finding H1).
 func orderCategories(categories map[string][]int64) []TokenUsageCategory {
 	ordered := make([]TokenUsageCategory, 0, len(categories))
-	taken := make(map[string]bool, len(categories))
 	for _, key := range categoryServeOrder {
 		if values, ok := categories[key]; ok {
 			ordered = append(ordered, TokenUsageCategory{Key: key, Totals: values})
-			taken[key] = true
 		}
-	}
-	var rest []string
-	for key := range categories {
-		if !taken[key] {
-			rest = append(rest, key)
-		}
-	}
-	for index := 1; index < len(rest); index++ {
-		for probe := index; probe > 0 && rest[probe] < rest[probe-1]; probe-- {
-			rest[probe], rest[probe-1] = rest[probe-1], rest[probe]
-		}
-	}
-	for _, key := range rest {
-		ordered = append(ordered, TokenUsageCategory{Key: key, Totals: categories[key]})
 	}
 	return ordered
 }

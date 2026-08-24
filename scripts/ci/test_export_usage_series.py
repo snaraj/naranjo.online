@@ -472,6 +472,25 @@ class MergeSourceTest(unittest.TestCase):
             "hostile markup category key": merge_document(
                 categories={"<img src=x onerror=alert(1)>": [30, 10]}
             ),
+            # MEMBERSHIP, not shape (2026-08-24 review finding H1): these
+            # keys are perfectly label-shaped, the original guard ADMITTED
+            # them, and each would then pass Go admission and render publicly
+            # as panel copy. The closed category vocabulary must refuse them.
+            "label-shaped private category key": merge_document(
+                categories={"private-feature": [30, 10]}
+            ),
+            "label-shaped project category key": merge_document(
+                categories={"internal-project-name": [30, 10]}
+            ),
+            # Real calendar membership (2026-08-24 review finding H1): both
+            # satisfy the digit shape, and re.match's `$` tolerated the
+            # trailing newline.
+            "impossible calendar start date": merge_document(
+                series={"startDate": "2026-99-99", "totals": [30, 10], "recorded": True}
+            ),
+            "newline-suffixed start date": merge_document(
+                series={"startDate": "2026-08-10\n", "totals": [30, 10], "recorded": True}
+            ),
             "short category": merge_document(categories={"input": [30]}),
             "negative category": merge_document(categories={"input": [30, -10]}),
             "non-partitioning categories": merge_document(
@@ -540,9 +559,9 @@ class ExportTest(unittest.TestCase):
         observed = []
         original = capture.assert_only_dates_and_integers
 
-        def recording(value, where="emission"):
+        def recording(value, where="emission", extra_keys=frozenset()):
             observed.append((value, where))
-            return original(value, where)
+            return original(value, where, extra_keys=extra_keys)
 
         capture.assert_only_dates_and_integers = recording
         try:
