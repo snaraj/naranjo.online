@@ -331,6 +331,21 @@ func TestDataRootRefusesHostileDocuments(t *testing.T) {
 			categories["<img src=x>"] = categories["input"]
 			delete(categories, "input")
 		}, "category key"},
+		// MEMBERSHIP, not shape (2026-08-24 review finding H1): these keys
+		// are perfectly label-shaped — lowercase, hyphenated, bounded — and
+		// the original shape-only guard ADMITTED them, which would have
+		// rendered a private identifier publicly through the frontend's
+		// category labels. The closed vocabulary must refuse them.
+		"category key label-shaped but private": {func(d map[string]any) {
+			categories := alphaSection(d)["categories"].(map[string]any)
+			categories["private-feature"] = categories["input"]
+			delete(categories, "input")
+		}, "closed category vocabulary"},
+		"category key label-shaped project name": {func(d map[string]any) {
+			categories := alphaSection(d)["categories"].(map[string]any)
+			categories["internal-project-name"] = categories["input"]
+			delete(categories, "input")
+		}, "closed category vocabulary"},
 		"category key with a path": {func(d map[string]any) {
 			categories := alphaSection(d)["categories"].(map[string]any)
 			categories["a/b"] = categories["input"]
@@ -368,6 +383,39 @@ func TestDataRootRefusesHostileDocuments(t *testing.T) {
 			t.Parallel()
 			refuseCase(t, testCase.mutate, testCase.wantErr)
 		})
+	}
+}
+
+// TestDataRootAdmitsTheWholeClosedCategoryVocabulary proves the membership
+// check is a vocabulary, not a hardcoded pair: every canonical category —
+// including the fifth, reasoning, which only the merged second tool reports —
+// is admitted and served in canonical order when the partition holds.
+func TestDataRootAdmitsTheWholeClosedCategoryVocabulary(t *testing.T) {
+	t.Parallel()
+	reg, state := usageDataRootRegistry(t, dataRootSnapshot)
+	document := validDocument()
+	section := alphaSection(document)
+	section["series"].(map[string]any)["totals"] = []int64{5, 0, 7}
+	section["categories"] = map[string]any{
+		"reasoning":   []int64{1, 0, 1},
+		"cache-write": []int64{1, 0, 1},
+		"cache-read":  []int64{1, 0, 1},
+		"output":      []int64{1, 0, 2},
+		"input":       []int64{1, 0, 2},
+	}
+	if _, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex)); err != nil {
+		t.Fatalf("the complete canonical vocabulary was refused: %v", err)
+	}
+	_, data := decodeServedUsage(t, state)
+	categories := data.Sources[0].Series.Categories
+	want := []string{"input", "output", "cache-read", "cache-write", "reasoning"}
+	if len(categories) != len(want) {
+		t.Fatalf("served %d categories, want %d", len(categories), len(want))
+	}
+	for index, key := range want {
+		if categories[index].Key != key {
+			t.Fatalf("category %d is %q, want %q (canonical order)", index, categories[index].Key, key)
+		}
 	}
 }
 

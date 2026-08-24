@@ -1129,10 +1129,14 @@ var usageSeriesDerivedKeys = map[string]string{
 	statLongestStreak: UnitDays,
 }
 
-// categoryServeOrder fixes the canonical order categories are SERVED in, so
-// every replica emits identical bytes (the digest ETag depends on it) and
-// the frontend's fixed categorical hue assignment is stable. Keys outside
-// this list follow it alphabetically.
+// categoryServeOrder is the CLOSED category vocabulary AND the canonical
+// order categories are SERVED in. Closed first (2026-08-24 review finding
+// H1): validCategoryKey admits exactly these keys, so a pushed file can
+// never mint a category label — a new accounting class is a deliberate edit
+// here, in the capture tool's CATEGORY_KEYS, and in the frontend's fixed
+// palette slots together. Ordered second: every replica emits identical
+// bytes (the digest ETag depends on it) and the frontend's fixed categorical
+// hue assignment is stable.
 var categoryServeOrder = []string{"input", "output", "cache-read", "cache-write", "reasoning"}
 
 // usageSeriesDocument is the strict on-disk shape of the sealed series file

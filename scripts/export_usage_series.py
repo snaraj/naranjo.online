@@ -265,9 +265,10 @@ def load_merge_source(path):
     series = document.get("series")
     if not isinstance(series, dict) or series.get("recorded") is not True:
         raise capture.CaptureError("a merge source series must declare recorded provenance")
-    if not isinstance(series.get("startDate"), str) or not capture.DAY_PATTERN.match(
-        series["startDate"]
-    ):
+    if not capture.valid_calendar_day(series.get("startDate")):
+        # Membership in the real calendar, not shape: 2026-99-99 and a
+        # newline-suffixed date both match the digit pattern and must both
+        # refuse (2026-08-24 review finding H1).
         raise capture.CaptureError("a merge source series carries no calendar start date")
     totals = series.get("totals")
     if (
@@ -287,8 +288,16 @@ def load_merge_source(path):
             raise capture.CaptureError("a merge source carries malformed categories")
         admitted = {}
         for key, values in categories.items():
-            if not valid_source_key(key):
-                raise capture.CaptureError("a merge source category key is not label-shaped")
+            if key not in capture.CATEGORY_KEYS:
+                # MEMBERSHIP in the closed category vocabulary, never mere
+                # label shape: `private-feature` is label-shaped and renders
+                # publicly if admitted (2026-08-24 review finding H1). The
+                # origin refuses the same set, so nothing this refuses could
+                # have been served anyway — refusing here keeps a hostile
+                # merge file from ever reaching the wire.
+                raise capture.CaptureError(
+                    "a merge source category key is outside the closed category vocabulary"
+                )
             if not isinstance(values, list) or len(values) != len(totals):
                 raise capture.CaptureError("a merge source category does not cover the series")
             if not all(
@@ -349,8 +358,13 @@ def export(root, source_key, merge_files, today):
         sources[key] = load_merge_source(path)
     # THE guard — the capture tool's own, not a copy — over the complete
     # payload: nothing but calendar dates, non-negative integers, and the
-    # declared recorded flags survives to the emission.
-    capture.assert_only_dates_and_integers(sources, "sources")
+    # declared recorded flags survives to the emission. Every dictionary key
+    # must sit in the guard's closed emission vocabulary; the only declared
+    # additions are the source keys the OPERATOR typed on the command line
+    # (validated label-shaped there, and admitted by the origin only against
+    # its embedded snapshot labels) — nothing read from a transcript or a
+    # merge file can mint a key.
+    capture.assert_only_dates_and_integers(sources, "sources", extra_keys=frozenset(sources))
     return sources, counters
 
 

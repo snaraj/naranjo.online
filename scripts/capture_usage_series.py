@@ -73,7 +73,9 @@ import re
 import sys
 
 # The calendar-date form the series indexes by, mirroring dayLayout in
-# internal/panels/types.go.
+# internal/panels/types.go. The regex is the SHAPE only; valid_calendar_day
+# below is the truth — a string can match this pattern and still name a day
+# no calendar has (2026-99-99), so shape alone must never admit anything.
 DAY_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # The shape a field NAME in the emission may take. Keys are this file's own
@@ -81,7 +83,45 @@ DAY_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # tripwire and not a proof: what it catches cheaply is the realistic accident,
 # a path, a file name, or a session identifier used as a key — each of which
 # carries a separator, a dot, or more characters than a field name needs.
+# Shape is necessary but NOT sufficient: EMISSION_KEYS below is the closed
+# membership check, because `private-feature` is perfectly label-shaped and
+# must still never leave this machine (2026-08-24 review finding H1).
 KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9-]{0,31}$")
+
+# The CLOSED category vocabulary — the accounting classes a day's total may
+# be partitioned into, and nothing else. It mirrors, and must stay equal to,
+# categoryServeOrder in internal/panels/types.go and the frontend's fixed
+# palette slots: the first four are the transcript usage fields this tool
+# derives itself, the fifth is the reasoning class the second tool's capture
+# reports. These are accounting terms, not vendor names, so spelling them
+# here keeps the vendor-neutrality pin intact.
+CATEGORY_KEYS = ("input", "output", "cache-read", "cache-write", "reasoning")
+
+# Every field name the emission may legitimately contain, CLOSED. The guard
+# refuses any dictionary key outside this set (plus the caller's explicitly
+# declared extra keys — the operator-typed source labels, which the origin
+# separately admits only against its embedded snapshot). Membership, not
+# shape: a label-shaped private identifier used as a key must refuse.
+EMISSION_KEYS = frozenset(
+    {
+        # Section names of one exported source.
+        "series",
+        "categories",
+        "windows",
+        "derived",
+        # The series shape.
+        "startDate",
+        "totals",
+        "recorded",
+        # The window vocabulary and its two figures.
+        "today",
+        "week",
+        # The derived-tile vocabulary (also declared below as STAT_*).
+        "peak-day",
+        "current-streak",
+        "longest-streak",
+    }
+).union(CATEGORY_KEYS)
 
 # The usage fields that make up one message's contribution to its day. The
 # names are the transcript's; the SUM is what internal/panels/mapping.go
@@ -281,32 +321,74 @@ def derived_figures(series):
     }
 
 
-def assert_only_dates_and_integers(value, where="emission"):
+def valid_calendar_day(value):
+    """True only for a real YYYY-MM-DD calendar date with no extra bytes.
+
+    Two checks, both load-bearing. `fullmatch` pins the exact shape including
+    the string's END — `re.match` with `$` quietly tolerates one trailing
+    newline, which is how `"2026-08-10\\n"` once passed review. Then the real
+    calendar parse refuses impossible dates like 2026-99-99 that satisfy the
+    digit shape but name no day (2026-08-24 review finding H1).
+    """
+    if not isinstance(value, str) or not DAY_PATTERN.fullmatch(value):
+        return False
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def assert_only_dates_and_integers(value, where="emission", extra_keys=frozenset()):
     """Refuse anything that is not a calendar date, an integer, or a container.
 
     The last line of defence for requirement 12, deliberately placed between
-    computation and output so it covers printing AND splicing. Booleans are
-    admitted only where the shape declares one — the series' `recorded` flag —
-    and everything else must be a date string, an int, or a list/dict of them.
-    Any other type is a refusal naming only the FIELD, never the value.
+    computation and output so it covers printing AND splicing. The checks are
+    MEMBERSHIP checks, not shape checks (2026-08-24 review finding H1: a
+    shape-only guard admitted label-shaped private identifiers, impossible
+    calendar dates, newline-suffixed dates, and negative integers):
+
+    * a dictionary key must be field-name shaped AND a member of the closed
+      EMISSION_KEYS vocabulary — or of `extra_keys`, the caller's explicitly
+      declared additions (the operator-typed source labels, which the origin
+      additionally admits only against its embedded snapshot);
+    * a string must be a REAL calendar date (exact shape, real calendar, not
+      one byte more);
+    * an integer must be non-negative — every emitted figure is a count;
+    * a boolean is admitted only under the one field that declares one, the
+      series' `recorded` flag.
+
+    Any refusal names only the FIELD, never the value.
     """
+    _assert_emission(value, where, frozenset(extra_keys), False)
+
+
+def _assert_emission(value, where, extra_keys, allow_bool):
     if isinstance(value, bool):
-        return
+        if allow_bool:
+            return
+        raise CaptureError("%s carries a boolean outside the recorded flag" % where)
     if isinstance(value, int):
+        if value < 0:
+            raise CaptureError("%s carries a negative integer" % where)
         return
     if isinstance(value, str):
-        if DAY_PATTERN.match(value):
+        if valid_calendar_day(value):
             return
         raise CaptureError("%s carries a string that is not a calendar date" % where)
     if isinstance(value, list):
         for index, item in enumerate(value):
-            assert_only_dates_and_integers(item, "%s[%d]" % (where, index))
+            _assert_emission(item, "%s[%d]" % (where, index), extra_keys, False)
         return
     if isinstance(value, dict):
         for key, item in value.items():
-            if not isinstance(key, str) or not KEY_PATTERN.match(key):
+            if not isinstance(key, str) or not KEY_PATTERN.fullmatch(key):
                 raise CaptureError("%s carries a key that is not a field name" % where)
-            assert_only_dates_and_integers(item, "%s.%s" % (where, key))
+            if key not in EMISSION_KEYS and key not in extra_keys:
+                raise CaptureError(
+                    "%s carries a key outside the closed emission vocabulary" % where
+                )
+            _assert_emission(item, "%s.%s" % (where, key), extra_keys, key == "recorded")
         return
     raise CaptureError("%s carries a value that is neither a date nor an integer" % where)
 
