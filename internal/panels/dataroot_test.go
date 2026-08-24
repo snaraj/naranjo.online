@@ -791,6 +791,79 @@ func TestDataRootFloorSurvivesRestart(t *testing.T) {
 	})
 }
 
+// TestDataRootMarksStaleWhenAnAcceptedFileDisappears is the 2026-08-24
+// review finding 5 regression test. `fs.ErrNotExist` was treated as the
+// benign cold-start case unconditionally, so a runtime document that had
+// been accepted and served could be DELETED from the mounted volume and the
+// envelope would keep reporting `ok` at the vanished instant forever — the
+// panel claiming a provenance that no longer existed. The reviewer removed
+// an accepted file, advanced one TTL, and still observed status="ok".
+//
+// The two directions are pinned together, because the fix must not make a
+// cold boot noisy: before the first publication an absent file is the
+// ordinary pre-push state and stays `ok`; after one, the data is retained
+// and the status turns `stale`; and a later push recovers to `ok`.
+func TestDataRootMarksStaleWhenAnAcceptedFileDisappears(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reg, state := usageDataRootRegistry(t, synctestSnapshot)
+		fsys := &lockedFS{inner: fstest.MapFS{}}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		reg.startDataRoot(ctx, fsys, productionUnsealer(dataRootTestKeyHex), nil, time.Now)
+
+		// Cold boot, no file yet: benign, and it must STAY benign across
+		// several wakes or the fix has simply moved the dishonesty.
+		synctest.Wait()
+		time.Sleep(3 * dataRootTTL)
+		synctest.Wait()
+		envelope, _ := decodeServedUsage(t, state)
+		if envelope.Status != StatusOK || envelope.GeneratedAt != "1999-12-31T00:00:00Z" {
+			t.Fatalf("cold boot: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+
+		// A push lands and is published.
+		fsys.swap(seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:20:00Z"))))
+		time.Sleep(dataRootTTL)
+		synctest.Wait()
+		envelope, data := decodeServedUsage(t, state)
+		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:20:00Z" {
+			t.Fatalf("after push: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		if data.Sources[0].Series.StartDate != "2026-08-15" {
+			t.Fatal("the pushed series is not being served")
+		}
+
+		// The file is REMOVED from the mounted root. Last good data stands;
+		// its freshness claim does not.
+		fsys.swap(fstest.MapFS{})
+		time.Sleep(dataRootTTL)
+		synctest.Wait()
+		envelope, data = decodeServedUsage(t, state)
+		if envelope.Status != StatusStale {
+			t.Fatalf("a deleted runtime document left status %q, want stale", envelope.Status)
+		}
+		if envelope.GeneratedAt != "2000-01-01T00:20:00Z" || data.Sources[0].Series.StartDate != "2026-08-15" {
+			t.Fatalf("the last good payload was not retained: generatedAt %q series %+v", envelope.GeneratedAt, data.Sources[0].Series)
+		}
+
+		// It stays stale while the file stays gone.
+		time.Sleep(3 * dataRootTTL)
+		synctest.Wait()
+		if envelope, _ = decodeServedUsage(t, state); envelope.Status != StatusStale {
+			t.Fatalf("status drifted back to %q while the file was still gone", envelope.Status)
+		}
+
+		// A later push recovers to ok, so staleness is a state and not a
+		// one-way trap.
+		fsys.swap(seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:40:00Z"))))
+		time.Sleep(dataRootTTL)
+		synctest.Wait()
+		if envelope, _ = decodeServedUsage(t, state); envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:40:00Z" {
+			t.Fatalf("after recovery: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+	})
+}
+
 // TestDataRootFloorMarkerFailsClosed pins every marker direction under the
 // 2026-08-24 finding-2 contract. Durable mode is a promise about what
 // survives a restart, so when its own state cannot be read or written the

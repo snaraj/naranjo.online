@@ -282,6 +282,7 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | `push refused` | ssh transport failed; nothing landed |
 | `checksum mismatch after push` | landed bytes differ from sealed bytes — investigate before trusting the panel |
 | panel `status: stale` | the origin refused the newest file (tamper, replay, wrong key, over-cap, malformed) and kept the last good payload |
+| panel `status: stale`, sealed file gone from the data dir | the runtime document this pod had already served from was deleted or unmounted: the data is retained, the freshness claim is not (2026-08-24 security review, finding 5). Before the FIRST push an absent file is the ordinary cold state and stays `ok` on the embedded snapshot |
 | panel serves embedded snapshot | `panels.data.enabled=false` (the default — the documented as-of-release decision), or no sealed file yet — the shipped state, not an error |
 | floor marker absent in the state dir | a first boot: benign, the floor is the embedded snapshot's, and the first published push writes the marker |
 | floor marker present but corrupt, unauthentic, or future-dated | durable mode refuses the tick and reports `stale` rather than serving on a silently lowered floor; delete the marker file to declare a cold start, and the next tick recovers without a restart |

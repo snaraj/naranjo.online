@@ -194,10 +194,21 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 		case err == nil:
 			floor = accepted
 			acceptedInProcess = true
-		case errors.Is(err, fs.ErrNotExist), errors.Is(err, errSeriesUnchanged):
-			// An absent file is the ordinary cold state before the first
-			// push, and an unchanged file is the ordinary state between
-			// pushes. Neither says anything bad about the data being served.
+		case errors.Is(err, errSeriesUnchanged):
+			// The ordinary state between pushes: the same file, already
+			// published, still there. Nothing is wrong.
+		case errors.Is(err, fs.ErrNotExist):
+			// An absent file means two different things, and conflating them
+			// let a deleted document keep the envelope `ok` forever
+			// (2026-08-24 review finding 5). BEFORE the first publication it
+			// is the ordinary cold state — no push has happened yet, and the
+			// embedded snapshot is exactly what the panel should be serving.
+			// AFTER one, the runtime document this panel is serving from has
+			// DISAPPEARED: the data stands, its freshness does not, and the
+			// envelope has to say so.
+			if acceptedInProcess {
+				reg.markStale(state)
+			}
 		default:
 			// File present but unreadable, unauthentic, malformed, replayed,
 			// refused — or accepted but not committable to the durable
