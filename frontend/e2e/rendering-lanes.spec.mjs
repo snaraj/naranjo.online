@@ -375,17 +375,36 @@ const desktopWidths = [1440, 1920];
 // filled page is the viewport minus exactly this and nothing else.
 const gutterPx = 32;
 
-test('the page fills a wide viewport and tiles its panels across it', async ({ page }) => {
+/* The width the arrangement before this one was rejected FOR: a 30rem ribbon
+ * down the middle of a desktop. The owner asked for one centred container,
+ * wider than that (issue 134), so a column that failed to clear it would be
+ * the ribbon under a new name. */
+const ribbonPx = 480;
+
+test('the page is one centred column on a wide viewport, and everything stacks down it', async ({
+  page,
+}) => {
   await visit(page);
   for (const width of desktopWidths) {
     await page.setViewportSize({ width, height: 900 });
     await settled(page);
     const observed = await page.evaluate(() => {
+      const root = window.document.documentElement;
       const stack = window.document.querySelector('.panel-stack');
       const main = window.document.querySelector('main');
+      const box = main.getBoundingClientRect();
+      /* The column the STYLESHEET asks for, resolved here rather than
+         duplicated: the token is the one knob this width has, and a lane that
+         hardcoded the number would keep passing after somebody changed it. */
+      const declared = getComputedStyle(root).getPropertyValue('--page-column-width').trim();
+      const rem = Number.parseFloat(getComputedStyle(root).fontSize);
       return {
-        viewport: window.document.documentElement.clientWidth,
-        main: main.getBoundingClientRect().width,
+        viewport: root.clientWidth,
+        declared,
+        column: Number.parseFloat(declared) * (declared.endsWith('rem') ? rem : 1),
+        main: box.width,
+        left: box.left,
+        right: box.right,
         stack: stack.getBoundingClientRect().width,
         tracks: getComputedStyle(stack).gridTemplateColumns.split(/\s+/).filter(Boolean).length,
         cards: [...window.document.querySelectorAll('.panel-shell')].map(
@@ -393,25 +412,38 @@ test('the page fills a wide viewport and tiles its panels across it', async ({ p
         ),
       };
     });
-    /* The gutter is the only thing between the content and the edge. A page
-       that still centred a 480px ribbon would fail here by ~900px, which is
-       the defect the directive names. */
+    expect(observed.declared, 'the page column is not a length any more').toMatch(/rem$/);
+    /* The column is what the token says, and it is a COLUMN: narrower than the
+       viewport it sits in. A page that filled the viewport — the arrangement
+       the owner replaced — fails the second of these by hundreds of pixels. */
     expect(
       observed.main,
       `the page holds ${observed.main}px of a ${observed.viewport}px viewport`
-    ).toBeCloseTo(observed.viewport - gutterPx, 0);
-    expect(observed.stack).toBeCloseTo(observed.viewport - gutterPx, 0);
-    /* Filling with CARDS, not with one wide card: the tracks are what turn
-       a wider viewport into more panels side by side. */
+    ).toBeCloseTo(observed.column, 0);
+    expect(observed.main).toBeLessThan(observed.viewport - gutterPx);
+    /* ...and wider than the ribbon the owner asked us to grow past. */
+    expect(
+      observed.main,
+      `the column is ${observed.main}px; the design it replaces was ${ribbonPx}px and the owner asked for a wider one`
+    ).toBeGreaterThan(ribbonPx);
+    /* Centred, which is the other half of "one container": equal margin on
+       both sides, to within a rounding pixel. */
+    expect(
+      Math.abs(observed.left - (observed.viewport - observed.right)),
+      `the column sits ${observed.left}px from one edge and ${observed.viewport - observed.right}px from the other`
+    ).toBeLessThanOrEqual(1);
+    /* Stacked, not tiled: one track, and every card the full width of it. The
+       arrangement the owner rejected shows up here as three tracks and cards a
+       third of the column wide. */
     expect(
       observed.tracks,
-      `${observed.viewport}px lays out ${observed.tracks} column(s) of panels`
-    ).toBeGreaterThan(1);
-    /* And no card is stretched across the whole page — the arrangement the
-       owner rejected would show up here as one card at viewport width. */
+      `${observed.viewport}px lays out ${observed.tracks} column(s) of trackers`
+    ).toBe(1);
+    expect(observed.stack).toBeCloseTo(observed.main, 0);
     for (const card of observed.cards) {
-      expect(card, `a card is ${card}px wide in a ${observed.viewport}px viewport`).toBeLessThan(
-        observed.viewport - gutterPx
+      expect(card, `a card is ${card}px wide in a ${observed.main}px column`).toBeCloseTo(
+        observed.stack,
+        0
       );
     }
   }
@@ -487,11 +519,15 @@ test('every strip opens on its newest data and scrolls back for history', async 
   }
 });
 
-test('the boss log scrolls sideways, and its detail escapes the strip', async ({ page }) => {
+test('the boss log is three columns that never scroll, and its detail sits on its tile', async ({
+  page,
+}) => {
   await visit(page);
-  const strip = await page.evaluate(() => {
+  const table = await page.evaluate(() => {
     const box = window.document.querySelector('.boss-grid');
     const style = getComputedStyle(box);
+    const cells = [...box.querySelectorAll('.boss-cell')];
+    const distinct = (values) => new Set(values.map((value) => Math.round(value))).size;
     return {
       overflowX: style.overflowX,
       overflowY: style.overflowY,
@@ -499,62 +535,50 @@ test('the boss log scrolls sideways, and its detail escapes the strip', async ({
       clientWidth: box.clientWidth,
       scrollHeight: box.scrollHeight,
       clientHeight: box.clientHeight,
-      /* The two tile rows the strip is bounded to, as the engine actually
-         laid them out — measured from the tiles rather than from the CSS,
-         because the whole question is whether the box the engine gave the
-         scrollbar still holds them. */
-      rows: [...box.querySelectorAll('.boss-cell')]
-        .map((cell) => Math.round(cell.getBoundingClientRect().top))
-        .filter((top, index, tops) => tops.indexOf(top) === index).length,
-      tileHeight: box.querySelector('.boss-cell')?.getBoundingClientRect().height ?? 0,
+      cells: cells.length,
+      /* The shape the engine actually laid out, measured from the tiles
+         rather than read back off the CSS: three columns, wrapping downward
+         for as many rows as the payload needs. */
+      columns: distinct(cells.map((cell) => cell.getBoundingClientRect().left)),
+      rows: distinct(cells.map((cell) => cell.getBoundingClientRect().top)),
       icons: box.querySelectorAll('img.boss-icon').length,
     };
   });
-  /* Sideways, and only sideways: the tallies used to fill a tall box that
-     scrolled DOWN inside the card, which on a phone put a scroll region
-     under the same thumb as the page's own. */
-  expect(strip.overflowX).toBe('auto');
-  expect(strip.overflowY).toBe('hidden');
-  expect(
-    strip.scrollWidth,
-    'the boss strip fits its box; there is no sideways scroll left to prove'
-  ).toBeGreaterThan(strip.clientWidth);
-  expect(strip.scrollHeight, 'the boss strip scrolls downward as well as across').toBe(
-    strip.clientHeight
+  /* The owner asked for the scrolling to go away, not to be pointed in
+     another direction (issue 134). This table has been a vertical scroller
+     and a sideways one; the assertion now is that there is no scroll region
+     left at all — no overflow, and nothing to scroll to on either axis. */
+  expect(table.overflowX, 'the boss table is a scroll region again').toBe('visible');
+  expect(table.overflowY, 'the boss table is a scroll region again').toBe('visible');
+  expect(table.scrollWidth, 'the boss table has content to scroll across').toBe(table.clientWidth);
+  expect(table.scrollHeight, 'the boss table has content to scroll down to').toBe(
+    table.clientHeight
   );
-  /* And the box the engine left after taking its scrollbar still holds both
-     rows whole. This is the assertion a fixed block-size fails: the scrollbar
-     comes OUT of a fixed box, so a strip sized to exactly two rows shows one
-     and a half wherever scrollbars are classic rather than overlaid — Linux
-     and Windows both, which no macOS run would ever reveal. Sized by its rows
-     instead, the box grows by exactly the scrollbar it was given. */
-  expect(strip.rows, 'the boss strip is not two rows of tiles').toBe(2);
+  /* Columns of three, going down — the owner's words. The arrangement this
+     replaced would report two rows and dozens of columns. */
+  expect(table.cells, 'the boss table rendered no tiles').toBeGreaterThan(50);
+  expect(table.columns, `the boss table laid out ${table.columns} columns`).toBe(3);
   expect(
-    strip.clientHeight,
-    `the strip has ${strip.clientHeight}px for two ${strip.tileHeight}px rows; its bottom row is clipped`
-  ).toBeGreaterThanOrEqual(strip.tileHeight * 2 - subPixel);
+    table.rows,
+    `the boss table laid out ${table.rows} rows for ${table.cells} tiles in three columns`
+  ).toBe(Math.ceil(table.cells / 3));
   /* The owner locked the vendored art exactly as it renders, so the lane
      counts what actually painted rather than trusting the markup. */
-  expect(strip.icons, 'the boss strip rendered no icons').toBeGreaterThan(50);
+  expect(table.icons, 'the boss table rendered no icons').toBeGreaterThan(50);
 
-  /* The detail readout is the part a sideways strip breaks: anchored inside
-     a scroller it is clipped by the scroller's own edge, and it must not
-     widen the strip it floats over either. Both are measured on the FIRST
-     tile, which is the one a clipping bug cuts in half. */
-  const before = await page.evaluate(() => window.document.querySelector('.boss-grid').scrollWidth);
+  /* The detail belongs to the tile it describes now that no scroller clips
+     it: it is drawn directly above its OWN cell rather than at one fixed
+     readout position that would be twenty rows away from most of them. */
   await page.locator('.boss-cell').first().hover();
   const tip = await page.evaluate(() => {
-    const node = window.document.querySelector('.boss-cell .boss-tip');
-    const box = window.document.querySelector('.boss-grid');
+    const cell = window.document.querySelector('.boss-cell');
+    const node = cell.querySelector('.boss-tip');
     const shown = node.getBoundingClientRect();
-    const region = box.getBoundingClientRect();
     return {
       visibility: getComputedStyle(node).visibility,
-      top: shown.top,
       bottom: shown.bottom,
       height: shown.height,
-      stripTop: region.top,
-      scrollWidth: box.scrollWidth,
+      cellTop: cell.getBoundingClientRect().top,
       pageScrolls:
         window.document.documentElement.scrollWidth >
         window.document.documentElement.clientWidth,
@@ -562,12 +586,43 @@ test('the boss log scrolls sideways, and its detail escapes the strip', async ({
   });
   expect(tip.visibility, 'the boss detail does not appear on hover').toBe('visible');
   expect(tip.height, 'the boss detail rendered with no height').toBeGreaterThan(0);
-  expect(
-    tip.bottom,
-    'the boss detail is drawn inside the strip that clips it'
-  ).toBeLessThanOrEqual(tip.stripTop + 1);
-  expect(tip.scrollWidth, 'the detail widened the strip it floats over').toBe(before);
+  expect(tip.bottom, 'the boss detail is not drawn above its own tile').toBeLessThanOrEqual(
+    tip.cellTop + 1
+  );
   expect(tip.pageScrolls, 'the detail made the page scroll sideways').toBe(false);
+
+  /* And the containment rule that replaced the scroller's clipping, measured
+     where it decides: the LAST column at the NARROWEST viewport. A detail is
+     wider than a tile, so a start-anchored one in the third column hangs past
+     the card — and with no clipping ancestor left, that drags the document
+     sideways, which is the floor this page is pinned against. */
+  await page.setViewportSize({ width: phoneWidths[0], height: 720 });
+  await settled(page);
+  await page.locator('.boss-cell').nth(2).hover();
+  const edge = await page.evaluate(() => {
+    const cell = window.document.querySelectorAll('.boss-cell')[2];
+    const node = cell.querySelector('.boss-tip');
+    const card = window.document.querySelector('.boss-grid').closest('.panel-shell');
+    const shown = node.getBoundingClientRect();
+    const frame = card.getBoundingClientRect();
+    return {
+      visibility: getComputedStyle(node).visibility,
+      left: shown.left,
+      right: shown.right,
+      cardLeft: frame.left,
+      cardRight: frame.right,
+      pageScrolls:
+        window.document.documentElement.scrollWidth >
+        window.document.documentElement.clientWidth,
+    };
+  });
+  expect(edge.visibility, 'the last column detail does not appear on hover').toBe('visible');
+  expect(
+    edge.right,
+    `the last column detail reaches ${edge.right}px past a card ending at ${edge.cardRight}px`
+  ).toBeLessThanOrEqual(edge.cardRight + subPixel);
+  expect(edge.left).toBeGreaterThanOrEqual(edge.cardLeft - subPixel);
+  expect(edge.pageScrolls, 'the last column detail made the page scroll sideways').toBe(false);
 });
 
 test('the page names its owner, carries no badges, and wears no button chrome', async ({ page }) => {
@@ -582,6 +637,11 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
         n.hasAttribute('data-panel-status')
       ),
       viewport: window.document.documentElement.clientWidth,
+      /* The content column's end edge. The chrome is aligned with the column
+         rather than with the window (issue 134 made the page one centred
+         container), so "in the corner" is a statement about the column and
+         measuring it against the viewport would measure the centring. */
+      columnEnd: window.document.querySelector('main').getBoundingClientRect().right,
       icons: icons.map((node) => {
         const box = node.getBoundingClientRect();
         const style = getComputedStyle(node);
@@ -632,9 +692,9 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
   }
   /* The pair sits in the corner and reads as a pair: the same row, adjacent
      rather than spread across the header, and the last of them against the
-     page's own gutter. The arrangement the owner rejected — one control above
-     the title and one below it — fails the first of these by hundreds of
-     pixels. */
+     end edge of the column it belongs to. The arrangement the owner rejected —
+     one control above the title and one below it — fails the first of these by
+     hundreds of pixels. */
   const [first, second] = observed.icons;
   expect(Math.abs(first.top - second.top), 'the two icons are stacked, not paired').toBeLessThan(4);
   expect(
@@ -642,8 +702,8 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
     'the two icons are not beside each other'
   ).toBeLessThan(touchFloorPx / 2);
   expect(
-    observed.viewport - second.right,
-    `the pair sits ${observed.viewport - second.right}px from the page's end edge`
+    observed.columnEnd - second.right,
+    `the pair sits ${observed.columnEnd - second.right}px from the column's end edge`
   ).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
 });
 
@@ -710,4 +770,120 @@ test('the popover animates only where motion is welcome', async ({ page }) => {
   expect(await animation(), 'the popover animates for a reader who asked for less motion').toBe(
     'none'
   );
+});
+
+/* ===========================================================================
+ * The stacked page (issue 134)
+ *
+ * The nav and the art feed are the two surfaces whose correctness is a
+ * property of the RENDERED page rather than of the source: a link that names
+ * a section nobody rendered still looks perfect in the markup, and a gallery
+ * whose origin serves no media is the ordinary case that must still look
+ * deliberate.
+ * ======================================================================== */
+
+test('every section the nav names is on the page, and its link reaches it', async ({ page }) => {
+  await visit(page);
+  const links = page.locator('.section-link');
+  const count = await links.count();
+  expect(count, 'the page renders no section links at all').toBeGreaterThan(3);
+  for (let index = 0; index < count; index += 1) {
+    const link = links.nth(index);
+    const href = await link.getAttribute('href');
+    expect(href, 'a nav link points nowhere').toMatch(/^#[a-z-]+$/);
+    /* The section exists. This is the assertion a source pin cannot make on
+       the assembled page: the nav is one component and the sections are
+       four others, and only the rendered document knows they agree. */
+    await expect(page.locator(href), `${href} names no section on this page`).toHaveCount(1);
+    await link.click();
+    const landed = await page.locator(href).evaluate((node) => ({
+      top: node.getBoundingClientRect().top,
+      viewport: window.innerHeight,
+    }));
+    /* And the jump lands: the section is in view rather than somewhere far
+       below the fold. The last section cannot always reach the very top of
+       the window — there is nothing under it to scroll — so the assertion is
+       that it is visible, not that it is flush. */
+    expect(
+      landed.top,
+      `${href} did not bring its section into view (${Math.round(landed.top)}px from the top)`
+    ).toBeLessThan(landed.viewport);
+    expect(landed.top).toBeGreaterThanOrEqual(-1);
+  }
+});
+
+test('the art feed shows its frames when the origin serves no media', async ({ page }) => {
+  await visit(page);
+  /* The lanes run the binary with media disabled (playwright.config.mjs), so
+     this is the ORDINARY state of the gallery rather than a failure being
+     simulated: every frame asks for its picture, the origin serves none, and
+     what the visitor sees has to be a designed empty frame. The count is
+     awaited rather than read once — the frames answer as their requests
+     resolve. */
+  const frames = page.locator('.art-frame');
+  const total = await frames.count();
+  expect(total, 'the art feed rendered no frames').toBeGreaterThan(0);
+  /* The explanation appears for a reader who has not scrolled anywhere: only
+     the first picture is fetched eagerly, so keying the note on all of them
+     would hide it behind pictures nobody asked for. */
+  await expect(page.locator('[data-art-unserved]')).toHaveCount(1);
+  await expect(page.locator('[data-art-pending]')).not.toHaveCount(0);
+  /* And the deferred ones answer the same way once they are scrolled toward,
+     which is the other half of the lazy path. The scroll walks the feed a
+     viewport at a time rather than jumping to the end: a lazy picture is only
+     fetched when it comes NEAR the viewport, so a jump past it never requests
+     it at all — measured, two of eight had answered after one jump. */
+  await page.evaluate(async () => {
+    const step = Math.max(1, window.innerHeight);
+    for (let top = 0; top <= window.document.documentElement.scrollHeight; top += step) {
+      window.scrollTo(0, top);
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    }
+  });
+  await expect(page.locator('[data-art-pending]')).toHaveCount(total);
+  const observed = await page.evaluate(() => {
+    const boxes = [...window.document.querySelectorAll('.art-frame')];
+    return {
+      images: window.document.querySelectorAll('img.art-image').length,
+      inCards: boxes.every((frame) => frame.closest('.feed-card') !== null),
+      /* No ART card carries a title today (the owner asked for none) and the
+         region is ABSENT rather than empty, while the work feed's cards — the
+         same primitive — do carry one. Both branches, in one measurement. */
+      artTitles: window.document.querySelectorAll('.art-feed .feed-card-title').length,
+      workTitles: window.document.querySelectorAll('.work-feed .feed-card-title').length,
+      sizes: boxes.map((frame) => {
+        const box = frame.getBoundingClientRect();
+        return { width: Math.round(box.width), height: Math.round(box.height) };
+      }),
+      columns: new Set(
+        boxes.map((frame) => Math.round(frame.getBoundingClientRect().left))
+      ).size,
+    };
+  });
+  /* No broken-image glyph anywhere: an <img> whose source 404s is replaced by
+     the frame, not left on the page to render the browser's own failure. */
+  expect(observed.images, 'a picture the origin does not serve is still in the document').toBe(0);
+  /* Every frame is a feed card — the same primitive the rest of the page is
+     built from, so a title, a date or a border is data rather than surgery. */
+  expect(observed.inCards, 'a picture is not wrapped in the card primitive').toBe(true);
+  expect(
+    observed.artTitles,
+    'an art card drew a heading band for a title it was never given'
+  ).toBe(0);
+  expect(
+    observed.workTitles,
+    'no card anywhere renders a title, so the absent art heading proves nothing'
+  ).toBeGreaterThan(0);
+  /* One vertical column of cards (the owner asked for a feed), and every
+     frame the same reserved box — which is what makes the arrival of six
+     megabytes of photography cost no layout shift. */
+  expect(observed.columns, 'the art feed is a mosaic rather than a column').toBe(1);
+  const [firstBox] = observed.sizes;
+  expect(firstBox.height, 'the art frames reserve no height').toBeGreaterThan(0);
+  for (const size of observed.sizes) {
+    expect(size, 'the art frames are not all the same reserved box').toEqual(firstBox);
+  }
+  /* And the box is the ratio the pictures are: 16:9, held open before a byte
+     of them arrives. */
+  expect(firstBox.width / firstBox.height).toBeCloseTo(16 / 9, 1);
 });

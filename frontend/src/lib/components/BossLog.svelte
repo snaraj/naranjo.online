@@ -1,16 +1,29 @@
 <!-- BossLog renders the boss-log/v1 panel as the account's whole public record,
   laid out the way the RuneLite hiscore panel lays one out: a dense grid of
   skill cells first — small icon, right-aligned level, and the account's two
-  totals filling the last row — then the boss tallies below as a horizontal
-  strip, each an icon beside a right-aligned, thousands-separated kill count
+  totals filling the last row — then the boss tallies below in the SAME three
+  columns, each an icon beside a right-aligned, thousands-separated kill count
   with a hover/focus detail carrying the full name, the rank, and the score.
 
-  The boss strip scrolls SIDEWAYS (owner directive, issue 127). The origin
-  serves every row the hiscores report — dozens of bosses — and they used to
-  fill a tall box that scrolled vertically inside the card, which on a phone
-  means a scroll region competing with the page's own scroll under the same
-  thumb. Sideways is the gesture a phone has spare, and the card gets its
-  height back.
+  The boss table does not scroll (owner directive, issue 134): "it doesn't need
+  scrolling if it just goes down in columns of 3". It has now been all three
+  arrangements — a tall box that scrolled down inside the card, then a
+  two-row strip that scrolled sideways, and now the same three-column table
+  the skills already use, wrapping downward and ending where the data ends.
+  The scroll region is GONE rather than merely unused: the tracks are
+  minmax(0, 1fr), so three columns always fit the card exactly and there is
+  never a width at which this box has something to scroll to. A count squeezed
+  by a very narrow card truncates with an ellipsis and keeps its full figure in
+  the cell's accessible name and its detail, because a silently clipped number
+  is a wrong number.
+
+  Removing the scroller is also what puts the detail back on the tile it
+  describes. It had to move out to a wrapper while the strip scrolled — an
+  absolutely positioned box is clipped by an overflow ancestor in its
+  containing-block chain, so a cell-anchored detail on the strip's top row was
+  cut in half by the strip's own edge — and with no overflow ancestor left, the
+  cell is the correct anchor again. In a table that wraps down the card, one
+  fixed readout at the top would be nowhere near the twentieth row.
 
   The account name is deliberately NOT rendered (owner directive, issue 127):
   the RSN is personal information, and a panel does not need to name whose
@@ -121,56 +134,48 @@
     {:else}
       <p class="boss-note">No skill levels reported.</p>
     {/if}
-    <!-- The strip wrapper is positioned and the scroller inside it is not,
-      which is what lets a cell's detail escape the scroller's clipping: an
-      absolutely positioned box is clipped by an overflow ancestor only when
-      that ancestor is in its containing-block chain. Anchored to a cell, as
-      it was while the table scrolled vertically, every detail on the strip's
-      top row would be cut off by the strip's own edge. -->
-    <div class="boss-strip">
-      <!-- The complete boss table is dozens of tiles, so the strip is bounded
-        and scrolls sideways inside its own box; a scrollable region is
-        keyboard-reachable only when focusable, so the tabindex is
-        deliberate. -->
-      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <ul class="boss-grid" tabindex="0" aria-label="Boss tallies">
-        {#each data.bosses as boss (boss.name)}
-          <!-- Cells take keyboard focus solely so the tooltip's
-            :focus-visible reveal matches its :hover reveal; there is no
-            action to perform, so a button would be the wrong semantics. -->
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-          <li
-            class="boss-cell"
-            tabindex="0"
-            data-boss-unranked={boss.rank === null ? 'true' : 'false'}
-            aria-label={cellLabel(boss)}
-          >
-            {#if icons.has(bossSlug(boss.name))}
-              <img
-                class="boss-icon"
-                src={icons.get(bossSlug(boss.name))}
-                alt=""
-                width="26"
-                height="26"
-                loading="lazy"
-                decoding="async"
-              />
-            {:else}
-              <span class="boss-icon boss-glyph" aria-hidden="true">{bossInitials(boss.name)}</span>
+    <!-- The complete boss table, three columns wrapping downward (owner
+      directive, issue 134). It is no longer a scroll region, so it is no
+      longer a focus stop either: the tabindex it used to carry existed only
+      because a scrollable box is keyboard-reachable when focusable, and a
+      tab stop that scrolls nothing is a stop that does nothing. -->
+    <ul class="boss-grid" aria-label="Boss tallies">
+      {#each data.bosses as boss (boss.name)}
+        <!-- Cells take keyboard focus solely so the tooltip's
+          :focus-visible reveal matches its :hover reveal; there is no
+          action to perform, so a button would be the wrong semantics. -->
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+        <li
+          class="boss-cell"
+          tabindex="0"
+          data-boss-unranked={boss.rank === null ? 'true' : 'false'}
+          aria-label={cellLabel(boss)}
+        >
+          {#if icons.has(bossSlug(boss.name))}
+            <img
+              class="boss-icon"
+              src={icons.get(bossSlug(boss.name))}
+              alt=""
+              width="26"
+              height="26"
+              loading="lazy"
+              decoding="async"
+            />
+          {:else}
+            <span class="boss-icon boss-glyph" aria-hidden="true">{bossInitials(boss.name)}</span>
+          {/if}
+          <span class="boss-kc">{tally(boss.kc)}</span>
+          <span class="boss-tip" role="tooltip" aria-hidden="true">
+            <span class="boss-tip-name">{boss.name}</span>
+            <span>KC: {tally(boss.kc)}</span>
+            <span>Rank: {rankLabel(boss.rank)}</span>
+            {#if boss.score !== undefined && boss.score !== null}
+              <span>Score: {tally(boss.score)}</span>
             {/if}
-            <span class="boss-kc">{tally(boss.kc)}</span>
-            <span class="boss-tip" role="tooltip" aria-hidden="true">
-              <span class="boss-tip-name">{boss.name}</span>
-              <span>KC: {tally(boss.kc)}</span>
-              <span>Rank: {rankLabel(boss.rank)}</span>
-              {#if boss.score !== undefined && boss.score !== null}
-                <span>Score: {tally(boss.score)}</span>
-              {/if}
-            </span>
-          </li>
-        {/each}
-      </ul>
-    </div>
+          </span>
+        </li>
+      {/each}
+    </ul>
   {:else if envelope}
     <p class="boss-note">Boss data is unavailable right now.</p>
   {:else}
@@ -202,49 +207,21 @@
     flex: none;
   }
 
-  /* The strip's positioned wrapper. It exists for the tooltip: a detail
-     anchored inside the scroller is clipped by it, and anchored here it is
-     not, because this box is not the scroller. It also owns nothing else —
-     the strip's height is the scroller's own. */
-  .boss-strip {
-    position: relative;
-  }
+  /* The boss table is the skills table's own shape now (owner directive,
+     issue 134): three columns, wrapping downward, ending where the data ends.
+     It has been a tall vertical scroller and a two-row sideways one; it is
+     neither any more, and the declarations that made it one are gone rather
+     than overridden — no auto-flow, no bounded row count, no overflow, no
+     overscroll rule, because there is nothing left to scroll or to chain.
 
-  /* Dozens of boss tiles in one vertical table made this card taller than
-     everything below it put together, so the table used to be bounded and
-     scroll DOWN inside itself. It scrolls SIDEWAYS now: two rows of tiles
-     flowing into columns, one gesture wide on a phone, and the card keeps
-     the height the vertical box used to spend.
-
-     The bound is the ROW COUNT, not a height, and that distinction is
-     measured rather than stylistic. Two explicit rows bound the strip
-     whatever the payload holds — seventy bosses or seven hundred flow into
-     more columns, never more rows, and the two rows exist before any data
-     arrives, so nothing shifts when it does. A fixed block-size on top of
-     that looks equivalent and is not: a horizontal scroller's scrollbar is
-     taken OUT of a fixed box, and on every platform that reserves space for
-     one rather than overlaying it — Linux and Windows, which is also where
-     CI runs — the second row is cut off behind it. MEASURED here: 69px of
-     tiles in the 70px content box a 4.5rem bound leaves, which survives an
-     overlay scrollbar by one pixel and loses fifteen to a classic one. With
-     no fixed height the box grows by exactly the scrollbar it was given, so
-     the same two rows are whole in both. The columns stay a fixed width so a
-     long kill count cannot re-lay-out the strip around it. */
+     minmax(0, 1fr) is what makes "never scrolls" true rather than usually
+     true: identical to the skills grid above, the tracks are exactly a third
+     of the card at every width, so three columns always fit and the box never
+     has a scrollable overflow to reveal. The tracks cannot be given a fixed
+     width instead — a bare 5.25rem minimum would lay out 252px of columns in
+     a 266px card at 320px and, one narrower device later, scroll. */
   .boss-grid {
-    grid-auto-flow: column;
-    grid-template-rows: repeat(2, var(--boss-cell-height, 2.125rem));
-    grid-auto-columns: var(--boss-cell-width, 5.25rem);
-    overflow-x: auto;
-    overflow-y: hidden;
-    /* A sideways scroll inside a page that scrolls downward must not chain:
-       reaching the end of the strip should stop, never start dragging the
-       document with it. */
-    overscroll-behavior: contain;
-  }
-
-  .boss-grid:focus-visible {
-    outline: 1px solid var(--panel-accent, rgb(220, 138, 0));
-    outline-offset: 1px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .skill-cell,
@@ -289,12 +266,16 @@
     color: var(--panel-muted, rgb(158, 158, 158));
   }
 
-  /* The cell is NOT the tooltip's containing block any more: the strip
-     scrolls sideways, and an absolutely positioned box inside a scroller is
-     clipped by it, so a cell-anchored detail on the top row was cut in half
-     by the strip's own edge. The containing block moved out to .boss-strip,
-     which sits outside the scroller — see the tip's own rule. */
+  /* The cell is the tooltip's containing block again. It could not be while
+     the table scrolled — an absolutely positioned box is clipped by an
+     overflow ancestor in its containing-block chain, so a cell-anchored
+     detail on the scroller's top row was cut in half by the scroller's own
+     edge — and with the overflow gone there is nothing left to clip it. In a
+     table that wraps down the card, this is also the only anchor that works:
+     one readout fixed to the table's top edge would be twenty rows away from
+     the tile a reader is pointing at. */
   .boss-cell {
+    position: relative;
     block-size: var(--boss-cell-height, 2.125rem);
   }
 
@@ -334,10 +315,18 @@
     color: var(--panel-muted, rgb(158, 158, 158));
   }
 
+  /* A figure squeezed by a very narrow card truncates VISIBLY. The cells
+     shrink with the column now instead of scrolling, so the last defence
+     against a card too narrow for its own digits is the ellipsis: a silently
+     clipped number reads as a smaller number, and the whole figure is still
+     in the cell's accessible name and its detail. */
   .skill-level,
   .boss-kc {
     flex: 1;
     min-inline-size: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     text-align: right;
     font-size: 0.75rem;
     font-variant-numeric: tabular-nums;
@@ -357,15 +346,16 @@
     font-size: 0.625rem;
   }
 
-  /* The detail reads out ABOVE the strip, in one place, for whichever tile
-     the pointer or keyboard is on. Its containing block is .boss-strip and
-     not the cell, for two reasons that both come from the strip scrolling:
-     a tip anchored inside the scroller is clipped by it, and a tip that
-     followed its cell would slide off the visible window as the strip moved
-     under it. One fixed readout position is legible in both states, and it
-     can never widen the strip it floats over — an absolutely positioned box
-     whose containing block sits outside a scroller contributes nothing to
-     that scroller's scrollable width. */
+  /* The detail reads out directly above the tile it describes.
+
+     It is anchored per COLUMN, and that is a containment rule rather than a
+     stylistic one: the tip is wider than a cell, so a start-anchored one in
+     the last column would extend past the card's end edge — and an absolutely
+     positioned box with no clipping ancestor drags the DOCUMENT sideways when
+     it does, which is the floor this page is pinned against at 320px. The
+     first column opens toward the end edge, the last opens toward the start
+     edge, and the middle one opens from its own centre; the three-column grid
+     is fixed, so nth-child names the column exactly. */
   .boss-tip {
     position: absolute;
     inset-block-end: calc(100% + 0.25rem);
@@ -389,6 +379,18 @@
     visibility: hidden;
     opacity: 0;
     pointer-events: none;
+  }
+
+  /* The middle column opens from its own centre, the last from its end edge;
+     both keep a 12rem detail inside a 320px card. */
+  .boss-cell:nth-child(3n + 2) .boss-tip {
+    inset-inline-start: 50%;
+    transform: translateX(-50%);
+  }
+
+  .boss-cell:nth-child(3n) .boss-tip {
+    inset-inline-start: auto;
+    inset-inline-end: 0;
   }
 
   .boss-cell:hover .boss-tip,

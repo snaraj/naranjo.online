@@ -113,46 +113,59 @@ test('the panels are one centered column, not a rail', () => {
   assert.match(styles, /#app > \.page-header,\s*\n#app > main\s*\{[^}]*inline-size:\s*min\(var\(--page-column-width\), 100%\)/);
 });
 
-// The page FILLS the viewport (owner directive, issue 127) and the stack
-// tiles inside it, which are two halves of one change: filling alone would
-// stretch one card across a desktop, and tiling alone would keep the ribbon.
-// Both are pinned by SHAPE rather than by value — the width the owner
-// eventually chooses is a later issue, and this must still hold then.
-test('the page fills the viewport and the stack tiles inside it', () => {
-  // The column is the whole content box. It is still expressed through the
-  // token and still passes through min(…, 100%), so the collapse-to-viewport
-  // guarantee the phone floor depends on is untouched.
-  assert.match(
+// The page is ONE CENTRED COLUMN and everything stacks down it (owner
+// directive, issue 134), which reverses the tiling half of issue 127 and
+// keeps none of it: the owner asked for everything stacked on top of each
+// other in a container WIDER than the ribbon that arrangement replaced.
+//
+// The width is pinned by value here and not merely by shape, because "wider"
+// is the directive: a shape-only pin is satisfied by the 30rem ribbon this
+// column is required to be bigger than. The specific number stays free — only
+// the floor it has to clear is asserted.
+test('the page is one centred column, wider than the ribbon it replaced', () => {
+  const column = /--page-column-width:\s*([\d.]+)rem;/.exec(styles);
+  assert.ok(
+    column,
+    'the page column must be a fixed maximum width again, not a viewport fill; the owner asked for one centred container'
+  );
+  // 30rem was the pre-127 ribbon, and the trackers are still designed at that
+  // width — a column that did not clear it would be the ribbon under a new
+  // name rather than the wider container the owner asked for.
+  assert.ok(
+    Number(column[1]) > 30,
+    `the page column is ${column[1]}rem; the design it replaces was 30rem and the owner asked for a wider one`
+  );
+  // The collapse-to-viewport guarantee the phone floor depends on lives in the
+  // consumer (pinned in the rail test above): min(--page-column-width, 100%)
+  // resolves to the viewport on every phone, so a fixed column changes nothing
+  // a phone renders.
+  assert.doesNotMatch(
     styles,
     /--page-column-width:\s*100%/,
-    'the page column must fill the viewport, not claim a fixed ribbon down the middle'
+    'a viewport-filling column is the arrangement the owner replaced'
   );
-  // Repeating against a card minimum is what makes ONE declaration serve both
-  // a phone and a desktop: below the minimum there is room for exactly one
-  // track, above it the extra room becomes more cards rather than a wider one.
+  // One track, at every width. minmax(0, 1fr) rather than a bare 1fr: a grid
+  // track's automatic minimum is its min-content, so a card holding a dense
+  // table would refuse to shrink and drag the stack past the column — the
+  // exact defect that made the body scroll sideways at every width.
   assert.match(
     styles,
-    /\.panel-stack\s*\{[^}]*grid-template-columns:\s*repeat\(\s*auto-fill,\s*minmax\(\s*min\(var\(--page-card-min\), 100%\)/,
-    'the stack must tile at a card minimum that can still collapse to the viewport'
+    /\.panel-stack\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/,
+    'the stack must be one column whose track can shrink to the column it is given'
   );
-  // auto-FILL, not auto-fit, and the difference is measurable rather than
-  // stylistic: auto-fit collapses tracks holding no item, so while the panels
-  // were still arriving the first card was laid out at the full page width and
-  // then snapped to a third of it as its siblings mounted — every panel inside
-  // it re-measuring, which is the layout shift this page is pinned against.
+  // Neither tiling form may come back: both put trackers side by side, which
+  // is the arrangement the owner rejected.
   assert.doesNotMatch(
     styles,
-    /grid-template-columns:\s*repeat\(\s*auto-fit/,
-    'auto-fit re-lays-out a card the visitor is already reading as its siblings mount'
+    /grid-template-columns:\s*repeat\(\s*auto-fi[lt]/,
+    'a tiling stack puts the trackers side by side again'
   );
-  // The min() inside the minmax is the load-bearing part: a bare card
-  // minimum lays out a 480px track on a 320px phone and scrolls the body
-  // sideways, which is the floor this repository is pinned against. A test
-  // that only matched "minmax(var(--page-card-min)" would pass that bug.
+  // And the token that only existed to tile them is gone rather than left
+  // behind for the next reader to wire back up.
   assert.doesNotMatch(
     styles,
-    /minmax\(\s*var\(--page-card-min\)/,
-    'a card minimum that cannot shrink forces a track wider than a phone'
+    /--page-card-min/,
+    'the card-minimum token belonged to the tiling stack and must not linger'
   );
 });
 
@@ -389,76 +402,61 @@ test('the page header is two plain icons in the top-end corner', () => {
   assert.match(styles, /\.icon-button\s*\{[^}]*block-size:\s*2\.75rem/);
 });
 
-test('boss log renders the dense fixed-cell strip with tooltips and -- tallies', () => {
+test('boss log renders the dense fixed-cell table with tooltips and -- tallies', () => {
   assert.match(bossLog, /block-size:\s*var\(--boss-cell-height/, 'cells must keep a fixed height (no CLS)');
   assert.match(bossLog, /tally\(boss\.kc\)/, 'tallies must go through the tested renderer');
   assert.match(bossLog, /rankLabel\(boss\.rank\)/, 'ranks must go through the tested renderer');
-  // The complete table scrolls inside the panel, SIDEWAYS (owner directive,
-  // issue 127). Dozens of boss tiles would otherwise make this card taller
-  // than everything stacked below it put together; bounding it vertically
-  // solved that but left a downward scroll region competing with the page's
-  // own under the same thumb. The page scrolls through the STACK, this strip
-  // scrolls across, and the card's geometry is the same before and after the
-  // payload lands.
-  assert.match(bossLog, /\.boss-grid\s*\{[^}]*grid-auto-flow:\s*column/, 'the strip must flow sideways');
-  // The bound is the ROW COUNT, and it has to be: a fixed block-size on a
-  // horizontal scroller takes the scrollbar OUT of the box, so on every
-  // platform that reserves space for one instead of overlaying it — Linux
-  // and Windows, CI included — the second row of tiles is cut off behind it.
-  // MEASURED: 69px of tiles in the 70px a 4.5rem bound leaves, which survives
-  // an overlay scrollbar by a pixel and loses fifteen to a classic one.
+  // Three columns wrapping downward, and NO scroll region (owner directive,
+  // issue 134: "it doesn't need scrolling if it just goes down in columns of
+  // 3"). The table has now been all three arrangements — a tall vertical
+  // scroller, a two-row sideways one, and this — so every declaration that
+  // made it a scroller is pinned absent rather than merely replaced.
+  //
+  // minmax(0, 1fr) is what makes "never scrolls" a property instead of a
+  // hope: the tracks are exactly a third of the card at every width, so three
+  // columns always fit and the box never has an overflow to reveal. A fixed
+  // track width would lay out 252px of columns in the 266px a 320px card
+  // leaves, and would scroll on the first narrower device.
   assert.match(
     bossLog,
-    /\.boss-grid\s*\{[^}]*grid-template-rows:\s*repeat\(2,/,
-    'the boss region must be bounded by its row count'
+    /\.boss-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
+    'the boss table must be three shrinkable columns, exactly like the skills table above it'
   );
   assert.doesNotMatch(
     bossLog,
-    /\.boss-grid\s*\{[^}]*block-size:/,
-    'a fixed height on the sideways scroller clips its bottom row behind a classic scrollbar'
+    /\.boss-grid\s*\{[^}]*grid-auto-flow/,
+    'a column flow is the sideways strip the owner replaced'
   );
-  assert.match(bossLog, /\.boss-grid\s*\{[^}]*overflow-x:\s*auto/, 'and scroll inside itself');
+  // The absence of overflow is now the load-bearing pin, and it protects two
+  // things at once: the table the owner asked not to scroll, and the tooltip
+  // below, which an overflow ancestor would clip the moment one came back.
   assert.doesNotMatch(
     bossLog,
-    /\.boss-grid\s*\{[^}]*overflow-y:\s*auto/,
-    'a sideways strip that also scrolls downward is two scroll regions in one box'
+    /\.boss-grid\s*\{[^}]*overflow/,
+    'an overflow on the boss table is a scroll region the owner removed and a clipping ancestor for the detail'
   );
-  // A strip that chains its scroll drags the document sideways when the
-  // reader reaches the end of it.
-  assert.match(bossLog, /\.boss-grid\s*\{[^}]*overscroll-behavior:\s*contain/);
   // The fill variant existed only to claim the retired rail's height; a card
   // in the stack grows to its content, so it must not come back.
   assert.doesNotMatch(shell, /panel-shell-fill/, 'the rail-filling variant must stay retired');
   assert.match(bossLog, /role="tooltip"/);
   assert.match(bossLog, /:hover\s+\.boss-tip/);
   assert.match(bossLog, /:focus-visible\s+\.boss-tip/);
-  // The tooltip is what actually cut the leading digits off the table: a
+  // The tooltip is what actually cut the leading digits off the old table: a
   // minimum width inside a ~90px cell pushed the grid's scroll width past
   // the card. A viewport-width threshold cannot catch that — the offending
   // value was 9rem, comfortably under the 320px floor — so the MECHANISM is
   // pinned: the tip is bounded by the viewport and claims no minimum.
   //
-  // Its containing block moved OUT of the cell, and that inversion is
-  // deliberate. An absolutely positioned box is clipped by an overflow
-  // ancestor only when that ancestor is in its containing-block chain, so a
-  // cell-anchored tip inside a sideways scroller is cut off by the strip's
-  // own edge — and, being outside the chain, one anchored to the wrapper
-  // contributes nothing to the strip's scrollable width either. The floor
-  // the old pin protected is therefore stronger here, not weaker.
+  // Its containing block is the CELL again. It had to move out to a wrapper
+  // while the table scrolled, because an absolutely positioned box is clipped
+  // by an overflow ancestor in its containing-block chain; with the scroller
+  // gone there is nothing to clip it, and a table that wraps down the card
+  // has no single readout position that is near the tile a reader is
+  // pointing at.
   assert.match(
     bossLog,
-    /\.boss-strip\s*\{[^}]*position:\s*relative/,
-    'the strip wrapper must be the tip’s containing block'
-  );
-  assert.doesNotMatch(
-    bossLog,
-    /\.boss-cell\s*\{[^}]*position:/,
-    'a positioned cell puts the tip back inside the scroller that clips it'
-  );
-  assert.doesNotMatch(
-    bossLog,
-    /\.boss-grid\s*\{[^}]*position:/,
-    'a positioned scroller becomes the tip’s containing block and clips it again'
+    /\.boss-cell\s*\{[^}]*position:\s*relative/,
+    'the cell must be the tip’s containing block, so the detail appears on the tile it describes'
   );
   assert.match(
     bossLog,
@@ -468,7 +466,18 @@ test('boss log renders the dense fixed-cell strip with tooltips and -- tallies',
   assert.doesNotMatch(
     bossLog,
     /\.boss-tip\s*\{[^}]*min-inline-size/,
-    'a tip wider than its cell widens the grid it floats over'
+    'a tip wider than its cell claims space the card does not have'
+  );
+  // Anchoring the tip per COLUMN is the containment rule that replaces the
+  // scroller's clipping: a tip is wider than a cell, so a start-anchored one
+  // in the last column extends past the card's end edge — and with no
+  // clipping ancestor left, that drags the DOCUMENT sideways, which is the
+  // floor this repository is pinned against at 320px. First column opens
+  // toward the end edge, last column toward the start edge.
+  assert.match(
+    bossLog,
+    /\.boss-cell:nth-child\(3n\)\s+\.boss-tip\s*\{[^}]*inset-inline-end:\s*0/,
+    'the last column’s detail must open toward the start edge, or it hangs off the card'
   );
   assert.match(bossLog, /tabindex="0"/, 'cells must be focusable for the tooltip');
   assert.match(bossLog, /aria-label=\{cellLabel\(boss\)\}/);
@@ -881,7 +890,16 @@ test('the boss panel displays no account name anywhere', () => {
   // The grids keep accessible names — losing the account must not cost a
   // screen reader the ability to tell the two tables apart.
   assert.match(bossLog, /<ul class="skill-grid" aria-label="Skill levels">/);
-  assert.match(bossLog, /<ul class="boss-grid" tabindex="0" aria-label="Boss tallies">/);
+  // And the boss table is no longer a focus stop. The tabindex it used to
+  // carry existed because a scrollable box is keyboard-reachable only when
+  // focusable; with the scroll region gone (issue 134) it is a tab stop that
+  // does nothing, which costs every keyboard reader a press for no action.
+  assert.match(bossLog, /<ul class="boss-grid" aria-label="Boss tallies">/);
+  assert.doesNotMatch(
+    bossLog,
+    /<ul class="boss-grid"[^>]*tabindex/,
+    'the boss table is not a scroll region any more, so it must not be a focus stop either'
+  );
 });
 
 // The grid's trailing gap, filled with the account's own totals rather than
