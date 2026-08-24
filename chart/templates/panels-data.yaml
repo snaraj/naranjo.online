@@ -9,15 +9,17 @@ capture the volume.
 
 THE SHAPE CHANGED IN THE 2026-08-24 ROUND-3 REVIEW (finding 7). It was a
 hostPath PV with an empty storageClassName. That is not a dated shape, it is
-a REFUSED one: website-infrastructure #211's storage acceptance denies
-hostPath outright, admits a persistent volume only as `local` or `csi`,
+a REFUSED one: the platform storage acceptance — originating issue
+website-infrastructure #211, now carried by website-infrastructure PR #212 —
+denies hostPath outright, admits a persistent volume only as `local` or `csi`,
 requires the path under the enumerated local-volume root, requires the
 enumerated StorageClass on both objects, and requires bounded nodeAffinity
 (operator In, non-empty values). Shipping the old shape would have meant
 shipping something the platform rejects on arrival, so the chart adopts the
-platform design instead. #211 is still OPEN and this remains blocked on its
-five-part receipt either way; what changed is that the receipt now confirms
-the chart rather than contradicting it.
+platform design instead. The dependency is still UNLANDED and this stays
+Draft until website-infrastructure #212 merges and releases AND the
+#141/#189 live convergence receipt posts; what changed is that the receipt
+now confirms the chart rather than contradicting it.
 
 A `local` volume is node-bound by definition, so nodeAffinity is not
 decoration — Kubernetes requires it, and the node name is supplied at

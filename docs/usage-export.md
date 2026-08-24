@@ -105,12 +105,14 @@ keeps the last good payload and says so in the envelope `status`.
 
   This was a hostPath pair with an explicitly empty storageClassName until
   the 2026-08-24 round-3 review (finding 7). That shape is not merely dated:
-  website-infrastructure #211's storage acceptance denies hostPath outright
-  and admits a persistent volume only as `local` or `csi`, under the
+  the platform storage acceptance — originating issue website-infrastructure
+  #211, now carried by website-infrastructure PR #212 — denies hostPath
+  outright and admits a persistent volume only as `local` or `csi`, under the
   enumerated local-volume root, carrying the enumerated class on both
-  objects. **This alignment is not yet confirmed by the platform — #211 is
-  open, and this work remains blocked on its five-part receipt either way.**
-  What changed is the direction of the gap.
+  objects. **This alignment is not yet confirmed by the platform.** The
+  dependency is unlanded: this work stays Draft until website-infrastructure
+  #212 merges and releases AND the #141/#189 live convergence receipt posts
+  on the pull request. What changed is the direction of the gap.
 - **One writer, by construction.** `replicaCount` defaults to 1 whenever
   `panels.data` is enabled, the state claim is `ReadWriteOncePod`, and the
   render REFUSES `replicaCount > 1` with the capability on (2026-08-24

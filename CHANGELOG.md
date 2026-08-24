@@ -164,13 +164,15 @@ could not carry it:
   process memory. It is persisted, so provenance loss is `stale` from the
   first tick.
 - 7 — the storage shape was a hostPath pair the platform storage acceptance
-  DENIES (website-infrastructure #211), and the sibling check compared raw
+  DENIES (originating issue website-infrastructure #211, now carried by
+  website-infrastructure PR #212), and the sibling check compared raw
   strings in one direction. The chart adopts the platform design — `local`
   volumes under the enumerated root, the enumerated StorageClass on both
   objects, bounded required nodeAffinity, node name supplied at ceremony
   time and never stored here — and both root pairs must be disjoint in BOTH
-  directions over normalized paths. #211 is open and this work remains
-  blocked on its five-part receipt regardless.
+  directions over normalized paths. The platform dependency is unlanded and
+  this work stays Draft until website-infrastructure #212 merges and
+  releases AND the #141/#189 live convergence receipt posts on this PR.
 - 8 — the push inherited whatever `~/.ssh/config` resolved for a host alias
   and hardened only the options someone had named. It now runs with
   `-F /dev/null` (which also excludes the system-wide file), states every

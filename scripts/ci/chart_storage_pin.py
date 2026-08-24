@@ -14,7 +14,8 @@ cannot half-exist.
 
 WHAT CHANGED IN THE 2026-08-24 ROUND-3 REVIEW (findings 3 and 7). The volumes
 were hostPath with an explicitly empty storageClassName. website-infrastructure
-#211's storage acceptance denies hostPath outright and admits only enumerated
+#211 (now carried by website-infrastructure PR #212) denies hostPath
+outright and admits only enumerated
 classes, so the chart adopted the platform shape and this pin moved with it:
 it now requires `local` and refuses a hostPath source, requires the enumerated
 class rather than the empty one, and requires nodeAffinity to be REQUIRED,
@@ -180,7 +181,8 @@ def _check_claim_common(claim: dict, facts: argparse.Namespace, name: str,
             "pair to the class the platform admits" % (name, facts.storage_class))
     if spec.get("volumeName") != name:
         raise StoragePinError("claim %s does not pin volumeName to itself" % name)
-    # website-infrastructure #211 SR-12 and SR-15: a claim that names a data
+    # Platform storage acceptance SR-12 and SR-15 (website-infrastructure
+    # #211, carried by PR #212): a claim that names a data
     # source or a volume-attributes class is asking the platform to do
     # something other than bind the exact pre-provisioned volume above it.
     for forbidden in ("dataSource", "dataSourceRef", "volumeAttributesClassName"):
@@ -319,7 +321,8 @@ def _check_volume_common(volume: dict, facts: argparse.Namespace, name: str,
         raise StoragePinError(
             "PV %s's claimRef must pin the pair: namespace %s, name %s"
             % (name, facts.namespace, name))
-    # website-infrastructure #211 SR-2: hostPath is denied outright. It is the
+    # Platform storage acceptance SR-2 (website-infrastructure #211, carried
+    # by PR #212): hostPath is denied outright. It is the
     # admin-only loophole through restricted pod security, which is exactly
     # why the shape this replaced needed a manual admin ceremony to exist at
     # all. Naming it here rather than only checking for `local` means a

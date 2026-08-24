@@ -129,8 +129,9 @@ panels:
   # the platform's own StorageClass. This REPLACED a static hostPath pair
   # with an empty storageClassName in the 2026-08-24 round-3 review (finding
   # 7), because that shape is not merely dated — it is one the platform's
-  # storage policy REJECTS. website-infrastructure #211's acceptance denies
-  # hostPath volumes outright (a hostPath PV is the admin-only loophole
+  # storage policy REJECTS. The platform acceptance — originating issue
+  # website-infrastructure #211, now carried by website-infrastructure PR
+  # #212 — denies hostPath volumes outright (a hostPath PV is the loophole
   # through restricted pod security, which is exactly why the old shape had
   # to ship its PV behind a manual admin ceremony), and admits a persistent
   # volume only when it is `local` or `csi`, under the enumerated local
@@ -138,9 +139,10 @@ panels:
   # the claim, with bounded required nodeAffinity. Shipping the old shape
   # would have meant shipping something the platform would refuse on arrival.
   #
-  # THIS ALIGNMENT IS NOT YET CONFIRMED BY THE PLATFORM: #211 is open, and
-  # this PR remains blocked on its five-part receipt regardless of what the
-  # chart renders. What changed is the direction of the gap — the chart now
+  # THIS ALIGNMENT IS NOT YET CONFIRMED BY THE PLATFORM. The dependency is
+  # unlanded: this work stays Draft until website-infrastructure #212 merges
+  # and releases AND the #141/#189 live convergence receipt posts on the
+  # naranjo PR. What changed is the direction of the gap — the chart now
   # renders what the platform design says it will admit, so the receipt
   # confirms rather than contradicts it.
   #

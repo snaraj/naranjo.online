@@ -23,7 +23,8 @@
 #   with-pv (panels.data.persistentVolume.enabled=true, the admin ceremony):
 #   additionally exactly TWO PersistentVolumes — each a `local` volume at its
 #   reviewed path strictly under the enumerated local-volume root (hostPath
-#   is refused outright: website-infrastructure #211 denies it), Retain, the
+#   is refused outright: the platform storage acceptance denies it —
+#   website-infrastructure #211, carried by PR #212), Retain, the
 #   enumerated storageClassName, bounded REQUIRED nodeAffinity (one term, one
 #   expression, operator In, one non-empty value), a claimRef pinning each
 #   pair from the volume side too, and the two directories disjoint in BOTH
@@ -159,7 +160,7 @@ mutate_must_fail "claim reference flipped writable" enabled \
 mutate_must_fail "claim storageClassName dropped" enabled \
   '/storageClassName: '"${STORAGE_CLASS}"'/d' \
   "${enabled_render}"
-mutate_must_fail "claim storageClassName emptied — the shape #211 refuses" enabled \
+mutate_must_fail "claim storageClassName emptied — the shape the platform refuses" enabled \
   's/storageClassName: '"${STORAGE_CLASS}"'/storageClassName: ""/' \
   "${enabled_render}"
 mutate_must_fail "claim unpinned from its volume" enabled \
