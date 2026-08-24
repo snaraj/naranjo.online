@@ -12,12 +12,19 @@
   because a link with two counters beside it is not something a title string can
   express, and that is exactly what the header snippet is for.
 
-  Nothing here is fetched. The rows are data in lib/projects.ts, captured out
-  of band on a stated date, and the section prints that date — requirement 1
-  keeps this frontend local-origin-only and live refresh is off by default, so
-  a count that implied it was current would be the same class of falsehood the
-  panels' provenance rules exist to prevent. The repository addresses reach the
-  DOM only as href values; no request is made for them from this page.
+  No request is ever made for these rows. They are data in lib/projects.ts,
+  captured out of band on a stated date (projectsCapturedOn) — requirement 1
+  keeps this frontend local-origin-only and live refresh is off by default.
+  A visitor-facing caption used to spell out the capture date and the
+  network posture in prose; the owner removed both (issue 167), because
+  provenance and how the data got here are maintainer/reviewer facts, not
+  something a visitor came to this page to read. The underlying guarantee
+  the caption used to describe is unchanged and stays ENFORCED regardless —
+  by the structural provider-neutrality tests (no remote origin anywhere in
+  frontend source), never by a sentence on the page. projectsCapturedOn
+  remains the maintenance record for when the six counts below were
+  captured; it is simply no longer printed. The repository addresses reach
+  the DOM only as href values.
 
   The glyphs are drawn here, in the same language as the page's own chrome — a
   24-unit box, currentColor, round caps — rather than vendored from anyone's
@@ -30,15 +37,7 @@
   import ArtGallery from './ArtGallery.svelte';
   import FeedCard from './FeedCard.svelte';
   import { artNote, artProvenance } from '../art.ts';
-  import { formatIsoDate } from '../feed.ts';
-  import {
-    projectCounts,
-    projectHostLabel,
-    projectLinkLabel,
-    projects,
-    projectsCapturedOn,
-    projectUrl
-  } from '../projects.ts';
+  import { projectCounts, projectLinkLabel, projects, projectUrl } from '../projects.ts';
 </script>
 
 <section class="page-section" id="projects" aria-labelledby="projects-title">
@@ -53,10 +52,6 @@
 
   <div class="page-subsection">
     <h3 class="subsection-title">Coding Projects</h3>
-    <p class="section-note">
-      Counts captured from {projectHostLabel} on {formatIsoDate(projectsCapturedOn)}; this page
-      fetches nothing.
-    </p>
     <ul class="project-feed">
       {#each projects as project (project.name)}
         <li>
