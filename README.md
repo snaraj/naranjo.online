@@ -318,12 +318,19 @@ refreshes without a release and without any egress from the cluster.
 
 Fail-closed at every absence: no `PANELS_DATA_ROOT`, no key, no file, or a
 file that is tampered, replayed, oversized, or malformed all leave the last
-good payload serving, with the envelope `status` saying so. The end-to-end
-operator manual — key generation, the forced-command push identity, the
-cluster-side PV ceremony, verification, and the deliberate failure modes —
-is `docs/usage-export.md`; the chart contract is pinned by
-`scripts/ci/chart-storage-pin.sh` in the same CI job as the ingress and
-egress pins.
+good payload serving, with the envelope `status` saying so. The replay
+floor persists across restarts as a sealed marker in a separate writable
+state volume, so a restarted pod refuses ciphertext older than what any
+previous process accepted. The capability defaults OFF in the chart
+(`panels.data.enabled=false`): a fresh install schedules with no storage
+ceremony and serves the embedded release-time snapshot — an explicit,
+documented as-of-release state — and enabling the sealed feed is the
+deliberate last step of the storage ceremony. The end-to-end operator
+manual — key generation, the forced-command push identity, the
+cluster-side directory and PV ceremonies, enablement order, verification,
+and the deliberate failure modes — is `docs/usage-export.md`; the chart
+contract is pinned by `scripts/ci/chart-storage-pin.sh` in the same CI job
+as the ingress and egress pins.
 
 ### Enabling live refresh (not enabled anywhere today)
 

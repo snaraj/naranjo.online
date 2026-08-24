@@ -2,7 +2,10 @@
 # chart-storage-pin — prove the rendered panels data root keeps every storage
 # invariant (issue #142), in BOTH directions:
 #
-#   enabled (the default values): exactly TWO PersistentVolumeClaims — the
+#   enabled (--set panels.data.enabled=true — deliberately NOT the default
+#   since the 2026-08-24 review's finding M6: the capability binds to
+#   admin-provisioned volumes, so a default render must never carry its
+#   claims): exactly TWO PersistentVolumeClaims — the
 #   read-only DATA claim carrying the pushed sealed series, and the writable
 #   replay-floor STATE claim (2026-08-24 security review, finding H2) — each
 #   pinned to its PersistentVolume by name with an EXPLICIT empty
@@ -23,8 +26,13 @@
 #   each pair from the volume side too, and the state directory a genuine
 #   sibling of the push directory, never inside it.
 #
-#   disabled (panels.data.enabled=false): NONE of it — no claim, no volume,
-#   no mount, no PANELS_DATA_* environment. The capability cannot half-exist.
+#   disabled — proven for BOTH the untouched DEFAULT render (the
+#   fresh-install schedulability pin: nothing renders that could leave a
+#   pod Pending on an unbindable claim) and an explicit
+#   panels.data.enabled=false: NONE of it — no claim, no volume, no mount,
+#   no PANELS_DATA_* environment. The capability cannot half-exist, and
+#   turning it off is the documented as-of-release-snapshot decision, not
+#   a silent surprise.
 #
 # The checker (chart_storage_pin.py) reads renders through the census's own
 # fail-closed document reader, and the expected facts are read HERE from
@@ -87,24 +95,30 @@ pin() {
     --namespace "${NAMESPACE}"
 }
 
-enabled_render="$(render)"
-with_pv_render="$(render --set panels.data.persistentVolume.enabled=true)"
+enabled_render="$(render --set panels.data.enabled=true)"
+with_pv_render="$(render --set panels.data.enabled=true \
+  --set panels.data.persistentVolume.enabled=true)"
+default_render="$(render)"
 disabled_render="$(render --set panels.data.enabled=false)"
 
-# (a) The three directions hold.
+# (a) The four directions hold.
 printf '%s' "${enabled_render}" | pin enabled ||
-  fail "the default render violates the storage pin"
-echo "chart-storage-pin: (a) default render: claim + read-only wiring, no PV"
+  fail "the enabled render violates the storage pin"
+echo "chart-storage-pin: (a) enabled render: both claims + wiring (data ro, state rw), no PV"
 
 printf '%s' "${with_pv_render}" | pin with-pv ||
   fail "the with-pv render violates the storage pin"
-echo "chart-storage-pin: (b) admin render: the exact hostPath PersistentVolume"
+echo "chart-storage-pin: (b) admin render: the exact pair of hostPath PersistentVolumes"
+
+printf '%s' "${default_render}" | pin disabled ||
+  fail "the DEFAULT render carries capability objects; a fresh install must never wait on admin volumes (review M6)"
+echo "chart-storage-pin: (c) default render: capability fully absent — fresh installs schedule"
 
 printf '%s' "${disabled_render}" | pin disabled ||
   fail "the disabled render still carries capability objects"
-echo "chart-storage-pin: (c) disabled render: no claim, no volume, no wiring"
+echo "chart-storage-pin: (d) explicit disabled render: no claim, no volume, no wiring"
 
-# (d) Self-mutation battery: each hostile rewrite of the render must turn
+# (e) Self-mutation battery: each hostile rewrite of the render must turn
 # the checker red. sed operates on the RENDER, so what is proven is that the
 # checker catches the outcome, whatever template edit might produce it.
 mutation_count=0
@@ -188,6 +202,7 @@ mutate_must_fail "state PV hostPath moved off the reviewed directory" with-pv \
 # even when the render and the stated facts agree with each other.
 mutation_count=$((mutation_count + 1))
 nested_render="$(render \
+  --set panels.data.enabled=true \
   --set panels.data.persistentVolume.enabled=true \
   --set panels.data.stateHostPath="${HOST_PATH}/state")"
 if printf '%s' "${nested_render}" | \
@@ -205,6 +220,6 @@ fi
 
 [ "${mutation_count}" -ge "${minimum_mutations}" ] ||
   fail "only ${mutation_count} mutations ran; at least ${minimum_mutations} are required. Mutations are added, never removed."
-echo "chart-storage-pin: (d) mutation battery held (${mutation_count} mutants, all caught)"
+echo "chart-storage-pin: (e) mutation battery held (${mutation_count} mutants, all caught)"
 
-echo "chart-storage-pin: the data root renders read-only, pinned, and absent when disabled"
+echo "chart-storage-pin: the data root renders read-only, pinned, and absent by default and when disabled"

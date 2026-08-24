@@ -146,28 +146,6 @@ metadata:
   name: {chart}
 spec:
   replicas: 2
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {chart}-panels-data
-  namespace: {namespace}
-spec:
-  accessModes:
-    - ReadOnlyMany
-  storageClassName: ""
-  volumeName: {chart}-panels-data
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {chart}-panels-state
-  namespace: {namespace}
-spec:
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: ""
-  volumeName: {chart}-panels-state
 """
 
 
@@ -1141,7 +1119,7 @@ class CensusFixture(unittest.TestCase):
 
 class CensusAcceptsThePinnedRender(CensusFixture):
     def test_the_pinned_render_passes(self):
-        self.assertEqual(self.census(render())["objects"], 6)
+        self.assertEqual(self.census(render())["objects"], 4)
 
     def test_chart_facts_come_from_metadata_and_values(self):
         self.assertEqual(self.facts.chart_name, FIXTURE_CHART_NAME)
@@ -1191,7 +1169,7 @@ class CensusAcceptsThePinnedRender(CensusFixture):
                    .replace(label_anchor, label_anchor + label, 1))
         self.assertNotEqual(mutated, base)
         result = self.census(mutated)
-        self.assertEqual(result["objects"], 6)
+        self.assertEqual(result["objects"], 4)
         self.assertEqual(result["policy"]["metadata"]["labels"]["reviewed"], "by-hand")
         accounts = [o for o in CRC.flatten(parse(mutated))
                     if o["kind"] == "ServiceAccount"]
@@ -1412,7 +1390,7 @@ class CensusRefusesAWidenedPolicy(CensusFixture):
                      .replace("kind: NetworkPolicy", '"kind": NetworkPolicy', 1)
                      .replace("  egress: []", "  egress : []", 1))
         self.assertNotEqual(respelled, base)
-        self.assertEqual(CRC.census(respelled, self.facts)["objects"], 6)
+        self.assertEqual(CRC.census(respelled, self.facts)["objects"], 4)
 
     def test_the_wrong_policy_entirely_is_refused(self):
         # The expectation is stated by the census, never read from the input:
@@ -1483,7 +1461,7 @@ class CensusRefusesWhatKubernetesRefuses(CensusFixture):
         for written in ("''", "a", "MyValue", "'12345'", "a_b.c-d", "a" * 63,
                         "0.1.25", '"0.1.25"'):
             self.assertEqual(self.census(self.policy_label("    probe: %s\n" % written))["objects"],
-                             6, written)
+                             4, written)
         # Refused on the real server, so refused here.
         for written in ("'-abc'", "'abc-'", "'.abc'", "'-'", "'a b'", "'a/b'",
                         "\xe9", "'_a'", "'a.'"):
@@ -1496,7 +1474,7 @@ class CensusRefusesWhatKubernetesRefuses(CensusFixture):
         for key in ("a", "a" * 63, "A_b.c-d", "example.com/a",
                     (("a" * 61 + ".") * 4 + "a" * 5) + "/a"):
             self.assertEqual(self.census(self.policy_label("    %s: enabled\n" % key))["objects"],
-                             6, key)
+                             4, key)
         self.reject(self.policy_label("    a/b/c: enabled\n"), "carries more than one `/`")
         self.reject(self.policy_label("    /a: enabled\n"), "has an empty prefix")
         self.reject(self.policy_label("    example.com/: enabled\n"), "has an empty name part")
@@ -1525,7 +1503,7 @@ class CensusRefusesWhatKubernetesRefuses(CensusFixture):
                 "\n"
                 "      last\n"
                 "    unicode: \xe9\u4e2d\n")
-        self.assertEqual(self.census(self.account_block(free))["objects"], 6)
+        self.assertEqual(self.census(self.account_block(free))["objects"], 4)
         self.reject(self.account_block("  annotations:\n    a/b/c: enabled\n"),
                     "carries more than one `/`")
         self.reject(self.account_block("  annotations:\n    %s: enabled\n" % ("a" * 64)),
@@ -1566,7 +1544,7 @@ class CensusRefusesWhatKubernetesRefuses(CensusFixture):
         self.reject(self.policy_label("    probe: ~\n"), "not a string")
         # ... while the EMPTY STRING, which is what the server would have
         # stored, still reads and still passes.
-        self.assertEqual(self.census(self.policy_label("    probe: ''\n"))["objects"], 6)
+        self.assertEqual(self.census(self.policy_label("    probe: ''\n"))["objects"], 4)
 
     def test_object_names_must_be_names_kubernetes_accepts(self):
         subdomain = ("a" * 61 + ".") * 4 + "a" * 5
@@ -1650,7 +1628,7 @@ class CensusRefusesWhatKubernetesRefuses(CensusFixture):
         # class: every rule above must leave the real shape alone. The fixture
         # render carries `app.kubernetes.io/*` keys, a quoted version value,
         # matchLabels on both selector sides and a namespace -- and it passes.
-        self.assertEqual(self.census(render())["objects"], 6)
+        self.assertEqual(self.census(render())["objects"], 4)
 
 
 class MutationBattery(CensusFixture):

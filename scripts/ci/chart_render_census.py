@@ -293,17 +293,14 @@ EXPECTED_INVENTORY = (
     ("networking.k8s.io/v1", "NetworkPolicy"),
     ("v1", "Service"),
     ("v1", "ServiceAccount"),
-    # The panels data root's claims (issue #142): the namespace halves of
-    # the two statically bound hostPath pairs rendered by the default
-    # values — the read-only DATA claim for the pushed sealed series and,
-    # since the 2026-08-24 security review's finding H2, the writable STATE
-    # claim for the replay-floor marker. The cluster-scoped PersistentVolume
-    # halves render only under panels.data.persistentVolume.enabled=true (an
-    # admin ceremony, not the release identity) and therefore do not appear
-    # in the default inventory; scripts/ci/chart-storage-pin.sh pins every
-    # direction.
-    ("v1", "PersistentVolumeClaim"),
-    ("v1", "PersistentVolumeClaim"),
+    # The panels data root (issue #142) is deliberately ABSENT here: since
+    # the 2026-08-24 security review (finding M6) panels.data.enabled
+    # defaults to false, so the default render carries neither of its two
+    # statically bound PersistentVolumeClaims (the read-only data claim and
+    # the writable replay-floor state claim of finding H2) — a fresh install
+    # must never render claims against volumes only an admin ceremony can
+    # provide. The enabled, with-pv, and disabled directions are all pinned
+    # by scripts/ci/chart-storage-pin.sh.
 )
 
 # A list wrapper may nest, but not indefinitely; a render that needs more

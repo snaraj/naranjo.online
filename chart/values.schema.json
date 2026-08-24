@@ -106,8 +106,8 @@
           "properties": {
             "enabled": {
               "type": "boolean",
-              "default": true,
-              "description": "Render the claim, the read-only mount, and the PANELS_DATA_ROOT / PANELS_DATA_KEY wiring. Safe on by default: the capability is a read-only projection of one file, and the application fails closed to its embedded snapshot on every absent or unauthenticated input."
+              "default": false,
+              "description": "Render both claims, the mounts, and the PANELS_DATA_ROOT / PANELS_DATA_STATE / PANELS_DATA_KEY wiring. Off by default (2026-08-24 review finding M6): false serves the embedded release-time snapshot — an explicit, documented as-of-release decision, not a silent fallback — and true requires the pre-provisioned PVs and host directories of docs/usage-export.md first, because defaults that render claims against absent volumes leave a fresh cluster's pod Pending. Enable deliberately, last."
             },
             "hostPath": {
               "type": "string",

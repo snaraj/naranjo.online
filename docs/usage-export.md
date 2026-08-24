@@ -217,10 +217,20 @@ repository.
    kubectl apply -f /tmp/panels-data.yaml
    ```
 
-   The claims themselves are part of every release; only the PV documents
-   are the admin ceremony. Apply the PVs (and create both host directories)
-   BEFORE deploying a release with `panels.data.enabled=true`, or the new
-   pod waits Pending on an unbindable claim.
+   The claims themselves are part of every enabled release; only the PV
+   documents are the admin ceremony. Apply the PVs (and create both host
+   directories) BEFORE deploying a release with `panels.data.enabled=true`,
+   or the new pod waits Pending on an unbindable claim.
+
+5. **Enable the capability — deliberately, last.** `panels.data.enabled`
+   defaults to `false` (2026-08-24 security review, finding M6): a fresh
+   install renders none of the storage and schedules everywhere, serving
+   the token-usage panel from its embedded release-time snapshot — honest
+   recorded data whose envelope `generatedAt` says exactly how old it is.
+   Once steps 1–4 exist, set `panels.data.enabled=true` in the deployment
+   values. Turning it back off is the same explicit decision in reverse:
+   the sealed feed stops being read and the panel returns to as-of-release
+   data — documented behavior chosen in values, never a silent fallback.
 
 ## Verifying end to end
 
@@ -245,7 +255,7 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | `push refused` | ssh transport failed; nothing landed |
 | `checksum mismatch after push` | landed bytes differ from sealed bytes — investigate before trusting the panel |
 | panel `status: stale` | the origin refused the newest file (tamper, replay, wrong key, over-cap, malformed) and kept the last good payload |
-| panel serves embedded snapshot | no data root configured, or no sealed file yet — the shipped fallback, not an error |
+| panel serves embedded snapshot | `panels.data.enabled=false` (the default — the documented as-of-release decision), or no sealed file yet — the shipped state, not an error |
 | floor marker absent/corrupt in the state dir | the app falls back to the embedded snapshot's floor — replay protection degrades to the pre-marker guarantee, never below it; the next accepted push rewrites the marker |
 | pod Pending on the state claim | the state PV or its host directory was not created before enabling `panels.data` — finish the ceremony above |
 
