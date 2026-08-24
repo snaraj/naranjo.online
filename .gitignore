@@ -6,6 +6,11 @@ coverage.out
 *.cover.out
 .DS_Store
 
+# Browser-lane leftovers (issue #26, stage 2). The engines themselves live in
+# the operating system's user cache directory and never come near this tree;
+# what a failed run can leave here is the per-test output directory.
+frontend/test-results/
+
 # Agent worktrees (see AGENTS.md, "Parallel agents in one checkout"). The
 # tracked .claude/settings.json is deliberately not covered by this rule.
 .claude/worktrees/

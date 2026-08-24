@@ -10,23 +10,33 @@ const [fallback, component, styles, themeRegistry, themeMenu] = await Promise.al
   readFile(new URL('../src/lib/ThemeMenu.svelte', import.meta.url), 'utf8'),
 ]);
 
+/* Every component in the tree, keyed by file name — markup and scoped style
+ * together, because the rendering-lane floors below need both halves: which
+ * elements are controls is a MARKUP fact, and how big they are is a STYLE
+ * one. Discovered by walking the tree rather than listed by hand, so a
+ * component added later is covered without anyone remembering to add it
+ * here. */
+const componentSources = Object.fromEntries(
+  await Promise.all(
+    (await readdir(new URL('../src', import.meta.url), { recursive: true }))
+      .filter((entry) => entry.endsWith('.svelte'))
+      .map(async (entry) => [
+        entry,
+        await readFile(new URL(`../src/${entry}`, import.meta.url), 'utf8'),
+      ])
+  )
+);
+
 /* Every component's scoped <style>, keyed by file name. The global stylesheet
  * is not the only place a width is decided — two of the three overflow
  * defects this page has actually suffered lived in component style blocks —
  * so a source pin that reads styles.css alone would be blind to the majority
- * of its own subject. Discovered by walking the tree rather than listed by
- * hand, so a component added later is covered without anyone remembering to
- * add it here. */
+ * of its own subject. */
 const componentStyles = Object.fromEntries(
-  await Promise.all(
-    (await readdir(new URL('../src', import.meta.url), { recursive: true }))
-      .filter((entry) => entry.endsWith('.svelte'))
-      .map(async (entry) => {
-        const source = await readFile(new URL(`../src/${entry}`, import.meta.url), 'utf8');
-        const block = /<style[^>]*>([\s\S]*?)<\/style>/.exec(source);
-        return [entry, block ? block[1] : ''];
-      })
-  )
+  Object.entries(componentSources).map(([entry, source]) => {
+    const block = /<style[^>]*>([\s\S]*?)<\/style>/.exec(source);
+    return [entry, block ? block[1] : ''];
+  })
 );
 
 // Browser execution is deliberately outside this dependency-free test. These
@@ -619,4 +629,297 @@ test('theme toggle: swatch popover, token-pure colors, machine-wired', () => {
   // OS setting.
   assert.match(themeMenu, /2\.75rem/);
   assert.match(themeMenu, /prefers-reduced-motion/);
+});
+
+/* ===========================================================================
+ * Rendering lanes, stage 1 (issue #26)
+ *
+ * The floors below are what "renders correctly on a phone and in every
+ * engine" decomposes into, each pinned where it is actually decided — in the
+ * declarations — rather than measured once and assumed. They are deliberately
+ * SOURCE pins: the browser lanes in e2e/rendering-lanes.spec.mjs observe the
+ * same floors for real in Chromium, Firefox and WebKit at phone viewports,
+ * and the two halves answer different questions. A measurement proves what
+ * one build did on one engine; these prove the rule the next build inherits,
+ * including on the engines and devices no lane can run.
+ * ======================================================================== */
+
+/* Every rule in the stylesheet AND in every component <style>, tagged with
+ * the file it came from. cssRules is reused rather than re-derived: the
+ * question here is CONTAINMENT — which at-rules a declaration sits inside —
+ * and that is exactly what its `enclosing` list records. (The mode resolver
+ * above asks a different question, cascade order, which is why it weighs
+ * selectors and this does not.) */
+const sweptRules = Object.entries({ styles, ...componentStyles }).flatMap(([file, source]) =>
+  cssRules(source).map((rule) => ({ ...rule, file }))
+);
+
+// One rule's declarations, property and value, in source order.
+const declarationsOf = (body) =>
+  [...body.matchAll(/(?:^|;)\s*(--[a-z0-9-]+|-{0,2}[a-z][a-z0-9-]*)\s*:\s*([^;]+)/gi)].map(
+    ([, property, value]) => ({ property: property.toLowerCase(), value: value.trim() })
+  );
+
+// A selector list, split into the individual selectors it stands for.
+const selectorParts = (selector) => selector.split(',').map((part) => part.trim());
+
+/* A length literal in CSS pixels, or null when this parser cannot read it.
+ * Null is never treated as "fine": every caller fails loudly on it, because a
+ * value the parser does not understand is precisely where an undersized one
+ * would hide. rem is resolved at the 16px root default the page ships with —
+ * a reader who enlarges that only ever makes these boxes bigger. */
+function lengthInPx(value) {
+  const trimmed = value.trim();
+  const px = /^([\d.]+)px$/.exec(trimmed);
+  if (px) return Number(px[1]);
+  const rem = /^([\d.]+)rem$/.exec(trimmed);
+  if (rem) return Number(rem[1]) * 16;
+  return null;
+}
+
+/* The SMALLEST size a value can resolve to. max() is the form the 16px floor
+ * is written in — it takes whichever of its arguments is larger, so the
+ * guarantee is the largest of the parts, and a max() whose parts are all
+ * under the floor is caught rather than excused by the function name. */
+function smallestLengthPx(value) {
+  const direct = lengthInPx(value);
+  if (direct !== null) return direct;
+  const max = /^max\(([^()]+)\)$/.exec(value.trim());
+  if (!max) return null;
+  const parts = max[1].split(',').map((part) => lengthInPx(part));
+  return parts.some((part) => part === null) ? null : Math.max(...parts);
+}
+
+// The static viewport unit, in any spelling; the dynamic family it must be
+// replaced by. `100dvh` deliberately does NOT match the static pattern.
+const staticViewportHeight = /\b\d+(?:\.\d+)?vh\b/;
+const dynamicViewportHeight = /\b\d+(?:\.\d+)?[dsl]vh\b/;
+
+test('full-viewport height is a dynamic unit, in every file that decides one (issue #26)', () => {
+  const scanned = { styles, ...componentStyles };
+  assert.ok(
+    Object.keys(scanned).length > 5,
+    'the component sweep found almost nothing; the tree walk is broken'
+  );
+  let dynamic = 0;
+  for (const [name, source] of Object.entries(scanned)) {
+    assert.doesNotMatch(
+      source,
+      staticViewportHeight,
+      `${name}: the static viewport unit is the tallest the viewport ever gets, so a box sized in it sits under a phone's browser chrome; use dvh or svh`
+    );
+    dynamic += [...source.matchAll(new RegExp(dynamicViewportHeight, 'g'))].length;
+  }
+  /* The absence assertion alone is satisfied by a page that never expresses a
+     full-viewport height at all, which is not the floor — the floor is that
+     when the page DOES want the viewport, it asks for the one that tracks the
+     visible area. So the positive form is pinned too, and pinned on the
+     element that carries it. */
+  assert.ok(
+    dynamic > 0,
+    'no box asks for a dynamic viewport height; the floor has no positive expression left, only a ban'
+  );
+  assert.match(
+    styles,
+    /body\s*\{\s*min-height:\s*100dvh/,
+    'the page body must claim the dynamic viewport height'
+  );
+});
+
+/* The features this page uses that a browser inside its support window may
+ * not have. Every one of them fails the same silent way — an unsupported
+ * value invalidates its whole declaration, so the page does not degrade, it
+ * simply loses the padding, the height, or the ink it asked for — which is
+ * why each must be an upgrade over a base that stands on its own. */
+const progressiveFeatures = [
+  { name: 'a dynamic viewport unit', used: dynamicViewportHeight, tested: /[dsl]vh/ },
+  { name: 'a safe-area inset', used: /env\(\s*safe-area-inset/, tested: /env\(\s*safe-area-inset/ },
+  { name: 'a color mix', used: /color-mix\(/, tested: /color-mix\(/ },
+];
+
+const supportsQueries = (rule) => rule.enclosing.filter((at) => at.startsWith('@supports'));
+
+test('every progressive feature is guarded, and every guard has a base under it (issue #26)', () => {
+  /* CSS offers exactly two ways to state a fallback, and both are correct, so
+     both are accepted here:
+       * a plain earlier declaration of the SAME property in the SAME rule,
+         which an engine keeps precisely because it discards the later one it
+         cannot parse (the meter track uses this);
+       * an @supports block, which is what a fallback spanning several
+         properties or living in a different rule needs (the page height, the
+         safe-area padding and the sepia glyph use this).
+     What is refused is the third case: a progressive value with nothing
+     underneath it. */
+  const guarded = sweptRules.filter((rule) => supportsQueries(rule).length > 0);
+  assert.ok(
+    guarded.length > 0,
+    'no rule sits inside an @supports block; the graceful-degradation floor has nothing left to enforce'
+  );
+  for (const feature of progressiveFeatures) {
+    for (const rule of sweptRules) {
+      const declarations = declarationsOf(rule.body);
+      declarations.forEach(({ property, value }, index) => {
+        if (!feature.used.test(value)) return;
+        const query = supportsQueries(rule).some((at) => feature.tested.test(at));
+        const earlierBase = declarations
+          .slice(0, index)
+          .some((earlier) => earlier.property === property && !feature.used.test(earlier.value));
+        assert.ok(
+          query || earlierBase,
+          `${rule.file}: "${rule.selector}" sets ${property} with ${feature.name} and nothing to fall back to — a browser without it drops the declaration and the element keeps neither value`
+        );
+      });
+    }
+  }
+  /* And the other half, which is the half that actually degrades: a guarded
+     declaration is only an upgrade if the property is ALSO declared outside
+     the guard. Without that, the @supports block is just an unsupported
+     declaration with extra ceremony. */
+  for (const rule of guarded) {
+    for (const { property } of declarationsOf(rule.body)) {
+      const base = sweptRules.find(
+        (candidate) =>
+          candidate.file === rule.file &&
+          supportsQueries(candidate).length === 0 &&
+          selectorParts(candidate.selector).includes(rule.selector) &&
+          declarationsOf(candidate.body).some((declaration) => declaration.property === property)
+      );
+      assert.ok(
+        base,
+        `${rule.file}: "${rule.selector}" upgrades ${property} inside @supports with no base declaration outside it; a browser that fails the query is left with nothing`
+      );
+    }
+  }
+});
+
+test('text entry never renders below the 16px iOS zoom threshold (issue #26)', () => {
+  // The threshold is iOS Safari's: focus a field whose text is smaller than
+  // this and it zooms the whole page in, which moves everything the visitor
+  // was reading and does not zoom back out.
+  const entryFloorPx = 16;
+  const textEntry = /(?:^|[\s,>+~])(?:input|select|textarea)\b/;
+  const sizing = sweptRules.filter(
+    (rule) =>
+      textEntry.test(rule.selector) &&
+      declarationsOf(rule.body).some(({ property }) => property === 'font-size')
+  );
+  assert.ok(
+    sizing.length > 0,
+    'nothing sizes a text-entry control any more; the floor has no expression left'
+  );
+  for (const rule of sizing) {
+    for (const { property, value } of declarationsOf(rule.body)) {
+      if (property !== 'font-size') continue;
+      const px = smallestLengthPx(value);
+      assert.ok(
+        px !== null,
+        `${rule.file}: "${rule.selector}" sizes text entry as "${value}", which this pin cannot resolve to a floor — including inherit, which lands wherever the surrounding card happens to be`
+      );
+      assert.ok(
+        px >= entryFloorPx,
+        `${rule.file}: "${rule.selector}" renders text entry at ${px}px, under the ${entryFloorPx}px threshold that stops iOS from zooming the page`
+      );
+    }
+  }
+  // All three controls, not merely the one somebody remembered: iOS zooms for
+  // a small <select> and <textarea> exactly as it does for <input>.
+  const covered = selectorParts(sizing.map((rule) => rule.selector).join(','));
+  for (const control of ['input', 'select', 'textarea']) {
+    assert.ok(covered.includes(control), `<${control}> inherits no 16px floor of its own`);
+  }
+});
+
+/* Every class a <button> or link carries in the markup, dropping the parts
+ * built at runtime ({mode.id}) — a class this walk cannot read is a class it
+ * makes no claim about. The controls that matter here are all static. */
+const controlClasses = (source) =>
+  [...source.matchAll(/<(?:button|a)\b[^>]*\bclass="([^"]*)"/g)]
+    .flatMap(([, list]) => list.split(/\s+/))
+    .filter((name) => name.length > 0 && !name.includes('{') && !name.includes('}'));
+
+test('every control the markup declares clears the 44px touch floor (issue #26)', () => {
+  // 44px is the comfortable minimum for a finger; a control sized under it is
+  // reliably missable on a phone however good it looks on a desktop.
+  const touchFloorPx = 44;
+  const axes = { 'inline-size': 'inline', width: 'inline', 'block-size': 'block', height: 'block' };
+  const classes = new Set(Object.values(componentSources).flatMap(controlClasses));
+  assert.ok(classes.size > 0, 'the markup walk found no control classes at all; it is broken');
+  let measured = 0;
+  for (const name of classes) {
+    for (const rule of sweptRules) {
+      if (!selectorParts(rule.selector).includes(`.${name}`)) continue;
+      for (const { property, value } of declarationsOf(rule.body)) {
+        const axis = axes[property];
+        if (axis === undefined) continue;
+        const px = lengthInPx(value);
+        assert.ok(
+          px !== null,
+          `${rule.file}: ".${name}" sizes its ${axis} axis as "${value}", which this pin cannot measure against the touch floor`
+        );
+        assert.ok(
+          px >= touchFloorPx,
+          `${rule.file}: ".${name}" is ${px}px on the ${axis} axis, under the ${touchFloorPx}px touch floor`
+        );
+        measured += 1;
+      }
+    }
+  }
+  /* Both page-level controls size both of their axes, so four is the number
+     this walk must keep finding. A control sized only by its padding is a
+     legitimate shape this pin says nothing about — the browser lanes measure
+     those, because only a rendered box knows how big padding made it. */
+  assert.ok(
+    measured >= 4,
+    `only ${measured} control dimensions were measured; the shared control rules size both axes each, so the walk has lost sight of one`
+  );
+});
+
+test('motion exists only where the reader has not asked for less of it (issue #26)', () => {
+  const motion = /^(?:animation|transition)(?:-.+)?$/;
+  const moving = sweptRules.filter(
+    (rule) =>
+      !rule.enclosing.some((at) => at.startsWith('@keyframes')) &&
+      declarationsOf(rule.body).some(({ property }) => motion.test(property))
+  );
+  assert.ok(
+    moving.length > 0,
+    'nothing on the page animates any more; this pin now proves nothing and should move with the motion it guarded'
+  );
+  for (const rule of moving) {
+    /* The page states motion inside `no-preference` rather than cancelling it
+       inside `reduce`, and this pin holds it to that: the reduce override is
+       reachable only by a browser that HAS the media feature, so a cancelling
+       block leaves the animation running everywhere the feature is unknown,
+       while a no-preference block never starts it there. */
+    assert.ok(
+      rule.enclosing.some((at) => /prefers-reduced-motion\s*:\s*no-preference/.test(at)),
+      `${rule.file}: "${rule.selector}" animates outside a (prefers-reduced-motion: no-preference) block, so it plays for a reader who asked for less motion`
+    );
+  }
+});
+
+test('a reading-mode swap can only repaint, never re-lay-out (issue #26)', () => {
+  /* Zero CLS on the theme switch, made structural. The toggle swaps one
+     attribute on <html>, so everything a reading-mode block declares takes
+     effect INSTANTLY on a page the visitor is already reading — a padding, a
+     font-size, a border width in one of these blocks would move the text
+     under their eyes. Custom properties and color-scheme cannot: they change
+     what is painted, never how much room it takes. */
+  const swapped = sweptRules.filter(
+    (rule) =>
+      rule.selector.includes('[data-theme') ||
+      rule.enclosing.some((at) => at.includes('prefers-color-scheme'))
+  );
+  assert.ok(
+    swapped.length >= 3,
+    `only ${swapped.length} reading-mode blocks were found; the stylesheet ships three swappable renderings`
+  );
+  for (const rule of swapped) {
+    for (const { property } of declarationsOf(rule.body)) {
+      assert.ok(
+        property.startsWith('--') || property === 'color-scheme',
+        `${rule.file}: "${rule.selector}" declares ${property}; a reading mode may only move custom properties and color-scheme, or switching it shifts the layout under the reader`
+      );
+    }
+  }
 });

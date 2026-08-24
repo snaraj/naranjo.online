@@ -290,12 +290,27 @@
     fill: var(--palette-dark-surface);
   }
 
+  /* The base ink is the palette's own accent — the lightest sepia foreground,
+     unmistakable on the sepia surface in every engine that ever shipped. It
+     is not decoration: color-mix() is the one function here that a browser
+     within this site's support window may not know (Safari before 16.2,
+     Firefox before 113), and an unknown function does not fall back to
+     something duller, it invalidates the declaration. The glyph would then
+     inherit the PAGE's text color, which in the light reading mode is
+     near-black on a near-black swatch — an invisible moon, and no test that
+     reads the mixed value would see it. */
   .swatch-sepia {
     background: var(--palette-sepia-surface);
-    /* Still a dark-brown moon, but mixed one step toward the accent so the
-       glyph clears WCAG 1.4.11's 3:1 with real margin (≈4.4:1) on the sepia
-       surface — tokens only, no restated value (review F4). */
-    color: color-mix(in srgb, var(--palette-sepia-border-strong) 60%, var(--palette-sepia-accent));
+    color: var(--palette-sepia-accent);
+  }
+
+  /* Still a dark-brown moon, but mixed one step toward the accent so the
+     glyph clears WCAG 1.4.11's 3:1 with real margin (≈4.4:1) on the sepia
+     surface — tokens only, no restated value (review F4). */
+  @supports (color: color-mix(in srgb, currentColor 50%, transparent)) {
+    .swatch-sepia {
+      color: color-mix(in srgb, var(--palette-sepia-border-strong) 60%, var(--palette-sepia-accent));
+    }
   }
 
   .swatch[aria-pressed='true'] {

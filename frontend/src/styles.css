@@ -243,10 +243,37 @@ body,
    unit measures the TALLEST the viewport ever gets, so on a phone showing its
    toolbars a full-height box is taller than the screen and the bottom of the
    page sits under the browser chrome; dvh tracks the space actually
-   available. A frontend test refuses the static spelling anywhere in this
-   file, which is why it is described here rather than written. */
-body {
-  min-height: 100dvh;
+   available. A frontend test refuses the static spelling anywhere in the
+   stylesheet AND in every component <style>, which is why it is described
+   here rather than written.
+
+   The upgrade is guarded because an unsupported unit does not degrade, it
+   DISAPPEARS: a browser too old for dvh drops the whole declaration and the
+   box keeps whatever height it had. So the base is stated first — the
+   min-height: 100% chain above already reaches the viewport through <html> —
+   and the dynamic unit is an enhancement on top of it. Every progressive
+   feature on this page is written that way, and a test refuses an unguarded
+   one. */
+@supports (min-height: 100dvh) {
+  body {
+    min-height: 100dvh;
+  }
+}
+
+/* Text-entry controls never render below 16px. Below that threshold iOS
+   Safari zooms the whole page in when the field takes focus, throwing the
+   layout the visitor was reading off the screen — and it does not zoom back
+   out. max() keeps a reader's own enlarged base size (1rem follows it) while
+   flooring the PHYSICAL size at the 16px the threshold is written in, so
+   honouring the preference and clearing the floor are not in tension. The
+   site ships no form control yet: this is the rule the first one inherits,
+   and the pin refuses a smaller font-size on a text-entry control anywhere in
+   the tree. */
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: max(1rem, 16px);
 }
 
 /* The page is one centered column: the header row, then the panel stack. It
@@ -258,12 +285,26 @@ body {
 
    The insets are the page's, not each component's: with no fixed elements
    left, one padding rule here clears the notch and the home indicator for
-   everything inside. */
+   everything inside.
+
+   Base first, inset-aware second, for the same reason the viewport unit is
+   guarded: a browser that does not understand env() drops the ENTIRE
+   declaration rather than the unknown part of it, so an unguarded inset
+   padding is not "no notch handling", it is NO PADDING — text flush against
+   both edges of a 320px screen. The base states the gutter that must always
+   be there; the guarded block widens it to whatever the device reports. */
 #app {
   display: grid;
   justify-items: center;
-  padding-inline: max(var(--page-gutter), env(safe-area-inset-left)) max(var(--page-gutter), env(safe-area-inset-right));
-  padding-block: max(0px, env(safe-area-inset-top)) calc(2rem + env(safe-area-inset-bottom));
+  padding-inline: var(--page-gutter);
+  padding-block: 0 2rem;
+}
+
+@supports (padding: env(safe-area-inset-top)) {
+  #app {
+    padding-inline: max(var(--page-gutter), env(safe-area-inset-left)) max(var(--page-gutter), env(safe-area-inset-right));
+    padding-block: max(0px, env(safe-area-inset-top)) calc(2rem + env(safe-area-inset-bottom));
+  }
 }
 
 /* The header and the hero both take the column's width so the controls sit
