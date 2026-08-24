@@ -2610,3 +2610,789 @@ test('a hostile row name reaches the detail as text and nothing else', async ({ 
      DOM and it must be no different. */
   expect(rendered.labels, 'the hostile name never reached an accessible name').toBe(2);
 });
+
+/* ===========================================================================
+ * The reader-controlled column (owner directive, 2026-08-24)
+ *
+ * "Give me very sleek and seamless ability to drag the feed in or out on its
+ * X axis", and — equally weighted — "make sure that all objects stay
+ * responsive and that there is no way to break the website in an ugly way, so
+ * there should be unit test of users making the website very small, the width
+ * very small etc.. everything should have safe boundaries of min/max values
+ * that work across different screen sizes, and devices."
+ *
+ * The arithmetic is executed in tests/column-width.test.mjs against a fake
+ * host that records every style write. These lanes answer what a source pin
+ * cannot: whether a real engine, given a real pointer, produces a column that
+ * is where it should be, within the bounds, at every width, on five engines
+ * and at phone size — and whether the reader ever sees it move.
+ * ======================================================================== */
+
+// The narrowest viewport with room for the column, its gutters and both hit
+// lanes: 60 + 2x1 + 2x2.75 rem. Pinned against the tokens in
+// tests/column-width.test.mjs; used here as the width at which a handle is
+// first expected to exist.
+const railsBreakpointPx = 67.5 * 16;
+
+// The storage entry the reader's preference lives in. The grammar it accepts
+// is executed in tests/column-width.test.mjs; these lanes only need the name.
+const columnStorageKey = 'page-column-width';
+
+const handles = (page) => page.getByRole('separator');
+
+// The column, and everything a width assertion needs to know about it.
+const columnBox = (page) =>
+  page.evaluate(() => {
+    const main = window.document.querySelector('main');
+    const box = main.getBoundingClientRect();
+    const root = window.document.documentElement;
+    return {
+      width: box.width,
+      left: box.left,
+      right: box.right,
+      rem: Number.parseFloat(getComputedStyle(root).fontSize),
+      token: getComputedStyle(root).getPropertyValue('--page-column-width').trim(),
+      scrollWidth: root.scrollWidth,
+      clientWidth: root.clientWidth
+    };
+  });
+
+// Grab point for one handle: the centre of its lane, at a y inside the window.
+const grabPoint = (page, edge) =>
+  page.evaluate((wanted) => {
+    const handle = window.document.querySelector(`.column-handle[data-edge="${wanted}"]`);
+    const box = handle.getBoundingClientRect();
+    return {
+      x: box.left + box.width / 2,
+      y: Math.min(Math.max(box.top + 80, 24), window.innerHeight - 24)
+    };
+  }, edge);
+
+async function dragHandle(page, edge, byPx) {
+  const from = await grabPoint(page, edge);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + byPx, from.y, { steps: 12 });
+  await page.mouse.up();
+  return from;
+}
+
+/* The same gesture, dispatched as pointer events the test composes itself.
+ * It exists for ONE reason: a pointer thrown far past the edge of the window.
+ * Playwright's Firefox driver reports clientX 0 for a position outside the
+ * viewport (measured: a move to x+6000 arrived as x=0, and the column
+ * obediently went to its minimum), so a real-pointer lane cannot ask what
+ * happens beyond the screen — while a real browser, holding a captured
+ * pointer, delivers exactly those out-of-window coordinates. Composing the
+ * events keeps the question askable in every engine, and the ordinary drag
+ * above stays a real pointer. */
+const syntheticDrag = (page, edge, toClientX) =>
+  page.evaluate(
+    ([wanted, target]) => {
+      const handle = window.document.querySelector(`.column-handle[data-edge="${wanted}"]`);
+      const box = handle.getBoundingClientRect();
+      const y = Math.min(Math.max(box.top + 80, 24), window.innerHeight - 24);
+      const send = (type, x, buttons) =>
+        handle.dispatchEvent(
+          new PointerEvent(type, {
+            pointerId: 11,
+            isPrimary: true,
+            button: 0,
+            buttons,
+            clientX: x,
+            clientY: y,
+            bubbles: true,
+            cancelable: true
+          })
+        );
+      send('pointerdown', box.left + box.width / 2, 1);
+      send('pointermove', target, 1);
+      send('pointerup', target, 0);
+    },
+    [edge, toClientX]
+  );
+
+/* One load, observed from document-start: the width the reader stored, the
+ * heading's box in the FIRST animation frame, and the layout shift the engine
+ * scored for the whole page.
+ *
+ * The heading is the measurement that carries the pre-paint claim, and it is
+ * the one every engine can make. The static document paints exactly one thing
+ * — a centred h1 in a centred column — and a centred box inside a centred box
+ * sits in the same place at every column width. So whatever the module's
+ * timing turns out to be on a given engine, there is nothing painted before it
+ * that a width could move. (Measured, Chromium: first paint at 28ms with the
+ * shipped column, the stored width applied at 44ms, the heading's box
+ * identical either side of it.)
+ */
+async function loadAndObserve(context, stored) {
+  const page = await context.newPage();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript(
+    ([key, value]) => {
+      try {
+        if (value === null) window.localStorage.removeItem(key);
+        else window.localStorage.setItem(key, value);
+      } catch {
+        /* A context without storage simply gets the shipped width. */
+      }
+      window.__columnFirstFrame = null;
+      requestAnimationFrame(() => {
+        const heading = window.document.querySelector('h1');
+        const box = heading === null ? null : heading.getBoundingClientRect();
+        window.__columnFirstFrame = {
+          heading: box === null ? null : [box.x, box.y, box.width, box.height].map(Math.round),
+          token: getComputedStyle(window.document.documentElement)
+            .getPropertyValue('--page-column-width')
+            .trim()
+        };
+      });
+      window.__columnShift = 0;
+      window.__columnShiftScored = false;
+      try {
+        new PerformanceObserver((list) => {
+          window.__columnShiftScored = true;
+          for (const entry of list.getEntries()) {
+            if (!entry.hadRecentInput) window.__columnShift += entry.value;
+          }
+        }).observe({ type: 'layout-shift', buffered: true });
+      } catch {
+        /* Only Chromium implements the Layout Instability API; every other
+           engine is held to the heading measurement instead. */
+      }
+    },
+    [columnStorageKey, stored]
+  );
+  await page.goto('/');
+  await settled(page);
+  const column = await columnBox(page);
+  const observed = await page.evaluate(() => ({
+    firstFrame: window.__columnFirstFrame,
+    shift: window.__columnShift,
+    scored: window.__columnShiftScored
+  }));
+  await page.close();
+  return { column, ...observed };
+}
+
+test('each column edge carries a handle, flush with the column and quiet until touched', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await visit(page);
+  await expect(handles(page)).toHaveCount(2);
+
+  const column = await columnBox(page);
+  const measured = await page.evaluate(() => {
+    const seen = [];
+    for (const handle of window.document.querySelectorAll('.column-handle')) {
+      const box = handle.getBoundingClientRect();
+      const mark = getComputedStyle(handle, '::before');
+      seen.push({
+        edge: handle.getAttribute('data-edge'),
+        left: box.left,
+        right: box.right,
+        width: box.width,
+        height: box.height,
+        orientation: handle.getAttribute('aria-orientation'),
+        label: handle.getAttribute('aria-label'),
+        now: Number(handle.getAttribute('aria-valuenow')),
+        min: Number(handle.getAttribute('aria-valuemin')),
+        max: Number(handle.getAttribute('aria-valuemax')),
+        focusable: handle.tabIndex,
+        cursor: getComputedStyle(handle).cursor,
+        markWidth: mark.inlineSize === 'auto' ? mark.width : mark.inlineSize,
+        markInk: mark.backgroundColor
+      });
+    }
+    const root = getComputedStyle(window.document.documentElement);
+    return {
+      seen,
+      quietInk: root.getPropertyValue('--page-rail-ink').trim(),
+      liveInk: root.getPropertyValue('--page-rail-ink-live').trim(),
+      border: root.getPropertyValue('--color-border').trim(),
+      quietLine: root.getPropertyValue('--page-rail-line').trim(),
+      liveLine: root.getPropertyValue('--page-rail-line-live').trim()
+    };
+  });
+
+  for (const handle of measured.seen) {
+    /* A hit lane, not a hairline: the mark is two pixels and the target is the
+       same 44px every other control on this page clears. */
+    expect(handle.width, `the ${handle.edge} handle is ${handle.width}px wide`).toBeGreaterThanOrEqual(
+      touchFloorPx - subPixel
+    );
+    expect(handle.height, `the ${handle.edge} handle is ${handle.height}px tall`).toBeGreaterThanOrEqual(
+      touchFloorPx - subPixel
+    );
+    expect(handle.cursor, `the ${handle.edge} handle does not offer a resize cursor`).toBe('col-resize');
+    /* The WAI-ARIA Window Splitter pattern, as an engine reports it: a
+       focusable separator carrying a value and the range it moves in. */
+    expect(handle.orientation).toBe('vertical');
+    expect(handle.label, 'a handle with no accessible name').toBeTruthy();
+    expect(handle.focusable, 'a splitter no keyboard can reach').toBe(0);
+    expect(handle.min).toBeLessThan(handle.now);
+    expect(handle.now).toBeLessThan(handle.max);
+    expect(handle.now, 'the reported width is not the width on screen').toBeCloseTo(column.width, 0);
+    /* Quiet at rest: the resting mark is the card border token, at the
+       hairline width. */
+    expect(Number.parseFloat(handle.markWidth)).toBeCloseTo(
+      Number.parseFloat(measured.quietLine),
+      1
+    );
+  }
+  expect(
+    new Set(measured.seen.map((handle) => handle.label)).size,
+    'both handles answer to the same name'
+  ).toBe(2);
+  /* Flush with the column, to the pixel: the start handle ENDS where the
+     column begins and the end handle BEGINS where it ends, so the rail is the
+     boundary rather than something parked near it. */
+  const [start, end] = ['start', 'end'].map((edge) =>
+    measured.seen.find((handle) => handle.edge === edge)
+  );
+  expect(start.right, 'the start handle is not on the column edge').toBeCloseTo(column.left, 0);
+  expect(end.left, 'the end handle is not on the column edge').toBeCloseTo(column.right, 0);
+  /* ...and neither of them puts a pixel outside the page. */
+  expect(column.scrollWidth).toBe(column.clientWidth);
+  expect(start.left).toBeGreaterThanOrEqual(0);
+  expect(end.right).toBeLessThanOrEqual(column.clientWidth + subPixel);
+
+  /* Hover answers in the brand ink, and it is a DIFFERENT ink from the resting
+     one: a mark that painted the same colour in both states would satisfy a
+     one-sided assertion while offering the reader no feedback at all. */
+  const mark = () =>
+    page.evaluate(() => {
+      const style = getComputedStyle(
+        window.document.querySelector('.column-handle[data-edge="end"]'),
+        '::before'
+      );
+      return {
+        width: style.inlineSize === 'auto' ? style.width : style.inlineSize,
+        ink: style.backgroundColor
+      };
+    });
+  const resting = measured.seen[0];
+  await page.locator('.column-handle[data-edge="end"]').hover();
+  /* Polled rather than read once: the mark fades between the two inks where
+     the reader has not asked for less motion, so a single read taken on the
+     hover would measure the resting colour and call it the hovered one. */
+  await expect
+    .poll(
+      async () => {
+        const now = await mark();
+        return now.ink !== resting.markInk && Number.parseFloat(now.width) > Number.parseFloat(measured.quietLine);
+      },
+      { message: 'the handle never answered the pointer' }
+    )
+    .toBe(true);
+  await expect
+    .poll(async () => Number.parseFloat((await mark()).width), {
+      message: 'the hovered mark never reached its full width'
+    })
+    .toBeCloseTo(Number.parseFloat(measured.liveLine), 1);
+  const hovered = await mark();
+  expect(hovered.ink, 'the handle paints the same ink hovered as at rest').not.toBe(resting.markInk);
+  expect(
+    contrastRatio(hovered.ink, resting.markInk),
+    'the hovered mark is indistinguishable from the resting one'
+  ).toBeGreaterThan(1.2);
+
+  /* Focus wears the site's own ring — the same width, token and offset as
+     every other focusable thing on the page. */
+  await page.locator('.column-handle[data-edge="end"]').focus();
+  const focused = await page.evaluate(() => {
+    const ring = getComputedStyle(window.document.querySelector('.column-handle[data-edge="end"]'));
+    const icon = getComputedStyle(window.document.querySelector('.icon-button'));
+    return {
+      handle: [ring.outlineWidth, ring.outlineStyle, ring.outlineColor, ring.outlineOffset],
+      accent: getComputedStyle(window.document.documentElement).getPropertyValue('--color-accent').trim(),
+      iconFocusable: icon.outlineColor
+    };
+  });
+  expect(focused.handle[1], 'a focused handle draws no ring').not.toBe('none');
+  expect(Number.parseFloat(focused.handle[0])).toBeGreaterThanOrEqual(2);
+  expect(Number.parseFloat(focused.handle[3])).toBeGreaterThanOrEqual(2);
+});
+
+test('a real pointer drag moves the edge exactly as far as the pointer', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await visit(page);
+  /* The handles are the SUBJECT here, so their arrival is a precondition and
+     not something to discover halfway through a gesture: settled() waits for
+     the page to stop growing, which a slow enough machine can satisfy while
+     the application is still mounting. Waiting for them explicitly makes a
+     starved run fail saying so, instead of stalling inside a focus or a grab.
+     (Observed twice on WebKit under heavy contention, both times inside
+     locator.focus(), whose wait is bounded only by the test timeout.) */
+  await expect(handles(page)).toHaveCount(2);
+  const before = await columnBox(page);
+
+  await dragHandle(page, 'end', 160);
+  const after = await columnBox(page);
+
+  /* The edge tracks the finger one for one, which for a CENTRED column means
+     the width grew by twice the travel. Both halves are asserted: the width
+     doubling alone would also be satisfied by an edge racing ahead of the
+     pointer. */
+  expect(after.right - before.right, 'the grabbed edge did not follow the pointer').toBeCloseTo(160, 0);
+  expect(after.width - before.width, 'a centred column must grow from both sides').toBeCloseTo(320, 0);
+  expect(after.left - before.left).toBeCloseTo(-160, 0);
+  expect(after.scrollWidth).toBe(after.clientWidth);
+
+  /* The start handle mirrors it, and undoes it. */
+  await dragHandle(page, 'start', 160);
+  const undone = await columnBox(page);
+  expect(undone.width, 'the start handle does not mirror the end one').toBeCloseTo(before.width, 0);
+
+  /* And the choice survives the visit: the width the reader let go of is the
+     width in storage, in the bare-decimal grammar the parser accepts. */
+  const stored = await page.evaluate((key) => window.localStorage.getItem(key), columnStorageKey);
+  expect(stored, 'the reader choice was not persisted').toMatch(/^\d+(?:\.\d+)?$/);
+  expect(Number(stored) * undone.rem).toBeCloseTo(undone.width, 0);
+});
+
+test('dragging past both extremes clamps instead of breaking the page', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await visit(page);
+  /* The handles are the SUBJECT here, so their arrival is a precondition and
+     not something to discover halfway through a gesture: settled() waits for
+     the page to stop growing, which a slow enough machine can satisfy while
+     the application is still mounting. Waiting for them explicitly makes a
+     starved run fail saying so, instead of stalling inside a focus or a grab.
+     (Observed twice on WebKit under heavy contention, both times inside
+     locator.focus(), whose wait is bounded only by the test timeout.) */
+  await expect(handles(page)).toHaveCount(2);
+  const bounds = await page.evaluate(() => {
+    const handle = window.document.querySelector('.column-handle');
+    return {
+      min: Number(handle.getAttribute('aria-valuemin')),
+      max: Number(handle.getAttribute('aria-valuemax'))
+    };
+  });
+
+  for (const [name, travel, expected] of [
+    ['as far out as the pointer can go', 100000, bounds.max],
+    ['as far in as the pointer can go', -100000, bounds.min]
+  ]) {
+    await syntheticDrag(page, 'end', travel);
+    await settled(page);
+    const column = await columnBox(page);
+    expect(column.width, `dragging ${name} produced a ${column.width}px column`).toBeCloseTo(
+      expected,
+      0
+    );
+    /* The floor this whole feature is measured against: whatever the reader
+       does with the handle, the document does not scroll sideways. */
+    expect(
+      column.scrollWidth,
+      `the page scrolls sideways at the ${name} extreme: ${column.scrollWidth}px in ${column.clientWidth}px`
+    ).toBe(column.clientWidth);
+    /* And the handles are still on the column's edges rather than off the
+       screen, which is what the reserved lanes in the ceiling are for. */
+    const rails = await page.evaluate(() =>
+      [...window.document.querySelectorAll('.column-handle')].map((handle) => {
+        const box = handle.getBoundingClientRect();
+        return { left: box.left, right: box.right };
+      })
+    );
+    for (const rail of rails) {
+      expect(rail.left).toBeGreaterThanOrEqual(-subPixel);
+      expect(rail.right).toBeLessThanOrEqual(column.clientWidth + subPixel);
+    }
+  }
+});
+
+test('the keyboard resizes the column, and a double click puts it back', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await visit(page);
+  /* The handles are the SUBJECT here, so their arrival is a precondition and
+     not something to discover halfway through a gesture: settled() waits for
+     the page to stop growing, which a slow enough machine can satisfy while
+     the application is still mounting. Waiting for them explicitly makes a
+     starved run fail saying so, instead of stalling inside a focus or a grab.
+     (Observed twice on WebKit under heavy contention, both times inside
+     locator.focus(), whose wait is bounded only by the test timeout.) */
+  await expect(handles(page)).toHaveCount(2);
+  const shipped = await columnBox(page);
+
+  const end = page.locator('.column-handle[data-edge="end"]');
+  await end.focus();
+  await expect(end).toBeFocused();
+
+  /* The arrows move the SPLITTER (WAI-ARIA Window Splitter): right on the end
+     handle widens, left narrows, and the reported value follows the box. */
+  await page.keyboard.press('ArrowRight');
+  const widened = await columnBox(page);
+  expect(widened.width, 'ArrowRight on the end handle did not widen the column').toBeGreaterThan(
+    shipped.width
+  );
+  await page.keyboard.press('ArrowLeft');
+  expect((await columnBox(page)).width).toBeCloseTo(shipped.width, 0);
+
+  /* The start handle answers the same keys in the opposite direction, because
+     "left" is a direction in the window and not in the column. */
+  const start = page.locator('.column-handle[data-edge="start"]');
+  await start.focus();
+  await page.keyboard.press('ArrowLeft');
+  expect(
+    (await columnBox(page)).width,
+    'ArrowLeft on the start handle must widen, not narrow'
+  ).toBeGreaterThan(shipped.width);
+  await page.keyboard.press('ArrowRight');
+
+  await page.keyboard.press('Home');
+  const home = await columnBox(page);
+  await page.keyboard.press('End');
+  const end2 = await columnBox(page);
+  expect(home.width, 'Home did not take the column to its minimum').toBeLessThan(shipped.width);
+  expect(end2.width, 'End did not take the column to its maximum').toBeGreaterThan(shipped.width);
+  const reported = await page.evaluate(() =>
+    Number(window.document.querySelector('.column-handle').getAttribute('aria-valuenow'))
+  );
+  expect(reported, 'the splitter reports a width it is not at').toBeCloseTo(end2.width, 0);
+
+  /* Double click resets, which is the convention every split view already
+     taught this reader. */
+  await end.dblclick();
+  const reset = await columnBox(page);
+  expect(reset.width, 'a double click did not return the shipped column').toBeCloseTo(
+    shipped.width,
+    0
+  );
+  const stored = await page.evaluate((key) => window.localStorage.getItem(key), columnStorageKey);
+  expect(Number(stored) * reset.rem).toBeCloseTo(shipped.width, 0);
+});
+
+test('a stored width is on the page before it paints, and moves nothing', async ({ page }) => {
+  const context = page.context();
+  const shipped = await loadAndObserve(context, null);
+  const chosen = await loadAndObserve(context, '40');
+
+  expect(chosen.column.width, 'the stored width was not applied at all').toBeCloseTo(
+    40 * chosen.column.rem,
+    0
+  );
+  expect(chosen.column.token).toBe('40rem');
+  expect(shipped.column.width, 'a page with no preference must ship at its own column').toBeCloseTo(
+    60 * shipped.column.rem,
+    0
+  );
+
+  /* The pre-paint guarantee, measured in every engine: the only thing the
+     static document paints is in exactly the same place either way, so there
+     is nothing a later width could move. A shell that grew a left-aligned
+     element would fail here, which is precisely the regression this measures
+     rather than assumes. */
+  expect(chosen.firstFrame?.heading, 'no heading was painted to measure').toBeTruthy();
+  expect(
+    chosen.firstFrame.heading,
+    'the page painted something the column width moves; the stored width now costs a layout shift'
+  ).toEqual(shipped.firstFrame.heading);
+
+  /* And the engine's own score for the whole load, where an engine keeps one.
+     The comparison is against the SHIPPED page rather than against zero: this
+     page already scores a small shift as the feed cards resolve (measured
+     0.0036 in Chromium at the shipped column, sourced to ARTICLE.feed-card),
+     and asserting zero would be asserting somebody else's bug fixed. What
+     must hold is that choosing a width costs nothing on top of it. */
+  if (chosen.scored) {
+    expect(
+      chosen.shift,
+      `a chosen width scored ${chosen.shift} of layout shift against ${shipped.shift} for the shipped page`
+    ).toBeLessThanOrEqual(shipped.shift + 0.001);
+    /* ...and both stay inside the Core Web Vitals "good" band, so the claim is
+       an absolute one as well as a relative one. */
+    expect(chosen.shift).toBeLessThan(0.1);
+  }
+});
+
+test('a poisoned preference lands the page on the width it ships at', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  /* Storage is attacker-writable — a shared machine, another tab, a console
+     paste — so each of these is a value the site may genuinely be handed. The
+     full battery is executed in tests/column-width.test.mjs; these are the
+     shapes worth proving against a real CSS parser, because a browser is the
+     one thing that could be persuaded to interpret them. */
+  for (const poison of [
+    '99999px',
+    '-40rem',
+    'garbage',
+    '',
+    '60rem; background: url(https://example.invalid/beacon)',
+    '{"rem":60}'
+  ]) {
+    const context = page.context();
+    const fresh = await context.newPage();
+    await fresh.setViewportSize({ width: 1440, height: 900 });
+    await fresh.addInitScript(
+      ([key, value]) => {
+        try {
+          window.localStorage.setItem(key, value);
+        } catch {
+          /* Nothing to poison. */
+        }
+      },
+      [columnStorageKey, poison]
+    );
+    await fresh.goto('/');
+    await settled(fresh);
+    const column = await columnBox(fresh);
+    expect(column.width, `${JSON.stringify(poison)} produced a ${column.width}px column`).toBeCloseTo(
+      60 * column.rem,
+      0
+    );
+    expect(column.scrollWidth).toBe(column.clientWidth);
+    /* Nothing it contained reached the document: the token holds a length this
+       page constructed, and no declaration it smuggled took effect. */
+    expect(column.token).toMatch(/^\d+(?:\.\d+)?rem$/);
+    await fresh.close();
+  }
+});
+
+test('a phone gets no handle and the page it has always had', async ({ page }) => {
+  await visit(page);
+  for (const width of [...phoneWidths, 768, 1024]) {
+    await page.setViewportSize({ width, height: 800 });
+    await settled(page);
+    await expect(handles(page), `a ${width}px viewport rendered a resize handle`).toHaveCount(0);
+    /* Absent from the DOCUMENT, not merely from the accessibility tree. The
+       two guards fail differently and this is the one that separates them: a
+       component that stopped asking matchMedia would still be invisible
+       behind the stylesheet's display rule, and a lane that only counted
+       roles would report that as fine. */
+    await expect(
+      page.locator('.column-handle'),
+      `a ${width}px viewport built a resize handle it then had to hide`
+    ).toHaveCount(0);
+    const column = await columnBox(page);
+    /* Byte for byte the arrangement the phone lanes above already prove: the
+       column is the screen less its two gutters, and nothing scrolls
+       sideways. */
+    expect(column.width).toBeCloseTo(Math.min(60 * column.rem, width - gutterPx), 0);
+    expect(column.scrollWidth).toBe(column.clientWidth);
+  }
+  /* And the boundary is where the stylesheet says it is, not near it. */
+  await page.setViewportSize({ width: railsBreakpointPx - 1, height: 900 });
+  await expect(handles(page)).toHaveCount(0);
+  await page.setViewportSize({ width: railsBreakpointPx, height: 900 });
+  await expect(handles(page)).toHaveCount(2);
+});
+
+test('every width the handle can reach keeps every section intact', async ({ page }) => {
+  /* The owner's own scenario, and the mid-range with it: "users making the
+     website very small, the width very small". The smallest window that has
+     handles at all, and then the whole continuous range across it — extremes
+     alone would miss a section that only breaks halfway. */
+  await page.setViewportSize({ width: railsBreakpointPx, height: 900 });
+  await visit(page);
+  const range = await page.evaluate(() => {
+    const handle = window.document.querySelector('.column-handle');
+    return {
+      min: Number(handle.getAttribute('aria-valuemin')),
+      max: Number(handle.getAttribute('aria-valuemax'))
+    };
+  });
+  const widths = [
+    ['its minimum', range.min],
+    ['a quarter along its range', range.min + (range.max - range.min) * 0.25],
+    ['halfway along its range', range.min + (range.max - range.min) * 0.5],
+    ['its maximum', range.max],
+    /* And one width no handle could ever ask for. The two clamps stand in
+       front of each other, so a lane driven from aria-valuemax measures the
+       SCRIPT's ceiling and would keep passing with the stylesheet's removed
+       (measured: breaking the rail reservation in CSS left this lane green).
+       Writing the token straight past the script is what puts the browser's
+       own ceiling under measurement. */
+    ['a width past anything the handle can ask for', 100 * 16]
+  ];
+
+  for (const [name, target] of widths) {
+    await page.evaluate((value) => {
+      window.document.documentElement.style.setProperty('--page-column-width', `${value / 16}rem`);
+    }, target);
+    await settled(page);
+    const state = await page.evaluate(() => {
+      const grid = window.document.querySelector('.boss-grid');
+      const cells = [...grid.querySelectorAll('.boss-cell')];
+      const distinct = (values) => new Set(values.map((value) => Math.round(value))).size;
+      const frames = [...window.document.querySelectorAll('.art-frame')].map((frame) => {
+        const box = frame.getBoundingClientRect();
+        return box.width / box.height;
+      });
+      const root = window.document.documentElement;
+      return {
+        column: window.document.querySelector('main').getBoundingClientRect().width,
+        scrollWidth: root.scrollWidth,
+        clientWidth: root.clientWidth,
+        bossColumns: distinct(cells.map((cell) => cell.getBoundingClientRect().left)),
+        bossRows: distinct(cells.map((cell) => cell.getBoundingClientRect().top)),
+        bossCells: cells.length,
+        tiles: window.document.querySelectorAll('[data-usage-tile]').length,
+        strips: window.document.querySelectorAll('.grid-strip').length,
+        navLinks: window.document.querySelectorAll('.section-link').length,
+        sections: window.document.querySelectorAll('.page-section').length,
+        rails: [...window.document.querySelectorAll('.column-handle')].map((handle) => {
+          const rail = handle.getBoundingClientRect();
+          return { left: rail.left, right: rail.right };
+        }),
+        frames,
+        /* Nothing anywhere escapes its own box: the same containment rule the
+           phone lane proves, asked at every width a reader can produce. */
+        escaping: [...window.document.querySelectorAll('body *')]
+          .filter((node) => {
+            if (node.scrollWidth <= root.clientWidth) return false;
+            for (let parent = node; parent instanceof HTMLElement; parent = parent.parentElement) {
+              const overflow = getComputedStyle(parent).overflowX;
+              if (['auto', 'scroll', 'hidden', 'clip'].includes(overflow)) return false;
+            }
+            return true;
+          })
+          .map((node) => `${node.tagName.toLowerCase()}.${node.className}`)
+      };
+    });
+
+    const at = `at ${name} (${Math.round(state.column)}px)`;
+    expect(state.column, `${at} the column is outside its own bounds`).toBeGreaterThanOrEqual(
+      range.min - 1
+    );
+    expect(state.column).toBeLessThanOrEqual(range.max + 1);
+    expect(state.scrollWidth, `the page scrolls sideways ${at}`).toBe(state.clientWidth);
+    /* The handles stay on the column's edges and inside the page — which is
+       what the reserved lanes in the ceiling exist for, and the thing that
+       fails first when that reservation goes. */
+    for (const rail of state.rails) {
+      expect(rail.left, `a handle starts ${rail.left}px off the page ${at}`).toBeGreaterThanOrEqual(
+        -subPixel
+      );
+      expect(rail.right, `a handle reaches ${rail.right}px past the page ${at}`).toBeLessThanOrEqual(
+        state.clientWidth + subPixel
+      );
+    }
+    expect(state.escaping, `content escapes its box ${at}`).toEqual([]);
+    /* Three columns going down, whatever the column measures — the owner's
+       arrangement, not a shape that survives only at one width. */
+    expect(state.bossColumns, `the boss table lays out ${state.bossColumns} columns ${at}`).toBe(3);
+    expect(state.bossRows, `the boss table lost rows ${at}`).toBe(Math.ceil(state.bossCells / 3));
+    expect(state.tiles, `the usage tiles disappeared ${at}`).toBeGreaterThan(0);
+    expect(state.strips, `the heatmap strips disappeared ${at}`).toBeGreaterThan(0);
+    expect(state.navLinks, `the nav lost links ${at}`).toBeGreaterThan(3);
+    expect(state.sections, `the page lost a section ${at}`).toBeGreaterThan(3);
+    /* The pictures still reserve the box they will fill. */
+    expect(state.frames.length, `the art feed rendered no frames ${at}`).toBeGreaterThan(0);
+    for (const ratio of state.frames) {
+      expect(ratio, `an art frame is ${ratio.toFixed(2)}:1 ${at}`).toBeCloseTo(16 / 9, 1);
+    }
+  }
+});
+
+test('the drag writes once a frame and never stalls on layout', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await visit(page);
+  /* A synthetic sweep, dispatched in ONE task: 120 pointer moves with no
+     opportunity for the browser to render between them. Whatever the handler
+     does, at most one animation frame can run across the whole burst — so the
+     number of style writes it produces is the throttle, measured rather than
+     asserted. An unthrottled handler writes 120 times here. */
+  const swept = await page.evaluate(() => {
+    const handle = window.document.querySelector('.column-handle[data-edge="end"]');
+    const box = handle.getBoundingClientRect();
+    const y = Math.min(Math.max(box.top + 80, 24), window.innerHeight - 24);
+    const writes = [];
+    const original = CSSStyleDeclaration.prototype.setProperty;
+    CSSStyleDeclaration.prototype.setProperty = function patched(name, value, priority) {
+      if (name === '--page-column-width') writes.push(value);
+      return original.call(this, name, value, priority);
+    };
+    const send = (type, x) =>
+      handle.dispatchEvent(
+        new PointerEvent(type, {
+          pointerId: 7,
+          isPrimary: true,
+          button: 0,
+          buttons: type === 'pointerup' ? 0 : 1,
+          clientX: x,
+          clientY: y,
+          bubbles: true,
+          cancelable: true
+        })
+      );
+    const startX = box.left + box.width / 2;
+    const began = performance.now();
+    send('pointerdown', startX);
+    for (let step = 1; step <= 120; step += 1) send('pointermove', startX + step);
+    const moves = performance.now() - began;
+    send('pointerup', startX + 120);
+    CSSStyleDeclaration.prototype.setProperty = original;
+    return { writes, moves, dispatched: 120 };
+  });
+
+  /* At most one write for the whole burst, plus the one the release commits.
+     The invariant is "never more than one per frame"; a burst inside a single
+     task is the sharpest place to observe it. */
+  expect(
+    swept.writes.length,
+    `${swept.dispatched} pointer moves produced ${swept.writes.length} style writes`
+  ).toBeLessThanOrEqual(2);
+  /* ...and it is not vacuous: the sweep really did resize the column. */
+  const column = await columnBox(page);
+  expect(column.token).toMatch(/^\d+(?:\.\d+)?rem$/);
+  /* Speed, as a number rather than a feeling: 120 pointer moves cost this
+     much wall clock, and they cost it because nothing in the handler reads
+     layout. The threshold is generous by two orders of magnitude — several
+     agent lanes share this machine — so only a handler that started measuring
+     the page on every move can breach it. */
+  expect(swept.moves, `120 pointer moves took ${swept.moves.toFixed(1)}ms`).toBeLessThan(250);
+});
+
+test('the reading-mode popover still fits the column at its narrowest', async ({ page }) => {
+  /* The popover is anchored to the end edge of the header, and the header IS
+     the column — so the narrowest column the handle can reach is the width the
+     popover has to live in. It was measured against a 320px PHONE before this
+     feature existed; a reader can now produce that same 288px column on a
+     desktop, with a popover that phone never had to fit beside anything. */
+  await page.setViewportSize({ width: railsBreakpointPx, height: 900 });
+  await visit(page);
+  await expect(handles(page)).toHaveCount(2);
+  await page.evaluate(() => {
+    window.document.documentElement.style.setProperty(
+      '--page-column-width',
+      getComputedStyle(window.document.documentElement).getPropertyValue('--page-column-min').trim()
+    );
+  });
+  await settled(page);
+  await openReadingModes(page);
+  const observed = await page.evaluate(() => {
+    const popover = window.document.querySelector('#reading-mode-menu').getBoundingClientRect();
+    const column = window.document.querySelector('main').getBoundingClientRect();
+    const root = window.document.documentElement;
+    return {
+      popover: { left: popover.left, right: popover.right, width: popover.width },
+      column: { left: column.left, right: column.right, width: column.width },
+      swatches: window.document.querySelectorAll('#reading-mode-menu button').length,
+      scrollWidth: root.scrollWidth,
+      clientWidth: root.clientWidth
+    };
+  });
+  /* Every choice still rendered, the whole popover still on the page, and the
+     page still not scrolling sideways. (Measured at the shipped minimum: a
+     270px popover inside a 288px column, 414px clear of the page edge.) */
+  expect(observed.swatches, 'the reading modes lost a swatch in a narrow column').toBe(5);
+  expect(observed.column.width, 'the column did not reach its minimum').toBeLessThan(300);
+  expect(
+    observed.popover.left,
+    `the popover starts ${observed.popover.left}px from the page edge`
+  ).toBeGreaterThanOrEqual(0);
+  expect(observed.popover.right).toBeLessThanOrEqual(observed.clientWidth + subPixel);
+  /* And it belongs to its column rather than merely to the window: a popover
+     hanging past the card it opens over reads as a control that came loose. */
+  expect(
+    observed.popover.right,
+    'the popover no longer ends on the column edge it is anchored to'
+  ).toBeLessThanOrEqual(observed.column.right + subPixel);
+  expect(
+    observed.popover.width,
+    `a ${observed.popover.width}px popover does not fit a ${observed.column.width}px column`
+  ).toBeLessThanOrEqual(observed.column.width);
+  expect(observed.scrollWidth).toBe(observed.clientWidth);
+});

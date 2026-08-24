@@ -130,14 +130,17 @@
   --palette-sepia-grid-3: #b98f4a;
   --palette-sepia-grid-4: #d9b676;
 
-  /* Stacking order, as tokens rather than magic numbers. The page holds no
-     fixed chrome any more — the rail and the docked activity bar are gone, so
-     nothing overlays the document and there is no arbitration to do. What
-     remains is one genuine overlap: the reading-mode popover hangs over the
-     panel stack, which is later in the document and would otherwise paint
-     over it. Two named layers say that, and a component reading a raw number
-     instead is still the defect this scale exists to prevent. */
+  /* Stacking order, as tokens rather than magic numbers. Two things sit over
+     the document and they must be told apart. The reading-mode popover hangs
+     over the panel stack, which is later in the document and would otherwise
+     paint over it. The column's resize rails are drawn against the column's
+     own edges, above whatever the page scrolls past — and they sit BELOW the
+     popover, because a menu the visitor deliberately opened must never be
+     covered by a rail nobody asked for. Three named layers say that, and a
+     component reading a raw number instead is still the defect this scale
+     exists to prevent. */
   --layer-base: 0;
+  --layer-rail: 10;
   --layer-menu: 30;
 
   /* The page column: one width for the header, the name, every section and
@@ -158,12 +161,59 @@
      The consumer wraps it in min(…, 100%), which is what keeps a phone
      unchanged: min(60rem, 100%) resolves to the viewport on every phone
      width, so the column is the screen there exactly as it has always been.
-     A user-chosen width is a later issue, and this token is the one knob it
-     will move. */
-  --page-column-width: 60rem;
+
+     That later issue arrived (owner directive, 2026-08-24): the reader drags
+     the column in and out, and --page-column-width is the ONE token the drag
+     writes. Everything below is what makes a written value safe.
+
+     --page-column-base is the width the page ships at and the width a
+     double-click returns to. It exists as its own token because the drag
+     writes --page-column-width as an inline style on <html>, which is exactly
+     what getComputedStyle then reports — so the shipped default has to be
+     readable from somewhere the override cannot reach.
+
+     The bounds are tokens for the same reason every other dimension here is:
+     they are read by the stylesheet AND by the script that writes the knob,
+     so a bound that lived in the script would be a second copy free to
+     disagree with the one the browser enforces.
+
+     18rem is not a taste: it is 288px, which is EXACTLY the column a 320px
+     phone has always rendered (320 minus the two 1rem gutters). Every phone
+     lane already proves the boss grid's three columns, the tiles, the heatmap
+     strips and the nav survive there, so the narrowest setting the handle can
+     reach is a rendering the suite measures on every run rather than a width
+     somebody eyeballed.
+
+     100rem is 1600px: wide enough to fill a 1920px monitor with the page's
+     own gutters and both rails still on screen (1600 + 32 + 88 = 1720), and
+     short of the 2560px and 3840px widths where one column becomes a line
+     nobody can track back to its own start. Prose never runs that far anyway
+     — --card-measure holds it to 42rem — so the extra width goes to the
+     trackers, which is what asked for it. */
+  --page-column-base: 60rem;
+  --page-column-width: var(--page-column-base);
+  --page-column-min: 18rem;
+  --page-column-max: 100rem;
   --page-gutter: 1rem;
   --page-stack-gap: 0.75rem;
   --page-header-height: 3.5rem;
+
+  /* The resize rails. --page-rail-size is a HIT LANE, not a visible object:
+     44px of grab area reserved beside each column edge, the same floor every
+     other control on this page clears. The visible mark is the hairline, one
+     card border wide, which is why it reads as part of the page rather than
+     as chrome bolted onto it — and why it can afford to be almost invisible
+     until a pointer or a focus ring arrives.
+
+     The inks resolve through the reading-mode roles like every other color
+     here: the quiet state is the same rule a card draws its border with, and
+     the live state is the brand mark that already answers for hover on the
+     nav links and the icon controls. No reading mode knows this rail exists. */
+  --page-rail-size: 2.75rem;
+  --page-rail-line: 2px;
+  --page-rail-line-live: 4px;
+  --page-rail-ink: var(--color-border);
+  --page-rail-ink-live: var(--color-brand);
 
   /* The feed-card token layer (owner directive, issue 134). The page is
      becoming a feed of many content types, so the card is a primitive with
@@ -538,10 +588,102 @@ textarea {
 }
 
 /* The header and the hero both take the column's width so the controls sit
-   directly over the cards they act on. */
+   directly over the cards they act on.
+
+   Three declarations now, and the outer two are the reason a dragged width
+   cannot break this page. The knob is clamped HERE, in the browser,
+   independently of whatever wrote it: a value under the floor is widened back
+   to the floor, a value over the ceiling is narrowed back to it, and because
+   both bounds are themselves wrapped in min(…, 100%) the column can never
+   exceed the space it is actually given. That last part is what makes the
+   no-horizontal-scroll floor hold at every width the handle can produce —
+   100% here is the container's content box, which is the viewport already
+   less its gutters and its safe-area insets. The script that writes the knob
+   clamps too; neither clamp is the other's excuse, and each alone still holds
+   the page. */
 #app > .page-header,
 #app > main {
   inline-size: min(var(--page-column-width), 100%);
+  min-inline-size: min(var(--page-column-min), 100%);
+  max-inline-size: min(var(--page-column-max), 100%);
+}
+
+/* Each handle is a grab lane pinned just OUTSIDE its own edge of the column,
+   and the column is <main> itself — which is why there is no arithmetic here
+   at all. inset-inline-end: 100% against a positioned <main> puts the start
+   handle's end edge exactly on the column's start edge, whatever the column
+   currently measures, so the rail cannot drift a pixel from the boundary it
+   draws. A handle that recomputed that edge from its own copy of the column
+   expression would be a second derivation free to disagree with the first.
+
+   Out of flow, so the page's layout is untouched: the column, the stack and
+   every card measure exactly as they did before the handles existed, and the
+   pair arriving at hydration moves nothing. They cannot overflow either — the
+   ceiling below reserves exactly the two lanes they occupy, so the widest
+   column the reader can reach still leaves each rail its 44px inside the
+   page's own gutter.
+
+   Logical properties throughout: the pair mirrors itself in a right-to-left
+   document without a second rule, and the script derives each handle's
+   direction from where it actually rendered rather than assuming.
+
+   touch-action: none hands the whole gesture to the pointer handlers; without
+   it a touch drag scrolls the page instead of resizing the column.
+
+   They start hidden. The rails exist only where there is room for them, and
+   "room" is arithmetic rather than a taste: the shipped column, its two
+   gutters and its two hit lanes, which is 60 + 2x1 + 2x2.75 = 67.5rem. Below
+   that the column already fills the screen and there is nothing to drag it
+   out to, so the handles are not rendered at all (the component asks the same
+   question of matchMedia) and this declaration is the second answer to it —
+   either alone keeps a phone exactly as it has always been. */
+.column-handle {
+  display: none;
+  position: absolute;
+  inset-block: 0;
+  inline-size: var(--page-rail-size);
+  z-index: var(--layer-rail);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.column-handle[data-edge='start'] {
+  inset-inline-end: 100%;
+}
+
+.column-handle[data-edge='end'] {
+  inset-inline-start: 100%;
+}
+
+/* For the length of a drag the whole document wears the resize cursor and
+   stops selecting text. Both matter: a pointer that has left the 44px lane —
+   which it does immediately, because the reader is dragging the edge out from
+   under their own finger — would otherwise pick up whatever cursor it is
+   passing over and start sweeping a selection across the page behind the
+   gesture. The attribute is set for the duration and removed on release, and
+   it changes nothing about layout. */
+html[data-column-resizing] {
+  cursor: col-resize;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Above the breakpoint the handles appear, and the column's ceiling gives the
+   lanes back their width. Without that subtraction a reader who dragged to
+   the maximum would push the column into the very space its own handles need,
+   and the rail would end up drawn over the card instead of beside it — or off
+   the edge of the page, which is the horizontal scroll this site does not
+   have. A frontend test recomputes 67.5 from the four tokens it is made of,
+   so the breakpoint cannot drift away from what it means. */
+@media (min-width: 67.5rem) {
+  #app > .page-header,
+  #app > main {
+    max-inline-size: min(var(--page-column-max), calc(100% - 2 * var(--page-rail-size)));
+  }
+
+  .column-handle {
+    display: block;
+  }
 }
 
 /* The chrome row is styled HERE rather than inside PageHeader.svelte because
@@ -556,10 +698,15 @@ textarea {
   min-block-size: var(--page-header-height);
 }
 
+/* The column, and — since the resize handles are drawn against its edges —
+   their containing block. position: relative adds no stacking context of its
+   own (no z-index sits on this rule), so the reading-mode popover still hangs
+   over everything from the one layer scale above. */
 main {
   display: grid;
   justify-items: center;
   gap: 2rem;
+  position: relative;
 }
 
 /* The name and the section nav are one block, so the links sit UNDER the name

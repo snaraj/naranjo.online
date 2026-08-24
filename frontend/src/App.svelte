@@ -4,6 +4,7 @@
   import WorkSection from './lib/components/WorkSection.svelte';
   import ProjectsSection from './lib/components/ProjectsSection.svelte';
   import AboutSection from './lib/components/AboutSection.svelte';
+  import ColumnHandles from './lib/components/ColumnHandles.svelte';
 
   /* Panel mount imports. One import line per panel, matching the one mount
      line inside the panels-mount fences below. Sibling changes insert their
@@ -65,4 +66,13 @@
   </section>
 
   <AboutSection />
+
+  <!-- The reader's grip on the column (owner directive, 2026-08-24). It sits
+    INSIDE main because main is the column: the two handles are drawn against
+    its edges, so the element that resizes is also the box they measure
+    themselves against and no width arithmetic is copied anywhere. They are
+    out of flow, so nothing above them moves when they arrive, and they are
+    rendered only where there is room for them — which is why a phone never
+    receives them at all. -->
+  <ColumnHandles />
 </main>

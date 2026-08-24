@@ -125,10 +125,21 @@ test('the panels are one centered column, not a rail', () => {
 // column is required to be bigger than. The specific number stays free — only
 // the floor it has to clear is asserted.
 test('the page is one centred column, wider than the ribbon it replaced', () => {
-  const column = /--page-column-width:\s*([\d.]+)rem;/.exec(styles);
+  // The shipped width moved behind a name when the reader gained a handle on
+  // it (owner directive, 2026-08-24): --page-column-width is the knob a drag
+  // writes as an inline style, so the width the page SHIPS at needs a token of
+  // its own that an override cannot reach — which is also the width a
+  // double-click returns to. Both halves are pinned, because a base token that
+  // nothing referenced would leave the column free to ship at anything.
+  const column = /--page-column-base:\s*([\d.]+)rem;/.exec(styles);
   assert.ok(
     column,
     'the page column must be a fixed maximum width again, not a viewport fill; the owner asked for one centred container'
+  );
+  assert.match(
+    styles,
+    /--page-column-width:\s*var\(--page-column-base\);/,
+    'the knob the drag writes must default to the shipped column, or the two can disagree'
   );
   // 30rem was the pre-127 ribbon, and the trackers are still designed at that
   // width — a column that did not clear it would be the ribbon under a new
