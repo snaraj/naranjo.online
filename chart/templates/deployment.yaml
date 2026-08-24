@@ -73,6 +73,24 @@ spec:
             which is the fail-soft outcome, not an outage. */}}
             - name: PANELS_REFRESH
               value: {{ .Values.panels.refresh.enabled | quote }}
+            {{- /* The panels data root (issue #142): rendered only when the
+            capability is enabled, so a disabled render is byte-identical to
+            the chart before the capability existed. The path here must equal
+            the volumeMount path below; scripts/ci/chart-storage-pin.sh
+            fails the render if the two ever drift. The key reference is
+            optional on purpose: a missing Secret degrades the panel to its
+            embedded snapshot (the app fails closed on every unreadable
+            input) and must never keep the site from scheduling. */}}
+            {{- if .Values.panels.data.enabled }}
+            - name: PANELS_DATA_ROOT
+              value: "/var/lib/panels-data"
+            - name: PANELS_DATA_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.panels.data.keySecret }}
+                  key: PANELS_DATA_KEY
+                  optional: true
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -109,8 +127,23 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.panels.data.enabled }}
+            - name: panels-data
+              mountPath: /var/lib/panels-data
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
             medium: Memory
             sizeLimit: 16Mi
+        {{- if .Values.panels.data.enabled }}
+        {{- /* readOnly at BOTH levels on purpose: the claim reference makes
+        the whole volume read-only toward the pod, and the mount repeats it
+        so neither level can be silently relaxed alone.
+        scripts/ci/chart-storage-pin.sh fails if either flag moves. */}}
+        - name: panels-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.panels.data.volumeName }}
+            readOnly: true
+        {{- end }}

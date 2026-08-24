@@ -192,13 +192,21 @@ func (s *Site) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handler.ServeHTTP(w, r)
 }
 
-// Close releases the optional media root. It is safe for media-disabled sites
-// and is called only after the HTTP server has stopped accepting requests.
+// Close releases the optional media and panels-data roots. It is safe for
+// sites with neither capability and is called only after the HTTP server has
+// stopped accepting requests.
 func (s *Site) Close() error {
-	if s.media == nil {
-		return nil
+	var mediaErr, dataErr error
+	if s.media != nil {
+		mediaErr = s.media.Close()
 	}
-	return s.media.Close()
+	if s.panelsData != nil {
+		dataErr = s.panelsData.Close()
+	}
+	if mediaErr != nil {
+		return mediaErr
+	}
+	return dataErr
 }
 
 // health provides the shared liveness and readiness response. The service has

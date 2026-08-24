@@ -77,6 +77,9 @@ type Site struct {
 	// panels is the prepared panel registry; its background refresh starts
 	// only through StartPanelRefresh, never as a construction side effect.
 	panels *panels.Registry
+	// panelsData owns the optional rooted data-root capability (issue #142),
+	// opened only through StartPanelData and closed with the site.
+	panelsData *os.Root
 }
 
 const (

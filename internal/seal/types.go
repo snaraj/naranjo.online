@@ -1,0 +1,60 @@
+// Package seal is the one AEAD boundary shared by the workstation-side
+// encryptor (cmd/usageseal) and the origin's panels data-root reader: both
+// sides speak exactly this format, so the encrypt and decrypt halves can
+// never drift apart in separate implementations.
+//
+// The format is deliberately minimal and versioned by its magic: an 8-byte
+// magic prefix, a random 96-bit nonce, then AES-256-GCM ciphertext with its
+// 128-bit tag. The magic doubles as the AEAD's associated data, so bytes
+// sealed under a future format version can never open under this one even if
+// the key is reused. Integrity is the point as much as confidentiality: a
+// tampered, truncated, or foreign file fails authentication loudly instead
+// of decoding into plausible-looking data.
+//
+// Standard library only (crypto/aes, crypto/cipher, crypto/rand), per
+// repository requirement 9.
+package seal
+
+import "errors"
+
+const (
+	// magic identifies format version 1 and is authenticated as the AEAD's
+	// associated data. A future breaking format mints a NEW magic; it never
+	// reuses this one.
+	magic = "NJSEAL/1"
+
+	// KeyBytes is the AES-256 key length. Keys are supplied hex-encoded
+	// (KeyHexChars characters) and parsed through ParseKey; raw key bytes
+	// never appear in configuration.
+	KeyBytes = 32
+
+	// KeyHexChars is the length of the hex encoding of one key.
+	KeyHexChars = KeyBytes * 2
+
+	// nonceBytes is the standard GCM nonce size. Each Seal draws a fresh
+	// random nonce; nonces are never derived or counted, so there is no
+	// state to lose.
+	nonceBytes = 12
+
+	// tagBytes is the GCM authentication tag size.
+	tagBytes = 16
+
+	// Overhead is how many bytes a sealed message adds to its plaintext:
+	// magic, nonce, and tag. It is also the minimum sealed size — anything
+	// shorter cannot even hold an empty plaintext and is refused before any
+	// cryptographic work.
+	Overhead = len(magic) + nonceBytes + tagBytes
+)
+
+// ErrKeyFormat reports a key that is not exactly KeyHexChars hex characters.
+var ErrKeyFormat = errors.New("seal: key must be exactly 64 hex characters")
+
+// ErrSealedFormat reports sealed bytes too short or not carrying the format
+// magic — a file that is not this format at all, as opposed to one that is
+// and fails authentication.
+var ErrSealedFormat = errors.New("seal: input does not carry the sealed format")
+
+// ErrOpen reports sealed bytes in the right format whose authentication
+// failed: a wrong key, a tampered byte, or a truncated tail. The three are
+// deliberately indistinguishable — that is what an AEAD promises.
+var ErrOpen = errors.New("seal: authentication failed")

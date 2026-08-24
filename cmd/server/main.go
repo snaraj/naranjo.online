@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -63,6 +64,10 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	panelsDataRoot, err := panelsDataConfiguration(lookupEnv("PANELS_DATA_ROOT"))
+	if err != nil {
+		return err
+	}
 	var handler *server.Site
 	if mediaEnabled {
 		handler, err = server.NewWithMedia(assets, mediaOptions)
@@ -80,6 +85,19 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 		// egress-free by default. Cancellation of ctx on shutdown stops the
 		// refresh loops before any further attempt.
 		handler.StartPanelRefresh(ctx)
+	}
+	if panelsDataRoot != "" {
+		// The panels data root (issue #142): a mounted read-only directory
+		// carrying the sealed usage-series file pushed from the recording
+		// workstation. Unset leaves behavior byte-identical to a build
+		// without the capability; set, an unopenable ROOT fails the boot
+		// loudly (operator misconfiguration), while a missing or malformed
+		// FILE inside a healthy root degrades softly to the embedded
+		// snapshot forever. The environment accessor is passed through so
+		// the decryption key is read at decrypt time only.
+		if err := handler.StartPanelData(ctx, panelsDataRoot, lookupEnv); err != nil {
+			return err
+		}
 	}
 
 	httpServer := &http.Server{
@@ -162,6 +180,20 @@ func panelsRefreshConfiguration(value string) (bool, error) {
 		return true, nil
 	}
 	return false, errors.New("PANELS_REFRESH must be true or false")
+}
+
+// panelsDataConfiguration validates the optional panels data root path.
+// Empty keeps the capability entirely absent — no root is opened and no loop
+// starts — and a relative path fails the boot instead of being resolved
+// against a working directory nobody chose on purpose.
+func panelsDataConfiguration(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(value, "/") {
+		return "", errors.New("PANELS_DATA_ROOT must be an absolute path")
+	}
+	return value, nil
 }
 
 // listenPort validates the only runtime listener setting. The stable 8080

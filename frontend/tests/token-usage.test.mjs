@@ -3,15 +3,20 @@ import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 
 import {
+  categoryLabel,
+  categoryShares,
+  categorySlot,
   formatDuration,
   formatStatValue,
   formatTokenCount,
   formatUtilization,
+  lensValues,
   meterFillPct,
   meterSeverity,
   provenanceIsMixed,
   resetsIn,
-  tokenUsageSources
+  tokenUsageSources,
+  totalLens
 } from '../src/lib/token-usage.ts';
 
 const [component, helper, app] = await Promise.all([
@@ -450,7 +455,13 @@ describe('TokenUsagePanel live surface', () => {
     assert.match(component, /role="radiogroup"/);
     assert.match(component, /\{#each seriesViews as candidate\}/);
     assert.match(component, /aria-checked=\{view === candidate\}/);
-    assert.match(component, /viewValues\(source\.series\.totals, view\)/);
+    // The view lens re-reads the CATEGORY-lensed dailies of the one shipped
+    // series — still client-side, still no extra payload. The lens resolver
+    // sits between the series and viewValues precisely so both toggles read
+    // one data set: activeDailies falls back to the plain totals whenever no
+    // category lens applies.
+    assert.match(component, /viewValues\(activeDailies\(source\), view\)/);
+    assert.match(component, /lensValues\(source\.series, activeCategory\(source\)\)/);
     // Touch target floor for the segmented control.
     assert.match(component, /min-block-size:\s*2\.75rem/);
   });
@@ -477,5 +488,157 @@ describe('TokenUsagePanel live surface', () => {
     assert.match(region[1], /<ContributionGrid/, 'the gate does not contain the graph');
     assert.match(region[1], /role="radiogroup"/, 'the lens toggle is outside the gate it belongs to');
     assert.doesNotMatch(component, /live refresh is off/);
+  });
+});
+
+/* The per-category breakdown (issue #142): admission holds the categories
+ * section to the origin's exact structural rules, the lens helpers read one
+ * data set two ways, and the component pins keep identity paired with text
+ * and every payload string inert. */
+describe('category breakdown admission', () => {
+  const withCategories = (categories) => ({
+    sources: [
+      {
+        label: 'alpha',
+        windows: [],
+        series: { startDate: '2026-08-10', totals: [10, 20, 30], categories }
+      }
+    ]
+  });
+
+  it('admits a well-formed partition and preserves the served order', () => {
+    const admitted = tokenUsageSources(
+      withCategories([
+        { key: 'input', totals: [1, 2, 3] },
+        { key: 'output', totals: [9, 18, 27] }
+      ])
+    );
+    assert.equal(admitted.length, 1);
+    assert.deepEqual(
+      admitted[0].series.categories.map((category) => category.key),
+      ['input', 'output']
+    );
+    assert.deepEqual(admitted[0].series.categories[1].totals, [9, 18, 27]);
+  });
+
+  it('admits a series without categories exactly as before', () => {
+    const admitted = tokenUsageSources(withCategories(undefined));
+    assert.equal(admitted.length, 1);
+    assert.equal(admitted[0].series.categories, undefined);
+  });
+
+  it('refuses the whole payload on any malformed corner', () => {
+    for (const [name, categories] of Object.entries({
+      'not an array': { input: [1, 2, 3] },
+      'markup in a key': [{ key: '<img src=x onerror=alert(1)>', totals: [1, 2, 3] }],
+      'uppercase key': [{ key: 'Input', totals: [1, 2, 3] }],
+      'path in a key': [{ key: 'a/b', totals: [1, 2, 3] }],
+      'empty key': [{ key: '', totals: [1, 2, 3] }],
+      'duplicate keys': [
+        { key: 'input', totals: [1, 2, 3] },
+        { key: 'input', totals: [1, 2, 3] }
+      ],
+      'length mismatch': [{ key: 'input', totals: [1, 2] }],
+      'negative count': [{ key: 'input', totals: [1, -2, 3] }],
+      'non-numeric count': [{ key: 'input', totals: [1, 'two', 3] }]
+    })) {
+      assert.deepEqual(tokenUsageSources(withCategories(categories)), [], name);
+    }
+  });
+});
+
+describe('category lens helpers', () => {
+  const series = {
+    startDate: '2026-08-10',
+    totals: [10, 20, 30],
+    categories: [
+      { key: 'input', totals: [1, 2, 3] },
+      { key: 'cache-read', totals: [9, 18, 27] }
+    ]
+  };
+
+  it('renders keys as display copy without inventing words', () => {
+    assert.equal(categoryLabel('cache-read'), 'cache read');
+    assert.equal(categoryLabel('input'), 'input');
+  });
+
+  it('resolves the lens to its dailies and falls back to the truth', () => {
+    assert.deepEqual(lensValues(series, totalLens), [10, 20, 30]);
+    assert.deepEqual(lensValues(series, 'cache-read'), [9, 18, 27]);
+    /* A lens the source does not report yields the plain series — real data,
+       never a guess. */
+    assert.deepEqual(lensValues(series, 'reasoning'), [10, 20, 30]);
+    assert.deepEqual(lensValues({ startDate: '2026-08-10', totals: [5] }, 'input'), [5]);
+  });
+
+  it('summarizes shares from the same integers the grid draws', () => {
+    const shares = categoryShares(series);
+    assert.deepEqual(
+      shares.map((share) => share.key),
+      ['input', 'cache-read']
+    );
+    assert.equal(shares[0].total, 6);
+    assert.equal(shares[1].total, 54);
+    assert.ok(Math.abs(shares[0].pct - 10) < 1e-9);
+    assert.ok(Math.abs(shares[1].pct - 90) < 1e-9);
+  });
+
+  it('reports a zero share for an empty window instead of dividing by zero', () => {
+    const empty = {
+      startDate: '2026-08-10',
+      totals: [0],
+      categories: [{ key: 'input', totals: [0] }]
+    };
+    assert.deepEqual(categoryShares(empty), [{ key: 'input', total: 0, pct: 0 }]);
+    assert.deepEqual(categoryShares({ startDate: '2026-08-10', totals: [1] }), []);
+  });
+
+  it('binds color slots to the entity, never the payload position', () => {
+    assert.equal(categorySlot('input'), 1);
+    assert.equal(categorySlot('output'), 2);
+    assert.equal(categorySlot('cache-read'), 3);
+    assert.equal(categorySlot('cache-write'), 4);
+    assert.equal(categorySlot('reasoning'), 5);
+    /* Unknown keys wear the neutral slot rather than stealing a hue. */
+    assert.equal(categorySlot('audio'), 0);
+  });
+});
+
+describe('category breakdown surface', () => {
+  it('gates the lens row and composition strip on categories existing', () => {
+    assert.match(component, /\{#if source\.series\?\.categories\}/);
+    assert.match(component, /class="usage-views usage-category-views"/);
+    assert.match(component, /class="usage-composition-bar"/);
+    assert.match(component, /class="usage-composition-rows"/);
+  });
+
+  it('never encodes a category by color alone', () => {
+    /* Every segment carries its category's name and figures in the tooltip,
+       and every legend chip sits BESIDE the written label and value. */
+    assert.match(component, /title=\{`\$\{categoryLabel\(share\.key\)\}: \$\{formatTokenCount\(share\.total\)\} tokens/);
+    assert.match(component, /class="usage-composition-label">\{categoryLabel\(share\.key\)\}</);
+    assert.match(component, /class="usage-composition-value"/);
+    /* Figures wear the text token, never a series color. */
+    assert.match(component, /\.usage-composition-value \{[^}]*var\(--panel-text/);
+  });
+
+  it('keeps 2px surface gaps between stacked segments (dataviz mark spec)', () => {
+    assert.match(component, /\.usage-composition-bar \{[^}]*gap: 2px/);
+  });
+
+  it('resolves every category color from a global token slot', () => {
+    for (let slot = 0; slot <= 5; slot += 1) {
+      assert.match(component, new RegExp(`var\\(--usage-cat-${slot},`));
+    }
+    assert.match(component, /data-category-slot=\{categorySlot\(share\.key\)\}/);
+  });
+
+  it('renders every payload string as text, never markup', () => {
+    /* Svelte escapes text interpolation; what would break that promise is a
+       raw-HTML injection, so the component may never contain one. A hostile
+       label in a payload therefore renders as inert text, and a hostile
+       category KEY cannot even reach the renderer (admission refuses it —
+       proven above). */
+    assert.doesNotMatch(component, /\{@html/);
   });
 });

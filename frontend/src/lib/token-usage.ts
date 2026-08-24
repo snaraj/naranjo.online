@@ -5,6 +5,7 @@
 
 import type {
   TokenStatUnit,
+  TokenUsageCategory,
   TokenUsageInsight,
   TokenUsageSeries,
   TokenUsageSource,
@@ -356,10 +357,20 @@ function admitInsights(value: unknown): TokenUsageInsight[] | null {
   return insights;
 }
 
+/* categoryKeyPattern is the machine shape a category key must take — the
+ * exact rule the origin enforces before serving one. It is deliberately a
+ * character-class so narrow that markup, paths, and prose are
+ * unrepresentable: a key is a rendering identifier, never copy. */
+const categoryKeyPattern = /^[a-z][a-z0-9-]{0,31}$/;
+
 /* admitSeries returns the admitted series, undefined when the section is
  * absent, or null when it exists and is malformed. The start date must be a
  * plain calendar date: the grid does day arithmetic on it, and an instant or
- * a locale string would silently shift every cell. */
+ * a locale string would silently shift every cell. The optional categories
+ * section is held to the same three-state contract: absent is fine, and any
+ * malformed corner — a non-array, a bad key, a length that disagrees with
+ * the series, a negative count, a duplicate key — refuses the whole payload
+ * rather than rendering a half-true breakdown. */
 function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
   if (value === undefined || value === null) {
     return undefined;
@@ -373,5 +384,107 @@ function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
   if (!Array.isArray(value.totals) || !value.totals.every(isCount)) {
     return null;
   }
-  return { startDate: value.startDate, totals: value.totals as number[] };
+  const totals = value.totals as number[];
+  const series: TokenUsageSeries = { startDate: value.startDate, totals };
+  if (value.categories !== undefined) {
+    const categories = admitCategories(value.categories, totals.length);
+    if (categories === null) {
+      return null;
+    }
+    if (categories.length > 0) {
+      series.categories = categories;
+    }
+  }
+  return series;
+}
+
+/* admitCategories validates the optional per-day breakdown. */
+function admitCategories(value: unknown, days: number): TokenUsageCategory[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const seen = new Set<string>();
+  const categories: TokenUsageCategory[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.key !== 'string' || !categoryKeyPattern.test(entry.key)) {
+      return null;
+    }
+    if (seen.has(entry.key)) {
+      return null;
+    }
+    seen.add(entry.key);
+    if (!Array.isArray(entry.totals) || entry.totals.length !== days || !entry.totals.every(isCount)) {
+      return null;
+    }
+    categories.push({ key: entry.key, totals: entry.totals as number[] });
+  }
+  return categories;
+}
+
+/* categoryLabel renders a category key as display copy: hyphens become
+ * spaces and nothing else changes, so the shown word list is exactly the
+ * data's vocabulary in the panel's own lowercase voice. */
+export function categoryLabel(key: string): string {
+  return key.replace(/-/g, ' ');
+}
+
+/* The category lens: 'total' reads the series as ever; a category key reads
+ * that category's own dailies through the same grid. */
+export const totalLens = 'total';
+
+/* lensValues resolves the active lens to the dailies the grid should draw.
+ * An unknown lens — a category that source does not report — falls back to
+ * the plain series, which is always real data, never a guess. */
+export function lensValues(series: TokenUsageSeries, lens: string): number[] {
+  if (lens !== totalLens && series.categories) {
+    for (const category of series.categories) {
+      if (category.key === lens) {
+        return category.totals;
+      }
+    }
+  }
+  return series.totals;
+}
+
+export interface CategoryShare {
+  key: string;
+  /* The category's total across the whole series window. */
+  total: number;
+  /* Its share of the window's grand total, in percent (0 when the window is
+   * empty); shares are computed from the same integers the grid draws, so
+   * the bar and the numbers can never disagree. */
+  pct: number;
+}
+
+/* categoryShares summarizes the breakdown for the composition strip: one
+ * row per category in served (canonical) order. */
+export function categoryShares(series: TokenUsageSeries): CategoryShare[] {
+  if (!series.categories || series.categories.length === 0) {
+    return [];
+  }
+  const grand = series.totals.reduce((sum, total) => sum + total, 0);
+  return series.categories.map((category) => {
+    const total = category.totals.reduce((sum, value) => sum + value, 0);
+    return {
+      key: category.key,
+      total,
+      pct: grand > 0 ? (total / grand) * 100 : 0
+    };
+  });
+}
+
+/* categorySlot maps a category key to its fixed palette slot. Color follows
+ * the ENTITY, never its position in this payload: the canonical vocabulary
+ * owns slots 1..5, and a key outside it wears the neutral slot 0 rather
+ * than stealing a known category's hue. */
+const categorySlots: ReadonlyMap<string, number> = new Map([
+  ['input', 1],
+  ['output', 2],
+  ['cache-read', 3],
+  ['cache-write', 4],
+  ['reasoning', 5]
+]);
+
+export function categorySlot(key: string): number {
+  return categorySlots.get(key) ?? 0;
 }

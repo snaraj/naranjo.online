@@ -207,6 +207,28 @@ type TokenUsageSeries struct {
 	// renders, so the kind stays token-usage/v1. Minting a new kind version is
 	// for a BREAKING reshape, and an optional flag is not one.
 	Recorded bool `json:"recorded,omitempty"`
+	// Categories optionally breaks every day of Totals down by accounting
+	// category (input, output, cache reads, ...), in a canonical served
+	// order. Additive exactly like Recorded above: absent for every series
+	// produced before it existed, and an absent section renders the plain
+	// single-series grid it always did.
+	Categories []TokenUsageCategory `json:"categories,omitempty"`
+}
+
+// TokenUsageCategory is one per-day breakdown component of a daily series:
+// the same day indexing as the series' Totals, restricted to one accounting
+// category. Categories PARTITION the series — for every day the category
+// values sum exactly to that day's total, enforced at admission — so a
+// stacked reading of the categories and the plain reading of the series are
+// the same measurement, never two claims that can disagree.
+type TokenUsageCategory struct {
+	// Key is the stable category identifier, e.g. "input" or "cache-read".
+	// It is data with a machine-checked shape (lowercase letters, digits,
+	// hyphens), never free text, so it can double as a rendering key.
+	Key string `json:"key"`
+	// Totals holds this category's per-day counts, indexed exactly like the
+	// owning series' Totals.
+	Totals []int64 `json:"totals"`
 }
 
 // TokenUsageInsight is one labeled proportion under the activity grid.
@@ -990,6 +1012,12 @@ type panelDefinition struct {
 type Registry struct {
 	// mu serializes index rebuilds when refreshers report concurrently.
 	mu sync.Mutex
+	// snapshots is the filesystem the registry's snapshot sources were
+	// loaded from at construction — the embedded files in production. The
+	// data-root loop re-reads its merge base from here, so a merge always
+	// starts from the shipped floor rather than compounding on earlier
+	// merges.
+	snapshots fs.FS
 	// index is the prepared /api/panels response, swapped atomically.
 	index atomic.Pointer[preparedResponse]
 	// states holds every panel in index order.
@@ -1000,6 +1028,9 @@ type Registry struct {
 	byID map[string]*panelState
 	// refreshStarted guards StartRefresh against double starts.
 	refreshStarted atomic.Bool
+	// dataRootStarted guards StartDataRoot against double starts, exactly as
+	// refreshStarted guards the fetch loops.
+	dataRootStarted atomic.Bool
 }
 
 // panelState is one panel's identity plus its atomically swapped current
@@ -1033,4 +1064,120 @@ type preparedResponse struct {
 	// etag is the quoted SHA-256 digest of body — the same strong-validator
 	// scheme the embedded frontend uses, identical across replicas.
 	etag string
+}
+
+// The panels data root (issue #142): a mounted read-only directory the
+// composition root MAY hand this package, carrying one sealed usage-series
+// file pushed out-of-band from the workstation that records the usage. The
+// constants below bound that path end to end; the loop, validation, and the
+// injected-capability seams (fs.FS and Unsealer — this package holds no
+// filesystem, key, or environment capability of its own) live in
+// dataroot.go.
+const (
+	// dataRootSeriesName is the one file name the data-root loop ever opens,
+	// relative to the mounted root. There is no discovery and no walk: a
+	// hostile root can present exactly one candidate, this one.
+	dataRootSeriesName = "token-usage.series.enc"
+
+	// dataRootTTL is the re-read cadence. The workstation pushes on the
+	// order of hourly and the volume projection updates within about a
+	// minute of the cluster object, so five minutes keeps the panel at most
+	// minutes behind a push at negligible read cost.
+	dataRootTTL = 5 * time.Minute
+
+	// maxSealedSeriesBytes caps one sealed series file read. The real file
+	// is a few kilobytes; the cap bounds a hostile or corrupted volume long
+	// before allocation, and the decoded payload is separately held to
+	// MaxPanelResponseBytes by the shared preparation path.
+	maxSealedSeriesBytes = 64 << 10
+
+	// dataRootFutureSkew is how far ahead of the local clock a series
+	// file's generatedAt may sit before it is refused as nonsense. Clock
+	// skew between the workstation and this host is real; more than this is
+	// a file trying to pin itself artificially fresh.
+	dataRootFutureSkew = 10 * time.Minute
+
+	// usageSeriesSchema is the exact schema marker the sealed document must
+	// declare. A breaking document reshape mints a new marker; it never
+	// bends this one.
+	usageSeriesSchema = "usage-series/v1"
+
+	// maxSeriesCategories bounds how many categories one source may break
+	// its series into. The realistic vocabularies hold four or five; the
+	// bound stops a hostile file from inflating the payload with hundreds.
+	maxSeriesCategories = 8
+)
+
+// usageSeriesWindowKeys is the CLOSED set of window keys a series document
+// may carry, mapped to the periods the panel serves. A closed set because a
+// window name is rendered copy: free text here would let a pushed file put
+// arbitrary words on the panel. Widening it is a conscious reviewed edit.
+var usageSeriesWindowKeys = map[string]string{
+	"today": "today",
+	"week":  "week",
+}
+
+// usageSeriesDerivedKeys is the CLOSED set of stat keys a series document may
+// update, and the unit each must already carry — exactly the three figures a
+// daily series defines on its own. The document can never add a tile, only
+// refresh one of these where the shipped snapshot already shows it; every
+// other recorded figure (a lifetime total, a session count) is out of its
+// reach by construction.
+var usageSeriesDerivedKeys = map[string]string{
+	statPeakDay:       UnitTokens,
+	statCurrentStreak: UnitDays,
+	statLongestStreak: UnitDays,
+}
+
+// categoryServeOrder fixes the canonical order categories are SERVED in, so
+// every replica emits identical bytes (the digest ETag depends on it) and
+// the frontend's fixed categorical hue assignment is stable. Keys outside
+// this list follow it alphabetically.
+var categoryServeOrder = []string{"input", "output", "cache-read", "cache-write", "reasoning"}
+
+// usageSeriesDocument is the strict on-disk shape of the sealed series file
+// (schema usage-series/v1). Sources are keyed by the SAME label the embedded
+// snapshot uses for that source — a key with no matching snapshot label
+// refuses the whole document, so a pushed file can never invent a source the
+// owner did not ship.
+type usageSeriesDocument struct {
+	// Schema must equal usageSeriesSchema.
+	Schema string `json:"schema"`
+	// GeneratedAt is the RFC 3339 capture instant. It must be newer than the
+	// embedded snapshot's and newer than the last accepted file's, and not
+	// meaningfully in the future — the replay and rollback guards.
+	GeneratedAt string `json:"generatedAt"`
+	// Sources maps snapshot source labels to their captured sections.
+	Sources map[string]usageSeriesSource `json:"sources"`
+}
+
+// usageSeriesSource is one source's captured section.
+type usageSeriesSource struct {
+	// Series is the daily total series; Recorded must be true — this file IS
+	// an out-of-band capture, and a file claiming live provenance is refused.
+	Series usageSeriesSection `json:"series"`
+	// Categories optionally partitions the series per day, keyed by category
+	// key. Every category must have exactly the series' length and the
+	// per-day category sum must equal the series total.
+	Categories map[string][]int64 `json:"categories,omitempty"`
+	// Windows optionally carries aggregate windows, keyed by the closed
+	// usageSeriesWindowKeys vocabulary.
+	Windows map[string]usageSeriesWindow `json:"windows,omitempty"`
+	// Derived optionally refreshes the series-derived stat tiles, keyed by
+	// the closed usageSeriesDerivedKeys vocabulary.
+	Derived map[string]int64 `json:"derived,omitempty"`
+}
+
+// usageSeriesSection mirrors TokenUsageSeries' on-disk form.
+type usageSeriesSection struct {
+	StartDate string  `json:"startDate"`
+	Totals    []int64 `json:"totals"`
+	Recorded  bool    `json:"recorded"`
+}
+
+// usageSeriesWindow is one aggregate window: the same input/output split the
+// panel's window rows render.
+type usageSeriesWindow struct {
+	Input  int64 `json:"input"`
+	Output int64 `json:"output"`
 }

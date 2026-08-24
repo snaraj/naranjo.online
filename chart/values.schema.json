@@ -84,6 +84,7 @@
       "description": "The panel API's live-data behavior. Unlike media, this block is not frozen to a single value: enabling background refresh is an operational decision the operator is allowed to express here. What the schema enforces is that the decision is EXPLICIT — the key is required and boolean, so a values file cannot omit it and have the origin guess, and the default in values.yaml is off.",
       "additionalProperties": false,
       "required": ["refresh"],
+      "allOf": [{ "required": ["data"] }],
       "properties": {
         "refresh": {
           "type": "object",
@@ -94,6 +95,50 @@
               "type": "boolean",
               "default": false,
               "description": "Start the background refresh loops. false (the default) starts no loop at all, so the origin makes no outbound request and the panels serve their embedded snapshots as stale. true additionally requires the credential Secrets named by keyEnvName in internal/panels/config/fetch.json and an egress allowance for that file's hosts list; without the egress allowance the attempts fail and the panels keep serving snapshots, which is fail-soft, not an outage."
+            }
+          }
+        },
+        "data": {
+          "type": "object",
+          "description": "The panels data root (issue #142): a read-only statically bound hostPath PV/PVC pair carrying one sealed usage-series file. Every field is required so a values file cannot half-describe the capability: the decision and every fact it depends on are explicit, and a disabled render emits none of the objects.",
+          "additionalProperties": false,
+          "required": ["enabled", "hostPath", "volumeName", "keySecret", "capacity", "persistentVolume"],
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Render the claim, the read-only mount, and the PANELS_DATA_ROOT / PANELS_DATA_KEY wiring. Safe on by default: the capability is a read-only projection of one file, and the application fails closed to its embedded snapshot on every absent or unauthenticated input."
+            },
+            "hostPath": {
+              "type": "string",
+              "description": "Absolute node directory backing the PersistentVolume (hostPath type Directory: it must already exist on the node).",
+              "pattern": "^/[^\\s]*[^/\\s]$"
+            },
+            "volumeName": {
+              "type": "string",
+              "description": "One DNS-1123 name shared by the PersistentVolume and the claim, making the statically bound pair legible as a pair.",
+              "pattern": "^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$"
+            },
+            "keySecret": {
+              "type": "string",
+              "description": "Secret feeding the PANELS_DATA_KEY environment variable. Referenced optional: absence degrades the panel, never the pod.",
+              "pattern": "^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$"
+            },
+            "capacity": {
+              "$ref": "#/definitions/memoryQuantity",
+              "description": "Declared PV capacity and PVC request. Static hostPath binding does not meter it; it exists because both objects require the field and the two must agree."
+            },
+            "persistentVolume": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled"],
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Also render the cluster-scoped PersistentVolume. Off by default because the release reconciles through a least-privilege namespace identity that deliberately holds no PersistentVolume authority (hostPath PVs are the admin-only loophole through restricted pod security); the PV is applied once by an admin from this chart's own template, and this flag flips the day the platform grants the reconciler that authority."
+                }
+              }
             }
           }
         }
