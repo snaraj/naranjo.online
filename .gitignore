@@ -6,6 +6,9 @@ coverage.out
 *.cover.out
 .DS_Store
 
+# `make dev`'s locally built backend binary (see root Makefile)
+/.dev-server
+
 # Browser-lane leftovers (issue #26, stage 2). The engines themselves live in
 # the operating system's user cache directory and never come near this tree;
 # what a failed run can leave here is the per-test output directory.

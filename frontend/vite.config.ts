@@ -1,6 +1,12 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
 
+// DEV_API_PORT names the locally built backend binary's port for the `/api`
+// proxy below; `make dev` sets it to PORT (default 8080). It affects only the
+// `vite dev` server config, never `build` -- a production build reads no
+// environment variable and this key does not exist in its output.
+const devApiPort = process.env.DEV_API_PORT ?? '8080';
+
 export default defineConfig({
   plugins: [svelte()],
   build: {
@@ -11,5 +17,19 @@ export default defineConfig({
     emptyOutDir: true,
     outDir: '../internal/web/dist',
     sourcemap: false,
+  },
+  // Dev-server-only: `vite build` never reads this block, so it cannot
+  // change production build output (proven by a before/after dist digest
+  // comparison in the PR that added it). Binds 127.0.0.1 only, and proxies
+  // `/api` to the locally built backend binary `make dev` launches on
+  // DEV_API_PORT, so hot-reload editing can see real panel data.
+  server: {
+    host: '127.0.0.1',
+    proxy: {
+      '/api': {
+        target: `http://127.0.0.1:${devApiPort}`,
+        changeOrigin: true,
+      },
+    },
   },
 });
