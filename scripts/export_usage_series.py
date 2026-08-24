@@ -41,9 +41,18 @@ without this program ever reading that tool's tree itself.
 
 Structurally incapable of spawning anything: standard-library file reading
 only. The import surface is pinned by test (scripts/ci) against a closed
-allowlist — no process spawning, no network reach, nothing executable — and
-that pin scans SOURCE BYTES, which is why this comment describes the
-forbidden capabilities without naming their modules.
+allowlist, and that allowlist is itself pinned against a refused set, so no
+process-, network-, or loader-capable module can be admitted without a test
+naming the module that got in.
+
+`os` is refused, and that is the load-bearing decision here (2026-08-24
+review finding 1). It is the obvious module for a directory walk and it was
+imported here until that review: it carries `system`, `popen`, `fork`,
+`spawn*` and `exec*`, and an attribute denylist around those spellings does
+not hold — a computed `getattr(os, "sys" + "tem")` reintroduced the launch
+callable with every test still green. Refusing the IMPORT is what makes the
+capability structurally absent rather than merely unspelled, and `pathlib`
+plus the capture tool's own walk do the same job with none of that reach.
 
     scripts/export_usage_series.py --transcripts DIR --source LABEL \\
         [--merge-source LABEL=FILE] [--out FILE]
@@ -54,10 +63,10 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
-import os
+import pathlib
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import capture_usage_series as capture  # noqa: E402
 
@@ -89,29 +98,26 @@ def read_category_records(root, counters):
     """Yield (day, {category: count}) per counted transcript record.
 
     The walk, the de-duplication identity, and the skip rules mirror
-    capture_usage_series.read_records EXACTLY — the parity test in
-    scripts/ci runs both over one fixture tree and requires the summed
-    categories to equal the capture tool's totals day for day.
+    capture_usage_series.read_records EXACTLY — they are now literally the
+    capture tool's own `record_paths` and `open_record_file`, so "mirror" is
+    shared code rather than a claim two files have to keep true by hand
+    (2026-08-24 review finding 1 removed this file's own `os.walk`). The
+    parity test in scripts/ci runs both over one fixture tree and requires
+    the summed categories to equal the capture tool's totals day for day.
     """
     seen = set()
-    for directory, _subdirectories, names in os.walk(root):
-        for name in sorted(names):
-            if not name.endswith(".jsonl"):
-                continue
-            counters["files"] += 1
-            path = os.path.join(directory, name)
-            try:
-                handle = open(path, "r", encoding="utf-8", errors="replace")
-            except OSError:
-                counters["unreadable"] += 1
-                continue
-            with handle:
-                for line in handle:
-                    counters["lines"] += 1
-                    reduced = reduce_category_line(line, seen, counters)
-                    if reduced is not None:
-                        counters["counted"] += 1
-                        yield reduced
+    for path in capture.record_paths(root):
+        counters["files"] += 1
+        handle = capture.open_record_file(path, counters)
+        if handle is None:
+            continue
+        with handle:
+            for line in handle:
+                counters["lines"] += 1
+                reduced = reduce_category_line(line, seen, counters)
+                if reduced is not None:
+                    counters["counted"] += 1
+                    yield reduced
 
 
 def reduce_category_line(line, seen, counters):
@@ -254,7 +260,7 @@ def load_merge_source(path):
     the emission guard over the result, so a hostile file cannot ride
     through under a friendly key.
     """
-    with open(path, "r", encoding="utf-8") as handle:
+    with pathlib.Path(path).open("r", encoding="utf-8") as handle:
         document = json.load(handle)
     if not isinstance(document, dict):
         raise capture.CaptureError("a merge source must be a JSON object")
@@ -398,8 +404,8 @@ def parse_arguments(argv):
 
 def main(argv=None):
     arguments = parse_arguments(sys.argv[1:] if argv is None else argv)
-    root = os.path.expanduser(arguments.transcripts)
-    if not os.path.isdir(root):
+    root = pathlib.Path(arguments.transcripts).expanduser()
+    if not root.is_dir():
         print("no such transcript directory", file=sys.stderr)
         return 2
     if not valid_source_key(arguments.source):
@@ -411,7 +417,7 @@ def main(argv=None):
         if not separator or not valid_source_key(key) or not path:
             print("merge sources take the form KEY=FILE with a label-shaped key", file=sys.stderr)
             return 2
-        merge_files.append((key, os.path.expanduser(path)))
+        merge_files.append((key, pathlib.Path(path).expanduser()))
     now = datetime.datetime.now(datetime.timezone.utc)
     try:
         sources, counters = export(root, arguments.source, merge_files, now.date())

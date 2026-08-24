@@ -120,44 +120,130 @@ def collect_strings(value, into):
             collect_strings(item, into)
 
 
+def imported_roots(tree):
+    """Every top-level module name a parsed tree imports, under any spelling.
+
+    Roots, not dotted names: `import os.path` and `from os import walk` both
+    reduce to `os`, so the closed sets below cannot be evaded by reaching for
+    a submodule. A relative import carries no module name, reads as the empty
+    root, and is refused by the closed-allowlist comparison.
+    """
+    roots = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                roots.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            roots.add((node.module or "").split(".")[0])
+    return roots
+
+
 class ImportSurfaceTest(unittest.TestCase):
-    """Owner ruling: structurally incapable of spawning or networking."""
+    """Owner ruling: structurally incapable of spawning or networking.
+
+    The enforcement is the capture tool's — the same closed allowlist pinned
+    against the same refused set — because the two producers must be equally
+    incapable or the weaker one is the pipeline's real capability.
+
+    `os` is REFUSED here, and that is the load-bearing change of the
+    2026-08-24 review (finding 1). The earlier pin admitted `os` for its walk
+    and separately denied the literal `os.<spawn>` attribute spellings; a
+    review mutant returning `getattr(os, "sys" + "tem")` reintroduced the
+    launch callable with all 30 exporter tests still green. An attribute
+    denylist cannot bound a module whose attributes can be computed, so the
+    module itself is refused at import level and no spelling of a launch
+    callable can exist.
+    """
+
+    ALLOWED = frozenset(
+        {
+            "__future__",
+            "argparse",
+            "capture_usage_series",
+            "datetime",
+            "json",
+            "pathlib",
+            "sys",
+        }
+    )
+
+    # Not an exhaustive index of the standard library — it does not need to
+    # be, because the allowlist above already refuses everything not named in
+    # it. This set exists so the ALLOWLIST ITSELF cannot be widened to admit
+    # one of these without a test naming the module that got in.
+    REFUSED = frozenset(
+        {
+            "asyncio",
+            "concurrent",
+            "ctypes",
+            "ftplib",
+            "http",
+            "importlib",
+            "multiprocessing",
+            "os",
+            "pickle",
+            "platform",
+            "posix",
+            "pty",
+            "runpy",
+            "select",
+            "shutil",
+            "signal",
+            "smtplib",
+            "socket",
+            "socketserver",
+            "ssl",
+            "subprocess",
+            "threading",
+            "urllib",
+            "webbrowser",
+            "xmlrpc",
+        }
+    )
 
     def setUp(self):
         self.source = _MODULE_PATH.read_text(encoding="utf-8")
         self.tree = ast.parse(self.source)
 
-    def imported_names(self):
-        names = set()
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    names.add(alias.name)
-            elif isinstance(node, ast.ImportFrom):
-                names.add(node.module or "")
-        return names
-
     def test_import_surface_is_exactly_the_closed_allowlist(self):
         # Closed EQUALITY, not a subset check: adding any import — however
         # innocent — must be a conscious edit to this exact set.
-        self.assertEqual(
-            self.imported_names(),
-            {
-                "__future__",
-                "argparse",
-                "datetime",
-                "json",
-                "os",
-                "sys",
-                "capture_usage_series",
-            },
+        self.assertEqual(imported_roots(self.tree), set(self.ALLOWED))
+
+    def test_the_allowlist_admits_nothing_that_can_spawn_or_connect(self):
+        # Guards the allowlist against itself. Without this, widening the set
+        # above by one line would make every other assertion here pass.
+        self.assertEqual(self.ALLOWED & self.REFUSED, frozenset())
+
+    def test_no_refused_module_is_imported_under_any_spelling(self):
+        self.assertEqual(imported_roots(self.tree) & self.REFUSED, frozenset())
+
+    def test_the_pin_refuses_an_os_import_itself(self):
+        # The exact mutant the 2026-08-24 review survived, now killed at its
+        # root: re-admitting `os` — with or without a computed
+        # getattr(os, "sys" + "tem") beneath it — must turn this suite red on
+        # the IMPORT, before any attribute spelling is even considered.
+        mutant = ast.parse(
+            'import os\n\n\ndef launch():\n    return getattr(os, "sys" + "tem")\n'
+            + self.source
         )
+        self.assertEqual(imported_roots(mutant) & self.REFUSED, {"os"})
+        self.assertNotEqual(imported_roots(mutant), set(self.ALLOWED))
+
+    def test_the_pin_is_reading_a_real_import_surface(self):
+        # Non-vacuity: an assertion about a set that turned out to be empty
+        # would pass for the wrong reason forever.
+        self.assertIn("json", imported_roots(self.tree))
+        self.assertGreater(len(imported_roots(self.tree)), 3)
 
     def test_no_process_network_or_loader_capability_is_named(self):
         # Belt over the braces: even if the allowlist above were widened,
         # naming any spawn/network/loader module anywhere in the file is a
         # separate refusal. Matched against source bytes so a string-built
-        # __import__ argument is caught too.
+        # __import__ argument is caught too. (`os` is absent from this list
+        # on purpose — it is a substring of ordinary English words like
+        # "most" and "close"; its refusal is the structural import check
+        # above, which no spelling can evade.)
         for forbidden in (
             "subprocess",
             "socket",
@@ -179,42 +265,17 @@ class ImportSurfaceTest(unittest.TestCase):
                     node.func.id, {"eval", "exec", "compile", "__import__"}
                 )
 
-    def test_no_process_capable_os_attribute_is_touched(self):
-        # os is imported for walk/path/expanduser; the process-capable corner
-        # of the module is individually refused.
-        forbidden = {
-            "system",
-            "popen",
-            "fork",
-            "forkpty",
-            "kill",
-            "execv",
-            "execve",
-            "execvp",
-            "execvpe",
-            "execl",
-            "execle",
-            "execlp",
-            "execlpe",
-            "spawnl",
-            "spawnle",
-            "spawnlp",
-            "spawnlpe",
-            "spawnv",
-            "spawnve",
-            "spawnvp",
-            "spawnvpe",
-            "posix_spawn",
-            "posix_spawnp",
-            "startfile",
-        }
-        for node in ast.walk(self.tree):
-            if (
-                isinstance(node, ast.Attribute)
-                and isinstance(node.value, ast.Name)
-                and node.value.id == "os"
-            ):
-                self.assertNotIn(node.attr, forbidden)
+    def test_the_transitive_producer_surface_is_equally_incapable(self):
+        # This module imports the capture tool, so the capture tool's import
+        # surface IS part of this program's capability. Pinning it here means
+        # a widening THERE cannot silently give the exporter a reach its own
+        # allowlist forbids.
+        capture_tree = ast.parse(
+            (_MODULE_PATH.parent / "capture_usage_series.py").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(imported_roots(capture_tree) & self.REFUSED, frozenset())
 
 
 class ReduceCategoryLineTest(unittest.TestCase):

@@ -31,9 +31,16 @@ keeps the last good payload and says so in the envelope `status`.
 
 - **Capture cannot spawn or connect.** `scripts/export_usage_series.py` is
   standard-library file reading; its import surface is pinned by an AST test
-  (`scripts/ci/test_export_usage_series.py`) against a closed allowlist with
-  no process- or network-capable module on it. It never executes any agent
-  binary, so a capture can never start a session or spend anything.
+  (`scripts/ci/test_export_usage_series.py`) against a closed allowlist that
+  is itself pinned against a refused set, so no process-, network-, or
+  loader-capable module can be admitted without a test naming the module
+  that got in. `os` is on the refused side — it carries `system`, `popen`,
+  `fork`, `spawn*` and `exec*`, and an attribute denylist around those
+  spellings does not hold, because a computed `getattr` rebuilds the
+  callable (2026-08-24 security review, finding 1). The capture tool's own
+  `pathlib` walk does the same job, and the pin covers that transitive
+  surface too. It never executes any agent binary, so a capture can never
+  start a session or spend anything.
 - **Only dates and integers leave the machine.** The export reuses the
   capture tool's `assert_only_dates_and_integers` guard — the same function,
   not a copy — over the complete payload immediately before writing.
