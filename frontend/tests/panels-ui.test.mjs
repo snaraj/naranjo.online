@@ -17,6 +17,21 @@ import {
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
+// Strip /* */ and <!-- --> comments to a fixed point, not in one pass: deleting
+// a match can butt adjacent characters together into a delimiter the same sweep
+// already stepped past, so a lone regex replace is incomplete (this is exactly
+// what CodeQL's js/incomplete-multi-character-sanitization flags). Looping until
+// the text stops changing leaves no reconstituted delimiter behind. Test-only —
+// it runs over repository source read off disk and its output feeds assert.
+const stripComments = (text) => {
+  let prev;
+  do {
+    prev = text;
+    text = text.replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, '');
+  } while (text !== prev);
+  return text;
+};
+
 // The container image builds the frontend from a stage that holds ONLY the
 // frontend tree (Dockerfile: COPY frontend/ ./), so repo-level files do not
 // exist there. The two cross-tree pins below are therefore capability-gated
@@ -347,7 +362,7 @@ test('no page chrome floats over the document', () => {
       // own raw-text pins: prose is not a declaration. A comment EXPLAINING
       // that a detail elsewhere is fixed tripped this pin, and a comment
       // could equally have hidden a real one from a stricter reader.
-      source.replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, ''),
+      stripComments(source),
       /position:\s*fixed/,
       `${name} floats over the page again; fixed chrome is what made the controls drift`
     );
@@ -370,7 +385,7 @@ test('no page chrome floats over the document', () => {
   assert.match(tipStyles, /pointer-events:\s*none/, 'fixed chrome that can take the pointer is chrome');
   assert.match(tipStyles, /visibility:\s*hidden/, 'a fixed box that is always visible is chrome');
   assert.doesNotMatch(
-    detailTip.replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, ''),
+    stripComments(detailTip),
     /--page-[a-z-]*gutter|reserve/,
     'the detail reserves page space; a transient overlay must cost the layout nothing'
   );
