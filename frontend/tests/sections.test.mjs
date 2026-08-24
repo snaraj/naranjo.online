@@ -263,6 +263,7 @@ test('the card token defaults are global, and resolve through the reading modes'
     '--card-max-inline-size',
     '--card-media-aspect',
     '--card-media-fit',
+    '--card-media-max-block-size',
     '--card-title-family',
     '--card-title-size',
     '--card-title-weight',
@@ -514,6 +515,10 @@ test('the heavy pictures cost the page no layout shift', () => {
   // that cannot disagree because both read the same token and the same
   // constants.
   assert.match(artGallery, /aspect-ratio:\s*var\(--card-media-aspect\)/);
+  // The cap (issue 157) is a SECOND, independent ceiling on the same
+  // reservation, not a second timing: it still resolves before any byte
+  // arrives, through the one global token every frame shares.
+  assert.match(artGallery, /max-block-size:\s*var\(--card-media-max-block-size\)/);
   assert.match(artGallery, /width=\{artWidth\}/);
   assert.match(artGallery, /height=\{artHeight\}/);
   // The first is the one a visitor is looking at; the rest wait until they are
