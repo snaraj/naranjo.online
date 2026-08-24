@@ -442,18 +442,50 @@ test('a count of one is a count of one thing', () => {
   assert.match(projectsSection, /aria-hidden="true"/);
 });
 
-test('the counts say when they were captured, and the page fetches nothing', async () => {
+test('projectsCapturedOn is a well-formed date, and formatIsoDate renders every stated date honestly', () => {
+  // A pure test of the constant and the function (issue 167): the owner
+  // removed the visitor-facing caption that used to render both together
+  // ("Counts captured from … on …; this page fetches nothing" — capture
+  // provenance is a maintainer/reviewer fact, not something a visitor came
+  // here to read), but projectsCapturedOn remains the maintenance record for
+  // when the six counts below were captured, and formatIsoDate is the same
+  // general date renderer the work/art feed cards use (feed.ts), so both
+  // still deserve direct coverage independent of any one caller.
   assert.match(projectsCapturedOn, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(formatIsoDate('2026-08-23'), '23 August 2026');
   assert.equal(formatIsoDate('2026-01-01'), '1 January 2026');
   // An unparseable date returns unchanged rather than inventing a day.
   assert.equal(formatIsoDate('not-a-date'), 'not-a-date');
   assert.equal(formatIsoDate('2026-13-01'), '2026-13-01');
-  assert.match(projectsSection, /formatIsoDate\(projectsCapturedOn\)/);
-  assert.match(projectsSection, /fetches nothing/);
-  // The rows are data. Nothing in this tree may reach the network for them:
-  // the origin is local-origin-only and live refresh is off by default, so a
-  // live count would be a promise the deployment cannot keep.
+});
+
+test('the Coding Projects feed renders no capture-date or no-fetch caption (issue 167)', () => {
+  // The owner: "why would a user care to know that this fetches nothing?
+  // remove this." Both halves are gone from the rendered markup — a
+  // regression back to either is what this pins against, not merely an
+  // absence of a check that used to require them.
+  assert.doesNotMatch(
+    projectsSection,
+    /Counts captured from/,
+    'the maintainer-facing capture-date caption returned to the visitor-facing markup'
+  );
+  assert.doesNotMatch(
+    projectsSection,
+    /fetches nothing/,
+    'the maintainer-facing no-fetch caption returned to the visitor-facing markup'
+  );
+  assert.doesNotMatch(
+    projectsSection,
+    /formatIsoDate\(projectsCapturedOn\)/,
+    'the component still renders the capture date somewhere'
+  );
+});
+
+test('nothing in the work, projects, art, or trackers surfaces reaches the network', async () => {
+  // The no-fetch INVARIANT the removed caption used to state in prose stays
+  // real and stays ENFORCED here regardless of whether any caption says so
+  // (issue 167): the origin is local-origin-only and live refresh is off by
+  // default, so a live count would be a promise the deployment cannot keep.
   for (const [name, source] of Object.entries(introduced)) {
     assert.doesNotMatch(
       source,
