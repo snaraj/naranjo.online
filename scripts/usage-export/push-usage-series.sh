@@ -111,8 +111,24 @@ fi
 #    `restrict` + a forced command, so whatever is requested here, the host
 #    runs exactly its own single-file write and answers with the landed
 #    file's checksum.
+#
+#    The connection itself is hardened AT THE CLIENT rather than trusted to
+#    whatever ~/.ssh/config or a future admin alias resolves to (2026-08-24
+#    security review, finding M5 — the server-side `restrict` is the other
+#    half, and both halves are stated because either side's configuration
+#    can drift):
+#      ControlPath=none        never join (or create) a multiplexed master
+#                              connection, so a live admin session to the
+#                              same host can never be reused to bypass the
+#                              restricted key's authentication;
+#      ClearAllForwardings=yes drop every port/agent/X11 forwarding any
+#                              config file might request for this host;
+#      ForwardAgent=no         the push never carries the agent socket;
+#      RequestTTY=no           a pipe, never an interactive terminal.
 remote_line=$(ssh -o BatchMode=yes -o IdentitiesOnly=yes \
-    -o IdentityAgent=none -i "$SSH_IDENTITY" \
+    -o IdentityAgent=none -o ControlPath=none \
+    -o ClearAllForwardings=yes -o ForwardAgent=no -o RequestTTY=no \
+    -i "$SSH_IDENTITY" \
     "$PUSH_HOST" usage-export-receive < "$SEALED") || fail "push refused"
 
 remote_sum=$(echo "$remote_line" | head -n 1 | cut -d' ' -f1)
