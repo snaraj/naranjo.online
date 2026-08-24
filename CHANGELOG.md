@@ -7,6 +7,60 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.36] - 2026-08-24
+
+### Added
+
+- The token-usage panel now consumes SEALED RUNTIME DATA (issue #142): the
+  workstation exports both tools' local usage records as one
+  `usage-series/v1` document — per-day totals plus a per-day CATEGORY
+  breakdown (input, output, cache reads, cache writes) that must partition
+  each day's total — seals it with AES-256-GCM (`cmd/usageseal`, versioned
+  `NJSEAL/1` format bound as AEAD associated data, fresh random nonce per
+  seal, 64-hex-char key refused unless its file is private), and pushes the
+  ciphertext over ssh stdin to a forced-command, `restrict`-ed dedicated key
+  that can write exactly one file. The origin re-reads that file every five
+  minutes through a rooted read-only mount (`PANELS_DATA_ROOT`), unseals
+  with `PANELS_DATA_KEY` read at decrypt time only, strict-decodes under a
+  64 KiB cap with closed window/derived vocabularies and a monotonic
+  `generatedAt` replay floor, and merges into the served panel — so the
+  panel refreshes without a release, and every failure (tamper, replay,
+  wrong key, over-cap, malformed, non-partitioning categories) keeps the
+  last good payload and says so in the envelope status instead of crashing
+  or fabricating. The export step is structurally incapable of spawning or
+  networking: stdlib file reading only, import surface pinned by an AST
+  test against a closed allowlist, and every emission passes through the
+  capture tool's own dates-and-integers guard with counts-only diagnostics.
+- The chart carries the storage as first-class templates under GitOps
+  (owner amendment on #142): a static PersistentVolume/PersistentVolumeClaim
+  pair with explicit empty `storageClassName`, `Retain`, `hostPath.type:
+  Directory`, and volumeName/claimRef double-pinning, read-only at BOTH the
+  volume and the mount. The claim defaults on so the floating HelmRelease
+  deploys it with no values edit; the cluster-scoped PV document defaults
+  off and is applied by an operator from the chart's own render, because
+  the namespaced app reconciler holds no PV rights and granting them would
+  bypass the namespace's restricted Pod Security posture. A storage pin
+  script (`scripts/ci/chart-storage-pin.sh`, wired into the chart CI job)
+  renders all three directions and kills 14 hostile mutations — writable
+  mounts, dropped storageClassName pins, smuggled PVs, moved host paths,
+  reclaim/type weakenings — and the render census admits exactly one new
+  kind (PersistentVolumeClaim).
+- The panel's per-source category lens: a second radiogroup slices the
+  heatmap by category, and a composition figure renders each source's
+  share bar with fixed per-category color slots, 2px segment gaps, and
+  written labels beside every chip so identity never rides on color alone.
+  Category palettes are defined per reading mode and hold the dataviz
+  floors (lightness band, chroma floor, CVD and normal-vision separation,
+  ≥3:1 contrast) in light, slate, and sepia; dark stays deliberately
+  achromatic as documented lightness steps. Hostile category labels render
+  inert — the component interpolates text and never markup.
+- Operator tooling and doctrine: `scripts/usage-export/` carries the push
+  pipeline (private scratch, checksum verification of the landed file, a
+  0600-only local configuration OUTSIDE the repository so no host fact
+  enters git), a launchd template plus installer for the hourly schedule,
+  and `docs/usage-export.md` documents the end-to-end design, setup,
+  verification, and deliberate failure modes.
+
 ## [0.1.33] - 2026-08-24
 
 ### Added
