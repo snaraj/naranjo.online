@@ -129,6 +129,28 @@ test('the page stacks the name, the nav and the four sections in one column', ()
   assert.match(link[1], /min-inline-size:\s*2\.75rem/);
 });
 
+test('the nav link carries no idle underline, but hover and focus still mark it as a link (issue 157)', () => {
+  const idle = /\.section-link\s*\{([^}]*)\}/.exec(styles);
+  assert.ok(idle, 'the section links are not styled where this pin expects them');
+  assert.match(idle[1], /text-decoration:\s*none/, 'the idle nav link must not carry an underline');
+
+  const hover = /\.section-link:hover\s*\{([^}]*)\}/.exec(styles);
+  assert.ok(hover, 'the hover state is not styled where this pin expects it');
+  assert.match(
+    hover[1],
+    /text-decoration:\s*underline/,
+    'hover must add back the affordance the idle state no longer carries'
+  );
+  assert.match(hover[1], /color:\s*var\(--color-brand\)/, 'hover keeps its brand-ink affordance too');
+
+  // The site's own focus ring must survive this change untouched — a nav
+  // link is still a link the moment keyboard focus lands on it.
+  const focus = /\.section-link:focus-visible\s*\{([^}]*)\}/.exec(styles);
+  assert.ok(focus, 'the focus-visible state is not styled where this pin expects it');
+  assert.match(focus[1], /outline:\s*2px solid var\(--color-accent\)/);
+  assert.match(focus[1], /outline-offset:\s*2px/);
+});
+
 // ---------------------------------------------------------------------------
 // The feed card primitive
 // ---------------------------------------------------------------------------

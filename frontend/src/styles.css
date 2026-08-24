@@ -747,9 +747,20 @@ main {
 
 /* A link, and a touch target. The 44px floor is a MINIMUM on both axes rather
    than a fixed box: a reader who enlarges their base font gets a bigger
-   target, never a clipped label. The underline stays — these are hyperlinks,
-   the owner asked for hyperlinks, and a nav row that identifies its links by
-   color alone identifies them for fewer readers. */
+   target, never a clipped label.
+
+   The idle underline is gone (owner directive, issue 157: it "looked
+   terrible" as a permanent row of four ruled-off words under the page's
+   name). These are hyperlinks and identifying them by color alone would
+   identify them for fewer readers — but color is not the only other channel
+   here, which is the a11y position this change rests on: a NAV link is
+   distinguished by POSITION (one row, directly under the page name, nowhere
+   else prose ever puts a link) and by ROLE (the enclosing <nav
+   aria-label="Page sections">, which names the row's purpose to assistive
+   tech independent of any visual mark) before color enters into it at all.
+   Hover and keyboard focus still mark a link as a link the moment intent is
+   shown: hover adds the underline back plus the brand ink, and focus-visible
+   keeps the exact site-wide ring untouched below. */
 .section-link {
   display: inline-flex;
   align-items: center;
@@ -759,11 +770,13 @@ main {
   padding-inline: 0.5rem;
   color: var(--color-text);
   font-size: 0.9375rem;
+  text-decoration: none;
   text-underline-offset: 0.2em;
 }
 
 .section-link:hover {
   color: var(--color-brand);
+  text-decoration: underline;
 }
 
 .section-link:focus-visible {
