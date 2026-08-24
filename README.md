@@ -2,6 +2,7 @@
 
 [![PR gate](https://github.com/snaraj/naranjo.online/actions/workflows/pr-gate.yml/badge.svg?branch=main)](https://github.com/snaraj/naranjo.online/actions/workflows/pr-gate.yml)
 [![CodeQL](https://github.com/snaraj/naranjo.online/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/snaraj/naranjo.online/actions/workflows/codeql.yml)
+[![Browser lanes](https://github.com/snaraj/naranjo.online/actions/workflows/browser-lanes.yml/badge.svg?branch=main)](https://github.com/snaraj/naranjo.online/actions/workflows/browser-lanes.yml)
 [![Release](https://img.shields.io/github/v/release/snaraj/naranjo.online?sort=semver)](https://github.com/snaraj/naranjo.online/releases)
 [![Go coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsnaraj%2Fnaranjo.online%2Fbadges%2Fgo-coverage.json&label=go%20coverage)](https://github.com/snaraj/naranjo.online/actions/workflows/pr-gate.yml)
 [![Frontend coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsnaraj%2Fnaranjo.online%2Fbadges%2Ffrontend-coverage.json&label=frontend%20coverage)](https://github.com/snaraj/naranjo.online/actions/workflows/pr-gate.yml)
@@ -85,6 +86,17 @@ docker build .
 
 Toolchain pins live in CI (`node 24.19.0`, `npm 11.17.0`, `go 1.26.6`);
 newer local versions generally work, CI is authoritative.
+
+The rendering-lane smoke matrix is separate, because it needs real browser
+engines rather than only Node. It boots the built Go binary over localhost and
+drives Chromium, Firefox and WebKit at desktop, Android and iPhone viewports:
+
+```sh
+cd frontend
+npm run build                                     # the binary embeds this
+npx playwright install chromium firefox webkit    # once per runner version
+npm run test:browsers
+```
 
 ## Releases
 
@@ -180,19 +192,47 @@ once at startup. The second is a **background live fetch**, which is opt-in,
 disabled by default, and the only reason this process would ever make an
 outbound request.
 
-Two of the live producers need no credential at all — the game hiscores and
-the version-control contribution calendar are public documents — so they are
-gated by `PANELS_REFRESH` and an egress allowance alone. The token-usage
-producers additionally need credentials, and a source whose credential is
-absent is simply skipped.
+Most of the live producers need no credential at all — the game hiscores, the
+version-control contribution calendar, and the public per-repository commit
+lists are public documents — so they are gated by `PANELS_REFRESH` and an
+egress allowance alone. Their configuration has no field a credential could be
+written into, and the one general escape hatch left, the static request-header
+map, admits exactly one header name. The token-usage producers additionally
+need credentials, and a source whose credential is absent is simply skipped.
 
 Mounted panels re-read their envelope roughly once a minute and stop entirely
 while the tab is hidden, and each panel's header carries a refresh control
 that forces one immediate re-read through the same single-flight path. Because
 each response carries a digest ETag, an unchanged panel costs a conditional
-request and a bodyless `304`. Upstream, a fetch-backed panel's data goes stale
-after five minutes (`ttlMinutes` in `internal/panels/config/fetch.json`), so
-the two ends of the freshness path sit inside the same 30s–5m band.
+request and a bodyless `304`.
+
+Upstream is a different clock, and deliberately a slower one. The refresh loop
+wakes on the shared cadence (`ttlMinutes`), but each producer additionally
+carries its OWN rate budget — `minIntervalMinutes` in
+`internal/panels/config/fetch.json` — and a wake that finds every endpoint
+still inside its budget contacts nothing at all. The budget is spent per
+ATTEMPT rather than per success, so a failing upstream is retried no faster
+than a healthy one is polled. The shipped figures are a quarter hour for the
+contribution calendar and the game hiscores, and ten minutes for the commit
+lists; a test computes the worst-case hourly request count per host from that
+configuration and fails if it passes half the documented budget for that host.
+
+Every outbound answer is bounded before it is believed: an exact declared
+media type, a per-endpoint byte cap, a per-attempt timeout, a 200-only status
+gate with rate-limit refusals backed off further than the ordinary cadence,
+and refused redirects. The destination is bounded too — the host allowlist
+governs a NAME, so the transport additionally refuses to connect unless every
+address that name resolves to is public, and then dials the exact addresses it
+admitted. A private, loopback, link-local, carrier-grade, or reserved answer
+for an allowlisted host is refused rather than followed.
+
+When a producer fails, the panel keeps its last good data and says so. The
+version-control panel reports both halves separately: the envelope's
+`generatedAt` is the calendar's own fetch instant, `commitsAt` is the commit
+list's, and the envelope is `ok` only when both halves are live. A commit list
+that has never been fetched serves as an empty array with no `commitsAt` at
+all, so "nobody managed to look" can never render as "there are no recent
+commits".
 
 ### Enabling live refresh (not enabled anywhere today)
 
@@ -213,7 +253,9 @@ requires all of the following, together:
    never stored, logged, or served. **No key, and no reference to a key,
    belongs in this repository** (requirement 12). A source whose variable is
    unset is simply skipped; it is never an error and never a fabricated
-   number.
+   number. This applies to the token-usage producers ONLY — the game
+   hiscores, the contribution calendar, and the commit lists are zero-secret
+   by construction and need nothing from this step.
 3. An egress allowance for the hosts in that file's `hosts` allowlist. The
    chart's NetworkPolicy denies every outbound connection — it declares the
    `Egress` policy type over an empty rule list — so with policy unchanged

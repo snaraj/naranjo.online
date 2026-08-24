@@ -14,6 +14,8 @@ import {
   isSeriesView,
   monthTicks,
   peakValue,
+  pendingColumns,
+  pendingWeeks,
   seriesCells,
   seriesViews,
   toColumns,
@@ -119,4 +121,34 @@ test('thousands grouping is locale-independent', () => {
   assert.equal(formatWhole(999), '999');
   assert.equal(formatWhole(1000), '1,000');
   assert.equal(formatWhole(1234567), '1,234,567');
+});
+
+// The graph a panel renders while it waits for its series (owner directive,
+// issue 127). It replaced a line of text where the graph belongs, and the
+// honesty invariant is the whole design: an empty graph must contain exactly
+// as many datapoints as the source has reported, which is none.
+test('the pending graph is chrome with no datapoints in it', () => {
+  const columns = pendingColumns();
+  assert.equal(columns.length, pendingWeeks, 'the empty graph is a year wide, like the real one');
+  assert.ok(pendingWeeks >= 52, 'a graph narrower than a year would not read as the same graph');
+  for (const column of columns) {
+    assert.equal(column.length, gridRows, 'every column is a full week, like the real ones');
+    for (const cell of column) {
+      // Absent is what makes this honest rather than decorative: an absent
+      // cell is drawn as a hole and labelled as having no data, which is the
+      // identical rendering a day outside a real window gets.
+      assert.equal(cell.absent, true);
+      assert.equal(cell.value, 0);
+      assert.equal(cell.date, '', 'a placeholder day must not claim a date it was never told');
+    }
+  }
+  // Every cell absent means no peak, so the ramp cannot paint a level: a
+  // placeholder can never be mistaken for activity, whatever it is passed to.
+  assert.equal(peakValue(columns.flat()), 0);
+  assert.equal(cellLabel(columns[0][0], 'token'), 'no data for this day');
+  // ...and no month axis either, since an undated column cannot be labelled.
+  assert.deepEqual(monthTicks(columns), []);
+  // A caller asking for nothing gets nothing, never a negative-length loop.
+  assert.deepEqual(pendingColumns(0), []);
+  assert.deepEqual(pendingColumns(-3), []);
 });

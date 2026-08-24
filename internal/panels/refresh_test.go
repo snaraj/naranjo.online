@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
@@ -338,7 +340,11 @@ func TestRedirectsAreRefusedAndCredentialStaysHome(t *testing.T) {
 	source := state.fetch
 	// The header name and sentinel spelling deliberately avoid secret-scanner
 	// keywords and entropy so the repository's gitleaks gate stays meaningful.
-	if _, err := source.fetchDocument(t.Context(), doer, origin.URL+"/scores.json", "x-test-credential", "fixture-sentinel-aaaa", nil, 0); err == nil {
+	if _, err := source.fetchDocument(t.Context(), doer, fetchRequest{
+		endpoint:  origin.URL + "/scores.json",
+		keyHeader: "x-test-credential",
+		keyValue:  "fixture-sentinel-aaaa",
+	}); err == nil {
 		t.Fatal("credentialed fetch followed a redirect")
 	}
 	if got := targetHits.Load(); got != 0 {
@@ -650,4 +656,779 @@ type recordingDoer struct {
 func (d *recordingDoer) Do(r *http.Request) (*http.Response, error) {
 	d.accept = r.Header.Get("Accept")
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(d.body))}, nil
+}
+
+// cannedAnswer is one scripted upstream reply: the status, the media type it
+// declares, and the bytes it serves. Every field is separately settable
+// because each is a separate gate on the fetch path, and a canary that can
+// only vary the body cannot prove the other two exist.
+type cannedAnswer struct {
+	status      int
+	contentType string
+	body        string
+	transport   error
+}
+
+// routingDoer answers by URL path and counts what it was asked for, so a
+// two-producer panel can be driven with one producer healthy and the other
+// hostile — the arrangement every partial-failure claim below rests on.
+type routingDoer struct {
+	mu      sync.Mutex
+	answers map[string]cannedAnswer
+	calls   map[string]int
+	headers map[string]string
+}
+
+func newRoutingDoer(answers map[string]cannedAnswer) *routingDoer {
+	return &routingDoer{answers: answers, calls: map[string]int{}, headers: map[string]string{}}
+}
+
+func (d *routingDoer) Do(r *http.Request) (*http.Response, error) {
+	d.mu.Lock()
+	answer, known := d.answers[r.URL.Path]
+	d.calls[r.URL.Path]++
+	d.headers[r.URL.Path] = r.Header.Get("Accept")
+	d.mu.Unlock()
+	if !known {
+		return nil, fmt.Errorf("routingDoer: no answer scripted for %s", r.URL.Path)
+	}
+	if answer.transport != nil {
+		return nil, answer.transport
+	}
+	header := http.Header{}
+	if answer.contentType != "" {
+		header.Set("Content-Type", answer.contentType)
+	}
+	status := answer.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader(answer.body))}, nil
+}
+
+func (d *routingDoer) countOf(path string) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls[path]
+}
+
+func (d *routingDoer) total() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	sum := 0
+	for _, count := range d.calls {
+		sum += count
+	}
+	return sum
+}
+
+// activityFixtureSnapshot is the cold-start fallback the activity scenarios
+// begin from: a minimal, valid, contribution payload with no commits, which is
+// exactly the state the owner reported as the defect — a panel that shows no
+// recent commits at all.
+const activityFixtureSnapshot = `{"generatedAt":"2026-08-01T00:00:00Z","data":{"totalContributions":1,` +
+	`"weeks":[[0,0,0,0,0,0,1]],"streak":1,"endDate":"2026-08-01","recentCommits":[]}}`
+
+// commitDocument builds one repository's public commit document. It carries
+// the FULL upstream row — including the authorship name and email address the
+// projection deliberately does not model — so these scenarios prove the
+// projection tolerates the real document rather than a trimmed one.
+func commitDocument(rows ...[2]string) string {
+	entries := make([]string, 0, len(rows))
+	for index, row := range rows {
+		sha := fmt.Sprintf("%040x", index+1)
+		entries = append(entries, fmt.Sprintf(
+			`{"sha":%q,"node_id":"fixture","commit":{"author":{"name":"Fixture Author","email":"fixture@example.invalid","date":%q},`+
+				`"committer":{"name":"Fixture Author","email":"fixture@example.invalid","date":%q},"message":%q,`+
+				`"tree":{"sha":%q,"url":"https://api.example.test/tree"},"url":"https://api.example.test/commit",`+
+				`"comment_count":0,"verification":{"verified":true,"reason":"valid","signature":null,"payload":null}},`+
+				`"url":"https://api.example.test/commit","html_url":"https://api.example.test/c","comments_url":"https://api.example.test/cc",`+
+				`"author":null,"committer":null,"parents":[]}`,
+			sha, row[1], row[1], row[0], sha,
+		))
+	}
+	return "[" + strings.Join(entries, ",") + "]"
+}
+
+// activityFetchRegistry builds a one-panel registry whose version-control
+// panel reads BOTH public producers on their own rate budgets.
+func activityFetchRegistry(t *testing.T, minutes int) (*Registry, *panelState) {
+	t.Helper()
+	fsys := fstest.MapFS{"snapshots/activity.json": {Data: []byte(activityFixtureSnapshot)}}
+	source, err := NewFetchSource(
+		SnapshotSource{Name: "snapshots/activity.json"},
+		validFetchConfig(),
+		panelFetchSpecs{vcs: &vcsActivityFetchSpec{
+			Endpoint:           "https://api.example.test/contributions",
+			Headers:            map[string]string{"Accept": "text/html"},
+			ContentType:        "text/html",
+			MinIntervalMinutes: minutes,
+			Commits: &vcsCommitsFetchSpec{
+				Headers:            map[string]string{"Accept": "application/json"},
+				ContentType:        "application/json",
+				MinIntervalMinutes: minutes,
+				// A tighter cap than the shared bound, so the oversized-body
+				// canary below exercises the per-endpoint limit rather than
+				// the shared one.
+				MaxBytes: 64 << 10,
+				Max:      4,
+				Sources: []vcsCommitSourceSpec{
+					{Repo: "first-repo", Endpoint: "https://api.example.test/repos/first/commits"},
+					{Repo: "second-repo", Endpoint: "https://api.example.test/repos/second/commits"},
+				},
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("NewFetchSource() error = %v", err)
+	}
+	registry := newRegistry(fsys, []panelDefinition{
+		{id: "vcs-activity", kind: KindVCSActivity, title: "Version-control activity", source: source},
+	})
+	return registry, registry.byID["vcs-activity"]
+}
+
+// activityAnswers scripts a healthy round for both producers.
+func activityAnswers(t *testing.T) map[string]cannedAnswer {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "contributions-fragment.html"))
+	if err != nil {
+		t.Fatalf("read the captured contribution calendar: %v", err)
+	}
+	return map[string]cannedAnswer{
+		"/contributions": {contentType: "text/html; charset=utf-8", body: string(raw)},
+		"/repos/first/commits": {contentType: "application/json; charset=utf-8", body: commitDocument(
+			[2]string{"feat(panels): the newest thing\n\nbody text", "2026-08-23T09:00:00Z"},
+			[2]string{"fix(panels): the older thing", "2026-08-21T09:00:00Z"},
+		)},
+		"/repos/second/commits": {contentType: "application/json; charset=utf-8", body: commitDocument(
+			[2]string{"docs: the middle thing", "2026-08-22T09:00:00Z"},
+		)},
+	}
+}
+
+// decodeActivity reads the panel's current payload.
+func decodeActivity(t *testing.T, registry *Registry) (Envelope, VCSActivityData) {
+	t.Helper()
+	envelope := decodePanelEnvelope(t, registry, "vcs-activity")
+	var payload VCSActivityData
+	if err := decodeStrict(envelope.Data, &payload); err != nil {
+		t.Fatalf("decode activity payload: %v", err)
+	}
+	return envelope, payload
+}
+
+// TestActivityRefreshServesLiveCommits is the owner's reported defect, stated
+// as a scenario: a panel that cold-starts reporting no recent commits at all,
+// refreshed once, must serve real commits merged newest-first across every
+// configured repository — with each row's repo label taken from CONFIGURATION,
+// its subject from the document, and the whole payload dated by the calendar
+// rather than by the clock.
+func TestActivityRefreshServesLiveCommits(t *testing.T) {
+	t.Parallel()
+	registry, state := activityFetchRegistry(t, 0)
+	env := func(key string) string {
+		t.Errorf("a public producer read the environment for %q", key)
+		return ""
+	}
+
+	if _, cold := decodeActivity(t, registry); len(cold.RecentCommits) != 0 || cold.CommitsAt != "" {
+		t.Fatalf("cold start already reports commits: %+v", cold)
+	}
+
+	doer := newRoutingDoer(activityAnswers(t))
+	if err := registry.refreshPanel(t.Context(), state, doer, env); err != nil {
+		t.Fatalf("refreshPanel() error = %v", err)
+	}
+	envelope, payload := decodeActivity(t, registry)
+	if envelope.Status != StatusOK {
+		t.Fatalf("status = %q, want ok with both producers healthy", envelope.Status)
+	}
+	want := []VCSCommit{
+		{Repo: "first-repo", Message: "feat(panels): the newest thing", At: "2026-08-23T09:00:00Z"},
+		{Repo: "second-repo", Message: "docs: the middle thing", At: "2026-08-22T09:00:00Z"},
+		{Repo: "first-repo", Message: "fix(panels): the older thing", At: "2026-08-21T09:00:00Z"},
+	}
+	if len(payload.RecentCommits) != len(want) {
+		t.Fatalf("served %d commits, want %d: %+v", len(payload.RecentCommits), len(want), payload.RecentCommits)
+	}
+	for index, expected := range want {
+		if payload.RecentCommits[index] != expected {
+			t.Errorf("commit[%d] = %+v, want %+v", index, payload.RecentCommits[index], expected)
+		}
+	}
+	if payload.CommitsAt == "" {
+		t.Error("a freshly fetched commit list carries no commitsAt; the payload cannot then say which half is older")
+	}
+	// The calendar half still maps, and the payload is dated by IT.
+	if payload.TotalContributions != 499 || payload.EndDate != "2026-08-20" {
+		t.Errorf("calendar half = total %d end %q, want the fixture's 499 / 2026-08-20", payload.TotalContributions, payload.EndDate)
+	}
+	if envelope.GeneratedAt == "" {
+		t.Error("the payload carries no generatedAt")
+	}
+	// The document-type header each producer declares is what actually went
+	// out: the calendar answers 406 to a JSON Accept header, the commit
+	// documents want JSON, and neither is assumed in code.
+	if got := doer.headers["/contributions"]; got != "text/html" {
+		t.Errorf("calendar Accept = %q, want text/html", got)
+	}
+	if got := doer.headers["/repos/first/commits"]; got != "application/json" {
+		t.Errorf("commit Accept = %q, want application/json", got)
+	}
+	// No authorization of any kind rode along. The producers are public, and
+	// the environment lookup above already fails the test if one is read.
+	if doer.total() != 3 {
+		t.Errorf("the round took %d requests, want one per configured endpoint", doer.total())
+	}
+}
+
+// TestHostileCommitUpstreamsKeepTheLastGoodList is the canary matrix for the
+// commit producer. Each case makes the commit half hostile in ONE way while
+// the calendar stays healthy, and every one of them must land in the same
+// place: the previously fetched commit list keeps serving, the panel says
+// stale, and commitsAt still names when that list was really read.
+func TestHostileCommitUpstreamsKeepTheLastGoodList(t *testing.T) {
+	t.Parallel()
+	oversized := commitDocument([2]string{strings.Repeat("a", 300000), "2026-08-23T09:00:00Z"})
+	for name, hostile := range map[string]cannedAnswer{
+		"an error status":                {status: http.StatusInternalServerError, contentType: "application/json", body: "[]"},
+		"a rate-limit refusal":           {status: http.StatusTooManyRequests, contentType: "application/json", body: "[]"},
+		"a quota refusal":                {status: http.StatusForbidden, contentType: "application/json", body: "[]"},
+		"markup where json was due":      {contentType: "text/html; charset=utf-8", body: commitDocument([2]string{"anything", "2026-08-23T09:00:00Z"})},
+		"no declared document type":      {body: commitDocument([2]string{"anything", "2026-08-23T09:00:00Z"})},
+		"a body over the byte bound":     {contentType: "application/json", body: oversized},
+		"malformed json":                 {contentType: "application/json", body: `[{"sha":`},
+		"an unrelated json document":     {contentType: "application/json", body: `[{"unrelated":"shape"}]`},
+		"an empty commit list":           {contentType: "application/json", body: `[]`},
+		"a transport that never answers": {transport: http.ErrHandlerTimeout},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			registry, state := activityFetchRegistry(t, 0)
+			env := func(string) string { return "" }
+			healthy := newRoutingDoer(activityAnswers(t))
+			if err := registry.refreshPanel(t.Context(), state, healthy, env); err != nil {
+				t.Fatalf("seed refresh error = %v", err)
+			}
+			_, seeded := decodeActivity(t, registry)
+			if len(seeded.RecentCommits) == 0 {
+				t.Fatal("the seed round served no commits; the scenario has nothing to retain")
+			}
+
+			answers := activityAnswers(t)
+			answers["/repos/first/commits"] = hostile
+			answers["/repos/second/commits"] = hostile
+			if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(answers), env); err != nil {
+				t.Fatalf("the calendar half still mapped, so the round must succeed: %v", err)
+			}
+			envelope, payload := decodeActivity(t, registry)
+			if envelope.Status != StatusStale {
+				t.Errorf("status = %q, want stale: the commit half is not live", envelope.Status)
+			}
+			if len(payload.RecentCommits) != len(seeded.RecentCommits) {
+				t.Fatalf("served %d commits, want the %d retained ones", len(payload.RecentCommits), len(seeded.RecentCommits))
+			}
+			for index, expected := range seeded.RecentCommits {
+				if payload.RecentCommits[index] != expected {
+					t.Errorf("commit[%d] = %+v, want the retained %+v", index, payload.RecentCommits[index], expected)
+				}
+			}
+			if payload.CommitsAt != seeded.CommitsAt {
+				t.Errorf("commitsAt = %q, want the retained %q: a stale list must not claim a fresh read", payload.CommitsAt, seeded.CommitsAt)
+			}
+		})
+	}
+}
+
+// TestHostileCalendarUpstreamsKeepTheLastGoodPanel is the same matrix for the
+// calendar half, where the failure is total: without a calendar there is no
+// payload to build, so the whole round fails and the previous envelope keeps
+// serving as stale.
+func TestHostileCalendarUpstreamsKeepTheLastGoodPanel(t *testing.T) {
+	t.Parallel()
+	for name, hostile := range map[string]cannedAnswer{
+		"json where markup was due":  {contentType: "application/json", body: "{}"},
+		"no declared document type":  {body: "<html></html>"},
+		"an error status":            {status: http.StatusBadGateway, contentType: "text/html", body: "<html></html>"},
+		"a rate-limit refusal":       {status: http.StatusTooManyRequests, contentType: "text/html", body: "<html></html>"},
+		"a signed-out page":          {contentType: "text/html", body: "<html><body>signed out</body></html>"},
+		"a body over the byte bound": {contentType: "text/html", body: strings.Repeat("x", 2*1024*1024)},
+		"a dead transport":           {transport: http.ErrHandlerTimeout},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			registry, state := activityFetchRegistry(t, 0)
+			env := func(string) string { return "" }
+			if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(activityAnswers(t)), env); err != nil {
+				t.Fatalf("seed refresh error = %v", err)
+			}
+			_, seeded := decodeActivity(t, registry)
+
+			answers := activityAnswers(t)
+			answers["/contributions"] = hostile
+			if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(answers), env); err == nil {
+				t.Fatal("a hostile calendar answer was accepted")
+			}
+			envelope, payload := decodeActivity(t, registry)
+			if envelope.Status != StatusStale {
+				t.Errorf("status = %q, want stale", envelope.Status)
+			}
+			if payload.TotalContributions != seeded.TotalContributions || len(payload.RecentCommits) != len(seeded.RecentCommits) {
+				t.Errorf("the last good payload was not retained: %+v", payload)
+			}
+		})
+	}
+}
+
+// TestRateBudgetHoldsTheOriginBackFromItsUpstreams is the cadence contract
+// observed as behavior rather than read off a constant: with a budget
+// configured, the loop's second pass inside the window contacts NOTHING, does
+// not disturb the served payload, and reports the "nothing due" outcome the
+// scheduler must not mistake for a failure.
+func TestRateBudgetHoldsTheOriginBackFromItsUpstreams(t *testing.T) {
+	t.Parallel()
+	registry, state := activityFetchRegistry(t, 15)
+	env := func(string) string { return "" }
+	doer := newRoutingDoer(activityAnswers(t))
+	if err := registry.refreshPanel(t.Context(), state, doer, env); err != nil {
+		t.Fatalf("first pass error = %v", err)
+	}
+	firstRound := doer.total()
+	envelope, payload := decodeActivity(t, registry)
+
+	for pass := range 5 {
+		err := registry.refreshPanel(t.Context(), state, poisonedDoer{t: t}, env)
+		if !errors.Is(err, errNothingDue) {
+			t.Fatalf("pass %d error = %v, want the nothing-due outcome", pass+2, err)
+		}
+	}
+	if got := doer.total(); got != firstRound {
+		t.Errorf("the transport was reached %d times, want the %d of the first pass only", got, firstRound)
+	}
+	// Nothing due must leave the served state exactly as it was — in
+	// particular it must NOT mark the panel stale, which would turn
+	// politeness into a false freshness signal.
+	after, afterPayload := decodeActivity(t, registry)
+	if after.Status != envelope.Status || after.GeneratedAt != envelope.GeneratedAt {
+		t.Errorf("a skipped pass changed the envelope: %q/%q became %q/%q", envelope.Status, envelope.GeneratedAt, after.Status, after.GeneratedAt)
+	}
+	if afterPayload.CommitsAt != payload.CommitsAt {
+		t.Errorf("a skipped pass changed commitsAt: %q became %q", payload.CommitsAt, afterPayload.CommitsAt)
+	}
+	if decodeIndex(t, registry).Panels[0].Status != envelope.Status {
+		t.Error("a skipped pass moved the index row")
+	}
+}
+
+// TestTheCalendarDatesThePayloadEvenWhenOnlyCommitsRefresh is the honesty
+// invariant at the seam between two producers on different budgets. With the
+// calendar's budget still unspent and the commit budget already free, a round
+// refreshes ONLY the commit half — and the payload must then keep the
+// calendar's original instant as generatedAt while commitsAt moves. Dating the
+// payload with the clock instead would advertise a calendar that is minutes
+// old as if it had just been read.
+func TestTheCalendarDatesThePayloadEvenWhenOnlyCommitsRefresh(t *testing.T) {
+	t.Parallel()
+	fsys := fstest.MapFS{"snapshots/activity.json": {Data: []byte(activityFixtureSnapshot)}}
+	source, err := NewFetchSource(
+		SnapshotSource{Name: "snapshots/activity.json"},
+		validFetchConfig(),
+		panelFetchSpecs{vcs: &vcsActivityFetchSpec{
+			Endpoint:    "https://api.example.test/contributions",
+			Headers:     map[string]string{"Accept": "text/html"},
+			ContentType: "text/html",
+			// The calendar carries a budget; the commit half deliberately
+			// carries none, so a second immediate round has exactly one of
+			// the two producers due.
+			MinIntervalMinutes: 30,
+			Commits: &vcsCommitsFetchSpec{
+				Headers:     map[string]string{"Accept": "application/json"},
+				ContentType: "application/json",
+				Max:         4,
+				Sources:     []vcsCommitSourceSpec{{Repo: "first-repo", Endpoint: "https://api.example.test/repos/first/commits"}},
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("NewFetchSource() error = %v", err)
+	}
+	registry := newRegistry(fsys, []panelDefinition{
+		{id: "vcs-activity", kind: KindVCSActivity, title: "Version-control activity", source: source},
+	})
+	state := registry.byID["vcs-activity"]
+	env := func(string) string { return "" }
+
+	doer := newRoutingDoer(activityAnswers(t))
+	if err := registry.refreshPanel(t.Context(), state, doer, env); err != nil {
+		t.Fatalf("first round error = %v", err)
+	}
+	first, firstPayload := decodeActivity(t, registry)
+
+	// The second round advances the commit list. A different newest commit
+	// makes the advance observable rather than inferred.
+	answers := activityAnswers(t)
+	answers["/repos/first/commits"] = cannedAnswer{contentType: "application/json", body: commitDocument(
+		[2]string{"feat(panels): a commit that landed since", "2026-08-23T11:00:00Z"},
+	)}
+	if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(answers), env); err != nil {
+		t.Fatalf("second round error = %v", err)
+	}
+	second, secondPayload := decodeActivity(t, registry)
+
+	if doer.countOf("/contributions") != 1 {
+		t.Errorf("the calendar was fetched %d times; its budget was still unspent", doer.countOf("/contributions"))
+	}
+	if second.GeneratedAt != first.GeneratedAt {
+		t.Errorf("generatedAt moved from %q to %q without the calendar being re-read; the payload would claim a freshness the calendar does not have",
+			first.GeneratedAt, second.GeneratedAt)
+	}
+	// commitsAt tracks the read that actually happened. Both rounds land
+	// inside the same wall-clock second here, so the assertion that carries
+	// weight is that it never goes BACKWARDS while the rows move forward —
+	// the advance itself is proven by the changed row below.
+	if secondPayload.CommitsAt < firstPayload.CommitsAt {
+		t.Errorf("commitsAt went backwards, %q then %q", firstPayload.CommitsAt, secondPayload.CommitsAt)
+	}
+	if secondPayload.CommitsAt == "" {
+		t.Error("a freshly refreshed commit list reports no commitsAt")
+	}
+	// The retained calendar is the real one, not a re-fetch and not the
+	// cold-start snapshot.
+	if secondPayload.TotalContributions != firstPayload.TotalContributions || secondPayload.EndDate != firstPayload.EndDate {
+		t.Errorf("the retained calendar changed: %+v then %+v", firstPayload, secondPayload)
+	}
+	if len(secondPayload.RecentCommits) != 1 || secondPayload.RecentCommits[0].Message != "feat(panels): a commit that landed since" {
+		t.Errorf("the commit half did not advance: %+v", secondPayload.RecentCommits)
+	}
+	if second.Status != StatusOK {
+		t.Errorf("status = %q; a calendar inside its own budget is current, not stale", second.Status)
+	}
+}
+
+// TestTheLoopRespectsARateBudgetAcrossItsWakes is the scheduler half of the
+// cadence contract, driven through the REAL background loop rather than
+// through direct refresh calls: the loop wakes many times inside one budget
+// window and the upstream is contacted exactly once. A loop that treated
+// "nothing due" as a failure would instead climb its retry ladder and mark a
+// perfectly current panel stale.
+func TestTheLoopRespectsARateBudgetAcrossItsWakes(t *testing.T) {
+	t.Parallel()
+	registry, _ := activityFetchRegistry(t, int(maxEndpointInterval/time.Minute))
+	doer := newRoutingDoer(activityAnswers(t))
+	state := registry.byID["vcs-activity"]
+	state.fetch.config.TTL = 5 * time.Millisecond
+	state.fetch.config.Timeout = time.Millisecond
+	state.fetch.config.InitialBackoff = time.Millisecond
+	state.fetch.config.MaxBackoff = 2 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	registry.startRefresh(ctx, doer, func(string) string { return "" })
+	deadline := time.Now().Add(3 * time.Second)
+	for decodePanelEnvelope(t, registry, "vcs-activity").Status != StatusOK {
+		if time.Now().After(deadline) {
+			t.Fatal("the panel never became ok under the refresh loop")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	afterFirst := doer.total()
+	// Many more wakes than the first one, all inside the budget window.
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	if got := doer.total(); got != afterFirst {
+		t.Errorf("the loop made %d requests across ~40 wakes, want the %d of its first pass", got, afterFirst)
+	}
+	if got := decodePanelEnvelope(t, registry, "vcs-activity").Status; got != StatusOK {
+		t.Errorf("status = %q after wakes that fetched nothing; a spent budget is not a failure", got)
+	}
+}
+
+// TestTheLoopKeepsItsCadenceWhileABudgetIsSpent is the scheduler's other
+// half, and it is about TIMING rather than about served bytes. A wake that
+// finds nothing due must leave the retry ladder alone: a loop that treated it
+// as a failure would reset its timer to the backoff delay instead of the
+// cadence, and the panel's first real refresh would arrive a backoff late
+// rather than the moment its budget frees.
+//
+// The margins are deliberately enormous — a budget measured in tens of
+// milliseconds against a backoff measured in seconds — so a machine under
+// load fails this only if the behavior really regressed.
+func TestTheLoopKeepsItsCadenceWhileABudgetIsSpent(t *testing.T) {
+	t.Parallel()
+	registry, state := activityFetchRegistry(t, 0)
+	source := state.fetch
+	source.config.TTL = 5 * time.Millisecond
+	source.config.Timeout = time.Millisecond
+	// A retry ladder far longer than the budget: if the loop mistakes a
+	// spent budget for a failure, the next attempt lands seconds away.
+	source.config.InitialBackoff = 3 * time.Second
+	source.config.MaxBackoff = 6 * time.Second
+	// Both producers are held back for a moment, so the loop's first several
+	// wakes have nothing to do.
+	held := 60 * time.Millisecond
+	now := time.Now()
+	if !source.reserve(roleVCSCalendar, now, held) || !source.reserve(roleVCSCommits, now, held) {
+		t.Fatal("the budgets were already spent")
+	}
+	doer := newRoutingDoer(activityAnswers(t))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	registry.startRefresh(ctx, doer, func(string) string { return "" })
+	deadline := time.Now().Add(time.Second)
+	for decodePanelEnvelope(t, registry, "vcs-activity").Status != StatusOK {
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatalf("the panel was still %q a second after its budget freed; the loop backed off instead of keeping its cadence",
+				decodePanelEnvelope(t, registry, "vcs-activity").Status)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+}
+
+// TestRateBudgetCountsAttemptsNotSuccesses closes the retry-storm hole: an
+// endpoint that FAILED still spends its budget, so a broken upstream is
+// retried on the same cadence a healthy one is polled — which is precisely
+// what stops a backoff ladder from walking into a rate limit.
+func TestRateBudgetCountsAttemptsNotSuccesses(t *testing.T) {
+	t.Parallel()
+	registry, state := activityFetchRegistry(t, 15)
+	env := func(string) string { return "" }
+	answers := activityAnswers(t)
+	answers["/contributions"] = cannedAnswer{status: http.StatusBadGateway, contentType: "text/html", body: "<html></html>"}
+	doer := newRoutingDoer(answers)
+	if err := registry.refreshPanel(t.Context(), state, doer, env); err == nil {
+		t.Fatal("the failing calendar answer was accepted")
+	}
+	if got := doer.countOf("/contributions"); got != 1 {
+		t.Fatalf("calendar attempts = %d, want 1", got)
+	}
+	if err := registry.refreshPanel(t.Context(), state, doer, env); !errors.Is(err, errNothingDue) {
+		t.Fatalf("second pass error = %v, want the nothing-due outcome", err)
+	}
+	if got := doer.countOf("/contributions"); got != 1 {
+		t.Errorf("calendar attempts = %d after a failure; a failed attempt must still spend its budget", got)
+	}
+}
+
+// TestNeverFetchedCommitsAreNeverPresentedAsFresh is the honesty invariant at
+// its sharpest corner: a panel whose calendar is live but whose commit
+// producer has never answered must serve an empty list, no commitsAt, and a
+// stale envelope. Serving an empty list as OK would tell a reader "there are
+// no recent commits" when the truth is "nobody managed to look".
+func TestNeverFetchedCommitsAreNeverPresentedAsFresh(t *testing.T) {
+	t.Parallel()
+	registry, state := activityFetchRegistry(t, 0)
+	answers := activityAnswers(t)
+	dead := cannedAnswer{transport: http.ErrHandlerTimeout}
+	answers["/repos/first/commits"] = dead
+	answers["/repos/second/commits"] = dead
+	if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(answers), func(string) string { return "" }); err != nil {
+		t.Fatalf("refreshPanel() error = %v", err)
+	}
+	envelope, payload := decodeActivity(t, registry)
+	if envelope.Status != StatusStale {
+		t.Errorf("status = %q, want stale", envelope.Status)
+	}
+	if len(payload.RecentCommits) != 0 {
+		t.Errorf("recentCommits = %+v, want an empty list", payload.RecentCommits)
+	}
+	if payload.CommitsAt != "" {
+		t.Errorf("commitsAt = %q, want it absent: no list has ever been read", payload.CommitsAt)
+	}
+	// And the empty list is an ARRAY, not a null: a payload the frontend has
+	// to special-case is a payload that renders wrong once.
+	if !bytes.Contains(envelope.Data, []byte(`"recentCommits":[]`)) {
+		t.Errorf("payload = %s, want an explicit empty array", envelope.Data)
+	}
+}
+
+// TestAGatedCommitProducerThatNeverAnsweredIsStillStale closes the corner
+// where the two honesty rules meet: a commit budget already spent, and no
+// successful fetch behind it. The gated branch has a retained list to hand
+// back — an EMPTY one — and reporting that as current would tell a reader
+// "there are no recent commits" on the strength of a request nobody has ever
+// completed. The budget being spent is not evidence about the data.
+func TestAGatedCommitProducerThatNeverAnsweredIsStillStale(t *testing.T) {
+	t.Parallel()
+	registry, state := activityFetchRegistry(t, 0)
+	// Spend the commit budget without ever fetching: the next round finds the
+	// gate closed and has to fall back to the retained (empty) list.
+	if !state.fetch.reserve(roleVCSCommits, time.Now(), time.Hour) {
+		t.Fatal("the commit budget was already spent")
+	}
+	if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(activityAnswers(t)), func(string) string { return "" }); err != nil {
+		t.Fatalf("refreshPanel() error = %v", err)
+	}
+	envelope, payload := decodeActivity(t, registry)
+	if envelope.Status != StatusStale {
+		t.Errorf("status = %q, want stale: no commit list has ever been read", envelope.Status)
+	}
+	if len(payload.RecentCommits) != 0 || payload.CommitsAt != "" {
+		t.Errorf("a never-fetched commit list reported itself as data: %+v", payload)
+	}
+	// The calendar half still refreshed, so the stale verdict is about the
+	// commit half specifically and not about a round that did nothing.
+	if payload.TotalContributions != 499 {
+		t.Errorf("the calendar half did not refresh: total = %d", payload.TotalContributions)
+	}
+}
+
+// TestARateLimitRefusalBuysMoreQuietThanTheOrdinaryCadence pins the one thing
+// that makes a 429 different from any other bad status. Both keep the last
+// good data — the canary matrix already proves that — so the distinguishing
+// behavior is what happens NEXT: an ordinary failure is retried on the
+// ordinary cadence, while a refusal that says "too often" pushes the endpoint
+// out to the backoff ceiling. Without the contrast the special case would be
+// decorative.
+func TestARateLimitRefusalBuysMoreQuietThanTheOrdinaryCadence(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		first         cannedAnswer
+		wantSecondTry bool
+	}{
+		"an ordinary failure is retried on the ordinary cadence": {
+			first:         cannedAnswer{status: http.StatusInternalServerError, contentType: "application/json", body: "[]"},
+			wantSecondTry: true,
+		},
+		"a rate-limit refusal is not": {
+			first:         cannedAnswer{status: http.StatusTooManyRequests, contentType: "application/json", body: "[]"},
+			wantSecondTry: false,
+		},
+		"a quota refusal is not either": {
+			first:         cannedAnswer{status: http.StatusForbidden, contentType: "application/json", body: "[]"},
+			wantSecondTry: false,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// No cadence of its own: without the cooldown, EVERY round would
+			// attempt the commit endpoints again, so a skipped second round
+			// can only be the rate-limit backoff.
+			registry, state := activityFetchRegistry(t, 0)
+			env := func(string) string { return "" }
+			answers := activityAnswers(t)
+			answers["/repos/first/commits"] = tc.first
+			answers["/repos/second/commits"] = tc.first
+			first := newRoutingDoer(answers)
+			if err := registry.refreshPanel(t.Context(), state, first, env); err != nil {
+				t.Fatalf("first round error = %v", err)
+			}
+			if got := first.countOf("/repos/first/commits"); got != 1 {
+				t.Fatalf("first round made %d commit attempts, want 1", got)
+			}
+			second := newRoutingDoer(activityAnswers(t))
+			if err := registry.refreshPanel(t.Context(), state, second, env); err != nil {
+				t.Fatalf("second round error = %v", err)
+			}
+			tried := second.countOf("/repos/first/commits") > 0
+			if tried != tc.wantSecondTry {
+				t.Errorf("second round attempted the commit endpoint = %v, want %v", tried, tc.wantSecondTry)
+			}
+			// The calendar is untouched by the commit half's cooldown: one
+			// producer's backoff must never silence the other.
+			if got := second.countOf("/contributions"); got != 1 {
+				t.Errorf("the calendar was attempted %d times in the second round, want 1", got)
+			}
+		})
+	}
+}
+
+// TestPartialCommitRoundIsHonestlyStale covers the middle case the canary
+// matrix does not: one repository answers and another does not. The rows that
+// arrived are served — losing them would be worse — but the panel says stale,
+// because the list a reader sees is not the complete one.
+func TestPartialCommitRoundIsHonestlyStale(t *testing.T) {
+	t.Parallel()
+	registry, state := activityFetchRegistry(t, 0)
+	answers := activityAnswers(t)
+	answers["/repos/second/commits"] = cannedAnswer{status: http.StatusInternalServerError, contentType: "application/json", body: "[]"}
+	if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(answers), func(string) string { return "" }); err != nil {
+		t.Fatalf("refreshPanel() error = %v", err)
+	}
+	envelope, payload := decodeActivity(t, registry)
+	if envelope.Status != StatusStale {
+		t.Errorf("status = %q, want stale for an incomplete round", envelope.Status)
+	}
+	if len(payload.RecentCommits) != 2 {
+		t.Fatalf("served %d commits, want the 2 that did arrive: %+v", len(payload.RecentCommits), payload.RecentCommits)
+	}
+	for _, commit := range payload.RecentCommits {
+		if commit.Repo != "first-repo" {
+			t.Errorf("commit from %q survived a failed source: %+v", commit.Repo, commit)
+		}
+	}
+}
+
+// TestSlowCommitUpstreamIsBoundedByTheAttemptTimeout is the slow-upstream
+// canary over a REAL socket, because a fake transport cannot stall: a
+// commit producer that never answers costs one attempt timeout and leaves the
+// panel serving its calendar with the retained commit list.
+func TestSlowCommitUpstreamIsBoundedByTheAttemptTimeout(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+	_, config := loopbackConfig(t, server.URL)
+	// Two seconds, not tens of milliseconds: this suite also runs inside
+	// the container build's emulated arm64 leg, where a loopback TLS
+	// handshake alone can blow a 40ms budget (CI failed exactly there,
+	// 2026-08-24). The property under test is unchanged - the stalled
+	// producer costs at most ONE attempt timeout, pinned by the elapsed
+	// ceiling below - and the healthy calendar leg needs headroom that
+	// emulation cannot steal.
+	config.Timeout = 2 * time.Second
+	fsys := fstest.MapFS{"snapshots/activity.json": {Data: []byte(activityFixtureSnapshot)}}
+	raw, err := os.ReadFile(filepath.Join("testdata", "contributions-fragment.html"))
+	if err != nil {
+		t.Fatalf("read the captured contribution calendar: %v", err)
+	}
+	calendar := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(raw)
+	}))
+	t.Cleanup(calendar.Close)
+	calendarHost, _ := loopbackConfig(t, calendar.URL)
+	config.Hosts = append(config.Hosts, calendarHost)
+	source, err := NewFetchSource(
+		SnapshotSource{Name: "snapshots/activity.json"},
+		config,
+		panelFetchSpecs{vcs: &vcsActivityFetchSpec{
+			Endpoint:    calendar.URL + "/contributions",
+			Headers:     map[string]string{"Accept": "text/html"},
+			ContentType: "text/html",
+			Commits: &vcsCommitsFetchSpec{
+				Headers:     map[string]string{"Accept": "application/json"},
+				ContentType: "application/json",
+				Max:         4,
+				Sources:     []vcsCommitSourceSpec{{Repo: "stalled-repo", Endpoint: server.URL + "/commits"}},
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("NewFetchSource() error = %v", err)
+	}
+	registry := newRegistry(fsys, []panelDefinition{
+		{id: "vcs-activity", kind: KindVCSActivity, title: "Version-control activity", source: source},
+	})
+	state := registry.byID["vcs-activity"]
+	started := time.Now()
+	if err := registry.refreshPanel(t.Context(), state, loopbackDoer(server, calendar), func(string) string { return "" }); err != nil {
+		t.Fatalf("the calendar mapped, so the round must succeed: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 4*config.Timeout {
+		t.Errorf("the round took %v; a stalled upstream must be bounded by the attempt timeout", elapsed)
+	}
+	envelope, payload := decodeActivity(t, registry)
+	if envelope.Status != StatusStale {
+		t.Errorf("status = %q, want stale with a stalled commit producer", envelope.Status)
+	}
+	if payload.TotalContributions != 499 {
+		t.Errorf("the calendar half did not map through: total = %d", payload.TotalContributions)
+	}
+	if len(payload.RecentCommits) != 0 || payload.CommitsAt != "" {
+		t.Errorf("a stalled producer produced commits: %+v", payload)
+	}
 }

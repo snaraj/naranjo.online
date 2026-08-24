@@ -7,8 +7,14 @@
 package panels
 
 import (
+	"context"
+	"errors"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -280,11 +286,12 @@ func TestNewFetchSourceFailsClosed(t *testing.T) {
 }
 
 // TestProductionHostAllowlistIsPinned pins the embedded config's outbound
-// surface to the exact owner-approved set — the hiscores host plus the two
-// usage-API hosts — and requires every configured endpoint to sit on it.
-// Off-list is a test failure here and a runtime refusal below; the vendor
-// hosts are assembled from fragments because this file lives inside the
-// vendor-neutral source tree.
+// surface to the exact owner-approved set — the hiscores host, the two
+// version-control hosts the zero-secret producers read, and the two usage-API
+// hosts — and requires every configured endpoint to sit on it. Off-list is a
+// test failure here and a runtime refusal below; the vendor hosts are
+// assembled from fragments because this file lives inside the vendor-neutral
+// source tree.
 func TestProductionHostAllowlistIsPinned(t *testing.T) {
 	t.Parallel()
 	document, bounds, err := loadFetchConfig(fetchConfigBytes)
@@ -294,6 +301,7 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 	pinned := []string{
 		"secure.runescape.com",
 		"git" + "hub.com",
+		"api." + "git" + "hub.com",
 		"api." + "anthro" + "pic" + ".com",
 		"api." + "open" + "ai" + ".com",
 	}
@@ -308,7 +316,13 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 	if document.BossLog == nil || document.TokenUsage == nil || document.VCSActivity == nil {
 		t.Fatal("embedded config must configure every fetch-backed panel")
 	}
+	if document.VCSActivity.Commits == nil {
+		t.Fatal("embedded config configures no commit producer; the version-control panel would report no recent commits forever, which is the defect issue #79 exists to close")
+	}
 	endpoints := []string{document.BossLog.Endpoint, document.VCSActivity.Endpoint}
+	for _, source := range document.VCSActivity.Commits.Sources {
+		endpoints = append(endpoints, source.Endpoint)
+	}
 	for _, source := range document.TokenUsage.Sources {
 		endpoints = append(endpoints, source.Endpoint)
 	}
@@ -326,7 +340,7 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 		"evil.example.test",
 		"raw." + "git" + "hubusercontent.com",
 		"git" + "hub.com.evil.example.test",
-		"api." + "git" + "hub.com",
+		"api." + "git" + "hub.com.evil.example.test",
 	} {
 		if hostAllowed(bounds.Hosts, rogue) {
 			t.Errorf("host %q is allowed; the allowlist must be exact-match only", rogue)
@@ -360,7 +374,11 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 	}
 	// Every endpoint's body cap must be at or below the shared bound, so a
 	// per-endpoint cap can only ever tighten.
-	caps := map[string]int64{"boss-log": document.BossLog.MaxBytes, "vcs-activity": document.VCSActivity.MaxBytes}
+	caps := map[string]int64{
+		"boss-log":     document.BossLog.MaxBytes,
+		"vcs-activity": document.VCSActivity.MaxBytes,
+		"vcs-commits":  document.VCSActivity.Commits.MaxBytes,
+	}
 	for _, source := range document.TokenUsage.Sources {
 		caps["usage:"+source.Label] = source.MaxBytes
 	}
@@ -384,6 +402,554 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 	if bounds.InitialBackoff < bounds.TTL/10 || bounds.MaxBackoff <= bounds.TTL {
 		t.Errorf("backoff ladder = %v..%v against a %v ttl; a failing upstream must back off past the healthy cadence",
 			bounds.InitialBackoff, bounds.MaxBackoff, bounds.TTL)
+	}
+}
+
+// ownedEndpoint is one shipped endpoint this issue's zero-secret producers
+// own, reduced to the three facts every rate and schema pin below needs.
+type ownedEndpoint struct {
+	// what names the producer in a failure message.
+	what string
+	// host is the bare host the endpoint contacts.
+	host string
+	// contentType is the media type the answer must declare.
+	contentType string
+	// interval is the endpoint's declared rate budget in minutes.
+	interval int
+}
+
+// ownedEndpoints reads the shipped configuration into the shape the pins
+// below share. It covers ONLY the zero-secret producers issue #79 governs;
+// the credentialed usage sources belong to a different issue and appear in
+// the rate arithmetic through their own accounting.
+func ownedEndpoints(t *testing.T, document fetchConfigDocument) []ownedEndpoint {
+	t.Helper()
+	if document.BossLog == nil || document.VCSActivity == nil || document.VCSActivity.Commits == nil {
+		t.Fatal("the embedded config lost one of the zero-secret producers")
+	}
+	owned := []ownedEndpoint{
+		{"boss-log", hostOf(t, document.BossLog.Endpoint), document.BossLog.ContentType, document.BossLog.MinIntervalMinutes},
+		{"vcs-calendar", hostOf(t, document.VCSActivity.Endpoint), document.VCSActivity.ContentType, document.VCSActivity.MinIntervalMinutes},
+	}
+	commits := document.VCSActivity.Commits
+	for _, source := range commits.Sources {
+		owned = append(owned, ownedEndpoint{
+			"vcs-commits:" + source.Repo, hostOf(t, source.Endpoint), commits.ContentType, commits.MinIntervalMinutes,
+		})
+	}
+	return owned
+}
+
+// hostOf extracts the bare host of a configured endpoint.
+func hostOf(t *testing.T, endpoint string) string {
+	t.Helper()
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatalf("parse configured endpoint %q: %v", endpoint, err)
+	}
+	return parsed.Hostname()
+}
+
+// TestPublicProducerCadencesStayInsideTheRateBudget is the CADENCE pin the
+// owner's ruling asked for, expressed as arithmetic over the shipped
+// configuration rather than as a constant somebody has to trust.
+//
+// The property: for every host this origin contacts, the worst-case number of
+// requests one process can make in an hour must stay at or under HALF the
+// documented budget for that host. Worst case means every endpoint on that
+// host firing at its declared minimum interval forever, which is exactly what
+// a healthy origin does — and the retry ladder can only ever make it slower,
+// because a rate reservation is taken per ATTEMPT rather than per success.
+//
+// Half, not all, because the budget is per IP and this process is not
+// guaranteed to be the only thing behind it: a second replica, a rolling
+// deploy overlapping two pods, or the owner's own browser share the same
+// address. A pin at 100% would be green right up to the first duplicate.
+func TestPublicProducerCadencesStayInsideTheRateBudget(t *testing.T) {
+	t.Parallel()
+	document, bounds, err := loadFetchConfig(fetchConfigBytes)
+	if err != nil {
+		t.Fatalf("embedded fetch config refused: %v", err)
+	}
+	// Documented hourly budgets per host. The version-control API publishes 60
+	// requests per hour per IP for unauthenticated callers; the calendar
+	// document is ordinary markup with no published figure, so it borrows the
+	// same conservative number. The game hiscores publish no automated-polling
+	// contract at all, which is exactly why issue #79 asks for SPARSE polling
+	// there until one exists — hence the deliberately smaller budget.
+	budgets := map[string]int{
+		"api." + "git" + "hub.com":      60,
+		"git" + "hub.com":               60,
+		"secure.runescape.com":          20,
+		"api." + "anthro" + "pic.com":   60,
+		"api." + "open" + "ai" + ".com": 60,
+	}
+	perHour := make(map[string]int, len(budgets))
+	for _, endpoint := range ownedEndpoints(t, document) {
+		perHour[endpoint.host] += requestsPerHour(t, endpoint.what, endpoint.interval, bounds.TTL)
+	}
+	// The credentialed usage sources declare no budget of their own, so they
+	// fire on the loop cadence. They are counted anyway: the pin is about what
+	// this process does to a host, not about whose issue owns the endpoint.
+	for _, source := range document.TokenUsage.Sources {
+		perHour[hostOf(t, source.Endpoint)] += requestsPerHour(t, "usage:"+source.Label, 0, bounds.TTL)
+	}
+	for host, requests := range perHour {
+		budget, ok := budgets[host]
+		if !ok {
+			t.Errorf("host %q has no documented request budget; a cadence nobody has costed is a rate limit waiting to happen", host)
+			continue
+		}
+		if ceiling := budget / 2; requests > ceiling {
+			t.Errorf("%s takes %d requests/hour, over the %d ceiling (half of the documented %d)", host, requests, ceiling, budget)
+		}
+	}
+	// And the other direction: a cadence so slow the panel stops being live.
+	// The owner's ruling put the calendar at roughly a quarter hour, so a
+	// producer that drifted past that has quietly become a snapshot.
+	for _, endpoint := range ownedEndpoints(t, document) {
+		if interval := time.Duration(endpoint.interval) * time.Minute; interval > 15*time.Minute {
+			t.Errorf("%s refreshes every %v; a live panel refreshes inside a quarter hour", endpoint.what, interval)
+		}
+	}
+}
+
+// requestsPerHour converts one endpoint's declared budget into a worst-case
+// hourly request count, falling back to the loop cadence for an endpoint that
+// declares none.
+func requestsPerHour(t *testing.T, what string, minutes int, ttl time.Duration) int {
+	t.Helper()
+	interval := time.Duration(minutes) * time.Minute
+	if minutes <= 0 {
+		interval = ttl
+	}
+	if interval <= 0 {
+		t.Fatalf("%s has no cadence at all", what)
+	}
+	return int(time.Hour / interval)
+}
+
+// TestEveryPublicProducerDeclaresItsBoundsAsData is the completeness half of
+// the two bounds that are per-endpoint DATA rather than code: the declared
+// media type and the rate budget. Both mechanisms skip when a spec leaves them
+// unset, which is what lets hand-built test specs stay simple — so the shipped
+// configuration is where "unset" has to be impossible.
+func TestEveryPublicProducerDeclaresItsBoundsAsData(t *testing.T) {
+	t.Parallel()
+	document, _, err := loadFetchConfig(fetchConfigBytes)
+	if err != nil {
+		t.Fatalf("embedded fetch config refused: %v", err)
+	}
+	for _, endpoint := range ownedEndpoints(t, document) {
+		if endpoint.contentType == "" {
+			t.Errorf("%s declares no contentType: an answer that is a login page, a captive portal, or an error document would reach the parser and fail there, where the reason is already lost", endpoint.what)
+		}
+		if endpoint.interval <= 0 {
+			t.Errorf("%s declares no minIntervalMinutes: its request rate would then be whatever the loop cadence happens to be, which is not a budget", endpoint.what)
+		}
+	}
+	// The commit producer's row cap is a payload bound as well as a rate one:
+	// the merged list has to fit the owner's panel budget beside a full year
+	// of calendar weeks.
+	if max := document.VCSActivity.Commits.Max; max <= 0 || max > maxServedCommits {
+		t.Errorf("commit row cap = %d, want a positive value at or below %d", max, maxServedCommits)
+	}
+}
+
+// TestPublicProducersCarryNoCredentialSurface is the zero-secret pin. It is
+// structural, not textual: the two specs the public producers use have no
+// field a credential could be written into, and the header map — the one
+// general escape hatch left — refuses every name but the document-type one on
+// BOTH halves, in any casing.
+func TestPublicProducersCarryNoCredentialSurface(t *testing.T) {
+	t.Parallel()
+	document, bounds, err := loadFetchConfig(fetchConfigBytes)
+	if err != nil {
+		t.Fatalf("embedded fetch config refused: %v", err)
+	}
+	fallback := SnapshotSource{Name: "snapshots/vcs-activity.json"}
+	for name, header := range map[string]string{
+		"bearer authorization": "Authorization",
+		"api key":              "x-api-key",
+		"odd casing":           "AUTHorization",
+		"cookie":               "Cookie",
+	} {
+		t.Run("commit half refuses "+name, func(t *testing.T) {
+			t.Parallel()
+			spec := *document.VCSActivity
+			commits := *spec.Commits
+			commits.Headers = map[string]string{header: "fixture-sentinel-eeee"}
+			spec.Commits = &commits
+			if _, err := NewFetchSource(fallback, bounds, panelFetchSpecs{vcs: &spec}); err == nil {
+				t.Fatalf("the commit producer accepted a %s header; this path is public and sends no credential", name)
+			}
+		})
+	}
+	// The allowlist itself stays exactly one name. Widening it is the edit
+	// this pin exists to make somebody argue for.
+	if len(vcsActivityHeaderAllowlist) != 1 || vcsActivityHeaderAllowlist[0] != "Accept" {
+		t.Errorf("public-producer header allowlist = %v, want exactly [Accept]", vcsActivityHeaderAllowlist)
+	}
+}
+
+// TestDestinationGuardRefusesEverythingButPublicUnicast drives the address
+// admission rule directly over the ranges an attacker steers a client toward
+// when the client trusts a NAME and not the answer behind it. Cloud metadata,
+// cluster Services, LAN hosts, the loopback interface, and the whole
+// documentation/benchmark/reserved space all have to be refused; ordinary
+// public unicast has to be admitted, or the guard is just an outage.
+func TestDestinationGuardRefusesEverythingButPublicUnicast(t *testing.T) {
+	t.Parallel()
+	for name, address := range map[string]string{
+		"cloud metadata service":    "169.254.169.254",
+		"loopback":                  "127.0.0.1",
+		"loopback in another guise": "127.9.9.9",
+		"ipv6 loopback":             "::1",
+		"private class a":           "10.43.0.1",
+		"private class b":           "172.16.5.4",
+		"private class c":           "192.168.1.10",
+		"unique local ipv6":         "fd00::1",
+		"link local ipv6":           "fe80::1",
+		"carrier grade nat":         "100.100.0.1",
+		"unspecified":               "0.0.0.0",
+		"unspecified ipv6":          "::",
+		"this network":              "0.1.2.3",
+		"multicast":                 "224.0.0.1",
+		"ipv6 multicast":            "ff02::1",
+		"reserved space":            "240.0.0.1",
+		"benchmarking":              "198.18.0.1",
+		"documentation":             "192.0.2.1",
+		"ipv6 documentation":        "2001:db8::1",
+		"ipv4 mapped private ipv6":  "::ffff:10.0.0.1",
+		"ipv4 mapped loopback ipv6": "::ffff:127.0.0.1",
+		"ipv4 mapped metadata ipv6": "::ffff:169.254.169.254",
+		"6to4 relay":                "2002::1",
+		"teredo":                    "2001::1",
+		"nat64":                     "64:ff9b::1",
+		"ietf protocol assignments": "192.0.0.1",
+	} {
+		t.Run("refuses "+name, func(t *testing.T) {
+			t.Parallel()
+			if err := admitDestination(netip.MustParseAddr(address)); err == nil {
+				t.Fatalf("admitDestination(%s) admitted a non-public destination", address)
+			}
+		})
+	}
+	for name, address := range map[string]string{
+		"ordinary ipv4":           "93.184.216.34",
+		"ordinary ipv6":           "2606:2800:220:1:248:1893:25c8:1946",
+		"ipv4 mapped public ipv6": "::ffff:93.184.216.34",
+	} {
+		t.Run("admits "+name, func(t *testing.T) {
+			t.Parallel()
+			if err := admitDestination(netip.MustParseAddr(address)); err != nil {
+				t.Fatalf("admitDestination(%s) refused a public destination: %v", address, err)
+			}
+		})
+	}
+	// The zero Addr is not an address at all, and must not fall through the
+	// predicate list into the admitted branch.
+	if err := admitDestination(netip.Addr{}); err == nil {
+		t.Error("admitDestination admitted the zero address")
+	}
+}
+
+// recordingDialer records every address it is asked to connect to and always
+// refuses, so a scenario can prove BOTH that a refused destination never
+// reached the dialer and that an admitted one reached it as the exact literal
+// the guard checked.
+type recordingDialer struct {
+	mu        sync.Mutex
+	addresses []string
+}
+
+var errFixtureDialRefused = errors.New("fixture dialer: connect refused")
+
+func (d *recordingDialer) dial(_ context.Context, _, address string) (net.Conn, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.addresses = append(d.addresses, address)
+	return nil, errFixtureDialRefused
+}
+
+func (d *recordingDialer) seen() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.addresses...)
+}
+
+// TestShippedTransportRefusesNonPublicDestinations drives the guard through
+// newDoer — the SAME constructor newProductionDoer calls, with only the
+// resolver and dialer replaced — so what is proven is the shipped composition
+// rather than a lookalike client.
+//
+// The rebinding case is the one that matters most: a name that resolves to one
+// public and one private address is refused OUTRIGHT rather than connected to
+// on the public half, because a mixed answer is an attack and not a partially
+// usable destination.
+func TestShippedTransportRefusesNonPublicDestinations(t *testing.T) {
+	t.Parallel()
+	for name, answer := range map[string][]string{
+		"a single private answer":           {"10.0.0.7"},
+		"the metadata address":              {"169.254.169.254"},
+		"loopback":                          {"127.0.0.1"},
+		"a rebinding answer, public first":  {"93.184.216.34", "10.0.0.7"},
+		"a rebinding answer, private first": {"10.0.0.7", "93.184.216.34"},
+		"an ipv4-mapped private answer":     {"::ffff:192.168.0.5"},
+	} {
+		t.Run("refuses "+name, func(t *testing.T) {
+			t.Parallel()
+			dialer := &recordingDialer{}
+			doer := newDoer(fixtureResolver(answer), dialer.dial)
+			request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://fixture.example.test/document", nil)
+			if err != nil {
+				t.Fatalf("build request: %v", err)
+			}
+			if _, err := doer.Do(request); err == nil {
+				t.Fatal("the transport connected to a non-public destination")
+			} else if !strings.Contains(err.Error(), "egress refused") {
+				t.Fatalf("error = %v, want the destination refusal", err)
+			}
+			if seen := dialer.seen(); len(seen) != 0 {
+				t.Fatalf("the dialer was reached with %v; a refused destination must never get that far", seen)
+			}
+		})
+	}
+
+	t.Run("admits a public answer and dials the admitted literal", func(t *testing.T) {
+		t.Parallel()
+		dialer := &recordingDialer{}
+		doer := newDoer(fixtureResolver([]string{"93.184.216.34"}), dialer.dial)
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://fixture.example.test/document", nil)
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+		if _, err := doer.Do(request); err == nil {
+			t.Fatal("the fixture dialer reported success")
+		} else if strings.Contains(err.Error(), "egress refused") {
+			t.Fatalf("a public destination was refused: %v", err)
+		}
+		// The dialer must receive the IP LITERAL the guard admitted, never the
+		// name: handing the name back would leave room for a second resolution
+		// to answer differently.
+		want := []string{"93.184.216.34:443"}
+		if seen := dialer.seen(); len(seen) != 1 || seen[0] != want[0] {
+			t.Fatalf("dialed %v, want %v", seen, want)
+		}
+	})
+
+	t.Run("refuses a destination that resolves to nothing", func(t *testing.T) {
+		t.Parallel()
+		dialer := &recordingDialer{}
+		doer := newDoer(fixtureResolver(nil), dialer.dial)
+		request, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://fixture.example.test/document", nil)
+		if _, err := doer.Do(request); err == nil || !strings.Contains(err.Error(), "egress refused") {
+			t.Fatalf("error = %v, want the destination refusal", err)
+		}
+	})
+
+	t.Run("refuses a port that is not the https port", func(t *testing.T) {
+		t.Parallel()
+		dialer := &recordingDialer{}
+		doer := newDoer(fixtureResolver([]string{"93.184.216.34"}), dialer.dial)
+		request, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://fixture.example.test:8443/document", nil)
+		if _, err := doer.Do(request); err == nil || !strings.Contains(err.Error(), "not the https port") {
+			t.Fatalf("error = %v, want the port refusal", err)
+		}
+		if seen := dialer.seen(); len(seen) != 0 {
+			t.Fatalf("the dialer was reached with %v", seen)
+		}
+	})
+}
+
+// fixtureResolver answers every lookup with the same fixed address list.
+func fixtureResolver(addresses []string) ipResolver {
+	return func(context.Context, string, string) ([]netip.Addr, error) {
+		resolved := make([]netip.Addr, 0, len(addresses))
+		for _, address := range addresses {
+			resolved = append(resolved, netip.MustParseAddr(address))
+		}
+		return resolved, nil
+	}
+}
+
+// TestContentTypeBoundRefusesAWrongDocumentType pins the media-type gate on
+// its own. Every case carries a body the parser downstream would ACCEPT, so
+// only the content-type check itself can refuse them — and an unset
+// expectation still skips, which is the behavior hand-built test specs rely on.
+func TestContentTypeBoundRefusesAWrongDocumentType(t *testing.T) {
+	t.Parallel()
+	for name, declared := range map[string]string{
+		"markup where json was promised": "text/html; charset=utf-8",
+		"plain text":                     "text/plain",
+		"a form post answer":             "application/x-www-form-urlencoded",
+		"nothing declared at all":        "",
+		"a near miss":                    "application/json5",
+	} {
+		t.Run("refuses "+name, func(t *testing.T) {
+			t.Parallel()
+			if err := admitContentType(declared, "application/json"); err == nil {
+				t.Fatalf("admitContentType(%q) admitted the wrong document type", declared)
+			}
+		})
+	}
+	for name, declared := range map[string]string{
+		"the exact type":           "application/json",
+		"with a charset parameter": "application/json; charset=utf-8",
+		"in another casing":        "Application/JSON",
+		"with surrounding space":   " application/json ",
+	} {
+		t.Run("admits "+name, func(t *testing.T) {
+			t.Parallel()
+			if err := admitContentType(declared, "application/json"); err != nil {
+				t.Fatalf("admitContentType(%q) refused a correct document type: %v", declared, err)
+			}
+		})
+	}
+	if err := admitContentType("anything/at-all", ""); err != nil {
+		t.Errorf("an unset expectation must skip the check, got %v", err)
+	}
+}
+
+// TestRateBudgetAdmitsOneAttemptPerWindow proves the reservation is real and
+// that it counts ATTEMPTS rather than successes: the second call inside the
+// window is refused whether the first succeeded or failed, and the window has
+// to elapse before another attempt is admitted.
+func TestRateBudgetAdmitsOneAttemptPerWindow(t *testing.T) {
+	t.Parallel()
+	source := &FetchSource{config: validFetchConfig(), gates: map[string]time.Time{}}
+	start := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	if !source.reserve(roleBossLog, start, 10*time.Minute) {
+		t.Fatal("the first attempt was refused")
+	}
+	for _, elapsed := range []time.Duration{0, time.Minute, 9*time.Minute + 59*time.Second} {
+		if source.reserve(roleBossLog, start.Add(elapsed), 10*time.Minute) {
+			t.Errorf("an attempt %v into a 10m budget was admitted", elapsed)
+		}
+	}
+	if !source.reserve(roleBossLog, start.Add(10*time.Minute), 10*time.Minute) {
+		t.Error("the attempt after the window was refused")
+	}
+	// A role with no declared cadence takes no reservation of its own — the
+	// behavior every endpoint had before budgets existed, and the reason
+	// hand-built test specs need no cadence.
+	for range 3 {
+		if !source.reserve(roleVCSCommits, start, 0) {
+			t.Fatal("a role with no declared cadence was refused")
+		}
+	}
+	// But "no declared cadence" must NOT mean "ungated". The rate-limit
+	// cooldown writes a reservation too, and a cooldown that an unset config
+	// field could switch off would be a silent security toggle: the origin
+	// would keep knocking on an upstream that has just said stop.
+	source.cool(roleVCSCommits, start, time.Hour)
+	if source.reserve(roleVCSCommits, start.Add(30*time.Minute), 0) {
+		t.Error("a rate-limit cooldown was ignored because the role declares no cadence of its own")
+	}
+	if !source.reserve(roleVCSCommits, start.Add(90*time.Minute), 0) {
+		t.Error("the cooldown never expired")
+	}
+	// A rate-limit answer buys more quiet than the ordinary cadence, and never
+	// less: cooling is one-directional.
+	source.cool(roleBossLog, start.Add(10*time.Minute), time.Hour)
+	if source.reserve(roleBossLog, start.Add(30*time.Minute), 10*time.Minute) {
+		t.Error("an attempt inside the rate-limit cooldown was admitted")
+	}
+	source.cool(roleBossLog, start.Add(10*time.Minute), time.Second)
+	if source.reserve(roleBossLog, start.Add(30*time.Minute), 10*time.Minute) {
+		t.Error("a shorter cooldown pulled the gate back in; cooling must never shorten a wait")
+	}
+}
+
+// TestCommitProducerSpecFailsClosed drives the commit half's constructor gate
+// the way TestNewFetchSourceFailsClosed drives the others: the complete spec
+// builds, and every incomplete or out-of-band one is refused before a source
+// exists to run it.
+func TestCommitProducerSpecFailsClosed(t *testing.T) {
+	t.Parallel()
+	fallback := SnapshotSource{Name: "snapshots/vcs-activity.json"}
+	base := func(mutate func(*vcsCommitsFetchSpec)) *vcsActivityFetchSpec {
+		commits := vcsCommitsFetchSpec{
+			Headers:            map[string]string{"Accept": "application/json"},
+			ContentType:        "application/json",
+			MinIntervalMinutes: 10,
+			Max:                4,
+			Sources:            []vcsCommitSourceSpec{{Repo: "fixture-repo", Endpoint: "https://api.example.test/repos/fixture/commits"}},
+		}
+		if mutate != nil {
+			mutate(&commits)
+		}
+		return &vcsActivityFetchSpec{
+			Endpoint:           "https://api.example.test/contributions",
+			Headers:            map[string]string{"Accept": "text/html"},
+			ContentType:        "text/html",
+			MinIntervalMinutes: 15,
+			Commits:            &commits,
+		}
+	}
+	if _, err := NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{vcs: base(nil)}); err != nil {
+		t.Fatalf("the complete two-producer spec was refused: %v", err)
+	}
+	for name, mutate := range map[string]func(*vcsCommitsFetchSpec){
+		"no sources at all":            func(c *vcsCommitsFetchSpec) { c.Sources = nil },
+		"a source with no repo label":  func(c *vcsCommitsFetchSpec) { c.Sources[0].Repo = "" },
+		"a source with no endpoint":    func(c *vcsCommitsFetchSpec) { c.Sources[0].Endpoint = "" },
+		"a source off the allowlist":   func(c *vcsCommitsFetchSpec) { c.Sources[0].Endpoint = "https://evil.example.test/commits" },
+		"a source over plain http":     func(c *vcsCommitsFetchSpec) { c.Sources[0].Endpoint = "http://api.example.test/commits" },
+		"a source carrying userinfo":   func(c *vcsCommitsFetchSpec) { c.Sources[0].Endpoint = "https://user@api.example.test/commits" },
+		"a body cap wider than shared": func(c *vcsCommitsFetchSpec) { c.MaxBytes = validFetchConfig().MaxBytes + 1 },
+		"no row cap":                   func(c *vcsCommitsFetchSpec) { c.Max = 0 },
+		"a row cap past the ceiling":   func(c *vcsCommitsFetchSpec) { c.Max = maxServedCommits + 1 },
+		"a cadence below the floor":    func(c *vcsCommitsFetchSpec) { c.MinIntervalMinutes = 0 - 1 },
+		"a cadence past the ceiling":   func(c *vcsCommitsFetchSpec) { c.MinIntervalMinutes = int(maxEndpointInterval/time.Minute) + 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if source, err := NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{vcs: base(mutate)}); err == nil {
+				t.Fatalf("the constructor accepted an unsafe commit spec: %+v", source)
+			}
+		})
+	}
+	// The calendar half's own cadence is bounded by the same rule, so neither
+	// producer can be the one that slipped through.
+	for name, minutes := range map[string]int{
+		"a negative calendar cadence":         -5,
+		"a calendar cadence past the ceiling": int(maxEndpointInterval/time.Minute) + 1,
+		"a boss cadence past the ceiling":     int(maxEndpointInterval/time.Minute) + 1,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			spec := base(nil)
+			spec.MinIntervalMinutes = minutes
+			if _, err := NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{vcs: spec}); err == nil {
+				t.Fatal("an out-of-band cadence was accepted")
+			}
+			boss := validBossSpec()
+			boss.MinIntervalMinutes = minutes
+			if _, err := NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{bossLog: boss}); err == nil {
+				t.Fatal("an out-of-band cadence was accepted on the hiscores producer")
+			}
+		})
+	}
+}
+
+// TestResolveNetworkKeepsTheAddressFamily pins the mapping between the
+// transport's connect network and the resolver's family. It matters: an ip4
+// dial that resolved ip6 answers would hand the dialer addresses it cannot
+// use, and the fallback for anything unrecognized has to be the WIDER family
+// so every candidate is put through admission rather than skipped.
+func TestResolveNetworkKeepsTheAddressFamily(t *testing.T) {
+	t.Parallel()
+	for network, want := range map[string]string{
+		"tcp4":    "ip4",
+		"tcp6":    "ip6",
+		"tcp":     "ip",
+		"":        "ip",
+		"unknown": "ip",
+	} {
+		if got := resolveNetwork(network); got != want {
+			t.Errorf("resolveNetwork(%q) = %q, want %q", network, got, want)
+		}
 	}
 }
 

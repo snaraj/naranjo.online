@@ -559,6 +559,68 @@ func TestLoadFetchConfigFailsClosed(t *testing.T) {
 	}
 }
 
+// TestPanelHeadingsComeFromConfigData pins the heading path introduced for the
+// owner's panel rename: a display title the owner chooses may name a service,
+// and this package's source may not spell one, so the chosen string lives in
+// config data and is applied by panel id.
+//
+// The assertions deliberately name no vendor and no copy. They compare the
+// SERVED title against the CONFIGURED one, so the pin keeps holding when the
+// owner renames a panel again, and it goes red the moment the overlay stops
+// being applied — at which point the served title falls back to the neutral
+// Go literal and stops matching config.
+func TestPanelHeadingsComeFromConfigData(t *testing.T) {
+	t.Parallel()
+	document, _, err := loadFetchConfig(fetchConfigBytes)
+	if err != nil {
+		t.Fatalf("shipped config refused: %v", err)
+	}
+	if len(document.Titles) == 0 {
+		t.Fatal("the shipped config chooses no heading; this pin has nothing to protect")
+	}
+	for id, want := range document.Titles {
+		found := false
+		for _, definition := range builtinPanels {
+			if definition.id != id {
+				continue
+			}
+			found = true
+			if definition.title != want {
+				t.Errorf("panel %q serves the heading %q, want the configured %q", id, definition.title, want)
+			}
+		}
+		if !found {
+			// A heading configured for an id no panel carries is a typo that
+			// would otherwise do nothing at all, silently.
+			t.Errorf("config chooses a heading for %q, which is not a panel", id)
+		}
+	}
+	for _, definition := range builtinPanels {
+		if definition.title == "" {
+			t.Errorf("panel %q serves a blank heading", definition.id)
+		}
+	}
+	// The overlay's two non-choices, driven directly: an id nothing carries,
+	// and an entry that is empty. Both must leave the neutral title standing —
+	// a blank heading is a rendering defect, never a decision.
+	definitions := []panelDefinition{{id: "first", title: "neutral"}, {id: "second", title: "other"}}
+	applyTitles(definitions, nil)
+	applyTitles(definitions, map[string]string{"first": "", "absent": "ignored"})
+	if definitions[0].title != "neutral" || definitions[1].title != "other" {
+		t.Errorf("a blank or unmatched heading changed the panel list: %+v", definitions)
+	}
+	applyTitles(definitions, map[string]string{"first": "chosen"})
+	if definitions[0].title != "chosen" {
+		t.Errorf("the configured heading was not applied: %q", definitions[0].title)
+	}
+	if definitions[1].title != "other" {
+		t.Errorf("applying one panel's heading changed another's: %q", definitions[1].title)
+	}
+	if definitions[0].id != "first" || definitions[1].id != "second" {
+		t.Errorf("a heading override moved a panel's identity: %+v", definitions)
+	}
+}
+
 // contributionsFixture is a REAL captured contribution-calendar document,
 // reduced twice and in exactly two ways, both stated here because a fixture
 // nobody can audit is worth nothing:
@@ -861,5 +923,211 @@ func TestMapContributionsRequiresSundayColumns(t *testing.T) {
 	shippedCovered := len(shipped.Weeks)*daysPerWeek - (daysPerWeek - 1 - int(shippedEnd.Weekday()))
 	if got := shippedEnd.AddDate(0, 0, -(shippedCovered - 1)).Weekday(); got != time.Sunday {
 		t.Errorf("the shipped snapshot starts on %s, not Sunday", got)
+	}
+}
+
+// commitFixtureNow is a fixed instant every commit-mapping scenario measures
+// against, so the plausibility window is exercised deterministically rather
+// than against a clock that moves under the suite.
+var commitFixtureNow = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+
+// commitRow builds one upstream commit row with an explicit identity, subject,
+// and instant. It carries the authorship name and email address the real
+// document carries — the fields the projection deliberately does not model —
+// so these scenarios prove the projection reads the REAL shape rather than a
+// trimmed one, and that neither field can reach a served row.
+//
+// The subject is encoded with the JSON marshaler rather than with Go's %q,
+// and that detail is load-bearing rather than cosmetic. Go quoting renders a
+// control byte as \a or \x07, neither of which is legal JSON — so a fixture
+// built that way is refused by the DECODER, and every value check downstream
+// would pass for a reason the scenario never intended. Marshaling emits a
+// six-character u-escape instead, which is legal JSON carrying a real control
+// character, so the control-character refusal is the only thing that can
+// reject it.
+func commitRow(sha, message, date string) string {
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		panic("commit fixture subject cannot be encoded: " + err.Error())
+	}
+	return fmt.Sprintf(
+		`{"sha":%q,"node_id":"fixture","commit":{"author":{"name":"Fixture Author","email":"fixture@example.invalid","date":%q},`+
+			`"committer":{"name":"Fixture Author","email":"fixture@example.invalid","date":%q},"message":%s,`+
+			`"tree":{"sha":%q,"url":"https://api.example.test/t"},"url":"https://api.example.test/c","comment_count":0,`+
+			`"verification":{"verified":true,"reason":"valid","signature":null,"payload":null}},`+
+			`"url":"https://api.example.test/c","html_url":"https://api.example.test/h","comments_url":"https://api.example.test/cc",`+
+			`"author":null,"committer":null,"parents":[{"sha":%q,"url":"https://api.example.test/p"}]}`,
+		sha, date, date, encoded, sha, sha,
+	)
+}
+
+// fixtureSHA renders a distinct valid commit identity.
+func fixtureSHA(n int) string { return fmt.Sprintf("%040x", n) }
+
+// TestMapCommitsReadsARealisticDocument is the mapper's happy path: the real
+// upstream row shape in, exactly three served facts out — and the repo label
+// is the CALLER's, so a document that tried to name a repository could not.
+func TestMapCommitsReadsARealisticDocument(t *testing.T) {
+	t.Parallel()
+	document := "[" + strings.Join([]string{
+		commitRow(fixtureSHA(1), "feat(panels): a subject line\n\na body paragraph the panel never shows", "2026-08-23T09:00:00Z"),
+		commitRow(fixtureSHA(2), "fix(panels): another subject", "2026-08-22T09:00:00-07:00"),
+	}, ",") + "]"
+	rows, err := mapCommits([]byte(document), "fixture-repo", commitFixtureNow)
+	if err != nil {
+		t.Fatalf("a realistic commit document was refused: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("mapped %d rows, want 2", len(rows))
+	}
+	if got := rows[0].row; got.Repo != "fixture-repo" || got.Message != "feat(panels): a subject line" || got.At != "2026-08-23T09:00:00Z" {
+		t.Errorf("row 0 = %+v", got)
+	}
+	// An offset instant is normalized to UTC, so every served row is directly
+	// comparable and the frontend never has to reason about zones.
+	if got := rows[1].row.At; got != "2026-08-22T16:00:00Z" {
+		t.Errorf("row 1 instant = %q, want the UTC normalization of the offset form", got)
+	}
+	// The authorship name and email in the document reached nothing: the
+	// served rows carry three fields and none of them is a contact detail.
+	marshaled, err := json.Marshal([]VCSCommit{rows[0].row, rows[1].row})
+	if err != nil {
+		t.Fatalf("marshal served rows: %v", err)
+	}
+	for _, leak := range []string{"fixture@example.invalid", "Fixture Author", "node_id", "verification"} {
+		if bytes.Contains(marshaled, []byte(leak)) {
+			t.Errorf("the served rows carry %q from the upstream document: %s", leak, marshaled)
+		}
+	}
+}
+
+// TestMapCommitsFailsClosedOnEveryDrift is the projection's whole gate. The
+// decoder is deliberately tolerant of unknown fields — see commitListEntry for
+// why that is the stronger privacy posture — so the value checks below are
+// what stands between a drifted or hostile document and a confidently wrong
+// panel. Every case must be REFUSED, not partially mapped: a commit list that
+// half-parses looks exactly like a quiet week.
+//
+// The replacement-rune case is how invalid UTF-8 arrives in practice: the JSON
+// decoder substitutes U+FFFD for every byte sequence that is not valid UTF-8,
+// so refusing that rune refuses a mis-encoded document end to end.
+func TestMapCommitsFailsClosedOnEveryDrift(t *testing.T) {
+	t.Parallel()
+	oversizedRows := make([]string, 0, maxCommitDocumentItems+1)
+	for index := range maxCommitDocumentItems + 1 {
+		oversizedRows = append(oversizedRows, commitRow(fixtureSHA(index+1), "feat: row", "2026-08-23T09:00:00Z"))
+	}
+	for name, document := range map[string]string{
+		"not an array at all":             `{"sha":"` + fixtureSHA(1) + `"}`,
+		"malformed json":                  `[{"sha":`,
+		"an empty list":                   `[]`,
+		"an unrelated array":              `[{"unrelated":"shape"}]`,
+		"a null row":                      `[null]`,
+		"more rows than the bound":        "[" + strings.Join(oversizedRows, ",") + "]",
+		"a row with no identity":          "[" + commitRow("", "feat: row", "2026-08-23T09:00:00Z") + "]",
+		"a truncated identity":            "[" + commitRow("abc123", "feat: row", "2026-08-23T09:00:00Z") + "]",
+		"an uppercase identity":           "[" + commitRow(strings.ToUpper(fixtureSHA(255)), "feat: row", "2026-08-23T09:00:00Z") + "]",
+		"a non-hex identity":              "[" + commitRow(strings.Repeat("z", shaHexDigits), "feat: row", "2026-08-23T09:00:00Z") + "]",
+		"an empty subject":                "[" + commitRow(fixtureSHA(1), "", "2026-08-23T09:00:00Z") + "]",
+		"a whitespace-only subject":       "[" + commitRow(fixtureSHA(1), "   \n body", "2026-08-23T09:00:00Z") + "]",
+		"a subject carrying a control":    "[" + commitRow(fixtureSHA(1), "feat: row\abell", "2026-08-23T09:00:00Z") + "]",
+		"a subject carrying a delete":     "[" + commitRow(fixtureSHA(1), "feat: row\x7fdel", "2026-08-23T09:00:00Z") + "]",
+		"a subject that is not utf-8":     "[" + commitRow(fixtureSHA(1), "feat: row�broken", "2026-08-23T09:00:00Z") + "]",
+		"an unparseable instant":          "[" + commitRow(fixtureSHA(1), "feat: row", "yesterday") + "]",
+		"an empty instant":                "[" + commitRow(fixtureSHA(1), "feat: row", "") + "]",
+		"an instant from the future":      "[" + commitRow(fixtureSHA(1), "feat: row", "2027-01-01T00:00:00Z") + "]",
+		"an instant older than the bound": "[" + commitRow(fixtureSHA(1), "feat: row", "2020-01-01T00:00:00Z") + "]",
+		"one good row and one drifted": "[" + commitRow(fixtureSHA(1), "feat: good", "2026-08-23T09:00:00Z") +
+			"," + commitRow("short", "feat: bad", "2026-08-23T09:00:00Z") + "]",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if rows, err := mapCommits([]byte(document), "fixture-repo", commitFixtureNow); err == nil {
+				t.Fatalf("a drifted commit document was accepted as %+v", rows)
+			}
+		})
+	}
+	// The positive control: exactly the bound's worth of rows is fine, so the
+	// refusals above are about the drift and not about the fixture builder.
+	atBound := oversizedRows[:maxCommitDocumentItems]
+	if _, err := mapCommits([]byte("["+strings.Join(atBound, ",")+"]"), "fixture-repo", commitFixtureNow); err != nil {
+		t.Errorf("a document exactly at the row bound was refused: %v", err)
+	}
+	// And clock skew inside the tolerance is accepted: refusing it would make
+	// the panel fail whenever an upstream's clock ran a few minutes fast.
+	skewed := commitFixtureNow.Add(maxCommitFutureSkew / 2).Format(time.RFC3339)
+	if _, err := mapCommits([]byte("["+commitRow(fixtureSHA(1), "feat: row", skewed)+"]"), "fixture-repo", commitFixtureNow); err != nil {
+		t.Errorf("an instant inside the skew tolerance was refused: %v", err)
+	}
+}
+
+// TestCommitSubjectTruncatesRatherThanRefusingLength pins the one bound that
+// is a truncation instead of a refusal, and pins that it is VISIBLE: a
+// silently shortened subject is a small lie, and refusing a verbose commit
+// would lose a real one.
+func TestCommitSubjectTruncatesRatherThanRefusingLength(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("é", maxCommitMessageRunes+40)
+	subject, err := commitSubject(long)
+	if err != nil {
+		t.Fatalf("a long subject was refused: %v", err)
+	}
+	runes := []rune(subject)
+	if len(runes) != maxCommitMessageRunes+1 {
+		t.Fatalf("truncated subject is %d runes, want %d plus the marker", len(runes), maxCommitMessageRunes)
+	}
+	if runes[len(runes)-1] != '…' {
+		t.Errorf("truncated subject ends with %q, want a visible truncation marker", runes[len(runes)-1])
+	}
+	// A subject exactly at the bound keeps every rune and gains no marker.
+	exact, err := commitSubject(strings.Repeat("é", maxCommitMessageRunes))
+	if err != nil {
+		t.Fatalf("a subject at the bound was refused: %v", err)
+	}
+	if got := len([]rune(exact)); got != maxCommitMessageRunes {
+		t.Errorf("a subject at the bound became %d runes", got)
+	}
+}
+
+// TestMergeCommitsOrdersNewestFirstAndHoldsTheCap pins the cross-repository
+// merge: newest first regardless of which document a row came from, the
+// configured cap honored, and maxServedCommits honored even when
+// configuration asks for more than the payload budget can carry.
+func TestMergeCommitsOrdersNewestFirstAndHoldsTheCap(t *testing.T) {
+	t.Parallel()
+	build := func(repo string, days ...int) []datedCommit {
+		rows := make([]datedCommit, 0, len(days))
+		for _, day := range days {
+			at := time.Date(2026, 8, day, 12, 0, 0, 0, time.UTC)
+			rows = append(rows, datedCommit{
+				at:  at,
+				row: VCSCommit{Repo: repo, Message: fmt.Sprintf("%s day %d", repo, day), At: at.Format(time.RFC3339)},
+			})
+		}
+		return rows
+	}
+	dated := append(build("alpha", 20, 18, 12), build("beta", 19, 17)...)
+	merged := mergeCommits(dated, 4)
+	if len(merged) != 4 {
+		t.Fatalf("merged %d rows, want the configured 4", len(merged))
+	}
+	for index, want := range []string{"alpha day 20", "beta day 19", "alpha day 18", "beta day 17"} {
+		if merged[index].Message != want {
+			t.Errorf("row %d = %q, want %q", index, merged[index].Message, want)
+		}
+	}
+	// A cap above the structural ceiling is clamped to it, so configuration
+	// cannot widen a payload bound.
+	many := make([]datedCommit, 0, (maxServedCommits+5)*3)
+	for index := range maxServedCommits + 5 {
+		many = append(many, build("alpha", 1+index%28)...)
+	}
+	if got := len(mergeCommits(many, maxServedCommits+5)); got > maxServedCommits {
+		t.Errorf("merged %d rows, want at most the structural %d", got, maxServedCommits)
+	}
+	// An unset cap falls back to the ceiling rather than serving nothing, so a
+	// missing value degrades to a bound instead of an outage.
+	if got := len(mergeCommits(dated, 0)); got != len(dated) {
+		t.Errorf("an unset cap served %d of %d rows", got, len(dated))
 	}
 }

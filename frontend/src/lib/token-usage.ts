@@ -134,8 +134,16 @@ function isCount(value: unknown): value is number {
  * contract break, not a rendering choice, so admission refuses it. */
 const statUnits: ReadonlySet<string> = new Set(['tokens', 'days', 'seconds', 'count']);
 
-/* formatDuration renders elapsed seconds the way a task length reads: hours
- * and minutes above an hour, minutes above a minute, seconds below that. */
+/* formatDuration renders elapsed seconds the way a task length reads: days,
+ * hours and minutes above a day, hours and minutes above an hour, minutes
+ * above a minute, seconds below that.
+ *
+ * The day step is not decoration. A session running past midnight twice is a
+ * real recorded figure, and rendering it as "41h 55m" made the reader do the
+ * division the source tool had already done for them — it reports "1d 17h
+ * 55m", the same quantity, in the units a person thinks in. Every step keeps
+ * its remainder rather than rounding, so the rendered figure is exact at the
+ * minute and "1d 0h 0m" reads like the "1h 0m" one step below it. */
 export function formatDuration(seconds: number): string {
   if (seconds < 60) {
     return `${Math.round(seconds)}s`;
@@ -145,7 +153,10 @@ export function formatDuration(seconds: number): string {
     return `${minutes}m`;
   }
   const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
+  if (hours < 24) {
+    return `${hours}h ${minutes % 60}m`;
+  }
+  return `${Math.floor(hours / 24)}d ${hours % 24}h ${minutes % 60}m`;
 }
 
 /* formatStatValue renders one tile's figure by unit: compact digits for token

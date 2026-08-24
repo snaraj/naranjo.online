@@ -1,26 +1,29 @@
-<!-- PanelShell is the one chrome every panel shares: a heading, an honest
-  freshness control, and a content slot. Deliberately minimal and shaped, not
-  styled: every color and metric reads a panel custom property with a
-  dark-native default, so the future theme layer restyles panels by overriding
-  variables, never by editing components.
+<!-- PanelShell is the one chrome every panel shares: a heading and a content
+  slot. Deliberately minimal and shaped, not styled: every color and metric
+  reads a panel custom property with a dark-native default, so the theme layer
+  restyles panels by overriding variables, never by editing components.
 
-  The freshness READING is per-panel and stays here: the envelope's status
-  drives a dot whose SHAPE differs per state — filled, hollow, square — so
-  status is never carried by color alone, and the full sentence ("stale,
-  updated 8d ago") rides the badge's own tooltip.
+  Neither half of the old freshness widget renders here any more, and the two
+  left for different reasons.
 
-  The freshness ACTION is not per-panel and no longer lives here. Every card
-  used to carry its own refresh button in its heading, which put a control the
-  reader rarely wants beside the title they always read, once per card, and
-  implied that refreshing was a per-panel decision when it is really one
-  gesture: bring everything up to date. One control for the whole stack does
-  that (see RefreshAll), and it rides the same single-flight watchers this
-  panel already polls with. What is genuinely per-panel — how old THIS data
-  is — is exactly what stayed. -->
+  The ACTION left because it is not per-panel: every card used to carry its
+  own refresh button beside the title, which implied that refreshing was a
+  per-card decision when it is one gesture. One control does it for the whole
+  page, and it now sits in the page header (see RefreshAll).
+
+  The READING — "stale, updated 8d ago" beside every heading — left at the
+  owner's direction (issue 127): three cards each announcing their own age
+  is chrome competing with the data it describes. What left is the BADGE, not
+  the model behind it. Status and provenance still arrive on every envelope,
+  still ride this element as data attributes, and every panel still renders an
+  explicit unavailable state in its own body when it has nothing true to show;
+  what no longer happens is a card interrupting itself to say how old it is.
+  The attributes are deliberate: a reading nobody displays is still a reading
+  the page can be audited for, and it is what a lane or a future presentation
+  reads instead of re-deriving freshness from scratch. -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import type { PanelStatus } from '../panels';
-  import { panelAge, watchClock } from '../panels';
 
   let {
     title,
@@ -33,27 +36,11 @@
     generatedAt?: string;
     children?: Snippet;
   } = $props();
-
-  /* The freshness reading follows a ticking clock, not the mount instant: an
-     age computed once would read "just now" for the life of the tab, which is
-     worse than no reading at all — a freshness claim that quietly becomes
-     false. */
-  let now = $state(new Date());
-  $effect(() => watchClock((tick) => (now = tick)));
-
-  const age = $derived(panelAge(generatedAt, now));
-  /* One sentence, used twice: the badge's visible label and its native
-     tooltip, so the reading is legible whether or not it fits the card. */
-  const freshness = $derived(age ? `${status}, updated ${age}` : status);
 </script>
 
-<section class="panel-shell" data-panel-status={status}>
+<section class="panel-shell" data-panel-status={status} data-panel-generated-at={generatedAt}>
   <header class="panel-head">
     <h2 class="panel-title">{title}</h2>
-    <p class="panel-badge" data-panel-status={status} title={freshness}>
-      <span class="panel-badge-dot" data-panel-status={status} aria-hidden="true"></span>
-      <span class="panel-badge-age">{freshness}</span>
-    </p>
   </header>
   <div class="panel-body">
     {#if children}{@render children()}{/if}
@@ -73,6 +60,10 @@
     font-size: var(--panel-font-size, 0.8125rem);
   }
 
+  /* The heading is the whole row now. It keeps the flex box rather than
+     collapsing to a bare h2 so a later addition lands beside the title
+     instead of under it — the geometry a card reserves must not depend on
+     what happens to be in the row today. */
   .panel-head {
     display: flex;
     align-items: center;
@@ -86,43 +77,6 @@
     font-weight: 650;
     letter-spacing: 0.02em;
     color: var(--panel-heading, var(--panel-accent, rgb(220, 138, 0)));
-  }
-
-  .panel-badge {
-    margin: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3em;
-    font-size: var(--panel-badge-size, 0.6875rem);
-    color: var(--panel-muted, rgb(158, 158, 158));
-    text-transform: lowercase;
-  }
-
-  /* Status is dot COLOR plus dot SHAPE — filled for ok, hollow for stale,
-     square for unavailable — so the state survives a reader who cannot tell
-     the colors apart, and the words ride the tooltip regardless. */
-  .panel-badge-dot {
-    flex: none;
-    inline-size: 0.5em;
-    block-size: 0.5em;
-    border: 1px solid var(--panel-status-unavailable, rgb(110, 110, 110));
-    background: var(--panel-status-unavailable, rgb(110, 110, 110));
-  }
-
-  .panel-badge-dot[data-panel-status='ok'] {
-    border-radius: 50%;
-    border-color: var(--panel-status-ok, rgb(94, 171, 94));
-    background: var(--panel-status-ok, rgb(94, 171, 94));
-  }
-
-  .panel-badge-dot[data-panel-status='stale'] {
-    border-radius: 50%;
-    border-color: var(--panel-status-stale, var(--panel-accent, rgb(220, 138, 0)));
-    background: none;
-  }
-
-  .panel-badge-age {
-    color: var(--panel-muted, rgb(158, 158, 158));
   }
 
   .panel-body {

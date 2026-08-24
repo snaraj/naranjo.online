@@ -1510,6 +1510,160 @@ class SettingsReceiptTests(unittest.TestCase):
             with self.subTest(receipt_mutation=mutation), self.assertRaises(RC.ContractError):
                 RC.validate_settings_receipt(changed, "owner/site")
 
+    # --- issue #93: Python's bool/int conflation across the settings pins ---
+    #
+    # `True == 1` and `False == 0`, so before this hardening a plain `==`
+    # against a pinned boolean ALSO accepted the integer lookalike, and the
+    # pin of the integer 0 (required_approving_review_count) also accepted
+    # False. Both directions were live: the raw pull-request rule compare and
+    # the derived receipt loop each admitted an authoritative record whose
+    # enforcing surface had silently changed type. The lookalike -- 1 for
+    # True, 0 for False, False for 0 -- is the only mutant that can survive a
+    # value compare, so it is exactly what these fixtures inject.
+
+    #: Fields whose pinned value has an equal-valued integer/boolean twin.
+    CONFLATABLE_RECEIPT_FIELDS = (
+        "actions_can_approve_pull_request_reviews",
+        "actions_enabled",
+        "actions_sha_pinning_required",
+        "allow_deletions",
+        "allow_force_pushes",
+        "dismiss_stale_reviews_on_push",
+        "immutable_releases",
+        "private_vulnerability_reporting",
+        "require_code_owner_review",
+        "require_extra_approval_for_unattributed_changes",
+        "require_last_push_approval",
+        "require_linear_history",
+        "require_pull_request",
+        "require_signed_commits",
+        "required_approving_review_count",
+        "required_review_thread_resolution",
+        "restrict_creations",
+        "restrict_updates",
+        "secret_scanning",
+        "secret_scanning_non_provider_patterns",
+        "secret_scanning_push_protection",
+        "secret_scanning_validity_checks",
+        "strict_status_checks",
+    )
+
+    @staticmethod
+    def lookalike(value: object) -> object:
+        """The equal-but-wrong-typed twin of a pinned boolean or 0/1 integer."""
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int) and value in {0, 1}:
+            return bool(value)
+        raise AssertionError(f"value has no bool/int twin: {value!r}")
+
+    @staticmethod
+    def conflatable(record: dict[str, object]) -> dict[str, object]:
+        return {
+            field: value
+            for field, value in record.items()
+            if isinstance(value, bool) or (isinstance(value, int) and value in {0, 1})
+        }
+
+    def test_exact_pin_helper_closes_the_conflation_in_both_directions(self):
+        # The helper is the single mechanism both call sites now share, so its
+        # branches are exercised directly: a bool on either side must meet a
+        # bool, and everything else keeps ordinary value equality.
+        for actual, expected in (
+            (True, True),
+            (False, False),
+            (0, 0),
+            (1, 1),
+            ("read", "read"),
+            (None, None),
+            ([], []),
+            (["squash", "rebase"], ["squash", "rebase"]),
+            (80, 80),
+        ):
+            with self.subTest(match=(actual, expected)):
+                self.assertTrue(RC._exact_pin(actual, expected))
+        for actual, expected in (
+            (1, True),
+            (True, 1),
+            (0, False),
+            (False, 0),
+            (1, False),
+            (False, 1),
+            ("true", True),
+            (None, False),
+            ("read", "write"),
+            (79, 80),
+            ([], None),
+        ):
+            with self.subTest(mismatch=(actual, expected)):
+                self.assertFalse(RC._exact_pin(actual, expected))
+        self.assertTrue(
+            RC._exact_pin_mapping({"a": True, "b": 0}, {"a": True, "b": 0})
+        )
+        for actual in (
+            {"a": 1, "b": 0},
+            {"a": True, "b": False},
+            {"a": True},
+            {"a": True, "b": 0, "c": "extra"},
+            {"a": True, "c": 0},
+        ):
+            with self.subTest(mapping=actual):
+                self.assertFalse(RC._exact_pin_mapping(actual, {"a": True, "b": 0}))
+
+    def test_receipt_boolean_pins_reject_the_integer_one_and_zero(self):
+        exact = settings_receipt()
+        RC.validate_settings_receipt(exact, "owner/site")
+        conflatable = self.conflatable(exact)
+        # Re-anchoring is deliberate: a new boolean field must be added here
+        # so it arrives with its lookalike mutant, never silently unguarded.
+        self.assertEqual(
+            sorted(conflatable),
+            sorted(self.CONFLATABLE_RECEIPT_FIELDS),
+            "the receipt's bool/int surface moved; re-anchor this pin",
+        )
+        for field, value in sorted(conflatable.items()):
+            twin = self.lookalike(value)
+            self.assertEqual(twin, value)
+            self.assertIsNot(twin, value)
+            changed = copy.deepcopy(exact)
+            changed[field] = twin
+            with self.subTest(receipt_lookalike=field), self.assertRaises(RC.ContractError):
+                RC.validate_settings_receipt(changed, "owner/site")
+        # Non-regression: the genuine values are untouched by the hardening.
+        RC.validate_settings_receipt(settings_receipt(), "owner/site")
+
+    def test_pull_request_rule_pins_reject_the_integer_one_and_zero(self):
+        conflatable = self.conflatable(RC.EXPECTED_PULL_REQUEST_PARAMETERS)
+        self.assertEqual(
+            sorted(conflatable),
+            [
+                "dismiss_stale_reviews_on_push",
+                "require_code_owner_review",
+                "require_extra_approval_for_unattributed_changes",
+                "require_last_push_approval",
+                "required_approving_review_count",
+                "required_review_thread_resolution",
+            ],
+            "the pull-request rule's bool/int surface moved; re-anchor this pin",
+        )
+        for field, value in sorted(conflatable.items()):
+            records = settings_api()
+            pull = next(
+                rule
+                for rule in records["repos/owner/site/rulesets/42"]["rules"]
+                if rule["type"] == "pull_request"
+            )
+            self.assertEqual(pull["parameters"][field], value)
+            pull["parameters"][field] = self.lookalike(value)
+            with self.subTest(rule_lookalike=field):
+                with self.assertRaises(RC.ContractError) as caught:
+                    self.observe(records)
+                self.assertIn(
+                    "pull-request rule parameters are not exact", str(caught.exception)
+                )
+        # Non-regression: the live shape still builds the exact receipt.
+        self.assertEqual(self.observe(settings_api()), settings_receipt())
+
     def test_merge_methods_bind_to_the_enforcing_ruleset_under_the_ci_credential(self):
         # The publisher mints an Administration-read App token, and GitHub
         # documents that "to view merge-related settings, you must have the
@@ -3890,6 +4044,110 @@ curl() {
             self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             self.assertNotIn("class=", output)
 
+    #: The cumulative proof's base argument, and the one wrong value for it.
+    #: Both halves are asserted present/unique before either is used, so a
+    #: reworded workflow fails loudly instead of testing an unmutated block.
+    CUMULATIVE_BASE = '--base "${anchor}" --head "${COMPLETED_SHA}"'
+    CUMULATIVE_BASE_MUTANT = '--base "${boundary_sha}" --head "${COMPLETED_SHA}"'
+
+    def test_rebase_release_with_trailing_artifact_commits_needs_the_advanced_anchor(self):
+        """Issue #110: swapping the cumulative proof's base must go red.
+
+        ``--base "${anchor}"`` versus ``--base "${boundary_sha}"`` is the
+        entire difference between the shipped design and the one the prose
+        keeps drifting back to, and until now the swap SURVIVED the whole
+        suite. It survived because every other fixture here has anchor ==
+        boundary_sha: their release push is a single bump commit, so the
+        advance walk has nothing to step over and both arguments name the
+        same commit. Only a rebase release with TRAILING artifact commits
+        separates them.
+
+        History, all first-parent:
+
+            [0.1.9 base] -> [bump 0.1.10] -> [code] -> [docs]
+                             \\____ one rebase-merged release push ____/
+
+        The publisher tags the push HEAD, so ``code`` is both the tagged
+        release commit and the last successfully gated main head. The
+        advance walk must therefore land the anchor on ``code``; the
+        recovered boundary stays at ``bump``. Classifying ``bump..docs``
+        sees ``code``'s artifact change with no version bump and DENIES --
+        a false denial of a perfectly good documentation merge -- while
+        ``code..docs`` is documentation-only, which is the truth.
+
+        The isolation this test needs is structural, not argued: the mutant
+        block differs from the shipped block in exactly one argument, and
+        the shipped run's exit 0 proves every preceding guard already
+        passed on this same fixture. So the mutant's red can come from
+        nothing else.
+        """
+        block = self.workflow_run_block(self.STEP)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, _base = self.repo(temporary)
+            bump = self.release_commit(root, "0.1.10")
+            code = self.paths_commit(
+                root, {"cmd/site/main.go": "package main\n"}, "trailing code"
+            )
+            docs_head = self.paths_commit(root, {"AGENTS.md": "docs\n"}, "docs")
+            self._install_release_contract(root)
+
+            # The fixture genuinely discriminates: the two candidate bases
+            # give OPPOSITE outcomes here. Without this the test could pass
+            # for a reason unrelated to the argument under test.
+            self.assertNotEqual(bump, code)
+            self.assertEqual(
+                RC.classify_transition(root, code, docs_head, first_parent=True)["class"],
+                "no-artifact",
+            )
+            with self.assertRaises(RC.ContractError):
+                RC.classify_transition(root, bump, docs_head, first_parent=True)
+
+            verdict = {"class": "no-artifact", "base_sha": code, "source_sha": docs_head}
+            pr_gate_runs = self._pr_gate_runs([(500, code)])
+            completed, output, summary = self.execute(
+                block,
+                root=root,
+                completed_sha=docs_head,
+                verdict=verdict,
+                pr_gate_runs=pr_gate_runs,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertIn("class=no-artifact\n", output)
+            self.assertIn("NO-ARTIFACT:", completed.stdout)
+            self.assertIn("No-artifact merge", summary)
+            # The shipped run never classifies from the un-advanced boundary.
+            # This assertion, and the exit-0 one above, are what a WORKFLOW
+            # already carrying the swap fails on -- a behavioural red, not a
+            # bookkeeping one. The two below then keep the in-test mutation
+            # well-defined so a reworded step cannot leave it a no-op.
+            self.assertNotIn(f"--base {bump} --head {docs_head}", completed.stderr)
+            self.assertEqual(
+                block.count(self.CUMULATIVE_BASE),
+                1,
+                "the cumulative proof's base argument moved; re-anchor this test",
+            )
+            self.assertNotIn(self.CUMULATIVE_BASE_MUTANT, block)
+            mutant = block.replace(self.CUMULATIVE_BASE, self.CUMULATIVE_BASE_MUTANT, 1)
+            self.assertNotEqual(mutant, block)
+
+            mutated, mutant_output, mutant_summary = self.execute(
+                mutant,
+                root=root,
+                completed_sha=docs_head,
+                verdict=verdict,
+                pr_gate_runs=pr_gate_runs,
+            )
+            self.assertNotEqual(
+                mutated.returncode, 0, mutated.stdout + mutated.stderr
+            )
+            # Red at the mutated line specifically: the trace shows the
+            # boundary-based classification running, and nothing downstream
+            # of it ever ran.
+            self.assertIn(f"--base {bump} --head {docs_head}", mutated.stderr)
+            self.assertNotIn("class=", mutant_output)
+            self.assertNotIn("NO-ARTIFACT:", mutated.stdout)
+            self.assertEqual(mutant_summary, "")
+
 
 class ExistingImageShellPathTests(unittest.TestCase):
     @staticmethod
@@ -5794,18 +6052,36 @@ python3() {
         )
 
 class GovernanceParityTests(unittest.TestCase):
+    # Reviewer independence is a GitHub PRINCIPAL, not a string. Verdict
+    # receipts post as this App, which is granted Contents write in no
+    # repository, so the reviewing identity can never push the code it
+    # reviews. Its predecessor compared the signature text to the recorded
+    # author context; a reviewer satisfied that rule by writing a
+    # different-looking signature, which proved only that the reviewer
+    # could type. The comparison — and its `author_context` parameter —
+    # are retired with issue #64 rather than kept alongside the actor
+    # check: keeping a rule that a keystroke satisfies invites the same
+    # signature-crafting the actor makes pointless. Nothing is weakened,
+    # because the replacement binds an unforgeable posting principal where
+    # the old rule bound editable prose.
+    REVIEW_ACTOR = "snaraj-agent-reviews[bot]"
+
     @staticmethod
     def adversarial_receipt_denial(
         text: str,
         expected_head: str,
         *,
-        author_context: str,
+        actor: str,
         resource_kind: str,
     ) -> str | None:
         if resource_kind != "pull-request":
             return "exact-head review receipts apply only to pull requests"
         if re.fullmatch(r"[0-9a-f]{40}", expected_head) is None:
             return "expected head is not one lowercase 40-hex SHA"
+        # Byte-exact, deliberately: a padded, case-varied, or lookalike
+        # login is not the App, and a fail-closed check never guesses.
+        if actor != GovernanceParityTests.REVIEW_ACTOR:
+            return "verdict receipt must be posted by the review App actor"
         lines = text.replace("\r\n", "\n").splitlines()
         heads = [line[6:] for line in lines if line.startswith("HEAD: ")]
         verdicts = [line[9:] for line in lines if line.startswith("VERDICT: ")]
@@ -5813,15 +6089,23 @@ class GovernanceParityTests(unittest.TestCase):
             return "receipt must bind exactly one expected HEAD line"
         if len(verdicts) != 1 or verdicts[0] not in {"APPROVE", "REQUEST-CHANGES"}:
             return "receipt must contain exactly one supported VERDICT line"
+        # No "receipt is empty" arm: the two guards above each independently
+        # require a non-empty line (a `HEAD: ` line and a `VERDICT: ` line),
+        # so a blank receipt is denied before this point and the arm that
+        # used to sit here could never run.  A branch no input can reach is
+        # decorative by this repository's own review protocol, and it read
+        # as protection for the indexing below that it never supplied;
+        # `test_a_blank_receipt_is_denied_by_the_head_line_guard` pins the
+        # guard that actually does (issue #128).
         nonempty = [line for line in lines if line.strip()]
-        if not nonempty:
-            return "receipt is empty"
         signature = re.fullmatch(r"- (.+?) \(adversarial reviewer\)", nonempty[-1])
         if signature is None:
             return "final non-empty line must be adversarial reviewer signature"
-        reviewer = signature.group(1).strip().casefold()
-        if not reviewer or reviewer == author_context.strip().casefold():
-            return "reviewer context must differ textually from author context"
+        # The lane must be named — provenance is still mandatory — but WHICH
+        # lane is content: every current and future model name is valid, and
+        # no roster is pinned here.
+        if not signature.group(1).strip():
+            return "adversarial reviewer signature must name the reviewing lane"
         if "mutation" not in text.casefold() or "claim" not in text.casefold():
             return "receipt must report mutation and claim audit evidence"
         return None
@@ -5829,6 +6113,9 @@ class GovernanceParityTests(unittest.TestCase):
     @classmethod
     def require_adversarial_review_governance(cls, agents: str) -> str:
         try:
+            independence = agents.split("**Reviewer independence.**", 1)[1].split(
+                "**Exact-head receipt.**", 1
+            )[0]
             receipt = agents.split("**Exact-head receipt.**", 1)[1].split(
                 "**The review must:**", 1
             )[0]
@@ -5854,6 +6141,27 @@ class GovernanceParityTests(unittest.TestCase):
         ):
             if token not in receipt:
                 raise ValueError(f"canonical adversarial receipt lost: {token}")
+        independence_flat = " ".join(independence.split())
+        for token in (
+            "Independence is established by the POSTING ACTOR",
+            "`snaraj-agent-reviews[bot]` GitHub App",
+            "granted Contents write in no repository",
+            "any current or future model name is valid there",
+            "this contract pins no model roster",
+            "No rule compares the reviewer's name to the author's",
+        ):
+            if token not in independence_flat:
+                raise ValueError(f"actor-based reviewer independence lost: {token}")
+        # The retired rule must not return by prose either: restating it
+        # anywhere in the contract re-opens the signature-crafting path the
+        # actor check exists to close (issue #64).
+        agents_flat = " ".join(agents.split())
+        for forbidden in (
+            "differ textually from author",
+            "Review identity is textual because agents share",
+        ):
+            if forbidden in agents_flat:
+                raise ValueError(f"retired same-lane receipt rule returned: {forbidden}")
         label_flat = " ".join(label.split())
         working_flat = " ".join(working.split())
         for token in (
@@ -5895,7 +6203,7 @@ class GovernanceParityTests(unittest.TestCase):
         denial = cls.adversarial_receipt_denial(
             rendered,
             "a" * 40,
-            author_context="5.6 Sol",
+            actor=cls.REVIEW_ACTOR,
             resource_kind="pull-request",
         )
         if denial is not None:
@@ -5982,6 +6290,115 @@ class GovernanceParityTests(unittest.TestCase):
             raise ValueError("absolute no-personal-data claim contradicts canonical public attribution")
         if "PERSON_NAME_SENTINEL alone merges" in requirements:
             raise ValueError("canonical merge authority contains a personal-name regression")
+
+    @staticmethod
+    def require_two_denial_modes(agents: str) -> str:
+        """Pin requirement 10's two-denial-mode passage, positively.
+
+        This operator-facing text has been wrong twice and corrected twice
+        (issue #106): the first revision made BOTH denials sticky, and the
+        correction overshot by promising the next documentation merge green.
+        Nothing mechanical held the line, so every restatement was free to
+        drift back onto a reader who is, by definition, staring at a red
+        build and deciding whether to wait or act.
+
+        Two deliberate design choices, both of them the point:
+
+        * The assertions are POSITIVE and exact. A whole-file ``assertNotIn``
+          of a forbidden token has already failed twice in this effort,
+          because the comment written beside a guard contains the very token
+          the guard forbids -- prose then satisfies or breaks the check by
+          accident. Nothing here scans a file for an absent string.
+        * The passage is SLICED before it is read, between two anchors that
+          appear exactly once, so only requirement 10's own sentences can
+          satisfy this pin. Restating the wording anywhere else in the
+          contract -- or in a comment -- cannot rescue a mutated original;
+          ``test_two_denial_mode_wording_is_pinned_to_requirement_ten``
+          proves that by relocating the passage and requiring red anyway.
+
+        Returns the flattened passage so callers can assert on it.
+        """
+        opening = "Two denial modes are deliberate"
+        closing = "Successful main CI publishes that exact SHA"
+        _, found_opening, tail = agents.partition(opening)
+        passage, found_closing, _ = tail.partition(closing)
+        # BOTH anchors are load-bearing. A missing opener has no passage to
+        # read; a missing closer would silently widen the slice to the rest
+        # of the document, which is the whole-file scan this pin refuses to
+        # become. Neither may degrade into a wider or empty read.
+        if not found_opening or not found_closing:
+            raise ValueError("canonical two-denial-mode passage is missing or unbounded")
+        flat = " ".join((opening + passage).split())
+        for token in (
+            # The pair exists on purpose, and telling them apart is the point.
+            "Two denial modes are deliberate and must not be mistaken for"
+            " bugs, and they behave differently",
+            "conflating them misleads whoever is on the other end of the red build",
+            # Boundary denial: sticky, and ordinary rather than exotic.
+            "The BOUNDARY denial, from the recovered last release boundary, is STICKY",
+            "every later documentation merge fails the same way until an artifact"
+            " merge moves the boundary past it",
+            "It is reachable under the ordinary rebase convention of a separate"
+            " slot commit, not only under exotic histories",
+            # Anchor denial: NOT sticky, and NOT promised green next merge.
+            "The ANCHOR denial, from the four-lock comparison against the newest"
+            " earlier successful protected-main gate run, does not persist the same way",
+            "it needs no artifact merge to clear, because the denied merge's own"
+            " gate run becomes a later anchor",
+            "It is NOT, however, promised to clear on the very NEXT merge, and an"
+            " earlier revision of this contract wrongly said it was",
+            # The mechanism behind that second correction.
+            "Main pushes each get their own concurrency group",
+            "gate runs can complete out of order and `select(.id < $current)` can"
+            " filter a newer run out of an older orchestration",
+            "two racing documentation merges can therefore both deny, reporting"
+            " the identical anchor",
+            # The closing summary, which is what a hurried reader reads.
+            "Both denials are the intended trade — loud and recoverable, never a"
+            " wrong release",
+            "only the boundary denial requires an artifact merge to clear, and"
+            " neither promises green on any particular next merge",
+        ):
+            if token not in flat:
+                raise ValueError(f"two-denial-mode wording lost: {token}")
+        return flat
+
+    @staticmethod
+    def require_adversarial_signature_parity(agents: str, template: str) -> None:
+        """The PR template's reviewer signature must be the contract's.
+
+        Issue #128: the template asked for a signature shape the contract
+        never defined, so an author following the template and a reviewer
+        following AGENTS.md wrote different last lines. Post-#64 the
+        signature is lane provenance -- CONTENT -- while independence rides
+        the posting App actor, so the two documents disagreeing costs no
+        security; it costs a reviewer a pointless correction round, which
+        is exactly the friction this effort exists to remove.
+
+        The Main Worker receipt keeps its own distinct wording in both
+        documents on purpose; this checks the adversarial line only, and
+        checks that the Main Worker line did not get swept along with it.
+        """
+        adversarial = "- <Agent> (adversarial reviewer)"
+        main_worker = "- <distinct context> (Main Worker)"
+        for name, text in (("AGENTS.md", agents), ("PR template", template)):
+            if adversarial not in text:
+                raise ValueError(f"{name} lost the canonical reviewer signature shape")
+            if main_worker not in text:
+                raise ValueError(f"{name} lost the canonical Main Worker signature shape")
+        # Scoped to the template's own reviewer bullet, never the whole file:
+        # a document may legitimately quote the Main Worker form nearby, and
+        # this repository has twice been burned by whole-file token scans.
+        try:
+            bullet = template.split("- Independent normal-comment verdict", 1)[1].split(
+                "- Main Worker exact-head bounded receipt", 1
+            )[0]
+        except IndexError as exc:
+            raise ValueError("PR template lost its independent-verdict bullet") from exc
+        if adversarial not in bullet:
+            raise ValueError("PR template reviewer bullet lost the canonical signature")
+        if "(adversarial reviewer)" in bullet.replace(adversarial, "", 1):
+            raise ValueError("PR template reviewer bullet names a second signature shape")
 
     @staticmethod
     def require_main_worker_receipt(agents: str, template: str, runbook: str) -> None:
@@ -6118,7 +6535,7 @@ class GovernanceParityTests(unittest.TestCase):
             self.adversarial_receipt_denial(
                 valid,
                 head,
-                author_context="5.6 Sol",
+                actor=self.REVIEW_ACTOR,
                 resource_kind="pull-request",
             )
         )
@@ -6126,7 +6543,7 @@ class GovernanceParityTests(unittest.TestCase):
             self.adversarial_receipt_denial(
                 valid.replace("VERDICT: APPROVE", "VERDICT: REQUEST-CHANGES", 1),
                 head,
-                author_context="5.6 Sol",
+                actor=self.REVIEW_ACTOR,
                 resource_kind="pull-request",
             )
         )
@@ -6144,7 +6561,7 @@ class GovernanceParityTests(unittest.TestCase):
                     self.adversarial_receipt_denial(
                         sample,
                         head,
-                        author_context="5.6 Sol",
+                        actor=self.REVIEW_ACTOR,
                         resource_kind="pull-request",
                     )
                 )
@@ -6152,10 +6569,407 @@ class GovernanceParityTests(unittest.TestCase):
             self.adversarial_receipt_denial(
                 valid,
                 head,
-                author_context="5.6 Sol",
+                actor=self.REVIEW_ACTOR,
                 resource_kind="issue",
             )
         )
+
+    def test_reviewer_independence_binds_the_bot_actor_not_the_signature_text(self):
+        """The App actor decides independence; the lane name is content."""
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        valid = self.require_adversarial_review_governance(agents)
+        head = "a" * 40
+        documented_signature = "- Fable5 (adversarial reviewer)"
+        self.assertIn(documented_signature, valid)
+
+        def denial(sample, *, actor=self.REVIEW_ACTOR, kind="pull-request"):
+            return self.adversarial_receipt_denial(
+                sample, head, actor=actor, resource_kind=kind
+            )
+
+        def signed(lane):
+            return valid.replace(
+                documented_signature, f"- {lane} (adversarial reviewer)", 1
+            )
+
+        self.assertIsNone(denial(valid))
+        wrong_actor = "verdict receipt must be posted by the review App actor"
+        for name, actor in (
+            ("owner account", "snaraj"),
+            ("release bot", "github-actions[bot]"),
+            ("app login without the bot suffix", "snaraj-agent-reviews"),
+            ("case-varied login", "Snaraj-Agent-Reviews[bot]"),
+            ("leading whitespace", " snaraj-agent-reviews[bot]"),
+            ("trailing whitespace", "snaraj-agent-reviews[bot] "),
+            ("prefixed lookalike", "evil-snaraj-agent-reviews[bot]"),
+            ("suffixed lookalike", "snaraj-agent-reviews[bot]2"),
+            ("empty actor", ""),
+        ):
+            with self.subTest(wrong_actor=name):
+                self.assertEqual(denial(valid, actor=actor), wrong_actor)
+        # A wrong actor denies even when every other field is perfect, and a
+        # right actor never rescues a malformed body — the two are independent.
+        self.assertEqual(
+            denial(valid.replace("VERDICT: APPROVE", "APPROVE", 1), actor="snaraj"),
+            wrong_actor,
+        )
+
+        # No roster: lanes that do not exist yet validate exactly like Fable5.
+        for lane in (
+            "Fable5",
+            "Opus5",
+            "Sonnet5",
+            "5.6 Sol",
+            "Nebula 9",
+            "Some-Future-Model 12.3",
+            "Claude Opus 42 (fresh session)",
+        ):
+            with self.subTest(novel_lane=lane):
+                self.assertIsNone(denial(signed(lane)))
+
+        # Same-lane review: every textual variation of one lane's signature
+        # yields the identical outcome, so crafting a distinguishing string
+        # can no longer change a verdict's fate.
+        crafted = {
+            variant: denial(signed(variant))
+            for variant in (
+                "Fable5",
+                "fable5",
+                "FABLE5",
+                "Fable5 / pr64-exact-head-review",
+                "Fable5 (fresh session)",
+                "Fable 5",
+            )
+        }
+        self.assertEqual(set(crafted.values()), {None}, crafted)
+
+        # Provenance is still mandatory: a nameless signature denies.
+        self.assertEqual(
+            denial(valid.replace(documented_signature, "-   (adversarial reviewer)", 1)),
+            "adversarial reviewer signature must name the reviewing lane",
+        )
+
+        # Shape still fails closed under the correct actor.
+        for name, sample, reason in (
+            (
+                "bare verdict",
+                valid.replace("VERDICT: APPROVE", "APPROVE", 1),
+                "receipt must contain exactly one supported VERDICT line",
+            ),
+            (
+                "unsupported verdict",
+                valid.replace("VERDICT: APPROVE", "VERDICT: LGTM", 1),
+                "receipt must contain exactly one supported VERDICT line",
+            ),
+            (
+                "duplicate head",
+                valid.replace(f"HEAD: {head}", f"HEAD: {head}\nHEAD: {head}", 1),
+                "receipt must bind exactly one expected HEAD line",
+            ),
+            (
+                "foreign head",
+                valid.replace(f"HEAD: {head}", "HEAD: " + "b" * 40, 1),
+                "receipt must bind exactly one expected HEAD line",
+            ),
+            (
+                "main worker signature",
+                valid.replace(" (adversarial reviewer)", " (Main Worker)", 1),
+                "final non-empty line must be adversarial reviewer signature",
+            ),
+            (
+                "missing mutation evidence",
+                valid.replace("Mutation audit:", "Evidence:", 1),
+                "receipt must report mutation and claim audit evidence",
+            ),
+            ("empty receipt", "", "receipt must bind exactly one expected HEAD line"),
+        ):
+            with self.subTest(malformed=name):
+                self.assertEqual(denial(sample), reason)
+        self.assertEqual(
+            denial(valid, kind="issue"),
+            "exact-head review receipts apply only to pull requests",
+        )
+        for bad_head in ("A" * 40, "a" * 39, "a" * 41, "", "z" * 40, "a" * 40 + "\n"):
+            with self.subTest(bad_head=repr(bad_head)):
+                self.assertEqual(
+                    self.adversarial_receipt_denial(
+                        valid,
+                        bad_head,
+                        actor=self.REVIEW_ACTOR,
+                        resource_kind="pull-request",
+                    ),
+                    "expected head is not one lowercase 40-hex SHA",
+                )
+
+    def test_retired_same_lane_signature_rule_cannot_return(self):
+        """Neither the validator nor the contract may restate the retired rule."""
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        valid = self.require_adversarial_review_governance(agents)
+        # The parameter itself is gone, so no caller can re-supply an author
+        # context and no edit can quietly restore the comparison behind one.
+        with self.assertRaises(TypeError):
+            self.adversarial_receipt_denial(
+                valid,
+                "a" * 40,
+                actor=self.REVIEW_ACTOR,
+                author_context="Fable5",
+                resource_kind="pull-request",
+            )
+        for anchor in (
+            "POSTING",
+            "`snaraj-agent-reviews[bot]` GitHub App",
+            "granted Contents",
+            "any current or future model name is valid there",
+            "this contract pins no model roster",
+            "No rule compares the reviewer's",
+        ):
+            self.assertIn(anchor, agents)
+            with self.subTest(deletion=anchor), self.assertRaises(ValueError):
+                self.require_adversarial_review_governance(agents.replace(anchor, "", 1))
+        for source, replacement in (
+            ("No rule compares the reviewer's", "One rule compares the reviewer's"),
+            (
+                "Independence is established by the POSTING",
+                "Independence is established by the SIGNATURE, not the POSTING",
+            ),
+        ):
+            self.assertIn(source, agents)
+            with self.subTest(inversion=source), self.assertRaises(ValueError):
+                self.require_adversarial_review_governance(
+                    agents.replace(source, replacement, 1)
+                )
+        for restatement in (
+            "The reviewer context must differ textually from author context.",
+            "Review identity is textual because agents share the account.",
+        ):
+            with self.subTest(restatement=restatement), self.assertRaises(ValueError):
+                self.require_adversarial_review_governance(
+                    agents.replace("what it reviews.", "what it reviews. " + restatement, 1)
+                )
+
+    def test_two_denial_mode_wording_is_pinned_to_requirement_ten(self):
+        """Issue #106: the twice-wrong denial-mode text gets a mechanical guard.
+
+        Every mutant below is a sentence this contract has actually carried
+        or been corrected away from, so none of them is hypothetical.
+        """
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        flat = self.require_two_denial_modes(agents)
+        self.assertIn("BOUNDARY", flat)
+        self.assertIn("ANCHOR", flat)
+
+        # Deletions: each raw fragment appears exactly once in the file, so
+        # the replace below cannot silently hit a different sentence.
+        for fragment in (
+            "conflating them misleads whoever is",
+            "is STICKY",
+            "documentation merge fails the same way until an artifact merge moves the",
+            "It is reachable under the ordinary rebase convention",
+            "of a separate slot commit, not only under exotic histories",
+            "does not persist the same way",
+            "needs no artifact merge to clear, because the denied merge's own gate",
+            "It is NOT, however, promised to clear on",
+            "an earlier revision of this contract wrongly",
+            "Main pushes each get their own concurrency group",
+            "`select(.id < $current)` can filter",
+            "two racing documentation",
+            "reporting the identical anchor",
+            "loud and recoverable, never a wrong",
+            "only the boundary denial requires an artifact merge to",
+            "neither promises green on any particular next merge",
+        ):
+            self.assertEqual(agents.count(fragment), 1, fragment)
+            with self.subTest(deletion=fragment), self.assertRaises(ValueError):
+                self.require_two_denial_modes(agents.replace(fragment, "", 1))
+
+        # Inversions: the exact two regressions this issue was filed for,
+        # plus their neighbours, each restated the way a drifting rewrite
+        # would restate it.
+        for source, replacement in (
+            # Regression 1 (corrected once): stickiness attributed to both.
+            (
+                "only the boundary denial requires an artifact merge to",
+                "both denials require an artifact merge to",
+            ),
+            ("is STICKY", "is not sticky"),
+            ("does not persist the same way", "persists the same way"),
+            # Regression 2 (corrected once): the overshoot promising green.
+            (
+                "It is NOT, however, promised to clear on",
+                "It is, moreover, promised to clear on",
+            ),
+            (
+                "neither promises green on any particular next merge",
+                "both promise green on the next merge",
+            ),
+            # The exotic-history misreading that made the boundary denial
+            # look like somebody else's problem.
+            (
+                "It is reachable under the ordinary rebase convention",
+                "It is reachable only under exotic conventions",
+            ),
+        ):
+            self.assertEqual(agents.count(source), 1, source)
+            with self.subTest(inversion=source), self.assertRaises(ValueError):
+                self.require_two_denial_modes(agents.replace(source, replacement, 1))
+
+        # Anti-decoration: the pin must read requirement 10's own sentences
+        # and nothing else. Relocating the intact passage elsewhere in the
+        # document must NOT rescue a mutated original -- otherwise a comment
+        # or an appendix could satisfy the guard, which is the exact failure
+        # mode #106 warns about.
+        passage = "Two denial modes are deliberate" + agents.split(
+            "Two denial modes are deliberate", 1
+        )[1].split("Successful main CI publishes that exact SHA", 1)[0]
+        relocated = agents.replace("is STICKY", "is not sticky", 1) + "\n\n" + passage
+        self.assertIn("is STICKY", relocated)
+        with self.assertRaises(ValueError):
+            self.require_two_denial_modes(relocated)
+        # And the anchors themselves are load-bearing: losing either end of
+        # the slice is a missing passage, never an empty one that passes.
+        for anchor in (
+            "Two denial modes are deliberate",
+            "Successful main CI publishes that exact SHA",
+        ):
+            with self.subTest(anchor=anchor), self.assertRaises(ValueError):
+                self.require_two_denial_modes(agents.replace(anchor, "", 1))
+
+    def test_a_blank_receipt_is_denied_by_the_head_line_guard(self):
+        """Issue #128: the removed "receipt is empty" arm was unreachable.
+
+        Both guards ahead of it require a line that is not blank -- one
+        ``HEAD: `` line and one ``VERDICT: `` line -- so no receipt could
+        ever arrive at that arm with nothing to index. This pins the guard
+        that actually denies a blank receipt, in the exact message it
+        denies with, for every shape of blankness; deleting the HEAD-line
+        guard changes the message and turns this test red, which is what
+        the removed arm never did for anything.
+        """
+        head = "a" * 40
+        for name, sample in (
+            ("empty string", ""),
+            ("one newline", "\n"),
+            ("crlf", "\r\n"),
+            ("spaces", "   "),
+            ("tab", "\t"),
+            ("blank lines", "\n\n\n"),
+            ("mixed whitespace lines", "  \n\t\n  "),
+            ("crlf blank lines", "\r\n\r\n"),
+            ("verdict only, no head", "VERDICT: APPROVE\n"),
+        ):
+            with self.subTest(blank=name):
+                self.assertEqual(
+                    self.adversarial_receipt_denial(
+                        sample,
+                        head,
+                        actor=self.REVIEW_ACTOR,
+                        resource_kind="pull-request",
+                    ),
+                    "receipt must bind exactly one expected HEAD line",
+                )
+        # A head line alone is already enough to make the removed arm
+        # unreachable: the receipt is non-blank by the time indexing runs,
+        # and the shape checks below it are what deny from here on.
+        self.assertEqual(
+            self.adversarial_receipt_denial(
+                f"HEAD: {head}\n",
+                head,
+                actor=self.REVIEW_ACTOR,
+                resource_kind="pull-request",
+            ),
+            "receipt must contain exactly one supported VERDICT line",
+        )
+        self.assertEqual(
+            self.adversarial_receipt_denial(
+                f"HEAD: {head}\nVERDICT: APPROVE\n",
+                head,
+                actor=self.REVIEW_ACTOR,
+                resource_kind="pull-request",
+            ),
+            "final non-empty line must be adversarial reviewer signature",
+        )
+
+    def test_pr_template_reviewer_signature_matches_the_contract(self):
+        """Issue #128: template and contract asked for different last lines."""
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        template = (ROOT / ".github" / "PULL_REQUEST_TEMPLATE.md").read_text(
+            encoding="utf-8"
+        )
+        self.require_adversarial_signature_parity(agents, template)
+        canonical = "- <Agent> (adversarial reviewer)"
+        # The template asks for exactly what a reviewer following AGENTS.md
+        # will write, and what this suite's own receipt validator accepts.
+        self.assertIn(canonical, template)
+        self.assertIsNone(
+            self.adversarial_receipt_denial(
+                self.require_adversarial_review_governance(agents),
+                "a" * 40,
+                actor=self.REVIEW_ACTOR,
+                resource_kind="pull-request",
+            )
+        )
+        drifted = "- <distinct context> (adversarial reviewer)"
+        self.assertEqual(template.count(canonical), 1)
+        for name, changed_template in (
+            ("drift back to the pre-#128 shape", template.replace(canonical, drifted, 1)),
+            ("signature dropped", template.replace(canonical, "", 1)),
+            (
+                "Main Worker shape swept into the reviewer bullet",
+                template.replace(canonical, "- <distinct context> (Main Worker)", 1),
+            ),
+            (
+                "Main Worker signature dropped",
+                template.replace("- <distinct context> (Main Worker)", "", 1),
+            ),
+            # The three below keep the canonical string SOMEWHERE in the file
+            # and still have to die, which is what makes the bullet-scoped
+            # half of the guard load-bearing rather than decoration.
+            (
+                "canonical signature relocated out of the reviewer bullet",
+                template.replace(canonical, drifted, 1) + "\n" + canonical + "\n",
+            ),
+            (
+                "reviewer bullet stops naming a signature at all",
+                template.replace(
+                    "and final `" + canonical + "`: pending",
+                    "and final signature: pending",
+                    1,
+                )
+                + "\n"
+                + canonical
+                + "\n",
+            ),
+            (
+                "second signature shape offered inside the bullet",
+                template.replace(
+                    canonical + "`: pending",
+                    canonical + "` or `" + drifted + "`: pending",
+                    1,
+                ),
+            ),
+            (
+                "reviewer bullet anchor removed",
+                template.replace("- Independent normal-comment verdict", "", 1),
+            ),
+        ):
+            with self.subTest(template_mutant=name), self.assertRaises(ValueError):
+                self.require_adversarial_signature_parity(agents, changed_template)
+        # AGENTS.md states the shape in three places; a partial edit leaves
+        # the contract self-consistent, so these mutants replace every one.
+        self.assertEqual(agents.count(canonical), 3)
+        for name, changed_agents in (
+            ("contract drops the signature shape", agents.replace(canonical, "")),
+            (
+                "contract drifts to the template's old shape",
+                agents.replace(canonical, drifted),
+            ),
+            (
+                "contract drops the Main Worker shape",
+                agents.replace("- <distinct context> (Main Worker)", ""),
+            ),
+        ):
+            with self.subTest(agents_mutant=name), self.assertRaises(ValueError):
+                self.require_adversarial_signature_parity(changed_agents, template)
 
     def test_main_worker_actor_scope_evidence_and_exact_head_are_parity_pinned(self):
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")

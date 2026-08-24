@@ -15,6 +15,14 @@
   does not report renders as an explicit dash, a figure captured out of band
   wears a "recorded" marker instead of borrowing the panel's freshness, and a
   payload that fails admission renders an empty state, never invented numbers.
+
+  A source with no daily series renders the heatmap's CHROME and says the
+  series is pending (owner directive, issue 127). It used to render a line of
+  text instead, and that line explained the ORIGIN's refresh configuration to
+  a visitor who had asked about tokens — an operator's sentence on a reader's
+  page. The chrome is empty in the literal sense: every cell is absent,
+  valueless and undated, because the honest rendering of no data is a graph
+  with no data in it, and never a graph of zeroes.
   The envelope's status rides the shell's badge, and watchPanel keeps the
   whole block current while the tab is visible.
 
@@ -163,7 +171,7 @@
                 noun="token"
                 {view}
                 label={`${source.label} token activity, ${view} view`}
-                emptyNote="no activity series — live refresh is off"
+                emptyNote="series pending"
               />
               {#if source.series}
                 <p class="usage-activity-total">

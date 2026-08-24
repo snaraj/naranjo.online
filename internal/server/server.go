@@ -299,15 +299,37 @@ func (f *staticFile) serveTo(w http.ResponseWriter, r *http.Request, name string
 }
 
 // securityHeaders enforces the browser-security baseline at the origin as
-// defense in depth if an edge rule is later changed. HSTS is deliberately
-// scoped to this hostname rather than making a promise for every subdomain —
-// the application is the sole HSTS owner, and widening the promise
-// (includeSubDomains, preload) is an explicit owner decision deferred until a
-// subdomain inventory and a rollback path exist. The header accompanies only
-// requests the edge declares as TLS: an HSTS pin teaches a browser to refuse
-// plain HTTP for a year, so it must never ride a response whose public leg
-// was not demonstrably secure — and probe or port-forward traffic that never
-// crossed the edge states no proto and correctly earns no promise.
+// defense in depth if an edge rule is later changed. HSTS is the one header
+// of that set with two layers in play, so what follows records observed
+// outcomes rather than a mechanism this origin is in no position to see.
+//
+// Since 2026-08-22 a public request over the proxied path is answered with
+// exactly one Strict-Transport-Security header, and its value is
+// max-age=31536000; includeSubDomains. The edge is therefore the
+// visitor-facing HSTS owner: the promise browsers are actually told, and its
+// scope, are settled there and not here (the observed value carries no
+// preload directive). The value this function mints — max-age=31536000, no
+// includeSubDomains — was NOT observed on that path in the measurements
+// recorded on issue #115. Why is not decidable from outside, and this comment
+// deliberately asserts neither answer: a public response cannot distinguish a
+// promise the origin never minted, because that leg was not declared TLS,
+// from one that did not arrive intact, and both would produce exactly what
+// was measured.
+//
+// The origin's own header stays on purpose. It is the promise an
+// origin-direct client receives if the edge is ever bypassed — defense in
+// depth is the whole reason it exists — and with both lifetimes now at
+// 31536000 seconds, includeSubDomains is the only remaining difference
+// between the two layers. Neither layer closes the first-contact gap: HSTS
+// binds a browser only once it has been told (RFC 6797 §14.6), never the
+// request that tells it, which is why the plain-HTTP redirect below is a
+// separate control and not a restatement of this one.
+//
+// The header accompanies only requests the edge declares as TLS: an HSTS pin
+// teaches a browser to refuse plain HTTP for a year, so it must never ride a
+// response whose public leg was not demonstrably secure — and probe or
+// port-forward traffic that never crossed the edge states no proto and
+// correctly earns no promise.
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'")

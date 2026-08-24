@@ -99,6 +99,28 @@ export function toColumns(cells: GridCell[]): GridCell[][] {
   return columns;
 }
 
+/* The width of an empty graph, in columns: one year, the same window the
+ * contribution calendar covers, so a panel still waiting for its series
+ * renders the same shaped box the panel beside it renders full. */
+export const pendingWeeks = 53;
+
+/* pendingColumns is the graph's CHROME with no data in it: every cell absent,
+ * valueless and undated. It exists because "no series yet" was rendering as a
+ * line of text where a graph belongs, which reads as a broken panel rather
+ * than as a panel waiting; an outlined empty grid says the same thing in the
+ * shape the reader is looking for.
+ *
+ * Absent is the whole point. An absent cell is drawn as a hole and labelled
+ * as having no data — the identical rendering a day outside a real window
+ * gets — so this fills a graph with EXACTLY as much information as the source
+ * has reported, which is none. A zero would be a datapoint, and inventing one
+ * per day for a year would be a doctrine violation with a very tidy look. */
+export function pendingColumns(weeks: number = pendingWeeks): GridCell[][] {
+  return Array.from({ length: Math.max(0, weeks) }, () =>
+    Array.from({ length: gridRows }, () => ({ value: 0, date: '', absent: true }))
+  );
+}
+
 /* addDays walks a calendar date forward in UTC. Dates in this file are plain
  * calendar labels, never instants, so UTC arithmetic keeps them stable in
  * every visitor's time zone. */

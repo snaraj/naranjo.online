@@ -1,0 +1,113 @@
+name: Browser lanes
+
+# Rendering lanes, stage 2 (issue #26). The PR gate proves the site's source
+# and its Go behavior; this proves what three real engines DO with the
+# stylesheet at phone sizes — the one thing a source pin cannot reach.
+#
+# It is deliberately a separate workflow rather than a job inside pr-gate.yml.
+# The publisher authorizes a release against pr-gate's EXACT job inventory
+# (scripts/ci/release_contract.py, EXPECTED_MAIN_JOBS), so adding a job there
+# changes a release-authorization surface; a rendering smoke lane has no
+# business doing that. Making this lane a required check is a repository
+# ruleset decision that belongs to the owner, not to a workflow file.
+#
+# Zero spend, by construction: GitHub-hosted runners on a public repository,
+# the origin under test is this repository's own Go binary on localhost, and
+# no external service receives anything. See "Zero-spend guardrails" in
+# AGENTS.md.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # Same shape as the PR gate: a PR synchronization may cancel its own older
+  # run, while every main push keeps its unique run id so no merge can erase
+  # another merge's result.
+  group: browser-lanes-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  lanes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.19.0'
+          check-latest: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+          check-latest: false
+          cache: false
+      - name: Verify application toolchain
+        run: |
+          test "$(node --version)" = "v24.19.0"
+          test "$(npm --version)" = "11.17.0"
+          test "$(go env GOVERSION)" = "go1.26.6"
+      - name: Read the pinned browser-runner version
+        id: runner
+        working-directory: frontend
+        # The cache key is the EXACT pinned version from package.json, not a
+        # range and not whatever is installed: each Playwright release binds
+        # its own browser build revisions, so a version bump must miss the
+        # cache rather than run last version's engines.
+        run: |
+          version="$(node -p "require('./package.json').devDependencies['@playwright/test']")"
+          case "${version}" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) printf 'browser runner is not pinned to an exact version: %s\n' "${version}" >&2; exit 1 ;;
+          esac
+          printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
+      - name: Build the frontend the binary embeds
+        working-directory: frontend
+        # --ignore-scripts as everywhere else in this repository. The runner
+        # ships no install script of its own (verified: the three added
+        # packages declare none), and the only one anywhere in that subtree
+        # belongs to an optional macOS-only file watcher that a Linux runner
+        # never installs.
+        run: |
+          test -f package-lock.json
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+      - name: Restore the browser cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.runner.outputs.version }}
+      - name: Install the three engines
+        working-directory: frontend
+        # Chromium (Chrome and Edge), Firefox and WebKit (Safari and every
+        # iOS browser) — named explicitly so an engine is a deliberate
+        # addition. The download is skipped entirely when the cache above
+        # restored them; --with-deps installs the system libraries the
+        # engines link against, from the runner's own Ubuntu archives.
+        #
+        # Honest limit, stated where it will be read: these engine builds
+        # arrive from Playwright's CDN over TLS and are NOT checksum-verified
+        # the way scripts/ci/install-tools.sh verifies every other third-party
+        # binary, because Playwright publishes no per-build digest to verify
+        # against. What is pinned is the exact runner version, whose npm
+        # tarball integrity IS in the committed lockfile and which selects the
+        # browser revisions. This job holds no secret, no write permission and
+        # no package scope, and nothing it produces is published.
+        run: npx playwright install --with-deps chromium firefox webkit
+      - name: Run the rendering-lane smoke matrix
+        working-directory: frontend
+        # The suite boots the real Go binary over localhost (see
+        # playwright.config.mjs) and drives five projects: three desktop
+        # engines plus an Android and an iPhone viewport.
+        run: npm run test:browsers

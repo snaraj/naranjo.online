@@ -172,9 +172,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   orchestrator re-derives from git itself. The PR gate publishes its verdict
   for the exact pushed range as a run artifact; the orchestrator requires it
   from the run it already binds, re-derives the class independently, and for a
-  no-artifact range additionally re-proves the entire boundary-commit-to-head
-  gap as documentation. An absent verdict, a foreign class, or any mismatch
-  fails the job red. There is no third path and no toggle.
+  no-artifact range additionally re-proves as documentation the gap an
+  anchor-advance walk leaves behind — from the advanced anchor to the merged
+  head, not from the boundary commit, since the prefix the walk consumed is
+  genuine artifact history that already released. An absent verdict, a foreign
+  class, or any mismatch fails the job red. There is no third path and no
+  toggle.
 
 ## [0.1.26] - 2026-08-21
 
