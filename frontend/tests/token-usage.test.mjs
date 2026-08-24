@@ -376,6 +376,12 @@ describe('TokenUsagePanel live surface', () => {
   it('renders the activity heatmap through the shared grid component', () => {
     assert.match(component, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
     assert.match(component, /<ContributionGrid/);
-    assert.match(component, /emptyNote="no activity series/);
+    // A source with no series gets the graph's chrome and an honest note, not
+    // a sentence where the graph belongs (owner directive, issue 127). The
+    // note says what is true of the DATA — no series yet — and nothing about
+    // the origin's refresh configuration, which is not a visitor's business
+    // and was what the retired copy explained to them.
+    assert.match(component, /emptyNote="series pending"/);
+    assert.doesNotMatch(component, /live refresh is off/);
   });
 });

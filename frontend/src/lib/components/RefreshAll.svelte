@@ -1,19 +1,23 @@
-<!-- RefreshAll is the trackers' own control: ONE button that re-reads every
-  mounted tracker at once. It sits at the head of the stack, attached to the
-  cards it acts on, rather than in the page header — the page header is for
-  controls that act on the document, and a refresh acts on the data.
+<!-- RefreshAll is ONE control that re-reads every mounted tracker at once. It
+  renders as a bare icon in the page header beside the reading mode (owner
+  directive, issue 127); it used to head the panel stack, on the argument
+  that it acts on the data rather than on the document, and that argument lost
+  to the arrangement it produced — one control above the page title and one
+  below it, stacked around the heading.
 
   One button, not one per card. Every tracker used to carry its own refresh in
   its heading, which put a control the visitor rarely wants beside the title
   they always read, three times over, and made "refresh" look like a
   per-tracker decision when in practice it is one gesture: bring everything up
-  to date. The per-card freshness READING stays exactly where it was — each
-  card still says, honestly, how old its own data is — because that genuinely
-  is per-tracker information.
+  to date.
 
   The read rides each tracker's existing single-flight watcher, so pressing
   this costs the origin at most one request per mounted tracker however hard
-  it is pressed, and it resolves only when the slowest of them has settled. -->
+  it is pressed, and it resolves only when the slowest of them has settled.
+
+  It renders no wrapper of its own: the header owns the row and its alignment,
+  so a control that also positioned itself would fight whatever the header
+  decided. -->
 <script lang="ts">
   import { refreshPanels } from '../panels';
 
@@ -35,42 +39,35 @@
   }
 </script>
 
-<div class="refresh-all">
-  <button
-    type="button"
-    class="icon-button"
-    aria-label="Refresh all trackers"
-    aria-busy={busy}
-    title="Refresh all trackers"
-    disabled={busy}
-    onclick={refresh}
-  >
-    <svg class="refresh-glyph" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-      <path
-        d="M20 12a8 8 0 1 1-2.34-5.66"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2.2"
-        stroke-linecap="round"
-      />
-      <path
-        d="M20 3.5V9h-5.5"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2.2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
-    </svg>
-  </button>
-</div>
+<button
+  type="button"
+  class="icon-button"
+  aria-label="Refresh all trackers"
+  aria-busy={busy}
+  title="Refresh all trackers"
+  disabled={busy}
+  onclick={refresh}
+>
+  <svg class="refresh-glyph" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+    <path
+      d="M20 12a8 8 0 1 1-2.34-5.66"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2.2"
+      stroke-linecap="round"
+    />
+    <path
+      d="M20 3.5V9h-5.5"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2.2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+  </svg>
+</button>
 
 <style>
-  .refresh-all {
-    display: flex;
-    justify-content: flex-end;
-  }
-
   @media (prefers-reduced-motion: no-preference) {
     .refresh-glyph {
       /* Only while a read is genuinely in flight; the control is disabled for

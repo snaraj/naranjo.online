@@ -7,9 +7,10 @@ import { bossInitials, bossSlug, skillSlug } from '../src/lib/bossIcons.ts';
 import {
   cellLabel,
   noTally,
-  panelSummary,
   rankLabel,
   skillLabel,
+  skillSummary,
+  summaryLabel,
   tally,
   unrankedLabel,
 } from '../src/lib/bossLog.ts';
@@ -112,31 +113,91 @@ test('the panels are one centered column, not a rail', () => {
   assert.match(styles, /#app > \.page-header,\s*\n#app > main\s*\{[^}]*inline-size:\s*min\(var\(--page-column-width\), 100%\)/);
 });
 
-test('panel shell surfaces status and generatedAt age over themable tokens', () => {
-  assert.match(shell, /data-panel-status=\{status\}/);
-  assert.match(shell, /panelAge/);
-  assert.match(shell, /var\(--panel-surface,\s*rgb\(40,\s*40,\s*40\)\)/);
-  assert.match(shell, /var\(--panel-border,\s*rgb\(23,\s*23,\s*23\)\)/);
-  for (const status of ['ok', 'stale', 'unavailable']) {
-    assert.match(shell, new RegExp(`--panel-status-${status}`), `badge lost its ${status} token`);
-  }
+// The page FILLS the viewport (owner directive, issue 127) and the stack
+// tiles inside it, which are two halves of one change: filling alone would
+// stretch one card across a desktop, and tiling alone would keep the ribbon.
+// Both are pinned by SHAPE rather than by value — the width the owner
+// eventually chooses is a later issue, and this must still hold then.
+test('the page fills the viewport and the stack tiles inside it', () => {
+  // The column is the whole content box. It is still expressed through the
+  // token and still passes through min(…, 100%), so the collapse-to-viewport
+  // guarantee the phone floor depends on is untouched.
+  assert.match(
+    styles,
+    /--page-column-width:\s*100%/,
+    'the page column must fill the viewport, not claim a fixed ribbon down the middle'
+  );
+  // Repeating against a card minimum is what makes ONE declaration serve both
+  // a phone and a desktop: below the minimum there is room for exactly one
+  // track, above it the extra room becomes more cards rather than a wider one.
+  assert.match(
+    styles,
+    /\.panel-stack\s*\{[^}]*grid-template-columns:\s*repeat\(\s*auto-fill,\s*minmax\(\s*min\(var\(--page-card-min\), 100%\)/,
+    'the stack must tile at a card minimum that can still collapse to the viewport'
+  );
+  // auto-FILL, not auto-fit, and the difference is measurable rather than
+  // stylistic: auto-fit collapses tracks holding no item, so while the panels
+  // were still arriving the first card was laid out at the full page width and
+  // then snapped to a third of it as its siblings mounted — every panel inside
+  // it re-measuring, which is the layout shift this page is pinned against.
+  assert.doesNotMatch(
+    styles,
+    /grid-template-columns:\s*repeat\(\s*auto-fit/,
+    'auto-fit re-lays-out a card the visitor is already reading as its siblings mount'
+  );
+  // The min() inside the minmax is the load-bearing part: a bare card
+  // minimum lays out a 480px track on a 320px phone and scrolls the body
+  // sideways, which is the floor this repository is pinned against. A test
+  // that only matched "minmax(var(--page-card-min)" would pass that bug.
+  assert.doesNotMatch(
+    styles,
+    /minmax\(\s*var\(--page-card-min\)/,
+    'a card minimum that cannot shrink forces a track wider than a phone'
+  );
 });
 
-// The freshness READING is per-card and stayed; the freshness ACTION is not
-// per-card and left. Every panel used to carry its own refresh button beside
-// its title, which made refreshing look like a per-tracker decision when it is
-// one gesture. This pins both halves: no card grows a control back, and not a
-// word of the honesty left with it.
-test('each card keeps its own freshness reading and none keeps a control', () => {
-  // The sentence is still built from the same status and age as before.
-  assert.match(shell, /const freshness = \$derived\(age \? `\$\{status\}, updated \$\{age\}` : status\)/);
-  // It reaches a pointer user and a screen-reader user through the badge.
-  assert.match(shell, /<p class="panel-badge" data-panel-status=\{status\} title=\{freshness\}>/);
-  assert.match(shell, /<span class="panel-badge-age">\{freshness\}<\/span>/);
-  // Status is never color alone: the dot's SHAPE differs per state.
-  assert.match(shell, /\.panel-badge-dot\s*\{[^}]*inline-size:\s*0\.5em/, 'the dot lost its size');
-  assert.match(shell, /\.panel-badge-dot\[data-panel-status='ok'\]\s*\{[^}]*border-radius:\s*50%/);
-  assert.match(shell, /\.panel-badge-dot\[data-panel-status='stale'\]\s*\{[^}]*background:\s*none/);
+test('panel shell surfaces status and provenance over themable tokens', () => {
+  assert.match(shell, /data-panel-status=\{status\}/);
+  assert.match(shell, /var\(--panel-surface,\s*rgb\(40,\s*40,\s*40\)\)/);
+  assert.match(shell, /var\(--panel-border,\s*rgb\(23,\s*23,\s*23\)\)/);
+});
+
+// The freshness BADGE is gone (owner directive, issue 127) and the freshness
+// MODEL is not. They are separate things and this pins the separation: the
+// card no longer interrupts itself to announce its own age, while status and
+// provenance still arrive on the envelope and still ride the shell, so the
+// removal is a display change that a lane can audit rather than a quiet loss
+// of the panel's honesty.
+test('no card announces its own age, and none keeps a control', () => {
+  // The badge, in every part: the element, its text, and its dot.
+  assert.doesNotMatch(shell, /panel-badge/, 'the freshness badge came back');
+  assert.doesNotMatch(
+    shell,
+    /updated \$\{age\}|panelAge|watchClock/,
+    'a card is rendering an age again; the reading left with the badge'
+  );
+  // The model behind it did NOT leave: both facts stay on the element, where
+  // nothing displays them and anything can read them.
+  assert.match(
+    shell,
+    /data-panel-status=\{status\}\s+data-panel-generated-at=\{generatedAt\}/,
+    'the shell must still carry status and provenance as data'
+  );
+  assert.match(
+    shell,
+    /generatedAt\?:\s*string;/,
+    'the shell must still accept the envelope timestamp, or its callers stop passing one'
+  );
+  // Honest states are unaffected — they live in each panel's own body, and
+  // this is what makes the badge removal safe to make: a panel with nothing
+  // true to show still says so in words.
+  for (const [name, source] of Object.entries({ bossLog, activityBar, tokenUsage })) {
+    assert.match(
+      source,
+      /unavailable|No usage data|no activity data/i,
+      `${name} lost its explicit unavailable state, which the badge is not there to replace`
+    );
+  }
   // No per-card control, and no panel hands one up any more.
   assert.doesNotMatch(shell, /panel-refresh|<button/, 'a card grew its own refresh control back');
   // Two spellings, because a bespoke refresher does not have to be CALLED
@@ -177,19 +238,25 @@ test('each card keeps its own freshness reading and none keeps a control', () =>
   }
 });
 
-// One control for the whole stack, attached to the trackers it acts on —
-// never in the page header, which is for controls that act on the document.
-test('one refresh serves every tracker, and it belongs to the stack', () => {
-  assert.match(app, /<RefreshAll \/>/);
-  // It sits inside the stack, above the mount fence, so it is visually part
-  // of the cards rather than part of the page chrome.
-  assert.match(app, /<div class="panel-stack">[\s\S]*<RefreshAll \/>[\s\S]*panels:mount:begin/);
-  assert.doesNotMatch(
+// One control for the whole page, and it sits with the other one. The
+// refresh used to head the panel stack on the argument that it acts on the
+// data rather than on the document; the owner overruled that argument on what
+// it looked like (issue 127), because it put one control above the centered
+// title and one below it. Both now sit together in the header's corner.
+test('one refresh serves every tracker, and it sits with the reading mode', () => {
+  assert.match(pageHeaderSource, /import RefreshAll from '\.\/RefreshAll\.svelte'/);
+  assert.match(
     pageHeaderSource,
-    /import RefreshAll|refreshPanels\(/,
-    'the refresh must not sit in the page header'
+    /<header class="page-header">\s*<RefreshAll \/>\s*<ThemeMenu \/>\s*<\/header>/,
+    'both chrome icons sit in the header, reading mode last so its popover opens inside the page'
   );
+  // The stack is panels and nothing else, so a card added later inherits a
+  // column of cards rather than a column with a control stuck on top.
+  assert.doesNotMatch(app, /RefreshAll/, 'the refresh must not head the panel stack again');
   assert.match(refreshAll, /aria-label="Refresh all trackers"/);
+  // It renders no wrapper: the header owns the row, and a control that also
+  // positioned itself would fight it.
+  assert.doesNotMatch(refreshAll, /class="refresh-all"/, 'the control must not lay itself out');
   assert.match(refreshAll, /refreshPanels\(\)/);
   // One source pin survives here, and deliberately: a watcher LEAVING the
   // live set is unobservable through the public API, because stop() also sets
@@ -285,36 +352,80 @@ test('no page chrome floats over the document', () => {
   }
 });
 
-// The reading-mode control sits alone in the top-end corner. It acts on the
-// document, so it is the only thing in the page header — pairing it with the
-// refresh implied the two had the same scope, and they do not.
-test('the reading mode is the page header, alone and in flow', () => {
+// Both page-level controls sit in the top-end corner, in flow, and they are
+// ICONS rather than buttons (owner directive, issue 127): no disc, no border,
+// no fill. What is NOT negotiable is the box — 44px on both axes stays,
+// because a bare glyph is no easier to hit than a framed one.
+test('the page header is two plain icons in the top-end corner', () => {
   assert.match(app, /<PageHeader \/>/);
   assert.match(pageHeaderSource, /<ThemeMenu \/>/);
-  assert.doesNotMatch(pageHeaderSource, /<button/, 'the header carries the reading mode and nothing else');
+  assert.doesNotMatch(pageHeaderSource, /<button/, 'the header composes controls, it does not spell them');
   assert.match(themeMenu, /class="icon-button trigger"/);
+  assert.match(refreshAll, /class="icon-button"/);
   assert.match(styles, /\.page-header\s*\{[^}]*justify-content:\s*flex-end/);
-  // The static shell reserves the row, so the control arriving at hydration
-  // fills held-open space instead of pushing the page down.
+  // The static shell reserves the row, so the controls arriving at hydration
+  // fill held-open space instead of pushing the page down.
   assert.match(styles, /\.page-header\s*\{[^}]*min-block-size:\s*var\(--page-header-height\)/);
   assert.match(fallbackShell, /<header class="page-header"><\/header>/);
+  // The chrome is gone, and its absence is the pin: a circle, a border or a
+  // fill on this rule is what the owner rejected, and each would come back
+  // as one innocent-looking declaration.
+  const iconRule = /\.icon-button\s*\{([^}]*)\}/.exec(styles);
+  assert.ok(iconRule, 'the shared icon-control rule is not where this pin expects it');
+  assert.match(iconRule[1], /border:\s*0/, 'a page icon must carry no border');
+  assert.match(iconRule[1], /background:\s*none/, 'a page icon must carry no fill');
+  assert.doesNotMatch(iconRule[1], /border-radius/, 'a page icon must not wear a disc');
+  // ...and neither does any state of it: a hover that paints a surface is a
+  // button that appears when touched.
+  for (const [, body] of styles.matchAll(/\.icon-button[^{]*\{([^}]*)\}/g)) {
+    assert.doesNotMatch(
+      body,
+      /background:\s*var\(|border-radius:\s*50%/,
+      'an icon-button state paints button chrome'
+    );
+  }
+  // 44px on both axes, still, from the one shared rule.
+  assert.match(styles, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
+  assert.match(styles, /\.icon-button\s*\{[^}]*block-size:\s*2\.75rem/);
 });
 
-test('boss log renders the dense fixed-cell grid with tooltips and -- tallies', () => {
-  assert.match(bossLog, /grid-template-columns:\s*repeat\(3,/, 'the grid must stay three columns');
-  assert.match(bossLog, /block-size:\s*2\.125rem/, 'cells must keep a fixed height (no CLS)');
-  assert.match(bossLog, /width="26"\s+height="26"/, 'icons must declare their box (no CLS)');
-  assert.match(bossLog, /loading="lazy"/, 'icons must lazy-load');
-  assert.match(bossLog, /decoding="async"/);
+test('boss log renders the dense fixed-cell strip with tooltips and -- tallies', () => {
+  assert.match(bossLog, /block-size:\s*var\(--boss-cell-height/, 'cells must keep a fixed height (no CLS)');
   assert.match(bossLog, /tally\(boss\.kc\)/, 'tallies must go through the tested renderer');
   assert.match(bossLog, /rankLabel\(boss\.rank\)/, 'ranks must go through the tested renderer');
-  // The complete table scrolls inside the panel. Dozens of boss rows would
-  // otherwise make this card taller than everything stacked below it put
-  // together, so the region is bounded to a fixed height and scrolls itself:
-  // the page scrolls through the STACK, never through one panel's contents,
-  // and the card's geometry is the same before and after the payload lands.
-  assert.match(bossLog, /\.boss-grid\s*\{[^}]*block-size:\s*var\(--boss-grid-height/, 'the boss region must be bounded');
-  assert.match(bossLog, /\.boss-grid\s*\{[^}]*overflow-y:\s*auto/, 'and scroll inside itself');
+  // The complete table scrolls inside the panel, SIDEWAYS (owner directive,
+  // issue 127). Dozens of boss tiles would otherwise make this card taller
+  // than everything stacked below it put together; bounding it vertically
+  // solved that but left a downward scroll region competing with the page's
+  // own under the same thumb. The page scrolls through the STACK, this strip
+  // scrolls across, and the card's geometry is the same before and after the
+  // payload lands.
+  assert.match(bossLog, /\.boss-grid\s*\{[^}]*grid-auto-flow:\s*column/, 'the strip must flow sideways');
+  // The bound is the ROW COUNT, and it has to be: a fixed block-size on a
+  // horizontal scroller takes the scrollbar OUT of the box, so on every
+  // platform that reserves space for one instead of overlaying it — Linux
+  // and Windows, CI included — the second row of tiles is cut off behind it.
+  // MEASURED: 69px of tiles in the 70px a 4.5rem bound leaves, which survives
+  // an overlay scrollbar by a pixel and loses fifteen to a classic one.
+  assert.match(
+    bossLog,
+    /\.boss-grid\s*\{[^}]*grid-template-rows:\s*repeat\(2,/,
+    'the boss region must be bounded by its row count'
+  );
+  assert.doesNotMatch(
+    bossLog,
+    /\.boss-grid\s*\{[^}]*block-size:/,
+    'a fixed height on the sideways scroller clips its bottom row behind a classic scrollbar'
+  );
+  assert.match(bossLog, /\.boss-grid\s*\{[^}]*overflow-x:\s*auto/, 'and scroll inside itself');
+  assert.doesNotMatch(
+    bossLog,
+    /\.boss-grid\s*\{[^}]*overflow-y:\s*auto/,
+    'a sideways strip that also scrolls downward is two scroll regions in one box'
+  );
+  // A strip that chains its scroll drags the document sideways when the
+  // reader reaches the end of it.
+  assert.match(bossLog, /\.boss-grid\s*\{[^}]*overscroll-behavior:\s*contain/);
   // The fill variant existed only to claim the retired rail's height; a card
   // in the stack grows to its content, so it must not come back.
   assert.doesNotMatch(shell, /panel-shell-fill/, 'the rail-filling variant must stay retired');
@@ -322,16 +433,32 @@ test('boss log renders the dense fixed-cell grid with tooltips and -- tallies', 
   assert.match(bossLog, /:hover\s+\.boss-tip/);
   assert.match(bossLog, /:focus-visible\s+\.boss-tip/);
   // The tooltip is what actually cut the leading digits off the table: a
-  // minimum width inside a ~90px cell, positioned against a distant
-  // ancestor, pushed the grid's scroll width past the card. A viewport-width
-  // threshold cannot catch that — the offending value was 9rem, comfortably
-  // under the 320px floor — so the MECHANISM is pinned instead. The cell is
-  // the containing block, the tip is bounded by the viewport, and it claims
-  // no minimum of its own.
+  // minimum width inside a ~90px cell pushed the grid's scroll width past
+  // the card. A viewport-width threshold cannot catch that — the offending
+  // value was 9rem, comfortably under the 320px floor — so the MECHANISM is
+  // pinned: the tip is bounded by the viewport and claims no minimum.
+  //
+  // Its containing block moved OUT of the cell, and that inversion is
+  // deliberate. An absolutely positioned box is clipped by an overflow
+  // ancestor only when that ancestor is in its containing-block chain, so a
+  // cell-anchored tip inside a sideways scroller is cut off by the strip's
+  // own edge — and, being outside the chain, one anchored to the wrapper
+  // contributes nothing to the strip's scrollable width either. The floor
+  // the old pin protected is therefore stronger here, not weaker.
   assert.match(
     bossLog,
-    /\.boss-cell\s*\{[^}]*position:\s*relative/,
-    'the cell must be the tip’s containing block, or the tip anchors to the grid'
+    /\.boss-strip\s*\{[^}]*position:\s*relative/,
+    'the strip wrapper must be the tip’s containing block'
+  );
+  assert.doesNotMatch(
+    bossLog,
+    /\.boss-cell\s*\{[^}]*position:/,
+    'a positioned cell puts the tip back inside the scroller that clips it'
+  );
+  assert.doesNotMatch(
+    bossLog,
+    /\.boss-grid\s*\{[^}]*position:/,
+    'a positioned scroller becomes the tip’s containing block and clips it again'
   );
   assert.match(
     bossLog,
@@ -353,17 +480,50 @@ test('boss log renders the dense fixed-cell grid with tooltips and -- tallies', 
   assert.match(bossLog, /bossInitials/);
 });
 
+// The owner reviewed the vendored boss art and locked it exactly as rendered
+// (issue 127: "gorgeous… LOCK THOSE IN"). The layout around it changed in the
+// same pass, which is precisely when a rendering detail gets adjusted by
+// accident, so every part of how a tile is SOURCED and DRAWN is pinned here
+// in one place: the file the slug selects, the declared box, the loading
+// behavior, and the painted size.
+test('the boss icons are locked exactly as they render', () => {
+  assert.match(
+    bossLog,
+    /<img\s+class="boss-icon"\s+src=\{icons\.get\(bossSlug\(boss\.name\)\)\}\s+alt=""\s+width="26"\s+height="26"\s+loading="lazy"\s+decoding="async"/,
+    'a boss tile is sourced by slug and declares its box, its lazy loading and its async decode'
+  );
+  assert.match(
+    bossLog,
+    /\.boss-icon\s*\{[^}]*inline-size:\s*26px[^}]*block-size:\s*26px[^}]*object-fit:\s*contain/,
+    'the painted icon box is 26px square and never distorts the art inside it'
+  );
+  // The designed hole for a row that ships upstream before its art does.
+  assert.match(bossLog, /<span class="boss-icon boss-glyph" aria-hidden="true">\{bossInitials\(boss\.name\)\}<\/span>/);
+});
+
 // The skills grid is the half of the panel the payload always carried and
 // nothing ever rendered: internal/panels parsed the hiscores skill table and
 // then dropped it on the floor (issue #78).
 test('the skills grid mirrors the hiscore panel and renders levels honestly', () => {
-  assert.match(bossLog, /\.skill-grid,\s*\n\s*\.boss-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,/);
+  assert.match(
+    bossLog,
+    /\.skill-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
+    'the skills table must stay three columns that can shrink'
+  );
   assert.match(bossLog, /\.skill-cell\s*\{[^}]*block-size:\s*1\.625rem/, 'skill cells need a fixed height (no CLS)');
   assert.match(bossLog, /width="18"\s+height="18"/, 'skill icons must declare their box (no CLS)');
   assert.match(bossLog, /tally\(skill\.level\)/, 'levels must go through the tested renderer');
   assert.match(bossLog, /aria-label=\{skillLabel\(skill\)\}/);
   assert.match(bossLog, /title=\{skillLabel\(skill\)\}/);
   assert.match(bossLog, /skillSlug/);
+  // The totals are cells of the same grid, keyed and labelled like the rest,
+  // so the last row ends flush instead of trailing two blank tiles.
+  assert.match(bossLog, /\{#each summary as cell \(cell\.key\)\}/);
+  assert.match(bossLog, /<li class="skill-cell skill-summary" aria-label=\{summaryLabel\(cell\)\} title=\{summaryLabel\(cell\)\}>/);
+  assert.match(bossLog, /const summary = \$derived\(skillSummary\(skills\)\)/, 'the totals must be derived from the payload');
+  // One line, whatever the width: a wrapped nine-digit figure in a 1.625rem
+  // cell spills over the row below it.
+  assert.match(bossLog, /\.skill-summary\s*\{[^}]*white-space:\s*nowrap/);
   // A payload with no skill table says so; it never renders an empty grid
   // that reads as "this account has no levels".
   assert.match(bossLog, /\{:else\}\s*<p class="boss-note">No skill levels reported\.<\/p>/);
@@ -477,6 +637,42 @@ test('the origin serves the complete boss table', { skip: reducedContextNote }, 
   );
 });
 
+// The owner renamed the version-control card to the service it reports from
+// (issue 127). That name could not land in either source tree: internal/panels
+// is pinned against vendor names in Go source, and the frontend is pinned
+// against naming this panel's origin (activity.test.mjs). Both pins hold
+// BECAUSE the title is data — which is the arrangement the doctrine wanted all
+// along, and this is the pin that keeps the string on the data side of it.
+test('the panel heading is data the origin serves, not a string in either tree', {
+  skip: reducedContextNote,
+}, async () => {
+  const fetchConfig = await read('../../internal/panels/config/fetch.json').then(JSON.parse);
+  assert.equal(
+    fetchConfig.titles?.['vcs-activity'],
+    'GitHub',
+    'the owner-chosen heading must live in config data, where a vendor name is allowed to be'
+  );
+  // The component renders whatever the envelope carries. A hardcoded heading
+  // here would render the same page today and make the config data a lie.
+  assert.match(activityBar, /title=\{envelope\?\.title \|\| 'Version-control activity'\}/);
+  // And the Go source keeps the neutral name as its fallback, so a config
+  // that fails to load degrades to a truthful heading rather than a blank.
+  const panelConfig = await read('../../internal/panels/config.go');
+  assert.match(panelConfig, /title: "Version-control activity"/);
+  // The overlay is applied by panel ID from the decoded config document, and
+  // an id the config does not name keeps the neutral literal above.
+  assert.match(
+    panelConfig,
+    /applyTitles\(definitions, document\.Titles\)/,
+    'the origin must overlay the configured headings onto its panel list'
+  );
+  assert.match(
+    panelConfig,
+    /if title, ok := titles\[definition\.id\]; ok && title != ""/,
+    'the origin must apply the configured heading by panel id, and treat a blank one as no choice'
+  );
+});
+
 test('vendored icons stay CSP-servable, never inlined', () => {
   assert.match(
     viteConfig,
@@ -512,9 +708,6 @@ test('every mounted panel stays current instead of painting once', () => {
       `${name} reads its envelope directly again; the one-shot read is the bug`
     );
   }
-  // And the freshness badge reads a ticking clock, not the mount instant.
-  assert.match(shell, /watchClock/);
-  assert.match(shell, /panelAge\(generatedAt, now\)/);
 });
 
 test('the contribution grid is one component both panels render', () => {
@@ -530,6 +723,63 @@ test('the contribution grid is one component both panels render', () => {
   assert.match(grid, /aria-label=\{text\}/);
   assert.match(grid, /title=\{text\}/);
   assert.match(grid, /data-grid-absent=\{cell\.absent \? 'true' : 'false'\}/);
+});
+
+// The calendar opens on TODAY at its end edge (owner directive, issue 127).
+// Cells run oldest first, so a strip that opens where its content begins
+// opens on January and hides every recent day off the right edge — which is
+// the defect, not a preference.
+test('the grid opens on its newest column and lets history scroll back', () => {
+  assert.match(
+    grid,
+    /node\.scrollLeft = node\.scrollWidth/,
+    'the strip must be scrolled to its end edge, where the newest column is'
+  );
+  // Keyed on the column COUNT, not on every payload: a sixty-second refresh
+  // that returns the same window must not yank a reader who scrolled back.
+  assert.match(
+    grid,
+    /count === anchoredColumns/,
+    'a refresh returning the same window must not re-anchor a reader who scrolled back'
+  );
+  // And re-anchored when the BOX changes width, because the scroll position
+  // that means "the end" is a function of that box: a card in this stack
+  // genuinely resizes (a rotation, a viewport change), and a strip anchored
+  // before the resize is left showing the middle of its history afterwards.
+  assert.match(grid, /node\.clientWidth === anchoredWidth/);
+  assert.match(grid, /new ResizeObserver\(/);
+  // Instantly. A smooth scroll here would be motion nobody asked for, on a
+  // page whose animations are all inside a no-preference query.
+  assert.doesNotMatch(grid, /scroll-behavior|scrollTo\(/, 'the opening position is not a journey');
+});
+
+// A panel with no series renders the graph's CHROME and says the series is
+// pending (owner directive, issue 127) — never the words "no activity series
+// — live refresh is off", which explained the origin's configuration to a
+// visitor. The honesty invariant is what makes this safe: the placeholder is
+// absent cells, so it contains exactly as many datapoints as the source has
+// reported, which is none.
+test('an empty grid renders chrome with no data in it, never zeroes', () => {
+  assert.match(grid, /pendingColumns/, 'the empty grid must render the graph chrome');
+  assert.match(
+    grid,
+    /<span class="grid-cell" data-grid-pending data-grid-absent="true"><\/span>/,
+    'every placeholder cell is absent — no value, no date, no level'
+  );
+  // Marked decorative, so a screen reader hears the honest note once rather
+  // than "no data for this day" three hundred and seventy-one times.
+  assert.match(grid, /<div class="grid-cells" aria-hidden="true">/);
+  // Out of flow, so the panel is the same height empty and full and the day
+  // a real series arrives nothing moves under the reader.
+  assert.match(grid, /\.grid-empty\s*\{[^}]*position:\s*absolute/);
+  // The retired sentence must not come back anywhere.
+  for (const [name, source] of Object.entries({ grid, tokenUsage, activityBar })) {
+    assert.doesNotMatch(
+      source,
+      /live refresh is off/,
+      `${name} explains the origin's configuration to a visitor again`
+    );
+  }
 });
 
 test('panel sources stay local-origin', () => {
@@ -615,10 +865,71 @@ test('a skill label carries the whole row, including its nulls', () => {
   );
 });
 
-// The subtitle counts the rows the payload actually carries, so an upstream
-// that ships a new skill or boss is reported rather than rounded off, and an
-// empty section says zero instead of quietly disappearing.
-test('the panel subtitle reports the account and what it actually serves', () => {
-  assert.equal(panelSummary('Roll The J', 25, 71), 'Roll The J · 25 skills · 71 bosses');
-  assert.equal(panelSummary('Roll The J', 0, 1200), 'Roll The J · 0 skills · 1,200 bosses');
+// The panel used to open with a subtitle naming the account. The RSN is
+// personal information and the owner does not want it displayed (issue 127),
+// so it is gone from the rendering entirely — from the visible line AND from
+// the accessible names, which are a display like any other. The payload still
+// carries the account, because what the origin serves is a data question and
+// this pass is a display one.
+test('the boss panel displays no account name anywhere', () => {
+  assert.doesNotMatch(
+    bossLog,
+    /data\.account/,
+    'the account name reaches a rendering again; a label read aloud is still displayed'
+  );
+  assert.doesNotMatch(bossLog, /panelSummary/, 'the account subtitle came back');
+  // The grids keep accessible names — losing the account must not cost a
+  // screen reader the ability to tell the two tables apart.
+  assert.match(bossLog, /<ul class="skill-grid" aria-label="Skill levels">/);
+  assert.match(bossLog, /<ul class="boss-grid" tabindex="0" aria-label="Boss tallies">/);
+});
+
+// The grid's trailing gap, filled with the account's own totals rather than
+// left blank (owner directive, issue 127). These are EXECUTED rather than
+// pattern-matched, because the interesting cases are the honest ones: a total
+// the hiscores do not report, and a payload with no Overall row at all.
+test('the skills grid closes with the account totals, honestly', () => {
+  const overall = { name: 'Overall', level: 2274, rank: 138220, xp: 453846899 };
+  const cells = skillSummary([overall, { name: 'Attack', level: 99, rank: 1, xp: 2 }]);
+  assert.deepEqual(
+    cells.map((cell) => [cell.label, cell.value]),
+    [
+      ['XP', '453,846,899'],
+      ['Rank', '138,220'],
+    ],
+    'the two totals are the Overall row’s xp and rank, grouped like every other figure'
+  );
+  // The full name rides the accessible text, because "Total XP" does not fit
+  // a third of a 320px card and a truncated label is worse than a short one.
+  assert.equal(summaryLabel(cells[0]), 'Total XP: 453,846,899');
+  assert.equal(summaryLabel(cells[1]), 'Overall rank: 138,220');
+  // Nulls render as the same markers every other cell uses — a total the
+  // upstream does not report is not a zero and not an empty tile.
+  const unreported = skillSummary([{ name: 'Overall', level: null, rank: null, xp: null }]);
+  assert.deepEqual(
+    unreported.map((cell) => cell.value),
+    [noTally, unrankedLabel]
+  );
+  // No Overall row, no invented cells. The gap coming back is the honest
+  // outcome, and the tiling pin below is what makes it loud.
+  assert.deepEqual(skillSummary([{ name: 'Attack', level: 99, rank: 1, xp: 2 }]), []);
+  assert.deepEqual(skillSummary([]), []);
+});
+
+// The blank tiles the owner asked us to remove are a COUNTING property, not a
+// styling one: three columns, twenty-five skills and two totals tile exactly,
+// and an upstream that ships a twenty-sixth skill breaks that. This fails the
+// day it does, naming the arithmetic, instead of shipping a blank tile.
+test('the skills grid tiles its columns exactly, with no cell left over', {
+  skip: reducedContextNote,
+}, async () => {
+  const snapshot = await read('../../internal/panels/snapshots/boss-log.json').then(JSON.parse);
+  const columns = 3;
+  const cells = snapshot.data.skills.length + skillSummary(snapshot.data.skills).length;
+  assert.equal(
+    cells % columns,
+    0,
+    `${snapshot.data.skills.length} skills plus ${cells - snapshot.data.skills.length} totals leave ` +
+      `${cells % columns} blank tile(s) in a ${columns}-column grid; the grid must end flush`
+  );
 });
