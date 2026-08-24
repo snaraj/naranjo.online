@@ -80,6 +80,12 @@ type Site struct {
 	// panelsData owns the optional rooted data-root capability (issue #142),
 	// opened only through StartPanelData and closed with the site.
 	panelsData *os.Root
+	// panelsState owns the optional rooted writable state capability the
+	// replay-floor marker persists through (2026-08-24 review finding H2),
+	// opened only through StartPanelData and closed with the site. It is a
+	// SEPARATE root on a separate mount: the data root above stays read-only
+	// in every layer, and this one holds nothing but the floor marker.
+	panelsState *os.Root
 }
 
 const (

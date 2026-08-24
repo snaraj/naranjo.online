@@ -2,20 +2,26 @@
 # chart-storage-pin — prove the rendered panels data root keeps every storage
 # invariant (issue #142), in BOTH directions:
 #
-#   enabled (the default values): exactly one PersistentVolumeClaim, pinned
-#   to its PersistentVolume by name with an EXPLICIT empty storageClassName
-#   (an omitted one would let the default StorageClass capture the claim),
-#   ReadOnlyMany, the declared capacity; the Deployment mounts it readOnly
-#   at BOTH the claim reference and the volumeMount, PANELS_DATA_ROOT equals
-#   the mount path, and the key Secret reference is optional so its absence
-#   degrades the panel rather than the pod. No PersistentVolume renders by
-#   default: the release identity deliberately holds no PV authority.
+#   enabled (the default values): exactly TWO PersistentVolumeClaims — the
+#   read-only DATA claim carrying the pushed sealed series, and the writable
+#   replay-floor STATE claim (2026-08-24 security review, finding H2) — each
+#   pinned to its PersistentVolume by name with an EXPLICIT empty
+#   storageClassName (an omitted one would let the default StorageClass
+#   capture the claim), ReadOnlyMany/ReadWriteOnce respectively, at the
+#   declared capacities; the Deployment mounts the data claim readOnly at
+#   BOTH the claim reference and the volumeMount, mounts the state claim
+#   EXPLICITLY writable at both (a silently read-only state root loses the
+#   durable floor), PANELS_DATA_ROOT and PANELS_DATA_STATE equal their mount
+#   paths, and the key Secret reference is optional so its absence degrades
+#   the panel rather than the pod. No PersistentVolume renders by default:
+#   the release identity deliberately holds no PV authority.
 #
 #   with-pv (panels.data.persistentVolume.enabled=true, the admin ceremony):
-#   additionally exactly one PersistentVolume — hostPath at the reviewed
-#   path with type Directory (mounts only what an admin already created),
-#   Retain, explicit empty storageClassName, and a claimRef pinning the pair
-#   from the volume side too.
+#   additionally exactly TWO PersistentVolumes — each hostPath at its
+#   reviewed path with type Directory (mounts only what an admin already
+#   created), Retain, explicit empty storageClassName, a claimRef pinning
+#   each pair from the volume side too, and the state directory a genuine
+#   sibling of the push directory, never inside it.
 #
 #   disabled (panels.data.enabled=false): NONE of it — no claim, no volume,
 #   no mount, no PANELS_DATA_* environment. The capability cannot half-exist.
@@ -59,6 +65,9 @@ HOST_PATH="$(read_value hostPath)"
 VOLUME_NAME="$(read_value volumeName)"
 KEY_SECRET="$(read_value keySecret)"
 CAPACITY="$(read_value capacity)"
+STATE_HOST_PATH="$(read_value stateHostPath)"
+STATE_VOLUME_NAME="$(read_value stateVolumeName)"
+STATE_CAPACITY="$(read_value stateCapacity)"
 RELEASE=smoke
 NAMESPACE=default
 
@@ -72,6 +81,9 @@ pin() {
     --volume-name "${VOLUME_NAME}" \
     --key-secret "${KEY_SECRET}" \
     --capacity "${CAPACITY}" \
+    --state-host-path "${STATE_HOST_PATH}" \
+    --state-volume-name "${STATE_VOLUME_NAME}" \
+    --state-capacity "${STATE_CAPACITY}" \
     --namespace "${NAMESPACE}"
 }
 
@@ -96,7 +108,7 @@ echo "chart-storage-pin: (c) disabled render: no claim, no volume, no wiring"
 # the checker red. sed operates on the RENDER, so what is proven is that the
 # checker catches the outcome, whatever template edit might produce it.
 mutation_count=0
-minimum_mutations=12
+minimum_mutations=19
 
 mutate_must_fail() {
   local description="$1" mode="$2" expression="$3" source="$4"
@@ -148,6 +160,48 @@ mutate_must_fail "PV claimRef unpinned" with-pv \
 mutate_must_fail "capability objects surviving a disabled render" disabled \
   's/x-never-matches/x/' \
   "${enabled_render}"
+
+# The replay-floor STATE pair's own battery (2026-08-24 review finding H2):
+# the writable direction is pinned as hard as the read-only one.
+mutate_must_fail "state mount flipped read-only" enabled \
+  '/mountPath: \/var\/lib\/panels-state/,/readOnly/ s/readOnly: false/readOnly: true/' \
+  "${enabled_render}"
+mutate_must_fail "state claim reference flipped read-only" enabled \
+  '/claimName: '"${STATE_VOLUME_NAME}"'/,/readOnly/ s/readOnly: false/readOnly: true/' \
+  "${enabled_render}"
+mutate_must_fail "state env diverges from the state mount" enabled \
+  's|value: "/var/lib/panels-state"|value: "/var/lib/other-state"|' \
+  "${enabled_render}"
+mutate_must_fail "state claim unpinned from its volume" enabled \
+  's/volumeName: '"${STATE_VOLUME_NAME}"'/volumeName: somebody-elses-volume/' \
+  "${enabled_render}"
+mutate_must_fail "state access mode widened" enabled \
+  's/- ReadWriteOnce/- ReadWriteMany/' \
+  "${enabled_render}"
+mutate_must_fail "state PV hostPath moved off the reviewed directory" with-pv \
+  's|path: '"${STATE_HOST_PATH}"'|path: /etc|' \
+  "${with_pv_render}"
+
+# The sibling refusal cannot be reached by mutating the render alone — the
+# expected paths arrive as caller facts — so it is proven with hostile
+# VALUES: a state directory nested inside the push directory must refuse
+# even when the render and the stated facts agree with each other.
+mutation_count=$((mutation_count + 1))
+nested_render="$(render \
+  --set panels.data.persistentVolume.enabled=true \
+  --set panels.data.stateHostPath="${HOST_PATH}/state")"
+if printf '%s' "${nested_render}" | \
+  python3 -I -B scripts/ci/chart_storage_pin.py with-pv \
+    --host-path "${HOST_PATH}" \
+    --volume-name "${VOLUME_NAME}" \
+    --key-secret "${KEY_SECRET}" \
+    --capacity "${CAPACITY}" \
+    --state-host-path "${HOST_PATH}/state" \
+    --state-volume-name "${STATE_VOLUME_NAME}" \
+    --state-capacity "${STATE_CAPACITY}" \
+    --namespace "${NAMESPACE}" >/dev/null 2>&1; then
+  fail "surviving mutant: state directory nested inside the push directory"
+fi
 
 [ "${mutation_count}" -ge "${minimum_mutations}" ] ||
   fail "only ${mutation_count} mutations ran; at least ${minimum_mutations} are required. Mutations are added, never removed."

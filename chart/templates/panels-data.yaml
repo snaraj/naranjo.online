@@ -13,8 +13,16 @@ holds no PersistentVolume authority (hostPath-backed PVs are the admin-only
 loophole through restricted pod security), so the PV is applied once by an
 admin from THIS template — the object in the cluster stays the object in
 git — and the flag flips the day the platform grants the reconciler that
-authority. scripts/ci/chart-storage-pin.sh holds every invariant stated
-here, in both enabled and disabled directions.
+authority.
+
+Two pairs render here: the read-only DATA pair carrying the pushed sealed
+series, and the writable STATE pair carrying the replay-floor marker
+(2026-08-24 security review, finding H2) so the floor survives restarts.
+They are separate on purpose — the data projection stays read-only in every
+layer exactly as reviewed, and the origin's one writable surface is a
+sibling directory the push pipeline never touches.
+scripts/ci/chart-storage-pin.sh holds every invariant stated here, in every
+direction.
 */ -}}
 {{- if .Values.panels.data.enabled }}
 {{- if .Values.panels.data.persistentVolume.enabled }}
@@ -39,6 +47,36 @@ spec:
     type: Directory
 ---
 {{- end }}
+{{- if .Values.panels.data.persistentVolume.enabled }}
+{{- /*
+The replay-floor STATE PersistentVolume (2026-08-24 security review, finding
+H2): the writable sibling of the read-only data volume above, holding one
+sealed floor-marker file so the replay floor survives restarts. Same admin
+ceremony, same static double-pinning, same Retain/Directory posture; the
+one deliberate difference is ReadWriteOnce — this is the single place the
+origin may write, and it is a directory the push pipeline never touches.
+*/ -}}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Values.panels.data.stateVolumeName }}
+  labels:
+    {{- include "naranjo-online.labels" . | nindent 4 }}
+spec:
+  capacity:
+    storage: {{ .Values.panels.data.stateCapacity }}
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    namespace: {{ .Release.Namespace }}
+    name: {{ .Values.panels.data.stateVolumeName }}
+  hostPath:
+    path: {{ .Values.panels.data.stateHostPath }}
+    type: Directory
+---
+{{- end }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -54,4 +92,20 @@ spec:
   resources:
     requests:
       storage: {{ .Values.panels.data.capacity }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.panels.data.stateVolumeName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "naranjo-online.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ""
+  volumeName: {{ .Values.panels.data.stateVolumeName }}
+  resources:
+    requests:
+      storage: {{ .Values.panels.data.stateCapacity }}
 {{- end }}

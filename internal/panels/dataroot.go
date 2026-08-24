@@ -47,6 +47,35 @@ import (
 // partial plaintext.
 type Unsealer func(sealed []byte) ([]byte, error)
 
+// FloorMarker persists the replay floor — the capture instant of the last
+// ACCEPTED series file — across process restarts (2026-08-24 review finding
+// H2: a floor seeded only from the embedded snapshot and advanced in process
+// memory re-admits, after any restart, every replayed ciphertext newer than
+// the snapshot but older than what was already accepted). The concrete
+// implementation lives with the composition root, exactly like the Unsealer:
+// this package gains no write capability of its own.
+//
+// Every direction fails SAFE and none fails the panel:
+//   - Load returns (instant, true) only for a marker that authenticates and
+//     parses; an absent, unreadable, corrupt, or unauthentic marker is
+//     (zero, false), which leaves the floor at the embedded snapshot's — the
+//     exact pre-marker behavior, never anything weaker.
+//   - A Load instant from the future beyond dataRootFutureSkew is ignored by
+//     the loop as corrupt, so a bad marker can never refuse honest pushes
+//     indefinitely.
+//   - A Store failure is tolerated: the in-memory floor has already risen,
+//     serving continues, and the next acceptance retries the write.
+//
+// A nil FloorMarker (or nil field) runs the loop with the process-memory
+// floor only — the documented degraded mode for deployments without a
+// writable state root.
+type FloorMarker struct {
+	// Load reads the persisted floor. False means "no usable marker".
+	Load func() (time.Time, bool)
+	// Store durably records a newly accepted capture instant.
+	Store func(time.Time) error
+}
+
 // errSeriesUnchanged reports a series file whose capture instant equals the
 // last accepted one — the normal state between pushes. Nothing is wrong and
 // nothing is replaced; the loop must not mark the panel stale over it.
@@ -54,16 +83,18 @@ var errSeriesUnchanged = errors.New("data root: series file unchanged")
 
 // StartDataRoot launches the data-root loop with the production clock. It is
 // explicitly invoked by the composition root, never by construction, and a
-// canceled context stops the loop before any further read.
-func (reg *Registry) StartDataRoot(ctx context.Context, fsys fs.FS, unseal Unsealer) {
-	reg.startDataRoot(ctx, fsys, unseal, time.Now)
+// canceled context stops the loop before any further read. The marker may be
+// nil where no writable state root exists; the loop then runs with the
+// process-memory floor only.
+func (reg *Registry) StartDataRoot(ctx context.Context, fsys fs.FS, unseal Unsealer, marker *FloorMarker) {
+	reg.startDataRoot(ctx, fsys, unseal, marker, time.Now)
 }
 
 // startDataRoot launches the data-root loop over the injected filesystem,
-// unsealer, and clock. Idempotent, returns immediately, and starts nothing
-// when the registry serves no token-usage panel or the capabilities are
-// absent.
-func (reg *Registry) startDataRoot(ctx context.Context, fsys fs.FS, unseal Unsealer, now func() time.Time) {
+// unsealer, marker, and clock. Idempotent, returns immediately, and starts
+// nothing when the registry serves no token-usage panel or the required
+// capabilities are absent.
+func (reg *Registry) startDataRoot(ctx context.Context, fsys fs.FS, unseal Unsealer, marker *FloorMarker, now func() time.Time) {
 	if fsys == nil || unseal == nil || now == nil {
 		return
 	}
@@ -74,16 +105,37 @@ func (reg *Registry) startDataRoot(ctx context.Context, fsys fs.FS, unseal Unsea
 	if !ok {
 		return
 	}
-	go reg.dataRootLoop(ctx, state, fsys, unseal, now)
+	go reg.dataRootLoop(ctx, state, fsys, unseal, marker, now)
 }
 
 // dataRootLoop re-reads the sealed series on the TTL cadence: an immediate
 // first attempt, then steady dataRootTTL wakes. The accepted-instant floor
-// starts at the embedded snapshot's own generatedAt and only ever rises, so
-// a replayed older file — or one older than the binary's own snapshot — can
-// never roll the panel back.
-func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys fs.FS, unseal Unsealer, now func() time.Time) {
+// starts at the HIGHER of the embedded snapshot's own generatedAt and the
+// persisted marker's instant, and only ever rises, so a replayed older
+// file — one older than the binary's own snapshot OR older than what a
+// previous process accepted — can never roll the panel back (2026-08-24
+// review finding H2: without the marker, a restart forgot every acceptance).
+//
+// One deliberate asymmetry: when the floor came from the marker, the FIRST
+// acceptance of this process may equal it exactly — that is the very file
+// the previous process accepted, and re-serving it at boot is recovery, not
+// replay. After anything has been accepted in-process, equality is again the
+// ordinary unchanged state between pushes.
+func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys fs.FS, unseal Unsealer, marker *FloorMarker, now func() time.Time) {
 	floor := reg.embeddedUsageInstant(state)
+	floorFromMarker := false
+	if marker != nil && marker.Load != nil {
+		if persisted, ok := marker.Load(); ok &&
+			persisted.After(floor) && !persisted.After(now().Add(dataRootFutureSkew)) {
+			// Fail safe in both directions: a marker at or below the
+			// embedded floor adds nothing, and a marker from the future is
+			// corrupt — ignoring either leaves the embedded floor, which is
+			// exactly the guarantee the process had before markers existed.
+			floor = persisted
+			floorFromMarker = true
+		}
+	}
+	acceptedInProcess := false
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
@@ -95,10 +147,18 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 		if ctx.Err() != nil {
 			return
 		}
-		accepted, err := reg.refreshFromDataRoot(state, fsys, unseal, now, floor)
+		allowEqual := floorFromMarker && !acceptedInProcess
+		accepted, err := reg.refreshFromDataRoot(state, fsys, unseal, now, floor, allowEqual)
 		switch {
 		case err == nil:
 			floor = accepted
+			acceptedInProcess = true
+			if marker != nil && marker.Store != nil {
+				// Tolerated on failure by design: the in-memory floor has
+				// already risen and serving continues; the next acceptance
+				// retries. Durability degrades, admission never does.
+				_ = marker.Store(accepted)
+			}
 		case errors.Is(err, fs.ErrNotExist), errors.Is(err, errSeriesUnchanged):
 			// An absent file is the ordinary cold state before the first
 			// push, and an unchanged file is the ordinary state between
@@ -148,8 +208,10 @@ func (reg *Registry) embeddedUsageInstant(state *panelState) time.Time {
 
 // refreshFromDataRoot performs one complete read-validate-merge-swap attempt
 // and returns the accepted capture instant. Every return before the final
-// swap leaves the served payload untouched.
-func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal Unsealer, now func() time.Time, floor time.Time) (time.Time, error) {
+// swap leaves the served payload untouched. allowEqual admits a file whose
+// instant EQUALS the floor — only the loop's first, marker-floored attempt
+// sets it, so a restarted process re-serves exactly what it last accepted.
+func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal Unsealer, now func() time.Time, floor time.Time, allowEqual bool) (time.Time, error) {
 	sealed, err := readBoundedFile(fsys, dataRootSeriesName, maxSealedSeriesBytes)
 	if err != nil {
 		return time.Time{}, err
@@ -162,7 +224,7 @@ func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal U
 	if err := decodeStrict(plaintext, &document); err != nil {
 		return time.Time{}, fmt.Errorf("data root: %w", err)
 	}
-	instant, err := admitSeriesInstant(document, floor, now())
+	instant, err := admitSeriesInstant(document, floor, now(), allowEqual)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -214,8 +276,11 @@ func readBoundedFile(fsys fs.FS, name string, cap int64) ([]byte, error) {
 }
 
 // admitSeriesInstant validates the document identity and its capture
-// instant against the replay floor and the local clock.
-func admitSeriesInstant(document usageSeriesDocument, floor, current time.Time) (time.Time, error) {
+// instant against the replay floor and the local clock. Equality with the
+// floor is ordinarily the benign unchanged state; allowEqual turns exactly
+// that case into an acceptance, for the restarted process re-reading the
+// file its predecessor already accepted (see dataRootLoop).
+func admitSeriesInstant(document usageSeriesDocument, floor, current time.Time, allowEqual bool) (time.Time, error) {
 	if document.Schema != usageSeriesSchema {
 		return time.Time{}, fmt.Errorf("data root: schema %q is not %q", document.Schema, usageSeriesSchema)
 	}
@@ -223,7 +288,7 @@ func admitSeriesInstant(document usageSeriesDocument, floor, current time.Time) 
 	if err != nil {
 		return time.Time{}, fmt.Errorf("data root: generatedAt: %w", err)
 	}
-	if instant.Equal(floor) {
+	if instant.Equal(floor) && !allowEqual {
 		return time.Time{}, errSeriesUnchanged
 	}
 	if instant.Before(floor) {

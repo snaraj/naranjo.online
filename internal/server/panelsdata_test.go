@@ -117,7 +117,7 @@ func TestStartPanelDataServesASealedSeriesEndToEnd(t *testing.T) {
 		lookups++
 		return panelsDataTestKeyHex
 	}
-	if err := site.StartPanelData(ctx, dir, lookupEnv); err != nil {
+	if err := site.StartPanelData(ctx, dir, "", lookupEnv); err != nil {
 		t.Fatalf("StartPanelData: %v", err)
 	}
 	// The key is read at decrypt time, not at start time... but the loop's
@@ -148,7 +148,7 @@ func TestStartPanelDataServesASealedSeriesEndToEnd(t *testing.T) {
 	if lookups == 0 {
 		t.Fatal("the key environment was never consulted")
 	}
-	if err := site.StartPanelData(ctx, dir, lookupEnv); err == nil || !strings.Contains(err.Error(), "already started") {
+	if err := site.StartPanelData(ctx, dir, "", lookupEnv); err == nil || !strings.Contains(err.Error(), "already started") {
 		t.Fatalf("second start: %v", err)
 	}
 }
@@ -204,6 +204,214 @@ func TestPanelsDataRootConfinesReads(t *testing.T) {
 	defer root.Close()
 	if _, err := root.FS().Open("token-usage.series.enc"); err == nil {
 		t.Fatal("a symlink escaping the root was followed")
+	}
+}
+
+// TestFloorMarkerRoundTripsAcrossRootInstances proves the durable half of
+// the 2026-08-24 review finding H2 fix on a REAL filesystem: a marker stored
+// through one rooted capability is read back by a SEPARATE rooted capability
+// over the same directory — which is exactly what a process restart is — and
+// every corrupt direction loads as "no marker" rather than an error or a
+// wrong instant.
+func TestFloorMarkerRoundTripsAcrossRootInstances(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	env := func(string) string { return panelsDataTestKeyHex }
+	instant := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+
+	first, err := openPanelsDataRoot(dir)
+	if err != nil {
+		t.Fatalf("open first root: %v", err)
+	}
+	writer := newFloorMarker(first, env)
+	if _, ok := writer.Load(); ok {
+		t.Fatal("an empty state directory produced a marker")
+	}
+	if err := writer.Store(instant); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	first.Close()
+
+	// The restart: a brand-new root over the same directory.
+	second, err := openPanelsDataRoot(dir)
+	if err != nil {
+		t.Fatalf("open second root: %v", err)
+	}
+	defer second.Close()
+	reader := newFloorMarker(second, env)
+	loaded, ok := reader.Load()
+	if !ok || !loaded.Equal(instant) {
+		t.Fatalf("marker did not survive the root boundary: %v %v", loaded, ok)
+	}
+
+	// A later Store REPLACES the marker; the newest instant wins.
+	later := instant.Add(time.Hour)
+	if err := reader.Store(later); err != nil {
+		t.Fatalf("second store: %v", err)
+	}
+	if loaded, ok = reader.Load(); !ok || !loaded.Equal(later) {
+		t.Fatalf("marker did not advance: %v %v", loaded, ok)
+	}
+
+	// Corrupt directions all load as "no marker": flipped ciphertext,
+	// unsealed junk, oversized bytes, and the wrong key.
+	markerPath := filepath.Join(dir, "token-usage.floor.enc")
+	sealed, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatalf("read marker: %v", err)
+	}
+	tampered := append([]byte(nil), sealed...)
+	tampered[len(tampered)/2] ^= 0x01
+	for name, bytes := range map[string][]byte{
+		"tampered ciphertext": tampered,
+		"unsealed junk":       []byte("not a sealed marker"),
+		"oversized":           make([]byte, maxFloorMarkerBytes+1),
+	} {
+		if err := os.WriteFile(markerPath, bytes, 0o600); err != nil {
+			t.Fatalf("stage %s: %v", name, err)
+		}
+		if _, ok := reader.Load(); ok {
+			t.Fatalf("%s loaded as a marker", name)
+		}
+	}
+	if err := os.WriteFile(markerPath, sealed, 0o600); err != nil {
+		t.Fatalf("restore marker: %v", err)
+	}
+	wrongKey := newFloorMarker(second, func(string) string {
+		return strings.Repeat("ff", 32)
+	})
+	if _, ok := wrongKey.Load(); ok {
+		t.Fatal("the wrong key still loaded the marker")
+	}
+	noKey := newFloorMarker(second, func(string) string { return "" })
+	if _, ok := noKey.Load(); ok {
+		t.Fatal("a missing key still loaded the marker")
+	}
+	if err := noKey.Store(instant); err == nil {
+		t.Fatal("a missing key still stored a marker")
+	}
+}
+
+// TestStartPanelDataFloorSurvivesProcessRestart is the composition-root
+// restart simulation for the 2026-08-24 review finding H2: one Site accepts
+// a push and persists the floor into the state root; a SECOND Site — a new
+// process over the same two directories — must refuse a rolled-back series
+// file that a markerless restart would have accepted, and must re-serve the
+// unchanged accepted file rather than degrade to the embedded snapshot.
+func TestStartPanelDataFloorSurvivesProcessRestart(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	stateDir := t.TempDir()
+	env := func(name string) string {
+		if name != "PANELS_DATA_KEY" {
+			t.Fatalf("unexpected environment read %q", name)
+		}
+		return panelsDataTestKeyHex
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	acceptedAt := now.Format(time.RFC3339)
+	rolledBackAt := now.Add(-time.Hour).Format(time.RFC3339)
+
+	serveUntil := func(t *testing.T, site *Site, want func(map[string]any) bool) map[string]any {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			envelope := servedTokenUsage(t, site)
+			if want(envelope) {
+				return envelope
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("condition never held; envelope: %v", envelope)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	// Process one: accept the push, persist the floor.
+	site1, err := New(testsupport.FrontendFS())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	label := firstSourceLabel(t, site1)
+	sealSeriesFile(t, dataDir, label, acceptedAt)
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	if err := site1.StartPanelData(ctx1, dataDir, stateDir, env); err != nil {
+		t.Fatalf("first StartPanelData: %v", err)
+	}
+	serveUntil(t, site1, func(envelope map[string]any) bool {
+		return envelope["generatedAt"] == acceptedAt && envelope["status"] == "ok"
+	})
+	cancel1()
+	site1.Close()
+	if _, err := os.Stat(filepath.Join(stateDir, "token-usage.floor.enc")); err != nil {
+		t.Fatalf("no floor marker was persisted: %v", err)
+	}
+
+	// Process two, facing a ROLLED-BACK file: refused, stale said. Without
+	// the persisted floor this file (newer than the embedded snapshot) was
+	// accepted after every restart.
+	sealSeriesFile(t, dataDir, label, rolledBackAt)
+	site2, err := New(testsupport.FrontendFS())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	if err := site2.StartPanelData(ctx2, dataDir, stateDir, env); err != nil {
+		t.Fatalf("second StartPanelData: %v", err)
+	}
+	envelope := serveUntil(t, site2, func(envelope map[string]any) bool {
+		return envelope["status"] == "stale"
+	})
+	if envelope["generatedAt"] == rolledBackAt {
+		t.Fatal("the rolled-back payload is being served")
+	}
+	cancel2()
+	site2.Close()
+
+	// Process three, facing the UNCHANGED accepted file: recovery, not
+	// replay — served ok again at the accepted instant.
+	sealSeriesFile(t, dataDir, label, acceptedAt)
+	site3, err := New(testsupport.FrontendFS())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer site3.Close()
+	ctx3, cancel3 := context.WithCancel(context.Background())
+	defer cancel3()
+	if err := site3.StartPanelData(ctx3, dataDir, stateDir, env); err != nil {
+		t.Fatalf("third StartPanelData: %v", err)
+	}
+	serveUntil(t, site3, func(envelope map[string]any) bool {
+		return envelope["generatedAt"] == acceptedAt && envelope["status"] == "ok"
+	})
+}
+
+// TestStartPanelDataRefusesAnUnopenableStateRoot pins the fail-closed
+// admission of the state capability: a configured but unopenable state path
+// is an operator error that fails the start loudly, exactly like the data
+// root, and leaves neither root open behind it.
+func TestStartPanelDataRefusesAnUnopenableStateRoot(t *testing.T) {
+	t.Parallel()
+	site, err := New(testsupport.FrontendFS())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer site.Close()
+	dataDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env := func(string) string { return panelsDataTestKeyHex }
+	for name, state := range map[string]string{
+		"relative": "relative/state",
+		"missing":  filepath.Join(dataDir, "absent-state"),
+	} {
+		if err := site.StartPanelData(ctx, dataDir, state, env); err == nil {
+			t.Fatalf("%s state path was admitted", name)
+		}
+	}
+	// The refusals must not have half-started the capability.
+	if err := site.StartPanelData(ctx, dataDir, "", env); err != nil {
+		t.Fatalf("a clean start after refusals failed: %v", err)
 	}
 }
 

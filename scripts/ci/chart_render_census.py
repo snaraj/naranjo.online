@@ -293,12 +293,16 @@ EXPECTED_INVENTORY = (
     ("networking.k8s.io/v1", "NetworkPolicy"),
     ("v1", "Service"),
     ("v1", "ServiceAccount"),
-    # The panels data root's claim (issue #142): the namespace half of the
-    # statically bound read-only hostPath pair, rendered by the default
-    # values. The cluster-scoped PersistentVolume half renders only under
-    # panels.data.persistentVolume.enabled=true (an admin ceremony, not the
-    # release identity) and therefore does not appear in the default
-    # inventory; scripts/ci/chart-storage-pin.sh pins both directions.
+    # The panels data root's claims (issue #142): the namespace halves of
+    # the two statically bound hostPath pairs rendered by the default
+    # values — the read-only DATA claim for the pushed sealed series and,
+    # since the 2026-08-24 security review's finding H2, the writable STATE
+    # claim for the replay-floor marker. The cluster-scoped PersistentVolume
+    # halves render only under panels.data.persistentVolume.enabled=true (an
+    # admin ceremony, not the release identity) and therefore do not appear
+    # in the default inventory; scripts/ci/chart-storage-pin.sh pins every
+    # direction.
+    ("v1", "PersistentVolumeClaim"),
     ("v1", "PersistentVolumeClaim"),
 )
 

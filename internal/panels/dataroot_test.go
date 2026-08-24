@@ -145,7 +145,7 @@ func fixedNow() time.Time {
 // floor (the synthetic snapshot's own instant).
 func refreshDirect(t *testing.T, reg *Registry, state *panelState, fsys fs.FS, unseal Unsealer) (time.Time, error) {
 	t.Helper()
-	return reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, reg.embeddedUsageInstant(state))
+	return reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, reg.embeddedUsageInstant(state), false)
 }
 
 // decodeServedUsage decodes the panel's currently served envelope.
@@ -562,7 +562,7 @@ func TestDataRootTreatsAbsentFileAndUnchangedFileAsBenign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first refresh: %v", err)
 	}
-	if _, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, accepted); !errors.Is(err, errSeriesUnchanged) {
+	if _, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, accepted, false); !errors.Is(err, errSeriesUnchanged) {
 		t.Fatalf("unchanged file: got %v, want errSeriesUnchanged", err)
 	}
 }
@@ -608,7 +608,7 @@ func TestDataRootLoopServesRefreshesAndDegrades(t *testing.T) {
 		fsys := &lockedFS{inner: fstest.MapFS{}}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		reg.startDataRoot(ctx, fsys, productionUnsealer(dataRootTestKeyHex), time.Now)
+		reg.startDataRoot(ctx, fsys, productionUnsealer(dataRootTestKeyHex), nil, time.Now)
 
 		// Cold: no file. The snapshot keeps serving as ok.
 		synctest.Wait()
@@ -672,6 +672,145 @@ func TestDataRootLoopServesRefreshesAndDegrades(t *testing.T) {
 	})
 }
 
+// fakeMarker is a FloorMarker over one shared in-memory cell, standing in
+// for the durable medium so restart tests can hand "the same persisted
+// state" to a second registry — the second registry IS the restarted
+// process, because a Registry owns all the state a process does here.
+type fakeMarker struct {
+	mu         sync.Mutex
+	instant    time.Time
+	ok         bool
+	storeErr   error
+	storeCalls int
+}
+
+func (m *fakeMarker) marker() *FloorMarker {
+	return &FloorMarker{
+		Load: func() (time.Time, bool) {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return m.instant, m.ok
+		},
+		Store: func(instant time.Time) error {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			m.storeCalls++
+			if m.storeErr != nil {
+				return m.storeErr
+			}
+			m.instant = instant
+			m.ok = true
+			return nil
+		},
+	}
+}
+
+// runMarkeredLoop starts one registry's loop over the given file and marker
+// inside the current synctest bubble and returns the served envelope after
+// the first wake settles.
+func runMarkeredLoop(t *testing.T, snapshot string, fsys fs.FS, marker *FloorMarker) (Envelope, TokenUsageData, context.CancelFunc) {
+	t.Helper()
+	reg, state := usageDataRootRegistry(t, snapshot)
+	ctx, cancel := context.WithCancel(context.Background())
+	reg.startDataRoot(ctx, fsys, productionUnsealer(dataRootTestKeyHex), marker, time.Now)
+	synctest.Wait()
+	envelope, data := decodeServedUsage(t, state)
+	return envelope, data, cancel
+}
+
+// TestDataRootFloorSurvivesRestart is the 2026-08-24 review finding H2
+// regression test: the replay floor must outlive the process. A first
+// process accepts a push and persists the floor; a SECOND process (a fresh
+// registry over the same marker — the restart) must refuse a rolled-back
+// file that is newer than the embedded snapshot but older than what the
+// first process accepted. Before the fix, the second process's floor reset
+// to the snapshot's instant and the replay was accepted.
+func TestDataRootFloorSurvivesRestart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		shared := &fakeMarker{}
+
+		// Process one accepts the 00:04 push and persists the floor.
+		envelope, _, cancel := runMarkeredLoop(t, synctestSnapshot,
+			seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:04:00Z"))), shared.marker())
+		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:04:00Z" {
+			t.Fatalf("first process: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		cancel()
+		synctest.Wait()
+		if !shared.ok || !shared.instant.Equal(time.Date(2000, 1, 1, 0, 4, 0, 0, time.UTC)) {
+			t.Fatalf("the accepted floor was not persisted: %v %v", shared.instant, shared.ok)
+		}
+
+		// The restart, facing a ROLLED-BACK file: newer than the embedded
+		// snapshot (1999-12-31), older than the persisted floor. Refused,
+		// embedded payload kept, stale said.
+		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot,
+			seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:02:00Z"))), shared.marker())
+		if envelope.Status != StatusStale {
+			t.Fatalf("restart accepted a replayed file: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		if envelope.GeneratedAt == "2000-01-01T00:02:00Z" {
+			t.Fatal("the replayed payload is being served")
+		}
+		cancel()
+		synctest.Wait()
+
+		// The restart facing the UNCHANGED file: the exact file the first
+		// process accepted is recovery, not replay — served ok again, so a
+		// restart never trades freshness for the floor.
+		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot,
+			seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:04:00Z"))), shared.marker())
+		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:04:00Z" {
+			t.Fatalf("restart did not re-serve the accepted file: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
+// TestDataRootFloorMarkerFailsSafe pins every degraded marker direction:
+// an unreadable marker leaves the embedded floor (the pre-marker guarantee,
+// so a lost marker can never refuse what a markerless build accepted), a
+// far-future marker is ignored as corrupt rather than allowed to refuse
+// every honest push, and a failing Store degrades durability, never
+// admission or serving.
+func TestDataRootFloorMarkerFailsSafe(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fsys := seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:02:00Z")))
+
+		// Unreadable marker: floor stays the embedded snapshot's, so the
+		// (snapshot-newer) file is accepted exactly as before markers.
+		unreadable := &fakeMarker{ok: false}
+		envelope, _, cancel := runMarkeredLoop(t, synctestSnapshot, fsys, unreadable.marker())
+		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:02:00Z" {
+			t.Fatalf("unreadable marker: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		cancel()
+		synctest.Wait()
+
+		// Far-future marker: ignored as corrupt; the honest push still lands.
+		future := &fakeMarker{instant: time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC), ok: true}
+		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot, fsys, future.marker())
+		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:02:00Z" {
+			t.Fatalf("future marker: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		cancel()
+		synctest.Wait()
+
+		// Failing Store: the acceptance itself must stand.
+		broken := &fakeMarker{storeErr: errors.New("disk full")}
+		envelope, _, cancel = runMarkeredLoop(t, synctestSnapshot, fsys, broken.marker())
+		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:02:00Z" {
+			t.Fatalf("failing store: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
+		}
+		if broken.storeCalls == 0 {
+			t.Fatal("the store was never attempted")
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
 // TestDataRootStartGuards pins the capability guards: nil capabilities start
 // nothing, a registry without the panel starts nothing, and a second start
 // is a no-op.
@@ -680,18 +819,18 @@ func TestDataRootStartGuards(t *testing.T) {
 	reg, _ := usageDataRootRegistry(t, dataRootSnapshot)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	reg.startDataRoot(ctx, nil, productionUnsealer(dataRootTestKeyHex), time.Now)
-	reg.startDataRoot(ctx, fstest.MapFS{}, nil, time.Now)
+	reg.startDataRoot(ctx, nil, productionUnsealer(dataRootTestKeyHex), nil, time.Now)
+	reg.startDataRoot(ctx, fstest.MapFS{}, nil, nil, time.Now)
 	if reg.dataRootStarted.Load() {
 		t.Fatal("a nil capability still marked the loop started")
 	}
-	reg.startDataRoot(ctx, fstest.MapFS{}, productionUnsealer(dataRootTestKeyHex), time.Now)
+	reg.startDataRoot(ctx, fstest.MapFS{}, productionUnsealer(dataRootTestKeyHex), nil, time.Now)
 	if !reg.dataRootStarted.Load() {
 		t.Fatal("the loop did not start")
 	}
 	// A registry without the token-usage panel never starts.
 	other := newRegistry(fstest.MapFS{}, nil)
-	other.startDataRoot(ctx, fstest.MapFS{}, productionUnsealer(dataRootTestKeyHex), time.Now)
+	other.startDataRoot(ctx, fstest.MapFS{}, productionUnsealer(dataRootTestKeyHex), nil, time.Now)
 	if len(other.states) != 0 {
 		t.Fatal("unexpected states")
 	}

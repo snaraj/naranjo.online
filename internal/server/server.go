@@ -196,17 +196,23 @@ func (s *Site) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // sites with neither capability and is called only after the HTTP server has
 // stopped accepting requests.
 func (s *Site) Close() error {
-	var mediaErr, dataErr error
+	var mediaErr, dataErr, stateErr error
 	if s.media != nil {
 		mediaErr = s.media.Close()
 	}
 	if s.panelsData != nil {
 		dataErr = s.panelsData.Close()
 	}
+	if s.panelsState != nil {
+		stateErr = s.panelsState.Close()
+	}
 	if mediaErr != nil {
 		return mediaErr
 	}
-	return dataErr
+	if dataErr != nil {
+		return dataErr
+	}
+	return stateErr
 }
 
 // health provides the shared liveness and readiness response. The service has

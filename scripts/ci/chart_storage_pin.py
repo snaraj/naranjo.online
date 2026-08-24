@@ -18,16 +18,19 @@ weaker parser would ever grow beside it. This module contains no parsing of
 its own; it walks canonical objects and compares values.
 
 MODES (stdin is always one complete multi-document render):
-  enabled       -- the default render: claim + deployment wiring, no PV.
+  enabled       -- the panels.data.enabled render: BOTH claims (read-only
+                   data + writable replay-floor state, 2026-08-24 review
+                   finding H2) + deployment wiring, no PV.
   with-pv       -- the persistentVolume.enabled render: everything above
-                   plus the exact PersistentVolume.
-  disabled      -- the panels.data.enabled=false render: none of it.
+                   plus the exact pair of PersistentVolumes.
+  disabled      -- the capability-off render: none of it.
 
 Facts arrive on the command line (--host-path, --volume-name, --key-secret,
---capacity, --namespace, --mount-path) so the expectation is stated by the
-CALLER — scripts/ci/chart-storage-pin.sh reads values.yaml, the single
-source the deployment-provider contract designates — never re-derived from
-the very template under test.
+--capacity, --state-host-path, --state-volume-name, --state-capacity,
+--namespace, --mount-path, --state-mount-path) so the expectation is stated
+by the CALLER — scripts/ci/chart-storage-pin.sh reads values.yaml, the
+single source the deployment-provider contract designates — never re-derived
+from the very template under test.
 """
 
 from __future__ import annotations
@@ -88,35 +91,55 @@ def check_disabled(objects: list[dict], facts: argparse.Namespace) -> None:
     for env in container.get("env") or []:
         if isinstance(env, dict) and str(env.get("name", "")).startswith("PANELS_DATA"):
             raise StoragePinError("a disabled render still wires %s" % env.get("name"))
-    if _named(container.get("volumeMounts"), "panels-data"):
-        raise StoragePinError("a disabled render still mounts panels-data")
-    if _named(_pod_spec(deployment).get("volumes"), "panels-data"):
-        raise StoragePinError("a disabled render still declares the panels-data volume")
+    for volume_name in ("panels-data", "panels-state"):
+        if _named(container.get("volumeMounts"), volume_name):
+            raise StoragePinError("a disabled render still mounts %s" % volume_name)
+        if _named(_pod_spec(deployment).get("volumes"), volume_name):
+            raise StoragePinError("a disabled render still declares the %s volume" % volume_name)
 
 
-def check_claim(objects: list[dict], facts: argparse.Namespace) -> dict:
-    claims = _of_kind(objects, "PersistentVolumeClaim")
+def _one_claim(objects: list[dict], name: str) -> dict:
+    claims = [
+        c for c in _of_kind(objects, "PersistentVolumeClaim")
+        if (c.get("metadata") or {}).get("name") == name
+    ]
     if len(claims) != 1:
-        raise StoragePinError("the render must carry exactly one PersistentVolumeClaim")
-    claim = claims[0]
+        raise StoragePinError(
+            "the render must carry exactly one PersistentVolumeClaim named %s" % name)
+    return claims[0]
+
+
+def _check_claim_common(claim: dict, facts: argparse.Namespace, name: str,
+                        access_mode: str, capacity: str) -> None:
     metadata = claim.get("metadata") or {}
-    if metadata.get("name") != facts.volume_name:
-        raise StoragePinError("the claim is not named %s" % facts.volume_name)
     if metadata.get("namespace") != facts.namespace:
-        raise StoragePinError("the claim is not in the release namespace")
+        raise StoragePinError("claim %s is not in the release namespace" % name)
     spec = claim.get("spec") or {}
-    if spec.get("accessModes") != ["ReadOnlyMany"]:
-        raise StoragePinError("the claim's access mode is not exactly ReadOnlyMany")
+    if spec.get("accessModes") != [access_mode]:
+        raise StoragePinError("claim %s's access mode is not exactly %s" % (name, access_mode))
     if "storageClassName" not in spec or spec.get("storageClassName") != "":
         raise StoragePinError(
-            "the claim must carry an EXPLICIT empty storageClassName; an omitted one "
-            "lets the default StorageClass capture the claim")
-    if spec.get("volumeName") != facts.volume_name:
-        raise StoragePinError("the claim does not pin volumeName to %s" % facts.volume_name)
+            "claim %s must carry an EXPLICIT empty storageClassName; an omitted one "
+            "lets the default StorageClass capture the claim" % name)
+    if spec.get("volumeName") != name:
+        raise StoragePinError("claim %s does not pin volumeName to itself" % name)
     requests = (spec.get("resources") or {}).get("requests") or {}
-    if requests.get("storage") != facts.capacity:
-        raise StoragePinError("the claim does not request the declared capacity")
-    return claim
+    if requests.get("storage") != capacity:
+        raise StoragePinError("claim %s does not request the declared capacity" % name)
+
+
+def check_claims(objects: list[dict], facts: argparse.Namespace) -> None:
+    """Exactly two claims: the read-only data claim and the writable state
+    claim (2026-08-24 review finding H2 — the replay-floor marker's home)."""
+    claims = _of_kind(objects, "PersistentVolumeClaim")
+    if len(claims) != 2:
+        raise StoragePinError(
+            "the enabled render must carry exactly two PersistentVolumeClaims "
+            "(data and state); found %d" % len(claims))
+    _check_claim_common(_one_claim(objects, facts.volume_name), facts,
+                        facts.volume_name, "ReadOnlyMany", facts.capacity)
+    _check_claim_common(_one_claim(objects, facts.state_volume_name), facts,
+                        facts.state_volume_name, "ReadWriteOnce", facts.state_capacity)
 
 
 def check_deployment_wiring(objects: list[dict], facts: argparse.Namespace) -> None:
@@ -126,6 +149,10 @@ def check_deployment_wiring(objects: list[dict], facts: argparse.Namespace) -> N
     roots = _named(container.get("env"), "PANELS_DATA_ROOT")
     if len(roots) != 1 or roots[0].get("value") != facts.mount_path:
         raise StoragePinError("PANELS_DATA_ROOT must equal the mount path %s" % facts.mount_path)
+    states = _named(container.get("env"), "PANELS_DATA_STATE")
+    if len(states) != 1 or states[0].get("value") != facts.state_mount_path:
+        raise StoragePinError(
+            "PANELS_DATA_STATE must equal the state mount path %s" % facts.state_mount_path)
     keys = _named(container.get("env"), "PANELS_DATA_KEY")
     if len(keys) != 1:
         raise StoragePinError("PANELS_DATA_KEY must be wired exactly once")
@@ -145,6 +172,20 @@ def check_deployment_wiring(objects: list[dict], facts: argparse.Namespace) -> N
     if mounts[0].get("readOnly") is not True:
         raise StoragePinError("the volumeMount must be readOnly: true")
 
+    # The state mount is the ONE writable projection (2026-08-24 review
+    # finding H2), and its writability is pinned EXPLICITLY in both
+    # directions: read-only would silently lose the durable replay floor,
+    # and it must never be the data mount that gains the writability.
+    state_mounts = _named(container.get("volumeMounts"), "panels-state")
+    if len(state_mounts) != 1:
+        raise StoragePinError("the panels-state volume must be mounted exactly once")
+    if state_mounts[0].get("mountPath") != facts.state_mount_path:
+        raise StoragePinError("the state mount path is not %s" % facts.state_mount_path)
+    if state_mounts[0].get("readOnly") is not False:
+        raise StoragePinError(
+            "the state volumeMount must be EXPLICITLY readOnly: false — a read-only "
+            "state root silently loses the durable replay floor")
+
     volumes = _named(_pod_spec(deployment).get("volumes"), "panels-data")
     if len(volumes) != 1:
         raise StoragePinError("the panels-data volume must be declared exactly once")
@@ -154,35 +195,75 @@ def check_deployment_wiring(objects: list[dict], facts: argparse.Namespace) -> N
     if claim_ref.get("readOnly") is not True:
         raise StoragePinError("the claim reference must be readOnly: true — both levels, always")
 
+    state_volumes = _named(_pod_spec(deployment).get("volumes"), "panels-state")
+    if len(state_volumes) != 1:
+        raise StoragePinError("the panels-state volume must be declared exactly once")
+    state_claim_ref = state_volumes[0].get("persistentVolumeClaim") or {}
+    if state_claim_ref.get("claimName") != facts.state_volume_name:
+        raise StoragePinError(
+            "the state volume does not reference the %s claim" % facts.state_volume_name)
+    if state_claim_ref.get("readOnly") is not False:
+        raise StoragePinError(
+            "the state claim reference must be EXPLICITLY readOnly: false — both levels, "
+            "matching the mount")
 
-def check_volume(objects: list[dict], facts: argparse.Namespace) -> None:
-    volumes = _of_kind(objects, "PersistentVolume")
+
+def _one_volume(objects: list[dict], name: str) -> dict:
+    volumes = [
+        v for v in _of_kind(objects, "PersistentVolume")
+        if (v.get("metadata") or {}).get("name") == name
+    ]
     if len(volumes) != 1:
-        raise StoragePinError("the with-pv render must carry exactly one PersistentVolume")
-    volume = volumes[0]
-    if (volume.get("metadata") or {}).get("name") != facts.volume_name:
-        raise StoragePinError("the PersistentVolume is not named %s" % facts.volume_name)
+        raise StoragePinError(
+            "the with-pv render must carry exactly one PersistentVolume named %s" % name)
+    return volumes[0]
+
+
+def _check_volume_common(volume: dict, facts: argparse.Namespace, name: str,
+                         access_mode: str, capacity: str, host_path: str) -> None:
     spec = volume.get("spec") or {}
-    if spec.get("accessModes") != ["ReadOnlyMany"]:
-        raise StoragePinError("the PV's access mode is not exactly ReadOnlyMany")
+    if spec.get("accessModes") != [access_mode]:
+        raise StoragePinError("PV %s's access mode is not exactly %s" % (name, access_mode))
     if spec.get("persistentVolumeReclaimPolicy") != "Retain":
-        raise StoragePinError("the PV's reclaim policy must be Retain")
+        raise StoragePinError("PV %s's reclaim policy must be Retain" % name)
     if "storageClassName" not in spec or spec.get("storageClassName") != "":
-        raise StoragePinError("the PV must carry an EXPLICIT empty storageClassName")
-    if (spec.get("capacity") or {}).get("storage") != facts.capacity:
-        raise StoragePinError("the PV does not declare the expected capacity")
+        raise StoragePinError("PV %s must carry an EXPLICIT empty storageClassName" % name)
+    if (spec.get("capacity") or {}).get("storage") != capacity:
+        raise StoragePinError("PV %s does not declare the expected capacity" % name)
     claim_ref = spec.get("claimRef") or {}
-    if claim_ref.get("namespace") != facts.namespace or claim_ref.get("name") != facts.volume_name:
+    if claim_ref.get("namespace") != facts.namespace or claim_ref.get("name") != name:
         raise StoragePinError(
-            "the PV's claimRef must pin the pair: namespace %s, name %s"
-            % (facts.namespace, facts.volume_name))
-    host_path = spec.get("hostPath") or {}
-    if host_path.get("path") != facts.host_path:
-        raise StoragePinError("the PV's hostPath is not the reviewed %s" % facts.host_path)
-    if host_path.get("type") != "Directory":
+            "PV %s's claimRef must pin the pair: namespace %s, name %s"
+            % (name, facts.namespace, name))
+    rendered = spec.get("hostPath") or {}
+    if rendered.get("path") != host_path:
+        raise StoragePinError("PV %s's hostPath is not the reviewed %s" % (name, host_path))
+    if rendered.get("type") != "Directory":
         raise StoragePinError(
-            "the PV's hostPath type must be Directory — it mounts only a directory an "
-            "admin already created, never creates one")
+            "PV %s's hostPath type must be Directory — it mounts only a directory an "
+            "admin already created, never creates one" % name)
+
+
+def check_volumes(objects: list[dict], facts: argparse.Namespace) -> None:
+    """Exactly two PVs in the admin render: read-only data, writable state."""
+    volumes = _of_kind(objects, "PersistentVolume")
+    if len(volumes) != 2:
+        raise StoragePinError(
+            "the with-pv render must carry exactly two PersistentVolumes "
+            "(data and state); found %d" % len(volumes))
+    _check_volume_common(_one_volume(objects, facts.volume_name), facts,
+                         facts.volume_name, "ReadOnlyMany", facts.capacity, facts.host_path)
+    _check_volume_common(_one_volume(objects, facts.state_volume_name), facts,
+                         facts.state_volume_name, "ReadWriteOnce", facts.state_capacity,
+                         facts.state_host_path)
+    # The state directory must be a genuine SIBLING: never the push
+    # directory itself, and never nested inside it, so the origin's one
+    # writable surface can never reach the pushed series file.
+    if facts.state_host_path == facts.host_path or facts.state_host_path.startswith(
+            facts.host_path.rstrip("/") + "/"):
+        raise StoragePinError(
+            "the state hostPath must be a sibling of the data hostPath, never the push "
+            "directory or inside it")
 
 
 def run(mode: str, text: str, facts: argparse.Namespace) -> None:
@@ -190,10 +271,10 @@ def run(mode: str, text: str, facts: argparse.Namespace) -> None:
     if mode == "disabled":
         check_disabled(objects, facts)
         return
-    check_claim(objects, facts)
+    check_claims(objects, facts)
     check_deployment_wiring(objects, facts)
     if mode == "with-pv":
-        check_volume(objects, facts)
+        check_volumes(objects, facts)
     elif _of_kind(objects, "PersistentVolume"):
         raise StoragePinError(
             "the default render carries a PersistentVolume; the release identity holds "
@@ -207,8 +288,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--volume-name", required=True)
     parser.add_argument("--key-secret", required=True)
     parser.add_argument("--capacity", required=True)
+    parser.add_argument("--state-host-path", required=True)
+    parser.add_argument("--state-volume-name", required=True)
+    parser.add_argument("--state-capacity", required=True)
     parser.add_argument("--namespace", required=True)
     parser.add_argument("--mount-path", default="/var/lib/panels-data")
+    parser.add_argument("--state-mount-path", default="/var/lib/panels-state")
     facts = parser.parse_args(argv)
     try:
         run(facts.mode, sys.stdin.read(), facts)

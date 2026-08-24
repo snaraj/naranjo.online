@@ -102,7 +102,7 @@
           "type": "object",
           "description": "The panels data root (issue #142): a read-only statically bound hostPath PV/PVC pair carrying one sealed usage-series file. Every field is required so a values file cannot half-describe the capability: the decision and every fact it depends on are explicit, and a disabled render emits none of the objects.",
           "additionalProperties": false,
-          "required": ["enabled", "hostPath", "volumeName", "keySecret", "capacity", "persistentVolume"],
+          "required": ["enabled", "hostPath", "volumeName", "keySecret", "capacity", "stateHostPath", "stateVolumeName", "stateCapacity", "persistentVolume"],
           "properties": {
             "enabled": {
               "type": "boolean",
@@ -127,6 +127,20 @@
             "capacity": {
               "$ref": "#/definitions/memoryQuantity",
               "description": "Declared PV capacity and PVC request. Static hostPath binding does not meter it; it exists because both objects require the field and the two must agree."
+            },
+            "stateHostPath": {
+              "type": "string",
+              "description": "Absolute node directory backing the replay-floor state PersistentVolume (2026-08-24 review finding H2). A SEPARATE sibling of hostPath — never the push directory itself — writable by the pod's runtime user, created in the same admin ceremony (hostPath type Directory: it must already exist on the node).",
+              "pattern": "^/[^\\s]*[^/\\s]$"
+            },
+            "stateVolumeName": {
+              "type": "string",
+              "description": "One DNS-1123 name shared by the state PersistentVolume and its claim, distinct from volumeName so the two statically bound pairs stay legible as pairs.",
+              "pattern": "^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$"
+            },
+            "stateCapacity": {
+              "$ref": "#/definitions/memoryQuantity",
+              "description": "Declared state PV capacity and PVC request; the marker is under a kilobyte, the field exists because both objects require it and the two must agree."
             },
             "persistentVolume": {
               "type": "object",

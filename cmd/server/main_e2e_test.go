@@ -153,6 +153,12 @@ func TestRunFailsClosedOnBadConfiguration(t *testing.T) {
 		"unknown panels refresh":       {"PANELS_REFRESH": "maybe"},
 		"relative panels data root":    {"PANELS_DATA_ROOT": "relative/dir"},
 		"unavailable panels data root": {"PANELS_DATA_ROOT": "/absent/panels/data/root"},
+		"panels state without a root":  {"PANELS_DATA_STATE": "/var/lib/panels-state"},
+		"relative panels data state":   {"PANELS_DATA_ROOT": "/tmp", "PANELS_DATA_STATE": "relative/state"},
+		"unavailable panels data state": {
+			"PANELS_DATA_ROOT":  "/tmp",
+			"PANELS_DATA_STATE": "/absent/panels/data/state",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
