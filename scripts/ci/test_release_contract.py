@@ -126,6 +126,23 @@ def normalized_keys(block: str, indent: int) -> list[str]:
     return keys
 
 
+def job_conditions(block: str) -> list[str]:
+    """Return every job-level `if` VALUE declared at exactly four spaces.
+
+    Reading the value, not searching the text, is what makes a conditional
+    pin non-vacuous in both directions: a comment quoting the condition
+    declares no key and is ignored, and every spelling the Actions runner
+    honors (`if :`, `"if":`) normalizes to the same key, so a mutant cannot
+    hide behind punctuation.
+    """
+    at_indent = re.compile(r"^ {4}(?=\S)")
+    return [
+        line.split(":", 1)[1].strip()
+        for line in block.split("\n")
+        if at_indent.match(line) and normalized_yaml_key(line) == "if"
+    ]
+
+
 def _step_scalar(lines: list[str], key: str) -> str:
     """Return a step key's scalar value, block scalars folded to their body."""
     for index, line in enumerate(lines):
@@ -819,7 +836,7 @@ class MainJobBindingTests(unittest.TestCase):
     def test_skipped_critical_missing_duplicate_extra_and_foreign_jobs_fail(self):
         exact = main_jobs_record(self.SHA)
         mutations: list[dict[str, object]] = []
-        for name in ("security", "application", "chart", "container", "coverage-badges"):
+        for name in ("security", "application", "chart", "coverage-badges"):
             changed = copy.deepcopy(exact)
             job = next(job for job in changed["jobs"] if job["name"] == name)
             job["conclusion"] = "skipped"
@@ -859,6 +876,29 @@ class MainJobBindingTests(unittest.TestCase):
             mutations.append(changed)
         for index, changed in enumerate(mutations):
             with self.subTest(job_mutant=index), self.assertRaises(RC.ContractError):
+                RC.validate_main_jobs_record(
+                    changed, expected_run_id=123, expected_source_sha=self.SHA
+                )
+
+    def test_a_contextually_skipped_job_reporting_success_is_refused(self):
+        """The skip pins are load-bearing in the fail-OPEN direction too.
+
+        Every mutation above turns an expected `success` into `skipped` --
+        the direction where a job silently stopped running. The opposite
+        direction was untested: a job the inventory expects to be `skipped`
+        can only report `success` because its pull-request condition in
+        pr-gate.yml is gone, which is exactly the drift the closed inventory
+        exists to catch. Both pull-request-only jobs are proven here, and
+        each asserts its recorded conclusion first so a future constant
+        change cannot quietly turn this mutation into a no-op.
+        """
+        exact = main_jobs_record(self.SHA)
+        for name in ("container", "dependency-review"):
+            changed = copy.deepcopy(exact)
+            job = next(job for job in changed["jobs"] if job["name"] == name)
+            self.assertEqual(job["conclusion"], "skipped")
+            job["conclusion"] = "success"
+            with self.subTest(fail_open_mutant=name), self.assertRaises(RC.ContractError):
                 RC.validate_main_jobs_record(
                     changed, expected_run_id=123, expected_source_sha=self.SHA
                 )
@@ -4736,6 +4776,7 @@ class MainAndCodeQLAuthorizationShellPathTests(unittest.TestCase):
         dependency = gate.split("\n  dependency-review:\n", 1)[1].split(
             "\n  application:\n", 1
         )[0]
+        container = gate.split("\n  container:\n", 1)[1].split("\n  coverage-badges:\n", 1)[0]
         # Normalized keys, not raw text: `if :` is a live conditional the
         # runner honors, so `^    if:` would let the security job be skipped
         # (same fail-open class as the publisher gate's conditional pin).
@@ -4743,6 +4784,15 @@ class MainAndCodeQLAuthorizationShellPathTests(unittest.TestCase):
             raise ValueError("security main job may not be conditionally skipped")
         if "if: github.event_name == 'pull_request'" not in dependency:
             raise ValueError("dependency-review must be skipped only outside pull requests")
+        # The container job is the other half of EXPECTED_MAIN_JOBS' two
+        # `skipped` entries, and until this pin it was constrained in NEITHER
+        # direction: it could gain any condition, or lose this one, without a
+        # test noticing. Pin the exact declared VALUE, so an added condition,
+        # a widened one (`always()`), an inverted one, a second `if`, or a
+        # deletion each fail -- and a comment quoting the condition satisfies
+        # nothing, because job_conditions reads keys rather than text.
+        if job_conditions(container) != ["github.event_name == 'pull_request'"]:
+            raise ValueError("container must build on pull requests only, by that exact condition")
         for required in (
             "main-jobs-record",
             "codeql-run-record",
@@ -4883,6 +4933,19 @@ gh() {
             encoding="utf-8"
         )
         self.require_workflow_contract(gate, publisher)
+        # The container job's own header lines, anchored on its unique
+        # 45-minute deadline so no replacement can land on dependency-review's
+        # identical condition earlier in the file.
+        container_head = (
+            "    if: github.event_name == 'pull_request'\n"
+            "    runs-on: ubuntu-24.04\n"
+            "    timeout-minutes: 45\n"
+        )
+        self.assertEqual(gate.count(container_head), 1)
+
+        def container_mutant(replacement: str) -> str:
+            return gate.replace(container_head, replacement, 1)
+
         mutants = (
             (gate.replace("  security:\n", "  security:\n    if: false\n", 1), publisher),
             # Same fail-open spelling class as the publisher gate's
@@ -4895,6 +4958,49 @@ gh() {
             (gate, publisher.replace("codeql-jobs-record", "deleted-codeql-jobs", 1)),
             (gate, publisher.replace('head_sha="${SOURCE_SHA}"', 'head_sha="foreign"', 1)),
             (gate, publisher.replace("for attempt in {1..36}", "for attempt in 1", 1)),
+            # container rebuilds the merged tree on every main push again:
+            # the condition is deleted outright.
+            (
+                container_mutant(
+                    "    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n"
+                ),
+                publisher,
+            ),
+            # ... or survives only as prose. A raw-text pin would accept this;
+            # reading declared keys refuses it.
+            (
+                container_mutant(
+                    "    # if: github.event_name == 'pull_request'\n"
+                    "    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n"
+                ),
+                publisher,
+            ),
+            # ... or is inverted, which builds on exactly the push the change
+            # exists to stop building on.
+            (
+                container_mutant(
+                    "    if: github.event_name == 'push'\n"
+                    "    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n"
+                ),
+                publisher,
+            ),
+            # ... or is widened to a condition that is never false.
+            (
+                container_mutant(
+                    "    if: always()\n    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n"
+                ),
+                publisher,
+            ),
+            # ... or gains a second declaration whose alternate spelling the
+            # runner honors and which wins as the later key.
+            (
+                container_mutant(
+                    "    if: github.event_name == 'pull_request'\n"
+                    "    if : always()\n"
+                    "    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n"
+                ),
+                publisher,
+            ),
         )
         for index, (mutant_gate, mutant_publisher) in enumerate(mutants):
             with self.subTest(static_mutant=index), self.assertRaises(ValueError):

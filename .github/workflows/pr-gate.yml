@@ -254,6 +254,19 @@ jobs:
             | grep -Eq '^ +image: "ghcr\.io/snaraj/[a-z-]+:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}"$'
 
   container:
+    # Pull requests only, exactly like dependency-review above. This job is
+    # a REQUIRED PR context and stays one: what is removed is the second,
+    # cache-less execution on the main push, which gates nothing. Merges are
+    # squash-or-rebase with strict required checks and no merge commits, so
+    # the tree that lands IS the tree this check already built, and the
+    # Dockerfile takes no build argument and no git metadata, so the build is
+    # a pure function of that tree. The bytes that ship are still built,
+    # tested, scanned for HIGH/CRITICAL, signed and attested inside
+    # release-publisher.yml's privileged job -- nothing about the release
+    # path changes. EXPECTED_MAIN_JOBS in scripts/ci/release_contract.py
+    # records the resulting `skipped` conclusion for the publisher's exact
+    # job-inventory check: this condition and that constant move together.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:

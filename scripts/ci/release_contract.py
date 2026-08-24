@@ -122,10 +122,21 @@ RELEASE_MANIFEST_WORKFLOW = ".github/workflows/release-publisher.yml"
 RELEASE_MANIFEST_PLATFORMS = ["linux/amd64", "linux/arm64"]
 TRIVY_VERSION = "0.72.0"
 TRIVY_SEVERITIES = ["HIGH", "CRITICAL"]
+# The closed inventory of the protected-main gate run, exact in both
+# directions: a job missing its expected conclusion denies, and so does a job
+# reporting a conclusion it is not supposed to reach. Two entries are
+# `skipped` BY DESIGN, and both are pull-request-only conditions in
+# pr-gate.yml -- dependency-review (no base/head pair exists on a push) and
+# container (the merged tree is byte-identical to the tree its required PR
+# check already built, and the released bytes are built, scanned, signed and
+# attested by release-publisher.yml regardless). Those two pins are
+# load-bearing the other way round too: a `container` job reporting `success`
+# on a main push means the workflow condition is gone, so the inventory
+# refuses it rather than releasing off a surface nobody re-anchored.
 EXPECTED_MAIN_JOBS = {
     "application": "success",
     "chart": "success",
-    "container": "success",
+    "container": "skipped",
     "coverage-badges": "success",
     "dependency-review": "skipped",
     "security": "success",

@@ -2,7 +2,6 @@
 
 [![PR gate](https://github.com/snaraj/naranjo.online/actions/workflows/pr-gate.yml/badge.svg?branch=main)](https://github.com/snaraj/naranjo.online/actions/workflows/pr-gate.yml)
 [![CodeQL](https://github.com/snaraj/naranjo.online/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/snaraj/naranjo.online/actions/workflows/codeql.yml)
-[![Browser lanes](https://github.com/snaraj/naranjo.online/actions/workflows/browser-lanes.yml/badge.svg?branch=main)](https://github.com/snaraj/naranjo.online/actions/workflows/browser-lanes.yml)
 [![Release](https://img.shields.io/github/v/release/snaraj/naranjo.online?sort=semver)](https://github.com/snaraj/naranjo.online/releases)
 [![Go coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsnaraj%2Fnaranjo.online%2Fbadges%2Fgo-coverage.json&label=go%20coverage)](https://github.com/snaraj/naranjo.online/actions/workflows/pr-gate.yml)
 [![Frontend coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsnaraj%2Fnaranjo.online%2Fbadges%2Ffrontend-coverage.json&label=frontend%20coverage)](https://github.com/snaraj/naranjo.online/actions/workflows/pr-gate.yml)
@@ -89,7 +88,9 @@ newer local versions generally work, CI is authoritative.
 
 The rendering-lane smoke matrix is separate, because it needs real browser
 engines rather than only Node. It boots the built Go binary over localhost and
-drives Chromium, Firefox and WebKit at desktop, Android and iPhone viewports:
+drives Chromium, Firefox and WebKit at desktop, Android and iPhone viewports.
+In CI it runs on pull requests and manual dispatch — never on the merge, which
+would re-measure the identical tree — so it carries no `main` status badge:
 
 ```sh
 cd frontend
