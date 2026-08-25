@@ -7,6 +7,37 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.37] - 2026-08-24
+
+### Changed
+
+- The frontend becomes the block architecture the owner specified in
+  issue #165: three strictly separated layers. INFORMATION keeps the
+  domain payloads — every `/api/panels/*` wire contract is untouched —
+  and gains one pure, node-executed adapter per block beside its data.
+  COMPONENTS are generic presentation primitives with zero domain
+  knowledge: a stat tracker, an activity tracker, a usage tracker, an
+  entry log, a media gallery, an empty note — each renders a typed props
+  bag and nothing else, so the tracker that shows game stats today shows
+  fitness stats tomorrow without an edit. THE FEED is one ordered
+  manifest, `frontend/src/page.ts`: each block a component bound to an
+  information source through its adapter, reordering the page one moved
+  line, and the section nav derived from the same array so a link can
+  never point at a section nobody rendered. Every behavior released in
+  0.1.36 is preserved inside the new names: sha admission tolerance and
+  the SHA-permalink-over-reference precedence now live in the executed
+  activity adapter (`commitTitleLink`), the caption-free Coding Projects
+  feed keeps its guards — the static rows are not fetched from GitHub, no
+  code automatically requests `projectHost`, and the validated GitHub
+  URLs are used only for visitor-activated navigation — and the touch
+  floors hold on both axes. Rendered output is unchanged: full-page
+  1280px screenshots in all four reading modes are byte-identical
+  between a clean previous-release build and this tree, and the
+  browser-lane matrix passes with only mechanical selector renames — no
+  measured assertion changed. `docs/design-iteration.md` documents the
+  three iteration loops, and `styles.css` opens by naming itself the
+  hand-tuning surface.
+
 ## [0.1.36] - 2026-08-24
 
 ### Changed
