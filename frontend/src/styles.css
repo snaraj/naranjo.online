@@ -223,13 +223,25 @@
      the viewport's top-end corner, independent of the column's width, so
      dragging the feed never moves it. Insets rather than a bare page-gutter
      literal so a notch or a home indicator is cleared the same way the rest
-     of the page already clears one; the second declaration of each is the
-     same progressive-with-a-plain-base pattern #app's own safe-area padding
-     uses below, kept in one rule rather than a second one only @supports
-     could add. */
-  --header-inset-inline: var(--page-gutter);
+     of the page already clears one.
+
+     ONE declaration each, deliberately not the plain-base-then-progressive
+     pair #app's own safe-area padding uses below (coordinator quality pass
+     on issue 186, correcting an earlier claim that this was the same pattern —
+     it is not, and cannot be, for a CUSTOM property). That pair works
+     because an unsupported REGULAR property VALUE is a parse-time error the
+     browser discards, leaving the earlier declaration standing; a custom
+     property's value is opaque text the parser always accepts, so a second
+     declaration here would simply win outright in every engine, making the
+     first one dead code — and if `env()` were ever unsupported, the `var()`
+     that reads this custom property downstream would be invalid at
+     COMPUTED-value time and the whole declaration would drop to its
+     initial value, not fall back to the plain base the way the guarded
+     #app padding below genuinely does. env() has been supported across
+     this site's entire browser-support window since before issue 168
+     shipped, so there is no fallback to write; the honest form is the one
+     declaration below. */
   --header-inset-inline: max(var(--page-gutter), env(safe-area-inset-right));
-  --header-inset-block: var(--page-gutter);
   --header-inset-block: max(var(--page-gutter), env(safe-area-inset-top));
 
   /* The feed-card token layer (owner directive, issue 134). The page is
@@ -764,8 +776,14 @@ html[data-column-resizing] {
    (--layer-rail) already has to out-rank it by exactly that much. */
 .page-header {
   position: fixed;
-  inset-block-start: var(--header-inset-block);
-  inset-inline-end: var(--header-inset-inline);
+  /* The fallback argument is real protection here, not decoration
+     (coordinator quality pass on issue 186): --header-inset-block/-inline's
+     own declarations read env(safe-area-inset-*), so in a hypothetical
+     engine without it those custom properties would be invalid at
+     computed-value time and resolve to their initial value — this second
+     argument is what recovers a real base (--page-gutter) instead. */
+  inset-block-start: var(--header-inset-block, var(--page-gutter));
+  inset-inline-end: var(--header-inset-inline, var(--page-gutter));
   z-index: var(--layer-menu);
   display: flex;
   align-items: center;
@@ -993,11 +1011,37 @@ h1 {
    color or image of its own. v1 is a static, near-invisible border;
    --gallery-frame-image is the extension point for a future repeated
    pattern (border-image's initial value is 'none', so it is a no-op until
-   set), and it is a token edit here alone, never a component change. */
+   set), and it is a token edit here alone, never a component change.
+
+   The scrim, the close control and the lightbox's two size caps join them
+   here (coordinator quality pass on issue 186): all three used to be literals in
+   MediaGallery.svelte's own stylesheet, which is exactly the "every style
+   dimension is a token" doctrine (issue 136) the frame border already
+   followed and these three had not caught up to. Defaults are today's exact
+   values, so this is a token move, not a look change. The scrim and the
+   close control deliberately do not branch by reading mode -- a backdrop
+   behind an enlarged photograph is legitimately the same near-black surface
+   in every mode, the way a photograph itself is not re-tinted per mode
+   either -- so the token layer states one value, not five. */
 :root {
   --gallery-frame-width: 2px;
   --gallery-frame-color: var(--color-border-strong);
   --gallery-frame-radius: var(--card-radius);
   --gallery-frame-padding: 0.375rem;
   --gallery-frame-image: none;
+  --gallery-scrim: rgba(0, 0, 0, 0.7);
+  --gallery-close-surface: rgba(0, 0, 0, 0.5);
+  --gallery-close-ink: white;
+  --gallery-lightbox-max-inline: min(94vw, 90rem);
+  /* --gallery-image-max-block is the fixed cap only; the dynamic-unit upgrade
+     stays a literal inside its own @supports guard in MediaGallery.svelte,
+     unlike every token above. A custom property accepts any value syntax
+     unconditionally (the coordinator's own finding just above, about
+     --header-inset-*), so declaring an 80svh DEFAULT here would sit outside
+     any @supports guard while still being textually indistinguishable from
+     an unguarded progressive value to this repository's own guard-pin
+     (tests/experience.test.mjs) — which is right to be strict about it: nothing
+     else in this stylesheet tokenizes a dynamic-unit fallback, and inventing
+     the first one is a bigger change than this quality pass asked for. */
+  --gallery-image-max-block: 40rem;
 }

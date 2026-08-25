@@ -836,6 +836,44 @@ test('the frame border is tokens only — the component states no width, color, 
   assert.match(styles, /--gallery-frame-image:\s*none;/);
 });
 
+test('the lightbox scrim, close control and size caps are tokens too (coordinator quality pass on #186)', () => {
+  // The frame border was tokens-only from the start; these three siblings in
+  // the same component were literals until this pass caught up to it — same
+  // doctrine (issue 136: every style dimension is a token), same file.
+  const style = styleBlock(mediaGallery);
+  const rules = {
+    lightbox: /\.gallery-lightbox\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
+    backdrop: /\.gallery-lightbox::backdrop\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
+    image: /\.gallery-lightbox-image\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
+    close: /\.gallery-lightbox-close\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
+  };
+  for (const [rule, body] of Object.entries(rules)) {
+    assert.ok(body.length > 0, `the ${rule} rule is not where this pin expects it`);
+  }
+  const expectations = [
+    ['lightbox', '--gallery-lightbox-max-inline'],
+    ['backdrop', '--gallery-scrim'],
+    ['image', '--gallery-image-max-block'],
+    ['close', '--gallery-close-surface'],
+    ['close', '--gallery-close-ink'],
+  ];
+  for (const [rule, token] of expectations) {
+    assert.match(rules[rule], new RegExp(`var\\(${token}`), `the ${rule} rule does not read ${token}`);
+    assert.match(styles, new RegExp(`${token}:`), `styles.css is missing a default for ${token}`);
+  }
+  // The dynamic-unit upgrade stays a literal inside its own @supports guard
+  // (not tokenized — see the note beside --gallery-image-max-block in
+  // styles.css), so this pin checks the guard directly rather than a token.
+  const dynamicImage = /@supports[^{]*\{\s*\.gallery-lightbox-image\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.match(dynamicImage, /max-block-size:\s*80svh/, 'the dynamic-unit upgrade lost its guarded literal');
+  // Deliberately not reading-mode-branched: a scrim behind an enlarged
+  // photograph and its close control read the same near-black regardless of
+  // theme, exactly like the photograph itself is not re-tinted per mode.
+  assert.match(styles, /--gallery-scrim:\s*rgba\(0, 0, 0, 0\.7\);/);
+  assert.match(styles, /--gallery-close-surface:\s*rgba\(0, 0, 0, 0\.5\);/);
+  assert.match(styles, /--gallery-close-ink:\s*white;/);
+});
+
 test('the visible frame reserves its box before any byte arrives, and lazy-loads', () => {
   // The box is reserved before a byte arrives, and the ratio the stylesheet
   // holds open is the ratio the markup declares — two statements of one

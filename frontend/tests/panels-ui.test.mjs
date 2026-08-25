@@ -402,8 +402,19 @@ test('no page chrome floats over the document', () => {
      open any more) and clears the same safe-area insets #app does, through
      its own inset tokens. */
   assert.match(headerRule[1], /position:\s*fixed/, 'the header is no longer pinned to the viewport corner; this exception is stale and should go');
-  assert.match(headerRule[1], /inset-block-start:\s*var\(--header-inset-block\)/);
-  assert.match(headerRule[1], /inset-inline-end:\s*var\(--header-inset-inline\)/);
+  assert.match(headerRule[1], /inset-block-start:\s*var\(--header-inset-block,\s*var\(--page-gutter\)\)/);
+  assert.match(headerRule[1], /inset-inline-end:\s*var\(--header-inset-inline,\s*var\(--page-gutter\)\)/);
+  // Coordinator quality pass on issue 186: --header-inset-inline/--header-inset-block
+  // used to carry a plain-base declaration ahead of the env()-guarded one, on
+  // the mistaken claim that a later custom-property declaration degrades the
+  // way a later REGULAR-property one can. It cannot: any value parses as a
+  // custom property, so the second declaration always wins and the first was
+  // dead code. Exactly one declaration of each survives.
+  for (const token of ['--header-inset-inline', '--header-inset-block']) {
+    const declarations = styles.match(new RegExp(`${token}:\\s*[^;]+;`, 'g')) ?? [];
+    assert.equal(declarations.length, 1, `${token} must be declared exactly once, not shadowed by a dead fallback`);
+    assert.match(declarations[0], /env\(safe-area-inset-/, `${token}'s one declaration must still clear the safe area`);
+  }
 
   /* The hover-detail primitive (owner directive, 2026-08-24). It is fixed so
      it can follow the cursor, and fixed positioning is what makes its

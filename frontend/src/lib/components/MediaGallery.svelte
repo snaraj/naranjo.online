@@ -188,14 +188,14 @@
 
   .gallery-lightbox {
     position: relative;
-    max-inline-size: min(94vw, 90rem);
+    max-inline-size: var(--gallery-lightbox-max-inline, min(94vw, 90rem));
     padding: 0;
     border: none;
     background: none;
   }
 
   .gallery-lightbox::backdrop {
-    background: rgba(0, 0, 0, 0.7);
+    background: var(--gallery-scrim, rgba(0, 0, 0, 0.7));
   }
 
   /* The frame border, entirely token-driven (issue 176): nothing here
@@ -215,12 +215,17 @@
     /* The static viewport unit is never used here (issue #26): the base is a
        fixed cap, generous enough that a browser without svh still shows a
        whole photograph, and the dynamic unit is a pure upgrade on top of it. */
-    max-block-size: 40rem;
+    max-block-size: var(--gallery-image-max-block, 40rem);
     border-radius: calc(var(--gallery-frame-radius) - var(--gallery-frame-width));
   }
 
   @supports (max-block-size: 1svh) {
     .gallery-lightbox-image {
+      /* Not tokenized, unlike the fixed cap above: a custom property accepts
+         any value unconditionally, so an svh DEFAULT would sit outside this
+         guard while looking textually identical to an unguarded progressive
+         value — see the note beside --gallery-image-max-block in
+         styles.css. */
       max-block-size: 80svh;
     }
   }
@@ -229,8 +234,8 @@
     position: absolute;
     top: 0.5rem;
     right: 0.5rem;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--gallery-close-surface, rgba(0, 0, 0, 0.5));
     border-radius: 999px;
-    color: white;
+    color: var(--gallery-close-ink, white);
   }
 </style>

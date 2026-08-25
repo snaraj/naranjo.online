@@ -766,16 +766,29 @@ const progressiveFeatures = [
 const supportsQueries = (rule) => rule.enclosing.filter((at) => at.startsWith('@supports'));
 
 test('every progressive feature is guarded, and every guard has a base under it (issue #26)', () => {
-  /* CSS offers exactly two ways to state a fallback, and both are correct, so
-     both are accepted here:
+  /* CSS offers exactly two ways to state a fallback for a REGULAR property,
+     and both are accepted here:
        * a plain earlier declaration of the SAME property in the SAME rule,
          which an engine keeps precisely because it discards the later one it
          cannot parse (the meter track uses this);
        * an @supports block, which is what a fallback spanning several
          properties or living in a different rule needs (the page height, the
          safe-area padding and the sepia glyph use this).
-     What is refused is the third case: a progressive value with nothing
-     underneath it. */
+     Neither works for a CUSTOM property (coordinator quality pass on issue
+     186): a custom property accepts any value syntax unconditionally, so an
+     "earlier declaration of the same custom property" is not kept as a
+     fallback the way a regular property's is — the later declaration always
+     wins outright, parseable or not, which makes that pattern dead code
+     wearing a fallback's shape. A custom property's real fallback lives
+     wherever it is CONSUMED: if the feature makes its own declaration
+     invalid at computed-value time, the custom property resolves to its
+     guaranteed-invalid value, and a var() reference with a second, fallback
+     argument (--header-inset-inline's own use site, .page-header below)
+     is what actually recovers from that — so a bare feature-bearing custom
+     property declaration is accepted here PROVIDED every place that reads
+     it supplies that fallback argument, checked separately below. What is
+     still refused in every case: a progressive value with nothing underneath
+     it, in whichever of the three forms applies to its property. */
   const guarded = sweptRules.filter((rule) => supportsQueries(rule).length > 0);
   assert.ok(
     guarded.length > 0,
@@ -786,6 +799,26 @@ test('every progressive feature is guarded, and every guard has a base under it 
       const declarations = declarationsOf(rule.body);
       declarations.forEach(({ property, value }, index) => {
         if (!feature.used.test(value)) return;
+        if (property.startsWith('--')) {
+          // The custom-property case: every var(property, ...) reference
+          // anywhere in the swept rules must carry a fallback argument — a
+          // bare var(property) would compute to the initial value, not to
+          // any base, the moment this declaration goes invalid.
+          const references = sweptRules.flatMap((candidate) =>
+            [...candidate.body.matchAll(new RegExp(`var\\(\\s*${property}\\s*(,[^)]*)?\\)`, 'g'))]
+          );
+          assert.ok(
+            references.length > 0,
+            `${rule.file}: "${property}" sets ${feature.name} but is never read anywhere, so its fallback obligation cannot even apply`
+          );
+          for (const reference of references) {
+            assert.ok(
+              reference[1] !== undefined,
+              `${rule.file}: a var(${property}) reference has no fallback argument — ${feature.name} going unsupported would resolve this custom property to its initial value instead of a base`
+            );
+          }
+          return;
+        }
         const query = supportsQueries(rule).some((at) => feature.tested.test(at));
         const earlierBase = declarations
           .slice(0, index)
