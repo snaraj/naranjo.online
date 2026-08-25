@@ -562,6 +562,26 @@ body,
   margin: 0;
 }
 
+/* The settle guard for a pull past the top (issue 187, iOS Safari): the
+   fragment-drop fix at issue 171 (history.scrollRestoration = 'manual', in
+   SectionNav.svelte) already keeps a RELOAD from landing on a stale scroll
+   position; this is the companion for the LIVE gesture, a pull-to-refresh
+   drag that overshoots and leaves the document translated down after the
+   bounce settles. `none` rather than `contain`: contain only stops the
+   overscroll from chaining to a further ancestor, which this page has none
+   of past the document — it does nothing about the rubber-band/bounce
+   effect itself, which is the actual bug. `none` suppresses that boundary
+   effect directly, on both axes' block dimension, on both elements a
+   browser might treat as the real scroller for the root document. The
+   header's own fixed positioning (`.page-header`, below) already keeps it
+   glued to the viewport rather than the document, so it was swept for a
+   leftover top gap during this fix and needs no rule of its own: a fixed
+   element never occupies flow space to leave behind. */
+html,
+body {
+  overscroll-behavior-y: none;
+}
+
 /* Dynamic viewport units only (rendering-lane floor, issue #26). The static
    unit measures the TALLEST the viewport ever gets, so on a phone showing its
    toolbars a full-height box is taller than the screen and the bottom of the

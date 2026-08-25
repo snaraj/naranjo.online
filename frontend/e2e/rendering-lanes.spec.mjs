@@ -2233,6 +2233,28 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
   await expect(codingProjects.locator('h3.subsection-title')).toHaveText('Coding Projects');
 });
 
+/* The pull-to-refresh settle guard (issue 187). What this lane CAN prove,
+ * in every engine: the declaration reached the page and the engine computed
+ * it — not a source-text scan, the same "what a real engine did with it"
+ * standard every other lane in this file holds to. What it CANNOT prove:
+ * that a live rubber-band drag on a physical iPhone visually settles flush
+ * instead of leaving the document translated down. Playwright's synthetic
+ * touch/wheel events do not drive WebKit's native overscroll/bounce
+ * animation the way a real touchscreen gesture does — there is no
+ * documented, reliable way to trigger that specific compositor-level effect
+ * from automation in any engine this matrix runs, headless or not. That gap
+ * is why this is a computed-style pin rather than a gesture simulation, and
+ * why the PR body states it needs the owner's own device to close. */
+test('the document root refuses the overscroll bounce, in every engine (issue 187)', async ({ page }) => {
+  await visit(page);
+  const observed = await page.evaluate(() => ({
+    html: getComputedStyle(window.document.documentElement).overscrollBehaviorY,
+    body: getComputedStyle(window.document.body).overscrollBehaviorY,
+  }));
+  expect(observed.html, 'html does not refuse the overscroll bounce').toBe('none');
+  expect(observed.body, 'body does not refuse the overscroll bounce').toBe('none');
+});
+
 /* Every repo card's title/counters row, measured (issue 188). The owner's
  * screenshot showed the SAME viewport rendering two cards differently: short
  * titles (naranjo.online, lidersea.com) left room for the commits/stars
