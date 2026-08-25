@@ -7,6 +7,7 @@ package server
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"regexp"
@@ -197,3 +198,62 @@ type idleDeadlineWriter struct {
 	// timeout is the per-write idle bound, refreshed before every chunk.
 	timeout time.Duration
 }
+
+// Option adjusts an optional Site construction dependency. Options exist so
+// the constructors' signatures stay stable while the composition root
+// injects cross-cutting concerns; today the only one is the logger.
+type Option func(*siteOptions)
+
+// siteOptions carries the resolved optional dependencies.
+type siteOptions struct {
+	// logger receives the per-request completion records; never nil after
+	// siteConfiguration (a discard logger is the quiet default).
+	logger *slog.Logger
+}
+
+// responseRecorder captures the two completion facts only the write path
+// knows — final status and body byte count — while staying transparent to
+// http.ResponseController via Unwrap, so the media path's idle write
+// deadline still reaches the real connection through it.
+type responseRecorder struct {
+	// ResponseWriter is the downstream writer; Unwrap keeps it reachable.
+	http.ResponseWriter
+	// status is the first explicitly written status code; 0 until one is
+	// written, read as net/http's implicit 200 when the handler only wrote.
+	status int
+	// bytes counts body bytes actually written downstream.
+	bytes int64
+}
+
+const (
+	// requestIDHeader carries the request correlation id, inbound (validated)
+	// and outbound (always set), so a visitor report, an edge trace, and this
+	// origin's log line can name the same request.
+	requestIDHeader = "X-Request-Id"
+	// traceparentHeader is the W3C trace-context header. The origin never
+	// mints or rewrites one; a valid inbound value is passed through
+	// untouched and its trace-id is logged for correlation.
+	traceparentHeader = "Traceparent"
+	// generatedRequestIDBytes sizes the random identity minted when no safe
+	// inbound id exists: 16 bytes, rendered as 32 hex characters.
+	generatedRequestIDBytes = 16
+	// zeroTraceID and zeroParentID are the all-zero field values the W3C
+	// spec declares invalid; either one fails the whole header closed.
+	zeroTraceID  = "00000000000000000000000000000000"
+	zeroParentID = "0000000000000000"
+)
+
+var (
+	// inboundRequestIDShape is the ONLY shape an inbound X-Request-Id may
+	// take to be honored: 1-64 characters of [A-Za-z0-9_-]. Anything else —
+	// control bytes, ANSI escapes, separators, over-length values — is
+	// replaced by a generated identity, never sanitized into the logs.
+	inboundRequestIDShape = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	// traceparentShape is the exact W3C version-00 traceparent layout:
+	// 2-hex version, 32-hex trace-id, 16-hex parent-id, 2-hex flags, all
+	// lowercase, dash-separated. Field semantics are checked on top of it.
+	traceparentShape = regexp.MustCompile(`^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$`)
+	// discardLogger is the quiet default behind every constructor that is
+	// not handed a logger, so tests and library callers stay silent.
+	discardLogger = slog.New(slog.DiscardHandler)
+)
