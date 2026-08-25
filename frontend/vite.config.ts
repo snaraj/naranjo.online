@@ -1,11 +1,19 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
 
+import { validatedDevApiPort } from './src/lib/devApiPort.ts';
+
 // DEV_API_PORT names the locally built backend binary's port for the `/api`
-// proxy below; `make dev` sets it to PORT (default 8080). It affects only the
-// `vite dev` server config, never `build` -- a production build reads no
-// environment variable and this key does not exist in its output.
-const devApiPort = process.env.DEV_API_PORT ?? '8080';
+// proxy below; `make dev` sets it to PORT (default 8080), after its own
+// Makefile-level validate-port gate. validatedDevApiPort re-validates
+// independently and fails closed HERE, at config load, because
+// `npm run dev` can be invoked directly with an arbitrary DEV_API_PORT,
+// bypassing the Makefile gate entirely -- see devApiPort.ts for why this
+// validation, not the Makefile's, is what actually protects the URL built
+// below. It affects only the `vite dev` server config, never `build` -- a
+// production build reads no environment variable and this key does not
+// exist in its output.
+const devApiPort = validatedDevApiPort(process.env.DEV_API_PORT ?? '8080');
 
 export default defineConfig({
   plugins: [svelte()],
