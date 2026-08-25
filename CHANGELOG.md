@@ -7,6 +7,28 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.41] - 2026-08-25
+
+### Changed
+
+- Risk-based review ceremony (issue #190, owner directive 2026-08-22
+  re-affirmed 2026-08-25): the Main Worker receipt is retired — after the
+  independent adversarial review approves the exact final head and all
+  required checks are green, the coordinator flips Ready and the owner
+  merges, with no third distinct-context pass. Review depth is now stated
+  as risk-based (security-surface / normal code / docs classes) instead of
+  identical for every PR; the author runs the complete local gate once on
+  the final head and the reviewer re-runs the full suite only with
+  specific cause; labels and PR metadata are named as coordination
+  signals rather than security invariants. The enforcement is repointed,
+  not weakened: `require_ready_flip_governance` pins the replacement rule
+  in `AGENTS.md` and `docs/release-governance.md` with deletion and
+  inversion mutants, and fails closed if the retired ceremony's canonical
+  shapes (`ROLE: MAIN-WORKER`, the bounded five-line receipt) resurface
+  in any governance document. Commit identity and SSH signing, owner-only
+  merge, the release transition gate, the four-way version lock, and the
+  independent adversarial review itself are all untouched.
+
 ## [0.1.40] - 2026-08-25
 
 ### Changed

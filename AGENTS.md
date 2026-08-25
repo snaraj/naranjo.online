@@ -332,6 +332,22 @@ step assumes a particular AI tool. (Claude sessions load this contract
 automatically through CLAUDE.md; other agents read AGENTS.md directly.
 Neither gets a different protocol.)
 
+**Review depth is risk-based.** Not every PR earns identical depth:
+
+- **Security-surface changes** — request/input handling, authn/authz, CI
+  workflows, chart/deploy, dependencies, secrets, signing/release
+  machinery, binary or vendored assets — take focused tests, one full CI
+  cycle, live validation, ONE independent adversarial review, and owner
+  merge.
+- **Normal code changes** take focused tests and one full local gate; a
+  live check only when runtime behavior changes; one review.
+- **Docs, comments, and formatting** (requirement 10's no-artifact class)
+  run the relevant checks only; adversarial review is the coordinator's
+  routing decision, not a mandate.
+
+Exact-head discipline is unchanged for whatever review DOES run: a
+verdict binds the head it names.
+
 **Reviewer independence.** The reviewer is a different agent or context
 than the author — a fresh session of the same vendor qualifies; a
 different lane is better. Independence is established by the POSTING
@@ -387,9 +403,10 @@ owner merges first, record a post-merge audit and classify—not erase—the gap
    or changed assertion, demonstrate at least one input that turns it
    red (the kill matrix usually supplies it); an assertion no input can
    fail is decorative, and decorative checks are findings.
-4. Probe for flakes: the full suite at least three times, plus the race
-   detector where the language has one. Any nondeterminism is a finding
-   naming the test.
+4. Probe for flakes: run the focused checks the findings need, plus the
+   race detector where the language has one, and re-run the full suite
+   when there is specific cause. Any nondeterminism is a finding naming
+   the test.
 5. Check hygiene: commit identity (owner noreply in BOTH author and
    committer), signature conventions and agent labels, no co-author
    trailers, secret scan clean, out-of-lane paths untouched.
@@ -419,26 +436,11 @@ and the evidence comment remains on the PR as the permanent record.
 A green check, a peer approval, or a ready state is evidence, never
 authority: the owner alone merges.
 
-### Main Worker receipt
+### After review, Ready
 
-The independent adversarial verdict proves the implementation at one exact
-head. Before Ready, a distinct Main Worker must separately perform one bounded
-review and post a normal PR comment in this exact shape:
-
-    HEAD: <40-lowercase-hex>
-    ROLE: MAIN-WORKER
-    VERDICT: PASS | BLOCK
-    SCOPE: architecture,merge-order,authority,settings,base-freshness,required-checks
-
-    - <distinct context> (Main Worker)
-
-The scope is closed to architecture,
-merge order, authority, settings, base freshness, and required checks. It does
-not repeat the line-level adversarial review, operate live infrastructure,
-change settings, grant merge authority, or substitute for the independent
-exact-head APPROVE receipt. `BLOCK`, missing/extra fields, a different head,
-a non-distinct context, or any later author push is not a receipt; the Main
-Worker must re-run the bounded check at the new exact head.
+Once the independent adversarial review has approved the exact final head and
+all required checks are green, the coordinator flips Ready and the owner
+merges. No third distinct-context pass is required.
 
 ## GitHub conventions
 
@@ -466,7 +468,9 @@ Worker must re-run the bounded check at the new exact head.
   an explicit normal comment for issue-spec review until a separately approved
   issue-review label exists. It is a coordination signal only: never a
   substitute for draft/ready state, for the APPROVE verdict that flips a PR
-  ready, or for owner merge authority.
+  ready, or for owner merge authority. Labels, comments, and PR metadata
+  generally are coordination signals, never security invariants: the
+  invariant is the signed-commit, protected-main, review-verdict chain.
 - **Agent labels.** Every agent-created PR and issue carries TWO further
   labels: the umbrella `agent-authored` AND the acting agent's own label —
   `fable5` (Claude Fable 5), `5.6-sol` (ChatGPT 5.6 SOL ULTRA), `opus5`
@@ -508,8 +512,7 @@ Worker must re-run the bounded check at the new exact head.
   pair, so the split cannot recur (merged precedents #56, #58).
 - **Merge readiness.** Draft remains Draft until every check is successful at
   the exact head, the base equals current protected `main`, all discussions and
-  findings are resolved, a fresh exact-head APPROVE receipt exists, a fresh
-  exact-head canonical `ROLE: MAIN-WORKER` / `VERDICT: PASS` receipt exists, the next patch
+  findings are resolved, a fresh exact-head APPROVE receipt exists, the next patch
   still follows that base for an artifact-classified PR (a documentation-only
   PR reserves no patch at all), the automatic release consequence is proven, and
   the owner-observed release-control receipt proves immutable releases plus
@@ -612,18 +615,14 @@ The complete delivery loop, each step gated by the sections around it:
 6. **Adversarial review** per the protocol above; findings are fixed on
    the same branch by the same writer and delta re-reviewed before the
    flip to ready.
-7. **Obtain the Main Worker receipt.** After the author tree and exact-head
-   adversarial verdict are final, a distinct Main Worker runs the bounded
-   canonical check defined above and posts its exact-head PASS comment. A later
-   push invalidates both exact-head receipts.
-8. **Prove server release controls.** For an automatic-release change, the
+7. **Prove server release controls.** For an automatic-release change, the
    repository owner runs the GET-only preflight in
    `docs/release-governance.md` AND, separately, that document's standalone
    bypass command — the preflight reads no bypass field under any credential.
    Immutable releases and strict current-base required checks must be exact,
    and the bypass-actor list must be empty, before Ready.
-9. **Owner comments** are handled per the owner review protocol below.
-10. **The owner merges.** Nothing you can do — approval, green checks,
+8. **Owner comments** are handled per the owner review protocol below.
+9. **The owner merges.** Nothing you can do — approval, green checks,
    ready state — substitutes for that.
 
 ## Commit identity mechanics
@@ -747,8 +746,9 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   fingerprints (`commit:file:rule:line`) with an in-file justification,
   admitted only for verified false positives already in pushed history;
   the working tree must always scan clean WITHOUT them.
-- **Flake probe.** Before a PR leaves draft the full suite has run at
-  least three times (author and reviewer independently); any
+- **Flake probe.** The author runs the complete local gate ONCE on the
+  final head; the reviewer runs the focused checks its findings need and
+  MAY re-run the full suite when it has specific cause. Any
   nondeterminism is a finding naming the test.
 
 ## CI map

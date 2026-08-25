@@ -332,28 +332,13 @@ from "you cannot see bypass actors". Exactly `[]` passes. `null` means the
 credential lacks that visibility and the check has not been performed. Any
 other output is a bypass actor: the owner clears it before Ready and posts only
 the `[]` result, never the actor entries, per the value-only rule above. This
-is the observation "Working a change end to end" step 8 requires; CI cannot
+is the observation "Working a change end to end" step 7 requires; CI cannot
 make it and will not pretend to.
 
-The separate Main Worker gate in `AGENTS.md` is also load-bearing for Ready.
-After the final author push and exact-head adversarial approval, the distinct
-Main Worker posts one normal PR comment bound to the same head in this exact
-shape:
-
-```text
-HEAD: <40-lowercase-hex>
-ROLE: MAIN-WORKER
-VERDICT: PASS
-SCOPE: architecture,merge-order,authority,settings,base-freshness,required-checks
-
-- <distinct context> (Main Worker)
-```
-
-That bounded receipt covers architecture, merge order, authority, settings,
-base freshness, and required checks; it is not another implementation review
-or merge authorization. A later push invalidates both exact-head receipts.
-The coordinator alone changes the Draft/Ready state, and the repository owner
-alone merges.
+The Main Worker gate retired with issue #190. After the final author push,
+exact-head adversarial approval, and green required checks, no further
+distinct-context receipt is required: the coordinator alone changes the
+Draft/Ready state, and the repository owner alone merges.
 
 GitHub documents the immutable-release control and its protected tag/asset
 behavior in [Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases),
