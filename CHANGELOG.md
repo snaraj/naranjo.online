@@ -7,6 +7,20 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.42] - 2026-08-25
+
+### Fixed
+
+- The issue-168 popover column-independence probe in the rendering-lane
+  smoke matrix measures the claim instead of half-pixel luck: raw float
+  positions compared per edge within one CSS pixel across the two page
+  loads, replacing round-then-require-equality, which flipped at
+  half-pixel font-metric boundaries and failed on unchanged trees
+  (issue #194; re-cut of the approved PR #195 onto the post-0.1.41
+  base). The invariant is unweakened: a column-coupled popover moves by
+  hundreds of pixels at the column minimum, far outside the one-pixel
+  cross-load tolerance.
+
 ## [0.1.41] - 2026-08-25
 
 ### Changed
