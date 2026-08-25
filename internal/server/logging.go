@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -67,15 +68,20 @@ func requestLog(logger *slog.Logger, next http.Handler) http.Handler {
 				// honest 0 for "nothing was sent".
 				status = http.StatusOK
 			}
+			// Attribute names follow OTel HTTP semantic conventions
+			// (http.request.method, url.path, http.response.status_code,
+			// http.response.body.size, network.protocol.version), so a
+			// future collector ingests these records without remapping;
+			// request_id and duration_ms are documented custom attributes.
 			attrs := make([]slog.Attr, 0, 10)
 			attrs = append(attrs,
 				slog.String("request_id", identity),
-				slog.String("method", r.Method),
-				slog.String("path", r.URL.Path),
-				slog.Int("status", status),
+				slog.String("http.request.method", r.Method),
+				slog.String("url.path", r.URL.Path),
+				slog.Int("http.response.status_code", status),
 				slog.Float64("duration_ms", float64(time.Since(start))/float64(time.Millisecond)),
-				slog.Int64("bytes", recorder.bytes),
-				slog.String("proto", r.Proto),
+				slog.Int64("http.response.body.size", recorder.bytes),
+				slog.String("network.protocol.version", strings.TrimPrefix(r.Proto, "HTTP/")),
 			)
 			if traceID, spanID := traceContext(r.Header.Get(traceparentHeader)); traceID != "" {
 				// Named for the OpenTelemetry log data model's TraceId/SpanId
@@ -87,9 +93,10 @@ func requestLog(logger *slog.Logger, next http.Handler) http.Handler {
 				attrs = append(attrs, slog.String("trace_id", traceID), slog.String("span_id", spanID))
 			}
 			// The User-Agent is a debugging detail, not routine telemetry: it
-			// rides only when the operator explicitly runs at debug.
+			// rides only when the operator explicitly runs at debug, under
+			// its semantic-convention name.
 			if logger.Enabled(r.Context(), slog.LevelDebug) {
-				attrs = append(attrs, slog.String("user_agent", r.UserAgent()))
+				attrs = append(attrs, slog.String("user_agent.original", r.UserAgent()))
 			}
 			if failure != nil {
 				attrs = append(attrs, slog.Any("error", fmt.Errorf("handler panic: %v", failure)))

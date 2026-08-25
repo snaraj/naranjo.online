@@ -199,11 +199,11 @@ func TestFetchAttemptNarratesHostStatusAndBytes(t *testing.T) {
 	if record == nil {
 		t.Fatalf("no fetch DEBUG in %q", out.String())
 	}
-	if record["source"] != roleBossLog || record["host"] != "api.example.test" || record["status"] != float64(200) {
-		t.Errorf("fetch record = source %v host %v status %v, want %s/api.example.test/200", record["source"], record["host"], record["status"], roleBossLog)
+	if record["source"] != roleBossLog || record["server.address"] != "api.example.test" || record["http.response.status_code"] != float64(200) {
+		t.Errorf("fetch record = source %v host %v status %v, want %s/api.example.test/200", record["source"], record["server.address"], record["http.response.status_code"], roleBossLog)
 	}
-	if bytesFetched, ok := record["bytes"].(float64); !ok || bytesFetched <= 0 {
-		t.Errorf("fetch record bytes = %v, want a positive count", record["bytes"])
+	if bytesFetched, ok := record["http.response.body.size"].(float64); !ok || bytesFetched <= 0 {
+		t.Errorf("fetch record bytes = %v, want a positive count", record["http.response.body.size"])
 	}
 	if _, ok := record["duration_ms"].(float64); !ok {
 		t.Errorf("fetch record duration_ms = %v, want a number", record["duration_ms"])

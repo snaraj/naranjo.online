@@ -187,7 +187,7 @@ func TestEveryRecordCarriesTheServiceIdentity(t *testing.T) {
 		t.Fatalf("emitted %d records, want 2", len(records))
 	}
 	for _, record := range records {
-		if record["service"] != serviceName {
+		if record["service.name"] != serviceName {
 			t.Errorf("record %v lacks service=%q", record, serviceName)
 		}
 	}
@@ -213,8 +213,8 @@ func TestIdentityArgsNeverInventsBuildFacts(t *testing.T) {
 	t.Run("no build info yields only the service name", func(t *testing.T) {
 		t.Parallel()
 		found := keysOf(identityArgs(nil, false))
-		if len(found) != 1 || found["service"] != serviceName {
-			t.Fatalf("identityArgs(nil, false) = %v, want only service=%q", found, serviceName)
+		if len(found) != 1 || found["service.name"] != serviceName {
+			t.Fatalf("identityArgs(nil, false) = %v, want only service.name=%q", found, serviceName)
 		}
 	})
 
@@ -228,11 +228,11 @@ func TestIdentityArgsNeverInventsBuildFacts(t *testing.T) {
 			{Key: "vcs.modified", Value: "false"},
 		}
 		found := keysOf(identityArgs(info, true))
-		if _, ok := found["version"]; ok {
+		if _, ok := found["service.version"]; ok {
 			t.Error("a (devel) module version must be omitted, not reported")
 		}
-		if found["revision"] != "0123456789abcdef0123456789abcdef01234567" {
-			t.Errorf("revision = %q, want the stamped VCS revision", found["revision"])
+		if found["vcs.ref.head.revision"] != "0123456789abcdef0123456789abcdef01234567" {
+			t.Errorf("revision = %q, want the stamped VCS revision", found["vcs.ref.head.revision"])
 		}
 		if found["build_time"] != "2026-08-25T00:00:00Z" {
 			t.Errorf("build_time = %q, want the stamped VCS time", found["build_time"])
@@ -244,10 +244,10 @@ func TestIdentityArgsNeverInventsBuildFacts(t *testing.T) {
 		info := &debug.BuildInfo{}
 		info.Main.Version = "v0.1.37"
 		found := keysOf(identityArgs(info, true))
-		if found["version"] != "v0.1.37" {
-			t.Errorf("version = %q, want v0.1.37", found["version"])
+		if found["service.version"] != "v0.1.37" {
+			t.Errorf("version = %q, want v0.1.37", found["service.version"])
 		}
-		for _, absent := range []string{"revision", "build_time"} {
+		for _, absent := range []string{"vcs.ref.head.revision", "build_time"} {
 			if _, ok := found[absent]; ok {
 				t.Errorf("%s reported without a VCS stamp; identity facts are never invented", absent)
 			}
@@ -264,7 +264,7 @@ func TestRunNarratesTheLifecycle(t *testing.T) {
 	t.Parallel()
 	requireBuiltFrontend(t)
 	out := &syncBuffer{}
-	logger := slog.New(slog.NewJSONHandler(out, nil)).With(slog.String("service", serviceName))
+	logger := slog.New(slog.NewJSONHandler(out, nil)).With(slog.String("service.name", serviceName))
 	log := processLogger{logger: logger, format: logFormatJSON, level: logLevelInfo}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -321,7 +321,7 @@ func TestRunNarratesTheLifecycle(t *testing.T) {
 		"log_level":      logLevelInfo,
 		"media_enabled":  false,
 		"panels_refresh": false,
-		"service":        serviceName,
+		"service.name":   serviceName,
 	} {
 		if startup[key] != want {
 			t.Errorf("startup record %s = %v, want %v", key, startup[key], want)

@@ -373,52 +373,70 @@ S2) covering the Secret material, the egress policy, and the review of what
 the origin is then permitted to talk to. Nothing in this repository performs
 it, and no artifact here should be read as approval for it.
 
-## Log contract
+## Observability contract
 
-The origin logs structured records to stdout — one complete object per
-line, `log/slog`, stdlib only. When stdout is not a terminal (every
-container) the format is JSON automatically; on an interactive terminal it
-is human-readable text. Two environment variables tune it, and an
-unrecognized value fails closed to the default and emits one WARN naming
-the rejected value (logging is operator convenience, not security behavior,
-so a typo never crash-loops a pod):
+The origin emits OpenTelemetry-conformant structured logs to stdout with
+the standard library only — one complete JSON object per line via
+`log/slog`, attribute names following OTel semantic conventions — so an
+OTel Collector can later ingest pod stdout with ZERO application change.
+When stdout is not a terminal (every container) the format is JSON
+automatically; on an interactive terminal it is human-readable text. Two
+environment variables tune it, and an unrecognized value fails closed to
+the default and emits one WARN naming the rejected value (logging is
+operator convenience, not security behavior, so a typo never crash-loops
+a pod):
 
 - `LOG_FORMAT` — `json` | `text` (default: JSON off-terminal, text on one).
 - `LOG_LEVEL` — `debug` | `info` | `warn` | `error` (default `info`).
 
-Every record carries `service="naranjo.online"`, plus `version`,
-`revision`, and `build_time` when the build embeds them (never invented —
-a build without VCS stamping simply omits them). Lifecycle: one startup
-line (`addr`, `port`, `log_format`, `log_level`, `media_enabled`,
-`panels_refresh`), then `shutdown signal received`, `server drained`, and
-a final `server exited` / `server stopped`.
+**OTel Logs Data Model mapping.** slog `time` → Timestamp, `level` →
+SeverityText (`DEBUG`/`INFO`/`WARN`/`ERROR`), `msg` → Body, `trace_id` →
+TraceId, `span_id` → SpanId; every other key is an attribute. Resource
+identity rides on every record under its semantic-convention names —
+`service.name` (`naranjo.online`), plus `service.version` and
+`vcs.ref.head.revision` when the build embeds them (never invented — a
+build without VCS stamping omits them; `build_time` is a custom
+attribute, as no stable convention names a build timestamp).
 
-Each request produces exactly one `request served` record: `request_id`,
-`method`, `path`, `status`, `duration_ms`, `bytes`, `proto` — at INFO for
-2xx/3xx, WARN for 4xx, ERROR for 5xx (a handler panic logs `request
-failed` with the error, then re-raises). Background panel refreshes log
-per-cycle outcomes at INFO, failures at WARN with the error chain and next
-retry time, and per-attempt host/status/byte detail at DEBUG.
+Each request produces exactly one `request served` record —
+`http.request.method`, `url.path`, `http.response.status_code`,
+`http.response.body.size`, `network.protocol.version` (all semantic
+conventions), plus the custom `request_id` and `duration_ms` — at INFO
+for 2xx/3xx, WARN for 4xx, ERROR for 5xx (a handler panic logs `request
+failed` with the error, then re-raises). `user_agent.original` rides only
+at `debug`. Lifecycle: one startup line (`addr`, `port`, `log_format`,
+`log_level`, `media_enabled`, `panels_refresh`), then `shutdown signal
+received`, `server drained`, and a final `server exited` /
+`server stopped`. Background panel refreshes log per-cycle outcomes at
+INFO, failures at WARN with the error chain and next retry time, and
+per-attempt `server.address`/`http.response.status_code`/
+`http.response.body.size` detail at DEBUG.
 
-**Correlation, OTel-ready with zero dependencies.** An inbound
-`X-Request-Id` is honored only when it matches `^[A-Za-z0-9_-]{1,64}$`;
-anything else is replaced by 16 random bytes as hex, and the response
-always carries `X-Request-Id`. A valid W3C `traceparent` passes through
-untouched and its fields land in the record as the OpenTelemetry log data
-model's correlation pair — `trace_id` (TraceId) and `span_id` (SpanId, the
-header's parent-id). The mapping a collector consumes: slog `time` →
-Timestamp, `level` → SeverityText, `msg` → Body, `service` →
-`service.name`, `trace_id`/`span_id` → TraceId/SpanId. **The future hook
-point is exactly here**: an OTel Collector, OTLP exporter, or service mesh
-reads this stdout stream (or joins on `traceparent`) without any code
-change; adding the OTel SDK itself is a dependency and therefore an owner
-decision (requirement 9).
+**W3C trace context, hand-rolled and spec-exact.** A valid version-00
+`traceparent` (lowercase hex, exact field lengths, version not `ff`,
+non-zero trace and parent ids) is accepted and never mutated, and its
+fields land on every record for that request as `trace_id`/`span_id` —
+which is exactly what a service mesh needs from the app: sidecars emit
+the spans, the origin propagates and correlates. The origin deliberately
+does NOT mint a `traceparent` when none arrives: it creates no spans, so
+a self-minted trace id would fabricate a trace no participant recorded
+(the honest-states doctrine applied to telemetry); `request_id` already
+correlates traceless requests. An inbound `X-Request-Id` is honored only
+when it matches `^[A-Za-z0-9_-]{1,64}$`; anything else is replaced by 16
+random bytes as hex, and the response always carries `X-Request-Id`.
+
+**Roadmap.** Today: OTel-conformant logs plus W3C propagation, stdlib
+only. Phase 2: an OTel Collector on the cluster ingests this stdout
+stream — no application change. Phase 3 (owner decision, requirement 9):
+the in-process OTel SDK for internal span detail, adopted at
+configuration level. Browser-side telemetry is a separate future lane
+with its own privacy design.
 
 **Privacy floor, pinned by tests.** Records carry the URL path only —
 never a query string, which can carry secrets. No client IP is logged at
-any level. `user_agent` rides only at `debug`. Panel-refresh records name
-bare hosts and configuration labels — never a URL, credential, or payload
-byte — and the media root path is never logged.
+any level. Panel-refresh records name bare hosts and configuration labels
+— never a URL, credential, or payload byte — and the media root path is
+never logged.
 
 ## Media
 

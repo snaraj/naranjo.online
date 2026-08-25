@@ -101,18 +101,18 @@ func TestRequestLogRecordsEveryOutcomeClass(t *testing.T) {
 			if record["msg"] != "request served" || record["level"] != testCase.wantLevel {
 				t.Errorf("record msg/level = %v/%v, want request served/%s", record["msg"], record["level"], testCase.wantLevel)
 			}
-			if record["status"] != testCase.wantStatus || record["path"] != testCase.wantPath || record["method"] != "GET" {
-				t.Errorf("record = status %v path %v method %v, want %v %q GET", record["status"], record["path"], record["method"], testCase.wantStatus, testCase.wantPath)
+			if record["http.response.status_code"] != testCase.wantStatus || record["url.path"] != testCase.wantPath || record["http.request.method"] != "GET" {
+				t.Errorf("record = status %v path %v method %v, want %v %q GET", record["http.response.status_code"], record["url.path"], record["http.request.method"], testCase.wantStatus, testCase.wantPath)
 			}
-			if record["proto"] != "HTTP/1.1" {
-				t.Errorf("proto = %v, want HTTP/1.1", record["proto"])
+			if record["network.protocol.version"] != "1.1" {
+				t.Errorf("network.protocol.version = %v, want 1.1", record["network.protocol.version"])
 			}
 			if _, ok := record["duration_ms"].(float64); !ok {
 				t.Errorf("duration_ms = %v, want a number", record["duration_ms"])
 			}
-			bodyBytes, ok := record["bytes"].(float64)
+			bodyBytes, ok := record["http.response.body.size"].(float64)
 			if !ok || (testCase.wantBytes && bodyBytes <= 0) {
-				t.Errorf("bytes = %v, want a positive count for a body-bearing response", record["bytes"])
+				t.Errorf("bytes = %v, want a positive count for a body-bearing response", record["http.response.body.size"])
 			}
 			identity, _ := record["request_id"].(string)
 			if !generatedIdentityShape.MatchString(identity) {
@@ -301,7 +301,7 @@ func TestUserAgentIsADebugOnlyAttribute(t *testing.T) {
 			request.Header.Set("User-Agent", "probe-agent/1.0")
 			site.ServeHTTP(httptest.NewRecorder(), request)
 			record := singleRecord(t, out.String())
-			if _, present := record["user_agent"]; present != testCase.want {
+			if _, present := record["user_agent.original"]; present != testCase.want {
 				t.Errorf("user_agent present = %t at %v, want %t", present, testCase.level, testCase.want)
 			}
 		})
@@ -335,8 +335,8 @@ func TestRequestLogMapsStatusClassesToLevels(t *testing.T) {
 			handler := requestLog(logger, testCase.handler)
 			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/probe", nil))
 			record := singleRecord(t, out.String())
-			if record["level"] != testCase.wantLevel || record["status"] != testCase.wantCode {
-				t.Errorf("record level/status = %v/%v, want %s/%v", record["level"], record["status"], testCase.wantLevel, testCase.wantCode)
+			if record["level"] != testCase.wantLevel || record["http.response.status_code"] != testCase.wantCode {
+				t.Errorf("record level/status = %v/%v, want %s/%v", record["level"], record["http.response.status_code"], testCase.wantLevel, testCase.wantCode)
 			}
 		})
 	}
@@ -372,8 +372,8 @@ func TestRequestLogReportsPanicsAndRepanics(t *testing.T) {
 	if errText, _ := record["error"].(string); !strings.Contains(errText, "boom-sentinel") {
 		t.Errorf("panic record error = %v, want the panic value", record["error"])
 	}
-	if record["status"] != float64(0) {
-		t.Errorf("panic record status = %v, want the honest 0 for a response never sent", record["status"])
+	if record["http.response.status_code"] != float64(0) {
+		t.Errorf("panic record status = %v, want the honest 0 for a response never sent", record["http.response.status_code"])
 	}
 }
 
@@ -442,8 +442,8 @@ func TestMediaRangeAbuseLogsWarnWithRequestID(t *testing.T) {
 		t.Fatalf("abusive Range status = %d, want 416", response.Code)
 	}
 	record := singleRecord(t, out.String())
-	if record["level"] != "WARN" || record["status"] != float64(416) || record["path"] != target {
-		t.Errorf("record = level %v status %v path %v, want WARN 416 %q", record["level"], record["status"], record["path"], target)
+	if record["level"] != "WARN" || record["http.response.status_code"] != float64(416) || record["url.path"] != target {
+		t.Errorf("record = level %v status %v path %v, want WARN 416 %q", record["level"], record["http.response.status_code"], record["url.path"], target)
 	}
 	identity, _ := record["request_id"].(string)
 	if !generatedIdentityShape.MatchString(identity) {

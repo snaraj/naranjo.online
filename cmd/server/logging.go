@@ -97,13 +97,19 @@ func resolveLogLevel(value string) (slog.Level, string, bool) {
 // the build actually carries them. Nothing is ever invented — a build
 // without VCS stamping (the container build excludes .git) simply omits the
 // attributes rather than faking a value, per the honest-states doctrine.
+//
+// Attribute names follow OpenTelemetry semantic conventions (service.name,
+// service.version, vcs.ref.head.revision), so an OTel Collector ingesting
+// this pod's stdout maps the resource identity with zero remapping;
+// build_time is a documented custom attribute (no stable convention names
+// a build timestamp). See README "Observability contract".
 func identityArgs(info *debug.BuildInfo, ok bool) []any {
-	args := []any{slog.String("service", serviceName)}
+	args := []any{slog.String("service.name", serviceName)}
 	if !ok || info == nil {
 		return args
 	}
 	if version := info.Main.Version; version != "" && version != "(devel)" {
-		args = append(args, slog.String("version", version))
+		args = append(args, slog.String("service.version", version))
 	}
 	for _, setting := range info.Settings {
 		if setting.Value == "" {
@@ -111,7 +117,7 @@ func identityArgs(info *debug.BuildInfo, ok bool) []any {
 		}
 		switch setting.Key {
 		case "vcs.revision":
-			args = append(args, slog.String("revision", setting.Value))
+			args = append(args, slog.String("vcs.ref.head.revision", setting.Value))
 		case "vcs.time":
 			args = append(args, slog.String("build_time", setting.Value))
 		}

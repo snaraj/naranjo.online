@@ -772,11 +772,15 @@ func (s *FetchSource) fetchDocument(ctx context.Context, doer fetchDoer, request
 	start := time.Now()
 	body, status, host, err := s.exchangeDocument(ctx, doer, request)
 	elapsed := float64(time.Since(start)) / float64(time.Millisecond)
+	// OTel semantic-convention names (server.address,
+	// http.response.status_code, http.response.body.size) so a collector
+	// ingests upstream-fetch records without remapping; source and
+	// duration_ms are documented custom attributes.
 	if err != nil {
 		s.log().LogAttrs(ctx, slog.LevelDebug, "upstream fetch failed",
 			slog.String("source", request.source),
-			slog.String("host", host),
-			slog.Int("status", status),
+			slog.String("server.address", host),
+			slog.Int("http.response.status_code", status),
 			slog.Float64("duration_ms", elapsed),
 			slog.Any("error", err),
 		)
@@ -784,9 +788,9 @@ func (s *FetchSource) fetchDocument(ctx context.Context, doer fetchDoer, request
 	}
 	s.log().LogAttrs(ctx, slog.LevelDebug, "upstream fetch",
 		slog.String("source", request.source),
-		slog.String("host", host),
-		slog.Int("status", status),
-		slog.Int("bytes", len(body)),
+		slog.String("server.address", host),
+		slog.Int("http.response.status_code", status),
+		slog.Int("http.response.body.size", len(body)),
 		slog.Float64("duration_ms", elapsed),
 	)
 	return body, nil
