@@ -41,11 +41,10 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   page fetches nothing."). Both halves were maintainer/reviewer facts, not
   visitor information; the capture date remains recorded as a maintenance
   constant (`projectsCapturedOn` in `lib/projects.ts`), simply no longer
-  printed, and the no-fetch guarantee it used to describe stays enforced
-  structurally — the reviewed surfaces contain no transport primitive and no
-  runtime fetch call; a validated link may still navigate a visitor to the
-  one centrally defined GitHub origin (`projectHost` in `lib/projects.ts`)
-  on click — rather than by a sentence on the page (#167).
+  printed. The static Coding Projects rows are not fetched from GitHub; no
+  code automatically requests `projectHost`; the validated GitHub URLs are
+  used only for visitor-activated navigation — rather than by a sentence on
+  the page (#167).
 
 ### Fixed
 
