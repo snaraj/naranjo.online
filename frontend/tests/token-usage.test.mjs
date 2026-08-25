@@ -529,7 +529,10 @@ describe('UsageTracker live surface', () => {
     assert.match(component, /role="radiogroup"/);
     assert.match(component, /\{#each seriesViews as candidate\}/);
     assert.match(component, /aria-checked=\{view === candidate\}/);
-    assert.match(component, /viewValues\(\[\.\.\.activity\.series\.totals\], view\)/);
+    assert.match(
+      component,
+      /viewColumns\(calendarColumns\(seriesCells\(activity\.series\.startDate, activity\.series\.totals\)\), view\)/
+    );
     // Touch target floor for the segmented control.
     assert.match(component, /min-block-size:\s*2\.75rem/);
   });

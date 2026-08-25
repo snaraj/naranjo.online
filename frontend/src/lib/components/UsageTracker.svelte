@@ -48,7 +48,7 @@
   so themes restyle by overriding variables. -->
 <script lang="ts">
   import type { UsageActivity, UsageTrackerProps } from '../blocks.ts';
-  import { seriesCells, seriesViews, toColumns, viewValues, type SeriesView } from '../grid';
+  import { calendarColumns, seriesCells, seriesViews, viewColumns, type SeriesView } from '../grid';
   import ContributionGrid from './ContributionGrid.svelte';
   import PanelShell from './PanelShell.svelte';
 
@@ -61,10 +61,15 @@
      and the lens math (lib/grid.ts) knows no source either. */
   let view = $state<SeriesView>('daily');
 
-  /* activityColumns re-reads a region's daily series through the active lens
-     and lays it out as grid columns. */
+  /* activityColumns realigns a region's daily series onto true calendar
+     weeks (issue 189: calendarColumns, so the shared weekday axis is
+     truthful for every column) and only THEN re-reads the aligned columns
+     through the active lens (viewColumns) — the order matters, because a
+     weekly or cumulative reading has to sum real calendar weeks, and only
+     calendarColumns knows where those actually fall once the series has
+     been padded to the fixed trailing window. */
   function activityColumns(activity: UsageActivity) {
-    return toColumns(seriesCells(activity.series.startDate, viewValues([...activity.series.totals], view)));
+    return viewColumns(calendarColumns(seriesCells(activity.series.startDate, activity.series.totals)), view);
   }
 </script>
 

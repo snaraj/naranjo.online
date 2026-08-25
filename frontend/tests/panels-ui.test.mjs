@@ -950,14 +950,15 @@ test('the token panel opts the shared grid into full width and the OSRS-style ca
   assert.match(grid, /data-grid-fullwidth=\{fullWidth\}/);
   assert.match(grid, /\{#if cardTitle && !cell\.absent\}/);
   assert.match(grid, /import DetailTip from '\.\/DetailTip\.svelte'/);
-  // The card shows the value alone — no date, which the X/Y axes already
-  // carry — mirroring BossLog's own DetailTip usage rather than a bespoke
-  // card of this component's own.
-  assert.match(grid, /rows: \[\{ label: '', value: formatWhole\(cell\.value\) \}\]/);
-  assert.doesNotMatch(
+  // The card shows the value AND the view-scoped period phrase (issue 189,
+  // amending the earlier value-only decision from #178 to match the owner's
+  // reference designs — "2.8B tokens on Aug 13" is a value plus a period,
+  // not a value alone). Both rows stay label-less, mirroring BossLog's own
+  // DetailTip usage; cellPeriod is the ONE function that phrase comes from,
+  // so this card and cellLabel's own accessible text can never drift apart.
+  assert.match(
     grid,
-    /\{#if cardTitle[\s\S]*?<DetailTip[\s\S]*?cell\.date/,
-    'the card reads the cell date; the axes already carry it'
+    /rows: \[\s*\{ label: '', value: formatWhole\(cell\.value\) \},\s*\{ label: '', value: cellPeriod\(cell, view\) \}\s*\]/
   );
 });
 

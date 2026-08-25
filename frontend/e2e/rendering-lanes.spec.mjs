@@ -553,11 +553,22 @@ test('every content-sized graph is exactly as wide as the columns it draws', asy
   const observed = await page.evaluate(() => {
     const width = (node) => Math.round(node.getBoundingClientRect().width * 100) / 100;
     return [...window.document.querySelectorAll('.grid-block')].map((block) => {
+      const body = block.querySelector('.grid-body');
+      const weekdayAxis = block.querySelector('.grid-weekday-axis');
       const strip = block.querySelector('.grid-strip');
       const cells = block.querySelector('.grid-cells');
       const legend = block.querySelector('.grid-legend');
       const cell = cells.querySelector('.grid-cell');
       const gap = parseFloat(getComputedStyle(cells).columnGap || '0');
+      /* The weekday gutter (issue 189) shares .grid-body's horizontal budget
+         with the strip, so "the block is exactly its cells" is no longer the
+         whole story — the block is the gutter, the row-gap beside it, AND
+         the cells. Measured off the DOM like every other figure here, never
+         hardcoded from the token defaults, so a themed override of
+         --grid-axis-width or --grid-gap cannot silently desync this lane
+         from what an engine actually painted. */
+      const axisWidth = weekdayAxis === null ? 0 : width(weekdayAxis);
+      const bodyGap = parseFloat(getComputedStyle(body).columnGap || getComputedStyle(body).gap || '0');
       /* The legend's INTRINSIC width: it is a nowrap flex row, so its own
          box tells you nothing about whether its contents fit inside it. */
       const legendChildren = [...legend.children];
@@ -584,6 +595,8 @@ test('every content-sized graph is exactly as wide as the columns it draws', asy
         drawn: Math.ceil(cells.querySelectorAll('.grid-cell').length / 7),
         cellSize: width(cell),
         gap,
+        axisWidth,
+        bodyGap,
         block: width(block),
         strip: width(strip),
         cells: width(cells),
@@ -615,7 +628,10 @@ test('every content-sized graph is exactly as wide as the columns it draws', asy
   expect(long.length, 'no year-wide graph is on the page to prove it was not shrunk').toBe(1);
 
   for (const grid of sized) {
-    const expected = grid.claimed * (grid.cellSize + grid.gap) - grid.gap;
+    /* The gutter (issue 189) is part of the box's own budget now, not only
+       the cells — see .grid-block's own calc(), which this mirrors term for
+       term rather than approximating. */
+    const expected = grid.axisWidth + grid.bodyGap + grid.claimed * (grid.cellSize + grid.gap) - grid.gap;
     /* Never wider than what it claims — the reported defect. */
     expect(
       grid.block,
@@ -644,12 +660,15 @@ test('every content-sized graph is exactly as wide as the columns it draws', asy
       grid.block,
       `"${grid.label}" is ${grid.block}px wide and its less/more key needs ${grid.legend}px`
     ).toBeGreaterThanOrEqual(Math.min(grid.legend, grid.available) - subPixel);
-    /* And the strip fills the block, so the frame drawn around an empty
-       plate is the frame around the box the data will land in. */
-    expect(grid.strip, `"${grid.label}" strip and block disagree about their width`).toBeCloseTo(
-      grid.block,
-      1
-    );
+    /* And the strip fills what the block leaves it once the gutter (issue
+       189) has taken its own fixed share, so the frame drawn around an
+       empty plate is the frame around the box the data will land in — the
+       block is no longer the strip alone, but the two must still account
+       for every pixel of each other. */
+    expect(
+      grid.strip + grid.axisWidth + grid.bodyGap,
+      `"${grid.label}" strip, gutter and block disagree about their combined width`
+    ).toBeCloseTo(grid.block, 1);
   }
 });
 
@@ -692,19 +711,23 @@ function syntheticSeries(days) {
 }
 
 /* LOOK, at every length a real series can be (owner directive, 2026-08-24;
- * RETARGETED by issue 178). Sizing a box to its data was only an improvement
- * if the box's GRAMMAR survived the short end: the same cell, the same gap,
- * the legend in the same place. This lane used to stage the token panel's
- * own series to prove exactly that for the CONTENT-SIZED box — but issue 178
- * opted that panel into fullWidth, and a full-width box does the opposite on
- * purpose: the BOX now holds still at its card's width regardless of the
- * data, and the CELLS stretch or shrink to fill it. The staging machinery is
- * unchanged; only what it proves is inverted, in step with the component. A
- * strip that quietly resized its box with the data, or that let its key
- * drift off the end at one day and not at fifty-three, would pass every
- * width assertion in this file and still look broken on the page. So the
- * four shapes are rendered on the real page and compared to each other. */
-test('the full-width strip keeps its grammar at every series length', async ({ page }) => {
+ * RETARGETED by issue 178, RETARGETED AGAIN by issue 189). Sizing a box to
+ * its data was only an improvement if the box's GRAMMAR survived the short
+ * end — that used to mean "the same cell, the same gap, the legend in the
+ * same place" while the CELL COUNT still tracked the series length one-for-
+ * one. Issue 189 retired that second half: every dated series, however
+ * short or long, now realigns onto the SAME fixed pendingWeeks trailing
+ * window (calendarColumns) — a fixed weekday axis is only truthful across a
+ * fixed window, so a strip that still resized its column count with its
+ * data could never promise one. What this lane proves is therefore the
+ * stronger, simpler claim issue 189 makes true: the box, the cell size, the
+ * gap, the row height and the legend placement are now IDENTICAL for every
+ * series length, not merely "no narrower than the shortest." A strip that
+ * quietly still varied its column count with the data, or that let its key
+ * drift at one length and not another, would pass every OTHER assertion in
+ * this file and still be wrong. So the four shapes are rendered on the real
+ * page and compared to each other. */
+test('the full-width strip draws the identical fixed window at every series length (issue 189)', async ({ page }) => {
   const shapes = [1, 15, 31, 371];
   const measured = [];
   for (const days of shapes) {
@@ -745,22 +768,35 @@ test('the full-width strip keeps its grammar at every series length', async ({ p
 
   const [first, ...rest] = measured;
   for (const shape of measured) {
-    expect(shape.drawn, `a ${shape.days} day series drew ${shape.drawn} columns`).toBe(
-      Math.ceil(shape.days / 7)
-    );
-    expect(shape.claimed, `a ${shape.days} day series claims fewer columns than it drew`)
-      .toBeGreaterThanOrEqual(shape.drawn);
+    // The fixed window (issue 189): every dated series, whatever its own
+    // length, realigns onto the SAME pendingWeeks trailing calendar, so
+    // "drawn" no longer tracks the series length at all.
+    expect(
+      shape.drawn,
+      `a ${shape.days}-day series drew ${shape.drawn} columns instead of the fixed trailing window it claims (${shape.claimed})`
+    ).toBe(shape.claimed);
     expect(shape.rows, `a ${shape.days} day series stopped being seven days tall`).toBe(7);
   }
   for (const shape of rest) {
     /* The grammar that survives full width: identical BOX (the card's own
        width, not the data's), identical row height, identical gap, identical
-       legend placement relative to that unchanging box. A floor may still
-       change the CELL size; it may not change the box or the drawing. */
+       legend placement relative to that unchanging box — and now, because
+       the fixed window means the column count itself never varies with the
+       series length either, identical CELL size too. A strip whose own
+       window never changes shape has nothing left that data length could
+       stretch or shrink. */
+    expect(
+      shape.claimed,
+      `the fixed window changed width at ${shape.days} days (${first.claimed} columns at 1 day, ${shape.claimed} here)`
+    ).toBe(first.claimed);
     expect(
       shape.block,
       `the box resized from ${first.block}px at 1 day to ${shape.block}px at ${shape.days} days; full width means the card decides the box, not the data`
     ).toBe(first.block);
+    expect(
+      shape.cell,
+      `the cell width moved at ${shape.days} days even though the fixed window never changes column count`
+    ).toBe(first.cell);
     expect(shape.cellHeight, `the cell height moved at ${shape.days} days`).toBe(first.cellHeight);
     expect(shape.gap, `the gap moved at ${shape.days} days`).toBe(first.gap);
     expect(shape.strip, `the strip changed height at ${shape.days} days`).toBe(first.strip);
@@ -769,27 +805,13 @@ test('the full-width strip keeps its grammar at every series length', async ({ p
       `the less/more key sits ${shape.legendOffset}px from the block edge at ${shape.days} days and ${first.legendOffset}px at 1 day`
     ).toBe(first.legendOffset);
     expect(shape.legendTop, `the key changed row at ${shape.days} days`).toBe(first.legendTop);
-    /* Cells stretch to fill the unchanging box: MORE columns of data means
-       narrower cells, floored at the same --grid-cell-size the capped layout
-       uses — the inverse of the content-sized grammar, and the reason the
-       box above can hold still while the drawing still reads its data. */
-    expect(
-      shape.cell,
-      `a ${shape.days}-day series (${shape.drawn} columns) drew cells no narrower than a 1-day series (${first.drawn} column)`
-    ).toBeLessThanOrEqual(first.cell + subPixel);
   }
-  /* Non-vacuity: the four shapes must not all have drawn identically sized
-     cells, or the stretch above is unproven — a strip that quietly kept a
-     fixed cell size regardless of column count would pass every check above
-     it by accident. */
-  expect(
-    new Set(measured.map((shape) => shape.cell)).size,
-    'every series length drew the same cell size; the stretch is not reading its data'
-  ).toBeGreaterThan(1);
-  /* And the long one is genuinely long — a year of columns still gets a year
-     of columns, which is the direction an over-correction would break. */
+  /* And the long one is genuinely the fixed window's own width — a one-day
+     series and a year-long series both claim the identical pendingWeeks
+     columns, which is the direction a stray data-driven code path would
+     break: it would only show up at one end of this range, never both. */
   const year = measured.at(-1);
-  expect(year.claimed, 'a year-long series no longer claims a year of columns').toBe(53);
+  expect(year.claimed, 'a year-long series no longer claims the fixed trailing window').toBe(53);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
@@ -2233,28 +2255,6 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
   await expect(codingProjects.locator('h3.subsection-title')).toHaveText('Coding Projects');
 });
 
-/* The pull-to-refresh settle guard (issue 187). What this lane CAN prove,
- * in every engine: the declaration reached the page and the engine computed
- * it — not a source-text scan, the same "what a real engine did with it"
- * standard every other lane in this file holds to. What it CANNOT prove:
- * that a live rubber-band drag on a physical iPhone visually settles flush
- * instead of leaving the document translated down. Playwright's synthetic
- * touch/wheel events do not drive WebKit's native overscroll/bounce
- * animation the way a real touchscreen gesture does — there is no
- * documented, reliable way to trigger that specific compositor-level effect
- * from automation in any engine this matrix runs, headless or not. That gap
- * is why this is a computed-style pin rather than a gesture simulation, and
- * why the PR body states it needs the owner's own device to close. */
-test('the document root refuses the overscroll bounce, in every engine (issue 187)', async ({ page }) => {
-  await visit(page);
-  const observed = await page.evaluate(() => ({
-    html: getComputedStyle(window.document.documentElement).overscrollBehaviorY,
-    body: getComputedStyle(window.document.body).overscrollBehaviorY,
-  }));
-  expect(observed.html, 'html does not refuse the overscroll bounce').toBe('none');
-  expect(observed.body, 'body does not refuse the overscroll bounce').toBe('none');
-});
-
 /* Every repo card's title/counters row, measured (issue 188). The owner's
  * screenshot showed the SAME viewport rendering two cards differently: short
  * titles (naranjo.online, lidersea.com) left room for the commits/stars
@@ -2320,6 +2320,142 @@ test('every repo card places its counters the same way relative to its title, re
       `at 1280px, card ${index}'s counters wrapped below its title instead of sitting beside it`
     ).toBe(true);
   }
+});
+
+/* The pull-to-refresh settle guard (issue 187). What this lane CAN prove,
+ * in every engine: the declaration reached the page and the engine computed
+ * it — not a source-text scan, the same "what a real engine did with it"
+ * standard every other lane in this file holds to. What it CANNOT prove:
+ * that a live rubber-band drag on a physical iPhone visually settles flush
+ * instead of leaving the document translated down. Playwright's synthetic
+ * touch/wheel events do not drive WebKit's native overscroll/bounce
+ * animation the way a real touchscreen gesture does — there is no
+ * documented, reliable way to trigger that specific compositor-level effect
+ * from automation in any engine this matrix runs, headless or not. That gap
+ * is why this is a computed-style pin rather than a gesture simulation, and
+ * why the PR body states it needs the owner's own device to close. */
+test('the document root refuses the overscroll bounce, in every engine (issue 187)', async ({ page }) => {
+  await visit(page);
+  const observed = await page.evaluate(() => ({
+    html: getComputedStyle(window.document.documentElement).overscrollBehaviorY,
+    body: getComputedStyle(window.document.body).overscrollBehaviorY,
+  }));
+  expect(observed.html, 'html does not refuse the overscroll bounce').toBe('none');
+  expect(observed.body, 'body does not refuse the overscroll bounce').toBe('none');
+});
+
+/* The weekday gutter sits BESIDE the strip, in its own flex row (issue 189),
+ * so a Mon/Wed/Fri label stays put while the cells beside it carry their own
+ * horizontal scroll. This is exactly the kind of claim a source-text pin
+ * cannot prove — it can show the two are siblings, never that scrolling one
+ * leaves the other's box alone — so this lane scrolls the real strip in a
+ * real engine and measures the gutter before and after. */
+test('the weekday gutter stays visually stationary while the strip scrolls under it (issue 189)', async ({
+  page,
+}) => {
+  // A narrow viewport, so the fixed 53-column calendar reliably overflows its
+  // card and the strip actually has somewhere to scroll to.
+  await page.setViewportSize({ width: 390, height: 900 });
+  await visit(page);
+
+  const block = page.locator('[data-activity-panel] .grid-block');
+  await expect(block).toBeVisible();
+  const strip = block.locator('.grid-strip');
+  const gutter = block.locator('.grid-weekday-axis');
+  await expect(gutter).toBeVisible();
+
+  const before = await gutter.boundingBox();
+  expect(before, 'the weekday gutter never rendered a box').not.toBeNull();
+
+  await strip.evaluate((node) => {
+    node.scrollLeft = 0;
+  });
+  const atStart = await gutter.boundingBox();
+  expect(atStart.x, 'the weekday gutter moved horizontally when the strip scrolled to its start').toBeCloseTo(
+    before.x,
+    0
+  );
+  expect(atStart.y, 'the weekday gutter moved vertically when the strip scrolled').toBeCloseTo(before.y, 0);
+
+  const movedTo = await strip.evaluate((node) => {
+    node.scrollLeft = node.scrollWidth;
+    return node.scrollLeft;
+  });
+  expect(
+    movedTo,
+    'the strip never actually scrolled; the calendar must overflow its own box for this lane to prove anything'
+  ).toBeGreaterThan(0);
+
+  const atEnd = await gutter.boundingBox();
+  expect(atEnd.x, 'the weekday gutter moved horizontally when the strip scrolled to its end').toBeCloseTo(
+    before.x,
+    0
+  );
+  expect(atEnd.y, 'the weekday gutter moved vertically when the strip scrolled').toBeCloseTo(before.y, 0);
+});
+
+/* The amended DetailTip card (issue 189, amending #178's value-only decision
+ * to match the owner's reference designs): a value row, then the SAME
+ * view-scoped period phrase cellLabel folds into the cell's accessible text —
+ * "on <date>" for daily, "week of <date>" for weekly, "through week of
+ * <date>" for cumulative. This is exactly the kind of thing a source-text
+ * regex cannot see (the card's actual painted text, after a real lens
+ * switch), so this lane drives the panel's own view toggle and reads the
+ * live card three times. */
+test('the token panel detail card shows the value and the view-scoped period, and both change with the lens (issue 189)', async ({
+  page,
+}) => {
+  await stageUsagePayload(page, (envelope) => {
+    const sources = envelope?.data?.sources ?? [];
+    expect(sources.length, 'the origin serves no usage sources; this lane cannot stage one').toBeGreaterThan(0);
+    sources[0].series = syntheticSeries(120);
+  });
+  await visit(page);
+
+  const panel = page.locator('[data-panel-id="token-usage"]');
+  const cell = panel.locator('[data-grid-cell][data-grid-absent="false"]').first();
+  await expect(cell).toBeVisible();
+  await cell.scrollIntoViewIfNeeded();
+
+  const readDetail = async () => {
+    await page.mouse.move(0, 0);
+    const box = await cell.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    const tip = cell.locator('.cell-tip');
+    await expect(tip).toHaveAttribute('data-tip-open', 'true');
+    const rows = await tip.locator('.cell-tip-row').allTextContents();
+    await page.mouse.move(0, 0);
+    return rows;
+  };
+
+  const dailyRows = await readDetail();
+  expect(
+    dailyRows,
+    'the card must show exactly a value row and a period row — no leftover date-only mode from issue 178'
+  ).toHaveLength(2);
+  expect(dailyRows[0], 'the first row must be the raw count').toMatch(/^\d[\d,]*$/);
+  expect(dailyRows[1], 'the daily card must read "on <month> <day>"').toMatch(/^on [A-Z][a-z]{2} \d{1,2}$/);
+
+  await panel.getByRole('radio', { name: 'weekly', exact: true }).first().click();
+  const weeklyRows = await readDetail();
+  expect(
+    weeklyRows[1],
+    'the weekly card must name its own calendar week, not a single day'
+  ).toMatch(/^week of [A-Z][a-z]{2} \d{1,2}, \d{4}$/);
+
+  await panel.getByRole('radio', { name: 'cumulative', exact: true }).first().click();
+  const cumulativeRows = await readDetail();
+  expect(
+    cumulativeRows[1],
+    'the cumulative card must say which week the running total runs through'
+  ).toMatch(/^through week of [A-Z][a-z]{2} \d{1,2}, \d{4}$/);
+
+  // Switching lens must not merely relabel the same figure: the running
+  // total is monotone, so it can only be greater than or equal to the one
+  // real day's own value.
+  expect(Number(cumulativeRows[0].replace(/,/g, ''))).toBeGreaterThanOrEqual(
+    Number(dailyRows[0].replace(/,/g, ''))
+  );
 });
 
 /* ===========================================================================
@@ -3342,11 +3478,16 @@ test('the token-activity grid fills its card, not a tiny left-aligned block', as
   ).toBeGreaterThan(measured.bodyWidth * 0.9);
 });
 
-test('a token-activity cell shows the value alone, titled "Tokens used", with no date', async ({
+test('a token-activity cell card is titled "Tokens used" and reads a human period phrase, never a raw ISO date', async ({
   page,
 }) => {
   await visit(page);
-  const selector = '[data-panel-id="token-usage"] .grid-cell[data-grid-cell]';
+  // Absent (issue 189: the fixed trailing window front-pads a series
+  // younger than itself) rather than data restricts the selector: an absent
+  // cell never renders the cardTitle/DetailTip branch at all, so `.nth(0)`
+  // on the bare `[data-grid-cell]` selector now frequently lands on a
+  // padding cell with no card to open.
+  const selector = '[data-panel-id="token-usage"] .grid-cell[data-grid-cell][data-grid-absent="false"]';
   test.skip(
     (await page.locator(selector).count()) === 0,
     'the token panel rendered no activity cells to hover'
@@ -3362,8 +3503,20 @@ test('a token-activity cell shows the value alone, titled "Tokens used", with no
   const shown = await detailBox(page, selector, 0);
   expect(shown.open, 'hovering/tapping a token cell opened no card').toBe('true');
   expect(shown.text, 'the card does not name itself "Tokens used"').toMatch(/^Tokens used/);
-  // No date anywhere on the card — the X axis already carries it.
-  expect(shown.text, `the card still reads a date: "${shown.text}"`).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+  // Issue 189 amends #178's "value only, no date" decision to match the
+  // owner's reference designs: the card now carries a human period phrase
+  // too ("on Aug 12" in the default daily view, tested across every lens by
+  // "the token panel detail card shows the value..." above). What survives
+  // from #178 is the FORMAT floor, not the absence: it must never leak the
+  // raw machine-formatted ISO date cellLabel's own hostile-string tests
+  // guard against elsewhere.
+  expect(shown.text, `the card leaked a raw ISO date instead of a formatted phrase: "${shown.text}"`).not.toMatch(
+    /\d{4}-\d{2}-\d{2}/
+  );
+  expect(
+    shown.text,
+    `the card must read a period phrase (issue 189), not a bare figure: "${shown.text}"`
+  ).toMatch(/on [A-Z][a-z]{2} \d{1,2}/);
   // Not a bare title= log line: the card-enabled cell carries no native
   // tooltip of its own for the browser to show alongside it.
   const nativeTooltip = await page
@@ -3376,7 +3529,12 @@ test('a token-activity cell shows the value alone, titled "Tokens used", with no
 test('a tap opens the token-activity card, and a second tap closes it', async ({ page }) => {
   await visit(page);
   test.skip(await followsPointer(page), 'this engine reports a cursor; hover is measured above');
-  const selector = '[data-panel-id="token-usage"] .grid-cell[data-grid-cell]';
+  // Absent (issue 189: the fixed trailing window front-pads a series
+  // younger than itself) rather than data restricts the selector: an absent
+  // cell never renders the cardTitle/DetailTip branch at all, so `.nth(0)`
+  // on the bare `[data-grid-cell]` selector now frequently lands on a
+  // padding cell with no card to open.
+  const selector = '[data-panel-id="token-usage"] .grid-cell[data-grid-cell][data-grid-absent="false"]';
   test.skip(
     (await page.locator(selector).count()) === 0,
     'the token panel rendered no activity cells to tap'
