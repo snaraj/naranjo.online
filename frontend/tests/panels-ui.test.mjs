@@ -912,6 +912,44 @@ test('the contribution grid is one component both panels render', () => {
   assert.match(grid, /data-grid-absent=\{cell\.absent \? 'true' : 'false'\}/);
 });
 
+// Full width and the OSRS-style card (issue #178): the daily heatmap used to
+// render as a tiny left-aligned block, and its value popover was a bare
+// title= tooltip reading "1,025,755,735 tokens on 2026-08-22" — a log line,
+// not a designed readout. Both are OPT-IN props on the shared component so
+// the version-control calendar this component also renders keeps its own
+// year-wide reserve and native tooltip untouched.
+test('the token panel opts the shared grid into full width and the OSRS-style card', () => {
+  assert.match(
+    tokenUsage,
+    /<ContributionGrid[\s\S]*?fullWidth[\s\S]*?\/>/,
+    'the token panel does not opt the grid into full width'
+  );
+  assert.match(
+    tokenUsage,
+    /<ContributionGrid[\s\S]*?cardTitle="Tokens used"[\s\S]*?\/>/,
+    'the token panel does not name the hover card'
+  );
+  assert.doesNotMatch(activityBar, /fullWidth/, 'the version-control calendar opted into full width too');
+  assert.doesNotMatch(activityBar, /cardTitle/, 'the version-control calendar opted into the OSRS card too');
+
+  // The shared component: both props are opt-in, so the default path — the
+  // calendar's own — is untouched by either.
+  assert.match(grid, /fullWidth\?: boolean/);
+  assert.match(grid, /cardTitle\?: string/);
+  assert.match(grid, /data-grid-fullwidth=\{fullWidth\}/);
+  assert.match(grid, /\{#if cardTitle && !cell\.absent\}/);
+  assert.match(grid, /import DetailTip from '\.\/DetailTip\.svelte'/);
+  // The card shows the value alone — no date, which the X/Y axes already
+  // carry — mirroring BossLog's own DetailTip usage rather than a bespoke
+  // card of this component's own.
+  assert.match(grid, /rows: \[\{ label: '', value: formatWhole\(cell\.value\) \}\]/);
+  assert.doesNotMatch(
+    grid,
+    /\{#if cardTitle[\s\S]*?<DetailTip[\s\S]*?cell\.date/,
+    'the card reads the cell date; the axes already carry it'
+  );
+});
+
 // The calendar opens on TODAY at its end edge (owner directive, issue 127).
 // Cells run oldest first, so a strip that opens where its content begins
 // opens on January and hides every recent day off the right edge — which is

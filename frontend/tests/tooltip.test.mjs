@@ -282,7 +282,15 @@ test('a hostile row name is data all the way to the DOM', () => {
   // a string as markup. {@html} is the ONLY Svelte construct that could,
   // which is why its absence is the whole assertion.
   assert.match(tipComponent, /\{detail\.name\}/, 'the name must be interpolated as text');
-  assert.match(tipComponent, /\{row\.label\}: \{row\.value\}/, 'rows must be interpolated as text');
+  // A labelled row still interpolates its label as text (issue 178 added the
+  // label-less branch for a value-only row; both branches stay expressions,
+  // never markup).
+  assert.match(
+    tipComponent,
+    /\{row\.label \? `\$\{row\.label\}: ` : ''\}/,
+    'a labelled row must interpolate its label as text'
+  );
+  assert.match(tipComponent, /\{row\.value\}/, 'rows must be interpolated as text');
   for (const [name, source] of Object.entries(componentSources)) {
     assert.doesNotMatch(
       source,

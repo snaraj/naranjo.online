@@ -279,25 +279,24 @@ test('the page keeps its gutters and its dynamic height in this engine', async (
   ).toBeCloseTo(observed.viewportHeight, 0);
 });
 
-/* SUPERSEDED by "every swatch still says which palette it selects, in every
- * reading mode" at the end of this file, and superseded rather than deleted
- * so the reason is on the record.
+/* SUPERSEDED twice over, and superseded rather than deleted both times so the
+ * reason stays on the record.
  *
- * This lane guarded a color-mix() that no longer exists. It measured one
- * thing — that the sepia glyph had not fallen back to the PAGE's ink, which
- * would have been near-black on a near-black disc — and under the restyle of
- * 2026-08-24 that assertion inverts: the swatches are line icons now, the
- * palette moved inside the glyph, and the page's own ink is deliberately what
- * every outline is drawn in, because it is the one ink guaranteed legible on
- * the popover in all four reading modes. Keeping the lane would have pinned
- * the design it replaced.
+ * First by "every swatch still says which palette it selects, in every
+ * reading mode" (2026-08-24 restyle): this lane guarded a color-mix() that no
+ * longer exists, measuring only that the sepia glyph had not fallen back to
+ * the PAGE's ink. That assertion widened into one lane covering all five
+ * swatches: each one's outline against the popover, and each dark mode's
+ * craters against its own moon.
  *
- * What it was actually FOR — the sepia swatch stays legible — is now measured
- * for all five swatches in all five reading modes, for the outline against
- * the popover and for each dark mode's craters against their own moon. The
- * sepia case is one row of that lane instead of a lane of its own, and the
- * color-mix it was written around is gone: sepia's craters read its accent
- * token directly, unmixed, at 7.09:1 on sepia's own surface. */
+ * Then that lane's own premise was superseded (issue #180, 2026-08-25): the
+ * owner reported the three dark craters unreadable at 18px — "they all look
+ * exactly the same" — so the glyphs stopped previewing a palette at all and
+ * now paint ONE ink (currentColor), telling the five modes apart by SHAPE
+ * instead. "Every swatch paints a distinct silhouette, at a legible ink, in
+ * every reading mode" is the current lane: it measures the inverse of what
+ * this one did — that every swatch now SHARES its ink and instead draws a
+ * silhouette no other swatch draws. */
 
 test('switching the reading mode repaints without moving anything', async ({ page }) => {
   await visit(page);
@@ -549,7 +548,7 @@ test('every strip opens on its newest data and scrolls back for history', async 
  * control calendar down with it, and that calendar genuinely has a year of
  * columns to show. So the lane insists a short graph is short AND that the
  * long one is untouched, in the same measurement. */
-test('every graph is exactly as wide as the columns it draws', async ({ page }) => {
+test('every content-sized graph is exactly as wide as the columns it draws', async ({ page }) => {
   await visit(page);
   const observed = await page.evaluate(() => {
     const width = (node) => Math.round(node.getBoundingClientRect().width * 100) / 100;
@@ -577,6 +576,7 @@ test('every graph is exactly as wide as the columns it draws', async ({ page }) 
       return {
         label: strip.getAttribute('aria-label'),
         state: block.getAttribute('data-grid-state'),
+        fullWidth: block.getAttribute('data-grid-fullwidth') === 'true',
         claimed: Number(block.getAttribute('data-grid-columns')),
         /* Counted off the DOM, never read back off the same attribute the
            claim came from: a lane that compared an attribute with itself
@@ -596,19 +596,25 @@ test('every graph is exactly as wide as the columns it draws', async ({ page }) 
     0
   );
 
-  /* Non-vacuity, and the reason the two halves cannot be written as one
-     assertion: the page must be showing BOTH a graph short enough to be
-     floored and a graph long enough to keep a year, or one of the two
-     directions below is being proved against no example. */
-  const short = observed.filter((grid) => grid.drawn < grid.claimed);
-  const long = observed.filter((grid) => grid.drawn >= 52);
-  expect(
-    short.length,
-    'no graph on the page is short enough to exercise the floor'
-  ).toBeGreaterThan(0);
+  /* Full-width graphs (issue 178: the token panel's own grid) opt OUT of the
+     content-sized grammar this lane measures — they claim the card's width
+     regardless of their data, which is the whole point of the opt-in, and
+     "the token-activity grid fills its card" above is where THAT invariant
+     is measured. What survives here is the calendar's own grammar. */
+  const sized = observed.filter((grid) => !grid.fullWidth);
+  expect(sized.length, 'no content-sized graph is on the page; this lane proves nothing').toBeGreaterThan(0);
+
+  /* Non-vacuity: the page must be showing a content-sized graph long enough
+     to keep a year, or the "never shrunk" direction below is proved against
+     no example. A short content-sized example lived here until issue 178
+     moved its only real-world source (the token panel) to full width; that
+     direction is covered instead by tests/grid.test.mjs's pure stripColumns
+     pins and by "the strip keeps its grammar at every series length" below,
+     both of which still exercise the floor directly. */
+  const long = sized.filter((grid) => grid.drawn >= 52);
   expect(long.length, 'no year-wide graph is on the page to prove it was not shrunk').toBe(1);
 
-  for (const grid of observed) {
+  for (const grid of sized) {
     const expected = grid.claimed * (grid.cellSize + grid.gap) - grid.gap;
     /* Never wider than what it claims — the reported defect. */
     expect(
@@ -685,14 +691,20 @@ function syntheticSeries(days) {
   };
 }
 
-/* LOOK, at every length a real series can be (owner directive, 2026-08-24).
- * Sizing a box to its data is only an improvement if the box's GRAMMAR
- * survives the short end: the same cell, the same gap, the legend in the same
- * place. A strip that quietly shrank its cells to fill a floor, or that let
- * its key drift off the end at one day and not at fifty-three, would pass
- * every width assertion in this file and still look broken on the page. So
- * the four shapes are rendered on the real page and compared to each other. */
-test('the strip keeps its grammar at every series length', async ({ page }) => {
+/* LOOK, at every length a real series can be (owner directive, 2026-08-24;
+ * RETARGETED by issue 178). Sizing a box to its data was only an improvement
+ * if the box's GRAMMAR survived the short end: the same cell, the same gap,
+ * the legend in the same place. This lane used to stage the token panel's
+ * own series to prove exactly that for the CONTENT-SIZED box — but issue 178
+ * opted that panel into fullWidth, and a full-width box does the opposite on
+ * purpose: the BOX now holds still at its card's width regardless of the
+ * data, and the CELLS stretch or shrink to fill it. The staging machinery is
+ * unchanged; only what it proves is inverted, in step with the component. A
+ * strip that quietly resized its box with the data, or that let its key
+ * drift off the end at one day and not at fifty-three, would pass every
+ * width assertion in this file and still look broken on the page. So the
+ * four shapes are rendered on the real page and compared to each other. */
+test('the full-width strip keeps its grammar at every series length', async ({ page }) => {
   const shapes = [1, 15, 31, 371];
   const measured = [];
   for (const days of shapes) {
@@ -741,10 +753,14 @@ test('the strip keeps its grammar at every series length', async ({ page }) => {
     expect(shape.rows, `a ${shape.days} day series stopped being seven days tall`).toBe(7);
   }
   for (const shape of rest) {
-    /* The grammar: identical cell, identical gap, identical row height,
-       identical legend placement. A floor may change the BOX; it may not
-       change the drawing. */
-    expect(shape.cell, `the cell resized between 1 day and ${shape.days} days`).toBe(first.cell);
+    /* The grammar that survives full width: identical BOX (the card's own
+       width, not the data's), identical row height, identical gap, identical
+       legend placement relative to that unchanging box. A floor may still
+       change the CELL size; it may not change the box or the drawing. */
+    expect(
+      shape.block,
+      `the box resized from ${first.block}px at 1 day to ${shape.block}px at ${shape.days} days; full width means the card decides the box, not the data`
+    ).toBe(first.block);
     expect(shape.cellHeight, `the cell height moved at ${shape.days} days`).toBe(first.cellHeight);
     expect(shape.gap, `the gap moved at ${shape.days} days`).toBe(first.gap);
     expect(shape.strip, `the strip changed height at ${shape.days} days`).toBe(first.strip);
@@ -753,12 +769,22 @@ test('the strip keeps its grammar at every series length', async ({ page }) => {
       `the less/more key sits ${shape.legendOffset}px from the block edge at ${shape.days} days and ${first.legendOffset}px at 1 day`
     ).toBe(first.legendOffset);
     expect(shape.legendTop, `the key changed row at ${shape.days} days`).toBe(first.legendTop);
+    /* Cells stretch to fill the unchanging box: MORE columns of data means
+       narrower cells, floored at the same --grid-cell-size the capped layout
+       uses — the inverse of the content-sized grammar, and the reason the
+       box above can hold still while the drawing still reads its data. */
+    expect(
+      shape.cell,
+      `a ${shape.days}-day series (${shape.drawn} columns) drew cells no narrower than a 1-day series (${first.drawn} column)`
+    ).toBeLessThanOrEqual(first.cell + subPixel);
   }
-  /* Non-vacuity: the four shapes must not all have produced the same box, or
-     the comparisons above are four measurements of one rendering. */
+  /* Non-vacuity: the four shapes must not all have drawn identically sized
+     cells, or the stretch above is unproven — a strip that quietly kept a
+     fixed cell size regardless of column count would pass every check above
+     it by accident. */
   expect(
-    new Set(measured.map((shape) => shape.block)).size,
-    'every series length produced the same box; the sizing is not reading its data'
+    new Set(measured.map((shape) => shape.cell)).size,
+    'every series length drew the same cell size; the stretch is not reading its data'
   ).toBeGreaterThan(1);
   /* And the long one is genuinely long — a year of columns still gets a year
      of columns, which is the direction an over-correction would break. */
@@ -2424,7 +2450,18 @@ test('choosing a reading mode marks it by shape, and moves nothing', async ({ pa
   expect(after.swatches, 'choosing a reading mode moved the swatches').toEqual(before.swatches);
 });
 
-test('every swatch still says which palette it selects, in every reading mode', async ({ page }) => {
+test('every swatch paints a distinct silhouette, at a legible ink, in every reading mode', async ({
+  page,
+}) => {
+  /* SUPERSEDED premise (issue #180, 2026-08-25): the swatches used to preview
+     each mode's OWN palette token inside the glyph, and this lane measured
+     that no two swatches painted the same (fill, ink) pair. The owner's
+     complaint was that this was unreadable at 18px — three near-identical
+     moons told apart only by a crater color difference nobody could see. The
+     glyphs now paint ONE ink (currentColor) and tell the five modes apart by
+     SHAPE instead, so what this lane must measure inverted: every swatch now
+     SHARES its ink (zero theme branching) and instead must paint a distinct
+     SILHOUETTE. */
   await visit(page);
   const read = async () => {
     await openedAndStill(page);
@@ -2433,20 +2470,30 @@ test('every swatch still says which palette it selects, in every reading mode', 
       return {
         surface: getComputedStyle(popover).backgroundColor,
         swatches: [...window.document.querySelectorAll('.swatch')].map((node) => {
-          const shape = node.querySelector('.chip, .chip-edge');
-          const halves = [...node.querySelectorAll('.auto-half-light, .auto-half-dark')];
+          const glyph = node.querySelector('svg.glyph');
+          const outlineShape = node.querySelector('.chip, .chip-edge');
+          const outline = getComputedStyle(outlineShape);
+          const box = glyph.getBoundingClientRect();
+          /* The silhouette: every filled or stroked primitive's own
+             geometry, concatenated in DOM order. Two swatches sharing this
+             string would be the same shape painted twice — the "three
+             identical moons" issue #180 reports, now measured as geometry
+             rather than as color, because color is no longer what tells them
+             apart. */
+          const geometry = [...node.querySelectorAll('.chip, .chip-edge, .ray line')]
+            .map(
+              (part) =>
+                part.getAttribute('d') ??
+                ['cx', 'cy', 'r', 'x1', 'y1', 'x2', 'y2']
+                  .map((attribute) => part.getAttribute(attribute))
+                  .join(',')
+            )
+            .join('|');
           return {
             label: node.getAttribute('aria-label'),
-            /* The outline is the PAGE's ink — the one ink guaranteed legible
-               on the popover in every mode, and the reason the swatch needs
-               no disc behind it to be seen. */
-            outline: getComputedStyle(shape).stroke,
-            /* The palette: what the shape encloses, and what is drawn inside
-               it. */
-            fill: [...halves, ...node.querySelectorAll('.chip')].map(
-              (part) => getComputedStyle(part).fill
-            ),
-            ink: [...node.querySelectorAll('.crater')].map((part) => getComputedStyle(part).fill),
+            ink: outline.stroke !== 'none' ? outline.stroke : outline.fill,
+            painted: box.width > 0 && box.height > 0,
+            geometry,
           };
         }),
       };
@@ -2471,39 +2518,28 @@ test('every swatch still says which palette it selects, in every reading mode', 
       await expect(page.locator('html')).toHaveAttribute('data-theme', id);
     }
     const painted = await read();
+    const ink = painted.swatches[0].ink;
     const seen = new Map();
     for (const swatch of painted.swatches) {
-      /* WCAG 1.4.11: the swatch is a non-text indicator, so the mark that
-         carries its silhouette clears 3:1 against what it is drawn on. The
-         palette inside it deliberately does not have to — a light swatch on a
-         light popover is SUPPOSED to disappear into it, which is exactly what
-         the outline is for. */
-      const ratio = contrastRatio(swatch.outline, painted.surface);
+      expect(swatch.painted, `"${swatch.label}" paints nothing in ${label} mode`).toBe(true);
+      /* Zero theme branching: at rest, every glyph resolves to the SAME
+         currentColor ink as its neighbours — a swatch that painted its own
+         color again would be the per-mode branching issue #180 removed. */
+      expect(swatch.ink, `"${swatch.label}" does not share the popover's one ink`).toBe(ink);
+      /* No two swatches draw the same shape. */
       expect(
-        ratio,
-        `in ${label} mode the "${swatch.label}" swatch outlines itself at ${ratio.toFixed(2)}:1 on the popover`
-      ).toBeGreaterThanOrEqual(3);
-      expect(swatch.fill.length, `"${swatch.label}" encloses no palette at all`).toBeGreaterThan(0);
-      /* Every dark mode's ink is its craters, and the craters have to be
-         legible on the moon they sit on or the three darks are one swatch
-         drawn three times. */
-      for (const ink of swatch.ink) {
-        const onOwnSurface = contrastRatio(ink, swatch.fill[0]);
-        expect(
-          onOwnSurface,
-          `in ${label} mode the "${swatch.label}" craters sit at ${onOwnSurface.toFixed(2)}:1 on their own moon`
-        ).toBeGreaterThanOrEqual(3);
-      }
-      /* No two swatches paint the same thing. This is the requirement the
-         shrink could most easily have broken: three near-black surfaces at
-         18px are one shape unless each carries its own ink. */
-      const signature = JSON.stringify([swatch.fill, swatch.ink]);
-      expect(
-        seen.get(signature),
-        `in ${label} mode "${swatch.label}" is painted identically to "${seen.get(signature)}"`
+        seen.get(swatch.geometry),
+        `in ${label} mode "${swatch.label}" draws the identical shape "${seen.get(swatch.geometry)}" already draws`
       ).toBeUndefined();
-      seen.set(signature, swatch.label);
+      seen.set(swatch.geometry, swatch.label);
     }
+    /* WCAG 1.4.11: the one shared ink is a non-text indicator, so it clears
+       3:1 against the surface it is drawn on, in every reading mode. */
+    const ratio = contrastRatio(ink, painted.surface);
+    expect(
+      ratio,
+      `in ${label} mode the reading-mode ink sits at ${ratio.toFixed(2)}:1 on the popover`
+    ).toBeGreaterThanOrEqual(3);
   }
 });
 
@@ -3144,6 +3180,96 @@ test('keyboard focus opens the detail on both grids', async ({ page }) => {
       shown.clientWidth
     );
   }
+});
+
+/* ===========================================================================
+ * The token-activity heatmap (issue 178)
+ *
+ * Two complaints, one fix each. The graph rendered as a tiny left-aligned
+ * block beside a card every other tracker fills, and its popover was the
+ * browser's own title= tooltip reading "1,025,755,735 tokens on
+ * 2026-08-22" — a log line, not a designed readout. Full width and the
+ * OSRS-style card are both opt-in on the shared ContributionGrid, so these
+ * lanes measure the token panel specifically; the version-control
+ * calendar's own coverage above is untouched by either change.
+ * ======================================================================== */
+
+test('the token-activity grid fills its card, not a tiny left-aligned block', async ({ page }) => {
+  await visit(page);
+  const measured = await page.evaluate(() => {
+    const block = window.document.querySelector('[data-panel-id="token-usage"] .grid-block');
+    const body = window.document.querySelector('[data-panel-id="token-usage"] .panel-body');
+    if (!block || !body) return null;
+    const blockBox = block.getBoundingClientRect();
+    const bodyBox = body.getBoundingClientRect();
+    return {
+      fullwidth: block.getAttribute('data-grid-fullwidth'),
+      blockWidth: blockBox.width,
+      bodyWidth: bodyBox.width,
+    };
+  });
+  expect(measured, 'the token panel rendered no activity grid to measure').not.toBeNull();
+  expect(measured.fullwidth, 'the token panel did not opt its grid into full width').toBe('true');
+  /* Not a pixel match — the block sits inside the card's own flex column —
+     but genuinely filling it rather than the few columns' worth of pixels a
+     15-day series would otherwise claim (roughly a third of the card). */
+  expect(
+    measured.blockWidth,
+    `the grid is ${Math.round(measured.blockWidth)}px inside a ${Math.round(measured.bodyWidth)}px card`
+  ).toBeGreaterThan(measured.bodyWidth * 0.9);
+});
+
+test('a token-activity cell shows the value alone, titled "Tokens used", with no date', async ({
+  page,
+}) => {
+  await visit(page);
+  const selector = '[data-panel-id="token-usage"] .grid-cell[data-grid-cell]';
+  test.skip(
+    (await page.locator(selector).count()) === 0,
+    'the token panel rendered no activity cells to hover'
+  );
+  if (await followsPointer(page)) {
+    await hoverAt(page, selector, 0, (box) => ({
+      x: Math.round(box.x + box.width / 2),
+      y: Math.round(box.y + box.height / 2),
+    }));
+  } else {
+    await page.locator(selector).nth(0).tap();
+  }
+  const shown = await detailBox(page, selector, 0);
+  expect(shown.open, 'hovering/tapping a token cell opened no card').toBe('true');
+  expect(shown.text, 'the card does not name itself "Tokens used"').toMatch(/^Tokens used/);
+  // No date anywhere on the card — the X axis already carries it.
+  expect(shown.text, `the card still reads a date: "${shown.text}"`).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+  // Not a bare title= log line: the card-enabled cell carries no native
+  // tooltip of its own for the browser to show alongside it.
+  const nativeTooltip = await page
+    .locator(selector)
+    .nth(0)
+    .evaluate((cell) => cell.hasAttribute('title'));
+  expect(nativeTooltip, 'the card-enabled cell still carries a native title= tooltip too').toBe(false);
+});
+
+test('a tap opens the token-activity card, and a second tap closes it', async ({ page }) => {
+  await visit(page);
+  test.skip(await followsPointer(page), 'this engine reports a cursor; hover is measured above');
+  const selector = '[data-panel-id="token-usage"] .grid-cell[data-grid-cell]';
+  test.skip(
+    (await page.locator(selector).count()) === 0,
+    'the token panel rendered no activity cells to tap'
+  );
+  const cell = page.locator(selector).nth(0);
+  await cell.scrollIntoViewIfNeeded();
+  await cell.tap();
+  const shown = await detailBox(page, selector, 0);
+  expect(shown.open, 'a tap opened no card on the token-activity grid').toBe('true');
+  expect(shown.visibility, 'a tap opened an invisible card').toBe('visible');
+
+  // A finger has no "away", so the tap is a TOGGLE, exactly like the boss
+  // grid's own (issue 178: touch must work here, not hover-only).
+  await cell.tap();
+  const closed = await detailBox(page, selector, 0);
+  expect(closed.open, 'a second tap left the card open').toBe('false');
 });
 
 test('the skill detail and the boss detail are the same object, measured', async ({ page }) => {

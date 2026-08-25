@@ -574,11 +574,13 @@ test('auto is the no-choice choice: derived menu, attribute removed, cookie expi
 });
 
 // The toggle is the wiki's, minimally: a labeled moon button opening a
-// popover of one swatch per mode, each swatch an inline-SVG line icon whose
-// enclosed area is that theme's OWN page-surface token — split circle on
-// auto, sun on light, cratered moon on the three darks. No icon assets, no
-// hex copies. These pins cover DOM wiring only; the open/select/close/reopen
-// behavior is EXECUTED against src/lib/disclosure.ts in toggle.test.mjs.
+// popover of one swatch per mode, each swatch an inline-SVG line icon drawn
+// in ONE ink (currentColor) with a genuinely different SILHOUETTE per mode
+// (issue #180: half-sun/half-moon on auto, sun on light, plain crescent on
+// dark, crescent-with-stars on slate, split disc on sepia) — shape tells the
+// five apart now, never color. No icon assets, no hex copies. These pins
+// cover DOM wiring only; the open/select/close/reopen behavior is EXECUTED
+// against src/lib/disclosure.ts in toggle.test.mjs.
 test('theme toggle: swatch popover, token-pure colors, machine-wired', () => {
   // Trigger: a labeled plain-disclosure button with an inline moon glyph.
   // Deliberately NO aria-haspopup: it would announce a menu, but the popover
@@ -595,41 +597,44 @@ test('theme toggle: swatch popover, token-pure colors, machine-wired', () => {
   assert.match(themeMenu, /aria-label=\{mode\.label\}/);
   assert.match(themeMenu, /aria-pressed=\{selected === mode\.id\}/);
 
-  // Swatch colors are references into each theme's own palette tokens —
-  // never a third copy of the values (see the dedup pins above) and never a
-  // hex anywhere in the component. The palette lives INSIDE the glyph now
-  // (owner directive, 2026-08-24: the swatches are line icons like the
-  // header chrome, not filled discs), so the mode's surface is the shape's
-  // fill rather than the button's background — and the button must carry no
-  // background at all, which is the half of this that the owner rejected.
-  for (const id of ['light', 'dark', 'slate', 'sepia']) {
-    assert.match(
-      themeMenu,
-      new RegExp(`\\.swatch-${id} \\.chip \\{\\s*fill: var\\(--palette-${id}-surface\\)`),
-      `the ${id} swatch glyph must be filled with that theme's own surface token`
-    );
-  }
-  // ...and each dark mode's INK is its craters, which is what tells the three
-  // apart — neutral, cool, warm. A mode whose craters lost their own accent
-  // becomes indistinguishable from its neighbour at this size.
-  for (const id of ['dark', 'slate', 'sepia']) {
-    assert.match(
-      themeMenu,
-      new RegExp(`\\.swatch-${id} \\.crater \\{\\s*fill: var\\(--palette-${id}-accent\\)`),
-      `the ${id} swatch craters must be that theme's own accent token`
-    );
-  }
-
-  // Auto has no palette of its own, so its glyph previews BOTH — one circle
-  // split down the middle between the two page surfaces it chooses between.
-  assert.match(themeMenu, /\.swatch-auto \.auto-half-light \{\s*fill: var\(--palette-light-surface\)/);
-  assert.match(themeMenu, /\.swatch-auto \.auto-half-dark \{\s*fill: var\(--palette-dark-surface\)/);
-  // ({#each …} starts with three hex-class letters, hence the full-token form.)
+  // Every glyph paints ONE ink — currentColor — never a palette token, so no
+  // mode carries its own color rule and there is zero theme branching to
+  // drift out of step (issue #180). .chip is the filled-shape class and it
+  // must resolve unconditionally, not per swatch-{id}.
+  assert.match(themeMenu, /\.chip \{\s*fill: currentColor;/);
+  assert.doesNotMatch(
+    themeMenu,
+    /\.swatch-(light|dark|slate|sepia|auto)[^{]*\{\s*fill:/,
+    'a swatch reads its own color rule again; shape alone must tell the modes apart'
+  );
+  // Never a hex anywhere in the component.
   assert.doesNotMatch(
     themeMenu,
     /#[0-9a-fA-F]{3,8}(?![0-9a-zA-Z])/,
     'the toggle must reference tokens, never hex values'
   );
+
+  // Five distinct silhouettes, one branch per mode id — a shared branch (the
+  // old "one moon for all three darks") is exactly the regression issue #180
+  // reports, so each id gets its own markup to diverge from. Sepia is the
+  // final, unconditional {:else} — the fifth and last mode needs no
+  // condition of its own once the other four have theirs.
+  for (const id of ['auto', 'light', 'dark', 'slate']) {
+    assert.match(
+      themeMenu,
+      new RegExp(`mode\\.id === '${id}'`),
+      `no dedicated branch draws the "${id}" glyph; it would share markup with a neighbour`
+    );
+  }
+  assert.match(themeMenu, /\{:else\}/, 'sepia has no dedicated branch to draw its glyph in');
+  // The three dark variants are the owner's literal complaint ("all look
+  // exactly the same") — dark stays a bare crescent, slate adds star marks
+  // beside it, and sepia is not a crescent at all, so no two of the five
+  // <svg> blocks can be byte-identical.
+  const glyphBlocks = [...themeMenu.matchAll(/<svg class="glyph"[\s\S]*?<\/svg>/g)].map((m) => m[0]);
+  assert.equal(glyphBlocks.length, 5, 'the popover does not render five glyphs');
+  assert.equal(new Set(glyphBlocks).size, 5, 'two reading-mode glyphs render identical markup');
+  assert.doesNotMatch(themeMenu, /class="crater"/, 'the retired per-mode crater mark is still drawn');
 
   // The component must delegate every open/close decision to the tested
   // state machine — the trigger latch (F1 fix) and the swatch press-in-

@@ -62,6 +62,7 @@
 <script lang="ts">
   import {
     cellLabel,
+    formatWhole,
     gridLevel,
     gridLevels,
     monthTicks,
@@ -71,6 +72,7 @@
     type GridCell,
     type SeriesView
   } from '../grid';
+  import DetailTip from './DetailTip.svelte';
 
   let {
     columns,
@@ -78,7 +80,9 @@
     view = 'daily' as SeriesView,
     label,
     showMonths = true,
-    emptyNote = 'no activity data'
+    emptyNote = 'no activity data',
+    fullWidth = false,
+    cardTitle
   }: {
     columns: GridCell[][];
     noun?: string;
@@ -86,6 +90,18 @@
     label: string;
     showMonths?: boolean;
     emptyNote?: string;
+    /* The strip claims its container's full width instead of just the
+       columns it draws (issue 178: the token panel's graph rendered as a
+       tiny left-aligned block beside a card the other trackers fill). Opt-in
+       so the version-control calendar this component also renders — which
+       genuinely wants its own year of columns, not a stretch — is untouched. */
+    fullWidth?: boolean;
+    /* When set, a cell's detail is the page's OSRS-style card (DetailTip)
+       instead of the browser's native title= tooltip, titled with this text
+       and showing the cell's value alone — no date, which the axes already
+       carry (issue 178). Opt-in for the same reason fullWidth is: the
+       calendar keeps its native tooltip. */
+    cardTitle?: string;
   } = $props();
 
   const legendLevels = Array.from({ length: gridLevels }, (_, level) => level);
@@ -166,6 +182,7 @@
   class="grid-block"
   data-grid-state={columns.length > 0 ? 'series' : 'empty'}
   data-grid-columns={claimedColumns}
+  data-grid-fullwidth={fullWidth}
   style:--grid-columns={claimedColumns}
 >
   <!-- The strip clips wide windows behind its own horizontal scrollbar, and a
@@ -178,15 +195,35 @@
         {#each columns as column}
           {#each column as cell}
             {@const text = cellLabel(cell, noun, view)}
-            <span
-              class="grid-cell"
-              data-grid-cell
-              data-grid-absent={cell.absent ? 'true' : 'false'}
-              data-grid-level={cell.absent ? '' : gridLevel(cell.value, peak)}
-              role="img"
-              aria-label={text}
-              title={text}
-            ></span>
+            {#if cardTitle && !cell.absent}
+              <!-- Mirrors BossLog's own cell: the visible tile doubles as the
+                DetailTip host, so the card is the whole of adding a detail
+                and there is no separate wrapper to keep in step (issue
+                178). aria-label keeps the full value-and-date reading for
+                assistive tech; the card itself shows the value alone — the
+                X/Y axes already carry the date. -->
+              <span
+                class="grid-cell"
+                data-grid-cell
+                data-grid-absent="false"
+                data-grid-level={gridLevel(cell.value, peak)}
+                role="img"
+                aria-label={text}
+                tabindex="0"
+              >
+                <DetailTip detail={{ name: cardTitle, rows: [{ label: '', value: formatWhole(cell.value) }] }} />
+              </span>
+            {:else}
+              <span
+                class="grid-cell"
+                data-grid-cell
+                data-grid-absent={cell.absent ? 'true' : 'false'}
+                data-grid-level={cell.absent ? '' : gridLevel(cell.value, peak)}
+                role="img"
+                aria-label={text}
+                title={text}
+              ></span>
+            {/if}
           {/each}
         {/each}
       </div>
@@ -254,6 +291,40 @@
         (var(--grid-cell-size, 0.625rem) + var(--grid-cell-gap, 0.1875rem)) -
         var(--grid-cell-gap, 0.1875rem)
     );
+  }
+
+  /* Full-width call sites (issue 178) drop the content-sized cap and stretch
+     the cells to the container's own width instead: each column becomes a
+     flexible track floored at the token cell size, so a short series fills
+     the card the way every other tracker does and a long one still overflows
+     into the strip's own scroll exactly as it always has. */
+  .grid-block[data-grid-fullwidth='true'] {
+    max-inline-size: none;
+    inline-size: 100%;
+  }
+
+  .grid-block[data-grid-fullwidth='true'] .grid-cells,
+  .grid-block[data-grid-fullwidth='true'] .grid-months {
+    /* The fallback is load-bearing, not decoration: --grid-cell-size has no
+       :root definition anywhere in this file, only fallback usages, so a
+       var() here without one is invalid at computed-value time — which does
+       not degrade, it drops this whole declaration to its initial value
+       (none) and silently falls through to the capped layout's fixed-size
+       columns. MEASURED: that is exactly what shipped here once already. */
+    grid-template-columns: repeat(var(--grid-columns), minmax(var(--grid-cell-size, 0.625rem), 1fr));
+    inline-size: 100%;
+  }
+
+  /* The track above stretches; the cell inside it does not, by default — a
+     grid item with its OWN declared width is sized to that width and merely
+     placed inside a wider track, not stretched to fill it (the CSS Grid
+     `stretch` default only governs items whose used width is auto). Scoped
+     to `.grid-cells` alone, not `.grid-legend`: the legend's own swatches
+     stay the fixed token size in every mode, full width or not. MEASURED:
+     without this rule every shape drew an identical 10px cell regardless of
+     how many columns shared the row. */
+  .grid-block[data-grid-fullwidth='true'] .grid-cells .grid-cell {
+    inline-size: auto;
   }
 
   /* 7 cell rows plus their 6 gaps measure 5.5rem, the month axis 0.75rem, and

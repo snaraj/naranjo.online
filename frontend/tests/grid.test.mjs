@@ -250,6 +250,30 @@ test('the block is sized from the columns it rendered, as a cap', () => {
   }
 });
 
+// The opt-in override (issue #178): a full-width call site drops the cap
+// above rather than replacing it, so the calendar's own content-sized box is
+// unaffected by a rule scoped to the [data-grid-fullwidth='true'] attribute.
+test('a full-width call site stretches to its container instead of its columns', () => {
+  const wide = /\.grid-block\[data-grid-fullwidth='true'\] \{([^}]*)\}/.exec(grid);
+  assert.ok(wide, 'the full-width override rule is missing');
+  assert.match(wide[1], /max-inline-size:\s*none/, 'the content-sized cap survives the opt-in');
+  assert.match(wide[1], /inline-size:\s*100%/);
+  // Cells and the month axis stretch together, floored at the same token the
+  // capped layout uses, so a short series fills the card instead of leaving
+  // a tiny graph beside empty space — and a long one still overflows into
+  // the strip's own scroll, exactly as the capped layout already does.
+  const tracks = /\.grid-block\[data-grid-fullwidth='true'\] \.grid-cells,\s*\n\s*\.grid-block\[data-grid-fullwidth='true'\] \.grid-months \{([^}]*)\}/.exec(
+    grid
+  );
+  assert.ok(tracks, 'the full-width track rule is missing, or no longer covers both the cells and the month axis');
+  // The fallback is load-bearing: --grid-cell-size has no :root definition
+  // anywhere, only fallback usages, so a var() here without one is invalid
+  // at computed-value time and silently drops the whole declaration to
+  // `none` — which falls through to the capped layout's fixed-size columns
+  // rather than stretching. MEASURED: that regression shipped here once.
+  assert.match(tracks[1], /minmax\(var\(--grid-cell-size,\s*0\.625rem\),\s*1fr\)/);
+});
+
 // The series arrives from a capture file on the owner's machine, through a
 // snapshot, through the origin, into this DOM — so every string on that path
 // has to reach the page as TEXT and never as markup (owner directive,

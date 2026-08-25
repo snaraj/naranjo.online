@@ -168,6 +168,8 @@
                   noun={source.activity.noun}
                   {view}
                   label={`${source.activity.label}, ${view} view`}
+                  fullWidth
+                  cardTitle="Tokens used"
                 />
                 <p class="usage-activity-total">
                   {source.activity.summary}
