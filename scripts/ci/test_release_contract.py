@@ -6755,23 +6755,18 @@ class GovernanceParityTests(unittest.TestCase):
         security; it costs a reviewer a pointless correction round, which
         is exactly the friction this effort exists to remove.
 
-        The Main Worker receipt keeps its own distinct wording in both
-        documents on purpose; this checks the adversarial line only, and
-        checks that the Main Worker line did not get swept along with it.
+        The Main Worker receipt and its distinct signature retired with
+        issue #190; this checks the adversarial line only.
         """
         adversarial = "- <Agent> (adversarial reviewer)"
-        main_worker = "- <distinct context> (Main Worker)"
         for name, text in (("AGENTS.md", agents), ("PR template", template)):
             if adversarial not in text:
                 raise ValueError(f"{name} lost the canonical reviewer signature shape")
-            if main_worker not in text:
-                raise ValueError(f"{name} lost the canonical Main Worker signature shape")
         # Scoped to the template's own reviewer bullet, never the whole file:
-        # a document may legitimately quote the Main Worker form nearby, and
         # this repository has twice been burned by whole-file token scans.
         try:
             bullet = template.split("- Independent normal-comment verdict", 1)[1].split(
-                "- Main Worker exact-head bounded receipt", 1
+                "- Base freshness and successful required checks", 1
             )[0]
         except IndexError as exc:
             raise ValueError("PR template lost its independent-verdict bullet") from exc
@@ -6781,68 +6776,54 @@ class GovernanceParityTests(unittest.TestCase):
             raise ValueError("PR template reviewer bullet names a second signature shape")
 
     @staticmethod
-    def require_main_worker_receipt(agents: str, template: str, runbook: str) -> None:
+    def require_ready_flip_governance(agents: str, template: str, runbook: str) -> None:
+        """Issue #190: the Ready flip needs approval plus green checks, nothing else.
+
+        The Main Worker ceremony retired; this pins its replacement rule
+        CLOSED. The AGENTS.md section and the runbook's retirement paragraph
+        must equal the canonical text exactly (whitespace-normalized), so a
+        contradictory permission inserted beside the rule is as red as a
+        deletion — review round 1 proved a substring pin lets "may also flip
+        Ready before review" survive. It also fails closed if the retired
+        ceremony's canonical shapes resurface in any governance document.
+        """
+        canonical_section = (
+            "Once the independent adversarial review has approved the exact "
+            "final head and all required checks are green, the coordinator "
+            "flips Ready and the owner merges. No third distinct-context "
+            "pass is required."
+        )
         try:
-            section = agents.split("### Main Worker receipt", 1)[1].split(
+            section = agents.split("### After review, Ready", 1)[1].split(
                 "## GitHub conventions", 1
             )[0]
         except IndexError as exc:
-            raise ValueError("canonical Main Worker receipt section is missing") from exc
-        for token in (
-            "distinct Main Worker",
-            "one bounded",
-            "HEAD: <40-lowercase-hex>",
+            raise ValueError("canonical Ready-flip section is missing") from exc
+        if " ".join(section.split()) != canonical_section:
+            raise ValueError("Ready-flip section is not the closed canonical rule")
+        agents_flat = " ".join(agents.split())
+        if "a fresh exact-head APPROVE receipt exists" not in agents_flat:
+            raise ValueError("merge readiness lost the exact-head APPROVE requirement")
+        canonical_runbook_paragraph = (
+            "The Main Worker gate retired with issue #190. After the final "
+            "author push, exact-head adversarial approval, and green required "
+            "checks, no further distinct-context receipt is required: the "
+            "coordinator alone changes the Draft/Ready state, and the "
+            "repository owner alone merges."
+        )
+        runbook_paragraphs = [" ".join(block.split()) for block in runbook.split("\n\n")]
+        if canonical_runbook_paragraph not in runbook_paragraphs:
+            raise ValueError(
+                "release runbook lost the closed Ready-flip retirement paragraph"
+            )
+        for retired in (
             "ROLE: MAIN-WORKER",
-            "VERDICT: PASS",
-            "SCOPE: architecture,merge-order,authority,settings,base-freshness,required-checks",
-            "- <distinct context> (Main Worker)",
-            "architecture,",
-            "merge order",
-            "authority",
-            "settings",
-            "base freshness",
-            "required checks",
-            "not repeat",
-            "any later author push",
-        ):
-            if token not in section:
-                raise ValueError(f"canonical Main Worker receipt lost: {token}")
-        for token in (
-            "Obtain the Main Worker receipt",
-            "exact-head canonical `ROLE: MAIN-WORKER` / `VERDICT: PASS` receipt",
-        ):
-            if token not in agents:
-                raise ValueError(f"agent Ready sequence lost Main Worker parity: {token}")
-        for token in (
-            "Main Worker exact-head bounded receipt",
-            "HEAD: <40-lowercase-hex>",
-            "ROLE: MAIN-WORKER",
-            "VERDICT: PASS",
-            "SCOPE: architecture,merge-order,authority,settings,base-freshness,required-checks",
-            "- <distinct context> (Main Worker)",
-            "): pending",
-        ):
-            if token not in template:
-                raise ValueError(f"PR template lost Main Worker receipt parity: {token}")
-        runbook_flat = " ".join(runbook.split())
-        for token in (
-            "separate Main Worker gate",
-            "distinct Main Worker",
-            "HEAD: <40-lowercase-hex>",
-            "ROLE: MAIN-WORKER",
-            "VERDICT: PASS",
-            "SCOPE: architecture,merge-order,authority,settings,base-freshness,required-checks",
-            "- <distinct context> (Main Worker)",
-            "later push",
-        ):
-            if token not in runbook_flat:
-                raise ValueError(f"release runbook lost Main Worker receipt parity: {token}")
-        for legacy in (
+            "(Main Worker)",
+            "Main Worker receipt",
             "MAIN-WORKER-ARCHITECTURE",
-            "Main Worker (architecture coordinator)",
         ):
-            if legacy in agents + template + runbook:
-                raise ValueError(f"legacy Main Worker receipt survived: {legacy}")
+            if retired in agents + template + runbook:
+                raise ValueError(f"retired Main Worker ceremony resurfaced: {retired}")
 
     def test_owner_only_merge_requirement_rejects_the_personal_name_mutant(self):
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
@@ -7293,14 +7274,6 @@ class GovernanceParityTests(unittest.TestCase):
         for name, changed_template in (
             ("drift back to the pre-#128 shape", template.replace(canonical, drifted, 1)),
             ("signature dropped", template.replace(canonical, "", 1)),
-            (
-                "Main Worker shape swept into the reviewer bullet",
-                template.replace(canonical, "- <distinct context> (Main Worker)", 1),
-            ),
-            (
-                "Main Worker signature dropped",
-                template.replace("- <distinct context> (Main Worker)", "", 1),
-            ),
             # The three below keep the canonical string SOMEWHERE in the file
             # and still have to die, which is what makes the bullet-scoped
             # half of the guard load-bearing rather than decoration.
@@ -7343,67 +7316,89 @@ class GovernanceParityTests(unittest.TestCase):
                 "contract drifts to the template's old shape",
                 agents.replace(canonical, drifted),
             ),
-            (
-                "contract drops the Main Worker shape",
-                agents.replace("- <distinct context> (Main Worker)", ""),
-            ),
         ):
             with self.subTest(agents_mutant=name), self.assertRaises(ValueError):
                 self.require_adversarial_signature_parity(changed_agents, template)
 
-    def test_main_worker_actor_scope_evidence_and_exact_head_are_parity_pinned(self):
+    def test_ready_flip_rule_is_parity_pinned_and_main_worker_ceremony_stays_retired(self):
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         template = (ROOT / ".github" / "PULL_REQUEST_TEMPLATE.md").read_text(
             encoding="utf-8"
         )
         runbook = (ROOT / "docs" / "release-governance.md").read_text(encoding="utf-8")
-        self.require_main_worker_receipt(agents, template, runbook)
+        self.require_ready_flip_governance(agents, template, runbook)
         for owner, token in (
-            ("agents", "distinct Main Worker"),
-            ("agents", "HEAD: <40-lowercase-hex>"),
-            ("agents", "ROLE: MAIN-WORKER"),
-            ("agents", "VERDICT: PASS"),
-            ("agents", "SCOPE: architecture,merge-order,authority,settings,base-freshness,required-checks"),
-            ("agents", "- <distinct context> (Main Worker)"),
-            ("agents", "Obtain the Main Worker receipt"),
-            ("agents", "exact-head canonical `ROLE: MAIN-WORKER` / `VERDICT: PASS` receipt"),
-            ("template", "HEAD: <40-lowercase-hex>"),
-            ("template", "ROLE: MAIN-WORKER"),
-            ("template", "VERDICT: PASS"),
-            ("template", "SCOPE: architecture,merge-order,authority,settings,base-freshness,required-checks"),
-            ("template", "- <distinct context> (Main Worker)"),
-            ("runbook", "the distinct\nMain Worker"),
-            ("runbook", "HEAD: <40-lowercase-hex>"),
-            ("runbook", "ROLE: MAIN-WORKER"),
-            ("runbook", "VERDICT: PASS"),
-            ("runbook", "SCOPE: architecture,merge-order,authority,settings,base-freshness,required-checks"),
-            ("runbook", "- <distinct context> (Main Worker)"),
-            ("runbook", "later push"),
+            ("agents", "independent adversarial review"),
+            ("agents", "approved the exact final head"),
+            ("agents", "all required checks are green"),
+            ("agents", "coordinator flips Ready"),
+            ("agents", "No third distinct-context pass"),
+            ("agents", "a fresh exact-head APPROVE receipt exists"),
+            ("runbook", "no further"),
+            ("runbook", "distinct-context receipt"),
+            ("runbook", "Draft/Ready state"),
+            ("runbook", "repository owner alone merges"),
         ):
             changed = {"agents": agents, "template": template, "runbook": runbook}
             if owner == "agents":
                 prefix, marker, suffix = changed[owner].partition(
-                    "### Main Worker receipt"
+                    "### After review, Ready"
                 )
                 self.assertTrue(marker)
+                self.assertIn(token, suffix)
                 changed[owner] = prefix + marker + suffix.replace(token, "", 1)
             else:
-                changed[owner] = changed[owner].replace(token, "", 1)
+                self.assertIn(token, changed[owner])
+                changed[owner] = changed[owner].replace(token, "")
             with self.subTest(deletion=owner + ":" + token), self.assertRaises(ValueError):
-                self.require_main_worker_receipt(
+                self.require_ready_flip_governance(
                     changed["agents"], changed["template"], changed["runbook"]
                 )
+        inverted = agents.replace(
+            "No third distinct-context pass is required.",
+            "A third distinct-context pass is required.",
+            1,
+        )
+        self.assertNotEqual(inverted, agents)
+        with self.subTest(inversion="agents"), self.assertRaises(ValueError):
+            self.require_ready_flip_governance(inverted, template, runbook)
+        # Review round 1: a contradictory permission INSERTED BESIDE the
+        # canonical rule survived the substring pin. The closed-section pin
+        # must kill exactly that mutant, in both governance documents.
+        contradiction = agents.replace(
+            "No third distinct-context pass is required.",
+            "No third distinct-context pass is required. The coordinator may "
+            "also flip Ready before review or required checks complete.",
+            1,
+        )
+        self.assertNotEqual(contradiction, agents)
+        with self.subTest(contradiction="agents"), self.assertRaises(ValueError):
+            self.require_ready_flip_governance(contradiction, template, runbook)
+        anchor = "Draft/Ready state, and the repository owner alone merges."
+        self.assertEqual(runbook.count(anchor), 1)
+        runbook_contradiction = runbook.replace(
+            anchor,
+            anchor + " The coordinator may publish without the owner when "
+            "every check is green.",
+            1,
+        )
+        self.assertNotEqual(runbook_contradiction, runbook)
+        with self.subTest(contradiction="runbook"), self.assertRaises(ValueError):
+            self.require_ready_flip_governance(agents, template, runbook_contradiction)
         for owner in ("agents", "template", "runbook"):
-            changed = {"agents": agents, "template": template, "runbook": runbook}
-            changed[owner] = changed[owner].replace(
-                "VERDICT: PASS",
-                "VERDICT: BLOCKED",
-                1,
-            )
-            with self.subTest(inversion=owner), self.assertRaises(ValueError):
-                self.require_main_worker_receipt(
-                    changed["agents"], changed["template"], changed["runbook"]
-                )
+            for retired in (
+                "ROLE: MAIN-WORKER",
+                "- <distinct context> (Main Worker)",
+                "Main Worker receipt",
+            ):
+                changed = {"agents": agents, "template": template, "runbook": runbook}
+                changed[owner] = changed[owner] + "\n" + retired + "\n"
+                with self.subTest(
+                    reintroduction=owner + ":" + retired
+                ), self.assertRaises(ValueError):
+                    self.require_ready_flip_governance(
+                        changed["agents"], changed["template"], changed["runbook"]
+                    )
 
     def test_manifest_scan_and_alias_audit_doctrine_is_truthful_and_load_bearing(self):
         paths = {
@@ -8916,7 +8911,6 @@ class WorkflowStructureTests(unittest.TestCase):
             "VERDICT: APPROVE",
             "mutation and claim-audit",
             "(adversarial reviewer)",
-            "Main Worker exact-head bounded receipt",
         ):
             self.assertIn(required, template)
 
