@@ -12,7 +12,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -70,14 +73,32 @@ func findRecord(records []map[string]any, msg string) map[string]any {
 // assertNoUpstreamURL is the privacy pin every narrative test runs: a
 // refresh record may name a host and a label, never a URL or a request
 // path, because usage endpoints carry query parameters and configuration
-// may embed account-specific paths.
+// may embed account-specific paths. The banned list includes the
+// query-secret sentinel the production-shaped *url.Error probes carry, so
+// this pin catches the exact disclosure shape Daybreak demonstrated in
+// PR #184 round 1 — a transport error whose string embeds the full URL.
 func assertNoUpstreamURL(t *testing.T, output string) {
 	t.Helper()
-	for _, banned := range []string{"https://", "http://", "scores.json", "/usage-a", "/usage-b", "/repos/", "starting_at="} {
+	for _, banned := range []string{"https://", "http://", "scores.json", "/usage-a", "/usage-b", "/repos/", "starting_at=", "?account=", urlErrorQuerySecret} {
 		if strings.Contains(output, banned) {
 			t.Errorf("refresh narrative leaked %q; records carry hosts and labels only:\n%s", banned, output)
 		}
 	}
+}
+
+// urlErrorQuerySecret is the sentinel query value the production-shaped
+// transport-error probes embed; its appearance anywhere in log output is
+// the disclosure this round's fix exists to prevent.
+const urlErrorQuerySecret = "query-secret-must-not-enter-logs"
+
+// urlErrorDoer models the PRODUCTION transport-failure shape, which the
+// plain-error scriptedDoer cannot: net/http's client wraps every DNS, TLS,
+// dial, timeout, and redirect failure in *url.Error, and that error's
+// string embeds the complete request URL — query parameters included.
+type urlErrorDoer struct{}
+
+func (urlErrorDoer) Do(r *http.Request) (*http.Response, error) {
+	return nil, &url.Error{Op: "Get", URL: r.URL.String(), Err: errors.New("connection reset by peer")}
 }
 
 // TestRefreshLoopWarnsOnFailureWithNextRetry drives the real loop under
@@ -317,6 +338,102 @@ func TestCommitSourceFailureWarnsWithRepoLabel(t *testing.T) {
 		t.Errorf("commit failure record = level %v repo %v, want WARN/fixture-repo", record["level"], record["repo"])
 	}
 	assertNoUpstreamURL(t, out.String())
+}
+
+// TestUsageSourceWarnSurvivesProductionURLError injects the exact
+// disclosure shape from Daybreak's round-1 finding — a *url.Error whose
+// string embeds the full query-bearing usage endpoint — through the real
+// per-source WARN handler at debug level (so the per-attempt DEBUG line is
+// swept too), and requires the narrative to carry the host and the
+// transport's cause while the URL never appears.
+func TestUsageSourceWarnSurvivesProductionURLError(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	registry := newRegistry(snapshotFiles, []panelDefinition{
+		{id: "token-usage", kind: KindTokenUsage, title: "Token usage", source: usageFetchSource(t)},
+	})
+	state := registry.byID["token-usage"]
+	state.fetch.setLogger(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	env := fakeLookup(map[string]string{"PANEL_TEST_KEY_A": "fixture-key"})
+	if err := registry.refreshPanel(t.Context(), state, urlErrorDoer{}, env); err == nil {
+		t.Fatal("refreshPanel() succeeded through a failing transport")
+	}
+	record := findRecord(refreshLogRecords(t, out.String()), "usage source failed")
+	if record == nil {
+		t.Fatalf("no per-source WARN in %q", out.String())
+	}
+	errText, _ := record["error"].(string)
+	if !strings.Contains(errText, "fetch api.example.test") || !strings.Contains(errText, "connection reset by peer") {
+		t.Errorf("sanitized error = %q, want the host and the transport cause", errText)
+	}
+	assertNoUpstreamURL(t, out.String())
+}
+
+// TestCommitSourceWarnSurvivesProductionURLError drives the same
+// production-shaped *url.Error through the commit-source WARN handler.
+func TestCommitSourceWarnSurvivesProductionURLError(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	source, err := NewFetchSource(
+		SnapshotSource{Name: "snapshots/vcs-activity.json"},
+		validFetchConfig(),
+		panelFetchSpecs{vcs: &vcsActivityFetchSpec{
+			Endpoint:    "https://api.example.test/contributions",
+			Headers:     map[string]string{"Accept": "text/html"},
+			ContentType: "text/html",
+			Commits: &vcsCommitsFetchSpec{
+				Headers:     map[string]string{"Accept": "application/json"},
+				ContentType: "application/json",
+				Max:         4,
+				Sources:     []vcsCommitSourceSpec{{Repo: "fixture-repo", Endpoint: "https://api.example.test/repos/fixture/commits?account=" + urlErrorQuerySecret}},
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("NewFetchSource() error = %v", err)
+	}
+	source.setLogger(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	_, _, attempted, fresh := source.commitSection(t.Context(), urlErrorDoer{}, source.specs.vcs.Commits, time.Now().UTC())
+	if !attempted || fresh {
+		t.Fatalf("commitSection = attempted %t, fresh %t; want an attempted, degraded round", attempted, fresh)
+	}
+	record := findRecord(refreshLogRecords(t, out.String()), "commit source failed")
+	if record == nil {
+		t.Fatalf("no commit-source WARN in %q", out.String())
+	}
+	errText, _ := record["error"].(string)
+	if !strings.Contains(errText, "fetch api.example.test") || !strings.Contains(errText, "connection reset by peer") {
+		t.Errorf("sanitized error = %q, want the host and the transport cause", errText)
+	}
+	assertNoUpstreamURL(t, out.String())
+}
+
+// TestRefreshLoopWarnSurvivesProductionURLError closes the loop-layer half
+// of the finding: refresh.go's "panel refresh failed" WARN logs the
+// propagated chain, so it must inherit the construction-boundary
+// sanitization — proven against a query-bearing configured endpoint under
+// the real loop in a synctest bubble.
+func TestRefreshLoopWarnSurvivesProductionURLError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		out := &safeBuffer{}
+		registry, _ := bossFetchRegistry(t, "https://api.example.test/scores.json?account="+urlErrorQuerySecret, validFetchConfig())
+		registry.logger = slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		ctx, cancel := context.WithCancel(t.Context())
+		registry.startRefresh(ctx, urlErrorDoer{}, func(string) string { return "" })
+		synctest.Wait()
+		cancel()
+		synctest.Wait()
+
+		record := findRecord(refreshLogRecords(t, out.String()), "panel refresh failed")
+		if record == nil {
+			t.Fatalf("no failure WARN in %q", out.String())
+		}
+		errText, _ := record["error"].(string)
+		if !strings.Contains(errText, "fetch api.example.test") || !strings.Contains(errText, "connection reset by peer") {
+			t.Errorf("sanitized error = %q, want the host and the transport cause", errText)
+		}
+		assertNoUpstreamURL(t, out.String())
+	})
 }
 
 // TestDirectlyDrivenSourcesStayQuiet pins the default the whole suite

@@ -377,6 +377,38 @@ func admitDestination(addr netip.Addr) error {
 	return nil
 }
 
+// transportErrorCause strips every *url.Error layer from err before it can
+// be wrapped into a returned fetch error. net/http's client wraps DNS, TLS,
+// dial, timeout, and redirect failures in *url.Error — and url.Parse and
+// http.NewRequestWithContext wrap parse failures the same way — whose
+// Error() string embeds the COMPLETE request URL, query included. The
+// shipped configuration carries account-specific paths and the usage
+// endpoints append query parameters, so a raw transport error reaching a
+// log would be a disclosure path (Daybreak finding, PR #184 round 1).
+// Sanitizing HERE, at the error-construction boundary, means every wrapped
+// fetch error's public string carries at most a host, a status, and a
+// stable reason — and every downstream log site (per-source WARNs, the
+// refresh loop's panel WARN, the per-attempt DEBUG) inherits that
+// guarantee instead of each having to re-prove it. The retained cause is
+// the transport's own reason (context deadline, refused redirect, egress
+// refusal, connection reset), which is exactly the debugging signal; only
+// the URL-bearing wrapper is dropped, and errors.Is/As over the cause
+// chain keeps working because the cause itself is returned unmodified.
+func transportErrorCause(err error) error {
+	for {
+		wrapped, ok := err.(*url.Error)
+		if !ok {
+			return err
+		}
+		if wrapped.Err == nil {
+			// A url.Error with no cause has only URL-bearing content; the
+			// operation name is the one safe fact it carries.
+			return errors.New(wrapped.Op + ": request failed")
+		}
+		err = wrapped.Err
+	}
+}
+
 // setLogger installs the registry's logger on this source. It is called
 // exactly once, by startRefresh, before any refresh loop launches; the
 // mutex makes even a misuse race-safe.
@@ -806,7 +838,9 @@ func (s *FetchSource) fetchDocument(ctx context.Context, doer fetchDoer, request
 func (s *FetchSource) exchangeDocument(ctx context.Context, doer fetchDoer, request fetchRequest) ([]byte, int, string, error) {
 	parsed, err := url.Parse(request.endpoint)
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("fetch: parse endpoint: %w", err)
+		// url.Parse failures arrive as *url.Error embedding the raw
+		// endpoint; only the URL-free cause may enter the returned chain.
+		return nil, 0, "", fmt.Errorf("fetch: parse endpoint: %w", transportErrorCause(err))
 	}
 	host := parsed.Hostname()
 	// Re-admitted at request time, defense in depth against any future spec
@@ -818,7 +852,7 @@ func (s *FetchSource) exchangeDocument(ctx context.Context, doer fetchDoer, requ
 	defer cancel()
 	outbound, err := http.NewRequestWithContext(attemptCtx, http.MethodGet, request.endpoint, nil)
 	if err != nil {
-		return nil, 0, host, fmt.Errorf("fetch: build request: %w", err)
+		return nil, 0, host, fmt.Errorf("fetch: build request: %w", transportErrorCause(err))
 	}
 	limit := s.config.MaxBytes
 	if request.maxBytes > 0 && request.maxBytes < limit {
@@ -833,7 +867,9 @@ func (s *FetchSource) exchangeDocument(ctx context.Context, doer fetchDoer, requ
 	}
 	response, err := doer.Do(outbound)
 	if err != nil {
-		return nil, 0, host, fmt.Errorf("fetch %s: %w", parsed.Hostname(), err)
+		// The client's *url.Error embeds the full request URL; the chain
+		// keeps the host and the transport's own cause, nothing more.
+		return nil, 0, host, fmt.Errorf("fetch %s: %w", parsed.Hostname(), transportErrorCause(err))
 	}
 	defer func() { _ = response.Body.Close() }()
 	// A rate-limit refusal is separated from every other bad status because
