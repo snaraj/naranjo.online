@@ -6777,7 +6777,8 @@ class GovernanceParityTests(unittest.TestCase):
 
     @staticmethod
     def require_ready_flip_governance(agents: str, template: str, runbook: str) -> None:
-        """Issue #190: the Ready flip needs approval plus green checks, nothing else.
+        """Issues #190/#198: the Ready flip needs approval plus green checks,
+        nothing else — and the pin closes the DOCUMENTS, not a window.
 
         The Main Worker ceremony retired; this pins its replacement rule
         CLOSED. The AGENTS.md section and the runbook's retirement paragraph
@@ -6786,6 +6787,21 @@ class GovernanceParityTests(unittest.TestCase):
         deletion — review round 1 proved a substring pin lets "may also flip
         Ready before review" survive. It also fails closed if the retired
         ceremony's canonical shapes resurface in any governance document.
+
+        Round 2 (issue #198) proved the window itself was the hole: a
+        competing Ready authority placed OUTSIDE the pinned section — a
+        displaced paragraph, a second runbook paragraph, or the Merge
+        readiness bullet rewritten — survived. Therefore every block in the
+        three governance documents that speaks the word "ready" (word
+        boundary, case-insensitive; `/readyz` and "readiness" do not match)
+        must hash-match one enumerated pin below, and every pin must still
+        be present, so an unenumerated Ready statement anywhere is red and a
+        vanished pinned region is red. Editing a ready-bearing block is a
+        conscious change: recompute its normalized SHA-256 here in the same
+        commit. Honest limit, stated for the reviewer: the closure keys on
+        the word "ready", so a contradiction that avoids the word evades
+        this net — the canonical-rule equality above and adversarial review
+        remain the outer layers.
         """
         canonical_section = (
             "Once the independent adversarial review has approved the exact "
@@ -6824,6 +6840,70 @@ class GovernanceParityTests(unittest.TestCase):
         ):
             if retired in agents + template + runbook:
                 raise ValueError(f"retired Main Worker ceremony resurfaced: {retired}")
+        ready_word = re.compile(r"\bready\b", re.IGNORECASE)
+        ready_block_pins = {
+            "AGENTS.md": (
+                ("Releases: every artifact-classified PR advances numeric",
+                 "51d731a4043ae6cd138faa11e771b4d019bc4ec4f123518ae4c42d645108c33b"),
+                ("**Verdict format** — posted as a normal PR comment",
+                 "5b074e5bab48c010304cc700fc62e47d14e34769c7534255b0ed14451e09a1cd"),
+                ("A green check, a peer approval, or a ready state is evidence",
+                 "c174925d3033b05506dfaad7adbf36f51b0d2b14007090a38cd9ef8465e9f7f3"),
+                ("### After review, Ready (the heading)",
+                 "8746155dd0c815012e6a09c3f159ebe5337426c6821c1c45a26023cafa6554f6"),
+                ("Once the independent adversarial review has approved (the rule)",
+                 "132d86d25ffe1a7cfb0d16c26c17c2768b417ab8e5bb5c2bc4bdd5d41a43306e"),
+                ("- **`requires-review` — the review-readiness signal.**",
+                 "340084c93dd72dbd2f93440ccc1f68955f3ad911ff08cf2904be70e0ff5d5694"),
+                ("- **Merge readiness.** Draft remains Draft until",
+                 "ae8e12d40d0dc1b2fd8f0b4af635ffe5a7481f9c653f67c5d73808f60bd0b956"),
+                ("1. **Claim the work.** (the delivery-loop numbered list)",
+                 "e7c8953ae84d4b69aa2985d0a3dd94b171c0806205fd8394ddf53ade179b01a9"),
+                ("Comments the owner leaves on PRs ARE code reviews",
+                 "e8e6f2dd0c82a28a8c280cd1705002f4faf8d2e9aa81195df5466d6db83a871c"),
+                ("The full local gate does not substitute for the server boundary",
+                 "f37cd9fe94b5eba97837c4498d33b9ca9e26f7a14cf4990f31eae08e0fd6a145"),
+            ),
+            "PR template": (
+                ("- Author applies `requires-review` only after exact-head",
+                 "91e45327a9619c731f57835fd77dfc1b35d39acce828080020756a2602fcd42e"),
+            ),
+            "release runbook": (
+                ("That same 2026-08-14 transaction recorded the `Protect-M",
+                 "461f11122e5d52df1dd1a937cbe51e1c4a82856daa1ae667e1bafa8e6a8b8ca9"),
+                ("Missing, extra, duplicated, name-only, foreign-integration",
+                 "2d6b738ab4bf9675eb30ce44edb02b22aa15eaaf2f2e2d542739b9908fe69a16"),
+                ("The property is returned only at ruleset write-access-level",
+                 "fbebe47bc7dfafbe7239d6f0db9f8e661ac56527edfb4561a99525d0ad5326f1"),
+                ("The Main Worker gate retired with issue #190 (the retirement paragraph)",
+                 "69aa791f7a6fc8e2c92a39b0579b3306949fd10d9bb4430647770de414d0b5ab"),
+            ),
+        }
+        for document_name, document in (
+            ("AGENTS.md", agents),
+            ("PR template", template),
+            ("release runbook", runbook),
+        ):
+            found = {}
+            for block in re.split(r"\n\n+|\n(?=- \*\*)", document):
+                if ready_word.search(block):
+                    normalized = " ".join(block.split())
+                    found[hashlib.sha256(normalized.encode()).hexdigest()] = normalized
+            pins = ready_block_pins[document_name]
+            pinned_digests = {digest for _, digest in pins}
+            for digest, block in found.items():
+                if digest not in pinned_digests:
+                    raise ValueError(
+                        f"unenumerated Ready-authority text in {document_name}: "
+                        f"{block[:100]!r} — every block that speaks of Ready must "
+                        "be an enumerated pin; editing one is a conscious change "
+                        "to the pin set in require_ready_flip_governance"
+                    )
+            for label, digest in pins:
+                if digest not in found:
+                    raise ValueError(
+                        f"pinned Ready region lost from {document_name}: {label!r}"
+                    )
 
     def test_owner_only_merge_requirement_rejects_the_personal_name_mutant(self):
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
@@ -7399,6 +7479,61 @@ class GovernanceParityTests(unittest.TestCase):
                     self.require_ready_flip_governance(
                         changed["agents"], changed["template"], changed["runbook"]
                     )
+        # Issue #198 / review round 2 and the post-merge audits: the window
+        # pin let a competing Ready authority survive OUTSIDE it. Every
+        # surviving mutant both reviewers reproduced must now die under the
+        # document-wide closure — both displacement directions, the operative
+        # Merge-readiness bullet, a second runbook paragraph, the template,
+        # and the lost-pin direction.
+        competing = (
+            "The coordinator may also flip Ready before review or required "
+            "checks complete."
+        )
+        displaced_before = agents.replace(
+            "### After review, Ready",
+            competing + "\n\n### After review, Ready",
+            1,
+        )
+        self.assertNotEqual(displaced_before, agents)
+        with self.subTest(closure="displaced-before-rule"), self.assertRaises(
+            ValueError
+        ):
+            self.require_ready_flip_governance(displaced_before, template, runbook)
+        displaced_after = agents.replace(
+            "## GitHub conventions",
+            competing + "\n\n## GitHub conventions",
+            1,
+        )
+        self.assertNotEqual(displaced_after, agents)
+        with self.subTest(closure="displaced-after-delimiter"), self.assertRaises(
+            ValueError
+        ):
+            self.require_ready_flip_governance(displaced_after, template, runbook)
+        bullet_rewrite = agents.replace(
+            "- **Merge readiness.**",
+            "- **Merge readiness.** The coordinator may flip Ready before "
+            "review completes.",
+            1,
+        )
+        self.assertNotEqual(bullet_rewrite, agents)
+        with self.subTest(closure="merge-readiness-bullet"), self.assertRaises(
+            ValueError
+        ):
+            self.require_ready_flip_governance(bullet_rewrite, template, runbook)
+        with self.subTest(closure="second-runbook-paragraph"), self.assertRaises(
+            ValueError
+        ):
+            self.require_ready_flip_governance(
+                agents, template, runbook + "\n\n" + competing + "\n"
+            )
+        with self.subTest(closure="template-addition"), self.assertRaises(ValueError):
+            self.require_ready_flip_governance(
+                agents, template + "\n\n" + competing + "\n", runbook
+            )
+        self.assertEqual(agents.count("a ready state"), 1)
+        lost_pin = agents.replace("a ready state", "an approved state", 1)
+        with self.subTest(closure="pinned-region-lost"), self.assertRaises(ValueError):
+            self.require_ready_flip_governance(lost_pin, template, runbook)
 
     def test_manifest_scan_and_alias_audit_doctrine_is_truthful_and_load_bearing(self):
         paths = {
