@@ -77,8 +77,15 @@ make help               # list every target
 `make dev` builds the backend to a real binary and launches it in the
 background under a captured PID, killed by a trap on `EXIT`/`INT`/`TERM` —
 never a backgrounded `go run`, whose child process survives the parent's
-death and orphans the listening port. Both `run` and `dev` bind `127.0.0.1`
-only.
+death and orphans the listening port. Both `run` and `dev` set
+`LISTEN_ADDRESS=127.0.0.1` for the backend they launch (Vite's own HMR
+server already binds `127.0.0.1` unconditionally), so neither target ever
+listens on a non-loopback interface — verify with `lsof -iTCP -sTCP:LISTEN
+-n -P` or equivalent. `LISTEN_ADDRESS` is unset by default and the deployed
+Helm chart never sets it, so production's all-interfaces bind — required
+inside the pod network — is unchanged; the override exists only for this
+local loop. `PORT` must be a decimal integer between 1 and 65535; any other
+value is refused before any process starts.
 
 Panels serve their embedded snapshot data egress-free by default; live
 refresh (`PANELS_REFRESH`) stays a production opt-in, never a local default
