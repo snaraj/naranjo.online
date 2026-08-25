@@ -7,6 +7,22 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.41] - 2026-08-25
+
+### Fixed
+
+- The issue-168 popover column-independence probe no longer flips on
+  sub-pixel cross-load noise (issue #194): it used to round each popover
+  edge and require the rounded values equal across two separate page
+  loads, which inverts at half-pixel boundaries — measured as a ±1 px
+  flake on three engines across unrelated diffs, including a README-only
+  one. The probe now compares raw floats within one CSS pixel, which
+  keeps its full discriminating power (a popover actually coupled to the
+  column moves by hundreds of pixels when the column drops to its
+  minimum) while making the pass/fail deterministic. The invariant under
+  test is unchanged and the assertion is not weakened: column
+  independence still fails on any real movement.
+
 ## [0.1.40] - 2026-08-25
 
 ### Changed

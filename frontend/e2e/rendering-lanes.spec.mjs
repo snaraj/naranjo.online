@@ -4451,11 +4451,15 @@ test('the reading-mode popover is unaffected by the column, even at its narrowes
   await openReadingModes(page);
   const shipped = await page.evaluate(() => {
     const box = window.document.querySelector('#reading-mode-menu').getBoundingClientRect();
-    // Rounded to the nearest pixel: two separate page loads can each settle a
-    // fraction of a pixel apart (font-metric timing, not a real position
-    // change), and the invariant under test is "the same place", not
-    // "byte-identical floats".
-    return { left: Math.round(box.left), right: Math.round(box.right), top: Math.round(box.top) };
+    // Raw floats on purpose. This used to round each edge and require the
+    // rounded values EQUAL, but two separate page loads settle a fraction of
+    // a pixel apart (font-metric timing, not a real position change), and
+    // round-then-compare flips 65↔66 whenever the true edge sits near a
+    // half-pixel boundary — issue #194, measured as a ±1 px flake on three
+    // engines across unrelated diffs. The invariant under test is "the same
+    // place", so the comparison below allows one CSS pixel of cross-load
+    // noise; a popover actually coupled to the column moves by hundreds.
+    return { left: box.left, right: box.right, top: box.top };
   });
 
   // A fresh visit rather than closing and reopening the first one: the
@@ -4479,7 +4483,7 @@ test('the reading-mode popover is unaffected by the column, even at its narrowes
     const box = window.document.querySelector('#reading-mode-menu').getBoundingClientRect();
     const root = window.document.documentElement;
     return {
-      popover: { left: Math.round(box.left), right: Math.round(box.right), top: Math.round(box.top) },
+      popover: { left: box.left, right: box.right, top: box.top },
       swatches: window.document.querySelectorAll('#reading-mode-menu button').length,
       scrollWidth: root.scrollWidth,
       clientWidth: root.clientWidth
@@ -4487,9 +4491,13 @@ test('the reading-mode popover is unaffected by the column, even at its narrowes
   });
 
   expect(observed.swatches, 'the reading modes lost a swatch at the narrowest column').toBe(5);
-  expect(
-    observed.popover,
-    'narrowing the column moved the popover; it is meant to be independent of the column now (issue 168)'
-  ).toEqual(shipped);
+  for (const edge of ['left', 'right', 'top']) {
+    expect(
+      Math.abs(observed.popover[edge] - shipped[edge]),
+      `narrowing the column moved the popover ${edge} from ${shipped[edge]} to ` +
+        `${observed.popover[edge]}; it is meant to be independent of the column ` +
+        'now (issue 168; one CSS pixel of cross-load noise allowed, issue #194)'
+    ).toBeLessThanOrEqual(1);
+  }
   expect(observed.scrollWidth).toBe(observed.clientWidth);
 });
