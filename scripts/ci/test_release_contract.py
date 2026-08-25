@@ -6779,37 +6779,43 @@ class GovernanceParityTests(unittest.TestCase):
     def require_ready_flip_governance(agents: str, template: str, runbook: str) -> None:
         """Issue #190: the Ready flip needs approval plus green checks, nothing else.
 
-        The Main Worker ceremony retired; this pins its replacement rule in
-        AGENTS.md and the release runbook, and fails closed if the retired
+        The Main Worker ceremony retired; this pins its replacement rule
+        CLOSED. The AGENTS.md section and the runbook's retirement paragraph
+        must equal the canonical text exactly (whitespace-normalized), so a
+        contradictory permission inserted beside the rule is as red as a
+        deletion — review round 1 proved a substring pin lets "may also flip
+        Ready before review" survive. It also fails closed if the retired
         ceremony's canonical shapes resurface in any governance document.
         """
+        canonical_section = (
+            "Once the independent adversarial review has approved the exact "
+            "final head and all required checks are green, the coordinator "
+            "flips Ready and the owner merges. No third distinct-context "
+            "pass is required."
+        )
         try:
             section = agents.split("### After review, Ready", 1)[1].split(
                 "## GitHub conventions", 1
             )[0]
         except IndexError as exc:
             raise ValueError("canonical Ready-flip section is missing") from exc
-        section_flat = " ".join(section.split())
-        for token in (
-            "independent adversarial review has approved the exact final head",
-            "all required checks are green",
-            "the coordinator flips Ready",
-            "the owner merges",
-            "No third distinct-context pass is required",
-        ):
-            if token not in section_flat:
-                raise ValueError(f"canonical Ready-flip rule lost: {token}")
+        if " ".join(section.split()) != canonical_section:
+            raise ValueError("Ready-flip section is not the closed canonical rule")
         agents_flat = " ".join(agents.split())
         if "a fresh exact-head APPROVE receipt exists" not in agents_flat:
             raise ValueError("merge readiness lost the exact-head APPROVE requirement")
-        runbook_flat = " ".join(runbook.split())
-        for token in (
-            "no further distinct-context receipt is required",
-            "the coordinator alone changes the Draft/Ready state",
-            "the repository owner alone merges",
-        ):
-            if token not in runbook_flat:
-                raise ValueError(f"release runbook lost Ready-flip parity: {token}")
+        canonical_runbook_paragraph = (
+            "The Main Worker gate retired with issue #190. After the final "
+            "author push, exact-head adversarial approval, and green required "
+            "checks, no further distinct-context receipt is required: the "
+            "coordinator alone changes the Draft/Ready state, and the "
+            "repository owner alone merges."
+        )
+        runbook_paragraphs = [" ".join(block.split()) for block in runbook.split("\n\n")]
+        if canonical_runbook_paragraph not in runbook_paragraphs:
+            raise ValueError(
+                "release runbook lost the closed Ready-flip retirement paragraph"
+            )
         for retired in (
             "ROLE: MAIN-WORKER",
             "(Main Worker)",
@@ -7356,6 +7362,29 @@ class GovernanceParityTests(unittest.TestCase):
         self.assertNotEqual(inverted, agents)
         with self.subTest(inversion="agents"), self.assertRaises(ValueError):
             self.require_ready_flip_governance(inverted, template, runbook)
+        # Review round 1: a contradictory permission INSERTED BESIDE the
+        # canonical rule survived the substring pin. The closed-section pin
+        # must kill exactly that mutant, in both governance documents.
+        contradiction = agents.replace(
+            "No third distinct-context pass is required.",
+            "No third distinct-context pass is required. The coordinator may "
+            "also flip Ready before review or required checks complete.",
+            1,
+        )
+        self.assertNotEqual(contradiction, agents)
+        with self.subTest(contradiction="agents"), self.assertRaises(ValueError):
+            self.require_ready_flip_governance(contradiction, template, runbook)
+        anchor = "Draft/Ready state, and the repository owner alone merges."
+        self.assertEqual(runbook.count(anchor), 1)
+        runbook_contradiction = runbook.replace(
+            anchor,
+            anchor + " The coordinator may publish without the owner when "
+            "every check is green.",
+            1,
+        )
+        self.assertNotEqual(runbook_contradiction, runbook)
+        with self.subTest(contradiction="runbook"), self.assertRaises(ValueError):
+            self.require_ready_flip_governance(agents, template, runbook_contradiction)
         for owner in ("agents", "template", "runbook"):
             for retired in (
                 "ROLE: MAIN-WORKER",

@@ -20,14 +20,24 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   identical for every PR; the author runs the complete local gate once on
   the final head and the reviewer re-runs the full suite only with
   specific cause; labels and PR metadata are named as coordination
-  signals rather than security invariants. The enforcement is repointed,
-  not weakened: `require_ready_flip_governance` pins the replacement rule
-  in `AGENTS.md` and `docs/release-governance.md` with deletion and
-  inversion mutants, and fails closed if the retired ceremony's canonical
-  shapes (`ROLE: MAIN-WORKER`, the bounded five-line receipt) resurface
-  in any governance document. Commit identity and SSH signing, owner-only
-  merge, the release transition gate, the four-way version lock, and the
-  independent adversarial review itself are all untouched.
+  signals rather than security invariants, while the App-posted
+  exact-head review verdict — actor and head binding — remains control
+  evidence. The enforcement is repointed: `require_ready_flip_governance`
+  pins the replacement rule CLOSED — the `AGENTS.md` section and the
+  runbook's retirement paragraph must equal the canonical text exactly,
+  so a contradictory permission inserted beside the rule is as red as a
+  deletion (review round 1 proved the substring pin let one survive) —
+  with deletion, inversion, and Ready-before-controls contradiction
+  mutants, and it fails closed if the retired ceremony's canonical shapes
+  (`ROLE: MAIN-WORKER`, the bounded five-line receipt) resurface in any
+  governance document. Removed control, stated plainly: no second
+  independent context re-checks architecture, merge order, authority,
+  settings, base freshness, or required checks before Ready — base
+  freshness and required checks stay coordinator-verified at the flip,
+  and the owner merge gate remains terminal. Commit identity and SSH
+  signing, owner-only merge, the release transition gate, the four-way
+  version lock, and the independent adversarial review itself are all
+  untouched.
 
 ## [0.1.40] - 2026-08-25
 
