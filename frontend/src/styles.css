@@ -272,6 +272,14 @@
   --card-header-gap: 0.125rem;
   --card-body-gap: 0.5rem;
   --card-meta-gap: 0.25rem 0.875rem;
+  /* A linked card's title/counters row (issue 188): every named phone width
+     (320/360/390/412, e2e/rendering-lanes.spec.mjs's phoneWidths) sits below
+     30rem with headroom, and it is far short of the 67.5rem column-handle
+     breakpoint, so this threshold never interacts with that one. Below it
+     EntryLog.svelte stacks the row outright; at or above it the row is
+     flex, nowrap, always inline — a deterministic viewport switch rather
+     than the old flex-wrap, which let a title's own length decide. */
+  --breakpoint-card-meta: 30rem;
   --card-title-family: var(--font-sans);
   --card-title-size: 1.0625rem;
   --card-title-weight: 650;

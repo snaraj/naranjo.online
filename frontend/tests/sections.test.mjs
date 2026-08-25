@@ -569,6 +569,54 @@ test('a count of one is a count of one thing', () => {
   assert.match(entryLog, /aria-hidden="true"/);
 });
 
+test('the entry-head row stacks or inlines by viewport alone, never by title length (issue 188)', () => {
+  const style = styleBlock(entryLog);
+  // No flex-wrap on .entry-head anywhere in this file: that property is
+  // exactly the old, content-dependent mechanism (a short title happened to
+  // leave room on the line; a long one did not) the fix replaces.
+  const entryHeadBlocks = [...style.matchAll(/\.entry-head\s*\{([^}]*)\}/g)].map(([, body]) => body);
+  assert.ok(entryHeadBlocks.length >= 2, 'expected a base rule and a min-width override for .entry-head');
+  for (const body of entryHeadBlocks) {
+    // "nowrap" is fine (and required below); the ambiguous value this test
+    // bans is a bare "wrap", which is what let content length decide.
+    assert.doesNotMatch(
+      body,
+      /flex-wrap:\s*wrap\b/,
+      'a wrap-based rule reintroduces content-dependent placement'
+    );
+  }
+  // The base (mobile-first) rule stacks the row in a column.
+  const [baseBody] = entryHeadBlocks;
+  assert.match(baseBody, /flex-direction:\s*column/);
+  // Exactly one min-width override flips it to an inline, non-wrapping row.
+  const overrides = [...style.matchAll(/@media \(min-width:\s*([^)]+)\)\s*\{\s*\.entry-head\s*\{([^}]*)\}/g)];
+  assert.equal(overrides.length, 1, 'expected exactly one viewport override for .entry-head');
+  const [, breakpoint, overrideBody] = overrides[0];
+  assert.match(overrideBody, /flex-direction:\s*row/);
+  assert.match(overrideBody, /flex-wrap:\s*nowrap/);
+  // The breakpoint used here is the same literal styles.css documents and
+  // justifies as --breakpoint-card-meta — a parity pin against silent drift
+  // between the two files, the same shape as the column breakpoint's own
+  // recomputation test.
+  const [, documentedValue] = /--breakpoint-card-meta:\s*([^;]+);/.exec(styles) ?? [];
+  assert.ok(documentedValue, 'styles.css must document --breakpoint-card-meta');
+  assert.equal(
+    breakpoint.trim(),
+    documentedValue.trim(),
+    'EntryLog.svelte’s media query must match styles.css’s documented --breakpoint-card-meta'
+  );
+  // Every phone width the rendering-lane suite tests sits below the
+  // breakpoint (480px), with headroom, so no real phone in that matrix can
+  // land on the wide side by accident.
+  const breakpointPx = Number.parseFloat(documentedValue) * 16;
+  for (const phoneWidth of [320, 360, 390, 412]) {
+    assert.ok(
+      phoneWidth < breakpointPx,
+      `phone width ${phoneWidth}px must sit below --breakpoint-card-meta (${breakpointPx}px)`
+    );
+  }
+});
+
 test('projectsCapturedOn is a well-formed date, and formatIsoDate renders every stated date honestly', () => {
   // A pure test of the constant and the function (issue 167): the owner
   // removed the visitor-facing caption that used to render both together

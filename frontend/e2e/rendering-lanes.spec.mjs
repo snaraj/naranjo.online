@@ -2233,6 +2233,73 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
   await expect(codingProjects.locator('h3.subsection-title')).toHaveText('Coding Projects');
 });
 
+/* Every repo card's title/counters row, measured (issue 188). The owner's
+ * screenshot showed the SAME viewport rendering two cards differently: short
+ * titles (naranjo.online, lidersea.com) left room for the commits/stars
+ * counters on the title's own line, while long titles
+ * (website-infrastructure, the foobar2000-* trio) pushed them below —
+ * content deciding the layout instead of the viewport. This lane measures
+ * every one of the six cards at once, at both a narrow and a wide viewport,
+ * and requires the SAME placement for every card at a given width: no
+ * overlap (stacked, two rows) below the breakpoint, real overlap (one row)
+ * at or above it — proving the fix by what a real engine painted, not by
+ * reading the rule back out of the stylesheet. */
+test('every repo card places its counters the same way relative to its title, regardless of title length (issue 188)', async ({
+  page,
+}) => {
+  await visit(page);
+
+  const codingProjects = page
+    .locator('#projects .page-subsection')
+    .filter({ has: page.locator('h3.subsection-title', { hasText: 'Coding Projects' }) });
+  const heads = codingProjects.locator('.entry-head');
+  const cardCount = await heads.count();
+  expect(cardCount, 'the six repo cards are not all on the page').toBe(6);
+
+  const overlapsVertically = (a, b) => a.y < b.y + b.height && b.y < a.y + a.height;
+
+  const measure = async () => {
+    const rows = [];
+    for (let index = 0; index < cardCount; index += 1) {
+      const head = heads.nth(index);
+      const heading = await head.locator('.entry-heading').boundingBox();
+      const counts = await head.locator('.entry-counts').boundingBox();
+      expect(heading, `card ${index}'s title never rendered a box`).not.toBeNull();
+      expect(counts, `card ${index}'s counters never rendered a box`).not.toBeNull();
+      rows.push({ heading, counts, inline: overlapsVertically(heading, counts) });
+    }
+    return rows;
+  };
+
+  // Narrow: 320, 375 and 412 are the owner's named widths for this issue —
+  // 375 is an iPhone SE/8 report the shared phoneWidths list does not
+  // otherwise cover, so it is added here rather than reused from that list.
+  for (const width of [320, 375, 412]) {
+    await page.setViewportSize({ width, height: 900 });
+    const rows = await measure();
+    for (const [index, row] of rows.entries()) {
+      expect(
+        row.inline,
+        `at ${width}px, card ${index}'s counters sit beside its title instead of below it`
+      ).toBe(false);
+      expect(
+        row.counts.y,
+        `at ${width}px, card ${index}'s counters render above its title`
+      ).toBeGreaterThanOrEqual(row.heading.y + row.heading.height - 1);
+    }
+  }
+
+  // Wide: an ordinary desktop width, comfortably above the breakpoint.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const wideRows = await measure();
+  for (const [index, row] of wideRows.entries()) {
+    expect(
+      row.inline,
+      `at 1280px, card ${index}'s counters wrapped below its title instead of sitting beside it`
+    ).toBe(true);
+  }
+});
+
 /* ===========================================================================
  * The chrome-icon family (owner directive, 2026-08-24)
  *
