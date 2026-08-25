@@ -129,6 +129,28 @@ test('the page stacks the name, the nav and the four sections in one column', ()
   assert.match(link[1], /min-inline-size:\s*2\.75rem/);
 });
 
+test('the nav link carries no idle underline, but hover and focus still mark it as a link (issue 157)', () => {
+  const idle = /\.section-link\s*\{([^}]*)\}/.exec(styles);
+  assert.ok(idle, 'the section links are not styled where this pin expects them');
+  assert.match(idle[1], /text-decoration:\s*none/, 'the idle nav link must not carry an underline');
+
+  const hover = /\.section-link:hover\s*\{([^}]*)\}/.exec(styles);
+  assert.ok(hover, 'the hover state is not styled where this pin expects it');
+  assert.match(
+    hover[1],
+    /text-decoration:\s*underline/,
+    'hover must add back the affordance the idle state no longer carries'
+  );
+  assert.match(hover[1], /color:\s*var\(--color-brand\)/, 'hover keeps its brand-ink affordance too');
+
+  // The site's own focus ring must survive this change untouched — a nav
+  // link is still a link the moment keyboard focus lands on it.
+  const focus = /\.section-link:focus-visible\s*\{([^}]*)\}/.exec(styles);
+  assert.ok(focus, 'the focus-visible state is not styled where this pin expects it');
+  assert.match(focus[1], /outline:\s*2px solid var\(--color-accent\)/);
+  assert.match(focus[1], /outline-offset:\s*2px/);
+});
+
 // ---------------------------------------------------------------------------
 // The feed card primitive
 // ---------------------------------------------------------------------------
@@ -263,6 +285,7 @@ test('the card token defaults are global, and resolve through the reading modes'
     '--card-max-inline-size',
     '--card-media-aspect',
     '--card-media-fit',
+    '--card-media-max-block-size',
     '--card-title-family',
     '--card-title-size',
     '--card-title-weight',
@@ -419,18 +442,50 @@ test('a count of one is a count of one thing', () => {
   assert.match(projectsSection, /aria-hidden="true"/);
 });
 
-test('the counts say when they were captured, and the page fetches nothing', async () => {
+test('projectsCapturedOn is a well-formed date, and formatIsoDate renders every stated date honestly', () => {
+  // A pure test of the constant and the function (issue 167): the owner
+  // removed the visitor-facing caption that used to render both together
+  // ("Counts captured from … on …; this page fetches nothing" — capture
+  // provenance is a maintainer/reviewer fact, not something a visitor came
+  // here to read), but projectsCapturedOn remains the maintenance record for
+  // when the six counts below were captured, and formatIsoDate is the same
+  // general date renderer the work/art feed cards use (feed.ts), so both
+  // still deserve direct coverage independent of any one caller.
   assert.match(projectsCapturedOn, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(formatIsoDate('2026-08-23'), '23 August 2026');
   assert.equal(formatIsoDate('2026-01-01'), '1 January 2026');
   // An unparseable date returns unchanged rather than inventing a day.
   assert.equal(formatIsoDate('not-a-date'), 'not-a-date');
   assert.equal(formatIsoDate('2026-13-01'), '2026-13-01');
-  assert.match(projectsSection, /formatIsoDate\(projectsCapturedOn\)/);
-  assert.match(projectsSection, /fetches nothing/);
-  // The rows are data. Nothing in this tree may reach the network for them:
-  // the origin is local-origin-only and live refresh is off by default, so a
-  // live count would be a promise the deployment cannot keep.
+});
+
+test('the Coding Projects feed renders no capture-date or no-fetch caption (issue 167)', () => {
+  // The owner: "why would a user care to know that this fetches nothing?
+  // remove this." Both halves are gone from the rendered markup — a
+  // regression back to either is what this pins against, not merely an
+  // absence of a check that used to require them.
+  assert.doesNotMatch(
+    projectsSection,
+    /Counts captured from/,
+    'the maintainer-facing capture-date caption returned to the visitor-facing markup'
+  );
+  assert.doesNotMatch(
+    projectsSection,
+    /fetches nothing/,
+    'the maintainer-facing no-fetch caption returned to the visitor-facing markup'
+  );
+  assert.doesNotMatch(
+    projectsSection,
+    /formatIsoDate\(projectsCapturedOn\)/,
+    'the component still renders the capture date somewhere'
+  );
+});
+
+test('nothing in the work, projects, art, or trackers surfaces reaches the network', async () => {
+  // The no-fetch INVARIANT the removed caption used to state in prose stays
+  // real and stays ENFORCED here regardless of whether any caption says so
+  // (issue 167): the origin is local-origin-only and live refresh is off by
+  // default, so a live count would be a promise the deployment cannot keep.
   for (const [name, source] of Object.entries(introduced)) {
     assert.doesNotMatch(
       source,
@@ -514,12 +569,35 @@ test('the heavy pictures cost the page no layout shift', () => {
   // that cannot disagree because both read the same token and the same
   // constants.
   assert.match(artGallery, /aspect-ratio:\s*var\(--card-media-aspect\)/);
+  // The cap (issue 157) is a SECOND, independent ceiling on the same
+  // reservation, not a second timing: it still resolves before any byte
+  // arrives, through the one global token every frame shares.
+  assert.match(artGallery, /max-block-size:\s*var\(--card-media-max-block-size\)/);
   assert.match(artGallery, /width=\{artWidth\}/);
   assert.match(artGallery, /height=\{artHeight\}/);
   // The first is the one a visitor is looking at; the rest wait until they are
   // scrolled toward.
   assert.match(artGallery, /loading=\{index === 0 \? 'eager' : 'lazy'\}/);
   assert.match(artGallery, /decoding="async"/);
+});
+
+test('the gallery frame cap is pinned at its literal value, independent of computed style', () => {
+  // Daybreak Blue's review of PR #161 found the previous e2e coverage
+  // self-referential: it read getComputedStyle(...).maxHeight from the very
+  // stylesheet under test and derived its OWN expectation from that reading,
+  // so a mutation widening the cap (20rem -> 200rem) moved the expectation
+  // and the rendered behavior together and the suite never noticed. This
+  // test pins the LITERAL value the design actually chose — 20rem, 320px at
+  // this page's unmodified 16px root — straight out of the source text, and
+  // the e2e assertions in rendering-lanes.spec.mjs now hardcode the same
+  // literal 320 rather than reading it back from the DOM, so a widened cap
+  // is a diff against a fixed number in two independent places, not against
+  // itself in one.
+  assert.match(
+    styles,
+    /--card-media-max-block-size:\s*20rem;/,
+    'the gallery cap token must read exactly 20rem — a change here must be a deliberate design edit, verified against the e2e literal too'
+  );
 });
 
 test('no picture entered the repository', async () => {

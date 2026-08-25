@@ -27,12 +27,34 @@
   existed only to undo the docking are all gone with it.
 
   Every region has a fixed block size, so data arriving never shifts layout,
-  and a wide window scrolls inside the grid, never the page. -->
+  and a wide window scrolls inside the grid, never the page.
+
+  Every commit row is real navigation now (issue 157). The repo name links to
+  the repository, and the subject PREFERS the commit's own permalink whenever
+  its SHA validates, falling back to its trailing "(#N)" reference only when
+  no valid SHA is present (Daybreak Blue's review, round 3, finding 3: the
+  SHA is the one association this document can actually prove, so it must
+  never be outranked by a syntactic guess a subject line happens to carry) —
+  every href comes from lib/activity.ts's validated builders, never from
+  interpolating the payload's own strings, so a row this document cannot
+  vouch for renders as the plain text it always was rather than as a link
+  nobody addressed. Text stays text either way: neither branch below renders
+  payload data as markup. -->
 <script lang="ts">
   import PanelShell from './PanelShell.svelte';
   import ContributionGrid from './ContributionGrid.svelte';
   import { panelAge, panelKinds, watchPanel, type PanelEnvelope } from '../panels';
-  import { activityCells, activityPanelId, parseVCSActivity } from '../activity';
+  import {
+    activityCells,
+    activityPanelId,
+    commitReferenceLinkLabel,
+    commitReferenceUrl,
+    commitRepoLinkLabel,
+    commitRepoUrl,
+    commitShaLinkLabel,
+    commitShaUrl,
+    parseVCSActivity
+  } from '../activity';
   import { formatWhole, toColumns } from '../grid';
 
   /* The commits region shows at most this many rows inside its fixed box;
@@ -92,9 +114,42 @@
           <li class="activity-commit activity-empty">no recent commits reported</li>
         {:else}
           {#each commits as commit}
+            {@const repoHref = commitRepoUrl(commit.repo)}
+            {@const shaHref = commitShaUrl(commit)}
+            {@const referenceHref = shaHref ? null : commitReferenceUrl(commit)}
             <li class="activity-commit">
-              <span class="activity-commit-repo">{commit.repo}</span>
-              <span class="activity-commit-message" title={commit.message}>{commit.message}</span>
+              {#if repoHref}
+                <a
+                  class="activity-commit-repo"
+                  href={repoHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={commitRepoLinkLabel(commit.repo)}
+                >{commit.repo}</a>
+              {:else}
+                <span class="activity-commit-repo">{commit.repo}</span>
+              {/if}
+              {#if shaHref}
+                <a
+                  class="activity-commit-message"
+                  href={shaHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={commit.message}
+                  aria-label={commitShaLinkLabel(commit.message, commit.sha)}
+                >{commit.message}</a>
+              {:else if referenceHref}
+                <a
+                  class="activity-commit-message"
+                  href={referenceHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={commit.message}
+                  aria-label={commitReferenceLinkLabel(commit.message)}
+                >{commit.message}</a>
+              {:else}
+                <span class="activity-commit-message" title={commit.message}>{commit.message}</span>
+              {/if}
               <span class="activity-commit-age">{panelAge(commit.at)}</span>
             </li>
           {/each}
@@ -144,11 +199,19 @@
     color: var(--panel-muted, rgb(158, 158, 158));
   }
 
+  /* Five rows at the 44px touch floor (issue 157: two cells in every row are
+     now real navigation, and AGENTS.md's touch-target floor applies to a
+     link exactly as it does to a button — there is no "it is small text"
+     exception). The row grew from 1.125rem to 2.75rem to make that floor
+     real rather than decorative; the list's own fixed block-size grew with
+     it, five times over, so the box is still reserved up front and nothing
+     here shifts when the payload lands — the reservation is simply taller
+     than it used to be. */
   .activity-commits {
     margin: 0;
     padding: 0;
     list-style: none;
-    block-size: 5.625rem;
+    block-size: 13.75rem;
     overflow: hidden;
     font-size: 0.75rem;
     line-height: 1.5;
@@ -157,23 +220,64 @@
   .activity-commit {
     display: grid;
     grid-template-columns: auto 1fr auto;
-    align-items: baseline;
+    align-items: center;
     gap: 0.5rem;
-    block-size: 1.125rem;
+    min-block-size: 2.75rem;
     white-space: nowrap;
   }
 
+  /* min-block-size plus a matching line-height is what makes the touch floor
+     real without reaching for flex: a grid item is blockified regardless of
+     whether it renders as <a> or <span> (the validated-vs-fallback branch),
+     so both variants of a cell claim the same 44px box and the same vertical
+     centering, and a row never changes height depending on which branch a
+     given entry took. min-inline-size covers the OTHER axis the block-size
+     fix left open (issue 157 follow-up): a valid one-character repo slug —
+     "a" is admitted by isValidRepoSlug — has almost no intrinsic content
+     width, and the grid's auto column sizes to that content absent a floor,
+     so the shortest admitted slug rendered a ~7px-wide anchor even though
+     the row's height already cleared 44px. The floor sits well under
+     max-inline-size, so it only ever WIDENS a column that content already
+     starves; every realistic repo name is wider than 2.75rem on its own and
+     is unaffected. */
   .activity-commit-repo {
     color: var(--activity-repo, var(--panel-accent, rgb(220, 138, 0)));
     max-inline-size: 9rem;
+    min-inline-size: 2.75rem;
+    min-block-size: 2.75rem;
+    line-height: 2.75rem;
     overflow: hidden;
     text-overflow: ellipsis;
+    text-decoration: none;
   }
 
   .activity-commit-message {
     color: var(--panel-text, rgb(230, 230, 230));
+    min-block-size: 2.75rem;
+    line-height: 2.75rem;
     overflow: hidden;
     text-overflow: ellipsis;
+    text-decoration: none;
+  }
+
+  /* A row that is not a link (the fallback <span> for an entry this document
+     cannot vouch for) never reaches these rules — only a real <a> gets the
+     hover/focus affordance, so nothing here implies navigation the payload
+     did not earn. The outline sits INSIDE the border box (a negative offset)
+     because both elements clip their own overflow for the ellipsis above,
+     and a ring drawn outside that box would be cropped by the same rule that
+     makes the truncation work. */
+  a.activity-commit-repo:hover,
+  a.activity-commit-repo:focus-visible,
+  a.activity-commit-message:hover,
+  a.activity-commit-message:focus-visible {
+    text-decoration: underline;
+  }
+
+  a.activity-commit-repo:focus-visible,
+  a.activity-commit-message:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
   }
 
   .activity-commit-age {

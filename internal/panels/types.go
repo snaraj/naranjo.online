@@ -271,6 +271,12 @@ type VCSCommit struct {
 	// compromised upstream can forge, and the panel would then attribute a
 	// stranger's commit to the owner.
 	Repo string `json:"repo"`
+	// SHA is the commit's full lowercase-hex identity: the same value
+	// mapCommits already validates through isCommitIdentity before this row
+	// is ever built, carried through rather than discarded so a subject line
+	// that resolves no pull-request reference still has a real destination
+	// to link to (issue 157) instead of rendering as inert text.
+	SHA string `json:"sha"`
 	// Message is the commit subject line, truncated with a visible marker
 	// past maxCommitMessageRunes so one absurd subject cannot dominate the
 	// panel budget.

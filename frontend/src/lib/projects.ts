@@ -6,10 +6,25 @@
  * does the page: requirement 1 keeps the frontend local-origin-only and
  * `PANELS_REFRESH` is default-off, so a live count would be a promise the
  * deployment cannot keep. These figures were captured out of band on the date
- * below and the section says so, which is the same provenance rule the panels
- * follow — a figure that is not live never borrows the freshness of one. The
- * host URLs here are link TARGETS: they reach the DOM as href values and
- * nothing in this tree ever requests them.
+ * recorded below (projectsCapturedOn) — a maintenance record kept for
+ * provenance, no longer rendered on the page (issue 167: a visitor-facing
+ * caption used to spell out the capture date and the network posture in
+ * prose; the owner removed both, because that is a maintainer/reviewer fact,
+ * not something a visitor came to this page to read). The underlying
+ * guarantee the caption used to describe — no live fetch, ever — is
+ * unchanged and stays ENFORCED regardless, structurally rather than by a
+ * sentence on the page: the static Coding Projects rows are not fetched
+ * from GitHub; no code automatically requests `projectHost`; the validated
+ * GitHub URLs are used only for visitor-activated navigation (Daybreak
+ * Blue's review of this pull request, round 4, finding 1 — two earlier
+ * wordings here both overstated the invariant, first as "no remote origin
+ * anywhere" and then as "no transport primitive... in this module and the
+ * components that read it," the second still false because
+ * ActivityBar.svelte, a separate consumer of this same `projectHost`,
+ * calls `watchPanel`, whose production default DOES call `fetch`; this
+ * wording claims nothing beyond what this module and this section
+ * themselves do). The host URLs here are link TARGETS: they reach the DOM
+ * as href values a human may click.
  *
  * Vendor names are data. The host label lives in this module beside the rows
  * it describes, exactly as the panels keep theirs in config data, so the
@@ -42,11 +57,18 @@ export const projectHostLabel = 'GitHub';
 
 /* The owner's account, and the only remote origin this repository's frontend
  * source spells. Every project URL is this plus the repository name, so the
- * host is written once and a row cannot point somewhere else by typo. */
+ * host is written once and a row cannot point somewhere else by typo. The
+ * recent-commits feed's outbound links (lib/activity.ts, issue 157) import
+ * this constant rather than writing a second one, which is what keeps the
+ * claim in this comment true as a second consumer arrives. */
 export const projectHost = 'https://github.com/snaraj';
 
-/* The ISO date these counts were read on. Rendered by the section, so the
- * page can never imply a freshness it does not have. */
+/* The ISO date these counts were read on. A maintenance record ONLY (issue
+ * 167) — no longer rendered by the section, since the capture date is a
+ * maintainer/reviewer fact rather than visitor information. Provenance
+ * stays truthful without display: this constant exists so the date is
+ * recorded somewhere durable, and the no-fetch guarantee it used to
+ * accompany on the page is enforced structurally, not by announcing it. */
 export const projectsCapturedOn = '2026-08-23';
 
 /* The six public repositories, in the order the owner listed them. */
@@ -141,7 +163,3 @@ export function projectCounts(project: Project): ProjectCount[] {
     }
   ];
 }
-
-/* The capture date is rendered by formatIsoDate in lib/feed.ts — the same
- * renderer a feed card's own date line uses, so a date is written one way
- * wherever it appears on this page. */

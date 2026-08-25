@@ -23,6 +23,17 @@ const textEntryFloorPx = 16;
 // The comfortable minimum for a finger, in CSS pixels.
 const touchFloorPx = 44;
 
+/* The gallery frame's height ceiling (issue 157): 20rem at this page's
+ * unmodified 16px root, the literal value tests/sections.test.mjs pins
+ * against the stylesheet's own text. A gallery-cap assertion below compares
+ * a MEASURED box against this fixed number, never against
+ * getComputedStyle(frame).maxHeight read back from the same page — Daybreak
+ * Blue's review of PR #161 proved that self-referential shape lets a
+ * 20rem -> 200rem mutation survive undetected, because the expectation and
+ * the rendered behavior move together when both derive from the one
+ * (mutated) token. */
+const galleryFrameCapPx = 320;
+
 /* Sub-pixel tolerance for a MEASURED box. Layout arithmetic lands on
  * fractional pixels in every engine (a hairline border, a scaled viewport),
  * so a box that should be exactly 44 can be reported as 43.999998. The
@@ -1355,6 +1366,487 @@ test('a panel whose data is still on its way holds exactly the box that data wil
   }
 });
 
+/* Outbound navigation for the recent-commits rows (issue 157), measured
+ * against a real render rather than only against the pure functions in
+ * tests/activity.test.mjs. The origin's own data is well behaved, which is
+ * exactly why it cannot demonstrate the hostile half: the response is
+ * intercepted and its rows replaced — one with a payload shape a raw
+ * interpolation would have turned into a working (and in one case
+ * executable) href, the other with a genuine reference. */
+test('a hostile commit row renders as text and never becomes a live link', async ({ page }) => {
+  const hostileRepo = 'evil.example" onmouseover="window.__activityEscaped = true';
+  const unresolvedPR = 'release (#12e3)'; // not a clean trailing integer
+  const hostileSha = '0000000000000000000000000000000000000001" onmouseover="window.__activityShaEscaped = true';
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.recentCommits = [
+      { repo: hostileRepo, sha: '', message: 'a merge (#1)', at: '2026-08-01T00:00:00Z' },
+      { repo: 'naranjo.online', sha: '', message: unresolvedPR, at: '2026-08-01T00:00:00Z' },
+      // Third row (issue 157 follow-up): a valid repo, no resolvable PR
+      // reference, AND a hostile SHA shaped to break out of an href if it
+      // were ever raw-interpolated. This is the SHA-fallback's own hostile
+      // probe, mirroring the repo probe above rather than merely trusting
+      // isValidCommitSha by inference.
+      { repo: 'naranjo.online', sha: hostileSha, message: unresolvedPR, at: '2026-08-01T00:00:00Z' },
+    ];
+    await route.fulfill({ response, json: envelope });
+  });
+  await visit(page);
+
+  const rendered = await page.evaluate(() => {
+    const rows = [...window.document.querySelectorAll('.activity-commit')];
+    const repoCell = rows[0]?.querySelector('.activity-commit-repo');
+    const messageCell = rows[1]?.querySelector('.activity-commit-message');
+    const shaMessageCell = rows[2]?.querySelector('.activity-commit-message');
+    return {
+      repoTag: repoCell?.tagName ?? null,
+      repoText: repoCell?.textContent ?? null,
+      messageTag: messageCell?.tagName ?? null,
+      messageText: messageCell?.textContent ?? null,
+      shaMessageTag: shaMessageCell?.tagName ?? null,
+      shaMessageText: shaMessageCell?.textContent ?? null,
+      anchors: rows.flatMap((row) =>
+        [...row.querySelectorAll('a')].map((a) => a.getAttribute('href'))
+      ),
+      escaped: window.__activityEscaped === true,
+      shaEscaped: window.__activityShaEscaped === true,
+    };
+  });
+
+  /* The hostile repo reached the DOM as literal text in a plain <span> —
+     never an anchor, and the string it carries never executed. */
+  expect(rendered.repoTag, 'the hostile repo row disappeared; this lane proves nothing').toBe('SPAN');
+  expect(rendered.repoText).toContain(hostileRepo);
+  expect(rendered.escaped, 'the hostile repo string executed').toBe(false);
+
+  /* The second row's repo is genuine, so the guard is scoped per FIELD
+     rather than blanking a whole row the moment anything about it looks
+     wrong — its title still renders as plain text because "(#12e3)" is not
+     a resolvable PR reference, and its SHA is the empty string (no
+     fallback destination either). */
+  expect(rendered.messageTag, 'the unresolved-PR title row disappeared').toBe('SPAN');
+  expect(rendered.messageText).toContain(unresolvedPR);
+
+  /* The third row's SHA fails isValidCommitSha (a real 40-hex prefix
+     followed by an injection attempt is still not 40 hex digits), so the
+     fallback refuses it exactly like the repo/PR guards refuse their own
+     hostile shapes — plain text, never a link, never executed. */
+  expect(rendered.shaMessageTag, 'the hostile-SHA title row disappeared').toBe('SPAN');
+  expect(rendered.shaMessageText).toContain(unresolvedPR);
+  expect(rendered.shaEscaped, 'the hostile SHA string executed').toBe(false);
+
+  /* And no anchor ANYWHERE in any row carries a hostile payload — not
+     merely "these cells are spans", but "nothing built a link out of this
+     payload at all", which is what closes off a raw-interpolation
+     regression landing somewhere this test did not think to look. */
+  for (const href of rendered.anchors) {
+    expect(href, `an anchor carries the hostile payload: ${href}`).not.toContain('evil.example');
+    expect(href, `an anchor carries the hostile payload: ${href}`).not.toContain('onmouseover');
+  }
+});
+
+test('an old-shape vcs-activity/v1 payload with no sha key on any row still renders real activity, not a blank panel (issue 157, Daybreak Blue round 3 finding 1)', async ({
+  page,
+}) => {
+  /* The exact regression Daybreak Blue's review proved with a real
+     intercepted payload: this chart runs a RollingUpdate across multiple
+     replicas, vcs-activity/v1 is an unversioned-forever envelope, and this
+     repository's OWN preceding release legitimately serves rows with no
+     `sha` key in the JSON at all. A browser holding the new frontend can
+     reach an OLD replica mid-rollout. Before this fix, ANY row missing the
+     key failed admission, and one bad row rejected the WHOLE payload —
+     turning a routine deploy into a blank "no activity data" panel for
+     every visitor caught mid-rollout. This lane mutates the REAL served
+     response to strip `sha` from every row (the mixed-version shape), the
+     way an old replica actually would, and proves the panel still renders
+     its real totals and real commit rows rather than the empty state. */
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    // Simulate the OLD v1 shape precisely: delete the key, never set it to
+    // '', because a real old replica's JSON encoder never wrote it at all.
+    for (const commit of envelope.data.recentCommits) {
+      delete commit.sha;
+    }
+    await route.fulfill({ response, json: envelope });
+  });
+  await visit(page);
+
+  const totals = await page.locator('.activity-totals').innerText();
+  expect(totals, 'the panel fell back to its empty state on an old-shape payload').not.toContain(
+    'no activity data'
+  );
+
+  const rows = page.locator('.activity-commit');
+  const rowCount = await rows.count();
+  expect(rowCount, 'no commit rows rendered from an old-shape payload — this is the outage Daybreak Blue proved').toBeGreaterThan(0);
+
+  /* Each row's repo cell is still real navigation — the sha's absence must
+     degrade only that row's own sha-permalink capability, never the repo
+     link, never the row itself, never the rest of the payload. */
+  const repoLinks = await page.locator('.activity-commit-repo').count();
+  expect(repoLinks, 'every row lost its repo link too, not just its sha capability').toBeGreaterThan(0);
+});
+
+/* Independent capability probe (issue 157 follow-up, correcting a finding in
+ * Daybreak Blue's review of PR #161): whether this engine's default keyboard
+ * configuration EVER moves focus onto a plain <a href> at all, measured
+ * against the page's FIRST NAV LINK — reached by one real Tab from the page
+ * header's own last control — which has nothing to do with the commit list
+ * this file's commit-row test uses it to gate. That independence is the
+ * whole point: the PREVIOUS version of that test derived its WebKit skip
+ * from the very Tab press it used to check the repo link's own
+ * reachability, so an `inert` attribute added to the commit list and a
+ * genuine engine limitation looked identical — both landed the check on a
+ * non-'A' element, and both took the skip branch. Measuring the capability
+ * here, against a control the commit list cannot affect, means a mutation
+ * that breaks JUST the commit list can never be masked as "this engine
+ * skips links." Desktop Safari's own default keyboard configuration is
+ * "Text boxes and lists only" and omits plain links from the tab order
+ * entirely; WebKit's automation build mirrors that setting, which is the
+ * true case this probe still legitimately reports. */
+async function engineTabsToPlainLinks(page) {
+  await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
+  await page.keyboard.press('Tab');
+  return page.evaluate(() => window.document.activeElement.tagName === 'A');
+}
+
+test('a resolvable commit row is real, keyboard-reachable navigation', async ({ page }) => {
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.recentCommits = [
+      {
+        repo: 'naranjo.online',
+        sha: '',
+        message: 'release(0.1.34): six-lane integration bundle (#152)',
+        at: '2026-08-24T00:00:00Z',
+      },
+    ];
+    await route.fulfill({ response, json: envelope });
+  });
+  await visit(page);
+
+  const messageLink = page.locator('.activity-commit-message').first();
+  await messageLink.scrollIntoViewIfNeeded();
+
+  const attrs = await page.evaluate(() => {
+    const row = window.document.querySelector('.activity-commit');
+    const repo = row.querySelector('.activity-commit-repo');
+    const message = row.querySelector('.activity-commit-message');
+    const read = (el) => ({
+      tag: el.tagName,
+      href: el.getAttribute('href'),
+      target: el.getAttribute('target'),
+      rel: el.getAttribute('rel'),
+      label: el.getAttribute('aria-label'),
+    });
+    return { repo: read(repo), message: read(message) };
+  });
+
+  expect(attrs.repo.tag).toBe('A');
+  expect(attrs.repo.href).toBe('https://github.com/snaraj/naranjo.online');
+  expect(attrs.repo.target).toBe('_blank');
+  expect(attrs.repo.rel).toBe('noopener noreferrer');
+  expect(attrs.repo.label).toContain('opens in a new tab');
+
+  /* /issues/152, never /pull/152, and "reference" rather than "pull
+     request" in the accessible name: the subject's trailing "(#152)" proves
+     only that this repository's squash-merge convention wrote a number
+     there, never that GitHub confirms it names a pull request specifically
+     (issue 157, Daybreak Blue's review, finding 1). GitHub's own issue/PR
+     numbering answers the ambiguity for us — /issues/N redirects to /pull/N
+     when N is a pull request — so the destination is still exactly right. */
+  expect(attrs.message.tag).toBe('A');
+  expect(attrs.message.href).toBe('https://github.com/snaraj/naranjo.online/issues/152');
+  expect(attrs.message.target).toBe('_blank');
+  expect(attrs.message.rel).toBe('noopener noreferrer');
+  expect(attrs.message.label).toContain('opens in a new tab');
+  expect(attrs.message.label).toContain('reference');
+  expect(
+    attrs.message.label,
+    'the accessible name asserts a fact the payload never proved'
+  ).not.toContain('pull request');
+
+  const engineTabsLinks = await engineTabsToPlainLinks(page);
+
+  /* This row's own natural tab-order boundary: .grid-strip is
+     ContributionGrid's ONE focusable region (the calendar's individual
+     cells carry no tabindex of their own), and it sits immediately before
+     the commit list in both the DOM and the tab order — the same "focus a
+     known preceding control, then real Tab" shape the nav test below uses,
+     anchored on a control that is neither of the two links this test
+     checks. Scoped to [data-activity-panel] because TokenUsagePanel renders
+     the identical ContributionGrid component for its own heatmap and would
+     otherwise make '.grid-strip' ambiguous. */
+  await page.locator('[data-activity-panel] .grid-strip').evaluate((node) => node.focus());
+  await page.keyboard.press('Tab');
+  const repoFocus = await page.evaluate(() => {
+    const el = window.document.activeElement;
+    const style = getComputedStyle(el);
+    return {
+      tag: el.tagName,
+      isRepoLink: el.classList.contains('activity-commit-repo'),
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+    };
+  });
+  test.skip(
+    !engineTabsLinks,
+    "this engine's default keyboard configuration does not include plain links in the tab order, measured independently against the page's own nav link (matches desktop Safari's own default) — nothing left to measure here"
+  );
+  /* From here the engine is INDEPENDENTLY proven capable of tabbing to
+     plain links, so failing to reach the repo link is a real regression,
+     never a platform quirk — this is exactly the assertion the `inert`
+     mutant on the commit list must now fail. */
+  expect(repoFocus.tag, 'a real Tab from the strip did not land on any anchor at all').toBe('A');
+  expect(repoFocus.isRepoLink, 'a real Tab from the strip did not land on the repo link').toBe(true);
+  expect(repoFocus.outlineStyle, 'the repo link has no visible keyboard focus ring').not.toBe('none');
+  expect(
+    parseFloat(repoFocus.outlineWidth),
+    'the repo link focus ring has zero width'
+  ).toBeGreaterThan(0);
+
+  await page.keyboard.press('Tab');
+  const messageFocus = await page.evaluate(() => {
+    const el = window.document.activeElement;
+    const style = getComputedStyle(el);
+    return {
+      isMessageLink: el.classList.contains('activity-commit-message'),
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+    };
+  });
+  expect(messageFocus.isMessageLink, 'Tab from the repo link did not land on the title link').toBe(
+    true
+  );
+  expect(messageFocus.outlineStyle, 'the title link has no visible keyboard focus ring').not.toBe(
+    'none'
+  );
+  expect(
+    parseFloat(messageFocus.outlineWidth),
+    'the title link focus ring has zero width'
+  ).toBeGreaterThan(0);
+
+  /* ACTIVATION, not merely attributes (issue 157, Daybreak Blue's review,
+     finding 3): a real Enter keypress on the now-focused title link must
+     actually trigger the navigation its href promises — target="_blank"
+     opens a new page, intercepted and fulfilled locally so this proof never
+     makes a real outbound request to github.com. Matching markup with no
+     working key handler would pass every assertion above and still leave a
+     keyboard reader stranded; this is what rules that out. */
+  let capturedReferer;
+  await page.context().route('https://github.com/**', (route) => {
+    capturedReferer = route.request().headers()['referer'];
+    return route.fulfill({ status: 200, contentType: 'text/plain', body: 'ok' });
+  });
+  const [popup] = await Promise.all([
+    page.context().waitForEvent('page'),
+    page.keyboard.press('Enter'),
+  ]);
+  await popup.waitForLoadState('domcontentloaded').catch(() => {});
+  expect(popup.url(), 'Enter on the focused title link did not navigate to its own href').toBe(
+    attrs.message.href
+  );
+
+  /* Popup isolation, BEHAVIOR not just markup (issue 157, Daybreak Blue's
+     review, round 3, finding 6): rel="noopener noreferrer" is asserted
+     above as an ATTRIBUTE — a click handler that flipped rel to plain
+     "opener" immediately before the default activation would contradict it
+     without failing a single assertion before this point, and Daybreak
+     Blue proved exactly that survives every check that stops at the
+     attribute string. These two checks close that gap on the REAL,
+     browser-mediated activation: the opened page must carry no
+     window.opener back to this one, and the request that opened it must
+     have carried no Referer header — the two actual security properties
+     noopener/noreferrer exist to guarantee. */
+  const openerIsNull = await popup.evaluate(() => window.opener === null);
+  expect(openerIsNull, 'the opened page can reach back to this one via window.opener').toBe(true);
+  expect(capturedReferer, 'the activating request leaked a Referer header').toBeUndefined();
+
+  await popup.close();
+});
+
+test('a valid-SHA commit row with no resolvable reference is real, keyboard-reachable navigation to its own commit permalink (issue 157, Daybreak Blue round 3 finding 5)', async ({
+  page,
+}) => {
+  /* The positive browser-lane case Daybreak Blue's review found missing:
+     every existing lane exercised either the hostile SHA path (rejected) or
+     a row with sha: '' falling back to a resolvable "(#N)" reference. None
+     exercised the {:else if shaHref} branch actually WINNING — the happy
+     path for a commit with a real identity but no trailing reference number
+     in its subject, which is exactly what an ordinary non-squash commit (or
+     one from a repository with a different merge convention) looks like.
+     Adding `inert` to only this one anchor branch survived every other
+     lane; this test is what makes that mutant fail. */
+  const validSha = '0123456789abcdef0123456789abcdef01234567';
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.recentCommits = [
+      {
+        repo: 'naranjo.online',
+        sha: validSha,
+        message: 'a commit with no trailing reference number at all',
+        at: '2026-08-24T00:00:00Z',
+      },
+    ];
+    await route.fulfill({ response, json: envelope });
+  });
+  await visit(page);
+
+  const messageLink = page.locator('.activity-commit-message').first();
+  await messageLink.scrollIntoViewIfNeeded();
+
+  const attrs = await page.evaluate(() => {
+    const row = window.document.querySelector('.activity-commit');
+    const message = row.querySelector('.activity-commit-message');
+    return {
+      tag: message.tagName,
+      href: message.getAttribute('href'),
+      target: message.getAttribute('target'),
+      rel: message.getAttribute('rel'),
+      label: message.getAttribute('aria-label'),
+    };
+  });
+
+  expect(attrs.tag, 'the sha-fallback branch did not render as a link at all').toBe('A');
+  expect(attrs.href).toBe(`https://github.com/snaraj/naranjo.online/commit/${validSha}`);
+  expect(attrs.target).toBe('_blank');
+  expect(attrs.rel).toBe('noopener noreferrer');
+  expect(attrs.label).toContain('opens in a new tab');
+  expect(attrs.label).toContain(`commit ${validSha.slice(0, 7)}`);
+
+  const engineTabsLinks = await engineTabsToPlainLinks(page);
+
+  await page.locator('[data-activity-panel] .grid-strip').evaluate((node) => node.focus());
+  await page.keyboard.press('Tab'); // repo link
+  await page.keyboard.press('Tab'); // message link (the sha-fallback anchor under test)
+  const focus = await page.evaluate(() => {
+    const el = window.document.activeElement;
+    const style = getComputedStyle(el);
+    return {
+      tag: el.tagName,
+      isMessageLink: el.classList.contains('activity-commit-message'),
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+    };
+  });
+  test.skip(
+    !engineTabsLinks,
+    "this engine's default keyboard configuration does not include plain links in the tab order, measured independently against the page's own nav link — nothing left to measure here"
+  );
+  /* This is exactly the assertion an `inert` mutant on ONLY the
+     {:else if shaHref} anchor branch must now fail: every OTHER lane in
+     this file exercises a different branch (the reference link, or the
+     hostile/rejected paths), so a mutation scoped to just this branch left
+     every one of them green. */
+  expect(focus.tag, 'a real Tab sequence did not land on any anchor at all').toBe('A');
+  expect(focus.isMessageLink, 'a real Tab sequence did not land on the sha-fallback link').toBe(true);
+  expect(focus.outlineStyle, 'the sha-fallback link has no visible keyboard focus ring').not.toBe(
+    'none'
+  );
+  expect(
+    parseFloat(focus.outlineWidth),
+    'the sha-fallback link focus ring has zero width'
+  ).toBeGreaterThan(0);
+
+  /* ACTIVATION, plus the same post-activation popup-isolation proof as the
+     reference-link test above (finding 6): both anchor branches are
+     independent <a> elements in the source, so a mutation scoped to only
+     one of them needs its own activation+isolation proof. */
+  let capturedReferer;
+  await page.context().route('https://github.com/**', (route) => {
+    capturedReferer = route.request().headers()['referer'];
+    return route.fulfill({ status: 200, contentType: 'text/plain', body: 'ok' });
+  });
+  const [popup] = await Promise.all([
+    page.context().waitForEvent('page'),
+    page.keyboard.press('Enter'),
+  ]);
+  await popup.waitForLoadState('domcontentloaded').catch(() => {});
+  expect(popup.url(), 'Enter on the focused sha-fallback link did not navigate to its own href').toBe(
+    attrs.href
+  );
+  const openerIsNull = await popup.evaluate(() => window.opener === null);
+  expect(openerIsNull, 'the opened page can reach back to this one via window.opener').toBe(true);
+  expect(capturedReferer, 'the activating request leaked a Referer header').toBeUndefined();
+  await popup.close();
+});
+
+test('a valid SHA outranks an unverifiable trailing reference on the SAME row (issue 157, Daybreak Blue round 3 finding 3)', async ({
+  page,
+}) => {
+  /* Daybreak Blue's own product probe, reproduced verbatim: a rendered row
+     carrying BOTH a proven commit identity AND a syntactically-valid but
+     nothing-proves-it-real trailing reference number. Before this fix, the
+     reference always won — this exact row linked to /issues/9999999,
+     outlinking a commit this document could actually vouch for. */
+  const validSha = '0123456789abcdef0123456789abcdef01234567';
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.recentCommits = [
+      {
+        repo: 'naranjo.online',
+        sha: validSha,
+        message: 'handwritten reference to nowhere (#9999999)',
+        at: '2026-08-24T00:00:00Z',
+      },
+    ];
+    await route.fulfill({ response, json: envelope });
+  });
+  await visit(page);
+
+  const attrs = await page.evaluate(() => {
+    const message = window.document.querySelector('.activity-commit-message');
+    return { tag: message.tagName, href: message.getAttribute('href') };
+  });
+
+  expect(attrs.tag).toBe('A');
+  expect(
+    attrs.href,
+    'the row linked to the unverifiable /issues/9999999 reference instead of its own proven commit'
+  ).toBe(`https://github.com/snaraj/naranjo.online/commit/${validSha}`);
+  expect(attrs.href).not.toContain('/issues/9999999');
+});
+
+test('the shortest admitted repo slug still clears the touch floor on both axes (issue 157)', async ({
+  page,
+}) => {
+  /* Daybreak Blue's review of PR #161 measured this exact probe: a
+     one-character repo slug — "a" is admitted by isValidRepoSlug, the
+     shortest string the pattern accepts — rendered a 6.625px-wide anchor
+     even though the row already cleared the 44px touch floor on its BLOCK
+     axis. max-inline-size alone bounds the upper end of
+     .activity-commit-repo; nothing bounded the lower end until
+     min-inline-size was added (ActivityBar.svelte), so a column sized
+     purely to this content's own width. */
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.recentCommits = [
+      { repo: 'a', sha: '', message: 'fix: shortest admitted slug (#1)', at: '2026-08-24T00:00:00Z' },
+    ];
+    await route.fulfill({ response, json: envelope });
+  });
+  await visit(page);
+
+  const repoLink = page.locator('.activity-commit-repo').first();
+  await repoLink.scrollIntoViewIfNeeded();
+  const box = await repoLink.boundingBox();
+  expect(box, 'the shortest admitted repo slug rendered no box at all').not.toBeNull();
+  expect(
+    box.width,
+    `the repo link is ${box.width.toFixed(2)}px wide, under the ${touchFloorPx}px touch floor`
+  ).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+  expect(
+    box.height,
+    `the repo link is ${box.height.toFixed(2)}px tall, under the ${touchFloorPx}px touch floor`
+  ).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+});
+
 test('the popover animates only where motion is welcome', async ({ page }) => {
   await visit(page);
   await openReadingModes(page);
@@ -1416,6 +1908,87 @@ test('every section the nav names is on the page, and its link reaches it', asyn
     ).toBeLessThan(landed.viewport);
     expect(landed.top).toBeGreaterThanOrEqual(-1);
   }
+});
+
+test('the nav link is quiet at rest and marks itself the moment intent shows (issue 157)', async ({
+  page,
+}) => {
+  await visit(page);
+  const link = page.locator('.section-link').first();
+  await link.scrollIntoViewIfNeeded();
+
+  const idle = await link.evaluate((node) => getComputedStyle(node).textDecorationLine);
+  expect(idle, 'the nav link carries an idle underline; the owner asked for it gone').toBe('none');
+
+  await link.hover();
+  const hovered = await link.evaluate((node) => getComputedStyle(node).textDecorationLine);
+  expect(hovered, 'hover must mark the link somehow now that idle carries no mark').toBe('underline');
+
+  /* Independent capability probe, corrected after Daybreak Blue's review of
+     PR #161 found the same self-derived-skip defect here as in the
+     commit-row test above: the earlier version's WebKit skip came from the
+     very Tab press it used to check the nav link's OWN reachability, so a
+     regression that broke just the nav link's tabbability would look
+     identical to a genuine engine limitation. The nav link cannot probe
+     itself, so this walks PAST every nav link instead — Work and the Art
+     gallery both carry zero focusable elements of their own between the nav
+     and the Coding Projects feed (a fact this exploits rather than assumes:
+     if that ever stops being true, this walk lands somewhere unexpected and
+     the assertion below fails loudly rather than skipping quietly) — to
+     the feed's first project link: a plain anchor with nothing to do with
+     the nav. */
+  const navCount = await page.locator('.section-link').count();
+  await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
+  for (let step = 0; step < navCount + 1; step += 1) {
+    await page.keyboard.press('Tab');
+  }
+  const probe = await page.evaluate(() => {
+    const el = window.document.activeElement;
+    return { tag: el.tagName, isProjectLink: el.classList.contains('project-link') };
+  });
+  const engineTabsLinks = probe.tag === 'A' && probe.isProjectLink;
+
+  /* Keyboard focus keeps the site's own ring — a real Tab from a throwaway
+     starting point, the same pattern this file uses everywhere else it
+     proves :focus-visible rather than merely programmatic focus. The reading
+     mode's own trigger is the last control the page header holds (it is
+     deliberately LAST, PageHeader.svelte says why), so one real Tab from it
+     is the cheapest way to reach the first nav link without walking every
+     stop from the top of the document. */
+  await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
+  await page.keyboard.press('Tab');
+  const focused = await page.evaluate(() => {
+    const el = window.document.activeElement;
+    const style = getComputedStyle(el);
+    return {
+      tag: el.tagName,
+      isSectionLink: el.classList.contains('section-link'),
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+    };
+  });
+  test.skip(
+    !engineTabsLinks,
+    "this engine's default keyboard configuration does not include plain links in the tab order, measured independently against the Coding Projects feed's own first link (matches desktop Safari's own default) — nothing left to measure here"
+  );
+  /* From here the engine is INDEPENDENTLY proven capable of tabbing to
+     plain links, so failing to reach the nav link is a real regression,
+     never a platform quirk. */
+  expect(
+    focused.isSectionLink,
+    'Tab from the reading-mode trigger did not land on the first nav link'
+  ).toBe(true);
+  expect(focused.outlineStyle, 'the nav link lost its focus ring').not.toBe('none');
+  expect(parseFloat(focused.outlineWidth), 'the nav link focus ring has zero width').toBeGreaterThan(0);
+
+  /* ACTIVATION, not merely attributes: a real Enter keypress on the focused
+     nav link must actually bring its target section into view — this is an
+     in-page anchor, so activation is a scroll rather than a navigation
+     event, and matching markup with no working key handler would pass
+     every assertion above while leaving a keyboard reader stranded. */
+  const targetId = await page.evaluate(() => window.document.activeElement.getAttribute('href'));
+  await page.keyboard.press('Enter');
+  await expect(page.locator(targetId)).toBeInViewport();
 });
 
 test('the art feed shows its frames when the origin serves no media', async ({ page }) => {
@@ -1489,9 +2062,81 @@ test('the art feed shows its frames when the origin serves no media', async ({ p
   for (const size of observed.sizes) {
     expect(size, 'the art frames are not all the same reserved box').toEqual(firstBox);
   }
-  /* And the box is the ratio the pictures are: 16:9, held open before a byte
-     of them arrives. */
-  expect(firstBox.width / firstBox.height).toBeCloseTo(16 / 9, 1);
+  /* And the box is the SMALLER of the pictures' 16:9 ratio and the tokenized
+     height cap (issue 157) — at the page's default column width the cap is
+     what actually wins (960px wide at 16:9 asks for 540px; the cap holds it
+     open at less than that), which is the fix for the owner's exact
+     complaint: one frame was filling the screen. galleryFrameCapPx is the
+     literal cap value, never read back from this page's own computed style
+     (see its declaration for why that self-reference is exactly the defect
+     Daybreak Blue's review found). */
+  const uncapped169Height = firstBox.width * (9 / 16);
+  const expectedHeight = Math.min(uncapped169Height, galleryFrameCapPx);
+  expect(
+    firstBox.height,
+    `the art frame is ${firstBox.height}px, not the capped ${expectedHeight.toFixed(1)}px`
+  ).toBeCloseTo(expectedHeight, 0);
+  /* The cap must be doing real work somewhere, not coincidentally matching
+     the uncapped ratio — but this test runs across every project, including
+     the phone emulations, whose own viewport genuinely renders a frame
+     under 360px wide (MEASURED: 356-359px), where 16:9 alone never reaches
+     320px and the cap is correctly inert. Gating on the frame's own
+     MEASURED width — a layout fact independent of whatever the height-cap
+     token currently says — rather than on the project name (this file's own
+     capability-over-project-name doctrine) restricts the strict-inequality
+     proof to viewports wide enough to exercise it, without ever weakening
+     what it proves there: on a desktop-width frame this still fails exactly
+     as hard against the 20rem -> 200rem mutant. */
+  if (firstBox.width * (9 / 16) > galleryFrameCapPx) {
+    expect(
+      uncapped169Height,
+      `the frame is ${firstBox.width}px wide, too narrow at this viewport to prove the cap engages`
+    ).toBeGreaterThan(galleryFrameCapPx);
+  }
+});
+
+test('the Coding Projects subsection renders no capture-date or no-fetch caption, in the actual DOM (issue 167, Daybreak Blue round 3 finding 4)', async ({
+  page,
+}) => {
+  /* The pre-existing pin at tests/sections.test.mjs scans the COMPONENT
+     SOURCE TEXT for the removed caption's exact spellings. Daybreak Blue
+     proved that pin vacuous against indirection: exporting the identical
+     removed sentence as a constant from projects.ts and rendering it via
+     `{projectCaption}` left every source-text scan green while the caption
+     still reached the page. A source scan can only ever see literal bytes;
+     it cannot see what actually painted. This lane instead reads the REAL
+     RENDERED TEXT of the Coding Projects subsection after a real navigation
+     — robust against ANY indirection technique, because it is checking the
+     one thing that cannot be laundered through a constant, a snippet, or a
+     second component: what a visitor's browser actually put on the screen. */
+  await visit(page);
+
+  const codingProjects = page
+    .locator('#projects .page-subsection')
+    .filter({ has: page.locator('h3.subsection-title', { hasText: 'Coding Projects' }) });
+  await expect(codingProjects, 'the Coding Projects subsection is not on the page at all').toHaveCount(1);
+
+  const text = await codingProjects.innerText();
+
+  /* Sanity: the scope itself must be real content, not an empty shell that
+     would make the negative assertions below trivially true. */
+  expect(text.length, 'the Coding Projects subsection rendered no text at all').toBeGreaterThan(0);
+  expect(text, 'the six project cards are missing from the rendered subsection').toContain(
+    'naranjo.online'
+  );
+
+  /* Both halves of the removed caption, checked independently exactly like
+     the source-text pin does, but against RENDERED text this time. */
+  expect(text, 'the rendered DOM still shows the capture-date caption').not.toMatch(
+    /Counts captured from/
+  );
+  expect(text, 'the rendered DOM still shows the no-fetch caption').not.toMatch(/fetches nothing/);
+
+  /* Scoped correctly: this proves the CODING PROJECTS half never shows the
+     caption, not merely that the phrase is absent from the whole page (a
+     weaker claim the Art subsection's own note could accidentally satisfy
+     if it happened to avoid these exact words). */
+  await expect(codingProjects.locator('h3.subsection-title')).toHaveText('Coding Projects');
 });
 
 /* ===========================================================================
@@ -3221,7 +3866,7 @@ test('every width the handle can reach keeps every section intact', async ({ pag
       const distinct = (values) => new Set(values.map((value) => Math.round(value))).size;
       const frames = [...window.document.querySelectorAll('.art-frame')].map((frame) => {
         const box = frame.getBoundingClientRect();
-        return box.width / box.height;
+        return { width: box.width, height: box.height };
       });
       const root = window.document.documentElement;
       return {
@@ -3281,10 +3926,30 @@ test('every width the handle can reach keeps every section intact', async ({ pag
     expect(state.strips, `the heatmap strips disappeared ${at}`).toBeGreaterThan(0);
     expect(state.navLinks, `the nav lost links ${at}`).toBeGreaterThan(3);
     expect(state.sections, `the page lost a section ${at}`).toBeGreaterThan(3);
-    /* The pictures still reserve the box they will fill. */
+    /* The pictures still reserve the box they will fill: 16:9 below the
+       tokenized cap (issue 157), the cap itself above it — a narrow column
+       still gets the full photograph proportion, and a wide one stops
+       growing the frame instead of reproducing the complaint the cap
+       exists to fix. galleryFrameCapPx is the literal cap value, never the
+       page's own computed style (see its declaration for why) — this is
+       what makes the assertion below independent, rather than the
+       self-referential shape Daybreak Blue's review of PR #161 found: a
+       mutation that widened the token could no longer widen its own
+       expectation along with it.
+       (This viewport is the narrow "rails" one the handle needs to exist at
+       all — MEASURED: even the widest column this sweep can reach keeps the
+       art card's own max-inline-size under ~569px, so the uncapped 16:9
+       height here never clears 320px by a comfortable margin. The
+       unambiguous "the cap is doing real work, not coincidentally equal to
+       the uncapped ratio" proof lives in the dedicated single-frame test
+       above instead, at a viewport wide enough to make that margin real.) */
     expect(state.frames.length, `the art feed rendered no frames ${at}`).toBeGreaterThan(0);
-    for (const ratio of state.frames) {
-      expect(ratio, `an art frame is ${ratio.toFixed(2)}:1 ${at}`).toBeCloseTo(16 / 9, 1);
+    for (const frame of state.frames) {
+      const expectedHeight = Math.min(frame.width * (9 / 16), galleryFrameCapPx);
+      expect(
+        frame.height,
+        `an art frame is ${frame.height.toFixed(1)}px, not the capped ${expectedHeight.toFixed(1)}px ${at}`
+      ).toBeCloseTo(expectedHeight, 0);
     }
   }
 });

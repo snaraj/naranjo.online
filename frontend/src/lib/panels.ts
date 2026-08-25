@@ -94,6 +94,12 @@ export interface TokenUsageData {
 /* vcs-activity/v1 — contribution weeks, totals, streak, recent commits. */
 export interface VCSCommit {
   repo: string;
+  /* The commit's full lowercase-hex identity, carried through so a subject
+   * line that resolves no pull-request reference still has a real
+   * destination to link to (issue 157). The embedded snapshot predates this
+   * field and may still serve an empty string for old rows; that is
+   * truthful absence, not a decode fault. */
+  sha: string;
   message: string;
   at: string;
 }

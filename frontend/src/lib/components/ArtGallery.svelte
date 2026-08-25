@@ -103,11 +103,16 @@
      megabytes of photography arrives. The minimum height is the base an engine
      without aspect-ratio keeps; the ratio is the upgrade, and it is the same
      token the markup's width and height attributes describe, so the two cannot
-     disagree about the shape of the hole they are holding open. */
+     disagree about the shape of the hole they are holding open. The max-height
+     is a second, independent ceiling (issue 157): the ratio alone has no limit
+     on a wide column, which is exactly how one frame came to fill the screen —
+     capping the block-size is what keeps several frames in one viewport
+     without touching the ratio a narrow column still gets in full. */
   .art-frame {
     display: grid;
     min-block-size: 8rem;
     aspect-ratio: var(--card-media-aspect);
+    max-block-size: var(--card-media-max-block-size);
   }
 
   .art-image {
