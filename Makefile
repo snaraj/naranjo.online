@@ -7,19 +7,40 @@
 
 .DEFAULT_GOAL := help
 
-# Overridable: `make run PORT=9090` or `make dev PORT=9090`. `export`
-# (rather than Make's own $(PORT) textual substitution inside a recipe body)
-# is deliberate: it puts PORT in the recipe shell's ENVIRONMENT, so every
-# recipe below reads it via a quoted shell expansion ($$PORT) instead of
-# having Make paste the raw string into the command line as text. An
-# untrusted value pasted as text is a shell-injection vector — see
-# validate-port below and its regression cases in
-# scripts/ci/makefile-invariants.sh — and, one layer further in, an
-# unvalidated port concatenated into a URL string can move a proxy target
-# off its intended host entirely (see frontend/vite.config.ts's own
-# independent validation of DEV_API_PORT).
-PORT ?= 8080
-export PORT
+# PORT is read STRICTLY from the process environment: `PORT=9090 make run`.
+# It is deliberately NEVER a Make command-line override (`make run
+# PORT=9090` is UNSUPPORTED) and this file declares NO Make variable named
+# PORT at all -- no `PORT ?=`, no `export`, nothing Make's own variable
+# engine ever stores or touches.
+#
+# This is not a style choice. Round 2 of this fix used `export PORT` plus
+# `$(value PORT)` to capture the raw text before Make's own textual
+# substitution could run it through a shell -- and that closed the shell-
+# metacharacter vector. But GNU Make ALSO reconstructs MAKEOVERRIDES/MFLAGS
+# from every command-line `VAR=value` argument, for every target, to
+# propagate overrides to a recursive $(MAKE) sub-invocation this Makefile
+# doesn't even have -- and building that reconstruction FULLY EXPANDS each
+# override's raw text, including any embedded $(shell ...) call, before a
+# single recipe line runs. Verified empirically (scratch Makefiles, not
+# reproduced here): `make anytarget PORT='$(shell touch marker)'` created
+# `marker` every time, and NONE of the following defended against it --
+#   - capturing via `RAW_PORT := $(value PORT)` before export: still ran
+#     (the override reconstruction expands PORT independently of what our
+#     own variable does with it);
+#   - never exporting PORT at all: still ran, even against a Makefile that
+#     does not mention PORT anywhere;
+#   - blanking `MAKEOVERRIDES :=` at the top of the file: still ran.
+# The expansion happens inside Make's own command-line-argument handling,
+# before the Makefile is fully read, so no Makefile-side code can intercept
+# it. An environment-set PORT never goes through this reconstruction at
+# all (verified the same way, same hostile payload: no marker) because
+# child processes already inherit the environment through the OS, not
+# through Make's override-propagation machinery -- so it is the only
+# interface this Makefile supports.
+#
+# scripts/ci/makefile-invariants.sh exercises the supported interface with
+# this exact hostile shape (and the shell-metacharacter and "@"-host shapes
+# from round 1) against validate-port, run, dev, and an unrelated target.
 
 FRONTEND := frontend
 # Gitignored; never committed. Rebuilt on every `make dev`.
@@ -31,15 +52,21 @@ help: ## Show this help
 	@echo ""
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ { printf "  make %-6s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 	@echo ""
-	@echo "PORT overrides the backend port for run/dev (default 8080);"
-	@echo "must be a decimal integer 1-65535, checked before anything starts."
+	@echo "PORT overrides the backend port for run/dev (default 8080) --"
+	@echo "set it as an environment variable: PORT=9090 make run. It must be"
+	@echo "a decimal integer 1-65535, checked before anything starts. Do NOT"
+	@echo "pass PORT=... as a make argument (make run PORT=9090); GNU Make"
+	@echo "expands command-line overrides through its own MAKEOVERRIDES"
+	@echo "machinery before any recipe runs, which this repository's own"
+	@echo "review found unsafe for untrusted input."
 	@echo "The full quality-gate battery is NOT here — see AGENTS.md \"Quality gates\"."
 
 # Reruns npm ci only when package-lock.json is newer than the last install.
 # The canonical flags match AGENTS.md "Quality gates" exactly: --ignore-scripts
 # refuses postinstall/preinstall execution from the lockfile's own
 # hasInstallScript dependencies, --no-audit and --no-fund skip network calls
-# this local loop has no business making.
+# this local loop has no business making. Pinned by
+# scripts/ci/makefile-invariants.sh, wired into pr-gate.yml's application job.
 $(DEPS_STAMP): $(FRONTEND)/package-lock.json
 	cd $(FRONTEND) && npm ci --ignore-scripts --no-audit --no-fund
 	@touch $@
@@ -50,28 +77,28 @@ build: deps ## Build the frontend into internal/web/dist (the Go embed tree)
 	cd $(FRONTEND) && npm run build
 
 # Fails closed on any PORT that is not a plain decimal integer in 1-65535 --
-# BEFORE run/dev ever hand PORT to a shell command, a URL, or a child
-# process. This is the ONLY point that inspects the raw, possibly-hostile
-# PORT value from the command line; every recipe below only ever sees it
-# again through the environment, after this gate has already passed. The
-# case pattern matches on the shell's own quoted expansion ("$$PORT"), never
-# on Make-substituted text, so even a value containing quotes, semicolons,
-# backticks, or "$(...)" cannot be interpreted as anything but inert data
-# here — see scripts/ci/makefile-invariants.sh for the hostile regression
-# cases this closes.
+# BEFORE run/dev ever hand it to a shell command, a URL, or a child process.
+# Reads ONLY the process environment ("$${PORT:-8080}", pure shell parameter
+# expansion, defaulting exactly like cmd/server's own listenPort does for an
+# empty PORT) -- never a Make variable, so there is nothing here for
+# MAKEOVERRIDES to expand. The case pattern matches on the shell's own
+# quoted expansion, never on Make-substituted text, so even a value
+# containing quotes, semicolons, backticks, or "$(...)" cannot be
+# interpreted as anything but inert data here.
 validate-port:
-	@case "$$PORT" in \
+	@port="$${PORT:-8080}"; \
+	case "$$port" in \
 		''|*[!0-9]*) \
-			echo "ERROR: PORT must be a decimal integer 1-65535 (got '$$PORT')" >&2; \
+			echo "ERROR: PORT must be a decimal integer 1-65535 (got '$$port')" >&2; \
 			exit 1 ;; \
 	esac; \
-	if [ "$$PORT" -lt 1 ] || [ "$$PORT" -gt 65535 ]; then \
-		echo "ERROR: PORT must be a decimal integer 1-65535 (got '$$PORT')" >&2; \
+	if [ "$$port" -lt 1 ] || [ "$$port" -gt 65535 ]; then \
+		echo "ERROR: PORT must be a decimal integer 1-65535 (got '$$port')" >&2; \
 		exit 1; \
 	fi
 
-run: validate-port build ## Run the full app at http://localhost:$(PORT) (Ctrl-C to stop)
-	LISTEN_ADDRESS=127.0.0.1 go run ./cmd/server
+run: validate-port build ## Run the full app at http://localhost:$$PORT (Ctrl-C to stop; PORT=9090 make run to override)
+	PORT="$${PORT:-8080}" LISTEN_ADDRESS=127.0.0.1 go run ./cmd/server
 
 # The backend is a REAL BUILT BINARY launched by captured PID, never a
 # backgrounded `go run` — `go run`'s child process survives the parent's
@@ -81,9 +108,10 @@ run: validate-port build ## Run the full app at http://localhost:$(PORT) (Ctrl-C
 # the port behind it. LISTEN_ADDRESS=127.0.0.1 (both here and in `run` above)
 # is this dev loop's own opt-in: cmd/server's default, unset behavior — the
 # one the deployed Helm chart actually uses — is untouched.
-dev: validate-port build ## Live-edit loop: built backend in the background, Vite HMR in the foreground
+dev: validate-port build ## Live-edit loop: built backend in the background, Vite HMR in the foreground (PORT=9090 make dev to override)
 	go build -o $(DEV_BINARY) ./cmd/server
-	LISTEN_ADDRESS=127.0.0.1 ./$(DEV_BINARY) & \
+	effective_port="$${PORT:-8080}"; \
+	PORT="$$effective_port" LISTEN_ADDRESS=127.0.0.1 ./$(DEV_BINARY) & \
 	backend_pid=$$!; \
 	trap 'kill $$backend_pid 2>/dev/null; wait $$backend_pid 2>/dev/null' EXIT INT TERM; \
-	cd $(FRONTEND) && DEV_API_PORT="$$PORT" npm run dev
+	cd $(FRONTEND) && DEV_API_PORT="$$effective_port" npm run dev
