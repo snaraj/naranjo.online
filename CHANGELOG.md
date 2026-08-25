@@ -11,30 +11,46 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ### Changed
 
-- Recent-commits feed rows are real navigation. The repo name links to the
-  repository, and — when a commit's own subject carries the trailing
-  `(#N)` a squash merge writes, the way every merge in this very changelog
-  does — the title links to that pull request. Every href is CONSTRUCTED
-  from a validated field, never interpolated from the payload's raw string:
-  the repo slug against the host's own character-set pattern, the PR number
-  as a clean positive integer anchored to the end of the subject. There is
-  no commit SHA in the `vcs-activity` payload, so a commit whose subject
-  resolves no PR renders its title as plain text rather than link to an
-  address nobody served. Two cells in every row are controls now, not
-  decoration, so the row grew from 1.125rem to the 44px touch floor every
-  other control on the page clears (#157).
+- Recent-commits feed rows are real navigation. The repo name always links
+  to the repository. The title's destination PREFERS the commit's own
+  permalink whenever the row carries a validated 40-lowercase-hex SHA —
+  the one association this document can actually prove — and falls back to
+  the trailing `(#N)` a squash merge writes at the end of the subject only
+  when no valid SHA is present; that fallback destination is deliberately
+  `/issues/N`, and the accessible name calls it a neutral "reference," never
+  a "pull request," because a trailing number alone proves only that this
+  repository's own convention wrote a number there, not what it names.
+  `sha` is an OPTIONAL field on the wire: a row may omit it entirely (an old
+  replica served during a rolling update legitimately still can), and an
+  absent or empty SHA is truthful absence, not a decode fault — normalized
+  to `''` and falling through to the reference link or, with neither
+  available, plain text. Every href is CONSTRUCTED from a validated field,
+  never interpolated from the payload's raw string. Two cells in every row
+  are controls now, not decoration, so the row grew from 1.125rem to the
+  44px touch floor every other control on the page clears, on BOTH axes —
+  a valid one-character repo slug gets an inline-size floor alongside the
+  existing block-size one, so the shortest admitted repository name still
+  clears 44px in both dimensions (#157).
 - The header nav row drops its idle underline. Hover adds the underline back
   plus the brand ink, and keyboard focus keeps the exact site-wide ring
   untouched; a nav link is told apart by POSITION (the one row directly
   under the page's name) and ROLE (`<nav aria-label="Page sections">`)
   before color enters into it at all (#157).
+- The Coding Projects feed no longer renders its capture-date and
+  network-posture caption ("Counts captured from GitHub on \<date\>; this
+  page fetches nothing."). Both halves were maintainer/reviewer facts, not
+  visitor information; the capture date remains recorded as a maintenance
+  constant (`projectsCapturedOn` in `lib/projects.ts`), simply no longer
+  printed, and the no-fetch guarantee it used to describe stays enforced
+  structurally — no remote origin anywhere in this tree — rather than by a
+  sentence on the page (#167).
 
 ### Fixed
 
 - The project gallery's placeholder frame rendered nearly viewport-tall at
   the page's default column width — a 16:9 ratio alone has no ceiling on a
   wide column, so 60rem of column asked for a 33.75rem frame. A second,
-  independent token, `--card-media-max-block-size` (20rem), caps the
+  independent token, `--card-media-max-block-size` (20rem, 320px), caps the
   reserved block-size; a narrow column still gets the full photograph
   proportion below that cap, and `object-fit: cover` crops the picture to
   fill the frame above it (#157).
