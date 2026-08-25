@@ -66,6 +66,54 @@ describe('parseVCSActivity', () => {
     assert.equal(activity.recentCommits[0].sha, '');
   });
 
+  it('admits a sha key that is ENTIRELY ABSENT, not just empty, and normalizes it to "" (issue 157, Daybreak Blue round 3 finding 1)', () => {
+    // Rolling-compatibility requirement, not a style choice: this chart runs
+    // a RollingUpdate across multiple replicas, and this exact repository's
+    // OWN preceding release served pre-this-PR vcs-activity/v1 rows with no
+    // `sha` key in the JSON at all — not `sha: ""`, the key genuinely absent.
+    // A browser holding this build can still reach an old replica mid-
+    // rollout. Before this fix, an absent key failed the `typeof !== 'string'`
+    // check exactly like a malformed one and rejected the WHOLE payload,
+    // turning a routine deploy into a blank activity panel for every visitor
+    // caught mid-rollout — Daybreak Blue proved this with a real intercepted
+    // old-v1 payload. The row itself must admit, not just the key.
+    const { sha: _omitted, ...rowWithoutSha } = {
+      repo: 'fixture-repo',
+      sha: 'irrelevant',
+      message: 'm',
+      at: 't'
+    };
+    assert.equal('sha' in rowWithoutSha, false, 'the fixture must genuinely omit the key, not merely set it falsy');
+    const activity = parseVCSActivity({ ...goodActivity, recentCommits: [rowWithoutSha] });
+    assert.notEqual(activity, null, 'a row with sha entirely absent must not reject the whole payload');
+    assert.equal(activity.recentCommits[0].sha, '', 'an absent sha normalizes to "" exactly like an explicitly empty one');
+  });
+
+  it('admits a mixed-version payload — some rows with sha, some without — and preserves every other served fact (rolling-compatibility)', () => {
+    // The realistic RollingUpdate shape: two replicas serving two different
+    // builds at once produce a payload where SOME rows already carry sha
+    // (the new replica) and others do not (the old one) in the SAME response,
+    // because recentCommits is merged newest-first across repos server-side.
+    // Nothing about totals, streak, or the OTHER served rows may degrade
+    // because of the old-shaped rows mixed in.
+    const activity = parseVCSActivity({
+      totalContributions: 42,
+      weeks: [[1, 2, 3, 4, 5, 6, 7]],
+      streak: 3,
+      recentCommits: [
+        { repo: 'new-repo', sha: '0123456789abcdef0123456789abcdef01234567', message: 'from the new replica', at: 't1' },
+        { repo: 'old-repo', message: 'from an old replica, no sha key at all', at: 't2' }
+      ]
+    });
+    assert.notEqual(activity, null);
+    assert.equal(activity.totalContributions, 42, 'the real total must survive, never fall back to 0');
+    assert.equal(activity.streak, 3);
+    assert.equal(activity.recentCommits.length, 2);
+    assert.equal(activity.recentCommits[0].sha, '0123456789abcdef0123456789abcdef01234567');
+    assert.equal(activity.recentCommits[1].sha, '', 'the old-replica row normalizes its absent sha to ""');
+    assert.equal(activity.recentCommits[1].repo, 'old-repo', 'the old-replica row itself is not dropped');
+  });
+
   it('admits the degenerate empty window', () => {
     const activity = parseVCSActivity({
       totalContributions: 0,
@@ -98,8 +146,9 @@ describe('parseVCSActivity', () => {
       { ...goodActivity, recentCommits: [{ repo: 'r', at: 't' }] },
       { ...goodActivity, recentCommits: [{ repo: 'r', message: 7, at: 't' }] },
       { ...goodActivity, recentCommits: [{ repo: 'r', message: 'm', at: 12 }] },
-      { ...goodActivity, recentCommits: [{ repo: 'r', message: 'm', at: 't' }] }, // sha entirely absent
-      { ...goodActivity, recentCommits: [{ repo: 'r', sha: 40, message: 'm', at: 't' }] }, // sha not a string
+      { ...goodActivity, recentCommits: [{ repo: 'r', sha: 40, message: 'm', at: 't' }] }, // sha PRESENT but not a string — a genuine decode fault, unlike an absent key (see the admission tests above)
+      { ...goodActivity, recentCommits: [{ repo: 'r', sha: null, message: 'm', at: 't' }] }, // sha PRESENT but null
+      { ...goodActivity, recentCommits: [{ repo: 'r', sha: true, message: 'm', at: 't' }] }, // sha PRESENT but boolean
       { ...goodActivity, endDate: 7 },
       { ...goodActivity, endDate: '2026-08-11T00:00:00Z' },
       { ...goodActivity, endDate: '11/08/2026' },

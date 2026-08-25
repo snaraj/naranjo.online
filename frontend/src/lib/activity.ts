@@ -26,19 +26,31 @@ function isCount(value: unknown): value is number {
 
 /* parseVCSActivity admits only payloads carrying the exact shape the strip
  * renders: non-negative totals and streak, week columns of exactly seven
- * non-negative counts, commit rows of repo/sha/message/at strings, and —
- * when present — an endDate that is a plain calendar date. Anything else
- * returns null and the panel renders its honest empty state; a data fault
- * degrades one panel, never the page.
+ * non-negative counts, commit rows of repo/message/at strings (sha
+ * optional, see below), and — when present — an endDate that is a plain
+ * calendar date. Anything else returns null and the panel renders its
+ * honest empty state; a data fault degrades one panel, never the page.
  *
- * sha is checked for TYPE only here, never for shape or non-emptiness —
- * unlike repo, which the server never legitimately serves blank. The
- * embedded snapshot predates the SHA field and truthfully serves "" for
- * every one of its rows; rejecting the whole payload over that would turn
- * an honest gap in old data into an outage of the whole commit list. The
- * 40-lowercase-hex shape check lives at USE time (isValidCommitSha), the
- * same layering isValidRepoSlug already uses for repo: a single row with a
- * malformed value loses only that row's own capability, never the page. */
+ * sha is OPTIONAL, not merely type-checked: a row may omit the key
+ * entirely, and that is admitted exactly like an explicitly empty string,
+ * never like a malformed value (Daybreak Blue's review, round 3, finding
+ * 1). This is a ROLLING-COMPATIBILITY requirement, not a style choice —
+ * vcs-activity/v1 is an unversioned-forever envelope contract (see the
+ * module doc above), and this chart runs a RollingUpdate across multiple
+ * replicas: a browser holding the new frontend can reach an OLD replica
+ * mid-rollout that still serves pre-this-PR v1 rows with no `sha` key at
+ * all. Rejecting a row — or worse, the WHOLE payload, since one bad row
+ * used to fail admission entirely — over an absent key one of this
+ * deployment's own replicas can legitimately still send would turn a
+ * routine rolling deploy into a blank activity panel for every visitor
+ * mid-rollout. So: absent is truthful absence, normalized to '' below,
+ * exactly like the embedded snapshot's pre-existing rows already are; the
+ * only thing this loop still rejects is a PRESENT sha of the wrong type
+ * (a number, an object, a boolean) — that is a genuine decode fault, not a
+ * version gap. The 40-lowercase-hex shape check lives at USE time
+ * (isValidCommitSha), the same layering isValidRepoSlug already uses for
+ * repo: a single row with a malformed or absent value loses only that
+ * row's own SHA-permalink capability, never the row, never the page. */
 export function parseVCSActivity(document: unknown): VCSActivityData | null {
   if (!isRecord(document)) {
     return null;
@@ -63,7 +75,7 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
       !isRecord(commit) ||
       typeof commit.repo !== 'string' ||
       commit.repo.length === 0 ||
-      typeof commit.sha !== 'string' ||
+      (commit.sha !== undefined && typeof commit.sha !== 'string') ||
       typeof commit.message !== 'string' ||
       typeof commit.at !== 'string'
     ) {
@@ -76,7 +88,7 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
     streak,
     recentCommits: recentCommits.map((commit) => ({
       repo: (commit as { repo: string }).repo,
-      sha: (commit as { sha: string }).sha,
+      sha: typeof (commit as { sha?: unknown }).sha === 'string' ? (commit as { sha: string }).sha : '',
       message: (commit as { message: string }).message,
       at: (commit as { at: string }).at
     }))

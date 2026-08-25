@@ -1446,6 +1446,49 @@ test('a hostile commit row renders as text and never becomes a live link', async
   }
 });
 
+test('an old-shape vcs-activity/v1 payload with no sha key on any row still renders real activity, not a blank panel (issue 157, Daybreak Blue round 3 finding 1)', async ({
+  page,
+}) => {
+  /* The exact regression Daybreak Blue's review proved with a real
+     intercepted payload: this chart runs a RollingUpdate across multiple
+     replicas, vcs-activity/v1 is an unversioned-forever envelope, and this
+     repository's OWN preceding release legitimately serves rows with no
+     `sha` key in the JSON at all. A browser holding the new frontend can
+     reach an OLD replica mid-rollout. Before this fix, ANY row missing the
+     key failed admission, and one bad row rejected the WHOLE payload —
+     turning a routine deploy into a blank "no activity data" panel for
+     every visitor caught mid-rollout. This lane mutates the REAL served
+     response to strip `sha` from every row (the mixed-version shape), the
+     way an old replica actually would, and proves the panel still renders
+     its real totals and real commit rows rather than the empty state. */
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    // Simulate the OLD v1 shape precisely: delete the key, never set it to
+    // '', because a real old replica's JSON encoder never wrote it at all.
+    for (const commit of envelope.data.recentCommits) {
+      delete commit.sha;
+    }
+    await route.fulfill({ response, json: envelope });
+  });
+  await visit(page);
+
+  const totals = await page.locator('.activity-totals').innerText();
+  expect(totals, 'the panel fell back to its empty state on an old-shape payload').not.toContain(
+    'no activity data'
+  );
+
+  const rows = page.locator('.activity-commit');
+  const rowCount = await rows.count();
+  expect(rowCount, 'no commit rows rendered from an old-shape payload — this is the outage Daybreak Blue proved').toBeGreaterThan(0);
+
+  /* Each row's repo cell is still real navigation — the sha's absence must
+     degrade only that row's own sha-permalink capability, never the repo
+     link, never the row itself, never the rest of the payload. */
+  const repoLinks = await page.locator('.activity-commit-repo').count();
+  expect(repoLinks, 'every row lost its repo link too, not just its sha capability').toBeGreaterThan(0);
+});
+
 /* Independent capability probe (issue 157 follow-up, correcting a finding in
  * Daybreak Blue's review of PR #161): whether this engine's default keyboard
  * configuration EVER moves focus onto a plain <a href> at all, measured
