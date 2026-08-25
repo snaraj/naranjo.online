@@ -2095,6 +2095,50 @@ test('the art feed shows its frames when the origin serves no media', async ({ p
   }
 });
 
+test('the Coding Projects subsection renders no capture-date or no-fetch caption, in the actual DOM (issue 167, Daybreak Blue round 3 finding 4)', async ({
+  page,
+}) => {
+  /* The pre-existing pin at tests/sections.test.mjs scans the COMPONENT
+     SOURCE TEXT for the removed caption's exact spellings. Daybreak Blue
+     proved that pin vacuous against indirection: exporting the identical
+     removed sentence as a constant from projects.ts and rendering it via
+     `{projectCaption}` left every source-text scan green while the caption
+     still reached the page. A source scan can only ever see literal bytes;
+     it cannot see what actually painted. This lane instead reads the REAL
+     RENDERED TEXT of the Coding Projects subsection after a real navigation
+     — robust against ANY indirection technique, because it is checking the
+     one thing that cannot be laundered through a constant, a snippet, or a
+     second component: what a visitor's browser actually put on the screen. */
+  await visit(page);
+
+  const codingProjects = page
+    .locator('#projects .page-subsection')
+    .filter({ has: page.locator('h3.subsection-title', { hasText: 'Coding Projects' }) });
+  await expect(codingProjects, 'the Coding Projects subsection is not on the page at all').toHaveCount(1);
+
+  const text = await codingProjects.innerText();
+
+  /* Sanity: the scope itself must be real content, not an empty shell that
+     would make the negative assertions below trivially true. */
+  expect(text.length, 'the Coding Projects subsection rendered no text at all').toBeGreaterThan(0);
+  expect(text, 'the six project cards are missing from the rendered subsection').toContain(
+    'naranjo.online'
+  );
+
+  /* Both halves of the removed caption, checked independently exactly like
+     the source-text pin does, but against RENDERED text this time. */
+  expect(text, 'the rendered DOM still shows the capture-date caption').not.toMatch(
+    /Counts captured from/
+  );
+  expect(text, 'the rendered DOM still shows the no-fetch caption').not.toMatch(/fetches nothing/);
+
+  /* Scoped correctly: this proves the CODING PROJECTS half never shows the
+     caption, not merely that the phrase is absent from the whole page (a
+     weaker claim the Art subsection's own note could accidentally satisfy
+     if it happened to avoid these exact words). */
+  await expect(codingProjects.locator('h3.subsection-title')).toHaveText('Coding Projects');
+});
+
 /* ===========================================================================
  * The chrome-icon family (owner directive, 2026-08-24)
  *
