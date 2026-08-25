@@ -3,7 +3,10 @@
  * whatever these helpers return; it never computes, so a formatting or
  * admission bug is a one-file fix with a failing test beside it. */
 
+import type { UsageSection, UsageTrackerProps, UsageWindow } from './blocks.ts';
+import { peakValue, seriesCells } from './grid.ts';
 import type {
+  PanelEnvelope,
   TokenStatUnit,
   TokenUsageInsight,
   TokenUsageSeries,
@@ -11,6 +14,10 @@ import type {
   TokenUsageStat,
   TokenUsageWindow
 } from './panels';
+
+/* The registry identifier the usage block loads; the one place the id is
+ * spelled on the frontend. */
+export const tokenUsagePanelId = 'token-usage';
 
 /* Meter severity thresholds, in utilization percent. Below warning the fill
  * wears the calm default; at or above each threshold it steps up. The numeric
@@ -374,4 +381,122 @@ function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
     return null;
   }
   return { startDate: value.startDate, totals: value.totals as number[] };
+}
+
+/* ---------------------------------------------------------------------------
+ * The adapter (issue 165): token-usage envelope in, UsageTracker props out.
+ * This is where token accounting becomes sections of a generic usage panel —
+ * every source label, figure, heading and noun below rides a domain-free
+ * field, and the component that renders the result knows none of this file.
+ * ------------------------------------------------------------------------ */
+
+/* The shell heading when an envelope arrives with an empty title (the
+ * unavailablePanel fallback carries one); otherwise the ORIGIN's title. */
+export const tokenUsageFallbackTitle = 'Token usage';
+
+/* The two honest empty-state lines, verbatim from the retired component. */
+export const tokenUsageEmptyNote = 'No usage data available.';
+export const tokenUsageSourceEmptyNote = 'No usage recorded for this source yet.';
+
+/* usageSection shapes one admitted source. Provenance marks are decided here
+ * by EXCEPTION (provenanceIsMixed above): a source whose figures all share
+ * one provenance marks none of them, and a mixed source marks exactly the
+ * recorded ones. The activity region exists only when there is a series with
+ * days in it — a heading and a lens toggle over nothing is the hole the
+ * owner's 2026-08-24 ruling removed — and the summary sentence is built here,
+ * lens-independent, because it describes the one daily series every lens
+ * re-reads. */
+function usageWindowProps(entry: TokenUsageWindow): UsageWindow {
+  const meter =
+    entry.utilizationPct === undefined
+      ? undefined
+      : {
+          fillPct: meterFillPct(entry.utilizationPct),
+          severity: meterSeverity(entry.utilizationPct),
+          reading: formatUtilization(entry.utilizationPct)
+        };
+  return {
+    period: entry.period,
+    reset: resetsIn(entry.resetsAt),
+    meter,
+    pairs: [
+      { key: 'in', label: 'in', figure: formatTokenCount(entry.inputTokens) },
+      { key: 'out', label: 'out', figure: formatTokenCount(entry.outputTokens) }
+    ],
+    pairsLabel: `${entry.inputTokens} input tokens, ${entry.outputTokens} output tokens`
+  };
+}
+
+function usageSection(source: TokenUsageSource): UsageSection {
+  const mixed = provenanceIsMixed(source);
+  const activity =
+    source.series && source.series.totals.length > 0
+      ? {
+          heading: 'Token activity',
+          label: `${source.label} token activity`,
+          noun: 'token',
+          series: source.series,
+          summary: usageActivitySummary(source.series)
+        }
+      : undefined;
+  return {
+    key: source.label,
+    label: source.label,
+    sublabel: source.account || undefined,
+    tiles:
+      source.stats && source.stats.length > 0
+        ? source.stats.map((stat) => ({
+            key: stat.key,
+            figure: formatStatValue(stat.value, stat.unit),
+            label: stat.label,
+            marked: mixed && stat.recorded === true
+          }))
+        : undefined,
+    note:
+      source.windows.length === 0 && (!source.stats || source.stats.length === 0)
+        ? tokenUsageSourceEmptyNote
+        : undefined,
+    windows: source.windows.length > 0 ? source.windows.map(usageWindowProps) : undefined,
+    activity,
+    insights:
+      source.insights && source.insights.length > 0
+        ? {
+            heading: 'Activity insights',
+            rows: source.insights.map((insight) => ({
+              key: insight.label,
+              label: insight.label,
+              marked: mixed && insight.recorded === true,
+              fillPct: insight.pct === null ? 0 : meterFillPct(insight.pct),
+              reading: insight.pct === null ? '--' : formatUtilization(insight.pct)
+            }))
+          }
+        : undefined
+  };
+}
+
+/* The whole-series sentence under the activity strip, lens-independent: it
+ * describes the one daily series every lens re-reads. */
+function usageActivitySummary(series: TokenUsageSeries): string {
+  const total = series.totals.reduce((sum, value) => sum + value, 0);
+  const days = series.totals.length;
+  const peak = peakValue(seriesCells(series.startDate, series.totals));
+  return `${formatTokenCount(total)} tokens over ${days} ${days === 1 ? 'day' : 'days'}, peaking at ${formatTokenCount(peak)}`;
+}
+
+/* tokenUsageProps renders the whole panel as data, or null before the first
+ * envelope arrives — the retired component rendered nothing until then, and
+ * the block host renders nothing for null, so the page's honest loading face
+ * is unchanged. */
+export function tokenUsageProps(envelope: PanelEnvelope | null): UsageTrackerProps | null {
+  if (envelope === null) {
+    return null;
+  }
+  return {
+    id: tokenUsagePanelId,
+    title: envelope.title || tokenUsageFallbackTitle,
+    status: envelope.status,
+    generatedAt: envelope.generatedAt,
+    sections: tokenUsageSources(envelope.data).map(usageSection),
+    emptyNote: tokenUsageEmptyNote
+  };
 }

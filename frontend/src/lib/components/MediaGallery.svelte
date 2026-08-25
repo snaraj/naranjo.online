@@ -1,6 +1,8 @@
-<!-- ArtGallery is the Art half of the Projects section (owner directive, issue
-  134): a feed of eight full-resolution placeholder photographs, deliberately
-  heavy, so the owner can watch a real page carry real weight.
+<!-- MediaGallery renders a feed of full-width pictures (owner directive, issue
+  134): deliberately heavy, so the owner can watch a real page carry real
+  weight. It is a generic primitive with NO domain knowledge — every source
+  URL, label and note arrives through MediaGalleryProps (lib/blocks.ts),
+  built by an adapter in the binding layer.
 
   A FEED, not a mosaic: one vertical column of cards, each card one picture
   filling the card's width, which is the arrangement the owner sketched for the
@@ -10,10 +12,10 @@
   nothing to put in them today, and a card with no title renders no title band
   rather than an empty one.
 
-  The pictures are NOT in this repository (requirement 11). Each frame asks the
-  origin's media route for one immutable publication, addressed by the digest
-  of its own bytes through lib/media.ts — this component knows no host, no
-  volume and no path, and could not construct one if it wanted to.
+  The pictures are NOT in this repository (requirement 11). Each item's src is
+  an origin media route the adapter addressed through lib/media.ts — this
+  component knows no host, no volume and no path, and could not construct one
+  if it wanted to.
 
   Media delivery is off unless an operator enables it, which makes the
   not-serving case the ORDINARY case rather than the exception, so it is
@@ -29,16 +31,11 @@
   looking at, and every other is deferred until it is scrolled toward. -->
 <script lang="ts">
   import FeedCard from './FeedCard.svelte';
-  import {
-    artHeight,
-    artLabel,
-    artPieces,
-    artSource,
-    artUnavailableNote,
-    artWidth
-  } from '../art.ts';
+  import type { MediaGalleryProps } from '../blocks.ts';
 
-  /* The rows whose picture the origin did not serve, by digest. Tracked per
+  let { items, width, height, unavailableNote }: MediaGalleryProps = $props();
+
+  /* The rows whose picture the origin did not serve, by key. Tracked per
      row because each frame answers for itself, and every frame keeps its own
      box whether its picture arrives or not.
 
@@ -52,39 +49,39 @@
      requested, so it is the one that can carry the explanation. */
   let missing = $state<string[]>([]);
 
-  const unserved = $derived(missing.includes(artPieces[0]?.sha256 ?? ''));
+  const unserved = $derived(missing.includes(items[0]?.key ?? ''));
 
-  function markMissing(sha256: string): void {
-    if (!missing.includes(sha256)) {
-      missing.push(sha256);
+  function markMissing(key: string): void {
+    if (!missing.includes(key)) {
+      missing.push(key);
     }
   }
 </script>
 
-<div class="art-feed">
+<div class="gallery-feed">
   {#if unserved}
-    <p class="section-note" data-art-unserved="true">{artUnavailableNote}</p>
+    <p class="section-note" data-gallery-unserved="true">{unavailableNote}</p>
   {/if}
-  {#each artPieces as piece, index (piece.sha256)}
+  {#each items as item, index (item.key)}
     <FeedCard variant="media">
       {#snippet media()}
-        <div class="art-frame">
-          {#if missing.includes(piece.sha256)}
+        <div class="gallery-frame">
+          {#if missing.includes(item.key)}
             <!-- The designed empty frame: the same box the photograph would
               occupy, so its arrival — or its absence — moves nothing. -->
-            <span class="art-pending" data-art-pending="true">
-              {artLabel(index, artPieces.length)}
+            <span class="gallery-pending" data-gallery-pending="true">
+              {item.alt}
             </span>
           {:else}
             <img
-              class="art-image"
-              src={artSource(piece)}
-              alt={artLabel(index, artPieces.length)}
-              width={artWidth}
-              height={artHeight}
+              class="gallery-image"
+              src={item.src}
+              alt={item.alt}
+              {width}
+              {height}
               loading={index === 0 ? 'eager' : 'lazy'}
               decoding="async"
-              onerror={() => markMissing(piece.sha256)}
+              onerror={() => markMissing(item.key)}
             />
           {/if}
         </div>
@@ -94,7 +91,7 @@
 </div>
 
 <style>
-  .art-feed {
+  .gallery-feed {
     display: grid;
     gap: var(--feed-gap);
   }
@@ -108,14 +105,14 @@
      on a wide column, which is exactly how one frame came to fill the screen —
      capping the block-size is what keeps several frames in one viewport
      without touching the ratio a narrow column still gets in full. */
-  .art-frame {
+  .gallery-frame {
     display: grid;
     min-block-size: 8rem;
     aspect-ratio: var(--card-media-aspect);
     max-block-size: var(--card-media-max-block-size);
   }
 
-  .art-image {
+  .gallery-image {
     inline-size: 100%;
     block-size: 100%;
     object-fit: var(--card-media-fit);
@@ -124,7 +121,7 @@
   /* The frame with no picture in it. It reads as a deliberate empty frame —
      the number of the placeholder, centred, in the same muted ink every other
      secondary line on the page uses — rather than as a hole or a failure. */
-  .art-pending {
+  .gallery-pending {
     display: grid;
     place-items: center;
     padding: var(--card-padding-compact);

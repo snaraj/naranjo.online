@@ -1,9 +1,10 @@
-/* Identity helpers for the Old School RuneScape stats rail. Boss and skill
+/* Identity helpers for the Old School RuneScape stats block. Boss and skill
  * names are API data, never frontend constants: the slug below is the only
  * bridge from a data name to an icon file shipped under assets/icons, so
  * adding an icon is a file drop and a missing file falls back to an initials
  * glyph. These helpers stay free of build-tool APIs so tests run them under
- * plain node; the asset lookups themselves live in BossLog.svelte.
+ * plain node; the asset lookups themselves live in the binding module
+ * (lib/blocks/osrsStats.ts), where the bundler's glob is allowed to be.
  */
 
 /* assetSlug canonicalizes a display name into the lowercase hyphenated form

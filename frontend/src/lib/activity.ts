@@ -1,6 +1,7 @@
-/* Pure helpers behind ActivityBar.svelte, kept out of the component so the
- * strip's admission and date arithmetic are plain functions a node test can
- * drive directly. Everything here mirrors the vcs-activity/v1 contract in
+/* The vcs-activity information module: admission, date arithmetic, link
+ * validation, and the adapter that turns the panel envelope into the generic
+ * ActivityTracker's props — all plain functions a node test drives directly.
+ * Everything here mirrors the vcs-activity/v1 contract in
  * internal/panels/types.go: week columns of seven non-negative daily counts,
  * totals, the current streak, an optional end date, and recent commits.
  *
@@ -8,8 +9,10 @@
  * heatmap implementation shared with the token-activity grid, so the two
  * cannot drift. */
 
-import { addDays, type GridCell } from './grid.ts';
-import type { VCSActivityData } from './panels';
+import type { ActivityLink, ActivityTrackerProps } from './blocks.ts';
+import { addDays, formatWhole, toColumns, type GridCell } from './grid.ts';
+import { panelAge, panelKinds } from './panels.ts';
+import type { PanelEnvelope, VCSActivityData } from './panels';
 import { projectHost, projectHostLabel } from './projects.ts';
 
 /* The registry identifier the activity strip loads; the one place the id is
@@ -270,4 +273,96 @@ export function commitShaUrl(commit: { repo: string; sha: string }): string | nu
  * validated full 40, this label's slice is display-only. */
 export function commitShaLinkLabel(message: string, sha: string): string {
   return `${message}, commit ${sha.slice(0, 7)}, opens in a new tab`;
+}
+
+/* ---------------------------------------------------------------------------
+ * The adapter (issue 165): vcs-activity envelope in, ActivityTracker props
+ * out. This is where commits become entries in a generic log — repository
+ * names, subjects and validated hrefs all ride domain-free fields, and the
+ * component that renders the result knows none of this file.
+ * ------------------------------------------------------------------------ */
+
+/* The entry log shows at most this many rows inside its fixed box; the
+ * payload may carry more and the rest simply do not render. */
+export const shownEntryRows = 5;
+
+/* The shell heading before any envelope arrives, or when one arrives with an
+ * empty title; otherwise the ORIGIN's own title rides the envelope. The
+ * owner's rename (issue 127) lives in the origin's config data, because the
+ * name the owner chose names a service and no frontend source file may spell
+ * one — swapping where the data comes from stays a data edit. */
+export const activityFallbackTitle = 'Version-control activity';
+
+/* The three honest empty-state lines, verbatim from the retired component. */
+export const activityFiguresNote = 'no activity data';
+export const activityStripEmptyNote = 'activity data unavailable';
+export const activityEntriesNote = 'no recent commits reported';
+
+/* The title half of an entry row, encoding the destination precedence the
+ * validators above document (Daybreak Blue's review, round 3, finding 3):
+ * the validated SHA permalink FIRST — the one association this module can
+ * prove — then the weaker "(#N)" reference, then plain text (a null href).
+ * The reference is consulted only after the SHA branch answers null, never
+ * independently, so the two candidates can never both win for one row. */
+export function commitTitleLink(commit: { repo: string; sha: string; message: string }): ActivityLink {
+  const shaHref = commitShaUrl(commit);
+  if (shaHref !== null) {
+    return {
+      text: commit.message,
+      href: shaHref,
+      label: commitShaLinkLabel(commit.message, commit.sha)
+    };
+  }
+  return {
+    text: commit.message,
+    href: commitReferenceUrl(commit),
+    label: commitReferenceLinkLabel(commit.message)
+  };
+}
+
+/* vcsActivityProps renders the whole panel as data. A payload renders only
+ * when the envelope carries the pinned kind AND the data passes strict
+ * admission (parseVCSActivity); anything else — including no envelope yet —
+ * is the honest empty state: no figures, an empty strip, no entry rows, each
+ * region saying so in its own words while holding its reserved box. */
+export function vcsActivityProps(envelope: PanelEnvelope | null): ActivityTrackerProps {
+  const activity =
+    envelope !== null && envelope.kind === panelKinds.vcsActivity
+      ? parseVCSActivity(envelope.data)
+      : null;
+  return {
+    title: envelope?.title || activityFallbackTitle,
+    status: envelope?.status ?? 'unavailable',
+    generatedAt: envelope?.generatedAt,
+    figures:
+      activity === null
+        ? []
+        : [
+            { key: 'total', lead: formatWhole(activity.totalContributions), rest: ' contributions' },
+            { key: 'streak', lead: formatWhole(activity.streak), rest: '-day streak' }
+          ],
+    figuresNote: activityFiguresNote,
+    strip: {
+      columns: activity === null ? [] : toColumns(activityCells(activity)),
+      noun: 'contribution',
+      label:
+        activity === null
+          ? 'contribution calendar'
+          : `contribution calendar: ${activity.weeks.length} weeks of daily counts, newest last`,
+      emptyNote: activityStripEmptyNote
+    },
+    entries:
+      activity === null
+        ? []
+        : activity.recentCommits.slice(0, shownEntryRows).map((commit) => ({
+            source: {
+              text: commit.repo,
+              href: commitRepoUrl(commit.repo),
+              label: commitRepoLinkLabel(commit.repo)
+            },
+            title: commitTitleLink(commit),
+            age: panelAge(commit.at)
+          })),
+    entriesNote: activityEntriesNote
+  };
 }

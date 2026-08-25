@@ -20,11 +20,11 @@
  * wordings here both overstated the invariant, first as "no remote origin
  * anywhere" and then as "no transport primitive... in this module and the
  * components that read it," the second still false because
- * ActivityBar.svelte, a separate consumer of this same `projectHost`,
- * calls `watchPanel`, whose production default DOES call `fetch`; this
- * wording claims nothing beyond what this module and this section
- * themselves do). The host URLs here are link TARGETS: they reach the DOM
- * as href values a human may click.
+ * lib/activity.ts, a separate consumer of this same `projectHost`, feeds a
+ * panel-bound block whose host calls `watchPanel`, whose production default
+ * DOES call `fetch`; this wording claims nothing beyond what this module
+ * and its own feed do). The host URLs here are link TARGETS: they reach the
+ * DOM as href values a human may click.
  *
  * Vendor names are data. The host label lives in this module beside the rows
  * it describes, exactly as the panels keep theirs in config data, so the
@@ -38,6 +38,7 @@
  * to slip past that scan would defeat a fail-closed pin rather than respect
  * it, so the clause is dropped and the omission is stated here. */
 
+import type { EntryLogProps } from './blocks.ts';
 import { formatWhole } from './grid.ts';
 
 export interface Project {
@@ -163,3 +164,27 @@ export function projectCounts(project: Project): ProjectCount[] {
     }
   ];
 }
+
+/* The adapter (issue 165): the rows above as EntryLog props. Each entry is a
+ * linked title — the code glyph, then the name — with the two counts beside
+ * it and the repository's own description as the summary. Compact cards at
+ * h4: the feed sits under the "Coding Projects" h3 the manifest declares.
+ * No caption rides along (issue 167): the capture date and network posture
+ * stay maintainer facts in this module, per the head comment above. */
+export const codingProjectsProps: EntryLogProps = {
+  variant: 'compact',
+  titleLevel: 4,
+  entries: projects.map((project) => ({
+    key: project.name,
+    title: project.name,
+    href: projectUrl(project),
+    linkLabel: projectLinkLabel(project),
+    glyph: 'code',
+    counts: projectCounts(project).map((count) => ({
+      key: count.kind,
+      glyph: count.kind === 'commits' ? ('node' as const) : ('star' as const),
+      label: count.label
+    })),
+    summary: project.description
+  }))
+};

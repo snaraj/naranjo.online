@@ -1,3 +1,14 @@
+/* THE HAND-TUNING SURFACE (issue 165 — cited hashless because three digits
+ * after a hash read as a hex color to the sweep below). This stylesheet is
+ * the one place the page's look is tuned by hand — the palette groups and
+ * active color tokens directly below, then the layout, type, card, feed and
+ * panel tokens further down. Every dial is a custom property that components only consume, so a
+ * value edited here moves every consumer at once and is restated nowhere.
+ * The other two iteration loops live elsewhere and stay out of this file —
+ * moving or adding a block is a manifest edit in src/page.ts, and changing
+ * what a block says is a data edit beside its adapter; how the three loops
+ * fit together is docs/design-iteration.md. */
+
 /* Reading-mode token layer (issue #22, the OSRS-wiki mechanism adapted):
  * every color lives in a custom property, and each reading mode is one
  * override block scoped by the data-theme attribute the origin stamps on

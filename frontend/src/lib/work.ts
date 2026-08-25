@@ -12,6 +12,8 @@
  * distinct — are executed by tests/sections.test.mjs instead of pattern
  * matched through an each-block. */
 
+import type { EntryLogProps } from './blocks.ts';
+
 export interface WorkEntry {
   /* The role heading, and the keyed-each key. */
   readonly title: string;
@@ -39,3 +41,19 @@ export const workEntries: readonly WorkEntry[] = [
       'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat duis aute irure.'
   }
 ];
+
+/* The adapter (issue 165): the rows above as EntryLog props. Every entry is
+ * marked placeholder — the honest-states flag the DOM carries — and the
+ * titles sit at h3, directly under the section's own h2. The default framed
+ * card variant is deliberate: these are the page's primary records, not a
+ * compact list. */
+export const workHistoryProps: EntryLogProps = {
+  entries: workEntries.map((entry) => ({
+    key: entry.title,
+    title: entry.title,
+    byline: entry.location,
+    summary: entry.summary,
+    placeholder: true
+  })),
+  titleLevel: 3
+};
