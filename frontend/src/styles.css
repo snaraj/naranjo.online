@@ -959,3 +959,17 @@ h1 {
 .icon-button[disabled] {
   cursor: progress;
 }
+
+/* Gallery lightbox frame tokens (issue 176): the enlarged photograph's
+   border reads these exclusively -- MediaGallery.svelte states no width,
+   color or image of its own. v1 is a static, near-invisible border;
+   --gallery-frame-image is the extension point for a future repeated
+   pattern (border-image's initial value is 'none', so it is a no-op until
+   set), and it is a token edit here alone, never a component change. */
+:root {
+  --gallery-frame-width: 2px;
+  --gallery-frame-color: var(--color-border-strong);
+  --gallery-frame-radius: var(--card-radius);
+  --gallery-frame-padding: 0.375rem;
+  --gallery-frame-image: none;
+}

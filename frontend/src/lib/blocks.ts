@@ -4,7 +4,7 @@
  * contract between them:
  *
  *   information — the domain payloads: the panel API (lib/panels.ts) and the
- *                 captured data modules (work.ts, projects.ts, art.ts).
+ *                 captured data modules (work.ts, projects.ts, gallery.ts).
  *   components  — generic presentation primitives with no domain knowledge
  *                 (lib/components/): a stat tracker, an activity tracker, a
  *                 usage tracker, an entry log, a media gallery. Each renders
@@ -326,11 +326,17 @@ export type UsageTrackerProps = {
   readonly emptyNote: string;
 };
 
-/* --- MediaGallery: a feed of reserved full-width frames ------------------ */
+/* --- MediaGallery: one visible frame, prev/next, a click-to-enlarge lightbox
+ * (issue 176) --------------------------------------------------------------- */
 
 export type MediaGalleryItem = {
   readonly key: string;
-  readonly src: string;
+  /* The small derivative the feed frame shows; loaded eagerly-lazy like any
+   * other card. */
+  readonly previewSrc: string;
+  /* The full-resolution derivative, loaded for the first time only when a
+   * reader enlarges the frame. */
+  readonly fullSrc: string;
   readonly alt: string;
 };
 
@@ -339,8 +345,6 @@ export type MediaGalleryProps = {
   /* The intrinsic box every frame declares, so arrival moves nothing. */
   readonly width: number;
   readonly height: number;
-  /* Shown over the first frame when the origin serves no media. */
-  readonly unavailableNote: string;
 };
 
 /* --- EntryLog: a feed of titled entries ---------------------------------- */

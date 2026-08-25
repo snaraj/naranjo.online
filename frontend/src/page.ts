@@ -21,7 +21,7 @@ import { workHistory } from './lib/blocks/workHistory.ts';
 
 export const page: readonly PageSection[] = [
   section('work', 'Work', [workHistory]),
-  section('projects', 'Projects', [artGallery, codingProjects]),
+  section('projects', 'Projects', [codingProjects, artGallery]),
   section('trackers', 'Trackers', [osrsStats, vcsActivity, tokenUsage], { layout: 'stack' }),
   section('about', 'About Me', [about])
 ];

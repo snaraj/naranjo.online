@@ -1013,7 +1013,10 @@ test('the boss log is three columns that never scroll', async ({
 test('the page names its owner, carries no badges, and wears no button chrome', async ({ page }) => {
   await visit(page);
   const observed = await page.evaluate(() => {
-    const icons = [...window.document.querySelectorAll('.icon-button')];
+    // Scoped to the header: .icon-button is a shared control shape (issue
+    // 176 reuses it for the gallery's prev/next/close), and this test's own
+    // claim is specifically about the page's top-end-corner chrome.
+    const icons = [...window.document.querySelectorAll('.page-header .icon-button')];
     return {
       heading: window.document.querySelector('h1')?.textContent?.trim(),
       titles: [...window.document.querySelectorAll('.panel-title')].map((n) => n.textContent.trim()),
@@ -1936,11 +1939,11 @@ test('the popover animates only where motion is welcome', async ({ page }) => {
 /* ===========================================================================
  * The stacked page (issue 134)
  *
- * The nav and the art feed are the two surfaces whose correctness is a
- * property of the RENDERED page rather than of the source: a link that names
- * a section nobody rendered still looks perfect in the markup, and a gallery
- * whose origin serves no media is the ordinary case that must still look
- * deliberate.
+ * The nav and the gallery are two surfaces whose correctness is a property
+ * of the RENDERED page rather than of the source: a link that names a
+ * section nobody rendered still looks perfect in the markup, and a single
+ * visible photograph plus a click-to-enlarge dialog (issue 176) are exactly
+ * the kind of interactive behavior no source pin can prove.
  * ======================================================================== */
 
 test('every section the nav names is on the page, and its link reaches it', async ({ page }) => {
@@ -1993,13 +1996,14 @@ test('the nav link is quiet at rest and marks itself the moment intent shows (is
      very Tab press it used to check the nav link's OWN reachability, so a
      regression that broke just the nav link's tabbability would look
      identical to a genuine engine limitation. The nav link cannot probe
-     itself, so this walks PAST every nav link instead — Work and the Art
-     gallery both carry zero focusable elements of their own between the nav
-     and the Coding Projects feed (a fact this exploits rather than assumes:
-     if that ever stops being true, this walk lands somewhere unexpected and
-     the assertion below fails loudly rather than skipping quietly) — to
-     the feed's first entry link: a plain anchor with nothing to do with
-     the nav. */
+     itself, so this walks PAST every nav link instead — Work carries zero
+     focusable elements of its own and Coding Projects now sits directly
+     after it (issue 176 moved Art, whose prev/next/enlarge controls ARE
+     focusable, after Coding Projects instead) between the nav and the
+     feed (a fact this exploits rather than assumes: if that ever stops
+     being true, this walk lands somewhere unexpected and the assertion
+     below fails loudly rather than skipping quietly) — to the feed's first
+     entry link: a plain anchor with nothing to do with the nav. */
   const navCount = await page.locator('.section-link').count();
   await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
   for (let step = 0; step < navCount + 1; step += 1) {
@@ -2054,90 +2058,48 @@ test('the nav link is quiet at rest and marks itself the moment intent shows (is
   await expect(page.locator(targetId)).toBeInViewport();
 });
 
-test('the art feed shows its frames when the origin serves no media', async ({ page }) => {
+test('the gallery shows exactly one loaded photograph, never eight stacked (issue 176)', async ({ page }) => {
   await visit(page);
-  /* The lanes run the binary with media disabled (playwright.config.mjs), so
-     this is the ORDINARY state of the gallery rather than a failure being
-     simulated: every frame asks for its picture, the origin serves none, and
-     what the visitor sees has to be a designed empty frame. The count is
-     awaited rather than read once — the frames answer as their requests
-     resolve. */
-  const frames = page.locator('.gallery-frame');
-  const total = await frames.count();
-  expect(total, 'the art feed rendered no frames').toBeGreaterThan(0);
-  /* The explanation appears for a reader who has not scrolled anywhere: only
-     the first picture is fetched eagerly, so keying the note on all of them
-     would hide it behind pictures nobody asked for. */
-  await expect(page.locator('[data-gallery-unserved]')).toHaveCount(1);
-  await expect(page.locator('[data-gallery-pending]')).not.toHaveCount(0);
-  /* And the deferred ones answer the same way once they are scrolled toward,
-     which is the other half of the lazy path. The scroll walks the feed a
-     viewport at a time rather than jumping to the end: a lazy picture is only
-     fetched when it comes NEAR the viewport, so a jump past it never requests
-     it at all — measured, two of eight had answered after one jump. */
-  await page.evaluate(async () => {
-    const step = Math.max(1, window.innerHeight);
-    for (let top = 0; top <= window.document.documentElement.scrollHeight; top += step) {
-      window.scrollTo(0, top);
-      await new Promise((resolve) => window.setTimeout(resolve, 50));
-    }
-  });
-  await expect(page.locator('[data-gallery-pending]')).toHaveCount(total);
+  // Vendored WebP, not a media-route fetch: the picture actually decodes,
+  // which the old remote-media "pending frame" case could never measure. It
+  // is also `loading="lazy"` (issue 176), and engines differ on how far
+  // ahead of the viewport a lazy image is fetched — Firefox measurably later
+  // than Chromium/WebKit here — so this polls for decode rather than
+  // asserting it the instant the page settles.
+  const image = page.locator('img.gallery-image');
+  await image.scrollIntoViewIfNeeded();
+  await expect
+    .poll(async () => image.evaluate((img) => img.complete && img.naturalWidth > 0), {
+      message: 'the vendored preview never finished decoding',
+      timeout: 10_000,
+    })
+    .toBe(true);
   const observed = await page.evaluate(() => {
-    const boxes = [...window.document.querySelectorAll('.gallery-frame')];
+    const frames = [...window.document.querySelectorAll('.gallery-image-button')];
+    const images = [...window.document.querySelectorAll('img.gallery-image')];
     return {
-      images: window.document.querySelectorAll('img.gallery-image').length,
-      inCards: boxes.every((frame) => frame.closest('.feed-card') !== null),
-      /* No ART card carries a title today (the owner asked for none) and the
-         region is ABSENT rather than empty, while the work feed's cards — the
-         same primitive — do carry one. Both branches, in one measurement. */
-      artTitles: window.document.querySelectorAll('.gallery-feed .feed-card-title').length,
-      workTitles: window.document.querySelectorAll('#work .entry-log .feed-card-title').length,
-      sizes: boxes.map((frame) => {
+      frameCount: frames.length,
+      imageCount: images.length,
+      count: window.document.querySelector('.gallery-count')?.textContent?.trim(),
+      sizes: frames.map((frame) => {
         const box = frame.getBoundingClientRect();
         return { width: Math.round(box.width), height: Math.round(box.height) };
       }),
-      columns: new Set(
-        boxes.map((frame) => Math.round(frame.getBoundingClientRect().left))
-      ).size,
     };
   });
-  /* No broken-image glyph anywhere: an <img> whose source 404s is replaced by
-     the frame, not left on the page to render the browser's own failure. */
-  expect(observed.images, 'a picture the origin does not serve is still in the document').toBe(0);
-  /* Every frame is a feed card — the same primitive the rest of the page is
-     built from, so a title, a date or a border is data rather than surgery. */
-  expect(observed.inCards, 'a picture is not wrapped in the card primitive').toBe(true);
-  expect(
-    observed.artTitles,
-    'an art card drew a heading band for a title it was never given'
-  ).toBe(0);
-  expect(
-    observed.workTitles,
-    'no card anywhere renders a title, so the absent art heading proves nothing'
-  ).toBeGreaterThan(0);
-  /* One vertical column of cards (the owner asked for a feed), and every
-     frame the same reserved box — which is what makes the arrival of six
-     megabytes of photography cost no layout shift. */
-  expect(observed.columns, 'the art feed is a mosaic rather than a column').toBe(1);
-  const [firstBox] = observed.sizes;
-  expect(firstBox.height, 'the art frames reserve no height').toBeGreaterThan(0);
-  for (const size of observed.sizes) {
-    expect(size, 'the art frames are not all the same reserved box').toEqual(firstBox);
-  }
-  /* And the box is the SMALLER of the pictures' 16:9 ratio and the tokenized
-     height cap (issue 157) — at the page's default column width the cap is
-     what actually wins (960px wide at 16:9 asks for 540px; the cap holds it
-     open at less than that), which is the fix for the owner's exact
-     complaint: one frame was filling the screen. galleryFrameCapPx is the
-     literal cap value, never read back from this page's own computed style
-     (see its declaration for why that self-reference is exactly the defect
-     Daybreak Blue's review found). */
-  const uncapped169Height = firstBox.width * (9 / 16);
+  expect(observed.frameCount, 'the gallery must render exactly one visible frame, never eight').toBe(1);
+  expect(observed.imageCount, 'exactly one <img> may be mounted in the feed frame').toBe(1);
+  expect(observed.count).toBe('1 / 8');
+  /* The box is reserved before the byte arrives: the SMALLER of the photo's
+     16:9 ratio and the tokenized height cap (issue 157), which is why a
+     single 4K photograph still costs the page no layout shift. */
+  const [box] = observed.sizes;
+  expect(box.height, 'the gallery frame reserves no height').toBeGreaterThan(0);
+  const uncapped169Height = box.width * (9 / 16);
   const expectedHeight = Math.min(uncapped169Height, galleryFrameCapPx);
   expect(
-    firstBox.height,
-    `the art frame is ${firstBox.height}px, not the capped ${expectedHeight.toFixed(1)}px`
+    box.height,
+    `the gallery frame is ${box.height}px, not the capped ${expectedHeight.toFixed(1)}px`
   ).toBeCloseTo(expectedHeight, 0);
   /* The cap must be doing real work somewhere, not coincidentally matching
      the uncapped ratio — but this test runs across every project, including
@@ -2150,12 +2112,80 @@ test('the art feed shows its frames when the origin serves no media', async ({ p
      proof to viewports wide enough to exercise it, without ever weakening
      what it proves there: on a desktop-width frame this still fails exactly
      as hard against the 20rem -> 200rem mutant. */
-  if (firstBox.width * (9 / 16) > galleryFrameCapPx) {
+  if (box.width * (9 / 16) > galleryFrameCapPx) {
     expect(
       uncapped169Height,
-      `the frame is ${firstBox.width}px wide, too narrow at this viewport to prove the cap engages`
+      `the frame is ${box.width}px wide, too narrow at this viewport to prove the cap engages`
     ).toBeGreaterThan(galleryFrameCapPx);
   }
+});
+
+test('prev/next cycle the visible photograph without leaving the page', async ({ page }) => {
+  await visit(page);
+  const image = page.locator('img.gallery-image');
+  const before = await image.getAttribute('src');
+  await page.getByRole('button', { name: 'Next photograph' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('2 / 8');
+  const after = await image.getAttribute('src');
+  expect(after, 'next must actually change which photograph is visible').not.toBe(before);
+  await page.getByRole('button', { name: 'Previous photograph' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('1 / 8');
+  const backToStart = await image.getAttribute('src');
+  expect(backToStart).toBe(before);
+});
+
+test('clicking the photograph opens a real modal dialog with a framed, larger image; Escape closes it', async ({
+  page,
+}) => {
+  await visit(page);
+  const dialog = page.locator('dialog.gallery-lightbox');
+  await expect(dialog).not.toBeVisible();
+  await page.locator('.gallery-image-button').click();
+  await expect(dialog).toBeVisible();
+  // A native <dialog> shown with showModal() reports itself open, and its
+  // ::backdrop is what makes the rest of the page inert to a pointer.
+  const modal = await dialog.evaluate((node) => node.matches(':modal'));
+  expect(modal, 'the dialog did not open as a real top-layer modal').toBe(true);
+  const enlarged = page.locator('img.gallery-lightbox-image');
+  await expect(enlarged).toBeVisible();
+  const [previewBox, enlargedBox, border] = await Promise.all([
+    page.locator('.gallery-image-button').boundingBox(),
+    enlarged.boundingBox(),
+    page.evaluate(() => {
+      const style = getComputedStyle(window.document.querySelector('.gallery-lightbox-border'));
+      return { width: style.borderTopWidth, style: style.borderTopStyle };
+    }),
+  ]);
+  // "Larger" is measured, not assumed: the enlarged image's rendered area
+  // must exceed the feed frame's, on every viewport this lane runs.
+  expect(
+    enlargedBox.width * enlargedBox.height,
+    'the enlarged photograph is not measurably larger than the feed frame'
+  ).toBeGreaterThan(previewBox.width * previewBox.height);
+  // The frame border is real and painted — issue 176's "static, simple,
+  // almost non-existent" v1, still an actual border rather than nothing.
+  expect(parseFloat(border.width), 'the frame border has no measurable width').toBeGreaterThan(0);
+  expect(border.style).not.toBe('none');
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+});
+
+test('the lightbox also closes on a backdrop click and its own close button', async ({ page }) => {
+  await visit(page);
+  const dialog = page.locator('dialog.gallery-lightbox');
+  await page.locator('.gallery-image-button').click();
+  await expect(dialog).toBeVisible();
+  await page.getByRole('button', { name: 'Close enlarged photograph' }).click();
+  await expect(dialog).not.toBeVisible();
+
+  await page.locator('.gallery-image-button').click();
+  await expect(dialog).toBeVisible();
+  // A click on the dialog element itself, outside its content box, is the
+  // backdrop — clicking at the very top-left corner of the viewport lands
+  // there whatever size the enlarged photograph happens to render at.
+  await page.mouse.click(2, 2);
+  await expect(dialog).not.toBeVisible();
 });
 
 test('the Coding Projects subsection renders no capture-date or no-fetch caption, in the actual DOM (issue 167, Daybreak Blue round 3 finding 4)', async ({
@@ -2198,8 +2228,8 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
 
   /* Scoped correctly: this proves the CODING PROJECTS half never shows the
      caption, not merely that the phrase is absent from the whole page (a
-     weaker claim the Art subsection's own note could accidentally satisfy
-     if it happened to avoid these exact words). */
+     weaker claim that would tell this pin nothing about THIS subsection
+     specifically). */
   await expect(codingProjects.locator('h3.subsection-title')).toHaveText('Coding Projects');
 });
 
@@ -2267,7 +2297,11 @@ const readFamily = (page) =>
       chromeStroke: Number.parseFloat(
         getComputedStyle(window.document.documentElement).getPropertyValue('--chrome-icon-stroke')
       ),
-      chrome: [...window.document.querySelectorAll('.icon-button')].map(painted),
+      // Scoped to the header for the same reason the button-chrome test
+      // above is: .icon-button is now also the gallery's prev/next/close
+      // shape (issue 176), and "chrome" here means the header family
+      // specifically, which is what the swatch-scale comparison is about.
+      chrome: [...window.document.querySelectorAll('.page-header .icon-button')].map(painted),
       swatches: [...window.document.querySelectorAll('.swatch')].map(painted),
     };
   });
@@ -4005,7 +4039,7 @@ test('every width the handle can reach keeps every section intact', async ({ pag
       const grid = window.document.querySelector('.stat-grid[data-cells="roomy"]');
       const cells = [...grid.querySelectorAll('.stat-cell')];
       const distinct = (values) => new Set(values.map((value) => Math.round(value))).size;
-      const frames = [...window.document.querySelectorAll('.gallery-frame')].map((frame) => {
+      const frames = [...window.document.querySelectorAll('.gallery-image-button')].map((frame) => {
         const box = frame.getBoundingClientRect();
         return { width: box.width, height: box.height };
       });
@@ -4079,17 +4113,17 @@ test('every width the handle can reach keeps every section intact', async ({ pag
        expectation along with it.
        (This viewport is the narrow "rails" one the handle needs to exist at
        all — MEASURED: even the widest column this sweep can reach keeps the
-       art card's own max-inline-size under ~569px, so the uncapped 16:9
+       gallery card's own max-inline-size under ~569px, so the uncapped 16:9
        height here never clears 320px by a comfortable margin. The
        unambiguous "the cap is doing real work, not coincidentally equal to
        the uncapped ratio" proof lives in the dedicated single-frame test
        above instead, at a viewport wide enough to make that margin real.) */
-    expect(state.frames.length, `the art feed rendered no frames ${at}`).toBeGreaterThan(0);
+    expect(state.frames.length, `the gallery rendered no frame ${at}`).toBe(1);
     for (const frame of state.frames) {
       const expectedHeight = Math.min(frame.width * (9 / 16), galleryFrameCapPx);
       expect(
         frame.height,
-        `an art frame is ${frame.height.toFixed(1)}px, not the capped ${expectedHeight.toFixed(1)}px ${at}`
+        `the gallery frame is ${frame.height.toFixed(1)}px, not the capped ${expectedHeight.toFixed(1)}px ${at}`
       ).toBeCloseTo(expectedHeight, 0);
     }
   }

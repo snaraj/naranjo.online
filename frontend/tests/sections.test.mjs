@@ -18,7 +18,7 @@
  * cannot execute it — the constructors it is written in are executed instead.
  */
 import assert from 'node:assert/strict';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import test from 'node:test';
 
 import { section, sectionHref, staticBlock } from '../src/lib/blocks.ts';
@@ -33,13 +33,7 @@ import {
   projectsCapturedOn,
   projectUrl,
 } from '../src/lib/projects.ts';
-import {
-  artGalleryProps,
-  artLabel,
-  artPieces,
-  artSource,
-  artUnavailableNote,
-} from '../src/lib/art.ts';
+import { galleryHeight, galleryLicenseNote, galleryPhotos, galleryWidth } from '../src/lib/gallery.ts';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
@@ -121,7 +115,7 @@ test('the manifest names the owner’s four sections, in the order the page stac
     manifestSections.map((entry) => entry.blocks),
     [
       ['workHistory'],
-      ['artGallery', 'codingProjects'],
+      ['codingProjects', 'artGallery'],
       ['osrsStats', 'vcsActivity', 'tokenUsage'],
       ['about'],
     ],
@@ -654,104 +648,175 @@ test('nothing in the work, projects, art, or trackers surfaces reaches the netwo
 // Projects: the art half
 // ---------------------------------------------------------------------------
 
-test('every picture is an immutable publication the origin can serve', () => {
-  assert.equal(artPieces.length, 8, 'the owner asked for eight pictures');
-  const digests = new Set();
-  for (const piece of artPieces) {
-    assert.match(
-      piece.sha256,
-      /^[0-9a-f]{64}$/,
-      `${piece.file} is not addressed by a lowercase SHA-256 digest`
+test('the gallery data pins eight distinct, honestly described photographs', () => {
+  assert.equal(galleryPhotos.length, 8, 'the owner asked for eight pictures');
+  const files = new Set();
+  for (const [i, entry] of galleryPhotos.entries()) {
+    assert.equal(entry.alt, `Placeholder photograph ${i + 1} of 8`);
+    // Nobody has reviewed what these placeholders depict, so nothing claims
+    // to know more than that — a caption invented to look finished is the
+    // same failure as a panel inventing a figure.
+    assert.doesNotMatch(entry.alt, /error|failed|broken|missing/i);
+    assert.match(entry.src, /^gallery-\d{2}-full\.webp$/);
+    assert.match(entry.previewSrc, /^gallery-\d{2}-preview\.webp$/);
+    assert.equal(
+      entry.sourceUrl,
+      `https://picsum.photos/seed/naranjo-gallery-${String(i + 1).padStart(2, '0')}/3840/2160`,
+      'the fixed seed in sourceUrl must match the vendored file it names'
     );
-    assert.equal(digests.has(piece.sha256), false, `${piece.sha256} addresses two pictures`);
-    digests.add(piece.sha256);
-    // EXECUTED through media.ts, not assembled here: the URL a picture resolves
-    // to is the one shape the origin accepts, and a name the origin would hide
-    // throws instead of rendering a broken frame.
-    assert.equal(artSource(piece), `/media/immutable/${piece.sha256}/${piece.file}`);
-    assert.match(artSource(piece), /^\/media\//, 'a media URL is same-origin and path-only');
+    for (const file of [entry.src, entry.previewSrc]) {
+      assert.equal(files.has(file), false, `${file} names two rows`);
+      files.add(file);
+    }
   }
-  // The gallery receives those exact URLs through the adapter, and the
-  // component renders the src it is handed — it could not build one.
-  assert.deepEqual(
-    artGalleryProps.items.map((item) => [item.key, item.src]),
-    artPieces.map((piece) => [piece.sha256, artSource(piece)])
-  );
-  assert.match(mediaGallery, /src=\{item\.src\}/, 'the gallery renders the adapter’s URL, never its own');
-  assert.doesNotMatch(mediaGallery, /mediaUrl|\/media\//, 'the gallery must not know the media route');
+  assert.equal(files.size, 16, 'eight photos at two derivatives each is sixteen distinct files');
+  assert.ok(galleryLicenseNote.includes('Unsplash Licence'), 'the vendored licence must be stated');
+  assert.equal(galleryWidth, 3840);
+  assert.equal(galleryHeight, 2160);
 });
 
-test('the pictures are described as what they verifiably are', () => {
-  // Nobody has reviewed what these placeholders depict, so nothing claims to
-  // know. A caption invented to look finished is the same failure as a panel
-  // inventing a figure.
-  assert.equal(artLabel(0, 8), 'Placeholder photograph 1 of 8');
-  assert.equal(artLabel(7, 8), 'Placeholder photograph 8 of 8');
-  assert.deepEqual(
-    artGalleryProps.items.map((item) => item.alt),
-    artPieces.map((_, index) => artLabel(index, artPieces.length))
-  );
+test('the gallery receives resolved URLs through the adapter, and never builds its own', () => {
+  // The binding module resolves gallery.ts's FILE NAMES to content-hashed
+  // URLs through import.meta.glob — the same pattern osrsStats.ts's icon
+  // maps use, because the bundler owns that resolution — so the component
+  // never sees a file name or a path of its own.
+  assert.match(artBinding, /import\.meta\.glob\('\.\.\/\.\.\/assets\/images\/gallery\/\*\.webp'/);
+  assert.match(artBinding, /previewSrc: resolve\(photo\.previewSrc\)/);
+  assert.match(artBinding, /fullSrc: resolve\(photo\.src\)/);
+  assert.match(mediaGallery, /src=\{item\.previewSrc\}/, 'the feed frame renders the adapter’s URL, never its own');
+  assert.doesNotMatch(mediaGallery, /\.webp|import\.meta\.glob/, 'the component must not know a file name of its own');
   assert.match(mediaGallery, /alt=\{item\.alt\}/);
 });
 
-test('an origin that serves no media shows frames, not broken pictures', () => {
-  // Media delivery is off unless an operator turns it on, so this is the
-  // ORDINARY state and it is designed rather than handled.
-  assert.ok(artUnavailableNote.trim().length > 0);
-  assert.equal(artGalleryProps.unavailableNote, artUnavailableNote);
-  assert.doesNotMatch(
-    artUnavailableNote,
-    /error|failed|broken|missing/i,
-    'the unavailable state must not read as a failure; media being off is a configuration, not a fault'
+test('exactly the reviewed sixteen WebP files (plus the sources manifest) are vendored — issue 176’s narrow, dated requirement-11 exception', async () => {
+  // Requirement 11 says heavy media never enters git; issue 176 is the
+  // owner's own dated exception for this temporary placeholder set alone
+  // (stated in gallery.ts, MediaGallery.svelte and SOURCES.md, where the
+  // owner will read it). The pin is an exact allowlist: precisely the
+  // reviewed set may exist here, nothing unreviewed can be added silently,
+  // and every file respects the size ceiling that keeps a "narrow,
+  // justified exception" narrow.
+  const dir = new URL('../src/assets/images/gallery/', import.meta.url);
+  const entries = (await readdir(dir)).filter((entry) => !entry.startsWith('.'));
+  const expected = galleryPhotos.flatMap((photo) => [photo.src, photo.previewSrc]);
+  assert.deepEqual(
+    [...entries].sort(),
+    [...expected, 'SOURCES.md'].sort(),
+    'the vendored gallery directory holds a file the data module and the manifest do not both name'
   );
-  assert.match(mediaGallery, /onerror=\{\(\) => markMissing\(item\.key\)\}/);
-  assert.match(mediaGallery, /data-gallery-pending="true"/);
-  assert.match(mediaGallery, /data-gallery-unserved="true"/);
-  // The explanation hangs off the FIRST picture, which is the only one always
-  // requested: every other is lazy, so a reader at the top of the feed has
-  // asked for one of them. Keyed on all eight — the shape this started as —
-  // the note never appeared for anyone who did not scroll the whole gallery,
-  // measured at two, three and six of eight answered across the engines.
-  assert.match(mediaGallery, /missing\.includes\(items\[0\]\?\.key/);
-  assert.doesNotMatch(
-    mediaGallery,
-    /missing\.length === items\.length/,
-    'keyed on every picture, the honest note waits for pictures nobody requested'
-  );
+  let total = 0;
+  for (const file of expected) {
+    const { size } = await stat(new URL(file, dir));
+    total += size;
+    assert.ok(size <= 2 * 1024 * 1024, `${file} is ${size} bytes, over the 2MB per-image ceiling`);
+  }
+  assert.ok(total <= 16 * 1024 * 1024, `the vendored set is ${total} bytes, over the 16MB total ceiling`);
 });
 
-test('the heavy pictures cost the page no layout shift', () => {
+test('exactly one frame is ever visible — never eight stacked', () => {
+  // A photograph rendered through an {#each} is the regression this guards
+  // against; the component renders exactly one <img> for the feed frame,
+  // keyed to whichever index state currently holds, and none of the seven
+  // others.
+  assert.doesNotMatch(mediaGallery, /\{#each items as/, 'the feed frame must not loop over every item at once');
+  assert.equal(
+    [...mediaGallery.matchAll(/class="gallery-image"/g)].length,
+    1,
+    'exactly one visible-frame <img> may exist in the markup'
+  );
+  assert.match(mediaGallery, /let index = \$state\(0\)/);
+  assert.match(mediaGallery, /const item = \$derived\(items\[index\]\)/);
+});
+
+test('prev/next are icon-only, and both wrap around the eight photographs', () => {
+  assert.match(mediaGallery, /aria-label="Previous photograph"/);
+  assert.match(mediaGallery, /aria-label="Next photograph"/);
+  // Text-free navigation affordance (issue 176): the controls carry an
+  // accessible name, never visible label prose.
+  assert.doesNotMatch(mediaGallery, />Next</);
+  assert.doesNotMatch(mediaGallery, />Previous</);
+  assert.match(mediaGallery, /index = \(index \+ 1\) % total/, 'next must wrap forward');
+  assert.match(mediaGallery, /index = \(index - 1 \+ total\) % total/, 'previous must wrap backward');
+});
+
+test('clicking the photograph enlarges it; only the full derivative loads on demand', () => {
+  assert.match(mediaGallery, /onclick=\{\(\) => \(enlarged = true\)\}/);
+  // The full derivative mounts only inside the enlarged branch — never
+  // alongside the small preview the feed frame always shows.
+  const enlargedBlock = /\{#if enlarged\}([\s\S]*?)\{\/if\}/.exec(mediaGallery)?.[1] ?? '';
+  assert.match(enlargedBlock, /src=\{item\.fullSrc\}/, 'the full derivative must load inside the enlarged branch');
+  assert.doesNotMatch(
+    mediaGallery.replace(enlargedBlock, ''),
+    /item\.fullSrc/,
+    'the full derivative must not load anywhere outside the enlarged branch'
+  );
+  assert.match(mediaGallery, /src=\{item\.previewSrc\}/, 'the feed frame must show the small preview');
+});
+
+test('the lightbox is a native <dialog>: Escape/backdrop/close all close it, arrow keys navigate', () => {
+  assert.match(mediaGallery, /<dialog[\s\S]*?bind:this=\{dialogEl\}/);
+  assert.match(mediaGallery, /dialogEl\.showModal\(\)/);
+  assert.match(mediaGallery, /dialogEl\.close\(\)/);
+  // The dialog's own 'close' event — which fires for Escape as much as for
+  // an explicit close() — is the single place `enlarged` resets, so no
+  // closing path can desync it from the dialog's real open state.
+  assert.match(mediaGallery, /onclose=\{onDialogClose\}/);
+  assert.match(mediaGallery, /function onDialogClose\(\): void \{\s*enlarged = false;/);
+  assert.match(mediaGallery, /event\.key === 'ArrowRight'/);
+  assert.match(mediaGallery, /event\.key === 'ArrowLeft'/);
+  assert.match(mediaGallery, /event\.target === dialogEl/, 'a genuine backdrop click must close the dialog');
+  assert.match(mediaGallery, /aria-label=\{item\.alt\}/, 'the dialog needs an accessible name naming which photograph');
+});
+
+test('the frame border is tokens only — the component states no width, color, radius, padding or image of its own', () => {
+  const style = styleBlock(mediaGallery);
+  const border = /\.gallery-lightbox-border\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(border.length > 0, 'the border rule is not where this pin expects it');
+  for (const token of [
+    '--gallery-frame-width',
+    '--gallery-frame-color',
+    '--gallery-frame-radius',
+    '--gallery-frame-padding',
+    '--gallery-frame-image',
+  ]) {
+    assert.match(border, new RegExp(`var\\(${token}\\)`), `the border rule does not read ${token}`);
+    assert.match(styles, new RegExp(`${token}:`), `styles.css is missing a default for ${token}`);
+  }
+  // border-image's initial value is 'none': the token IS the extension
+  // point, so the default asks for nothing extra rather than a component
+  // change being required to add a future pattern.
+  assert.match(styles, /--gallery-frame-image:\s*none;/);
+});
+
+test('the visible frame reserves its box before any byte arrives, and lazy-loads', () => {
   // The box is reserved before a byte arrives, and the ratio the stylesheet
-  // holds open is the ratio the markup declares — two statements of one shape
-  // that cannot disagree because both read the same token and the same
-  // constants.
-  assert.match(mediaGallery, /aspect-ratio:\s*var\(--card-media-aspect\)/);
+  // holds open is the ratio the markup declares — two statements of one
+  // shape that cannot disagree because both read the same token every media
+  // card on the page shares.
+  const style = styleBlock(mediaGallery);
+  assert.match(style, /aspect-ratio:\s*var\(--card-media-aspect\)/);
   // The cap (issue 157) is a SECOND, independent ceiling on the same
   // reservation, not a second timing: it still resolves before any byte
   // arrives, through the one global token every frame shares.
-  assert.match(mediaGallery, /max-block-size:\s*var\(--card-media-max-block-size\)/);
+  assert.match(style, /max-block-size:\s*var\(--card-media-max-block-size\)/);
   assert.match(mediaGallery, /\{width\}/);
   assert.match(mediaGallery, /\{height\}/);
-  assert.equal(artGalleryProps.width, 3840);
-  assert.equal(artGalleryProps.height, 2160);
-  // The first is the one a visitor is looking at; the rest wait until they are
-  // scrolled toward.
-  assert.match(mediaGallery, /loading=\{index === 0 \? 'eager' : 'lazy'\}/);
+  assert.match(mediaGallery, /loading="lazy"/);
   assert.match(mediaGallery, /decoding="async"/);
 });
 
 test('the gallery frame cap is pinned at its literal value, independent of computed style', () => {
-  // Daybreak Blue's review of PR #161 found the previous e2e coverage
-  // self-referential: it read getComputedStyle(...).maxHeight from the very
-  // stylesheet under test and derived its OWN expectation from that reading,
-  // so a mutation widening the cap (20rem -> 200rem) moved the expectation
-  // and the rendered behavior together and the suite never noticed. This
-  // test pins the LITERAL value the design actually chose — 20rem, 320px at
-  // this page's unmodified 16px root — straight out of the source text, and
-  // the e2e assertions in rendering-lanes.spec.mjs now hardcode the same
-  // literal 320 rather than reading it back from the DOM, so a widened cap
-  // is a diff against a fixed number in two independent places, not against
-  // itself in one.
+  // Daybreak Blue's review of PR #161 found e2e coverage that read
+  // getComputedStyle(...).maxHeight from the very stylesheet under test and
+  // derived its OWN expectation from that reading, so a mutation widening
+  // the cap (20rem -> 200rem) moved the expectation and the rendered
+  // behavior together and the suite never noticed. This test pins the
+  // LITERAL value the design chose — 20rem, 320px at this page's
+  // unmodified 16px root — straight out of the source text; the e2e
+  // assertions in rendering-lanes.spec.mjs hardcode the same literal 320
+  // rather than reading it back from the DOM, so a widened cap is a diff
+  // against a fixed number in two independent places, not against itself
+  // in one.
   assert.match(
     styles,
     /--card-media-max-block-size:\s*20rem;/,
@@ -759,32 +824,19 @@ test('the gallery frame cap is pinned at its literal value, independent of compu
   );
 });
 
-test('no picture entered the repository', async () => {
-  // Requirement 11: heavy media never enters git, the bundle, the embed, the
-  // image, or a ConfigMap. Eight 4K photographs are the first real test of
-  // that rule, and the media subsystem is the answer to it — so the pin is
-  // that the assets tree still holds no image at all.
-  const images = await readdir(new URL('../src/assets/images', import.meta.url));
-  assert.deepEqual(
-    images.filter((entry) => !entry.startsWith('.')),
-    [],
-    'an image landed in the bundle; heavy media is served by the media subsystem, never carried here'
-  );
-});
-
 // ---------------------------------------------------------------------------
 // The art and about bindings
 // ---------------------------------------------------------------------------
 
-test('the art block introduces itself with its heading and both provenance lines', () => {
+test('the art block introduces itself with its heading, and only its heading', () => {
   assert.match(artBinding, /heading: 'Art'/);
-  assert.match(artBinding, /intro: artNote/);
-  assert.match(artBinding, /note: artProvenance/);
-  // The section chrome renders those lines beside the block, in the
-  // established secondary styles.
+  // The retired intro/note provenance lines do not come back (issue 176):
+  // the gallery's whole content is the frame itself now, and the licence
+  // lives in gallery.ts's own doc comment and SOURCES.md — a maintainer
+  // fact, not something a visitor came here to read (the same ruling issue
+  // 167 already made for the Coding Projects capture note).
+  assert.doesNotMatch(artBinding, /intro:|note:/);
   assert.match(pageSectionSource, /<h3 class="subsection-title">\{block\.heading\}<\/h3>/);
-  assert.match(pageSectionSource, /<p class="subsection-intro">\{block\.intro\}<\/p>/);
-  assert.match(pageSectionSource, /<p class="section-note">\{block\.note\}<\/p>/);
 });
 
 test('the about section says it is empty rather than inventing a biography', () => {
