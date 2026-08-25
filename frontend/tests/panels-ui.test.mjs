@@ -920,17 +920,17 @@ test('the contribution grid is one component both panels render', () => {
 // year-wide reserve and native tooltip untouched.
 test('the token panel opts the shared grid into full width and the OSRS-style card', () => {
   assert.match(
-    tokenUsage,
+    usageTracker,
     /<ContributionGrid[\s\S]*?fullWidth[\s\S]*?\/>/,
     'the token panel does not opt the grid into full width'
   );
   assert.match(
-    tokenUsage,
+    usageTracker,
     /<ContributionGrid[\s\S]*?cardTitle="Tokens used"[\s\S]*?\/>/,
     'the token panel does not name the hover card'
   );
-  assert.doesNotMatch(activityBar, /fullWidth/, 'the version-control calendar opted into full width too');
-  assert.doesNotMatch(activityBar, /cardTitle/, 'the version-control calendar opted into the OSRS card too');
+  assert.doesNotMatch(activityTracker, /fullWidth/, 'the version-control calendar opted into full width too');
+  assert.doesNotMatch(activityTracker, /cardTitle/, 'the version-control calendar opted into the OSRS card too');
 
   // The shared component: both props are opt-in, so the default path — the
   // calendar's own — is untouched by either.
