@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"log/slog"
 )
 
 // New prepares the production registry: the explicit builtin panel list
@@ -19,16 +20,23 @@ import (
 // snapshot fallback as stale). Construction cannot fail — a missing or
 // invalid data file degrades that panel to StatusUnavailable — so a bad
 // data file can never keep the site from serving. No network activity
-// exists until StartRefresh is explicitly called.
-func New() *Registry {
-	return newRegistry(snapshotFiles, builtinPanels)
+// exists until StartRefresh is explicitly called. logger receives the
+// background-refresh narrative (construction and serving never log); nil
+// falls back to the discard logger, keeping library callers and tests
+// quiet by default.
+func New(logger *slog.Logger) *Registry {
+	reg := newRegistry(snapshotFiles, builtinPanels)
+	if logger != nil {
+		reg.logger = logger
+	}
+	return reg
 }
 
 // newRegistry loads every definition's source exactly once and precomputes
 // each complete HTTP response — envelope bytes plus digest ETag — so serving
 // never touches a source, a filesystem, or an encoder on a request.
 func newRegistry(fsys fs.FS, definitions []panelDefinition) *Registry {
-	reg := &Registry{byID: make(map[string]*panelState, len(definitions))}
+	reg := &Registry{byID: make(map[string]*panelState, len(definitions)), logger: discardLogger}
 	for _, definition := range definitions {
 		state := &panelState{definition: definition}
 		if fetch, ok := definition.source.(*FetchSource); ok {

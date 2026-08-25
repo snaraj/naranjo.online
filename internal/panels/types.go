@@ -14,11 +14,17 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// discardLogger is the quiet default behind every registry and source that
+// was not handed a logger, so construction, serving, and tests stay silent
+// unless the composition root explicitly injects observability.
+var discardLogger = slog.New(slog.DiscardHandler)
 
 const (
 	// EnvelopeSchema is the one envelope version every panel response carries.
@@ -462,6 +468,12 @@ type FetchSource struct {
 	// has ever been fetched, which the payload reports as an absent commitsAt
 	// rather than as a fresh empty list.
 	commitsAt time.Time
+	// logger narrates this source's fetch attempts: host, status, and byte
+	// counts at debug, per-source failures at warn — never a URL, never a
+	// credential, never a payload byte. Set once by the registry before its
+	// refresh loops launch; the mu-guarded accessor falls back to the
+	// discard logger so directly driven test sources stay quiet.
+	logger *slog.Logger
 }
 
 // Rate-budget roles. A role groups the endpoints that share one budget, so
@@ -1006,6 +1018,11 @@ type Registry struct {
 	byID map[string]*panelState
 	// refreshStarted guards StartRefresh against double starts.
 	refreshStarted atomic.Bool
+	// logger narrates the background refresh loops — per-cycle outcomes at
+	// info, failures at warn, per-attempt fetch detail at debug. Never nil:
+	// construction defaults it to discardLogger, and it never logs a URL, a
+	// credential, or a payload byte.
+	logger *slog.Logger
 }
 
 // panelState is one panel's identity plus its atomically swapped current

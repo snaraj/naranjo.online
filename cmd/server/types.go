@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"time"
 )
 
@@ -19,6 +20,36 @@ const (
 	// process after this window.
 	shutdownTimeout = 10 * time.Second
 )
+
+const (
+	// serviceName is the fixed service identity stamped on every log record,
+	// so aggregated cluster logs always say which service wrote a line.
+	serviceName = "naranjo.online"
+	// logFormatJSON emits one JSON object per line — the machine default and
+	// the shape `kubectl logs` consumers and future collectors parse.
+	logFormatJSON = "json"
+	// logFormatText emits slog's key=value text — the interactive default.
+	logFormatText = "text"
+	// Log level names accepted by LOG_LEVEL, exactly lowercase like every
+	// other environment switch this command reads.
+	logLevelDebug = "debug"
+	logLevelInfo  = "info"
+	logLevelWarn  = "warn"
+	logLevelError = "error"
+)
+
+// processLogger is the composition root's logging decision, carried as one
+// value: the constructed logger plus the resolved format and level names the
+// startup line reports, so what the process says it does and what it was
+// built to do can never drift apart.
+type processLogger struct {
+	// logger is the process-wide logger main also installs as slog's default.
+	logger *slog.Logger
+	// format is the resolved handler format: "json" or "text".
+	format string
+	// level is the resolved minimum level name, e.g. "info".
+	level string
+}
 
 // httpRunner is the narrow serving surface the lifecycle orchestration in
 // serve controls. *http.Server satisfies it directly; tests substitute a

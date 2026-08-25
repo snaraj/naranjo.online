@@ -413,7 +413,7 @@ func TestFetchPanelWithBrokenFallbackIsUnavailable(t *testing.T) {
 // deterministic guard pinned above, exercised through the public surface.
 func TestProductionStartRefreshUnderCanceledContext(t *testing.T) {
 	t.Parallel()
-	registry := New()
+	registry := New(nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	registry.StartRefresh(ctx)

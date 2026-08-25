@@ -113,7 +113,7 @@ func TestServePropagatesStartupFailure(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		listenErr := errors.New("listen tcp :8080: address already in use")
 		server := newFakeServer(listenErr).failNow()
-		if err := serve(t.Context(), server); !errors.Is(err, listenErr) {
+		if err := serve(t.Context(), server, quietLogger()); !errors.Is(err, listenErr) {
 			t.Fatalf("serve() error = %v, want %v", err, listenErr)
 		}
 		if got := server.calls(); got != 0 {
@@ -129,7 +129,7 @@ func TestServeTreatsServerClosedAsClean(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		server := newFakeServer(http.ErrServerClosed).failNow()
-		if err := serve(t.Context(), server); err != nil {
+		if err := serve(t.Context(), server, quietLogger()); err != nil {
 			t.Fatalf("serve() error = %v, want nil for ErrServerClosed", err)
 		}
 		if got := server.calls(); got != 0 {
@@ -149,7 +149,7 @@ func TestServeShutsDownOnceWithTheDocumentedBound(t *testing.T) {
 		cancel()
 		server := newFakeServer(http.ErrServerClosed)
 		start := time.Now()
-		if err := serve(ctx, server); err != nil {
+		if err := serve(ctx, server, quietLogger()); err != nil {
 			t.Fatalf("serve() error = %v, want nil after graceful drain", err)
 		}
 		if got := server.calls(); got != 1 {
@@ -178,7 +178,7 @@ func TestServeBoundsAShutdownThatCannotDrain(t *testing.T) {
 		server := newFakeServer(http.ErrServerClosed)
 		server.drainForever = true
 		start := time.Now()
-		err := serve(ctx, server)
+		err := serve(ctx, server, quietLogger())
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("serve() error = %v, want context.DeadlineExceeded", err)
 		}

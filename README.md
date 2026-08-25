@@ -373,6 +373,78 @@ S2) covering the Secret material, the egress policy, and the review of what
 the origin is then permitted to talk to. Nothing in this repository performs
 it, and no artifact here should be read as approval for it.
 
+## Observability contract
+
+The origin emits OpenTelemetry-conformant structured logs to stdout with
+the standard library only — one complete JSON object per line via
+`log/slog`, attribute names following OTel semantic conventions — so an
+OTel Collector can later ingest pod stdout with ZERO application change.
+When stdout is not a terminal (every container) the format is JSON
+automatically; on an interactive terminal it is human-readable text. Two
+environment variables tune it, and an unrecognized value fails closed to
+the default and emits one WARN naming the rejected value (logging is
+operator convenience, not security behavior, so a typo never crash-loops
+a pod):
+
+- `LOG_FORMAT` — `json` | `text` (default: JSON off-terminal, text on one).
+- `LOG_LEVEL` — `debug` | `info` | `warn` | `error` (default `info`).
+
+**OTel Logs Data Model mapping.** slog `time` → Timestamp, `level` →
+SeverityText (`DEBUG`/`INFO`/`WARN`/`ERROR`), `msg` → Body, `trace_id` →
+TraceId; every other key is an attribute. Records carry NO SpanId: the
+data model's SpanId names the span a record was produced in, and this
+origin produces no spans — the inbound parent-id is the CALLER's span
+(W3C trace-context §parent-id) and is therefore exposed only as the
+custom `parent_span_id` attribute, never as a field a collector would
+read as this record's own span. A real SpanId appears only when a real
+local span exists (phase 3 below). Resource identity rides on every
+record under its semantic-convention names — `service.name`
+(`naranjo.online`), plus `service.version` and `vcs.ref.head.revision`
+when the build embeds them (never invented — a build without VCS
+stamping omits them; `build_time` is a custom attribute, as no stable
+convention names a build timestamp).
+
+Each request produces exactly one `request served` record —
+`http.request.method`, `url.path`, `http.response.status_code`,
+`http.response.body.size`, `network.protocol.version` (all semantic
+conventions), plus the custom `request_id` and `duration_ms` — at INFO
+for 2xx/3xx, WARN for 4xx, ERROR for 5xx (a handler panic logs `request
+failed` with the error, then re-raises). `user_agent.original` rides only
+at `debug`. Lifecycle: one startup line (`addr`, `port`, `log_format`,
+`log_level`, `media_enabled`, `panels_refresh`), then `shutdown signal
+received`, `server drained`, and a final `server exited` /
+`server stopped`. Background panel refreshes log per-cycle outcomes at
+INFO, failures at WARN with the error chain and next retry time, and
+per-attempt `server.address`/`http.response.status_code`/
+`http.response.body.size` detail at DEBUG.
+
+**W3C trace context, hand-rolled and spec-exact.** A valid version-00
+`traceparent` (lowercase hex, exact field lengths, version not `ff`,
+non-zero trace and parent ids) is accepted and never mutated; its
+trace-id lands on every record for that request as `trace_id` and its
+parent-id as `parent_span_id` — which is exactly what a service mesh
+needs from the app: sidecars emit the spans, the origin propagates and
+correlates without claiming a span of its own. The origin deliberately
+does NOT mint a `traceparent` when none arrives: it creates no spans, so
+a self-minted trace id would fabricate a trace no participant recorded
+(the honest-states doctrine applied to telemetry); `request_id` already
+correlates traceless requests. An inbound `X-Request-Id` is honored only
+when it matches `^[A-Za-z0-9_-]{1,64}$`; anything else is replaced by 16
+random bytes as hex, and the response always carries `X-Request-Id`.
+
+**Roadmap.** Today: OTel-conformant logs plus W3C propagation, stdlib
+only. Phase 2: an OTel Collector on the cluster ingests this stdout
+stream — no application change. Phase 3 (owner decision, requirement 9):
+the in-process OTel SDK for internal span detail, adopted at
+configuration level. Browser-side telemetry is a separate future lane
+with its own privacy design.
+
+**Privacy floor, pinned by tests.** Records carry the URL path only —
+never a query string, which can carry secrets. No client IP is logged at
+any level. Panel-refresh records name bare hosts and configuration labels
+— never a URL, credential, or payload byte — and the media root path is
+never logged.
+
 ## Media
 
 Small UI assets live under `frontend/src/assets/` in documented categories

@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"mime"
 	"net/http"
 	"path"
@@ -22,21 +23,23 @@ import (
 // New constructs the complete naranjo.online HTTP handler from built frontend
 // assets. Construction validates index.html up front, wires Kubernetes probe
 // endpoints, and applies one security-header policy to every response.
-func New(assets fs.FS) (*Site, error) {
-	return newSite(assets, nil)
+// Options inject cross-cutting dependencies (WithLogger); omitted, the site
+// serves identically and logs nowhere.
+func New(assets fs.FS, options ...Option) (*Site, error) {
+	return newSite(assets, nil, siteConfiguration(options).logger)
 }
 
 // NewWithMedia constructs the site with a separately managed read-only media
 // library. Production charts deliberately cannot call this path until ADR 0012
 // discovery supplies a reviewed root and concurrency budget.
-func NewWithMedia(assets fs.FS, options MediaOptions) (*Site, error) {
-	media, err := openMediaHandler(options)
+func NewWithMedia(assets fs.FS, media MediaOptions, options ...Option) (*Site, error) {
+	mediaRoute, err := openMediaHandler(media)
 	if err != nil {
 		return nil, err
 	}
-	site, err := newSite(assets, media)
+	site, err := newSite(assets, mediaRoute, siteConfiguration(options).logger)
 	if err != nil {
-		_ = media.Close()
+		_ = mediaRoute.Close()
 		return nil, err
 	}
 	return site, nil
@@ -45,7 +48,7 @@ func NewWithMedia(assets fs.FS, options MediaOptions) (*Site, error) {
 // newSite wires the shared response policy after optional capabilities have
 // been validated, keeping the disabled and future media-enabled paths identical
 // for health probes and embedded frontend behavior.
-func newSite(assets fs.FS, media *mediaHandler) (*Site, error) {
+func newSite(assets fs.FS, media *mediaHandler, logger *slog.Logger) (*Site, error) {
 	h, err := newHandler(assets)
 	if err != nil {
 		return nil, err
@@ -70,11 +73,14 @@ func newSite(assets fs.FS, media *mediaHandler) (*Site, error) {
 	// performs network activity: fetch-backed panels serve their embedded
 	// snapshots as stale until StartPanelRefresh is explicitly invoked by
 	// the composition root.
-	panelAPI := panels.New()
+	panelAPI := panels.New(logger)
 	mux.Handle(panels.IndexPath, panelAPI)
 	mux.Handle(panels.PanelPathPrefix, panelAPI)
 	mux.Handle("/", h)
-	return &Site{handler: securityHeaders(redirectForwardedHTTP(rejectAmbiguousPath(mux))), media: media, panels: panelAPI}, nil
+	// requestLog wraps OUTSIDE the policy chain so the completion record
+	// carries every final outcome — including the TLS redirect's 308 and the
+	// ambiguous-path 404 — with the response's actual status and byte count.
+	return &Site{handler: requestLog(logger, securityHeaders(redirectForwardedHTTP(rejectAmbiguousPath(mux)))), media: media, panels: panelAPI}, nil
 }
 
 // StartPanelRefresh starts the panel API's background live refresh. It is an
