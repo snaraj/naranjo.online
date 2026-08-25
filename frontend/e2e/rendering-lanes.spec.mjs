@@ -1063,6 +1063,46 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
   ).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
 });
 
+/* ===========================================================================
+ * The section nav's fragment (owner report, issue 171)
+ *
+ * "Refreshing the website twice in Orion browser iphone causes the screen to
+ * go to #trackers immediately." The nav links are plain fragment anchors, and
+ * an ordinary tap writes that fragment into the URL and leaves it there —
+ * every later refresh re-applies it, so the page snaps to the section instead
+ * of loading at the top. Two behaviors have to hold at once, and this is the
+ * lane that can tell them apart from a source pin: a tap must not leave the
+ * fragment behind for a refresh to find, and a direct visit to a shared
+ * .../#trackers URL must still deep-link, because that half is desirable and
+ * stays. tests/sections.test.mjs pins the shape of the fix; this executes the
+ * actual reload against a real History API.
+ * ======================================================================== */
+
+test('a nav tap does not leave a fragment for a refresh to re-apply (issue 171)', async ({ page }) => {
+  await visit(page);
+  await page.getByRole('link', { name: 'Trackers' }).click();
+  await expect(page.locator('#trackers')).toBeInViewport();
+  // The tap itself must not have parked the fragment in the URL.
+  await expect(page, 'the nav tap left a fragment in the URL').not.toHaveURL(/#/);
+
+  // The refresh this issue is actually about: a page that left the fragment
+  // behind restores the scrolled-to-section here instead of loading at the
+  // top, which is the defect Orion reported on iPhone.
+  await page.reload();
+  await settled(page);
+  const scrollTop = await page.evaluate(() => window.scrollY);
+  expect(
+    scrollTop,
+    'a refresh after a nav tap restored a scroll position instead of loading at the top'
+  ).toBe(0);
+});
+
+test('a direct visit to a shared fragment URL still deep-links (issue 171)', async ({ page }) => {
+  await page.goto('/#trackers');
+  await settled(page);
+  await expect(page.locator('#trackers')).toBeInViewport();
+});
+
 /* INVERTED by the owner's ruling of 2026-08-24, and the inversion is the
  * finding. This lane used to REQUIRE the empty grid on the live page: a
  * `.grid-empty` note reading exactly "series pending" over more than three

@@ -174,6 +174,40 @@ test('every nav link lands on the section the manifest renders', () => {
   }
 });
 
+// A tap must not leave the fragment sitting in the URL for a later refresh
+// to re-apply (owner report, issue 171). There is no DOM here by contract
+// (see the file banner), so this pins the SHAPE of the fix — the browser
+// lanes in e2e/rendering-lanes.spec.mjs execute the actual reload behavior
+// against a real History API and a real scrollIntoView.
+test('a nav tap drops the fragment from the URL instead of the href (issue 171)', () => {
+  // The href is untouched: a real fragment link, readable by assistive tech
+  // and a genuine deep link when shared or typed directly.
+  assert.match(sectionNav, /href=\{sectionHref\(section\)\}/);
+  // A modified click (opening in a new tab) must reach the browser's own
+  // handling rather than this one.
+  assert.match(sectionNav, /event\.metaKey \|\| event\.ctrlKey \|\| event\.shiftKey \|\| event\.altKey/);
+  // The scroll happens in script now — never a bare anchor jump, which is
+  // the mechanism that left the fragment behind in the first place.
+  assert.match(sectionNav, /event\.preventDefault\(\)/);
+  assert.match(sectionNav, /\.scrollIntoView\(\)/);
+  // The URL is corrected AFTER the scroll, and by REPLACING history rather
+  // than pushing it — a pushed entry would put "back" one step behind where
+  // the reader actually was.
+  assert.match(
+    sectionNav,
+    /history\.replaceState\(null, '', window\.location\.pathname \+ window\.location\.search\)/
+  );
+});
+
+// A live probe (see the component's own doc comment) showed the fragment is
+// only half the bug: the browser remembers a scroll offset per history entry
+// independent of the URL, and replaceState does not clear it — so a refresh
+// still restored the reader's old position even with no fragment left to
+// reapply. This is the other half of the fix.
+test('scroll restoration is turned off once, so a refresh cannot silently reposition the reader (issue 171)', () => {
+  assert.match(sectionNav, /history\.scrollRestoration = 'manual'/);
+});
+
 test('the page stacks the name, the nav and the sections in one column', () => {
   // The nav sits WITH the name (owner sketch: the links are under it), not one
   // page gap away from it.
