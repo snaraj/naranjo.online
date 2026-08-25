@@ -102,9 +102,16 @@ capability boundary.
 
 This module's import surface is separately held to a CLOSED allowlist by its
 test suite — a file reader, a date library, a JSON codec, an argument parser,
-a pattern matcher, and the interpreter's own streams — with `os` deliberately
-refused even though `os.walk` would be the obvious way to write the walk. That
-pin bounds the REVIEWED SURFACE and makes a widening a conscious, named edit.
+a pattern matcher, the interpreter's own streams, an errno table, and `os`.
+That last one was refused until the 2026-08-25 round-4 review, and this
+paragraph said so for a while after it stopped being true; it is admitted now
+because the transcript walk is DESCRIPTOR-ROOTED (round-5 finding 1) and
+Python exposes `dir_fd`, `O_NOFOLLOW` and `O_DIRECTORY` nowhere else. Refusing
+the import would have meant keeping a real filesystem escape in order to
+preserve a smaller surface that — since round 3 — carries no capability claim
+anyway. The narrower pin that replaced it is an enumerated `os.` ATTRIBUTE
+allowlist in the same suite. That pin bounds the REVIEWED SURFACE and makes a
+widening a conscious, named edit.
 It is not a proof of capability absence, and the 2026-08-24 round-3 review is
 why this paragraph now says so: `pathlib` is admitted and re-exports `os`, so
 `pathlib.os.system(...)` reaches a launch callable with the import set
@@ -127,6 +134,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import errno
 import json
 import os
 import pathlib
@@ -286,89 +294,160 @@ def new_counters():
 
 
 # The POSIX file-type bits, spelled here rather than imported from `stat`,
-# because one constant is not worth another module on a surface this narrow.
+# because a handful of constants are not worth another module on a surface
+# this narrow. The walk tests st_mode itself rather than asking pathlib,
+# because `Path.is_dir()` and `Path.is_file()` answer about the TARGET of a
+# link and this walk must answer about the entry.
 FILE_TYPE_MASK = 0o170000
 REGULAR_FILE = 0o100000
+DIRECTORY = 0o040000
+SYMBOLIC_LINK = 0o120000
+
+
+def _identity(info):
+    """The (device, inode) pair that names one file to the kernel.
+
+    Compared only between stat results obtained through the SAME rooted
+    capability chain (2026-08-25 round-5 review, finding 1): an identity taken
+    through an attacker-controlled path names whatever the attacker pointed
+    at, so it matches itself and proves nothing.
+    """
+    return (info.st_dev, info.st_ino)
+
+
+def _descend(parent, name, counters):
+    """Open one child directory THROUGH parent, never by path. None on refusal.
+
+    `dir_fd` is what makes this a capability rather than a lookup: the kernel
+    resolves `name` relative to the open descriptor, and `name` is a single
+    component from `os.listdir`, which POSIX guarantees contains no separator
+    and is never `.` or `..`. With `O_NOFOLLOW` there is therefore nothing
+    left for a symbolic link to redirect — the whole remaining lookup is one
+    component that must not be a link.
+
+    ELOOP and ENOTDIR are the two errno values a swap produces, so they are
+    tallied as symlinks; anything else is an ordinary unreadable directory.
+    """
+    try:
+        return os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY | os.O_CLOEXEC,
+            dir_fd=parent,
+        )
+    except OSError as failure:
+        if failure.errno in (errno.ELOOP, errno.ENOTDIR):
+            counters["symlinks"] += 1
+        else:
+            counters["unreadable"] += 1
+        return None
 
 
 def admitted_records(root, counters=None):
     """Every journal file under root, in one deterministic order, each paired
-    with the IDENTITY it had when it was admitted.
+    with the IDENTITY it had when it was admitted and the ROOTED path by which
+    it may be re-opened.
 
-    The identity is the point (2026-08-25 round-4 review, finding 4). Every
-    check below happens on a path, and the file is opened later; between
-    those two moments the leaf can be replaced. Carrying (st_dev, st_ino)
-    forward lets the open verify it got the same file rather than trusting
-    that nothing moved.
+    DESCRIPTOR-ROOTED TRAVERSAL (2026-08-25 round-5 review, finding 1). The
+    previous walk was path-based: it proved containment with `resolve()`, took
+    an identity with a LATER path-based `lstat`, and opened with a path-based
+    `os.open`. Every one of those three re-resolves the name from the
+    filesystem root, and `O_NOFOLLOW` protects only the FINAL component — so
+    an INTERMEDIATE directory could be replaced with a symbolic link after
+    containment and before the lstat. The reviewer did exactly that: renamed
+    the parent, put a link to an outside tree in its place, and the walk
+    recorded the OUTSIDE file's identity, opened through the link, matched
+    that tainted identity against itself, and read private content. Carrying
+    an identity forward proves nothing when the identity itself was taken
+    through the attacker's path.
+
+    So no path is ever re-resolved below the root. The root is opened once and
+    every component beneath it is reached with `dir_fd` from the component
+    before it, `O_NOFOLLOW` on each, so a link anywhere along the chain is
+    refused at the kernel rather than followed. Containment stops being a
+    check and becomes a property: a descent that only ever opens single
+    non-symlink components of an already-opened directory cannot leave the
+    tree, which is why the old `resolve().is_relative_to()` test is gone
+    rather than kept as reassurance — it was the weaker statement of a thing
+    now guaranteed by construction.
+
+    The root itself is opened by path, and that is the honest boundary: it is
+    the configured trust anchor, not attacker-controlled tree content. Its
+    identity is recorded and re-checked when a record is opened, so even a
+    root swapped between the walk and the read is refused.
 
     Sorted because two runs over the same tree must produce the same series,
     and because the running-totals shape reads each file as a SEQUENCE — an
-    order that varied by filesystem would make the walk's arithmetic vary
-    with it.
+    order that varied by filesystem would make the walk's arithmetic vary with
+    it. The key is the joined relative path, which reproduces the ordering the
+    previous `pathlib.Path` sort produced.
 
-    ROOTED, NO-FOLLOW, AND BOUNDED (2026-08-24 round-3 review, finding 10).
-    The previous walk was `rglob` plus `is_file()`, which follows symbolic
-    links — `is_file()` answers about the TARGET — so a link inside the
-    transcript tree could point the producer at any file on the machine, and
-    a link to a parent directory could make the walk unbounded. This is an
-    explicit traversal instead:
+    NO-FOLLOW AND BOUNDED (2026-08-24 round-3 review, finding 10), unchanged:
 
       * a symbolic link is SKIPPED, leaf or directory alike, and tallied;
-      * every admitted file is re-checked to resolve INSIDE the root, so
-        containment does not rest on the traversal alone;
       * depth and file count are bounded before descending or admitting;
       * an unreadable directory is tallied and skipped, never named.
     """
     counters = new_counters() if counters is None else counters
-    base = pathlib.Path(root)
     try:
-        contained_in = base.resolve()
+        anchor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     except OSError:
-        raise CaptureError("the transcript root cannot be resolved")
+        raise CaptureError("the transcript root cannot be opened")
     admitted = []
-    pending = [(base, 0)]
-    while pending:
-        directory, depth = pending.pop()
-        if depth > MAX_TREE_DEPTH:
-            raise CaptureError(
-                "the transcript tree is deeper than the %d level bound" % MAX_TREE_DEPTH
-            )
+    try:
+        root_identity = _identity(os.fstat(anchor))
+        pending = [(anchor, (), 0)]
         try:
-            entries = list(directory.iterdir())
-        except OSError:
-            # Counted, never named: see the module docstring.
-            counters["unreadable"] += 1
-            continue
-        for entry in entries:
-            if entry.is_symlink():
-                counters["symlinks"] += 1
-                continue
-            try:
-                if entry.is_dir():
-                    pending.append((entry, depth + 1))
-                    continue
-                if not entry.is_file() or entry.name[-len(RECORD_SUFFIX):] != RECORD_SUFFIX:
-                    continue
-                if not entry.resolve().is_relative_to(contained_in):
-                    counters["symlinks"] += 1
-                    continue
-                # The identity of the file THIS check just approved. It
-                # travels with the path so the open can prove it received the
-                # same file, rather than whatever the name points at by then.
-                info = entry.lstat()
-                if (info.st_mode & FILE_TYPE_MASK) != REGULAR_FILE:
-                    counters["symlinks"] += 1
-                    continue
-                identity = (info.st_dev, info.st_ino)
-            except OSError:
-                counters["unreadable"] += 1
-                continue
-            admitted.append((entry, identity))
-            if len(admitted) > MAX_RECORD_FILES:
-                raise CaptureError(
-                    "the transcript tree holds more than the %d file bound" % MAX_RECORD_FILES
-                )
-    return sorted(admitted)
+            while pending:
+                directory, components, depth = pending.pop()
+                try:
+                    if depth > MAX_TREE_DEPTH:
+                        raise CaptureError(
+                            "the transcript tree is deeper than the %d level bound"
+                            % MAX_TREE_DEPTH
+                        )
+                    try:
+                        names = os.listdir(directory)
+                    except OSError:
+                        # Counted, never named: see the module docstring.
+                        counters["unreadable"] += 1
+                        continue
+                    for name in names:
+                        try:
+                            info = os.lstat(name, dir_fd=directory)
+                        except OSError:
+                            counters["unreadable"] += 1
+                            continue
+                        kind = info.st_mode & FILE_TYPE_MASK
+                        if kind == SYMBOLIC_LINK:
+                            counters["symlinks"] += 1
+                            continue
+                        if kind == DIRECTORY:
+                            child = _descend(directory, name, counters)
+                            if child is not None:
+                                pending.append((child, components + (name,), depth + 1))
+                            continue
+                        if kind != REGULAR_FILE:
+                            continue
+                        if name[-len(RECORD_SUFFIX):] != RECORD_SUFFIX:
+                            continue
+                        admitted.append(
+                            (root, root_identity, components + (name,), _identity(info))
+                        )
+                        if len(admitted) > MAX_RECORD_FILES:
+                            raise CaptureError(
+                                "the transcript tree holds more than the %d file bound"
+                                % MAX_RECORD_FILES
+                            )
+                finally:
+                    if directory != anchor:
+                        os.close(directory)
+        finally:
+            for directory, _, _ in pending:
+                if directory != anchor:
+                    os.close(directory)
+    finally:
+        os.close(anchor)
+    return sorted(admitted, key=lambda record: "/".join(record[2]))
 
 
 def bounded_lines(handle, counters):
@@ -412,59 +491,91 @@ def remember_identity(identity, seen):
 def open_record_file(record, counters):
     """Open one admitted journal file, or tally the refusal and return None.
 
-    DESCRIPTOR-ROOTED AND NO-FOLLOW (2026-08-25 round-4 review, finding 4).
-    The previous version called `Path.open()`, which follows whatever the
-    leaf has become. Every symlink and containment check in the walk happens
-    earlier, on the path, so a leaf replaced between the check and this call
-    was opened and read — the reviewer admitted a regular record, swapped it
-    for a symlink pointing outside the configured root, and watched this
-    function read the outside target. A walk that advertises "no-follow" and
-    then follows at the one moment it matters is not no-follow.
+    DESCRIPTOR-ROOTED, NO-FOLLOW AT EVERY COMPONENT (2026-08-25 round-5
+    review, finding 1). Round 4 put `O_NOFOLLOW` on this open and called the
+    read no-follow. It was not: `O_NOFOLLOW` constrains the FINAL component
+    only, and the path handed to it was rebased from the filesystem root, so
+    every directory above the leaf was re-resolved here and a link swapped in
+    at any of them was followed. The reviewer proved it by replacing the
+    leaf's PARENT.
 
-    Three things close it, and each answers a different substitution:
+    This re-walks the same chain the admitting walk walked, the same way:
+    the root by path, then every component beneath it through `dir_fd` from
+    the component before it, `O_NOFOLLOW` on each, single components only. No
+    absolute or rebased path is ever handed to the kernel below the root.
 
-      * `O_NOFOLLOW` refuses at the kernel if the FINAL component is a
-        symlink, so the swap the reviewer performed cannot open at all;
-      * `fstat` on the DESCRIPTOR — not on the path — confirms a regular
-        file, so a fifo or device swapped in is refused rather than read.
-        `O_NONBLOCK` rides along for that case specifically and is not
+    Four things must hold, and each answers a different substitution:
+
+      * the ROOT still has the identity the walk anchored on, so a root
+        swapped between the walk and this read is refused rather than
+        silently becoming the new anchor;
+      * every intermediate component opens as a real directory that is not a
+        link — the escape the round-5 review found;
+      * `fstat` on the resulting DESCRIPTOR — not on a path — confirms a
+        regular file, so a fifo or device swapped in is refused rather than
+        read. `O_NONBLOCK` rides along for that case specifically and is not
         decoration: opening a fifo read-only BLOCKS until a writer appears,
         so without it a swapped-in fifo would hang this hourly unattended job
         forever instead of being refused. It has no effect on the regular
         files this tool actually reads, and the descriptor is closed before
         any read whenever fstat says the leaf is not one;
-      * the (st_dev, st_ino) identity is compared against what the walk
-        admitted, which catches the case the first two cannot see: an
-        ordinary regular file swapped for a DIFFERENT ordinary regular file,
-        including through a hard link.
+      * the (device, inode) identity — now obtained through the rooted chain
+        on BOTH sides — is compared against what the walk admitted, which
+        catches an ordinary regular file swapped for a DIFFERENT ordinary
+        regular file, including through a hard link.
 
     Failures are tallied and never named, exactly as before.
     """
-    path, identity = record
+    root, root_identity, components, identity = record
     try:
-        descriptor = os.open(
-            path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
-        )
+        parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     except OSError:
-        # Both the ordinary unreadable case and an O_NOFOLLOW refusal land
-        # here. They are counted together on purpose: distinguishing them
-        # would mean reporting WHY a specific path could not be read, and
-        # this tool's contract is that a file it cannot read is a number.
         counters["unreadable"] += 1
         return None
+    leaf = None
     try:
-        info = os.fstat(descriptor)
-        if (info.st_mode & FILE_TYPE_MASK) != REGULAR_FILE:
-            os.close(descriptor)
+        if _identity(os.fstat(parent)) != root_identity:
             counters["symlinks"] += 1
             return None
-        if (info.st_dev, info.st_ino) != identity:
-            os.close(descriptor)
-            counters["symlinks"] += 1
+        for name in components[:-1]:
+            child = _descend(parent, name, counters)
+            if child is None:
+                return None
+            os.close(parent)
+            parent = child
+        try:
+            leaf = os.open(
+                components[-1],
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                dir_fd=parent,
+            )
+        except OSError as failure:
+            # An O_NOFOLLOW refusal and an ordinary unreadable file are told
+            # apart by errno only. Neither is ever named: this tool's contract
+            # is that a file it cannot read is a number.
+            if failure.errno in (errno.ELOOP, errno.ENOTDIR):
+                counters["symlinks"] += 1
+            else:
+                counters["unreadable"] += 1
             return None
-        return os.fdopen(descriptor, "r", encoding="utf-8", errors="replace")
     except OSError:
-        os.close(descriptor)
+        counters["unreadable"] += 1
+        return None
+    finally:
+        os.close(parent)
+    try:
+        info = os.fstat(leaf)
+        if (info.st_mode & FILE_TYPE_MASK) != REGULAR_FILE:
+            os.close(leaf)
+            counters["symlinks"] += 1
+            return None
+        if _identity(info) != identity:
+            os.close(leaf)
+            counters["symlinks"] += 1
+            return None
+        return os.fdopen(leaf, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        os.close(leaf)
         counters["unreadable"] += 1
         return None
 

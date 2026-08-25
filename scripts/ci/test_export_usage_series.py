@@ -218,12 +218,15 @@ class ImportSurfaceTest(unittest.TestCase):
     honestly be.
 
     The capture tool it imports is a documented EXCEPTION as of the
-    2026-08-25 round-4 review (finding 4). Its final transcript open needs
-    `O_NOFOLLOW` and an `fstat` on the descriptor to close a symlink-swap
-    TOCTOU, and Python exposes neither outside `os`; refusing the import
-    would have meant keeping a real escape to preserve a smaller surface that
-    — since round 3 — no longer carries a capability claim anyway, because
-    the enforced boundary is the kernel sandbox. That file carries an
+    2026-08-25 round-4 review (finding 4), widened by round 5 (finding 1).
+    Round 4 admitted `os` for `O_NOFOLLOW` and a descriptor `fstat` on the
+    FINAL open; round 5 established that this closed only the last component
+    and that the whole traversal has to be descriptor-rooted, which needs
+    `dir_fd`, `O_DIRECTORY`, `os.listdir` and `os.lstat` as well. Python
+    exposes none of it outside `os`; refusing the import would have meant
+    keeping a real filesystem escape to preserve a smaller surface that —
+    since round 3 — no longer carries a capability claim anyway, because the
+    enforced boundary is the kernel sandbox. That file carries an
     enumerated `os.` ATTRIBUTE allowlist in its own suite, and the assertion
     below pins the exception to exactly one module in exactly one file.
     """
@@ -367,10 +370,11 @@ class ImportSurfaceTest(unittest.TestCase):
         # its own allowlist forbids.
         #
         # `os` is the one deliberate divergence between the two allowlists
-        # (2026-08-25 round-4 review, finding 4): the capture tool needs
-        # `O_NOFOLLOW` and a descriptor `fstat` for its final transcript
-        # open, which Python exposes nowhere else, and THIS module still
-        # neither imports it nor may name it. The divergence is stated as an
+        # (2026-08-25 round-4 review finding 4, widened by round-5 finding
+        # 1): the capture tool's transcript walk is descriptor-rooted, which
+        # needs `dir_fd`, `O_NOFOLLOW`, `O_DIRECTORY`, `os.listdir` and
+        # `os.lstat`, and Python exposes none of it elsewhere. THIS module
+        # still neither imports it nor may name it. The divergence is stated as an
         # explicit exception rather than by widening this file's refused set,
         # so it cannot spread by accident — and the capture tool's own suite
         # holds the enumerated `os.` attribute allowlist that replaced

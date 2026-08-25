@@ -471,7 +471,21 @@ class ImportSurfaceTest(unittest.TestCase):
     """
 
     ALLOWED = frozenset(
-        {"__future__", "argparse", "datetime", "json", "os", "pathlib", "re", "sys"}
+        {
+            "__future__",
+            "argparse",
+            "datetime",
+            # `errno` joined in round 5: the descriptor-rooted descent tells a
+            # symlink swap (ELOOP/ENOTDIR) apart from an ordinary unreadable
+            # entry, and a bare `except OSError` cannot. It is a table of
+            # integers with no callables at all.
+            "errno",
+            "json",
+            "os",
+            "pathlib",
+            "re",
+            "sys",
+        }
     )
 
     # Every `os.` attribute the module is allowed to name. Descriptor-rooted
@@ -480,12 +494,21 @@ class ImportSurfaceTest(unittest.TestCase):
     ALLOWED_OS_ATTRIBUTES = frozenset(
         {
             "O_CLOEXEC",
+            # O_DIRECTORY joined in round 5: each intermediate component must
+            # open as a real directory, or the descent is not a descent.
+            "O_DIRECTORY",
             "O_NOFOLLOW",
             "O_NONBLOCK",
             "O_RDONLY",
             "close",
             "fdopen",
             "fstat",
+            # listdir and lstat joined in round 5 for the same reason: the
+            # walk reads entries and their types THROUGH a directory
+            # descriptor now, where it previously asked pathlib to re-resolve
+            # each name from the filesystem root.
+            "listdir",
+            "lstat",
             "open",
         }
     )
@@ -1128,25 +1151,47 @@ if __name__ == "__main__":
 
 
 class FinalOpenIsDescriptorRootedTest(unittest.TestCase):
-    """2026-08-25 round-4 review, finding 4: the check/open TOCTOU.
+    """The check/open TOCTOU, in the two forms two review rounds found.
 
-    Every symlink, type, and containment check the walk performs happens on a
-    PATH, and the file was opened later with `Path.open()`, which follows
-    whatever the leaf has become. The reviewer admitted a regular record,
-    replaced it with a symlink pointing outside the configured root, and the
-    production open read the outside target. These tests reproduce that swap
-    and require it refused.
+    ROUND 4, FINDING 4 — THE LEAF. Every symlink, type, and containment check
+    the walk performed happened on a PATH, and the file was opened later with
+    `Path.open()`, which follows whatever the leaf has become. The reviewer
+    admitted a regular record, replaced it with a symlink pointing outside the
+    configured root, and the production open read the outside target.
+
+    ROUND 5, FINDING 1 — THE PARENT, and this is the one that mattered. The
+    round-4 repair added `O_NOFOLLOW` to a PATH-BASED open, which constrains
+    the FINAL component only. Everything above the leaf was still re-resolved
+    from the filesystem root on every call, so the reviewer moved one level up:
+    keep the leaf through the containment check, then rename its PARENT and put
+    a symlink to an outside tree in its place. The later path-based `lstat`
+    recorded the OUTSIDE file's identity, the open followed the intermediate
+    link, and the identity "matched" — because both sides of the comparison had
+    been taken through the attacker's path. An identity is only evidence when
+    it is obtained through a capability the attacker cannot redirect.
+
+    The fixture therefore nests the record one directory deep, so the parent
+    swap has somewhere to happen. Every refusal below is paired with a
+    non-vacuity case: the same call on an untouched tree must succeed.
     """
 
     def setUp(self):
         self.scratch = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
         self.root = os.path.join(self.scratch, "transcripts")
-        os.makedirs(self.root)
-        self.record = os.path.join(self.root, "session.jsonl")
+        # One directory deep on purpose: a flat fixture cannot express the
+        # round-5 parent swap, and a test that cannot express the finding
+        # cannot regress on it.
+        self.inside = os.path.join(self.root, "inside")
+        os.makedirs(self.inside)
+        self.record = os.path.join(self.inside, "session.jsonl")
         with open(self.record, "w", encoding="utf-8") as handle:
             handle.write(transcript_line() + "\n")
-        self.outside = os.path.join(self.scratch, "outside.jsonl")
+        # The outside tree the reviewer redirected to: same shape, same file
+        # name, different content, reachable only by escaping the root.
+        self.elsewhere = os.path.join(self.scratch, "elsewhere")
+        os.makedirs(self.elsewhere)
+        self.outside = os.path.join(self.elsewhere, "session.jsonl")
         with open(self.outside, "w", encoding="utf-8") as handle:
             handle.write("a private file the producer must never read\n")
 
@@ -1156,9 +1201,19 @@ class FinalOpenIsDescriptorRootedTest(unittest.TestCase):
         self.assertEqual(len(admitted), 1, "the fixture must admit exactly one record")
         return admitted[0], counters
 
-    def test_the_admitted_record_carries_the_identity_it_was_checked_with(self):
-        (path, identity), _ = self.admit()
-        info = os.lstat(path)
+    def test_the_admitted_record_is_rooted_and_carries_its_identity(self):
+        (root, root_identity, components, identity), _ = self.admit()
+        # The record names the ROOT plus single components, never a rebased
+        # absolute path: that is what lets the open re-walk the chain instead
+        # of re-resolving a name the attacker controls.
+        self.assertEqual(root, self.root)
+        self.assertEqual(components, ("inside", "session.jsonl"))
+        for name in components:
+            self.assertNotIn("/", name)
+            self.assertNotIn(name, (".", ".."))
+        anchor = os.lstat(self.root)
+        self.assertEqual(root_identity, (anchor.st_dev, anchor.st_ino))
+        info = os.lstat(self.record)
         self.assertEqual(identity, (info.st_dev, info.st_ino))
 
     def test_the_happy_path_still_reads_the_admitted_file(self):
@@ -1173,8 +1228,8 @@ class FinalOpenIsDescriptorRootedTest(unittest.TestCase):
         self.assertEqual(counters["symlinks"], 0)
 
     def test_a_post_check_symlink_swap_is_refused(self):
-        # The reviewer's exact probe: admit a regular file, then replace it
-        # with a symlink out of the tree before the open.
+        # Round 4's probe: admit a regular file, then replace THE LEAF with a
+        # symlink out of the tree before the open.
         record, counters = self.admit()
         os.unlink(self.record)
         os.symlink(self.outside, self.record)
@@ -1183,7 +1238,92 @@ class FinalOpenIsDescriptorRootedTest(unittest.TestCase):
             with handle:
                 content = handle.read()
             self.fail("the final open followed a post-check symlink swap and read %r" % content[:40])
-        self.assertEqual(counters["unreadable"], 1)
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_a_post_check_parent_directory_swap_is_refused(self):
+        # ROUND 5's probe, reproduced exactly as the reviewer described it:
+        # keep the leaf through admission, then rename the parent and replace
+        # it with a symlink to an outside tree holding a file of the same
+        # name. Against the round-4 build this read the outside content and
+        # the suite stayed green, because O_NOFOLLOW never looked above the
+        # leaf and the identity had been taken through the swapped parent.
+        record, counters = self.admit()
+        os.rename(self.inside, os.path.join(self.root, "moved-away"))
+        os.symlink(self.elsewhere, self.inside)
+        handle = capture_usage_series.open_record_file(record, counters)
+        if handle is not None:
+            with handle:
+                content = handle.read()
+            self.fail(
+                "the final open followed a swapped parent directory outside the root "
+                "and read %r" % content[:40]
+            )
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_a_post_check_root_swap_is_refused(self):
+        # The same escape one level higher again. The root is opened by path
+        # because it is the configured trust anchor, so the only thing that
+        # can refuse a root swapped between the walk and the read is the
+        # recorded root identity — which is why the record carries it.
+        record, counters = self.admit()
+        os.rename(self.root, os.path.join(self.scratch, "root-moved-away"))
+        os.symlink(self.elsewhere, self.root)
+        self.assertIsNone(capture_usage_series.open_record_file(record, counters))
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_an_intermediate_symlink_is_refused_even_when_it_resolves_to_the_same_file(self):
+        # THE DECISIVE ROUND-5 TEST, and the reason the two swap tests above
+        # are not enough on their own. Both of those are ALSO refused by a
+        # path-based build, because the identity comparison happens to catch
+        # them in this deterministic ordering — the reviewer's escape needed
+        # the swap to land while the walk was between its containment check
+        # and its stat, so that BOTH sides of the comparison were taken
+        # through the attacker's path. A test cannot schedule that window.
+        #
+        # So this pins the property that closes it instead of the race that
+        # exploits it: NO INTERMEDIATE COMPONENT IS EVER FOLLOWED. The link
+        # here resolves back to the very directory that was admitted, so the
+        # leaf is the same inode and every identity check in the world says
+        # yes. Only a descent that refuses a link at each component says no,
+        # which is why this is red against a path-based open and green only
+        # for a descriptor-rooted one.
+        record, counters = self.admit()
+        moved = os.path.join(self.root, "moved-away")
+        os.rename(self.inside, moved)
+        os.symlink(moved, self.inside)
+        handle = capture_usage_series.open_record_file(record, counters)
+        if handle is not None:
+            handle.close()
+            self.fail(
+                "the open followed an intermediate symlink; it was admitted only "
+                "because the link happened to resolve inside the root, which is "
+                "the attacker's choice rather than the producer's"
+            )
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_an_intermediate_swap_for_a_real_directory_is_refused(self):
+        # Not every substitution is a symlink. A genuine directory holding a
+        # genuine file of the same name defeats O_NOFOLLOW at every component,
+        # so the leaf identity is what refuses this one.
+        record, counters = self.admit()
+        os.rename(self.inside, os.path.join(self.root, "moved-away"))
+        os.makedirs(self.inside)
+        with open(self.record, "w", encoding="utf-8") as handle:
+            handle.write("substituted content in a substituted directory\n")
+        self.assertIsNone(capture_usage_series.open_record_file(record, counters))
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_a_symlinked_directory_is_never_walked_into(self):
+        # The walk's own half of the same property: a link that is a
+        # DIRECTORY is skipped rather than descended, so an outside tree
+        # linked into the root contributes no records at all.
+        os.symlink(self.elsewhere, os.path.join(self.root, "linked"))
+        admitted = capture_usage_series.admitted_records(
+            self.root, capture_usage_series.new_counters()
+        )
+        self.assertEqual(
+            [record[2] for record in admitted], [("inside", "session.jsonl")]
+        )
 
     def test_a_post_check_swap_for_a_different_regular_file_is_refused(self):
         # O_NOFOLLOW alone cannot see this one: the leaf is a perfectly
