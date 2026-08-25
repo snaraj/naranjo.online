@@ -21,27 +21,35 @@ import (
 // main owns process termination and the process-global signal contract:
 // Kubernetes sends SIGTERM before a pod's grace period expires, and handling
 // both SIGTERM and local interrupts here gives every shutdown the same orderly
-// path. run stays free to report startup and serving failures through one
-// structured log statement.
+// path. It also owns the process logger: built exactly once from the
+// environment, installed as the slog default, and injected into run — so the
+// whole process shares one handler while tests keep injecting their own quiet
+// loggers. Both exit paths are logged, so `kubectl logs` always ends with an
+// explicit final line instead of trailing off.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Getenv); err != nil {
-		slog.Error("server stopped", "error", err)
+	log := newProcessLogger(os.Stdout, isTerminal(os.Stdout), os.Getenv)
+	slog.SetDefault(log.logger)
+	if err := run(ctx, os.Getenv, log); err != nil {
+		log.logger.Error("server stopped", "error", err)
 		os.Exit(1)
 	}
+	log.logger.Info("server exited")
 }
 
 // run assembles the immutable site, starts its hardened HTTP server, and blocks
 // until the server fails or ctx requests a graceful shutdown. Configuration
 // arrives through lookupEnv — main passes os.Getenv — so tests can inject each
 // case's environment without mutating process state, which t.Setenv would
-// require at the cost of forbidding t.Parallel. Validation keeps its
-// documented order — listen port, embedded assets, media configuration — and
-// the site is constructed exactly once, only after the media decision is
-// known, so a media-enabled boot never pays a throwaway walk and SHA-256 of
-// every embedded file for a Site it immediately discards.
-func run(ctx context.Context, lookupEnv func(string) string) error {
+// require at the cost of forbidding t.Parallel. The logger arrives the same
+// way, so every boot is exactly as quiet or as observable as its caller
+// chose. Validation keeps its documented order — listen port, embedded
+// assets, media configuration — and the site is constructed exactly once,
+// only after the media decision is known, so a media-enabled boot never pays
+// a throwaway walk and SHA-256 of every embedded file for a Site it
+// immediately discards.
+func run(ctx context.Context, lookupEnv func(string) string, log processLogger) error {
 	port, err := listenPort(lookupEnv("PORT"))
 	if err != nil {
 		return err
@@ -100,16 +108,31 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 		MaxHeaderBytes: maxRequestHeaderBytes,
 	}
 
-	slog.Info("naranjo.online listening", "port", port)
-	return serve(ctx, httpServer)
+	// The startup line is the boot's one-stop summary for a debugging reader:
+	// where the process listens, how it logs, and which optional capabilities
+	// this boot enabled. The media root path is deliberately NOT logged —
+	// production logs must not disclose filesystem layout (the media
+	// handler's own error policy states the same rule).
+	log.logger.Info("naranjo.online listening",
+		"addr", httpServer.Addr,
+		"port", port,
+		"log_format", log.format,
+		"log_level", log.level,
+		"media_enabled", mediaEnabled,
+		"panels_refresh", panelsRefresh,
+	)
+	return serve(ctx, httpServer, log.logger)
 }
 
 // serve blocks until the server fails on its own or ctx requests a graceful
 // shutdown, then bounds that shutdown with shutdownTimeout. It is separated
 // from run so this orchestration can be exercised against a fake httpRunner
 // while run keeps sole ownership of environment, signals, and the real
-// listener.
-func serve(ctx context.Context, server httpRunner) error {
+// listener. The shutdown path narrates itself — signal received, drain
+// outcome — because a rollout that stalls inside the grace window is exactly
+// the moment an operator is reading this log; the failure paths stay
+// unlogged here and are reported once by main from the returned error.
+func serve(ctx context.Context, server httpRunner, logger *slog.Logger) error {
 	// A one-result buffer lets the serving goroutine report an early failure even
 	// when signal cancellation wins the select and shutdown begins first.
 	errCh := make(chan error, 1)
@@ -126,9 +149,14 @@ func serve(ctx context.Context, server httpRunner) error {
 	case <-ctx.Done():
 	}
 
+	logger.Info("shutdown signal received", "drain_timeout", shutdownTimeout.String())
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	return server.Shutdown(shutdownCtx)
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		return err
+	}
+	logger.Info("server drained")
+	return nil
 }
 
 // mediaConfiguration keeps production media disabled unless all discovery-

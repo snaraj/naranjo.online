@@ -92,7 +92,7 @@ func bootServer(t *testing.T, extraEnv map[string]string) (string, <-chan error)
 			environment[key] = value
 		}
 		runResult := make(chan error, 1)
-		go func() { runResult <- run(ctx, fakeEnv(environment)) }()
+		go func() { runResult <- run(ctx, fakeEnv(environment), quietProcessLogger()) }()
 
 		base := "http://127.0.0.1:" + strconv.Itoa(port)
 		deadline := time.Now().Add(15 * time.Second)
@@ -155,7 +155,7 @@ func TestRunFailsClosedOnBadConfiguration(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if err := run(t.Context(), fakeEnv(environment)); err == nil {
+			if err := run(t.Context(), fakeEnv(environment), quietProcessLogger()); err == nil {
 				t.Fatal("run() accepted invalid configuration and would have served traffic")
 			}
 		})
@@ -191,7 +191,7 @@ func TestRunAcceptsBothPanelRefreshModes(t *testing.T) {
 			for key, value := range environment {
 				values[key] = value
 			}
-			if err := run(ctx, fakeEnv(values)); err != nil {
+			if err := run(ctx, fakeEnv(values), quietProcessLogger()); err != nil {
 				t.Fatalf("run() with %v = %v, want a clean drain", environment, err)
 			}
 		})
