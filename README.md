@@ -102,116 +102,66 @@ together — unset locally, the app serves with media off.
 
 ## Development
 
-```sh
-# Frontend: build first — the Go embed test expects the bundle to exist.
-cd frontend
-npm ci --ignore-scripts
-npm run check && npm test && npm run build
+The full local gate — frontend, backend, chart, container, and both secret
+scans — is canonical in `AGENTS.md` ("Quality gates — exact commands and
+patterns"); run it exactly as written there before every push. Toolchain
+pins live in CI (`node 24.19.0`, `npm 11.17.0`, `go 1.26.6`); newer local
+versions generally work, CI is authoritative.
 
-# Backend — the same gate CI enforces
-cd ..
-test -z "$(gofmt -l .)"
-go vet ./...
-CGO_ENABLED=0 go test ./...
-go test -race ./...
-
-# Container (both production architectures)
-docker build .
-```
-
-Toolchain pins live in CI (`node 24.19.0`, `npm 11.17.0`, `go 1.26.6`);
-newer local versions generally work, CI is authoritative.
-
-The rendering-lane smoke matrix is separate, because it needs real browser
-engines rather than only Node. It boots the built Go binary over localhost and
-drives Chromium, Firefox and WebKit at desktop, Android and iPhone viewports.
-In CI it runs on pull requests and manual dispatch — never on the merge, which
-would re-measure the identical tree — so it carries no `main` status badge:
-
-```sh
-cd frontend
-npm run build                                     # the binary embeds this
-npx playwright install chromium firefox webkit    # once per runner version
-npm run test:browsers
-```
+The rendering-lane smoke matrix (also in that AGENTS.md section) is
+separate because it needs real browser engines rather than only Node: it
+boots the built Go binary over localhost and drives Chromium, Firefox and
+WebKit at desktop, Android and iPhone viewports. In CI it runs on pull
+requests and manual dispatch — never on the merge, which would re-measure
+the identical tree — so it carries no `main` status badge.
 
 ## Releases
 
-Every protected-main merge that changes an artifact publishes exactly one patch
-release after the merged SHA's PR gate succeeds. A merge whose every commit is
-confined to the documentation allowlist — root `AGENTS.md`, `README.md`,
-`.gitignore`, and Markdown under `docs/` — changes no artifact, so it advances
-no version and publishes nothing; the orchestrator proves that class against
-evidence the merge cannot choose, then logs an explicit verdict instead of
-dispatching the publisher. That evidence is threefold: the last successful
-protected-`main` gate head from the Actions record, with every release lock
-required byte-identical to it; an anchor-advance walk that begins at the
-recovered release boundary and steps over that same already released push's
-artifact commits, hard-capped at that gated head so a lock-free artifact commit
-landing after it cannot be stepped over; and a re-classification as
-documentation of the gap the walk leaves behind — from the advanced anchor to
-the merged head, not from the boundary, since the prefix the walk consumed is
-genuine artifact history that already released. Nothing
-is relaxed by that: an unchanged artifact has nothing to version, sign, scan,
-or attest, and documentation merges still run the entire PR gate. The merged
-source of an artifact release carries numeric `X.Y.Z` in
-`VERSION`, chart `version`, `appVersion`, and the dated changelog heading, and
-exact plain `vX.Y.Z` in the image tag. Automation creates that plain tag at the
-exact SHA and explicitly dispatches the publisher definition from protected
-`main` with the authoritative successful-run ID. A separate read-only job
-validates that exact PR-gate push run before the write/packages/OIDC job can
-start; a manual dispatch for an unmerged branch fails before publication.
-Both enabled merge modes are covered: a squash is one linear commit, while a rebase may
-install several commits in one push; either produces one release for the exact
-final source tree. The publisher builds or verifies:
+Every protected-main merge that changes an artifact publishes exactly one
+patch release after the merged SHA's PR gate succeeds. A merge whose every
+commit is confined to the documentation allowlist — root `AGENTS.md`,
+`README.md`, `.gitignore`, and Markdown under `docs/` — changes no artifact,
+advances no version, and publishes nothing; the orchestrator proves that
+class against evidence the merge cannot choose, then logs an explicit
+verdict instead of dispatching the publisher. The complete classification,
+its two deliberate denial modes, and their recovery paths are canonical in
+`AGENTS.md` requirement 10 and
+[the release governance runbook](docs/release-governance.md) — this section
+is a summary, not a second copy.
+
+A read-only authorization job validates the exact successful PR-gate job
+inventory and the separate exact-SHA successful CodeQL `main` run before any
+privileged step. The publisher scans source dependencies, explicitly
+including frontend development dependencies, and the final image digest
+with the checksum-pinned Trivy binary, rejecting every fixed or unfixed
+high/critical finding. It builds or verifies:
 
 - `ghcr.io/snaraj/naranjo-online:vX.Y.Z` — multi-arch image, keyless-signed
   (Cosign), with SBOM and SLSA provenance; deployment consumes the digest,
   never the tag.
-- `ghcr.io/snaraj/charts/naranjo-online:X.Y.Z` — the Helm chart as an OCI
-  artifact, also signed. This is the one narrow tag exception: Helm requires
-  the registry tag to equal valid chart SemVer, and `vX.Y.Z` is not SemVerV2.
-  It is packaged with that release's resolved image digest already in
-  `image.digest`, so it is deployable as published; the committed
-  `chart/values.yaml` keeps an all-zeros fail-closed sentinel no registry can
-  resolve, and only the published artifact carries the real digest.
+- `ghcr.io/snaraj/charts/naranjo-online:X.Y.Z` — the signed Helm chart as an
+  OCI artifact (numeric because Helm requires chart-SemVer registry tags),
+  packaged with that release's resolved image digest already embedded; the
+  committed `chart/values.yaml` keeps an all-zeros fail-closed sentinel no
+  registry can resolve.
 - A GitHub Release with the immutable digests, human notes, and exactly one
-  canonical JSON evidence manifest binding the source SHA, successful-main run,
-  image/chart digests and aliases, signer identity, platforms, provenance, and
-  vulnerability-scan policy/results.
+  canonical JSON evidence manifest binding the source SHA, successful-main
+  run, image/chart digests and aliases, signer identity, platforms,
+  provenance, and vulnerability-scan policy/results.
 
-This automatic path may not leave Draft until the repository owner's read-only
-receipt proves that GitHub immutable releases are enabled and `main` requires
-the exact GitHub Actions checks against the current base, and the owner's
-separate read-only bypass check reports no bypass actor.
-The publisher first validates the exact successful PR-gate job inventory and
-the separate exact-SHA successful CodeQL `main` run and job inventory. It scans
-source dependencies, including frontend development dependencies, and the final
-image digest with the checksum-pinned Trivy binary, rejecting every fixed or
-unfixed high/critical finding. Immediately before building the manifest it
-re-resolves both public aliases to the exact produced image/chart digests and
-validates the strict raw SBOM schema, platform, and subject digest for both
-platforms. It uploads the manifest to a draft Release, verifies the closed
-one-asset REST inventory and downloaded bytes, and only then publishes. An
-exact zero-asset draft may resume a response-lost upload without clobber; every
-other partial/foreign state fails closed. Every
-created or reused Release must report exact immutable metadata and that exact
-manifest. Its terminal check re-fetches the immutable Release, downloads and
-compares the manifest again, then re-fetches the live tag ref and annotated
-object and binds the server-locked tag back to the exact signed source. No
-mutation follows. A weekly read-only audit repeats the Release/manifest/run/tag,
-semantic-alias/digest, signature, SLSA/SBOM, chart-source, and vulnerability
-bindings as later detection; it never substitutes for the pre-manifest alias
-and SBOM proof. Version tags are locked by the GitHub control and never reassigned. A
-retry reuses only exact, complete,
-correctly signed source state; partial or conflicting state is reported as
-burned and requires a new patch. Release publication is separate from
-deployment or promotion. See [the release governance runbook](docs/release-governance.md),
-[CHANGELOG.md](CHANGELOG.md), and [SECURITY.md](SECURITY.md).
-
-An OCI reference such as `image:vX.Y.Z@sha256:<digest>` or
-`chart:X.Y.Z@sha256:<digest>` contains a tag plus immutable digest; the complete
-string is a reference, never a tag.
+Immediately before sealing that manifest the publisher re-resolves both
+public aliases to the exact produced digests and validates the
+strict raw SBOM schema, platform, and subject digest for both platforms;
+a weekly read-only audit repeats those bindings as later detection and
+never substitutes for the pre-manifest alias and SBOM proof. This automatic path
+may not leave Draft until the repository owner's read-only receipt proves
+immutable releases and exact required checks, and the owner's separate
+read-only bypass check reports no bypass actor. Version tags are locked by
+the GitHub control and never reassigned; release publication is separate
+from deployment or promotion. An OCI reference such as
+`image:vX.Y.Z@sha256:<digest>` contains a tag plus immutable digest — the
+complete string is a reference, never a tag. See
+[CHANGELOG.md](CHANGELOG.md) and [SECURITY.md](SECURITY.md).
 
 ## Panels
 
@@ -238,10 +188,8 @@ map, admits exactly one header name. The token-usage producers additionally
 need credentials, and a source whose credential is absent is simply skipped.
 
 Mounted panels re-read their envelope roughly once a minute and stop entirely
-while the tab is hidden, and each panel's header carries a refresh control
-that forces one immediate re-read through the same single-flight path. Because
-each response carries a digest ETag, an unchanged panel costs a conditional
-request and a bodyless `304`.
+while the tab is hidden. Because each response carries a digest ETag, an
+unchanged panel costs a conditional request and a bodyless `304`.
 
 Upstream is a different clock, and deliberately a slower one. The refresh loop
 wakes on the shared cadence (`ttlMinutes`), but each producer additionally
@@ -449,8 +397,13 @@ never logged.
 
 Small UI assets live under `frontend/src/assets/` in documented categories
 with a per-file size ceiling. Heavy media (source video, FLAC, delivery
-derivatives) never enters this repository, the bundle, the image, or the
+derivatives) stays out of this repository, the bundle, the image, and the
 cluster control plane — it is served from dedicated storage on the platform.
+The one dated exception is the vendored gallery placeholder set under
+`frontend/src/assets/images/gallery/` (issue #176): a narrow requirement-11
+carve-out with provenance recorded in its `SOURCES.md`, an exact-file
+allowlist plus size ceiling pinned by test, and replacement by the real
+media pipeline tracked in issue #182.
 
 ## License
 
