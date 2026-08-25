@@ -101,13 +101,24 @@ for value in 'not-a-port' '8080x' '-1' '0'; do
 done
 echo "makefile-invariants: (e) negative, zero, and non-decimal PORT values (env var) are refused"
 
-# (f) Round 2's finding: a GNU Make function-call shape. Proven three ways —
-# against validate-port, against run's own prerequisite chain (via a dry
-# run, so this assertion doesn't also require a full frontend build), and
+# (f) Round 2's finding: a GNU Make function-call shape. Proven four ways —
+# against validate-port, against run and dev's own prerequisite chains, and
 # against an UNRELATED target (help) that never references PORT at all,
 # because the round-1 fix's `export PORT` exported (and, it turned out,
 # still left exploitable via MAKEOVERRIDES) the raw value into every
 # recipe's environment regardless of whether that recipe used it.
+#
+# run and dev are exercised with REAL invocations, not `-n` (dry-run):
+# `-n` never spawns a recipe's shell at all, so it never reaches the
+# $(shell ...) expansion this assertion is trying to catch — confirmed
+# empirically (`make -n validate-port 'PORT=$(shell touch marker)'`
+# creates no marker even via the fully vulnerable command-line-override
+# form, making a dry-run-based version of this check vacuous). A real
+# invocation stays cheap and hermetic here because run/dev both list
+# validate-port first in their prerequisite chain, and Make aborts the
+# chain the instant validate-port's recipe exits non-zero — confirmed by
+# measurement, a hostile PORT fails at validate-port in ~20ms without
+# ever reaching `npm run build` or starting a server.
 fn_marker="$(mktemp -u "${TMPDIR:-/tmp}/makefile-invariants-fn-marker.XXXXXX")"
 rm -f "${fn_marker}"
 trap 'rm -f "${pwn_file}" "${fn_marker}"' EXIT
@@ -120,10 +131,24 @@ if [ -f "${fn_marker}" ]; then
   fail "the Make-function PORT executed on validate-port at ${fn_marker} — the env-var interface did not close this vector"
 fi
 
+if PORT="${hostile_fn}" make -f "${makefile}" run >/dev/null 2>&1; then
+  fail "run accepted a Make-function PORT ('${hostile_fn}') instead of failing closed at validate-port"
+fi
+if [ -f "${fn_marker}" ]; then
+  fail "the Make-function PORT executed on 'run' at ${fn_marker} — the env-var interface did not close this vector"
+fi
+
+if PORT="${hostile_fn}" make -f "${makefile}" dev >/dev/null 2>&1; then
+  fail "dev accepted a Make-function PORT ('${hostile_fn}') instead of failing closed at validate-port"
+fi
+if [ -f "${fn_marker}" ]; then
+  fail "the Make-function PORT executed on 'dev' at ${fn_marker} — the env-var interface did not close this vector"
+fi
+
 if PORT="${hostile_fn}" make -f "${makefile}" help >/dev/null 2>&1; then :; fi
 if [ -f "${fn_marker}" ]; then
   fail "the Make-function PORT executed on the UNRELATED 'help' target at ${fn_marker} — a supported interface must never expand PORT for a target that never references it"
 fi
-echo "makefile-invariants: (f) a GNU Make function-call PORT (env var) never executes, on validate-port or an unrelated target"
+echo "makefile-invariants: (f) a GNU Make function-call PORT (env var) never executes, on validate-port, run, dev, or an unrelated target"
 
 echo "makefile-invariants: PORT validation and the npm ci install boundary both hold"
