@@ -21,7 +21,7 @@ func TestNewPreparesEveryBuiltinPanel(t *testing.T) {
 		"vcs-activity": StatusStale,
 		"boss-log":     StatusStale,
 	}
-	registry := New()
+	registry := New(nil)
 	index := decodeIndex(t, registry)
 	if len(index.Panels) != len(builtinPanels) {
 		t.Fatalf("index lists %d panels, want %d", len(index.Panels), len(builtinPanels))
@@ -57,7 +57,7 @@ func TestNewPreparesEveryBuiltinPanel(t *testing.T) {
 // survives all the way through the served bytes.
 func TestBossLogPanelModelsMissingKC(t *testing.T) {
 	t.Parallel()
-	envelope := decodePanelEnvelope(t, New(), "boss-log")
+	envelope := decodePanelEnvelope(t, New(nil), "boss-log")
 	var payload BossLogData
 	if err := decodeStrict(envelope.Data, &payload); err != nil {
 		t.Fatalf("decode boss-log payload: %v", err)
@@ -109,7 +109,7 @@ func TestBossLogPanelModelsMissingKC(t *testing.T) {
 // windows, never as Go identifiers (doctrine_test pins the identifier side).
 func TestTokenUsagePanelKeepsSourceLabelsAsData(t *testing.T) {
 	t.Parallel()
-	envelope := decodePanelEnvelope(t, New(), "token-usage")
+	envelope := decodePanelEnvelope(t, New(nil), "token-usage")
 	var payload TokenUsageData
 	if err := decodeStrict(envelope.Data, &payload); err != nil {
 		t.Fatalf("decode token-usage payload: %v", err)
@@ -229,7 +229,7 @@ func assertShippedSeriesIsMarkedRecorded(t *testing.T, source TokenUsageSource) 
 // surviving a successful refresh, or a live graph claiming to be a capture.
 func TestALiveRefreshReplacesTheRecordedSeries(t *testing.T) {
 	t.Parallel()
-	envelope := decodePanelEnvelope(t, New(), "token-usage")
+	envelope := decodePanelEnvelope(t, New(nil), "token-usage")
 	var payload TokenUsageData
 	if err := decodeStrict(envelope.Data, &payload); err != nil {
 		t.Fatalf("decode token-usage payload: %v", err)
@@ -304,7 +304,7 @@ func TestALiveRefreshReplacesTheRecordedSeries(t *testing.T) {
 // reader-visible symptom; a duplicate key is the mechanism.
 func TestShippedUsageTilesSurviveALiveMergeWithoutDoubling(t *testing.T) {
 	t.Parallel()
-	envelope := decodePanelEnvelope(t, New(), "token-usage")
+	envelope := decodePanelEnvelope(t, New(nil), "token-usage")
 	var payload TokenUsageData
 	if err := decodeStrict(envelope.Data, &payload); err != nil {
 		t.Fatalf("decode token-usage payload: %v", err)
@@ -347,7 +347,7 @@ const calendarWeeks = 53
 // and dated recent commits.
 func TestVCSActivityPanelShipsARenderableGraph(t *testing.T) {
 	t.Parallel()
-	envelope := decodePanelEnvelope(t, New(), "vcs-activity")
+	envelope := decodePanelEnvelope(t, New(nil), "vcs-activity")
 	var payload VCSActivityData
 	if err := decodeStrict(envelope.Data, &payload); err != nil {
 		t.Fatalf("decode vcs-activity payload: %v", err)

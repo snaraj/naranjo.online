@@ -10,12 +10,16 @@ package panels
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 )
 
 // startRefresh launches one refresh loop per fetch-backed panel with the
 // injected transport and environment. It is idempotent, returns immediately,
-// and starts nothing for a registry without fetch-backed panels.
+// and starts nothing for a registry without fetch-backed panels. Each
+// fetch-backed source receives the registry's logger BEFORE its loop
+// launches, so every attempt the loop ever makes is narrated through the
+// composition root's injected handler.
 func (reg *Registry) startRefresh(ctx context.Context, doer fetchDoer, env func(string) string) {
 	if !reg.refreshStarted.CompareAndSwap(false, true) {
 		return
@@ -24,6 +28,7 @@ func (reg *Registry) startRefresh(ctx context.Context, doer fetchDoer, env func(
 		if state.fetch == nil {
 			continue
 		}
+		state.fetch.setLogger(reg.logger)
 		go reg.refreshLoop(ctx, state, doer, env)
 	}
 }
@@ -32,6 +37,13 @@ func (reg *Registry) startRefresh(ctx context.Context, doer fetchDoer, env func(
 // cadence, degrading to exponential backoff while attempts fail. The
 // explicit ctx.Err check after every wake guarantees a canceled context
 // never reaches a fetch, even when cancellation races the timer.
+//
+// The loop is also where the refresh narrative is written, because only the
+// loop knows the retry ladder: every failed cycle logs WARN with the error
+// chain and the exact next-retry instant, every successful cycle logs one
+// INFO summary with the served status and the next-refresh instant, and a
+// wake that attempted nothing (every endpoint inside its rate budget) says
+// so at DEBUG instead of pretending it refreshed anything.
 func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fetchDoer, env func(string) string) {
 	config := state.fetch.config
 	backoff := config.InitialBackoff
@@ -46,13 +58,21 @@ func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fe
 		if ctx.Err() != nil {
 			return
 		}
+		attemptStart := time.Now()
 		err := reg.refreshPanel(ctx, state, doer, env)
+		elapsed := time.Since(attemptStart)
 		// Nothing due is not a failure. The loop wakes on the shared cadence
 		// while individual endpoints keep their own, longer, rate budgets, so
 		// a wake that finds every endpoint still inside its budget did not
 		// attempt anything, did not fail at anything, and must neither climb
 		// the retry ladder nor make the panel look stale.
 		if err != nil && !errors.Is(err, errNothingDue) {
+			reg.logger.LogAttrs(ctx, slog.LevelWarn, "panel refresh failed",
+				slog.String("panel", state.definition.id),
+				slog.Any("error", err),
+				slog.Float64("duration_ms", float64(elapsed)/float64(time.Millisecond)),
+				slog.Time("next_retry", time.Now().Add(backoff)),
+			)
 			timer.Reset(backoff)
 			backoff *= 2
 			if backoff > config.MaxBackoff {
@@ -62,6 +82,17 @@ func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fe
 		}
 		if err == nil {
 			backoff = config.InitialBackoff
+			reg.logger.LogAttrs(ctx, slog.LevelInfo, "panel refreshed",
+				slog.String("panel", state.definition.id),
+				slog.String("status", string(state.current.Load().payload.status)),
+				slog.Float64("duration_ms", float64(elapsed)/float64(time.Millisecond)),
+				slog.Time("next_refresh", time.Now().Add(config.TTL)),
+			)
+		} else {
+			reg.logger.LogAttrs(ctx, slog.LevelDebug, "panel refresh idle: every endpoint inside its rate budget",
+				slog.String("panel", state.definition.id),
+				slog.Time("next_refresh", time.Now().Add(config.TTL)),
+			)
 		}
 		timer.Reset(config.TTL)
 	}

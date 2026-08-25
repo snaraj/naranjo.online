@@ -73,7 +73,7 @@ func newSite(assets fs.FS, media *mediaHandler, logger *slog.Logger) (*Site, err
 	// performs network activity: fetch-backed panels serve their embedded
 	// snapshots as stale until StartPanelRefresh is explicitly invoked by
 	// the composition root.
-	panelAPI := panels.New()
+	panelAPI := panels.New(logger)
 	mux.Handle(panels.IndexPath, panelAPI)
 	mux.Handle(panels.PanelPathPrefix, panelAPI)
 	mux.Handle("/", h)

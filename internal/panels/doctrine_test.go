@@ -42,13 +42,19 @@ var allowedProductionImports = map[string]bool{
 	"fmt":           true,
 	"io":            true,
 	"io/fs":         true,
-	"net/http":      true,
-	"strconv":       true,
-	"strings":       true,
-	"sync":          true,
-	"sync/atomic":   true,
-	"time":          true,
-	"bytes":         true,
+	// log/slog was admitted with the refresh-observability work: it is the
+	// stdlib structured logger the injected registry logger is typed as, it
+	// has no egress capability of its own, and the refresh narrative it
+	// writes is pinned by logging_test to carry hosts and labels only —
+	// never a URL, credential, or payload byte.
+	"log/slog":    true,
+	"net/http":    true,
+	"strconv":     true,
+	"strings":     true,
+	"sync":        true,
+	"sync/atomic": true,
+	"time":        true,
+	"bytes":       true,
 }
 
 // allowedEgressImports extends the base surface for the egress file only:

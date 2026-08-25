@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -376,6 +377,30 @@ func admitDestination(addr netip.Addr) error {
 	return nil
 }
 
+// setLogger installs the registry's logger on this source. It is called
+// exactly once, by startRefresh, before any refresh loop launches; the
+// mutex makes even a misuse race-safe.
+func (s *FetchSource) setLogger(logger *slog.Logger) {
+	if logger == nil {
+		return
+	}
+	s.mu.Lock()
+	s.logger = logger
+	s.mu.Unlock()
+}
+
+// log returns this source's logger, failing closed to the discard logger so
+// a source driven directly by tests — which never call setLogger — stays
+// quiet without any caller having to think about it.
+func (s *FetchSource) log() *slog.Logger {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.logger == nil {
+		return discardLogger
+	}
+	return s.logger
+}
+
 // reserve admits ONE attempt against a rate-budget role and returns false
 // when the role is still inside its budget. The reservation is taken up front,
 // before the request is made, so an attempt costs its interval whether it
@@ -461,7 +486,7 @@ func (s *FetchSource) refreshBossLog(ctx context.Context, doer fetchDoer, now ti
 		return loadedPayload{}, errNothingDue
 	}
 	body, err := s.fetchDocument(ctx, doer, fetchRequest{
-		endpoint: spec.Endpoint, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
+		source: roleBossLog, endpoint: spec.Endpoint, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
 	})
 	if err != nil {
 		s.coolOnRateLimit(roleBossLog, now, err)
@@ -537,7 +562,7 @@ func (s *FetchSource) calendarSection(ctx context.Context, doer fetchDoer, spec 
 		return retained, at, false, nil
 	}
 	body, err := s.fetchDocument(ctx, doer, fetchRequest{
-		endpoint: spec.Endpoint, headers: spec.Headers, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
+		source: roleVCSCalendar, endpoint: spec.Endpoint, headers: spec.Headers, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
 	})
 	if err != nil {
 		s.coolOnRateLimit(roleVCSCalendar, now, err)
@@ -573,16 +598,24 @@ func (s *FetchSource) commitSection(ctx context.Context, doer fetchDoer, spec *v
 	complete := true
 	for _, source := range spec.Sources {
 		body, err := s.fetchDocument(ctx, doer, fetchRequest{
-			endpoint: source.Endpoint, headers: spec.Headers, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
+			source: roleVCSCommits, endpoint: source.Endpoint, headers: spec.Headers, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
 		})
 		if err != nil {
 			s.coolOnRateLimit(roleVCSCommits, now, err)
 			complete = false
+			// A failed commit document never propagates — the round degrades
+			// to stale instead — so its failure is narrated HERE or nowhere.
+			// The repo label is configuration data, and the error chain names
+			// the host at most; no URL.
+			s.log().LogAttrs(ctx, slog.LevelWarn, "commit source failed",
+				slog.String("repo", source.Repo), slog.Any("error", err))
 			continue
 		}
 		rows, err := mapCommits(body, source.Repo, now)
 		if err != nil {
 			complete = false
+			s.log().LogAttrs(ctx, slog.LevelWarn, "commit source failed",
+				slog.String("repo", source.Repo), slog.Any("error", err))
 			continue
 		}
 		dated = append(dated, rows...)
@@ -613,18 +646,36 @@ func retainedCommits(rows []VCSCommit) []VCSCommit {
 // present, merges fresh windows with snapshot fallbacks for the rest, and
 // reports ok only when every source fetched. Nothing fresh at all is an
 // error so the caller keeps serving the current payload.
+//
+// Per-source failures never propagate — the cycle degrades to stale instead
+// — so each is narrated HERE at WARN, and a skipped source (credential
+// unset) says so at DEBUG: without those lines, "why is this panel stale"
+// is undebuggable from a cluster log. The labels are configuration data;
+// error chains name a host at most, and neither a URL, a credential, nor
+// the variable NAME holding one is ever logged.
 func (s *FetchSource) refreshUsage(ctx context.Context, doer fetchDoer, env func(string) string, now time.Time) (loadedPayload, error) {
+	logger := s.log()
 	fetched := make(map[string]usageMapping, len(s.specs.usage.Sources))
+	skipped, failed := 0, 0
 	for _, source := range s.specs.usage.Sources {
 		key := env(source.KeyEnvName)
 		if key == "" {
+			skipped++
+			logger.LogAttrs(ctx, slog.LevelDebug, "usage source skipped: credential unset",
+				slog.String("source", source.Label))
 			continue
 		}
 		endpoint, err := withWindowParam(source.Endpoint, source.Window, now)
 		if err != nil {
+			failed++
+			// The parse error would embed the full endpoint URL, so the
+			// reason is logged as a static fact instead of the error value.
+			logger.LogAttrs(ctx, slog.LevelWarn, "usage source failed: window parameter construction",
+				slog.String("source", source.Label))
 			continue
 		}
 		body, err := s.fetchDocument(ctx, doer, fetchRequest{
+			source:    source.Label,
 			endpoint:  endpoint,
 			headers:   source.Headers,
 			keyHeader: source.KeyHeader,
@@ -632,10 +683,16 @@ func (s *FetchSource) refreshUsage(ctx context.Context, doer fetchDoer, env func
 			maxBytes:  source.MaxBytes,
 		})
 		if err != nil {
+			failed++
+			logger.LogAttrs(ctx, slog.LevelWarn, "usage source failed",
+				slog.String("source", source.Label), slog.Any("error", err))
 			continue
 		}
 		mapped, err := mapUsage(source.Shape, body)
 		if err != nil {
+			failed++
+			logger.LogAttrs(ctx, slog.LevelWarn, "usage source failed",
+				slog.String("source", source.Label), slog.Any("error", err))
 			continue
 		}
 		fetched[source.Label] = mapped
@@ -654,6 +711,12 @@ func (s *FetchSource) refreshUsage(ctx context.Context, doer fetchDoer, env func
 	if !allFresh {
 		status = StatusStale
 	}
+	logger.LogAttrs(ctx, slog.LevelDebug, "usage refresh cycle",
+		slog.Int("sources_ok", len(fetched)),
+		slog.Int("sources_failed", failed),
+		slog.Int("sources_skipped", skipped),
+		slog.Bool("fallback_used", !allFresh),
+	)
 	// Marshaling the package-owned payload cannot fail.
 	data, _ := json.Marshal(merged)
 	return loadedPayload{generatedAt: now.Format(time.RFC3339), data: data, status: status}, nil
@@ -675,6 +738,12 @@ func withWindowParam(endpoint string, window windowParamSpec, now time.Time) (st
 // a parameter list because every field is a BOUND, and a bound that is easy to
 // pass in the wrong position is a bound waiting to be lost.
 type fetchRequest struct {
+	// source names the rate-budget role or config label this attempt serves,
+	// used ONLY as a log attribute — data for the narrative, never for
+	// routing. It exists because the fetch layer knows the host while only
+	// the caller knows which panel section asked, and a debug line is worth
+	// little without both.
+	source string
 	// endpoint is the full request URL, re-admitted before it is used.
 	endpoint string
 	// headers holds the static request headers the spec declares.
@@ -693,27 +762,59 @@ type fetchRequest struct {
 	contentType string
 }
 
-// fetchDocument performs one bounded GET: allowlist re-checked at request
-// time (defense in depth against any future spec tampering), per-attempt
-// timeout, status pinned to 200, declared media type pinned to what the spec
-// expects, and the body read to the endpoint's byte cap with one extra byte to
-// detect overrun. The credential value goes into the request header and
-// nowhere else.
+// fetchDocument performs one bounded GET through exchangeDocument and
+// narrates the attempt at DEBUG — source, host, upstream status, byte count,
+// duration, and the error when it failed. The host is the ONLY address fact
+// a record may carry: full URLs never enter a log because the usage
+// endpoints carry query parameters and configuration may embed
+// account-specific paths.
 func (s *FetchSource) fetchDocument(ctx context.Context, doer fetchDoer, request fetchRequest) ([]byte, error) {
+	start := time.Now()
+	body, status, host, err := s.exchangeDocument(ctx, doer, request)
+	elapsed := float64(time.Since(start)) / float64(time.Millisecond)
+	if err != nil {
+		s.log().LogAttrs(ctx, slog.LevelDebug, "upstream fetch failed",
+			slog.String("source", request.source),
+			slog.String("host", host),
+			slog.Int("status", status),
+			slog.Float64("duration_ms", elapsed),
+			slog.Any("error", err),
+		)
+		return nil, err
+	}
+	s.log().LogAttrs(ctx, slog.LevelDebug, "upstream fetch",
+		slog.String("source", request.source),
+		slog.String("host", host),
+		slog.Int("status", status),
+		slog.Int("bytes", len(body)),
+		slog.Float64("duration_ms", elapsed),
+	)
+	return body, nil
+}
+
+// exchangeDocument is the uninstrumented exchange: allowlist re-checked at
+// request time (defense in depth against any future spec tampering),
+// per-attempt timeout, status pinned to 200, declared media type pinned to
+// what the spec expects, and the body read to the endpoint's byte cap with
+// one extra byte to detect overrun. The credential value goes into the
+// request header and nowhere else. It reports the upstream status (0 when no
+// response arrived) and the host so the caller can narrate the attempt.
+func (s *FetchSource) exchangeDocument(ctx context.Context, doer fetchDoer, request fetchRequest) ([]byte, int, string, error) {
 	parsed, err := url.Parse(request.endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("fetch: parse endpoint: %w", err)
+		return nil, 0, "", fmt.Errorf("fetch: parse endpoint: %w", err)
 	}
+	host := parsed.Hostname()
 	// Re-admitted at request time, defense in depth against any future spec
 	// tampering: scheme, userinfo, and host are all checked again here.
 	if err := admitURL(parsed, s.config.Hosts); err != nil {
-		return nil, fmt.Errorf("fetch refused: %w", err)
+		return nil, 0, host, fmt.Errorf("fetch refused: %w", err)
 	}
 	attemptCtx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	defer cancel()
 	outbound, err := http.NewRequestWithContext(attemptCtx, http.MethodGet, request.endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("fetch: build request: %w", err)
+		return nil, 0, host, fmt.Errorf("fetch: build request: %w", err)
 	}
 	limit := s.config.MaxBytes
 	if request.maxBytes > 0 && request.maxBytes < limit {
@@ -728,7 +829,7 @@ func (s *FetchSource) fetchDocument(ctx context.Context, doer fetchDoer, request
 	}
 	response, err := doer.Do(outbound)
 	if err != nil {
-		return nil, fmt.Errorf("fetch %s: %w", parsed.Hostname(), err)
+		return nil, 0, host, fmt.Errorf("fetch %s: %w", parsed.Hostname(), err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	// A rate-limit refusal is separated from every other bad status because
@@ -737,10 +838,10 @@ func (s *FetchSource) fetchDocument(ctx context.Context, doer fetchDoer, request
 	// it with 429, and an unauthenticated public API commonly says it with
 	// 403 once a quota is spent.
 	if response.StatusCode == http.StatusTooManyRequests || response.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("fetch %s: status %d: %w", parsed.Hostname(), response.StatusCode, errUpstreamRateLimited)
+		return nil, response.StatusCode, host, fmt.Errorf("fetch %s: status %d: %w", parsed.Hostname(), response.StatusCode, errUpstreamRateLimited)
 	}
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetch %s: status %d", parsed.Hostname(), response.StatusCode)
+		return nil, response.StatusCode, host, fmt.Errorf("fetch %s: status %d", parsed.Hostname(), response.StatusCode)
 	}
 	// The declared media type is checked BEFORE the body is read. An answer
 	// that says it is one thing and is another is drift at best; at worst it
@@ -748,16 +849,16 @@ func (s *FetchSource) fetchDocument(ctx context.Context, doer fetchDoer, request
 	// one of those parses as "no calendar in this document" further down —
 	// where the reason would already be lost.
 	if err := admitContentType(response.Header.Get("Content-Type"), request.contentType); err != nil {
-		return nil, fmt.Errorf("fetch %s: %w", parsed.Hostname(), err)
+		return nil, response.StatusCode, host, fmt.Errorf("fetch %s: %w", parsed.Hostname(), err)
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
-		return nil, fmt.Errorf("fetch %s: read body: %w", parsed.Hostname(), err)
+		return nil, response.StatusCode, host, fmt.Errorf("fetch %s: read body: %w", parsed.Hostname(), err)
 	}
 	if int64(len(body)) > limit {
-		return nil, fmt.Errorf("fetch %s: body exceeds the %d byte bound", parsed.Hostname(), limit)
+		return nil, response.StatusCode, host, fmt.Errorf("fetch %s: body exceeds the %d byte bound", parsed.Hostname(), limit)
 	}
-	return body, nil
+	return body, response.StatusCode, host, nil
 }
 
 // admitContentType compares the answer's declared media type against the one

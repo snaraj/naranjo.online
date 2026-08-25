@@ -27,7 +27,7 @@ func panelsGet(t *testing.T, registry *Registry, target string) *httptest.Respon
 // browser flow the shell document already uses.
 func TestPanelResponsesJoinTheRevalidatedCacheClass(t *testing.T) {
 	t.Parallel()
-	registry := New()
+	registry := New(nil)
 	for _, target := range []string{IndexPath, PanelPathPrefix + "boss-log"} {
 		first := panelsGet(t, registry, target)
 		if first.Code != http.StatusOK {
@@ -58,7 +58,7 @@ func TestPanelResponsesJoinTheRevalidatedCacheClass(t *testing.T) {
 // payload bytes.
 func TestPanelHeadRequestsCarryNoBody(t *testing.T) {
 	t.Parallel()
-	registry := New()
+	registry := New(nil)
 	for _, target := range []string{IndexPath, PanelPathPrefix + "token-usage"} {
 		response := httptest.NewRecorder()
 		registry.ServeHTTP(response, httptest.NewRequest(http.MethodHead, target, nil))
@@ -78,7 +78,7 @@ func TestPanelHeadRequestsCarryNoBody(t *testing.T) {
 // documents and 206 semantics have been deliberately removed from this API.
 func TestRangeRequestsServeTheWholeDocument(t *testing.T) {
 	t.Parallel()
-	registry := New()
+	registry := New(nil)
 	full := panelsGet(t, registry, PanelPathPrefix+"boss-log")
 	ranged := httptest.NewRequest(http.MethodGet, PanelPathPrefix+"boss-log", nil)
 	ranged.Header.Set("Range", "bytes=0-3")
@@ -102,7 +102,7 @@ func TestRangeRequestsServeTheWholeDocument(t *testing.T) {
 // weak-prefixed, and wildcard all answer 304; a stale validator misses.
 func TestConditionalVariantsRevalidate(t *testing.T) {
 	t.Parallel()
-	registry := New()
+	registry := New(nil)
 	etag := panelsGet(t, registry, IndexPath).Header().Get("ETag")
 	for name, value := range map[string]string{
 		"exact validator":    etag,
@@ -154,7 +154,7 @@ func TestOversizedIndexDegradesToEmpty(t *testing.T) {
 // default 404 a missing frontend file produces.
 func TestUnknownPanelShapesShareOneOpaque404(t *testing.T) {
 	t.Parallel()
-	registry := New()
+	registry := New(nil)
 	for name, target := range map[string]string{
 		"unknown id":       PanelPathPrefix + "listening-stats",
 		"nested path":      PanelPathPrefix + "boss-log/raids",
@@ -179,7 +179,7 @@ func TestUnknownPanelShapesShareOneOpaque404(t *testing.T) {
 // 0-RTT safety contract to the panel API: reads only, one refusal shape.
 func TestPanelRoutesRefuseEveryMutatingMethod(t *testing.T) {
 	t.Parallel()
-	registry := New()
+	registry := New(nil)
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions} {
 		for _, target := range []string{IndexPath, PanelPathPrefix + "boss-log"} {
 			response := httptest.NewRecorder()
@@ -207,7 +207,7 @@ func TestResponsesStayWithinTheOwnerBudgets(t *testing.T) {
 	if MaxPanelResponseBytes != 32768 {
 		t.Errorf("MaxPanelResponseBytes = %d, want the owner's 32 KiB budget", MaxPanelResponseBytes)
 	}
-	registry := New()
+	registry := New(nil)
 	index := panelsGet(t, registry, IndexPath)
 	if index.Code != http.StatusOK {
 		t.Fatalf("GET %s = %d", IndexPath, index.Code)
