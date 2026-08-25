@@ -7,6 +7,25 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.43] - 2026-08-25
+
+### Security
+
+- The Ready-flip governance validator closes the window pin the round-2
+  adversarial review and post-merge audit proved displaceable (issue
+  #198; Daybreak review 5023834495, audit receipt 5417622565): every
+  block of AGENTS.md, the PR template, and the release runbook that
+  speaks of Ready — `\bready\b`, case-insensitive — must now hash-match
+  an enumerated SHA-256 pin, in both directions (an unenumerated block
+  and a vanished pin both fail red), so a competing Ready authority
+  cannot ride outside the pinned canonical section. Six closure mutants
+  pin the fix: displacement before the rule, displacement after the
+  closing delimiter, a rewritten Merge-readiness bullet, a second
+  runbook paragraph, a template addition, and the lost-pin direction.
+  Documented honest limit: a contradiction phrased without the word
+  survives the scan; canonical-rule equality and adversarial review
+  remain the outer layers.
+
 ## [0.1.42] - 2026-08-25
 
 ### Fixed
