@@ -7,6 +7,40 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.40] - 2026-08-25
+
+### Changed
+
+- UX polish bundle (issues #168, #169, #171, #176, #177, #178, #179,
+  #180): three independently developed UX lanes assembled onto the
+  block-architecture refactor (#165).
+  - Header chrome (#179, #168, #177): the manual refresh control is
+    removed entirely — every panel keeps itself current through its own
+    live surface instead of a shared button — and the page header is now
+    pinned (`position: fixed`) to the corner of the viewport rather than
+    scrolling with the page; the resizable column's drag handle lost its
+    painted rail, leaving a bare 44px hit lane with a focus-visible
+    outline only.
+  - Navigation (#171): tapping a section nav link no longer leaves a
+    `#fragment` in the URL for a later page refresh to re-apply —
+    `history.scrollRestoration` is set to `'manual'` and the fragment is
+    dropped once the scroll completes — while a direct visit to a shared
+    fragment URL still deep-links correctly.
+  - Reading-mode menu and token chart (#169, #180, #178): the five
+    reading modes (auto/light/dark/slate/sepia) now paint genuinely
+    distinct `currentColor` silhouettes instead of palette-fill swatches,
+    inside a flatter popover; the token-usage contribution grid can opt
+    into a full-width, tap-friendly layout with an OSRS-style
+    value-only hover/tap card, and the shared detail card's rows may now
+    render a bare value without a label.
+  - Gallery (#176): the art gallery renders exactly one photograph at a
+    time — never eight stacked — with prev/next controls and a native
+    `<dialog>` lightbox for the full-resolution view. Eight placeholder
+    photographs are vendored locally as WebP pairs, a narrow and dated
+    exception to requirement 11 tracked by issue #182, with full
+    provenance recorded in `frontend/src/assets/images/gallery/SOURCES.md`
+    and an exact-file allowlist plus size ceiling pinned by test.
+
 ## [0.1.39] - 2026-08-25
 
 ### Added
