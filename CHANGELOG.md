@@ -26,7 +26,9 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   injection-safe `X-Request-Id` contract (strict inbound shape or a
   generated identity; always set on the response) and spec-exact W3C
   `traceparent` handling — passed through untouched, never minted, its
-  `trace_id`/`span_id` correlating every record for that request. The
+  trace-id logged as `trace_id` and its parent-id only as the custom
+  `parent_span_id` (no OTel SpanId is emitted: the origin produces no
+  spans, and the parent-id is the caller's span). The
   panel-refresh loops narrate themselves: per-cycle INFO summaries,
   failure WARNs with the error chain and exact next-retry instant,
   per-source degrade WARNs, and DEBUG upstream detail naming bare hosts

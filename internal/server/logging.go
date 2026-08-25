@@ -83,14 +83,19 @@ func requestLog(logger *slog.Logger, next http.Handler) http.Handler {
 				slog.Int64("http.response.body.size", recorder.bytes),
 				slog.String("network.protocol.version", strings.TrimPrefix(r.Proto, "HTTP/")),
 			)
-			if traceID, spanID := traceContext(r.Header.Get(traceparentHeader)); traceID != "" {
-				// Named for the OpenTelemetry log data model's TraceId/SpanId
-				// pair: span_id is the traceparent's parent-id — the caller's
-				// span, the closest honest correlate an origin that mints no
-				// spans of its own can report. A collector reading this
-				// stream can attach every record to the distributed trace
-				// with no SDK in the binary.
-				attrs = append(attrs, slog.String("trace_id", traceID), slog.String("span_id", spanID))
+			if traceID, parentSpanID := traceContext(r.Header.Get(traceparentHeader)); traceID != "" {
+				// trace_id is the record's OTel TraceId. The record carries
+				// NO OTel span_id: the data model's SpanId names the span
+				// this record was produced IN, this origin mints no spans,
+				// and W3C defines the traceparent parent-id as the CALLER's
+				// span — exporting it as span_id would misattribute origin
+				// events to the caller (Daybreak finding, PR #184 round 1).
+				// The caller's span survives under the clearly-custom
+				// parent_span_id, which keeps the edge-to-origin linkage
+				// debuggable without asserting a span this process never
+				// created; a real span_id arrives only with a real local
+				// span (phase 3, README "Observability contract").
+				attrs = append(attrs, slog.String("trace_id", traceID), slog.String("parent_span_id", parentSpanID))
 			}
 			// The User-Agent is a debugging detail, not routine telemetry: it
 			// rides only when the operator explicitly runs at debug, under
@@ -138,9 +143,10 @@ func requestIdentity(inbound string) string {
 // valid. Validation is fail-closed to the spec's version-00 shape:
 // lowercase hex, exact field lengths, a version that is not the forbidden
 // ff, and non-zero trace and parent ids. The header itself is never
-// modified — mesh-ready passthrough with no tracing dependency — and the
-// two values land in the record as the OTel log data model's TraceId/SpanId
-// correlation pair.
+// modified — mesh-ready passthrough with no tracing dependency. The
+// trace-id lands in the record as the OTel TraceId; the parent-id lands
+// as the custom parent_span_id, never as an OTel SpanId, because it names
+// the CALLER's span and this origin produces no spans of its own.
 func traceContext(value string) (string, string) {
 	if !traceparentShape.MatchString(value) {
 		return "", ""

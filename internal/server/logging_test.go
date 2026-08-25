@@ -230,14 +230,17 @@ func TestHostileHeadersCannotSplitOrForgeRecords(t *testing.T) {
 }
 
 // TestTraceparentPassthroughAndTraceIDLogging pins the mesh-ready contract:
-// a valid W3C traceparent is left untouched on the request and its
-// trace-id/parent-id pair lands in the record as the OTel log data model's
-// TraceId/SpanId correlation; every invalid shape — wrong version, zero
-// ids, uppercase hex, truncation — yields neither attribute.
+// a valid W3C traceparent is left untouched on the request, its trace-id
+// lands in the record as the OTel TraceId, and its parent-id lands ONLY
+// under the custom parent_span_id — never as an OTel span_id, because the
+// parent-id names the CALLER's span and this origin produces no spans
+// (W3C trace-context §parent-id; OTel logs data model §SpanId). Every
+// invalid shape — wrong version, zero ids, uppercase hex, truncation —
+// yields none of the three attributes.
 func TestTraceparentPassthroughAndTraceIDLogging(t *testing.T) {
 	t.Parallel()
 	const valid = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-	t.Run("valid header logs its trace and span ids and is not modified", func(t *testing.T) {
+	t.Run("valid header logs trace id and custom parent span id, never an OTel span id", func(t *testing.T) {
 		t.Parallel()
 		site, out := captureSite(t, slog.LevelInfo)
 		request := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -247,8 +250,11 @@ func TestTraceparentPassthroughAndTraceIDLogging(t *testing.T) {
 		if record["trace_id"] != "4bf92f3577b34da6a3ce929d0e0e4736" {
 			t.Errorf("trace_id = %v, want the header's trace-id field", record["trace_id"])
 		}
-		if record["span_id"] != "00f067aa0ba902b7" {
-			t.Errorf("span_id = %v, want the header's parent-id field", record["span_id"])
+		if record["parent_span_id"] != "00f067aa0ba902b7" {
+			t.Errorf("parent_span_id = %v, want the header's parent-id field", record["parent_span_id"])
+		}
+		if _, present := record["span_id"]; present {
+			t.Errorf("record carries span_id %v; an origin that mints no spans must emit no OTel SpanId", record["span_id"])
 		}
 		if got := request.Header.Get("Traceparent"); got != valid {
 			t.Errorf("traceparent was modified to %q; passthrough must leave it untouched", got)
@@ -274,8 +280,8 @@ func TestTraceparentPassthroughAndTraceIDLogging(t *testing.T) {
 				}
 				site.ServeHTTP(httptest.NewRecorder(), request)
 				record := singleRecord(t, out.String())
-				if record["trace_id"] != nil || record["span_id"] != nil {
-					t.Errorf("invalid traceparent %q logged trace_id %v span_id %v, want neither", header, record["trace_id"], record["span_id"])
+				if record["trace_id"] != nil || record["span_id"] != nil || record["parent_span_id"] != nil {
+					t.Errorf("invalid traceparent %q logged trace_id %v span_id %v parent_span_id %v, want none", header, record["trace_id"], record["span_id"], record["parent_span_id"])
 				}
 			})
 		}

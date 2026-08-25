@@ -391,12 +391,18 @@ a pod):
 
 **OTel Logs Data Model mapping.** slog `time` → Timestamp, `level` →
 SeverityText (`DEBUG`/`INFO`/`WARN`/`ERROR`), `msg` → Body, `trace_id` →
-TraceId, `span_id` → SpanId; every other key is an attribute. Resource
-identity rides on every record under its semantic-convention names —
-`service.name` (`naranjo.online`), plus `service.version` and
-`vcs.ref.head.revision` when the build embeds them (never invented — a
-build without VCS stamping omits them; `build_time` is a custom
-attribute, as no stable convention names a build timestamp).
+TraceId; every other key is an attribute. Records carry NO SpanId: the
+data model's SpanId names the span a record was produced in, and this
+origin produces no spans — the inbound parent-id is the CALLER's span
+(W3C trace-context §parent-id) and is therefore exposed only as the
+custom `parent_span_id` attribute, never as a field a collector would
+read as this record's own span. A real SpanId appears only when a real
+local span exists (phase 3 below). Resource identity rides on every
+record under its semantic-convention names — `service.name`
+(`naranjo.online`), plus `service.version` and `vcs.ref.head.revision`
+when the build embeds them (never invented — a build without VCS
+stamping omits them; `build_time` is a custom attribute, as no stable
+convention names a build timestamp).
 
 Each request produces exactly one `request served` record —
 `http.request.method`, `url.path`, `http.response.status_code`,
@@ -414,10 +420,11 @@ per-attempt `server.address`/`http.response.status_code`/
 
 **W3C trace context, hand-rolled and spec-exact.** A valid version-00
 `traceparent` (lowercase hex, exact field lengths, version not `ff`,
-non-zero trace and parent ids) is accepted and never mutated, and its
-fields land on every record for that request as `trace_id`/`span_id` —
-which is exactly what a service mesh needs from the app: sidecars emit
-the spans, the origin propagates and correlates. The origin deliberately
+non-zero trace and parent ids) is accepted and never mutated; its
+trace-id lands on every record for that request as `trace_id` and its
+parent-id as `parent_span_id` — which is exactly what a service mesh
+needs from the app: sidecars emit the spans, the origin propagates and
+correlates without claiming a span of its own. The origin deliberately
 does NOT mint a `traceparent` when none arrives: it creates no spans, so
 a self-minted trace id would fabricate a trace no participant recorded
 (the honest-states doctrine applied to telemetry); `request_id` already
