@@ -12,7 +12,7 @@
   because a link with two counters beside it is not something a title string can
   express, and that is exactly what the header snippet is for.
 
-  No request is ever made for these rows. They are data in lib/projects.ts,
+  No request is ever made FOR these rows. They are data in lib/projects.ts,
   captured out of band on a stated date (projectsCapturedOn) — requirement 1
   keeps this frontend local-origin-only and live refresh is off by default.
   A visitor-facing caption used to spell out the capture date and the
@@ -20,11 +20,17 @@
   provenance and how the data got here are maintainer/reviewer facts, not
   something a visitor came to this page to read. The underlying guarantee
   the caption used to describe is unchanged and stays ENFORCED regardless —
-  by the structural provider-neutrality tests (no remote origin anywhere in
-  frontend source), never by a sentence on the page. projectsCapturedOn
-  remains the maintenance record for when the six counts below were
-  captured; it is simply no longer printed. The repository addresses reach
-  the DOM only as href values.
+  by the structural no-transport-primitive / no-runtime-fetch tests
+  (`frontend/tests/sections.test.mjs`), never by a sentence on the page
+  (Daybreak Blue's round-3 review of this pull request, finding 1: the prior wording
+  here said "no remote origin anywhere in frontend source," which is false —
+  `projectHost` in `lib/projects.ts` centrally defines exactly one remote
+  origin, and the repository links below navigate a visitor there on click;
+  what is actually enforced is that nothing in this tree ISSUES a request).
+  projectsCapturedOn remains the maintenance record for when the six counts
+  below were captured; it is simply no longer printed. The repository
+  addresses reach the DOM only as href values — real outbound navigation
+  targets a visitor may follow, never a request this code makes itself.
 
   The glyphs are drawn here, in the same language as the page's own chrome — a
   24-unit box, currentColor, round caps — rather than vendored from anyone's

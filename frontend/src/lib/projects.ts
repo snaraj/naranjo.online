@@ -12,10 +12,15 @@
  * prose; the owner removed both, because that is a maintainer/reviewer fact,
  * not something a visitor came to this page to read). The underlying
  * guarantee the caption used to describe — no live fetch, ever — is
- * unchanged and stays ENFORCED regardless, structurally (no remote origin
- * anywhere in this tree, provable by static scan) rather than by a sentence
- * on the page. The host URLs here are link TARGETS: they reach the DOM as
- * href values and nothing in this tree ever requests them.
+ * unchanged and stays ENFORCED regardless, structurally rather than by a
+ * sentence on the page: this module and the components that read it contain
+ * no transport primitive and no runtime fetch call, provable by static scan
+ * (Daybreak Blue's round-3 review of this pull request, finding 1 — the earlier
+ * wording here overstated the invariant as "no remote origin anywhere,"
+ * which is false; `projectHost` below IS a remote origin, centrally defined
+ * exactly once, and validated links are free to navigate a visitor there).
+ * The host URLs here are link TARGETS: they reach the DOM as href values a
+ * human may click, and nothing in this tree ever ISSUES a request to them.
  *
  * Vendor names are data. The host label lives in this module beside the rows
  * it describes, exactly as the panels keep theirs in config data, so the

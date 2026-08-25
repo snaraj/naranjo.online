@@ -89,13 +89,25 @@ describe('parseVCSActivity', () => {
     assert.equal(activity.recentCommits[0].sha, '', 'an absent sha normalizes to "" exactly like an explicitly empty one');
   });
 
-  it('admits a mixed-version payload — some rows with sha, some without — and preserves every other served fact (rolling-compatibility)', () => {
-    // The realistic RollingUpdate shape: two replicas serving two different
-    // builds at once produce a payload where SOME rows already carry sha
-    // (the new replica) and others do not (the old one) in the SAME response,
-    // because recentCommits is merged newest-first across repos server-side.
-    // Nothing about totals, streak, or the OTHER served rows may degrade
-    // because of the old-shaped rows mixed in.
+  it('admits sha presence/absence independently per row — schema tolerance as defense-in-depth, not a claim about one response\'s shape', () => {
+    // One HTTP request reaches exactly one replica, and that replica alone
+    // builds its whole recentCommits response — a single response can never
+    // itself mix a new-shape row and an old-shape row, because it has only
+    // one server-side build behind it. The REAL RollingUpdate case this
+    // repository actually serves is a wholly OLD-shape response (every row
+    // missing `sha`) reaching a browser holding the NEW frontend during a
+    // rollout — covered separately by the browser-lane test below
+    // ("an old-shape vcs-activity/v1 payload with no sha key on any row..."),
+    // which Daybreak Blue confirmed live with a real intercepted payload.
+    // This unit test instead proves a narrower, still-useful property:
+    // admission decides EACH row's sha independently of every other row's,
+    // rather than deriving one payload-wide "shape" and applying it
+    // uniformly — schema tolerance as defense-in-depth against whatever
+    // future path might otherwise produce a genuinely mixed response (a
+    // hand-built fixture, a future merge strategy, a partial cache), not a
+    // claim that today's server ever does. Nothing about totals, streak, or
+    // the other served rows may degrade because of an old-shaped row mixed
+    // into this fixture.
     const activity = parseVCSActivity({
       totalContributions: 42,
       weeks: [[1, 2, 3, 4, 5, 6, 7]],
