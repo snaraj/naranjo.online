@@ -489,7 +489,9 @@ describe('the page cannot be broken by a width, whichever half is looking', () =
     // Belt AND braces, and the point of pinning both is that losing ONE is
     // silent: a page with only the script clamp still renders correctly today
     // and fails open the moment a value reaches the token by any other route.
-    const rule = /#app > \.page-header,\s*\n#app > main\s*\{([^}]*)\}/.exec(styles);
+    // main alone carries the column now — the header decoupled from it
+    // (owner directive, issue 168) and no longer shares this rule.
+    const rule = /#app > main\s*\{([^}]*)\}/.exec(styles);
     assert.ok(rule, 'the page column rule has moved; the clamp pins below no longer measure it');
     assert.match(rule[1], /inline-size:\s*min\(var\(--page-column-width\), 100%\);/);
     assert.match(
@@ -605,20 +607,34 @@ describe('the handle looks like the rest of the page', () => {
     assert.deepEqual(declarations(site[1]), ['outline: 2px solid var(--color-accent)', 'outline-offset: 2px']);
   });
 
-  it('is quiet at rest and answers in the brand ink when touched', () => {
-    assert.match(block, /background:\s*var\(--page-rail-ink\);/);
-    assert.match(
+  it('paints nothing at all, at rest or during the drag (issue 177)', () => {
+    // "no bar, no animation... the edge is simply draggable and the width
+    // follows the pointer" (issue 177); "no rendered bars at rest AND none
+    // during drag" (issue 168). The pointer affordance is the cursor
+    // (col-resize, styles.css) over the hot zone; this element draws
+    // nothing of its own any more — not a quiet mark, not a live one.
+    assert.doesNotMatch(block, /::before/, 'the handle still paints a pseudo-element bar');
+    assert.doesNotMatch(
       block,
-      /\.column-handle:hover::before,\s*\n\s*\.column-handle:focus-visible::before,\s*\n\s*\.column-handle\[data-live\]::before \{/,
-      'hover, focus and the drag itself must be one state; a mark that answered only the mouse is invisible to a keyboard'
+      /--page-rail-ink|--page-rail-line/,
+      'the handle still reaches for the retired bar tokens'
+    );
+    assert.doesNotMatch(
+      component,
+      /data-live/,
+      'the handle still carries a drag-lit attribute for a bar that no longer exists'
     );
   });
 
-  it('animates only where the reader has not asked for less motion', () => {
-    const guarded = /@media \(prefers-reduced-motion: no-preference\) \{([\s\S]*?)\n  \}/.exec(block);
-    assert.ok(guarded, 'the handle transition is not inside a reduced-motion guard');
-    assert.match(guarded[1], /transition:/);
-    const outside = block.replace(guarded[0], '');
-    assert.doesNotMatch(outside, /transition|animation/);
+  it('carries no transition or animation of its own', () => {
+    // There was exactly one thing here to animate — the bar's color and
+    // width on hover, focus and drag — and it left with the bar. What
+    // remains (the site's own focus-visible outline) is not this
+    // component's transition to add.
+    assert.doesNotMatch(
+      block,
+      /transition|animation|prefers-reduced-motion/,
+      'the handle states a transition; issue 177 asked for none at all'
+    );
   });
 });

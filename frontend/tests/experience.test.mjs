@@ -574,11 +574,13 @@ test('auto is the no-choice choice: derived menu, attribute removed, cookie expi
 });
 
 // The toggle is the wiki's, minimally: a labeled moon button opening a
-// popover of one swatch per mode, each swatch an inline-SVG line icon whose
-// enclosed area is that theme's OWN page-surface token — split circle on
-// auto, sun on light, cratered moon on the three darks. No icon assets, no
-// hex copies. These pins cover DOM wiring only; the open/select/close/reopen
-// behavior is EXECUTED against src/lib/disclosure.ts in toggle.test.mjs.
+// popover of one swatch per mode, each swatch an inline-SVG line icon drawn
+// in ONE ink (currentColor) with a genuinely different SILHOUETTE per mode
+// (issue #180: half-sun/half-moon on auto, sun on light, plain crescent on
+// dark, crescent-with-stars on slate, split disc on sepia) — shape tells the
+// five apart now, never color. No icon assets, no hex copies. These pins
+// cover DOM wiring only; the open/select/close/reopen behavior is EXECUTED
+// against src/lib/disclosure.ts in toggle.test.mjs.
 test('theme toggle: swatch popover, token-pure colors, machine-wired', () => {
   // Trigger: a labeled plain-disclosure button with an inline moon glyph.
   // Deliberately NO aria-haspopup: it would announce a menu, but the popover
@@ -595,41 +597,44 @@ test('theme toggle: swatch popover, token-pure colors, machine-wired', () => {
   assert.match(themeMenu, /aria-label=\{mode\.label\}/);
   assert.match(themeMenu, /aria-pressed=\{selected === mode\.id\}/);
 
-  // Swatch colors are references into each theme's own palette tokens —
-  // never a third copy of the values (see the dedup pins above) and never a
-  // hex anywhere in the component. The palette lives INSIDE the glyph now
-  // (owner directive, 2026-08-24: the swatches are line icons like the
-  // header chrome, not filled discs), so the mode's surface is the shape's
-  // fill rather than the button's background — and the button must carry no
-  // background at all, which is the half of this that the owner rejected.
-  for (const id of ['light', 'dark', 'slate', 'sepia']) {
-    assert.match(
-      themeMenu,
-      new RegExp(`\\.swatch-${id} \\.chip \\{\\s*fill: var\\(--palette-${id}-surface\\)`),
-      `the ${id} swatch glyph must be filled with that theme's own surface token`
-    );
-  }
-  // ...and each dark mode's INK is its craters, which is what tells the three
-  // apart — neutral, cool, warm. A mode whose craters lost their own accent
-  // becomes indistinguishable from its neighbour at this size.
-  for (const id of ['dark', 'slate', 'sepia']) {
-    assert.match(
-      themeMenu,
-      new RegExp(`\\.swatch-${id} \\.crater \\{\\s*fill: var\\(--palette-${id}-accent\\)`),
-      `the ${id} swatch craters must be that theme's own accent token`
-    );
-  }
-
-  // Auto has no palette of its own, so its glyph previews BOTH — one circle
-  // split down the middle between the two page surfaces it chooses between.
-  assert.match(themeMenu, /\.swatch-auto \.auto-half-light \{\s*fill: var\(--palette-light-surface\)/);
-  assert.match(themeMenu, /\.swatch-auto \.auto-half-dark \{\s*fill: var\(--palette-dark-surface\)/);
-  // ({#each …} starts with three hex-class letters, hence the full-token form.)
+  // Every glyph paints ONE ink — currentColor — never a palette token, so no
+  // mode carries its own color rule and there is zero theme branching to
+  // drift out of step (issue #180). .chip is the filled-shape class and it
+  // must resolve unconditionally, not per swatch-{id}.
+  assert.match(themeMenu, /\.chip \{\s*fill: currentColor;/);
+  assert.doesNotMatch(
+    themeMenu,
+    /\.swatch-(light|dark|slate|sepia|auto)[^{]*\{\s*fill:/,
+    'a swatch reads its own color rule again; shape alone must tell the modes apart'
+  );
+  // Never a hex anywhere in the component.
   assert.doesNotMatch(
     themeMenu,
     /#[0-9a-fA-F]{3,8}(?![0-9a-zA-Z])/,
     'the toggle must reference tokens, never hex values'
   );
+
+  // Five distinct silhouettes, one branch per mode id — a shared branch (the
+  // old "one moon for all three darks") is exactly the regression issue #180
+  // reports, so each id gets its own markup to diverge from. Sepia is the
+  // final, unconditional {:else} — the fifth and last mode needs no
+  // condition of its own once the other four have theirs.
+  for (const id of ['auto', 'light', 'dark', 'slate']) {
+    assert.match(
+      themeMenu,
+      new RegExp(`mode\\.id === '${id}'`),
+      `no dedicated branch draws the "${id}" glyph; it would share markup with a neighbour`
+    );
+  }
+  assert.match(themeMenu, /\{:else\}/, 'sepia has no dedicated branch to draw its glyph in');
+  // The three dark variants are the owner's literal complaint ("all look
+  // exactly the same") — dark stays a bare crescent, slate adds star marks
+  // beside it, and sepia is not a crescent at all, so no two of the five
+  // <svg> blocks can be byte-identical.
+  const glyphBlocks = [...themeMenu.matchAll(/<svg class="glyph"[\s\S]*?<\/svg>/g)].map((m) => m[0]);
+  assert.equal(glyphBlocks.length, 5, 'the popover does not render five glyphs');
+  assert.equal(new Set(glyphBlocks).size, 5, 'two reading-mode glyphs render identical markup');
+  assert.doesNotMatch(themeMenu, /class="crater"/, 'the retired per-mode crater mark is still drawn');
 
   // The component must delegate every open/close decision to the tested
   // state machine — the trigger latch (F1 fix) and the swatch press-in-
@@ -761,16 +766,29 @@ const progressiveFeatures = [
 const supportsQueries = (rule) => rule.enclosing.filter((at) => at.startsWith('@supports'));
 
 test('every progressive feature is guarded, and every guard has a base under it (issue #26)', () => {
-  /* CSS offers exactly two ways to state a fallback, and both are correct, so
-     both are accepted here:
+  /* CSS offers exactly two ways to state a fallback for a REGULAR property,
+     and both are accepted here:
        * a plain earlier declaration of the SAME property in the SAME rule,
          which an engine keeps precisely because it discards the later one it
          cannot parse (the meter track uses this);
        * an @supports block, which is what a fallback spanning several
          properties or living in a different rule needs (the page height, the
          safe-area padding and the sepia glyph use this).
-     What is refused is the third case: a progressive value with nothing
-     underneath it. */
+     Neither works for a CUSTOM property (coordinator quality pass on issue
+     186): a custom property accepts any value syntax unconditionally, so an
+     "earlier declaration of the same custom property" is not kept as a
+     fallback the way a regular property's is — the later declaration always
+     wins outright, parseable or not, which makes that pattern dead code
+     wearing a fallback's shape. A custom property's real fallback lives
+     wherever it is CONSUMED: if the feature makes its own declaration
+     invalid at computed-value time, the custom property resolves to its
+     guaranteed-invalid value, and a var() reference with a second, fallback
+     argument (--header-inset-inline's own use site, .page-header below)
+     is what actually recovers from that — so a bare feature-bearing custom
+     property declaration is accepted here PROVIDED every place that reads
+     it supplies that fallback argument, checked separately below. What is
+     still refused in every case: a progressive value with nothing underneath
+     it, in whichever of the three forms applies to its property. */
   const guarded = sweptRules.filter((rule) => supportsQueries(rule).length > 0);
   assert.ok(
     guarded.length > 0,
@@ -781,6 +799,26 @@ test('every progressive feature is guarded, and every guard has a base under it 
       const declarations = declarationsOf(rule.body);
       declarations.forEach(({ property, value }, index) => {
         if (!feature.used.test(value)) return;
+        if (property.startsWith('--')) {
+          // The custom-property case: every var(property, ...) reference
+          // anywhere in the swept rules must carry a fallback argument — a
+          // bare var(property) would compute to the initial value, not to
+          // any base, the moment this declaration goes invalid.
+          const references = sweptRules.flatMap((candidate) =>
+            [...candidate.body.matchAll(new RegExp(`var\\(\\s*${property}\\s*(,[^)]*)?\\)`, 'g'))]
+          );
+          assert.ok(
+            references.length > 0,
+            `${rule.file}: "${property}" sets ${feature.name} but is never read anywhere, so its fallback obligation cannot even apply`
+          );
+          for (const reference of references) {
+            assert.ok(
+              reference[1] !== undefined,
+              `${rule.file}: a var(${property}) reference has no fallback argument — ${feature.name} going unsupported would resolve this custom property to its initial value instead of a base`
+            );
+          }
+          return;
+        }
         const query = supportsQueries(rule).some((at) => feature.tested.test(at));
         const earlierBase = declarations
           .slice(0, index)
@@ -1009,16 +1047,23 @@ test('every reading mode declares the identical token set', () => {
  * "These icons are not matching the small, sleek, translucid, appearance of
  * the parent icons, they should not look this overwhelming." The reading-mode
  * popover's five swatches were 2.75rem filled discs, each rimmed and — when
- * chosen — ringed a further two pixels, sitting directly under two 18px line
- * glyphs that wear no chrome at all. They are one family now, and these pins
+ * chosen — ringed a further two pixels, sitting directly under an 18px line
+ * glyph that wears no chrome at all. They are one family now, and these pins
  * are what stops the two halves of it drifting apart again.
  *
- * The drift they guard is a real one rather than a theoretical one, because
- * the family is expressed in two different places: the header icons carry
- * their size and line weight as SVG ATTRIBUTES, which no custom property can
- * reach, while the swatches read tokens. So the attributes are read back out
- * of the chrome components here and compared with the tokens the swatches
- * consume — and the browser lanes measure the same pair in a real engine.
+ * A second chrome icon used to sit beside that glyph — the manual refresh
+ * control's stroked arrow — and its own hardcoded stroke-width attribute was
+ * this suite's second, independent data point for the swatch stroke pin
+ * below. It is gone now (owner directive, issue 179: the site is responsive
+ * on its own, and a failed read logs an error rather than waiting on a
+ * visitor to press something), so only the reading-mode trigger remains, and
+ * the stroke pin rests on the token alone.
+ *
+ * The drift this still guards is real rather than theoretical: the trigger
+ * carries its size as an SVG ATTRIBUTE, which no custom property can reach,
+ * while the swatches read a token. So the attribute is read back out of the
+ * chrome component here and compared with the token the swatches consume —
+ * and the browser lanes measure the same pair in a real engine.
  * ======================================================================== */
 
 // The chrome's own glyph, as the markup states it: the size attribute both
@@ -1071,22 +1116,13 @@ test('the reading-mode swatches are drawn in the header chrome grammar', () => {
      made of, in the opposite direction. */
   const glyphPx = lengthInPx(glyphSize);
   assert.ok(glyphPx !== null, `--chrome-icon-glyph-size is "${glyphSize}", which this pin cannot measure`);
-  for (const file of ['lib/components/RefreshAll.svelte', menuFile]) {
-    const painted = chromeGlyphAttributes(componentSources[file]);
-    assert.equal(
-      painted.width,
-      glyphPx,
-      `${file} paints its chrome glyph at ${painted.width}px while the shared token says ${glyphPx}px`
-    );
-    assert.equal(painted.height, glyphPx, `${file} paints a chrome glyph that is not square`);
-  }
-  const chromeStroke = /stroke-width="([\d.]+)"/.exec(componentSources['lib/components/RefreshAll.svelte']);
-  assert.ok(chromeStroke, 'the refresh glyph is no longer a stroked line icon; the family has no line weight left to share');
+  const painted = chromeGlyphAttributes(componentSources[menuFile]);
   assert.equal(
-    Number(chromeStroke[1]),
-    Number(strokeWidth),
-    `the refresh glyph is drawn at ${chromeStroke[1]} while the shared token says ${strokeWidth}`
+    painted.width,
+    glyphPx,
+    `${menuFile} paints its chrome glyph at ${painted.width}px while the shared token says ${glyphPx}px`
   );
+  assert.equal(painted.height, glyphPx, `${menuFile} paints a chrome glyph that is not square`);
 
   /* The swatch wears the chrome's absence of chrome. Each of these is one
      innocent-looking declaration away from returning, and together they are

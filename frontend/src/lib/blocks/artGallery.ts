@@ -1,14 +1,41 @@
-/* The art block (issue 165): the generic MediaGallery bound to the captured
- * rows in lib/art.ts. Static — the addresses are build-time facts and the
- * origin serves the bytes — and the subsection heading plus the two
- * provenance lines are declared here, where the page introduces the block. */
+/* The Art block (issue 165, redesigned issue 176): the generic MediaGallery
+ * bound to the vendored rows in lib/gallery.ts. Static — the files are
+ * vendored under assets/images/gallery/ (a narrow, dated requirement-11
+ * exception; see lib/gallery.ts and its SOURCES.md) and the origin serves
+ * no bytes for them, so there is nothing to fetch and nothing that can go
+ * "unserved".
+ *
+ * The URL map is built HERE because import.meta.glob is the bundler's,
+ * mirroring lib/blocks/osrsStats.ts's icon-map pattern: gallery.ts names
+ * FILES so it stays importable by plain Node in tests/sections.test.mjs,
+ * and this is the one place those names become content-hashed URLs. */
 
-import { artGalleryProps, artNote, artProvenance } from '../art.ts';
 import { staticBlock, type PageBlock } from '../blocks.ts';
+import { galleryHeight, galleryPhotos, galleryWidth } from '../gallery.ts';
 import MediaGallery from '../components/MediaGallery.svelte';
 
-export const artGallery: PageBlock = staticBlock('art-gallery', MediaGallery, artGalleryProps, {
-  heading: 'Art',
-  intro: artNote,
-  note: artProvenance
-});
+const galleryFiles = import.meta.glob('../../assets/images/gallery/*.webp', {
+  eager: true,
+  query: '?url',
+  import: 'default'
+}) as Record<string, string>;
+
+function resolve(file: string): string {
+  return galleryFiles[`../../assets/images/gallery/${file}`];
+}
+
+export const artGallery: PageBlock = staticBlock(
+  'art-gallery',
+  MediaGallery,
+  {
+    items: galleryPhotos.map((photo) => ({
+      key: photo.src,
+      previewSrc: resolve(photo.previewSrc),
+      fullSrc: resolve(photo.src),
+      alt: photo.alt
+    })),
+    width: galleryWidth,
+    height: galleryHeight
+  },
+  { heading: 'Art' }
+);

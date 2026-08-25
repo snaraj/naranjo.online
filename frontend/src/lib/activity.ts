@@ -10,7 +10,7 @@
  * cannot drift. */
 
 import type { ActivityLink, ActivityTrackerProps } from './blocks.ts';
-import { addDays, formatWhole, toColumns, type GridCell } from './grid.ts';
+import { addDays, calendarColumns, formatWhole, type GridCell } from './grid.ts';
 import { panelAge, panelKinds } from './panels.ts';
 import type { PanelEnvelope, VCSActivityData } from './panels';
 import { projectHost, projectHostLabel } from './projects.ts';
@@ -343,7 +343,13 @@ export function vcsActivityProps(envelope: PanelEnvelope | null): ActivityTracke
           ],
     figuresNote: activityFiguresNote,
     strip: {
-      columns: activity === null ? [] : toColumns(activityCells(activity)),
+      /* calendarColumns (issue 189), not the old positional toColumns: the
+       * payload's own weeks are already true Sunday-start calendar weeks
+       * (activityCells' own "Columns run Sunday..Saturday" comment), so this
+       * realignment is idempotent by construction — but it is still the
+       * one path both grids share, rather than a second implicit assumption
+       * that this payload happens to already agree with it. */
+      columns: activity === null ? [] : calendarColumns(activityCells(activity)),
       noun: 'contribution',
       label:
         activity === null

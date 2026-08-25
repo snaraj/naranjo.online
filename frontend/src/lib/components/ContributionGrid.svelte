@@ -10,22 +10,38 @@
   horizontal scroll, so a wide window scrolls inside the panel and never
   shifts the page.
 
-  Its INLINE size is its data, and used not to be. The box was a year wide
-  whatever it held, so a fifteen-day series was three columns pinned to the
-  left edge of fifty-three columns of nothing, which reads as a graph that
-  lost its data rather than as a short one (issue #141, residual risk 2). The
-  block now claims exactly the columns it draws — floored at gridMinColumns,
-  because a one-column strip is not a graph either — and the calendar, which
-  genuinely has a year of them, is unchanged by the same rule. The cap is a
-  maximum rather than a width, so a narrow screen still shrinks it and the
-  strip still scrolls inside itself.
+  Its INLINE size used to be its data, in columns (issue #141, residual risk
+  2: a fifteen-day series was three columns pinned to the left edge of
+  fifty-three columns of nothing, which read as a graph that had lost its
+  data rather than as a short one). Issue 189 SUPERSEDES that rule for any
+  series lib/grid.ts's calendarColumns can date: it always hands back exactly
+  pendingWeeks columns, front-padded with dated-but-absent cells when the
+  series is younger than the window, so `columns.length` is pendingWeeks by
+  construction and stripColumns' floor never engages for it — the "lost its
+  data" misread that rule protected against cannot recur once the window's
+  own faint absent cells and month axis say where the real data starts. The
+  cap below is what stays: a MAXIMUM rather than a width, so a narrow screen
+  still shrinks the block and the strip still scrolls inside itself, whatever
+  produced its column count.
 
   Sizing to content and reserving space are not in tension here, and the
   reason is arithmetic rather than luck: the empty state's chrome is one year
-  wide and the calendar that lands in it is one year wide, so the arrival
-  changes no dimension. Both sides of that equality are pinned — pendingWeeks
-  in lib/grid.ts and the shipped calendar in the origin's own test — and the
-  rendering lanes measure the box across a real arrival.
+  wide, the calendar that lands in it is one year wide, and now a short
+  series padded up to the window is ALSO one year wide, so no arrival changes
+  this dimension. Every side of that equality is pinned — pendingWeeks in
+  lib/grid.ts, calendarColumns' own fixed-width construction, and the
+  shipped calendar in the origin's own test — and the rendering lanes measure
+  the box across a real arrival.
+
+  Two axes (issue 189, matched to owner-supplied reference designs): a
+  three-letter month tick above the strip, at the column each month begins
+  and inside it — scrolling with the cells, since a month label only means
+  anything beside the columns it names — and a Mon/Wed/Fri weekday gutter
+  BESIDE the strip, in its own flex row so the labels stay put while the
+  cells scroll past them. Both read lib/grid.ts's weekdayAxis, the single
+  place the Sunday-start convention (verified against the origin's own
+  vcs-activity payload) is written down, so the two grids can never disagree
+  about which row a Wednesday is.
 
   It opens on the NEWEST data (owner directive, issue 127). Cells run oldest
   first, so a strip that opens where its content starts opens on January and
@@ -58,19 +74,34 @@
   flat, even field inside a framed plate, under a label set as a state rather
   than as an apology, with the magnitude legend hidden because there is no
   magnitude to explain — see the empty treatment in the styles below. Not one
-  datapoint moved. -->
+  datapoint moved.
+
+  Issue 189 carries that same finding one step further, into a real series: a
+  day INSIDE the window the strip draws — before the series existed, or a
+  future day in the calendar week that has not happened yet — is absent for
+  exactly the reason issue 134 named, and reads the same way now: a faint,
+  filled field, not an outlined hole. The distinction issue 134 drew stays
+  exact underneath the paint — absent still means no count, a level-0 cell is
+  still a real measured zero, and cellLabel still refuses to read a value off
+  an absent one — only the two states' PAINT converged, because both are the
+  identical honest "nothing was measured here" this component has always
+  meant by absent. -->
 <script lang="ts">
   import {
     cellLabel,
+    cellPeriod,
+    formatWhole,
     gridLevel,
     gridLevels,
     monthTicks,
     peakValue,
     pendingColumns,
     stripColumns,
+    weekdayAxis,
     type GridCell,
     type SeriesView
   } from '../grid';
+  import DetailTip from './DetailTip.svelte';
 
   let {
     columns,
@@ -78,7 +109,9 @@
     view = 'daily' as SeriesView,
     label,
     showMonths = true,
-    emptyNote = 'no activity data'
+    emptyNote = 'no activity data',
+    fullWidth = false,
+    cardTitle
   }: {
     columns: GridCell[][];
     noun?: string;
@@ -86,6 +119,18 @@
     label: string;
     showMonths?: boolean;
     emptyNote?: string;
+    /* The strip claims its container's full width instead of just the
+       columns it draws (issue 178: the token panel's graph rendered as a
+       tiny left-aligned block beside a card the other trackers fill). Opt-in
+       so the version-control calendar this component also renders — which
+       genuinely wants its own year of columns, not a stretch — is untouched. */
+    fullWidth?: boolean;
+    /* When set, a cell's detail is the page's OSRS-style card (DetailTip)
+       instead of the browser's native title= tooltip, titled with this text
+       and showing the cell's value alone — no date, which the axes already
+       carry (issue 178). Opt-in for the same reason fullWidth is: the
+       calendar keeps its native tooltip. */
+    cardTitle?: string;
   } = $props();
 
   const legendLevels = Array.from({ length: gridLevels }, (_, level) => level);
@@ -166,53 +211,101 @@
   class="grid-block"
   data-grid-state={columns.length > 0 ? 'series' : 'empty'}
   data-grid-columns={claimedColumns}
+  data-grid-fullwidth={fullWidth}
   style:--grid-columns={claimedColumns}
 >
-  <!-- The strip clips wide windows behind its own horizontal scrollbar, and a
-    scrollable region is keyboard-reachable only when focusable, so the
-    tabindex is deliberate. -->
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div class="grid-strip" role="region" aria-label={label} tabindex="0" bind:this={strip}>
-    {#if columns.length > 0}
-      <div class="grid-cells">
-        {#each columns as column}
-          {#each column as cell}
-            {@const text = cellLabel(cell, noun, view)}
-            <span
-              class="grid-cell"
-              data-grid-cell
-              data-grid-absent={cell.absent ? 'true' : 'false'}
-              data-grid-level={cell.absent ? '' : gridLevel(cell.value, peak)}
-              role="img"
-              aria-label={text}
-              title={text}
-            ></span>
+  <!-- The weekday gutter (issue 189) sits OUTSIDE the scrolling strip, in its
+    own row of this flex pair, so a Mon/Wed/Fri label stays put while the
+    cells beside it scroll past — a label that scrolled with the strip would
+    read a different weekday every time the reader dragged it. It renders in
+    both states: this is calendar structure (weekdayAxis, lib/grid.ts), never
+    data, so the pending/empty chrome carries it exactly like a real series
+    does, and only the undated month axis below is series-only. aria-hidden
+    because every cell already carries its own weekday inside its date. -->
+  <div class="grid-body">
+    <div class="grid-weekday-axis" aria-hidden="true">
+      {#each weekdayAxis as weekday (weekday.row)}
+        <span class="grid-weekday" style:grid-row={weekday.row + 1}>{weekday.label}</span>
+      {/each}
+    </div>
+    <!-- The strip clips wide windows behind its own horizontal scrollbar, and a
+      scrollable region is keyboard-reachable only when focusable, so the
+      tabindex is deliberate. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <div class="grid-strip" role="region" aria-label={label} tabindex="0" bind:this={strip}>
+      {#if columns.length > 0}
+        <div class="grid-cells">
+          {#each columns as column}
+            {#each column as cell}
+              {@const text = cellLabel(cell, noun, view)}
+              {#if cardTitle && !cell.absent}
+                <!-- Mirrors BossLog's own cell: the visible tile doubles as the
+                  DetailTip host, so the card is the whole of adding a detail
+                  and there is no separate wrapper to keep in step (issue
+                  178). aria-label keeps the full value-and-date reading for
+                  assistive tech; the card shows the value AND the
+                  view-scoped period phrase (issue 189, amending #178's
+                  value-only decision to match the owner's reference
+                  designs) — both rows label-less, so cellPeriod supplies the
+                  ONLY date reading in the card, the same phrase cellLabel
+                  folds into the accessible text above. -->
+                <span
+                  class="grid-cell"
+                  data-grid-cell
+                  data-grid-absent="false"
+                  data-grid-level={gridLevel(cell.value, peak)}
+                  role="img"
+                  aria-label={text}
+                  tabindex="0"
+                >
+                  <DetailTip
+                    detail={{
+                      name: cardTitle,
+                      rows: [
+                        { label: '', value: formatWhole(cell.value) },
+                        { label: '', value: cellPeriod(cell, view) }
+                      ]
+                    }}
+                  />
+                </span>
+              {:else}
+                <span
+                  class="grid-cell"
+                  data-grid-cell
+                  data-grid-absent={cell.absent ? 'true' : 'false'}
+                  data-grid-level={cell.absent ? '' : gridLevel(cell.value, peak)}
+                  role="img"
+                  aria-label={text}
+                  title={text}
+                ></span>
+              {/if}
+            {/each}
           {/each}
-        {/each}
-      </div>
-      {#if ticks.length > 0}
-        <p class="grid-months" aria-hidden="true">
-          {#each ticks as tick}
-            <span class="grid-month" style:grid-column={tick.column + 1} title={tick.name}>
-              {tick.initial}
-            </span>
+        </div>
+        {#if ticks.length > 0}
+          <p class="grid-months" aria-hidden="true">
+            {#each ticks as tick}
+              <span class="grid-month" style:grid-column={tick.column + 1} title={tick.name}>
+                {tick.abbrev}
+              </span>
+            {/each}
+          </p>
+        {/if}
+      {:else}
+        <!-- Chrome, and nothing but: no cell here carries a count, a date, or a
+          label, and the whole block is hidden from assistive technology so the
+          empty note below is the only thing it reads out. There is no month
+          axis either — an undated column cannot be labelled with a month it
+          was never told. -->
+        <div class="grid-cells" aria-hidden="true">
+          {#each chrome as column}
+            {#each column as _cell}
+              <span class="grid-cell" data-grid-pending data-grid-absent="true"></span>
+            {/each}
           {/each}
-        </p>
+        </div>
       {/if}
-    {:else}
-      <!-- Chrome, and nothing but: no cell here carries a count, a date, or a
-        label, and the whole block is hidden from assistive technology so the
-        empty note below is the only thing it reads out. There is no month
-        axis either — an undated column cannot be labelled with a month it
-        was never told. -->
-      <div class="grid-cells" aria-hidden="true">
-        {#each chrome as column}
-          {#each column as _cell}
-            <span class="grid-cell" data-grid-pending data-grid-absent="true"></span>
-          {/each}
-        {/each}
-      </div>
-    {/if}
+    </div>
   </div>
   {#if columns.length === 0}
     <p class="grid-empty">{emptyNote}</p>
@@ -236,34 +329,129 @@
     display: flex;
     flex-direction: column;
     gap: var(--grid-gap, 0.25rem);
-    /* The block is exactly as wide as the columns it draws: n cells and the
-       n-1 gaps between them. A CAP rather than a width, so the box still
+    /* The block is exactly as wide as its two horizontal neighbors need,
+       side by side: the weekday gutter, the row-gap beside it, and n cells
+       plus their n-1 gaps. A CAP rather than a width, so the box still
        shrinks on a narrow screen and the strip scrolls inside it — a fixed
        width here would push a year of columns past a 320px viewport and take
        the page's own scrollbar sideways with it.
 
+       Issue 189 added the gutter as a THIRD sibling sharing this box's
+       horizontal budget with the strip (.grid-body, below): leaving the cap
+       at cells-only arithmetic would squeeze the strip narrower than its own
+       cells need it to be, and every grid would carry a permanent, pointless
+       few pixels of horizontal scroll it never had before. --grid-axis-width
+       is what makes that budget exact rather than approximate: the gutter
+       below is sized to the SAME token, so the two can never disagree about
+       how much of this box belongs to the gutter and how much to the cells.
+
        --grid-columns is written by the component from the columns it
        actually rendered (see claimedColumns), so the box cannot claim a
-       series that is not there. The two custom properties below are the same
-       ones the cells and the month axis are laid out with, and the fallbacks
-       repeat theirs, so the box and its contents can never be computed from
-       two different cell sizes. Nothing here reads a reading-mode token: the
-       four modes restyle a grid and none of them resizes one. */
+       series that is not there. The cell-size and cell-gap custom properties
+       are the same ones the cells and the month axis are laid out with, and
+       the fallbacks repeat theirs, so the box and its contents can never be
+       computed from two different cell sizes. Nothing here reads a
+       reading-mode token: the four modes restyle a grid and none of them
+       resizes one. */
     max-inline-size: calc(
-      var(--grid-columns, 53) *
+      var(--grid-axis-width, 1.25rem) + var(--grid-gap, 0.25rem) + var(--grid-columns, 53) *
         (var(--grid-cell-size, 0.625rem) + var(--grid-cell-gap, 0.1875rem)) -
         var(--grid-cell-gap, 0.1875rem)
     );
   }
 
+  /* Full-width call sites (issue 178) drop the content-sized cap and stretch
+     the cells to the container's own width instead: each column becomes a
+     flexible track floored at the token cell size, so a short series fills
+     the card the way every other tracker does and a long one still overflows
+     into the strip's own scroll exactly as it always has. */
+  .grid-block[data-grid-fullwidth='true'] {
+    max-inline-size: none;
+    inline-size: 100%;
+  }
+
+  .grid-block[data-grid-fullwidth='true'] .grid-cells,
+  .grid-block[data-grid-fullwidth='true'] .grid-months {
+    /* The fallback is load-bearing, not decoration: --grid-cell-size has no
+       :root definition anywhere in this file, only fallback usages, so a
+       var() here without one is invalid at computed-value time — which does
+       not degrade, it drops this whole declaration to its initial value
+       (none) and silently falls through to the capped layout's fixed-size
+       columns. MEASURED: that is exactly what shipped here once already. */
+    grid-template-columns: repeat(var(--grid-columns), minmax(var(--grid-cell-size, 0.625rem), 1fr));
+    inline-size: 100%;
+  }
+
+  /* The track above stretches; the cell inside it does not, by default — a
+     grid item with its OWN declared width is sized to that width and merely
+     placed inside a wider track, not stretched to fill it (the CSS Grid
+     `stretch` default only governs items whose used width is auto). Scoped
+     to `.grid-cells` alone, not `.grid-legend`: the legend's own swatches
+     stay the fixed token size in every mode, full width or not. MEASURED:
+     without this rule every shape drew an identical 10px cell regardless of
+     how many columns shared the row. */
+  .grid-block[data-grid-fullwidth='true'] .grid-cells .grid-cell {
+    inline-size: auto;
+  }
+
+  /* The weekday gutter sits BESIDE .grid-strip (issue 189), not above or
+     below it, so it changes this row's INLINE size and never its block
+     size — the 7rem arithmetic right below is unaffected by the gutter's
+     own width and stays exactly what it already was. align-items: flex-start
+     keeps the gutter from being stretched to the strip's full 7rem (cells
+     plus month axis plus scrollbar gutter): it only has seven rows of labels
+     to draw, sized to match .grid-cells below, and stretching it taller would
+     only leave empty grid tracks under real content. */
+  .grid-body {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--grid-gap, 0.25rem);
+  }
+
+  /* The SAME row template .grid-cells uses (7 rows of --grid-cell-size, the
+     same --grid-cell-gap between them) so a label sits exactly on the row it
+     names rather than drifting against it — two independent grids computing
+     the same seven positions from the same two tokens, not one grid copying
+     the other's arithmetic by hand. Sized to the cells alone (5.5rem: 7 *
+     --grid-cell-size + 6 * --grid-cell-gap), not the full 7rem strip, so it
+     ends exactly where the last cell row does and never reaches into the
+     month-axis strip beside it. */
+  .grid-weekday-axis {
+    display: grid;
+    grid-template-rows: repeat(7, var(--grid-cell-size, 0.625rem));
+    row-gap: var(--grid-cell-gap, 0.1875rem);
+    block-size: calc(7 * var(--grid-cell-size, 0.625rem) + 6 * var(--grid-cell-gap, 0.1875rem));
+    /* Fixed rather than intrinsic (issue 189): an un-sized flex child would
+       shrink to whatever its widest label's glyphs happen to measure, which
+       .grid-block's own cap (above) has no way to read back — the two would
+       silently disagree about how wide "the gutter" is the moment a theme's
+       font metrics shifted by a pixel. Reading the SAME token both places
+       makes the two provably agree instead. 1.25rem clears "Wed"/"Fri" at
+       the axis font size in every shipped theme, right-aligned inside it. */
+    inline-size: var(--grid-axis-width, 1.25rem);
+    font-size: var(--grid-axis-size, 0.5625rem);
+    line-height: 1;
+    color: var(--grid-axis-color, var(--panel-muted, rgb(158, 158, 158)));
+  }
+
+  .grid-weekday {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+  }
+
   /* 7 cell rows plus their 6 gaps measure 5.5rem, the month axis 0.75rem, and
      the remaining 0.75rem is the horizontal scrollbar's reserved gutter — so
      a wide window scrolling inside the strip never changes its outer height
-     and data arriving shifts nothing. */
+     and data arriving shifts nothing. Unaffected by the weekday gutter
+     beside it (.grid-body, above): that gutter changes this row's INLINE
+     size only. */
   .grid-strip {
     block-size: 7rem;
     overflow-x: auto;
     overflow-y: hidden;
+    flex: 1 1 auto;
+    min-inline-size: 0;
   }
 
   .grid-strip:focus-visible {
@@ -306,11 +494,26 @@
     background: var(--grid-cell-4, #86b6ef);
   }
 
-  /* A day the window does not cover is a hole, not a zero: outlined, unfilled,
-     and labelled as having no data. */
+  /* A day the window does not cover is absent, not a zero, and is still
+     labelled as carrying no data (cellLabel refuses to read a value off it
+     either way) — but it PAINTS as a faint, filled field now (issue 189),
+     not the outlined hole this rule drew before. That is the same finding
+     issue 134 made about the panel's OWN empty state — a field of outlines
+     reads as a graph that failed to load — extended to a real series' own
+     in-window absences (a day before the series existed, or a future day
+     in its current week): both classes of absence read identically to a
+     reader now, which is honest, because both ARE identical honest
+     "nothing was measured here" statements, only on opposite ends of the
+     window. This rule is what a pending/empty-state cell would ALSO paint
+     as, except that state's own more specific selector
+     (.grid-block[data-grid-state='empty'] .grid-cell[data-grid-pending],
+     below) overrides it with its own framed-plate treatment — the two
+     empty looks stayed deliberately distinct: a whole panel with nothing to
+     plot is still a different state from a few missing days inside a real
+     one. */
   .grid-cell[data-grid-absent='true'] {
-    background: transparent;
-    box-shadow: inset 0 0 0 1px var(--grid-cell-absent, rgba(120, 120, 120, 0.35));
+    background: var(--grid-cell-absent, rgba(120, 120, 120, 0.18));
+    box-shadow: none;
   }
 
   .grid-strip .grid-cell:hover {
@@ -326,9 +529,12 @@
     gap: var(--grid-cell-gap, 0.1875rem);
     inline-size: max-content;
     block-size: 0.75rem;
-    font-size: 0.5625rem;
+    /* The SAME two axis tokens the weekday gutter reads (.grid-weekday-axis,
+       above), so the month row and the weekday column always render at one
+       shared size and ink rather than two that happen to agree today. */
+    font-size: var(--grid-axis-size, 0.5625rem);
     line-height: 1;
-    color: var(--panel-muted, rgb(158, 158, 158));
+    color: var(--grid-axis-color, var(--panel-muted, rgb(158, 158, 158)));
   }
 
   .grid-month {

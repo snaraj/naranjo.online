@@ -207,26 +207,42 @@
   --page-column-max: 100rem;
   --page-gutter: 1rem;
   --page-stack-gap: 0.75rem;
-  --page-header-height: 3.5rem;
 
-  /* The resize rails. --page-rail-size is a HIT LANE, not a visible object:
-     44px of grab area reserved beside each column edge, the same floor every
-     other control on this page clears. The quiet state paints NOTHING — no
-     hairline sits at the column edge until a pointer or a focus ring arrives
-     — because a mark that is always there reads as a border the page never
-     asked for, not as a control waiting to be found. The 44px lane is still
-     exactly where it was; only the resting paint is gone.
-
-     The inks resolve through the reading-mode roles like every other color
-     here: the quiet state is transparent in every mode, so a control that
-     nobody is touching is invisible everywhere at once, and the live state
-     is the same brand mark that already answers for hover on the nav links
-     and the icon controls. No reading mode knows this rail exists. */
+  /* --page-rail-size is a HIT LANE, not a visible object: 44px of grab area
+     reserved beside each column edge, the same floor every other control on
+     this page clears. It paints NOTHING at rest or during a drag (owner
+     directive, issue 177: "no bar, no highlight, no animation" — the
+     resting/live ink pair this rail used to carry is retired along with the
+     mark it drew). The affordance is the cursor (col-resize, below) over the
+     hot zone, plus the ordinary site focus ring for a keyboard reader
+     (ColumnHandles.svelte) — invisible until addressed either way, per the
+     owner's a11y instruction on issue 168. */
   --page-rail-size: 2.75rem;
-  --page-rail-line: 2px;
-  --page-rail-line-live: 4px;
-  --page-rail-ink: transparent;
-  --page-rail-ink-live: var(--color-brand);
+
+  /* The header's own fixed position (owner directive, issue 168): pinned to
+     the viewport's top-end corner, independent of the column's width, so
+     dragging the feed never moves it. Insets rather than a bare page-gutter
+     literal so a notch or a home indicator is cleared the same way the rest
+     of the page already clears one.
+
+     ONE declaration each, deliberately not the plain-base-then-progressive
+     pair #app's own safe-area padding uses below (coordinator quality pass
+     on issue 186, correcting an earlier claim that this was the same pattern —
+     it is not, and cannot be, for a CUSTOM property). That pair works
+     because an unsupported REGULAR property VALUE is a parse-time error the
+     browser discards, leaving the earlier declaration standing; a custom
+     property's value is opaque text the parser always accepts, so a second
+     declaration here would simply win outright in every engine, making the
+     first one dead code — and if `env()` were ever unsupported, the `var()`
+     that reads this custom property downstream would be invalid at
+     COMPUTED-value time and the whole declaration would drop to its
+     initial value, not fall back to the plain base the way the guarded
+     #app padding below genuinely does. env() has been supported across
+     this site's entire browser-support window since before issue 168
+     shipped, so there is no fallback to write; the honest form is the one
+     declaration below. */
+  --header-inset-inline: max(var(--page-gutter), env(safe-area-inset-right));
+  --header-inset-block: max(var(--page-gutter), env(safe-area-inset-top));
 
   /* The feed-card token layer (owner directive, issue 134). The page is
      becoming a feed of many content types, so the card is a primitive with
@@ -268,6 +284,14 @@
   --card-header-gap: 0.125rem;
   --card-body-gap: 0.5rem;
   --card-meta-gap: 0.25rem 0.875rem;
+  /* A linked card's title/counters row (issue 188): every named phone width
+     (320/360/390/412, e2e/rendering-lanes.spec.mjs's phoneWidths) sits below
+     30rem with headroom, and it is far short of the 67.5rem column-handle
+     breakpoint, so this threshold never interacts with that one. Below it
+     EntryLog.svelte stacks the row outright; at or above it the row is
+     flex, nowrap, always inline — a deterministic viewport switch rather
+     than the old flex-wrap, which let a title's own length decide. */
+  --breakpoint-card-meta: 30rem;
   --card-title-family: var(--font-sans);
   --card-title-size: 1.0625rem;
   --card-title-weight: 650;
@@ -441,6 +465,11 @@
   --swatch-mark-size: 0.5rem;
   --swatch-mark-thickness: 0.125rem;
   --swatch-mark-inset: 0.375rem;
+  /* The popover's own shape (owner directive, issue 169, 2026-08-24): a flat
+     radius shared with the rest of the page's chrome (--card-radius,
+     --tip-radius) rather than the bespoke 1.875rem pill curve the owner
+     rejected as "looks very AI". */
+  --theme-menu-radius: 3px;
 
   color: var(--color-text);
   background: var(--color-surface);
@@ -545,6 +574,26 @@ body,
   margin: 0;
 }
 
+/* The settle guard for a pull past the top (issue 187, iOS Safari): the
+   fragment-drop fix at issue 171 (history.scrollRestoration = 'manual', in
+   SectionNav.svelte) already keeps a RELOAD from landing on a stale scroll
+   position; this is the companion for the LIVE gesture, a pull-to-refresh
+   drag that overshoots and leaves the document translated down after the
+   bounce settles. `none` rather than `contain`: contain only stops the
+   overscroll from chaining to a further ancestor, which this page has none
+   of past the document — it does nothing about the rubber-band/bounce
+   effect itself, which is the actual bug. `none` suppresses that boundary
+   effect directly, on both axes' block dimension, on both elements a
+   browser might treat as the real scroller for the root document. The
+   header's own fixed positioning (`.page-header`, below) already keeps it
+   glued to the viewport rather than the document, so it was swept for a
+   leftover top gap during this fix and needs no rule of its own: a fixed
+   element never occupies flow space to leave behind. */
+html,
+body {
+  overscroll-behavior-y: none;
+}
+
 /* Dynamic viewport units only (rendering-lane floor, issue #26). The static
    unit measures the TALLEST the viewport ever gets, so on a phone showing its
    toolbars a full-height box is taller than the screen and the bottom of the
@@ -613,10 +662,11 @@ textarea {
   }
 }
 
-/* The header and the hero both take the column's width so the controls sit
-   directly over the cards they act on.
+/* The column's own width, decoupled from the header (owner directive, issue
+   168: the header pins to the viewport corner now, independent of whatever
+   the reader drags this to).
 
-   Three declarations now, and the outer two are the reason a dragged width
+   Three declarations, and the outer two are the reason a dragged width
    cannot break this page. The knob is clamped HERE, in the browser,
    independently of whatever wrote it: a value under the floor is widened back
    to the floor, a value over the ceiling is narrowed back to it, and because
@@ -627,7 +677,6 @@ textarea {
    less its gutters and its safe-area insets. The script that writes the knob
    clamps too; neither clamp is the other's excuse, and each alone still holds
    the page. */
-#app > .page-header,
 #app > main {
   inline-size: min(var(--page-column-width), 100%);
   min-inline-size: min(var(--page-column-min), 100%);
@@ -702,7 +751,6 @@ html[data-column-resizing] {
    have. A frontend test recomputes 67.5 from the four tokens it is made of,
    so the breakpoint cannot drift away from what it means. */
 @media (min-width: 67.5rem) {
-  #app > .page-header,
   #app > main {
     max-inline-size: min(var(--page-column-max), calc(100% - 2 * var(--page-rail-size)));
   }
@@ -713,15 +761,32 @@ html[data-column-resizing] {
 }
 
 /* The chrome row is styled HERE rather than inside PageHeader.svelte because
-   the static shell renders the same empty row and must reserve the identical
-   height — a component-scoped rule would style only the hydrated one, and the
-   controls arriving would push the page down. */
+   the static shell renders the same empty row, before any icon has hydrated
+   into it — a component-scoped rule would style only the hydrated one.
+
+   Pinned to the viewport's top-end corner (owner directive, issue 168):
+   "push the icons all the way to the top right, outside of the feed... I
+   don't like how they move when I drag the feed in and out." Fixed
+   positioning is what makes that true — the header no longer takes the
+   column's width or sits in its flow at all, so nothing the reader drags
+   can move it, and it needs no reserved row height either, because fixed
+   chrome never occupies one. The insets clear the same safe areas #app
+   pads by. z-index reuses the popover's own layer: the header CONTAINS the
+   reading-mode trigger, so anything that must out-rank the resize rails
+   (--layer-rail) already has to out-rank it by exactly that much. */
 .page-header {
+  position: fixed;
+  /* The fallback argument is real protection here, not decoration
+     (coordinator quality pass on issue 186): --header-inset-block/-inline's
+     own declarations read env(safe-area-inset-*), so in a hypothetical
+     engine without it those custom properties would be invalid at
+     computed-value time and resolve to their initial value — this second
+     argument is what recovers a real base (--page-gutter) instead. */
+  inset-block-start: var(--header-inset-block, var(--page-gutter));
+  inset-inline-end: var(--header-inset-inline, var(--page-gutter));
+  z-index: var(--layer-menu);
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  min-block-size: var(--page-header-height);
 }
 
 /* The column, and — since the resize handles are drawn against its edges —
@@ -939,4 +1004,44 @@ h1 {
 
 .icon-button[disabled] {
   cursor: progress;
+}
+
+/* Gallery lightbox frame tokens (issue 176): the enlarged photograph's
+   border reads these exclusively -- MediaGallery.svelte states no width,
+   color or image of its own. v1 is a static, near-invisible border;
+   --gallery-frame-image is the extension point for a future repeated
+   pattern (border-image's initial value is 'none', so it is a no-op until
+   set), and it is a token edit here alone, never a component change.
+
+   The scrim, the close control and the lightbox's two size caps join them
+   here (coordinator quality pass on issue 186): all three used to be literals in
+   MediaGallery.svelte's own stylesheet, which is exactly the "every style
+   dimension is a token" doctrine (issue 136) the frame border already
+   followed and these three had not caught up to. Defaults are today's exact
+   values, so this is a token move, not a look change. The scrim and the
+   close control deliberately do not branch by reading mode -- a backdrop
+   behind an enlarged photograph is legitimately the same near-black surface
+   in every mode, the way a photograph itself is not re-tinted per mode
+   either -- so the token layer states one value, not five. */
+:root {
+  --gallery-frame-width: 2px;
+  --gallery-frame-color: var(--color-border-strong);
+  --gallery-frame-radius: var(--card-radius);
+  --gallery-frame-padding: 0.375rem;
+  --gallery-frame-image: none;
+  --gallery-scrim: rgba(0, 0, 0, 0.7);
+  --gallery-close-surface: rgba(0, 0, 0, 0.5);
+  --gallery-close-ink: white;
+  --gallery-lightbox-max-inline: min(94vw, 90rem);
+  /* --gallery-image-max-block is the fixed cap only; the dynamic-unit upgrade
+     stays a literal inside its own @supports guard in MediaGallery.svelte,
+     unlike every token above. A custom property accepts any value syntax
+     unconditionally (the coordinator's own finding just above, about
+     --header-inset-*), so declaring an 80svh DEFAULT here would sit outside
+     any @supports guard while still being textually indistinguishable from
+     an unguarded progressive value to this repository's own guard-pin
+     (tests/experience.test.mjs) — which is right to be strict about it: nothing
+     else in this stylesheet tokenizes a dynamic-unit fallback, and inventing
+     the first one is a bigger change than this quality pass asked for. */
+  --gallery-image-max-block: 40rem;
 }

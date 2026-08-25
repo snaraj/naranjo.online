@@ -7,7 +7,9 @@ import test from 'node:test';
 
 import {
   addDays,
+  calendarColumns,
   cellLabel,
+  cellPeriod,
   formatWhole,
   gridLevel,
   gridLevels,
@@ -22,7 +24,9 @@ import {
   seriesViews,
   stripColumns,
   toColumns,
-  viewValues
+  viewColumns,
+  weekdayAxis,
+  weekStartsOn
 } from '../src/lib/grid.ts';
 
 const grid = await readFile(
@@ -30,29 +34,79 @@ const grid = await readFile(
   'utf8'
 );
 
-test('the three series lenses read one daily series three ways', () => {
-  const totals = [1, 2, 3, 4, 5, 6, 7, 10, 0, 0, 0, 0, 0, 0];
+// A tiny helper: two dated columns, one fully real and one with a trailing
+// absent (future) day — the shape calendarColumns actually produces, and the
+// shape viewColumns has to read correctly.
+function twoColumns() {
+  return [
+    [
+      { value: 1, date: '2026-08-09' },
+      { value: 2, date: '2026-08-10' },
+      { value: 3, date: '2026-08-11' },
+      { value: 4, date: '2026-08-12' },
+      { value: 5, date: '2026-08-13' },
+      { value: 6, date: '2026-08-14' },
+      { value: 7, date: '2026-08-15' }
+    ],
+    [
+      { value: 10, date: '2026-08-16' },
+      { value: 0, date: '2026-08-17', absent: true },
+      { value: 0, date: '2026-08-18', absent: true },
+      { value: 0, date: '2026-08-19', absent: true },
+      { value: 0, date: '2026-08-20', absent: true },
+      { value: 0, date: '2026-08-21', absent: true },
+      { value: 0, date: '2026-08-22', absent: true }
+    ]
+  ];
+}
 
-  assert.deepEqual(viewValues(totals, 'daily'), totals, 'the daily lens is the series itself');
-  assert.notEqual(viewValues(totals, 'daily'), totals, 'the daily lens must copy, never alias the payload');
+test('viewColumns reads one series three ways, on ALIGNED COLUMNS rather than array position (issue 189)', () => {
+  const columns = twoColumns();
 
-  // Weekly buckets align with the grid's own columns, so a column renders as
-  // one flat block of its week total.
+  // Daily is the series itself, copied rather than aliased — a caller may
+  // freely mutate what it gets back without corrupting the input columns.
+  const daily = viewColumns(columns, 'daily');
+  assert.deepEqual(daily, columns);
+  assert.notEqual(daily[0], columns[0], 'the daily lens must copy each column, never alias it');
+  assert.notEqual(daily[0][0], columns[0][0], 'the daily lens must copy each cell, never alias it');
+
+  // Weekly: every REAL cell in a column shows that column's own sum — 28 for
+  // the full first week (1+2+...+7), 10 for the second (only one real day).
+  const weekly = viewColumns(columns, 'weekly');
   assert.deepEqual(
-    viewValues(totals, 'weekly'),
-    [28, 28, 28, 28, 28, 28, 28, 10, 10, 10, 10, 10, 10, 10],
-    'every day in a column must carry that column total'
+    weekly[0].map((cell) => cell.value),
+    [28, 28, 28, 28, 28, 28, 28],
+    'every real cell in a full column must carry that column total'
   );
-
   assert.deepEqual(
-    viewValues([1, 2, 3], 'cumulative'),
-    [1, 3, 6],
-    'the cumulative lens is the running total'
+    weekly[1].map((cell) => cell.value),
+    [10, 0, 0, 0, 0, 0, 0],
+    'a short trailing week sums only its real cells, not the absent padding'
   );
+  // Absence itself must survive the lens untouched — a level cannot paint
+  // for a day the window does not cover, in any view.
+  for (const cell of weekly[1].slice(1)) {
+    assert.equal(cell.absent, true);
+  }
 
-  // A short trailing week must not be dropped or mis-summed.
-  assert.deepEqual(viewValues([5, 5], 'weekly'), [10, 10]);
-  assert.deepEqual(viewValues([], 'weekly'), []);
+  // Cumulative: a running total across real cells only, in window order —
+  // 1, 3, 6, 10, 15, 21, 28 through the first week, then +10 = 38 on the one
+  // real day of the second, absent cells left alone.
+  const cumulative = viewColumns(columns, 'cumulative');
+  assert.deepEqual(
+    cumulative[0].map((cell) => cell.value),
+    [1, 3, 6, 10, 15, 21, 28]
+  );
+  assert.equal(cumulative[1][0].value, 38, 'the running total must carry across the column boundary');
+  for (const cell of cumulative[1].slice(1)) {
+    assert.equal(cell.absent, true);
+    assert.equal(cell.value, 0, 'an absent cell must not be handed a running total it never earned');
+  }
+
+  // No columns is no columns, in every lens.
+  for (const view of seriesViews) {
+    assert.deepEqual(viewColumns([], view), []);
+  }
 });
 
 test('series views are a closed set', () => {
@@ -98,12 +152,132 @@ test('day arithmetic is UTC calendar arithmetic and survives month ends', () => 
   assert.equal(addDays('not-a-date', 1), '');
 });
 
-test('the month axis marks each month once, at the column it starts in', () => {
+test('weekStartsOn and weekdayAxis are the one Sunday-start convention every column and every gutter reads (issue 189)', () => {
+  assert.equal(
+    weekStartsOn,
+    0,
+    "the convention is Sunday-start, sourced from activity.ts's own \"Columns run Sunday..Saturday\" comment and the VCS snapshot's endDate"
+  );
+  assert.deepEqual(
+    weekdayAxis.map((entry) => [entry.row, entry.label]),
+    [
+      [1, 'Mon'],
+      [3, 'Wed'],
+      [5, 'Fri']
+    ],
+    'a Sunday-start week puts Monday on row 1, Wednesday on row 3, Friday on row 5 (zero-based)'
+  );
+});
+
+test('calendarColumns falls back to positional chunking for an undated series, rather than inventing a calendar for one', () => {
+  const undated = [
+    { value: 1, date: '' },
+    { value: 2, date: '' },
+    { value: 3, date: '' }
+  ];
+  assert.deepEqual(calendarColumns(undated, 5), toColumns(undated));
+});
+
+test('every calendarColumns window opens on the weekStartsOn weekday, whatever weekday the series itself starts on', () => {
+  for (const start of [
+    '2026-08-09',
+    '2026-08-10',
+    '2026-08-11',
+    '2026-08-12',
+    '2026-08-13',
+    '2026-08-14',
+    '2026-08-15'
+  ]) {
+    const columns = calendarColumns(seriesCells(start, [1]), 4);
+    assert.equal(columns.length, 4);
+    assert.equal(
+      new Date(`${columns[0][0].date}T00:00:00Z`).getUTCDay(),
+      weekStartsOn,
+      `a series starting ${start} must still open its window on the shared week-start weekday`
+    );
+    // Every column, not only the first, opens on the same weekday.
+    for (const column of columns) {
+      assert.equal(new Date(`${column[0].date}T00:00:00Z`).getUTCDay(), weekStartsOn);
+    }
+  }
+});
+
+// The direction the owner's reference designs draw: a series younger than
+// its window front-pads with DATED absences, never a blank hole — "before
+// the series existed" still names a real calendar day.
+test('calendarColumns front-pads a series younger than its window with dated absences (issue 189)', () => {
+  // 2026-08-12 is a Wednesday; 2026-08-14 (its last real day) is a Friday.
+  const cells = seriesCells('2026-08-12', [1, 2, 3]);
+  const columns = calendarColumns(cells, 2);
+  assert.equal(columns.length, 2, 'the window is always exactly the requested number of weeks');
+  assert.deepEqual(columns[0].map((cell) => cell.date), [
+    '2026-08-02',
+    '2026-08-03',
+    '2026-08-04',
+    '2026-08-05',
+    '2026-08-06',
+    '2026-08-07',
+    '2026-08-08'
+  ]);
+  for (const cell of columns[0]) {
+    assert.equal(cell.absent, true, 'a day before the series existed is a dated absence, not a dateless hole');
+    assert.equal(cell.value, 0);
+  }
+  assert.deepEqual(columns[1].map((cell) => cell.value), [0, 0, 0, 1, 2, 3, 0]);
+  assert.deepEqual(
+    columns[1].map((cell) => Boolean(cell.absent)),
+    [true, true, true, false, false, false, true]
+  );
+  assert.equal(columns[1][3].date, '2026-08-12', 'the series own first real day keeps its own date');
+  assert.equal(
+    columns[1][6].date,
+    '2026-08-15',
+    'a future day in the anchor week still carries a real calendar date even though nothing was measured there'
+  );
+});
+
+test('calendarColumns defaults to the fixed pendingWeeks window and truncates a much longer series to its newest days', () => {
+  const cells = seriesCells('2020-01-01', new Array(1000).fill(1));
+  const columns = calendarColumns(cells);
+  assert.equal(
+    columns.length,
+    pendingWeeks,
+    'the default window is the same fixed trailing calendar the empty-state chrome reserves'
+  );
+  const oldestKept = columns[0][0].date;
+  const lastColumn = columns[columns.length - 1];
+  const newestKept = lastColumn[lastColumn.length - 1].date;
+  const newestReal = cells[cells.length - 1].date;
+  assert.notEqual(
+    oldestKept,
+    cells[0].date,
+    'the oldest day of a thousand-day series must not survive a 53-week window'
+  );
+  assert.ok(
+    Date.parse(newestReal) <= Date.parse(newestKept),
+    'the window cannot end before the newest real day it is supposed to be showing'
+  );
+  const windowSpanDays = (Date.parse(newestKept) - Date.parse(oldestKept)) / 86_400_000;
+  assert.equal(
+    windowSpanDays,
+    pendingWeeks * gridRows - 1,
+    'the window spans exactly weeks*7 days from its first cell to its last, by construction'
+  );
+});
+
+test('calendarColumns is idempotent on its own output, so an already-aligned source does not drift on a second pass (issue 189)', () => {
+  const cells = seriesCells('2026-01-05', new Array(400).fill(2));
+  const once = calendarColumns(cells);
+  const twice = calendarColumns(once.flat(), once.length);
+  assert.deepEqual(twice, once);
+});
+
+test('the month axis marks each month once, at the column it starts in, with a three-letter abbreviation (issue 189)', () => {
   const ticks = monthTicks(toColumns(seriesCells('2026-08-01', new Array(70).fill(1))));
   assert.deepEqual(
-    ticks.map((tick) => tick.initial),
-    ['A', 'S', 'O'],
-    'August, September, October, each marked once'
+    ticks.map((tick) => tick.abbrev),
+    ['Aug', 'Sep', 'Oct'],
+    'August, September, October, each marked once, spelled out enough to tell March from May'
   );
   assert.equal(ticks[0].column, 0);
   assert.equal(ticks[0].name, 'August');
@@ -112,16 +286,109 @@ test('the month axis marks each month once, at the column it starts in', () => {
   assert.deepEqual(monthTicks([[{ value: 1, date: '' }]]), []);
 });
 
+// The month a column belongs to is read off ANY dated cell in it, including
+// one that carries no count: calendarColumns dates its own front padding (a
+// day before the series existed), and the axis has to span that padding
+// exactly like the reference designs do, not stop wherever real data begins.
+test('the month axis reads a dated-but-absent column too, not only a column with real data (issue 189)', () => {
+  const columns = [[{ value: 0, date: '2026-08-01', absent: true }]];
+  assert.deepEqual(monthTicks(columns).map((tick) => tick.abbrev), ['Aug']);
+});
+
+// A fixed trailing window almost never opens on a month boundary, so its
+// first column is often a one- or two-column fragment of a month that
+// collides with the tick right beside it. The axis drops only that leading
+// fragment — every other tick keeps its own column.
+test('a leading month tick fewer than three columns from the next is dropped, so it cannot collide with it (issue 189)', () => {
+  const columns = [
+    [{ value: 1, date: '2026-07-25' }],
+    [{ value: 1, date: '2026-08-01' }],
+    [{ value: 1, date: '2026-08-08' }],
+    [{ value: 1, date: '2026-09-05' }]
+  ];
+  const ticks = monthTicks(columns);
+  assert.deepEqual(
+    ticks.map((tick) => tick.abbrev),
+    ['Aug', 'Sep'],
+    'the one-column July fragment must not survive to collide with August'
+  );
+  assert.equal(ticks[0].column, 1, 'August now starts the axis, at its own real column');
+  assert.equal(ticks[1].column, 3);
+
+  // The boundary itself: three columns is the floor a leading fragment must
+  // clear to survive, not merely a rough gap. A two-column fragment is still
+  // dropped; a three-column one is not.
+  const narrow = [
+    [{ value: 1, date: '2026-07-01' }],
+    [{ value: 1, date: '2026-07-02' }],
+    [{ value: 1, date: '2026-08-01' }],
+    [{ value: 1, date: '2026-09-01' }]
+  ];
+  assert.deepEqual(
+    monthTicks(narrow).map((tick) => tick.abbrev),
+    ['Aug', 'Sep'],
+    'a two-column-wide leading fragment is still narrower than the floor'
+  );
+
+  const exactlyThree = [
+    [{ value: 1, date: '2026-07-01' }],
+    [{ value: 1, date: '2026-07-02' }],
+    [{ value: 1, date: '2026-07-03' }],
+    [{ value: 1, date: '2026-08-01' }],
+    [{ value: 1, date: '2026-09-01' }]
+  ];
+  assert.deepEqual(
+    monthTicks(exactlyThree).map((tick) => tick.abbrev),
+    ['Jul', 'Aug', 'Sep'],
+    'a three-column-wide leading fragment is wide enough to keep its own tick'
+  );
+});
+
 test('cell text always carries the count, so color is never the only encoding', () => {
-  assert.equal(cellLabel({ value: 1, date: '2026-08-12' }, 'contribution'), '1 contribution on 2026-08-12');
-  assert.equal(cellLabel({ value: 0, date: '2026-08-12' }, 'contribution'), '0 contributions on 2026-08-12');
+  assert.equal(cellLabel({ value: 1, date: '2026-08-12' }, 'contribution'), '1 contribution on Aug 12');
+  assert.equal(cellLabel({ value: 0, date: '2026-08-12' }, 'contribution'), '0 contributions on Aug 12');
   assert.equal(cellLabel({ value: 12000, date: '' }, 'token'), '12,000 tokens');
   assert.equal(
     cellLabel({ value: 5, date: '2026-08-12' }, 'token', 'cumulative'),
-    '5 tokens (cumulative) on 2026-08-12',
-    'an aggregated reading must say which reading it is'
+    '5 tokens through week of Aug 9, 2026',
+    'an aggregated reading must say which reading it is, in the same phrase the reference designs use'
+  );
+  assert.equal(
+    cellLabel({ value: 28, date: '2026-08-12' }, 'token', 'weekly'),
+    '28 tokens week of Aug 9, 2026',
+    'the weekly reading names its own week, without cumulative’s "through" prefix'
   );
   assert.equal(cellLabel({ value: 0, date: '', absent: true }, 'token'), 'no data for this day');
+});
+
+// cellPeriod is the one place a view is turned into a phrase, shared by
+// cellLabel's accessible text and the token panel's DetailTip card (issue
+// 189) — pinning it directly here is what keeps the two readable
+// independently of cellLabel's own concatenation.
+test('cellPeriod reads the view-scoped phrase the reference designs pair with a value (issue 189)', () => {
+  assert.equal(cellPeriod({ value: 1, date: '2026-08-13' }, 'daily'), 'on Aug 13');
+  // Aug 13, 2026 is a Thursday; its calendar week (weekStartsOn = Sunday)
+  // starts on Aug 9.
+  assert.equal(
+    cellPeriod({ value: 1, date: '2026-08-13' }, 'weekly'),
+    'week of Aug 9, 2026',
+    'a Thursday belongs to the week that started the Sunday before it'
+  );
+  // Aug 16, 2026 is itself a Sunday, so it is already its own week start.
+  assert.equal(cellPeriod({ value: 1, date: '2026-08-16' }, 'weekly'), 'week of Aug 16, 2026');
+  assert.equal(cellPeriod({ value: 1, date: '2026-08-13' }, 'cumulative'), 'through week of Aug 9, 2026');
+  assert.equal(cellPeriod({ value: 1, date: '' }, 'daily'), '', 'an undated cell has no calendar phrase');
+  assert.equal(cellPeriod({ value: 1, date: '' }, 'weekly'), '');
+  // A week start can fall in the prior month, and the phrase must say so.
+  assert.equal(
+    cellPeriod({ value: 1, date: '2026-08-01' }, 'weekly'),
+    'week of Jul 26, 2026',
+    'Aug 1, 2026 is a Saturday; its week starts the Sunday before, in July'
+  );
+  // A hostile-string date that cannot be calendar-parsed still degrades to
+  // the raw string rather than throwing or blanking it (the same
+  // never-corrupt-a-payload floor formatCalendarDate documents).
+  assert.equal(cellPeriod({ value: 1, date: 'not-a-date' }, 'daily'), 'on not-a-date');
 });
 
 test('thousands grouping is locale-independent', () => {
@@ -235,8 +502,13 @@ test('the block is sized from the columns it rendered, as a cap', () => {
   assert.ok(block, 'the grid block lost its rule');
   assert.match(
     block[1],
-    /max-inline-size:\s*calc\(\s*var\(--grid-columns/,
+    /max-inline-size:\s*calc\(/,
     'the size must be a maximum, so a narrow screen still shrinks it'
+  );
+  assert.match(
+    block[1],
+    /var\(--grid-columns/,
+    'the cap must still be driven by the columns actually rendered'
   );
   assert.doesNotMatch(
     block[1],
@@ -248,6 +520,46 @@ test('the block is sized from the columns it rendered, as a cap', () => {
   for (const token of ['--grid-cell-size, 0.625rem', '--grid-cell-gap, 0.1875rem']) {
     assert.ok(block[1].includes(token), `the box computes its width from a different ${token}`);
   }
+  // Issue 189: the weekday gutter shares this box's horizontal budget with
+  // the strip, so the cap must reserve the gutter's own fixed width and the
+  // row-gap beside it too — reading the SAME --grid-axis-width token
+  // .grid-weekday-axis is sized from, so the two can never disagree about
+  // how wide "the gutter" is.
+  assert.ok(
+    block[1].includes('--grid-axis-width, 1.25rem'),
+    'the cap no longer reserves the weekday gutter its own width'
+  );
+  const gutter = /\.grid-weekday-axis \{([^}]*)\}/.exec(grid);
+  assert.ok(gutter, 'the weekday gutter rule is missing');
+  assert.match(
+    gutter[1],
+    /inline-size:\s*var\(--grid-axis-width,\s*1\.25rem\)/,
+    'the gutter must be sized from the SAME token the block reserves room for'
+  );
+});
+
+// The opt-in override (issue #178): a full-width call site drops the cap
+// above rather than replacing it, so the calendar's own content-sized box is
+// unaffected by a rule scoped to the [data-grid-fullwidth='true'] attribute.
+test('a full-width call site stretches to its container instead of its columns', () => {
+  const wide = /\.grid-block\[data-grid-fullwidth='true'\] \{([^}]*)\}/.exec(grid);
+  assert.ok(wide, 'the full-width override rule is missing');
+  assert.match(wide[1], /max-inline-size:\s*none/, 'the content-sized cap survives the opt-in');
+  assert.match(wide[1], /inline-size:\s*100%/);
+  // Cells and the month axis stretch together, floored at the same token the
+  // capped layout uses, so a short series fills the card instead of leaving
+  // a tiny graph beside empty space — and a long one still overflows into
+  // the strip's own scroll, exactly as the capped layout already does.
+  const tracks = /\.grid-block\[data-grid-fullwidth='true'\] \.grid-cells,\s*\n\s*\.grid-block\[data-grid-fullwidth='true'\] \.grid-months \{([^}]*)\}/.exec(
+    grid
+  );
+  assert.ok(tracks, 'the full-width track rule is missing, or no longer covers both the cells and the month axis');
+  // The fallback is load-bearing: --grid-cell-size has no :root definition
+  // anywhere, only fallback usages, so a var() here without one is invalid
+  // at computed-value time and silently drops the whole declaration to
+  // `none` — which falls through to the capped layout's fixed-size columns
+  // rather than stretching. MEASURED: that regression shipped here once.
+  assert.match(tracks[1], /minmax\(var\(--grid-cell-size,\s*0\.625rem\),\s*1fr\)/);
 });
 
 // The series arrives from a capture file on the owner's machine, through a
@@ -264,7 +576,7 @@ test('payload strings reach the grid as text, never as markup', () => {
   const hostile = '<img src=x onerror="window.pwned=1">';
   assert.equal(
     cellLabel({ value: 7, date: '2026-08-12' }, hostile),
-    `7 ${hostile}s on 2026-08-12`,
+    `7 ${hostile}s on Aug 12`,
     'the cell label must carry the payload string verbatim'
   );
   assert.ok(cellLabel({ value: 1, date: hostile }, 'token').includes(hostile));
@@ -325,5 +637,60 @@ test('the empty graph is styled as a reserved plate, not as a graph of holes', (
     note[1],
     /font-style:\s*italic/,
     'italics are the typography of an apology; an unavailable series is a state, not a fault'
+  );
+});
+
+// Issue 189 carries issue 134's finding one step further: a day INSIDE the
+// window a real series draws — before the series existed, or a future day in
+// its current week — is absent for the same reason a whole empty panel is,
+// and now PAINTS the same honest way: a faint filled field, never an
+// outlined hole. Deliberately a DIFFERENT rule from the pending/empty
+// state's own plate treatment above (a whole panel with nothing to plot
+// stays visually distinct from a few missing days inside a real one), so
+// this pins the general, unscoped selector rather than reusing the empty
+// state's.
+test('an absent day inside a real series paints as a faint filled field, not an outlined hole (issue 189)', () => {
+  const rule = /(?:^|\n)[ \t]*\.grid-cell\[data-grid-absent='true'\]\s*\{([^}]*)\}/.exec(grid);
+  assert.ok(rule, 'the general in-window absent-cell treatment rule is missing, or was rescoped under another selector');
+  assert.match(rule[1], /background:\s*var\(--grid-cell-absent/, 'an absence still needs a fill, not a bare outline');
+  assert.match(
+    rule[1],
+    /box-shadow:\s*none/,
+    "the outlined-hole treatment issue 134 retired for the empty state must stay cleared here too"
+  );
+});
+
+// The gutter has to render EVERY time — series or empty — because it draws
+// calendar structure (weekdayAxis), never data: an empty panel still has
+// Mondays and Fridays, it just has no counts on them yet.
+test('the weekday gutter sits beside the strip in one flex row, and renders unconditionally rather than gated on a series arriving (issue 189)', () => {
+  const body = /<div class="grid-body">([\s\S]*?)\n {2}<\/div>\n {2}\{#if columns\.length === 0\}/.exec(grid);
+  assert.ok(body, 'the grid-body wrapper is missing, or no longer matches the shape the weekday gutter needs');
+  assert.match(
+    body[1],
+    /<div class="grid-weekday-axis" aria-hidden="true">/,
+    'the weekday gutter markup is missing from grid-body'
+  );
+  assert.match(
+    body[1],
+    /\{#each weekdayAxis as weekday \(weekday\.row\)\}/,
+    'the gutter must read the SAME weekdayAxis constant the Sunday-start convention is written down in once'
+  );
+  assert.match(
+    body[1],
+    /style:grid-row=\{weekday\.row \+ 1\}/,
+    'a label must land on the row grid.ts declared for it, not a hand-picked one'
+  );
+  // The weekday gutter's own markup must sit BEFORE the {#if columns.length
+  // > 0} branch that gates the strip's series/empty content — outside that
+  // conditional is what makes "renders in both states" a fact rather than a
+  // comment.
+  const weekdayIndex = body[1].indexOf('grid-weekday-axis');
+  const conditionalIndex = body[1].indexOf('{#if columns.length > 0}');
+  assert.ok(weekdayIndex >= 0, 'the weekday gutter markup was not found inside grid-body');
+  assert.ok(conditionalIndex >= 0, 'the series/empty conditional was not found inside grid-body');
+  assert.ok(
+    weekdayIndex < conditionalIndex,
+    'the weekday gutter must render outside (before) the series/empty conditional, not inside it'
   );
 });

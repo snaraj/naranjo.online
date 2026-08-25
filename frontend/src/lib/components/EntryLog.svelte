@@ -129,15 +129,29 @@
     gap: var(--feed-gap);
   }
 
-  /* The counts sit at the row's end edge on a wide column and wrap under the
-     name on a narrow one; nothing here is pinned to a width, so the wrap
-     happens when the content needs it rather than at a guessed breakpoint. */
+  /* Deterministic by viewport, never by content (issue 188). The previous
+     rule was flex-wrap: a short title happened to leave room for the
+     counters on the same line while a long title pushed them below — the
+     identical card shape reading differently card to card, which is what
+     the owner's screenshot caught (naranjo.online/lidersea.com inline,
+     website-infrastructure/foobar2000-* wrapped, same viewport). Below
+     --breakpoint-card-meta the row is a column outright: title, then
+     counters, always two rows. At or above it the row is flex, nowrap,
+     always one row. No title's length enters the decision either side. */
   .entry-head {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
+    flex-direction: column;
+    align-items: flex-start;
     gap: var(--card-meta-gap);
+  }
+
+  @media (min-width: 30rem) {
+    .entry-head {
+      flex-direction: row;
+      flex-wrap: nowrap;
+      align-items: center;
+      justify-content: space-between;
+    }
   }
 
   .entry-heading {

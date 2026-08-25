@@ -108,33 +108,21 @@
      one swatch per choice.
 
      The swatches are LINE ICONS, like the two header controls they sit under
-     (owner directive, 2026-08-24). They used to be 2.75rem filled discs, each
-     rimmed and — when chosen — ringed again two pixels thick, which made the
-     five quietest choices on the page its heaviest objects and read as
-     nothing like the small translucent glyphs above them. What they are now
-     is one grammar, shared with those glyphs and derived from their tokens
-     rather than restating them: the same painted box
+     (owner directive, 2026-08-24): the same painted box
      (--chrome-icon-glyph-size), the same line weight (--chrome-icon-stroke),
      no disc, no border, no fill, and the same brand-ink hover.
 
-     A swatch still has to say which palette it selects, so the palette moved
-     INSIDE the glyph instead of behind it. Every glyph is one shape drawn
-     twice over: the outline is the PAGE's own ink, which is what keeps the
-     mark legible on the popover in all four reading modes and is the family
-     trait it shares with the chrome; the enclosed area is that MODE's own
-     surface token; and the detail inside — the moon's craters — is that
-     mode's own ink. Nothing here is a second copy of a palette value.
-
-     Auto splits its circle down the middle between the two surfaces it
-     chooses between, light wears the sun, and the three darks wear the same
-     moon. Those three are told apart by their craters' temperature —
-     neutral, cool, warm — which is the honest distinction, because they ARE
-     the same kind of mode at different temperatures and inventing a third
-     shape would claim a difference the modes do not have. The craters used to
-     mark the true dark alone; at the chrome's icon size they are also the
-     only place a dark mode's INK can be shown, and all three have one, so
-     withholding them from two of the modes would have hidden the very value
-     that tells those two apart.
+     Redesigned again (owner UX directive, issue 180, 2026-08-25): "these
+     icons do not tell me at all what the modes are, they all look exactly
+     the same" — the three dark variants used to be one moon shape told apart
+     only by their craters' TEMPERATURE (a color difference too small to read
+     at 18px). Every glyph now draws a genuinely different SILHOUETTE — sun,
+     half-sun/half-moon, plain crescent, crescent-with-stars, split disc — so
+     the five are tellable apart by SHAPE alone, which is also the dataviz
+     floor applied to the toggle itself (a value is never encoded by color
+     alone). Every path paints `currentColor`: the glyph is the SAME ink the
+     swatch already answers hover and selection with, so no mode needs its
+     own palette rule and there is zero theme branching to keep in step.
 
      Native buttons only; the glyphs are inline SVG. Plain
      aria-expanded disclosure semantics on purpose: aria-haspopup would
@@ -184,19 +172,21 @@
         onkeydown={onSwatchKeydown}
       >
         {#if mode.id === 'auto'}
-          <!-- Auto owns no palette: it is whichever of the two the device
-            asks for, so its glyph is one circle split down the middle
-            between those two page surfaces, outlined in the page's own ink
-            like every other glyph here. -->
+          <!-- Half sun, half moon: the device's own choice previewed as the
+            one glyph that is genuinely neither light's sun nor dark's
+            crescent — a filled left half (the dark side) inside an open ring
+            wearing three rays on its right edge (the light side). -->
           <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">
-            <path class="auto-half-light" d="M12 3A9 9 0 0 0 12 21Z" />
-            <path class="auto-half-dark" d="M12 3A9 9 0 0 1 12 21Z" />
+            <path class="chip" d="M12 3a9 9 0 0 0 0 18Z" />
             <circle class="chip-edge" cx="12" cy="12" r="9" />
+            <g class="ray">
+              <line x1="19.8" y1="12" x2="22.1" y2="12" />
+              <line x1="17.51" y1="17.51" x2="19.14" y2="19.14" />
+              <line x1="17.51" y1="6.49" x2="19.14" y2="4.86" />
+            </g>
           </svg>
         {:else if mode.id === 'light'}
-          <!-- The sun's body is the palette chip — filled with light's own
-            page surface — and its rays are line work in the page's ink, at
-            the same weight the refresh glyph beside it is drawn in. -->
+          <!-- The sun: a filled disc with eight rays, all one ink. -->
           <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">
             <g class="ray">
               <line x1="12" y1="1.9" x2="12" y2="4.2" />
@@ -210,14 +200,30 @@
             </g>
             <circle class="chip" cx="12" cy="12" r="5" />
           </svg>
-        {:else}
-          <!-- One moon for all three darks, filled with that mode's own page
-            surface and cratered in that mode's own ink — neutral for the
-            true dark, cool for slate, warm for sepia. -->
+        {:else if mode.id === 'dark'}
+          <!-- The true dark: a plain crescent, unadorned — the simplest of
+            the three night modes, so the other two read as ADDING something
+            to it rather than all three competing on crater color. -->
           <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">
             <path class="chip" d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" />
-            <circle class="crater" cx="9.3" cy="15.2" r="2.5" />
-            <circle class="crater" cx="13.2" cy="17.4" r="1.7" />
+          </svg>
+        {:else if mode.id === 'slate'}
+          <!-- Slate: the same crescent plus two small marks beside it — a
+            night sky rather than a bare moon, which is the "stars-midnight"
+            silhouette issue 180 asks for. -->
+          <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">
+            <path class="chip" d="M20 15.5A7.5 7.5 0 1 1 12.9 5.3 6 6 0 0 0 20 15.5Z" />
+            <path class="chip" d="M5 4.2l0.55 1.3L6.85 6l-1.3 0.55L5 7.85l-0.55-1.3L3.15 6l1.3-0.55Z" />
+            <circle class="chip" cx="4.5" cy="16" r="0.85" />
+          </svg>
+        {:else}
+          <!-- Sepia: a "contrast disc" rather than a moon at all — a ring
+            with one half filled, split on the HORIZONTAL where every other
+            glyph here splits on the vertical or draws no split at all, so it
+            cannot be mistaken for auto's half-and-half at a glance. -->
+          <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">
+            <circle class="chip-edge" cx="12" cy="12" r="9" />
+            <path class="chip" d="M3 12a9 9 0 0 0 18 0Z" />
           </svg>
         {/if}
       </button>
@@ -237,8 +243,8 @@
 
   /* The trigger's chrome is the shared .icon-button rule in styles.css — one
      definition for every page-level icon control, so the reading-mode button
-     and the refresh button beside it cannot drift apart. Only the swatches,
-     which preview palettes, are styled here. */
+     and the refresh button beside it cannot drift apart. Only the popover and
+     its swatches are styled here. */
   .popover {
     position: absolute;
     top: calc(100% + 0.5rem);
@@ -251,7 +257,11 @@
     gap: var(--swatch-gap);
     padding: var(--swatch-popover-padding);
     border: 1px solid var(--color-border);
-    border-radius: 1.875rem;
+    /* A real design, not the generic floating pill (owner directive, issue
+       169, 2026-08-24): the same flat radius the rest of the page's chrome
+       wears (--card-radius, --tip-radius) rather than a bespoke 1.875rem
+       curve found nowhere else on the site. */
+    border-radius: var(--theme-menu-radius, 3px);
     background: var(--color-surface-raised);
   }
 
@@ -332,81 +342,34 @@
     block-size: var(--swatch-glyph-size);
   }
 
-  /* One shape, drawn twice over. The outline is the PAGE's ink — the only
-     ink guaranteed legible on the popover in all four reading modes, and the
-     reason a swatch needs no disc behind it to be seen — and the enclosed
-     area is the mode's own page surface. */
+  /* Every glyph paints ONE ink — currentColor, the same ink the swatch
+     already answers rest/hover/chosen with — so no mode needs its own
+     palette rule and there is zero theme branching for a reading mode to
+     fall out of step with (issue 180: shape tells the five apart now, not
+     color). .chip is a filled shape, .chip-edge a stroked ring, .ray a
+     stroked line; all three share the chrome's line weight, .chip included
+     — its own stroke is none, but the family reads one line-weight token
+     regardless of which part of a glyph is asked for it. */
   .chip,
   .chip-edge,
   .ray {
-    stroke: currentColor;
     stroke-width: var(--swatch-stroke);
     stroke-linejoin: round;
+  }
+
+  .chip {
+    fill: currentColor;
+    stroke: none;
   }
 
   .chip-edge,
   .ray {
     fill: none;
+    stroke: currentColor;
   }
 
   .ray {
     stroke-linecap: round;
-  }
-
-  .crater,
-  .auto-half-light,
-  .auto-half-dark {
-    stroke: none;
-  }
-
-  .swatch-auto .auto-half-light {
-    fill: var(--palette-light-surface);
-  }
-
-  .swatch-auto .auto-half-dark {
-    fill: var(--palette-dark-surface);
-  }
-
-  .swatch-light .chip {
-    fill: var(--palette-light-surface);
-  }
-
-  .swatch-dark .chip {
-    fill: var(--palette-dark-surface);
-  }
-
-  .swatch-dark .crater {
-    fill: var(--palette-dark-accent);
-  }
-
-  .swatch-slate .chip {
-    fill: var(--palette-slate-surface);
-  }
-
-  /* Slate's craters are its own accent, measured at 10.38:1 on its own
-     surface — the palette already holds a foreground this far from its
-     background, and a 3px mark needs every bit of it. */
-  .swatch-slate .crater {
-    fill: var(--palette-slate-accent);
-  }
-
-  .swatch-sepia .chip {
-    fill: var(--palette-sepia-surface);
-  }
-
-  /* Sepia's accent, unmixed, at 7.09:1 on sepia's own surface. It used to be
-     mixed one step darker so a 44px moon would not shout; the moon is 18px
-     now and its craters are 3px, and a mark that small needs the palette's
-     brightest ink rather than a dimmed one. Dropping the mix also drops this
-     component's only color-mix() — a function a browser inside this site's
-     support window may not know, which does not degrade but INVALIDATES the
-     declaration it sits in — so the @supports fallback it needed goes with
-     it. The page still uses one elsewhere (the usage meter's track), guarded
-     the other legal way, by a plain declaration of the same property above
-     it; the progressive-feature pin covers both forms and still has a
-     subject. */
-  .swatch-sepia .crater {
-    fill: var(--palette-sepia-accent);
   }
 
   /* The chosen mode, marked by SHAPE rather than by color alone (the dataviz

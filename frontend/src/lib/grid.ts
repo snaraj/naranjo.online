@@ -38,31 +38,44 @@ export function isSeriesView(value: unknown): value is SeriesView {
   return typeof value === 'string' && (seriesViews as readonly string[]).includes(value);
 }
 
-/* viewValues re-reads a daily series through one lens. Weekly buckets align
- * with the grid's own columns, so a weekly column renders as one flat block
- * of its total — which is exactly what a weekly reading means. */
-export function viewValues(totals: number[], view: SeriesView): number[] {
+/* viewColumns re-reads one series through one lens — on ALIGNED CALENDAR
+ * COLUMNS (issue 189), never on the raw array position viewValues used to
+ * bucket by. That distinction is the whole fix: once calendarColumns can pad
+ * the front of a series to its week boundary, "every 7th array entry" and
+ * "every real day in this calendar week" are no longer the same grouping, and
+ * the weekly/cumulative lenses have to read the grouping a reader can
+ * actually see (the grid's own columns) rather than the one the payload
+ * happened to arrive in.
+ *
+ * Absent cells are passed through unchanged rather than folded into a sum or
+ * a running total: they carry no count by definition (cellLabel already
+ * refuses to read a value off one), and a level-0 real zero must stay
+ * distinguishable from a day the window does not cover — this is exactly the
+ * distinction issue 134 drew for the daily lens, unaffected by which lens is
+ * active. */
+export function viewColumns(columns: GridCell[][], view: SeriesView): GridCell[][] {
   if (view === 'daily') {
-    return [...totals];
+    return columns.map((column) => column.map((cell) => ({ ...cell })));
   }
-  if (view === 'cumulative') {
-    let running = 0;
-    return totals.map((total) => {
-      running += total;
-      return running;
+  if (view === 'weekly') {
+    return columns.map((column) => {
+      const sum = column.reduce((total, cell) => (cell.absent ? total : total + cell.value), 0);
+      return column.map((cell) => (cell.absent ? { ...cell } : { ...cell, value: sum }));
     });
   }
-  const values = new Array<number>(totals.length).fill(0);
-  for (let start = 0; start < totals.length; start += gridRows) {
-    let sum = 0;
-    for (let offset = 0; offset < gridRows && start + offset < totals.length; offset += 1) {
-      sum += totals[start + offset];
-    }
-    for (let offset = 0; offset < gridRows && start + offset < totals.length; offset += 1) {
-      values[start + offset] = sum;
-    }
-  }
-  return values;
+  // Cumulative: a running total across real cells only, walked in window
+  // order (oldest column first) so "through week of X" means what it says
+  // regardless of which end of the strip the reader scrolled to.
+  let running = 0;
+  return columns.map((column) =>
+    column.map((cell) => {
+      if (cell.absent) {
+        return { ...cell };
+      }
+      running += cell.value;
+      return { ...cell, value: running };
+    })
+  );
 }
 
 /* gridLevel buckets one cell into 0..gridLevels-1 against the window's peak. */
@@ -99,6 +112,86 @@ export function toColumns(cells: GridCell[]): GridCell[][] {
   return columns;
 }
 
+/* The shared calendar-week convention (issue 189): row 0 of every column is
+ * Sunday, matching the origin's own vcs-activity payload — activityCells
+ * (lib/activity.ts) resolves it from that payload's own "Columns run
+ * Sunday..Saturday" shape, and the weekday axis below is written from the
+ * SAME convention rather than a second guess at it. A Monday label on row 1,
+ * a Wednesday on row 3, a Friday on row 5 (both zero-based) is what a
+ * Sunday-start week means; a different convention would move all three. */
+export const weekStartsOn = 0;
+
+export interface WeekdayAxisLabel {
+  /* Zero-based row this label marks. */
+  row: number;
+  readonly label: string;
+}
+
+export const weekdayAxis: readonly WeekdayAxisLabel[] = [
+  { row: 1, label: 'Mon' },
+  { row: 3, label: 'Wed' },
+  { row: 5, label: 'Fri' }
+];
+
+/* calendarColumns realigns a dated cell list onto TRUE calendar weeks, so
+ * every column starts on the same weekday (weekStartsOn) and a weekday axis
+ * beside the grid is truthful for every column rather than for whichever one
+ * happens to start where the series does.
+ *
+ * toColumns chunks by array position: row N's weekday floats with wherever
+ * the series' startDate fell, which is fine for a strip with no weekday axis
+ * but wrong the moment one is added. This instead walks real calendar dates:
+ * it anchors on the newest dated cell (the last real day if there is one,
+ * else the newest dated cell at all — an all-absent VCS tail is still real
+ * information that the current week is not over), rounds that up to the
+ * Saturday that ends its week, counts back weeks*7 days to the Sunday that
+ * starts the trailing window, and rebuilds every day in between — a real
+ * cell wherever the input already described that date, a dated-but-absent
+ * cell everywhere else (issue 189: "before the series existed" and "future
+ * day in the current week" are the same honest absence, just on opposite
+ * ends of the window, and both keep a real date rather than the bare '' a
+ * source that cannot date itself produces).
+ *
+ * Fixed-width by construction (issue 189 supersedes stripColumns' sizing for
+ * any series calendarColumns can date): the output is always exactly `weeks`
+ * columns, front-padded when the series is younger than the window and
+ * silently truncated to the newest `weeks` when it is older — never fewer,
+ * never more, because the day-by-day loop below runs from windowStart to
+ * windowEnd and nowhere else.
+ *
+ * An undated series (every cell.date === '') has no calendar to align to, so
+ * this falls back to the old positional chunking rather than guessing one:
+ * guessing would date every cell wrongly, the same reasoning activityCells
+ * already applies when the origin sends no endDate.
+ *
+ * Idempotent on already-aligned input: re-running it on its own output
+ * recomputes the identical anchor from the identical newest dated cell, so a
+ * source that is already calendar-aligned (the VCS payload's own weeks
+ * array) passes through unchanged rather than drifting on a second pass. */
+export function calendarColumns(cells: GridCell[], weeks: number = pendingWeeks): GridCell[][] {
+  const dated = cells.filter((cell) => cell.date !== '');
+  if (dated.length === 0) {
+    return toColumns(cells);
+  }
+  const byDate = new Map(dated.map((cell) => [cell.date, cell]));
+  const real = dated.filter((cell) => !cell.absent);
+  const anchor = (real.length > 0 ? real[real.length - 1] : dated[dated.length - 1]).date;
+  const anchorWeekday = new Date(`${anchor}T00:00:00Z`).getUTCDay();
+  const windowEnd = addDays(anchor, gridRows - 1 - anchorWeekday);
+  const totalDays = Math.max(0, weeks) * gridRows;
+  const windowStart = addDays(windowEnd, -(totalDays - 1));
+  const columns: GridCell[][] = [];
+  for (let week = 0; week < weeks; week += 1) {
+    const column: GridCell[] = [];
+    for (let day = 0; day < gridRows; day += 1) {
+      const date = addDays(windowStart, week * gridRows + day);
+      column.push(byDate.get(date) ?? { value: 0, date, absent: true });
+    }
+    columns.push(column);
+  }
+  return columns;
+}
+
 /* The width of an empty graph, in columns: one year, the same window the
  * contribution calendar covers, so a panel still waiting for its series
  * renders the same shaped box the panel beside it renders full.
@@ -115,18 +208,24 @@ export const pendingWeeks = 53;
 
 /* The narrowest a graph may be drawn, in columns.
  *
- * Sizing a strip to its data is the whole point (issue #141, residual risk
- * 2): fifteen days is three columns, and three columns hard against the left
- * edge of a box built for fifty-three read as a graph that had lost its data
- * rather than as a short one. But "sized to its data" taken literally
- * collapses a one-day series to a single ten-pixel column with the less/more
- * key hanging off its side, so there is a floor, and the floor is not a taste
- * judgement: it is the width the block's own furniture needs. The less/more
- * key under every graph measures 123.38px in all three engines, so ten
- * columns (127px) is the first count that carries it and nine (114px) is not
- * — the key would spill out of the block's start edge, which is the same
- * defect one step smaller. The rendering lanes MEASURE that per engine rather
- * than trusting this arithmetic. */
+ * Sizing a strip to its data was the whole point once (issue #141, residual
+ * risk 2): fifteen days is three columns, and three columns hard against the
+ * left edge of a box built for fifty-three read as a graph that had lost its
+ * data rather than as a short one. Issue 189 SUPERSEDES that rule for any
+ * series calendarColumns can date: a fixed weekday axis is only truthful
+ * across a fixed trailing window, and the misread the sizing rule protected
+ * against is gone by construction once the window's own faint, dated absent
+ * cells and its month axis say plainly "the window starts here, the data
+ * doesn't" — both being visible is what used to require a short strip, not a
+ * rule that shrinks the strip itself. stripColumns and this floor stay live
+ * for the one case calendarColumns still falls back on: a series with no
+ * dates to align by, where sizing to data is still the honest choice because
+ * there is no calendar to draw a window against. The less/more key under
+ * every graph measures 123.38px in all three engines, so ten columns (127px)
+ * is the first count that carries it and nine (114px) is not — the key would
+ * spill out of the block's start edge, which is the same defect one step
+ * smaller. The rendering lanes MEASURE that per engine rather than trusting
+ * this arithmetic. */
 export const gridMinColumns = 10;
 
 /* stripColumns is the width a grid block claims, in columns: exactly the
@@ -135,7 +234,11 @@ export const gridMinColumns = 10;
  *
  * A block never claims MORE columns than it draws. That direction is the one
  * the owner reported, and it is the one a regression would take: a fixed
- * fifty-three is a claim about a series nobody has. */
+ * fifty-three used to be a claim about a series nobody had — now, for any
+ * dated series, calendarColumns hands back exactly pendingWeeks columns by
+ * construction, so stripColumns(claimed) resolves to exactly pendingWeeks
+ * every time and this function's own floor never engages there. It stays the
+ * real answer for the undated fallback above. */
 export function stripColumns(drawn: number): number {
   if (!Number.isFinite(drawn) || drawn <= 0) {
     return gridMinColumns;
@@ -180,19 +283,34 @@ export function addDays(date: string, days: number): string {
 }
 
 /* seriesCells turns a start date plus daily magnitudes into grid cells. */
-export function seriesCells(startDate: string, totals: number[]): GridCell[] {
+export function seriesCells(startDate: string, totals: readonly number[]): GridCell[] {
   return totals.map((value, index) => ({ value, date: addDays(startDate, index) }));
 }
 
-/* monthInitials indexes month numbers 1..12; the axis prints one letter per
- * month so a year of columns stays readable at grid density. */
-const monthInitials = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+/* monthAbbreviations indexes month numbers 1..12 with the three-letter form
+ * (issue 189: replaces the earlier single-initial axis, which could not tell
+ * March from May or June from July — exactly the ambiguity the owner's
+ * reference designs avoid by spelling three letters). */
+const monthAbbreviations = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec'
+];
 
 export interface MonthTick {
   /* Zero-based column the month's first covered day falls in. */
   column: number;
-  /* The month's initial, e.g. 'A' for August. */
-  initial: string;
+  /* The month's three-letter abbreviation, e.g. 'Aug' for August. */
+  abbrev: string;
   /* The full month name, for the axis's accessible text. */
   name: string;
 }
@@ -214,12 +332,25 @@ const monthNames = [
 
 /* monthTicks marks the column where each new month begins, so the axis can
  * label the grid without a date on every cell. Columns whose cells carry no
- * date (a source that cannot date its series) simply produce no ticks. */
+ * date (a source that cannot date its series) simply produce no ticks.
+ *
+ * A column's month is read off ANY dated cell in it, absent or not (issue
+ * 189): calendarColumns dates its padding — a day before the series existed
+ * still has a real calendar date, it just has no count — and the axis has to
+ * span that padding exactly like the reference designs do, dotted region and
+ * all, rather than stopping wherever the real data happens to start.
+ *
+ * The leading tick is dropped when the next one sits fewer than three columns
+ * away (issue 189): a fixed trailing window almost never starts on a month
+ * boundary, so its first, partial month is often one or two columns wide and
+ * collides with the label right beside it. Every other tick keeps its own
+ * dedicated column — only the window's own left edge produces a fragment
+ * short enough to collide. */
 export function monthTicks(columns: GridCell[][]): MonthTick[] {
   const ticks: MonthTick[] = [];
   let previous = '';
   columns.forEach((column, index) => {
-    const dated = column.find((cell) => !cell.absent && cell.date.length >= 7);
+    const dated = column.find((cell) => cell.date.length >= 7);
     if (!dated) {
       return;
     }
@@ -232,9 +363,66 @@ export function monthTicks(columns: GridCell[][]): MonthTick[] {
     if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 12) {
       return;
     }
-    ticks.push({ column: index, initial: monthInitials[ordinal - 1], name: monthNames[ordinal - 1] });
+    ticks.push({ column: index, abbrev: monthAbbreviations[ordinal - 1], name: monthNames[ordinal - 1] });
   });
+  if (ticks.length >= 2 && ticks[1].column - ticks[0].column < 3) {
+    ticks.shift();
+  }
   return ticks;
+}
+
+/* formatCalendarDate renders a plain ISO date as "Aug 12" (or, with a year,
+ * "Aug 12, 2026") the way the owner's reference designs read a date — never
+ * as the ISO form a machine wrote it in. Returns null for anything that is
+ * not a well-formed calendar date, so a caller can fall back to the RAW
+ * string rather than mis-format one: the hostile-string floor (a payload
+ * value must reach the DOM verbatim, never silently rewritten into something
+ * that swallows it) survives this formatting step exactly because a string
+ * this cannot parse comes back unchanged, not blanked. */
+function formatCalendarDate(date: string, withYear: boolean): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!match) {
+    return null;
+  }
+  const [, year, month, day] = match;
+  const ordinal = Number(month);
+  if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 12) {
+    return null;
+  }
+  const label = `${monthAbbreviations[ordinal - 1]} ${Number(day)}`;
+  return withYear ? `${label}, ${year}` : label;
+}
+
+/* weekStartDate rounds a calendar date back to the Sunday that starts its
+ * week (weekStartsOn), the same convention calendarColumns aligns columns to.
+ * Empty on anything addDays cannot parse, mirroring addDays' own fail-empty
+ * shape rather than throwing. */
+function weekStartDate(date: string): string {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return '';
+  }
+  return addDays(date, -parsed.getUTCDay());
+}
+
+/* cellPeriod is the view-scoped period phrase the owner's reference designs
+ * pair with a value — "on Aug 13" for a day, "week of Aug 16, 2026" for a
+ * week, "through week of Aug 23, 2026" for the running total through one
+ * (issue 189). It reads the SAME phrase cellLabel's accessible text and the
+ * token panel's DetailTip card both show, so the two can never drift apart by
+ * one growing its own date formatting later — there is only ever the one
+ * function that knows how a period reads. Empty for an undated cell: there is
+ * no calendar phrase for a source that cannot date itself. */
+export function cellPeriod(cell: GridCell, view: SeriesView): string {
+  if (!cell.date) {
+    return '';
+  }
+  if (view === 'daily') {
+    return `on ${formatCalendarDate(cell.date, false) ?? cell.date}`;
+  }
+  const weekStart = weekStartDate(cell.date) || cell.date;
+  const phrase = `week of ${formatCalendarDate(weekStart, true) ?? cell.date}`;
+  return view === 'cumulative' ? `through ${phrase}` : phrase;
 }
 
 /* cellLabel is the one accessible text a cell carries — tooltip and
@@ -243,9 +431,9 @@ export function cellLabel(cell: GridCell, noun: string, view: SeriesView = 'dail
   if (cell.absent) {
     return 'no data for this day';
   }
-  const scope = view === 'daily' ? '' : ` (${view})`;
-  const counted = `${formatWhole(cell.value)} ${cell.value === 1 ? noun : `${noun}s`}${scope}`;
-  return cell.date ? `${counted} on ${cell.date}` : counted;
+  const counted = `${formatWhole(cell.value)} ${cell.value === 1 ? noun : `${noun}s`}`;
+  const period = cellPeriod(cell, view);
+  return period ? `${counted} ${period}` : counted;
 }
 
 /* formatWhole groups thousands by hand so the output is identical in every

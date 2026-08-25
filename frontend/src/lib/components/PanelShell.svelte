@@ -6,10 +6,13 @@
   Neither half of the old freshness widget renders here any more, and the two
   left for different reasons.
 
-  The ACTION left because it is not per-panel: every card used to carry its
-  own refresh button beside the title, which implied that refreshing was a
-  per-card decision when it is one gesture. One control does it for the whole
-  page, and it now sits in the page header (see RefreshAll).
+  The ACTION left twice over. Every card used to carry its own refresh button
+  beside the title, which implied that refreshing was a per-card decision when
+  it is one gesture — that button moved to a single page-header control
+  instead. That control is gone too now (owner directive, issue 179): the site
+  is responsive on its own, and a data-retrieval failure logs an error
+  (panels.ts' loadPanel) rather than waiting on a visitor to press something.
+  No panel offers a manual refresh of any kind any more.
 
   The READING — "stale, updated 8d ago" beside every heading — left at the
   owner's direction (issue 127): three cards each announcing their own age

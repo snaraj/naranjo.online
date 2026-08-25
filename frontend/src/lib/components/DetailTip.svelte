@@ -64,8 +64,11 @@
   use:hoverDetail={(next) => (open = next)}
 >
   <span class="cell-tip-name">{detail.name}</span>
-  {#each detail.rows as row (row.label)}
-    <span class="cell-tip-row">{row.label}: {row.value}</span>
+  {#each detail.rows as row, index (index)}
+    <!-- A row with no label renders its value alone (issue 178: the
+      token-activity card shows "Tokens used" as the name above and the
+      count alone below — no "label: " prefix nothing named it). -->
+    <span class="cell-tip-row">{row.label ? `${row.label}: ` : ''}{row.value}</span>
   {/each}
 </span>
 
