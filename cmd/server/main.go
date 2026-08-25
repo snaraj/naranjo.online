@@ -46,6 +46,10 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	bindHost, err := listenHostConfiguration(lookupEnv("LISTEN_ADDRESS"))
+	if err != nil {
+		return err
+	}
 
 	assets, err := website.FileSystem()
 	if err != nil {
@@ -85,7 +89,7 @@ func run(ctx context.Context, lookupEnv func(string) string) error {
 	httpServer := &http.Server{
 		// Explicit limits protect the small Pi-hosted origin from slow or oversized
 		// requests while leaving enough time for normal traffic through the tunnel.
-		Addr:              ":" + strconv.Itoa(port),
+		Addr:              listenAddress(bindHost, port),
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -176,4 +180,31 @@ func listenPort(value string) (int, error) {
 		return 0, errors.New("PORT must be an integer between 1 and 65535")
 	}
 	return port, nil
+}
+
+// listenHostConfiguration validates LISTEN_ADDRESS, an override that exists
+// solely for the local dev loop (Makefile's `run`/`dev` targets set it to
+// "127.0.0.1"; nothing else in this repository sets it). Empty is the ONLY
+// other accepted value and is the deployed default: the Helm chart never
+// sets this variable, so a production pod's Addr is unchanged by this
+// function's existence — it still binds every interface inside the pod
+// network, exactly as before. The allowlist is deliberately just these two
+// values, not an arbitrary host string, because this is a narrow dev-loop
+// safety valve, not a general bind-address feature.
+func listenHostConfiguration(value string) (string, error) {
+	switch value {
+	case "":
+		return "", nil
+	case "127.0.0.1":
+		return "127.0.0.1", nil
+	}
+	return "", errors.New("LISTEN_ADDRESS must be empty or 127.0.0.1")
+}
+
+// listenAddress builds the http.Server.Addr string from a validated host and
+// port. An empty bindHost preserves net/http's own wildcard-bind behavior
+// (":port"); no caller may pass an unvalidated bindHost — that validation
+// lives once, in listenHostConfiguration, before this function ever runs.
+func listenAddress(bindHost string, port int) string {
+	return bindHost + ":" + strconv.Itoa(port)
 }

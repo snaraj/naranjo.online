@@ -152,6 +152,8 @@ jobs:
           npm run check
           npm test
           npm run build
+      - name: Pin Makefile invariants (PORT validation, npm ci flags)
+        run: ./scripts/ci/makefile-invariants.sh
       - name: Test Go service with the embedded frontend
         env:
           GOTOOLCHAIN: local

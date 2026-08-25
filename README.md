@@ -64,6 +64,42 @@ travels only as fast as browsers ship it — so submitting would bind every
 subdomain this site ever adds to the same paid-certificate trap, which is
 exactly why the step still outstanding is a decision and not a formality.
 
+## Local development
+
+```sh
+make run                 # build once, then serve the full app at http://localhost:8080
+PORT=9090 make run       # override the port
+make dev                  # Vite HMR at http://127.0.0.1:5173, proxying /api to a locally
+                           # built backend on the same PORT (default 8080)
+make help                  # list every target
+```
+
+`make dev` builds the backend to a real binary and launches it in the
+background under a captured PID, killed by a trap on `EXIT`/`INT`/`TERM` —
+never a backgrounded `go run`, whose child process survives the parent's
+death and orphans the listening port. Both `run` and `dev` set
+`LISTEN_ADDRESS=127.0.0.1` for the backend they launch (Vite's own HMR
+server already binds `127.0.0.1` unconditionally), so neither target ever
+listens on a non-loopback interface — verify with `lsof -iTCP -sTCP:LISTEN
+-n -P` or equivalent. `LISTEN_ADDRESS` is unset by default and the deployed
+Helm chart never sets it, so production's all-interfaces bind — required
+inside the pod network — is unchanged; the override exists only for this
+local loop. `PORT` must be a decimal integer between 1 and 65535; any other
+value is refused before any process starts. **Set `PORT` as an environment
+variable (`PORT=9090 make run`), never as a `make` command-line argument
+(`make run PORT=9090`)** — GNU Make reconstructs its own MAKEOVERRIDES/MFLAGS
+from every command-line `VAR=value` argument, for every target, which fully
+expands the value (including a `$(shell ...)` call) before any recipe runs;
+no Makefile-side code can intercept that. The environment-variable form is
+not subject to it and is the only form this repository documents or
+supports.
+
+Panels serve their embedded snapshot data egress-free by default; live
+refresh (`PANELS_REFRESH`) stays a production opt-in, never a local default
+(see "Enabling live refresh" below). Media stays disabled unless
+`MEDIA_ENABLED`, `MEDIA_ROOT`, and `MEDIA_MAX_CONCURRENT` are all supplied
+together — unset locally, the app serves with media off.
+
 ## Development
 
 ```sh

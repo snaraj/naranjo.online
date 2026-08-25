@@ -89,3 +89,64 @@ func TestMediaConfigurationHasNoInventedDefaults(t *testing.T) {
 		t.Fatalf("enabled configuration = enabled=%t options=%+v err=%v", enabled, options, err)
 	}
 }
+
+// TestListenHostConfiguration pins the narrow LISTEN_ADDRESS allowlist behind
+// the dev-loop loopback override (Daybreak Blue finding #173, HIGH #2): empty
+// (the deployed chart's unset default) and the exact literal "127.0.0.1" (what
+// the Makefile's `run`/`dev` targets set) are the only two accepted values —
+// this is a narrow safety valve for one local use case, not a general
+// bind-address feature, so anything else, including other loopback-adjacent
+// or wildcard spellings, is refused.
+func TestListenHostConfiguration(t *testing.T) {
+	t.Parallel()
+	for name, testCase := range map[string]struct {
+		value   string
+		want    string
+		wantErr bool
+	}{
+		"empty matches the deployed chart default": {value: "", want: ""},
+		"the one accepted override":                {value: "127.0.0.1", want: "127.0.0.1"},
+		"wildcard is refused":                      {value: "0.0.0.0", wantErr: true},
+		"IPv6 unspecified is refused":              {value: "::", wantErr: true},
+		"loopback with trailing junk is refused":   {value: "127.0.0.1 ", wantErr: true},
+		"hostname is refused":                      {value: "localhost", wantErr: true},
+		"arbitrary host is refused":                {value: "10.0.0.5", wantErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := listenHostConfiguration(testCase.value)
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatalf("listenHostConfiguration(%q) = %q, want error", testCase.value, got)
+				}
+				return
+			}
+			if err != nil || got != testCase.want {
+				t.Fatalf("listenHostConfiguration(%q) = %q, %v, want %q, nil", testCase.value, got, err, testCase.want)
+			}
+		})
+	}
+}
+
+// TestListenAddress pins the pure Addr-string assembly: an empty bindHost
+// reproduces net/http's own wildcard-bind spelling exactly (so the deployed
+// chart's Addr is provably unchanged by this function's existence), and the
+// loopback override composes the literal host with the port, byte for byte.
+func TestListenAddress(t *testing.T) {
+	t.Parallel()
+	for name, testCase := range map[string]struct {
+		bindHost string
+		port     int
+		want     string
+	}{
+		"empty bindHost is the untouched wildcard bind": {bindHost: "", port: 8080, want: ":8080"},
+		"loopback override":                             {bindHost: "127.0.0.1", port: 18173, want: "127.0.0.1:18173"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := listenAddress(testCase.bindHost, testCase.port); got != testCase.want {
+				t.Fatalf("listenAddress(%q, %d) = %q, want %q", testCase.bindHost, testCase.port, got, testCase.want)
+			}
+		})
+	}
+}

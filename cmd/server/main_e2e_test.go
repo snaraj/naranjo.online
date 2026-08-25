@@ -147,6 +147,7 @@ func TestRunFailsClosedOnBadConfiguration(t *testing.T) {
 	requireBuiltFrontend(t)
 	for name, environment := range map[string]map[string]string{
 		"invalid PORT":                 {"PORT": "not-a-port"},
+		"invalid LISTEN_ADDRESS":       {"LISTEN_ADDRESS": "0.0.0.0"},
 		"media root while disabled":    {"MEDIA_ROOT": "/never/used"},
 		"unknown media switch":         {"MEDIA_ENABLED": "maybe"},
 		"media enabled but incomplete": {"MEDIA_ENABLED": "true", "MEDIA_ROOT": "/reviewed"},
@@ -195,6 +196,82 @@ func TestRunAcceptsBothPanelRefreshModes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// firstNonLoopbackIPv4 returns a locally-reachable, non-loopback IPv4 address
+// this host actually answers on, or "" if none exists (a minimal sandboxed
+// container may expose only loopback). Callers skip their non-loopback probe
+// rather than fail when this returns "" — an unprovable environment fact is
+// not a guard failure, and this is logged, never silent.
+func firstNonLoopbackIPv4(t *testing.T) string {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Logf("enumerate network interfaces: %v", err)
+		return ""
+	}
+	for _, addr := range addrs {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip4 := ipNet.IP.To4()
+		if ip4 == nil || ip4.IsLoopback() {
+			continue
+		}
+		return ip4.String()
+	}
+	return ""
+}
+
+// TestRunBindsTheDevLoopbackOverrideButNotTheDeployedDefault is the
+// independent listener/reachability proof behind README's local-development
+// binding claim (Daybreak Blue review of PR #173, HIGH finding #2): it boots
+// the real production run() — real TCP, no fakes — under each LISTEN_ADDRESS
+// state and dials the ACTUAL socket from a non-loopback interface, rather
+// than trusting the Addr string alone. Unset must remain reachable (the
+// deployed chart never sets this variable, so this is the production
+// contract, unchanged); "127.0.0.1" — what the Makefile's `run`/`dev` targets
+// set — must refuse that same dial.
+func TestRunBindsTheDevLoopbackOverrideButNotTheDeployedDefault(t *testing.T) {
+	requireBuiltFrontend(t)
+	nonLoopback := firstNonLoopbackIPv4(t)
+
+	t.Run("LISTEN_ADDRESS unset matches the deployed chart contract", func(t *testing.T) {
+		if nonLoopback == "" {
+			t.Skip("host exposes no non-loopback IPv4 interface to probe")
+		}
+		base, _ := bootServer(t, nil)
+		client := &http.Client{Timeout: 2 * time.Second}
+		response, _ := mustGet(t, client, base+"/readyz")
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("GET /readyz status = %d, want 200", response.StatusCode)
+		}
+		port := strings.TrimPrefix(base, "http://127.0.0.1:")
+		conn, err := net.DialTimeout("tcp", nonLoopback+":"+port, 2*time.Second)
+		if err != nil {
+			t.Fatalf("deployed default (LISTEN_ADDRESS unset) must stay reachable on every interface; dial %s:%s: %v", nonLoopback, port, err)
+		}
+		conn.Close()
+	})
+
+	t.Run("LISTEN_ADDRESS=127.0.0.1 refuses the non-loopback interface", func(t *testing.T) {
+		if nonLoopback == "" {
+			t.Skip("host exposes no non-loopback IPv4 interface to probe")
+		}
+		base, _ := bootServer(t, map[string]string{"LISTEN_ADDRESS": "127.0.0.1"})
+		client := &http.Client{Timeout: 2 * time.Second}
+		response, _ := mustGet(t, client, base+"/readyz")
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("GET /readyz status = %d, want 200", response.StatusCode)
+		}
+		port := strings.TrimPrefix(base, "http://127.0.0.1:")
+		conn, err := net.DialTimeout("tcp", nonLoopback+":"+port, 2*time.Second)
+		if err == nil {
+			conn.Close()
+			t.Fatalf("LISTEN_ADDRESS=127.0.0.1 must refuse connections on %s:%s, but one succeeded", nonLoopback, port)
+		}
+	})
 }
 
 // TestRunServesTheSiteAndDrainsOnSIGTERM is the complete production lifecycle

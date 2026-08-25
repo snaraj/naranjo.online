@@ -7,6 +7,21 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.37] - 2026-08-25
+
+### Added
+
+- Local development: a root `Makefile` (`make help`, `deps`, `build`, `run`,
+  `dev`) and an additive, dev-server-only Vite `server` block bound to
+  `127.0.0.1` with a `/api` proxy to the locally built backend, so the owner
+  can run the full app on localhost and give live feedback against real
+  panel data while a UI lane is in flight, instead of judging from
+  screenshots. `make dev` launches a real built backend binary by captured
+  PID (never a backgrounded `go run`, which orphans its listening port) and
+  traps `EXIT`/`INT`/`TERM` to kill exactly that PID, so Ctrl-C always frees
+  the port. `vite build` never reads the new `server` block, so production
+  build output is unaffected.
+
 ## [0.1.36] - 2026-08-24
 
 ### Changed
