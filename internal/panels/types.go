@@ -53,11 +53,29 @@ const (
 	// pipeline exists to deliver — a serve-time outage waiting for real depth
 	// to arrive, produced by a budget chosen before any real content existed.
 	//
-	// 128 KiB is not an arbitrary bigger number: it is the SAME ceiling the
+	// 128 KiB is not an arbitrary bigger number: it is the SAME value the
 	// sealed-payload pipeline already enforces at five stages
-	// (seal.MaxSealedBytes), so a document that can be transported can now
-	// also be served, and the pipeline has one ceiling philosophy end to end
-	// instead of a hidden smaller one at the last step.
+	// (seal.MaxSealedBytes), so the last step no longer hides a SMALLER
+	// ceiling than the four before it.
+	//
+	// Read that claim exactly as written, because the 2026-08-25 round-4
+	// review found the stronger version of it — "a document that can be
+	// transported can now also be served" — stated here and it is FALSE. The
+	// two ceilings are equal in value and different in SUBJECT: this one
+	// bounds the finished envelope the handler writes, seal.MaxSealedBytes
+	// bounds the sealed FILE. The envelope is the payload merged onto the
+	// embedded snapshot plus the envelope scaffolding, so it is strictly
+	// larger than the file it came from — measured at +517 bytes for the
+	// maximal admissible document (87,791 sealed, 88,308 served;
+	// TestTheMaximalDocumentFitsTheRaisedBudget logs both), and larger still
+	// by however much the snapshot contributes. A file sealed at exactly
+	// 131,072 bytes therefore serves OVER this budget and is refused.
+	//
+	// What is true, and is what the equality buys: both ceilings are real,
+	// both refuse rather than truncate, and neither is now the surprising
+	// one. What guarantees safety is not the arithmetic — it is the refusal
+	// path, which keeps the last good response serving whenever the envelope
+	// does not fit (TestDataRootRefusesAnOverBudgetEnvelope).
 	//
 	// This is a budget revision by the budget's owner, not a weakening of a
 	// gate. The bound stays REFUSE-not-truncate at construction and refresh,

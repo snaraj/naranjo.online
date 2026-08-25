@@ -204,7 +204,9 @@ func TestPanelRoutesRefuseEveryMutatingMethod(t *testing.T) {
 //
 // The panel budget moved from 32 KiB to 128 KiB on 2026-08-24 by owner
 // direction; the reasoning and the measurement are recorded at the constant
-// in types.go. The pin below moved WITH it in the same commit, which is the
+// in types.go. Equal to seal.MaxSealedBytes is NOT equal in meaning: see the
+// comment on that comparison below, and the 2026-08-25 round-4 review's
+// finding 7. The pin below moved WITH it in the same commit, which is the
 // point of pinning a budget rather than merely documenting one: the number
 // cannot change quietly, and changing it is a conscious edit that lands in
 // the diff a reviewer reads.
@@ -216,12 +218,29 @@ func TestResponsesStayWithinTheOwnerBudgets(t *testing.T) {
 	if MaxPanelResponseBytes != 131072 {
 		t.Errorf("MaxPanelResponseBytes = %d, want the owner's 128 KiB budget", MaxPanelResponseBytes)
 	}
-	// The serve gate and the transport ceiling are now the SAME number, and
-	// that is the property worth pinning rather than the two values
-	// separately: a document the pipeline can carry is a document the origin
-	// can serve, with no smaller hidden ceiling at the last step.
+	// The serve gate and the transport ceiling hold the same VALUE, and this
+	// pins that — but only the weaker, true property it supports.
+	//
+	// The 2026-08-25 round-4 review found the stronger claim here and in
+	// types.go: that equal values mean "a document the pipeline can carry is
+	// a document the origin can serve". They do not, because the two bounds
+	// measure different bytes. This one bounds the finished ENVELOPE — the
+	// payload merged onto the embedded snapshot, plus the envelope
+	// scaffolding — and seal.MaxSealedBytes bounds the sealed FILE, so the
+	// served bytes are strictly more than the transported ones. The maximal
+	// admissible document measures the gap at +517 bytes (87,791 sealed,
+	// 88,308 served; TestTheMaximalDocumentFitsTheRaisedBudget in
+	// dataroot_test.go logs both), and a snapshot with more rows widens it
+	// without bound. A file sealed at exactly the ceiling is refused at
+	// serve time, and TestDataRootRefusesAnOverBudgetEnvelope drives exactly
+	// that case.
+	//
+	// So what equality buys is narrower and still worth pinning: the LAST
+	// step no longer hides a smaller ceiling than the four before it, which
+	// is the regression this catches. The guarantee is the refusal path, not
+	// the arithmetic.
 	if MaxPanelResponseBytes != seal.MaxSealedBytes {
-		t.Errorf("the panel budget (%d) and the sealed-payload ceiling (%d) have diverged; a document the pipeline transports would be refused at serve time",
+		t.Errorf("the panel budget (%d) and the sealed-payload ceiling (%d) have diverged; the serve step would again be the surprising one",
 			MaxPanelResponseBytes, seal.MaxSealedBytes)
 	}
 	registry := New()
