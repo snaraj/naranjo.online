@@ -128,6 +128,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import os
 import pathlib
 import re
 import sys
@@ -284,8 +285,21 @@ def new_counters():
     }
 
 
-def record_paths(root, counters=None):
-    """Every journal file under root, in one deterministic order.
+# The POSIX file-type bits, spelled here rather than imported from `stat`,
+# because one constant is not worth another module on a surface this narrow.
+FILE_TYPE_MASK = 0o170000
+REGULAR_FILE = 0o100000
+
+
+def admitted_records(root, counters=None):
+    """Every journal file under root, in one deterministic order, each paired
+    with the IDENTITY it had when it was admitted.
+
+    The identity is the point (2026-08-25 round-4 review, finding 4). Every
+    check below happens on a path, and the file is opened later; between
+    those two moments the leaf can be replaced. Carrying (st_dev, st_ino)
+    forward lets the open verify it got the same file rather than trusting
+    that nothing moved.
 
     Sorted because two runs over the same tree must produce the same series,
     and because the running-totals shape reads each file as a SEQUENCE — an
@@ -338,10 +352,18 @@ def record_paths(root, counters=None):
                 if not entry.resolve().is_relative_to(contained_in):
                     counters["symlinks"] += 1
                     continue
+                # The identity of the file THIS check just approved. It
+                # travels with the path so the open can prove it received the
+                # same file, rather than whatever the name points at by then.
+                info = entry.lstat()
+                if (info.st_mode & FILE_TYPE_MASK) != REGULAR_FILE:
+                    counters["symlinks"] += 1
+                    continue
+                identity = (info.st_dev, info.st_ino)
             except OSError:
                 counters["unreadable"] += 1
                 continue
-            admitted.append(entry)
+            admitted.append((entry, identity))
             if len(admitted) > MAX_RECORD_FILES:
                 raise CaptureError(
                     "the transcript tree holds more than the %d file bound" % MAX_RECORD_FILES
@@ -387,12 +409,62 @@ def remember_identity(identity, seen):
     seen.add(identity)
 
 
-def open_record_file(path, counters):
-    """Open one journal file, or tally it as unreadable and return None."""
+def open_record_file(record, counters):
+    """Open one admitted journal file, or tally the refusal and return None.
+
+    DESCRIPTOR-ROOTED AND NO-FOLLOW (2026-08-25 round-4 review, finding 4).
+    The previous version called `Path.open()`, which follows whatever the
+    leaf has become. Every symlink and containment check in the walk happens
+    earlier, on the path, so a leaf replaced between the check and this call
+    was opened and read — the reviewer admitted a regular record, swapped it
+    for a symlink pointing outside the configured root, and watched this
+    function read the outside target. A walk that advertises "no-follow" and
+    then follows at the one moment it matters is not no-follow.
+
+    Three things close it, and each answers a different substitution:
+
+      * `O_NOFOLLOW` refuses at the kernel if the FINAL component is a
+        symlink, so the swap the reviewer performed cannot open at all;
+      * `fstat` on the DESCRIPTOR — not on the path — confirms a regular
+        file, so a fifo or device swapped in is refused rather than read.
+        `O_NONBLOCK` rides along for that case specifically and is not
+        decoration: opening a fifo read-only BLOCKS until a writer appears,
+        so without it a swapped-in fifo would hang this hourly unattended job
+        forever instead of being refused. It has no effect on the regular
+        files this tool actually reads, and the descriptor is closed before
+        any read whenever fstat says the leaf is not one;
+      * the (st_dev, st_ino) identity is compared against what the walk
+        admitted, which catches the case the first two cannot see: an
+        ordinary regular file swapped for a DIFFERENT ordinary regular file,
+        including through a hard link.
+
+    Failures are tallied and never named, exactly as before.
+    """
+    path, identity = record
     try:
-        return path.open("r", encoding="utf-8", errors="replace")
+        descriptor = os.open(
+            path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+        )
     except OSError:
-        # Counted, never named: see the module docstring.
+        # Both the ordinary unreadable case and an O_NOFOLLOW refusal land
+        # here. They are counted together on purpose: distinguishing them
+        # would mean reporting WHY a specific path could not be read, and
+        # this tool's contract is that a file it cannot read is a number.
+        counters["unreadable"] += 1
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if (info.st_mode & FILE_TYPE_MASK) != REGULAR_FILE:
+            os.close(descriptor)
+            counters["symlinks"] += 1
+            return None
+        if (info.st_dev, info.st_ino) != identity:
+            os.close(descriptor)
+            counters["symlinks"] += 1
+            return None
+        return os.fdopen(descriptor, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        os.close(descriptor)
         counters["unreadable"] += 1
         return None
 
@@ -406,9 +478,9 @@ def read_records(root, counters):
     `counters`, never named.
     """
     seen = set()
-    for path in record_paths(root, counters):
+    for record in admitted_records(root, counters):
         counters["files"] += 1
-        handle = open_record_file(path, counters)
+        handle = open_record_file(record, counters)
         if handle is None:
             continue
         with handle:
@@ -434,9 +506,9 @@ def read_running_totals(root, counters):
     diagnostics say how much of the walk was replay and how much was a
     restart, without naming a single file.
     """
-    for path in record_paths(root, counters):
+    for record in admitted_records(root, counters):
         counters["files"] += 1
-        handle = open_record_file(path, counters)
+        handle = open_record_file(record, counters)
         if handle is None:
             continue
         previous = 0

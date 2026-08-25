@@ -153,16 +153,16 @@ def read_category_records(root, counters):
 
     The walk, the de-duplication identity, and the skip rules mirror
     capture_usage_series.read_records EXACTLY — they are now literally the
-    capture tool's own `record_paths` and `open_record_file`, so "mirror" is
+    capture tool's own `admitted_records` and `open_record_file`, so "mirror" is
     shared code rather than a claim two files have to keep true by hand
     (2026-08-24 review finding 1 removed this file's own `os.walk`). The
     parity test in scripts/ci runs both over one fixture tree and requires
     the summed categories to equal the capture tool's totals day for day.
     """
     seen = set()
-    for path in capture.record_paths(root, counters):
+    for record in capture.admitted_records(root, counters):
         counters["files"] += 1
-        handle = capture.open_record_file(path, counters)
+        handle = capture.open_record_file(record, counters)
         if handle is None:
             continue
         with handle:

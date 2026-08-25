@@ -12,7 +12,11 @@ Three contracts carry the weight:
   step must be STRUCTURALLY unable to spawn an agent session or touch a
   network. What enforces that is the kernel sandbox the scheduled job starts
   the producer inside (`scripts/usage-export/producer.sb`, pinned in
-  `test_usage_export_scripts.py`). What THIS file pins is the reviewed import
+  `test_usage_export_scripts.py`) — and the enforced capability is exactly
+  its two denials, no fork and no network. Exec-in-place and filesystem
+  access remain, as the profile says; the ruling is met because a session
+  needs one of the two denied things, not because the step is confined in
+  general. What THIS file pins is the reviewed import
   surface: a closed allowlist held against a refused set, so widening it is a
   conscious edit naming the module that got in. The two are not the same
   claim, and the 2026-08-24 round-3 review is why they are now stated
@@ -205,13 +209,23 @@ class ImportSurfaceTest(unittest.TestCase):
     (`scripts/usage-export/producer.sb`; enforcement pinned, and on Darwin
     EXECUTED, in `test_usage_export_scripts.py`).
 
-    `os` stays REFUSED on the reviewed surface anyway (2026-08-24 round-2
-    finding 1): an earlier pin admitted `os` for the walk and denied the
-    literal `os.<spawn>` attribute spellings, which a computed
+    `os` stays REFUSED in THIS module (2026-08-24 round-2 finding 1): an
+    earlier pin admitted `os` for the walk and denied the literal
+    `os.<spawn>` attribute spellings, which a computed
     `getattr(os, "sys" + "tem")` walked straight past. Keeping the module off
-    the reviewed surface means an `os.` call site cannot appear here without a
-    deliberate widening — a review property, which is what a lint can honestly
-    be.
+    this file's surface means an `os.` call site cannot appear here without a
+    deliberate widening — a review property, which is what a lint can
+    honestly be.
+
+    The capture tool it imports is a documented EXCEPTION as of the
+    2026-08-25 round-4 review (finding 4). Its final transcript open needs
+    `O_NOFOLLOW` and an `fstat` on the descriptor to close a symlink-swap
+    TOCTOU, and Python exposes neither outside `os`; refusing the import
+    would have meant keeping a real escape to preserve a smaller surface that
+    — since round 3 — no longer carries a capability claim anyway, because
+    the enforced boundary is the kernel sandbox. That file carries an
+    enumerated `os.` ATTRIBUTE allowlist in its own suite, and the assertion
+    below pins the exception to exactly one module in exactly one file.
     """
 
     ALLOWED = frozenset(
@@ -346,17 +360,31 @@ class ImportSurfaceTest(unittest.TestCase):
                     node.func.id, {"eval", "exec", "compile", "__import__"}
                 )
 
-    def test_the_transitive_producer_surface_is_equally_incapable(self):
+    def test_the_transitive_producer_surface_stays_reviewed(self):
         # This module imports the capture tool, so the capture tool's import
-        # surface IS part of this program's capability. Pinning it here means
-        # a widening THERE cannot silently give the exporter a reach its own
-        # allowlist forbids.
+        # surface IS part of this program's reviewed surface. Pinning it here
+        # means a widening THERE cannot silently give the exporter a reach
+        # its own allowlist forbids.
+        #
+        # `os` is the one deliberate divergence between the two allowlists
+        # (2026-08-25 round-4 review, finding 4): the capture tool needs
+        # `O_NOFOLLOW` and a descriptor `fstat` for its final transcript
+        # open, which Python exposes nowhere else, and THIS module still
+        # neither imports it nor may name it. The divergence is stated as an
+        # explicit exception rather than by widening this file's refused set,
+        # so it cannot spread by accident — and the capture tool's own suite
+        # holds the enumerated `os.` attribute allowlist that replaced
+        # refusing the import outright.
         capture_tree = ast.parse(
             (_MODULE_PATH.parent / "capture_usage_series.py").read_text(
                 encoding="utf-8"
             )
         )
-        self.assertEqual(imported_roots(capture_tree) & self.REFUSED, frozenset())
+        self.assertEqual(
+            imported_roots(capture_tree) & self.REFUSED, frozenset({"os"})
+        )
+        # And the exception is exactly one module wide, in exactly one file.
+        self.assertNotIn("os", imported_roots(self.tree))
 
 
 class ReduceCategoryLineTest(unittest.TestCase):

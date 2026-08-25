@@ -20,6 +20,7 @@ import ast
 import importlib.util
 import json
 import os
+import shutil
 import pathlib
 import tempfile
 import unittest
@@ -437,15 +438,56 @@ class ImportSurfaceTest(unittest.TestCase):
     doctrine test applies to Go: the module's import surface is a closed
     allowlist, read out of the parsed source rather than out of prose.
 
-    `os` is on the refused list and that is the load-bearing decision here.
-    It is the obvious module for a directory walk, it was in this file until
-    this pin existed, and it carries `system`, `popen`, `fork`, `spawn*` and
-    `exec*` — so an allowlist that admitted it could not keep the promise the
-    ruling makes. `pathlib` does the same walk with none of that reach.
+    `os` WAS on the refused list, and it moved (2026-08-25 round-4 review,
+    finding 4). That is a widening of the reviewed surface and it is recorded
+    here rather than absorbed quietly.
+
+    Why it was refused: `os` carries `system`, `popen`, `fork`, `spawn*` and
+    `exec*`, and while this lint was believed to BE the capability boundary,
+    admitting it would have dissolved the boundary outright.
+
+    Why that reasoning no longer holds: round 3 established the lint cannot
+    carry a capability claim at all — `pathlib` is admitted and re-exports
+    `os`, so `pathlib.os.system` was always reachable and every test here
+    stayed green. The enforced boundary is the kernel sandbox the scheduled
+    push runs the producer inside (`scripts/usage-export/producer.sb`, which
+    denies `process-fork` and `network*`). Against that boundary, importing
+    `os` changes nothing about what this program CAN do.
+
+    Why it had to move: the final open of a transcript file needs
+    `O_NOFOLLOW` and an `fstat` on the descriptor, and Python exposes neither
+    outside `os`. `pathlib.Path.open()` follows whatever the leaf has become,
+    which is the TOCTOU the round-4 review demonstrated. Refusing the import
+    would have meant keeping a real symlink escape to preserve a smaller
+    reviewed surface that no longer carries a security claim — trading a
+    property for an appearance.
+
+    What replaces it: an enumerated ATTRIBUTE allowlist below. Every `os.`
+    attribute this module may name is listed, so a spawn or exec call site
+    cannot appear without a deliberate widening a reader sees. Like the
+    import pin, it is a REVIEW BOUND and not a capability proof — a computed
+    `getattr` walks past it exactly as round 2 showed — and it is written
+    down as one.
     """
 
     ALLOWED = frozenset(
-        {"__future__", "argparse", "datetime", "json", "pathlib", "re", "sys"}
+        {"__future__", "argparse", "datetime", "json", "os", "pathlib", "re", "sys"}
+    )
+
+    # Every `os.` attribute the module is allowed to name. Descriptor-rooted
+    # reading and nothing else: no process, no network, no filesystem
+    # mutation.
+    ALLOWED_OS_ATTRIBUTES = frozenset(
+        {
+            "O_CLOEXEC",
+            "O_NOFOLLOW",
+            "O_NONBLOCK",
+            "O_RDONLY",
+            "close",
+            "fdopen",
+            "fstat",
+            "open",
+        }
     )
 
     # Not an exhaustive index of the standard library — it does not need to
@@ -461,7 +503,6 @@ class ImportSurfaceTest(unittest.TestCase):
             "http",
             "importlib",
             "multiprocessing",
-            "os",
             "pickle",
             "platform",
             "posix",
@@ -522,6 +563,39 @@ class ImportSurfaceTest(unittest.TestCase):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         }
         self.assertEqual(called & self.REFUSED_BUILTINS, set())
+
+    def test_the_os_surface_is_exactly_the_enumerated_attributes(self):
+        # The narrower pin that replaced refusing `os` outright. Equality,
+        # not containment: an attribute arriving and an attribute leaving are
+        # both changes a reader must see.
+        named = {
+            node.attr
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "os"
+        }
+        self.assertEqual(named, set(self.ALLOWED_OS_ATTRIBUTES))
+
+    def test_the_enumerated_os_attributes_cannot_spawn_or_connect(self):
+        # Guards the attribute allowlist against itself, the way the module
+        # allowlist above is guarded: widening it to admit one of these would
+        # otherwise make every other assertion here pass unchanged.
+        forbidden = {
+            "abort", "execl", "execle", "execlp", "execv", "execve", "execvp",
+            "fork", "forkpty", "kill", "popen", "posix_spawn", "posix_spawnp",
+            "putenv", "remove", "rename", "rmdir", "setuid", "spawnl", "spawnv",
+            "startfile", "system", "unlink", "write",
+        }
+        self.assertEqual(set(self.ALLOWED_OS_ATTRIBUTES) & forbidden, set())
+
+    def test_the_os_pin_is_honest_about_what_it_cannot_prove(self):
+        # The round-2 lesson, kept where it applies: an attribute allowlist
+        # is defeated by a computed getattr exactly as an attribute denylist
+        # was. The docstring must say so, because a pin whose limits are
+        # undocumented gets read as a guarantee.
+        self.assertIn("REVIEW BOUND", ImportSurfaceTest.__doc__)
+        self.assertIn("getattr", ImportSurfaceTest.__doc__)
 
     def test_the_pin_is_reading_a_real_import_surface(self):
         # Non-vacuity: an assertion about a set that turned out to be empty
@@ -1051,3 +1125,115 @@ class SpliceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FinalOpenIsDescriptorRootedTest(unittest.TestCase):
+    """2026-08-25 round-4 review, finding 4: the check/open TOCTOU.
+
+    Every symlink, type, and containment check the walk performs happens on a
+    PATH, and the file was opened later with `Path.open()`, which follows
+    whatever the leaf has become. The reviewer admitted a regular record,
+    replaced it with a symlink pointing outside the configured root, and the
+    production open read the outside target. These tests reproduce that swap
+    and require it refused.
+    """
+
+    def setUp(self):
+        self.scratch = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.root = os.path.join(self.scratch, "transcripts")
+        os.makedirs(self.root)
+        self.record = os.path.join(self.root, "session.jsonl")
+        with open(self.record, "w", encoding="utf-8") as handle:
+            handle.write(transcript_line() + "\n")
+        self.outside = os.path.join(self.scratch, "outside.jsonl")
+        with open(self.outside, "w", encoding="utf-8") as handle:
+            handle.write("a private file the producer must never read\n")
+
+    def admit(self):
+        counters = capture_usage_series.new_counters()
+        admitted = capture_usage_series.admitted_records(self.root, counters)
+        self.assertEqual(len(admitted), 1, "the fixture must admit exactly one record")
+        return admitted[0], counters
+
+    def test_the_admitted_record_carries_the_identity_it_was_checked_with(self):
+        (path, identity), _ = self.admit()
+        info = os.lstat(path)
+        self.assertEqual(identity, (info.st_dev, info.st_ino))
+
+    def test_the_happy_path_still_reads_the_admitted_file(self):
+        # Non-vacuity for every refusal below: with nothing swapped, the same
+        # call opens the record and returns its contents.
+        record, counters = self.admit()
+        handle = capture_usage_series.open_record_file(record, counters)
+        self.assertIsNotNone(handle, "an untouched admitted record was refused")
+        with handle:
+            self.assertIn("2026-08-10", handle.read())
+        self.assertEqual(counters["unreadable"], 0)
+        self.assertEqual(counters["symlinks"], 0)
+
+    def test_a_post_check_symlink_swap_is_refused(self):
+        # The reviewer's exact probe: admit a regular file, then replace it
+        # with a symlink out of the tree before the open.
+        record, counters = self.admit()
+        os.unlink(self.record)
+        os.symlink(self.outside, self.record)
+        handle = capture_usage_series.open_record_file(record, counters)
+        if handle is not None:
+            with handle:
+                content = handle.read()
+            self.fail("the final open followed a post-check symlink swap and read %r" % content[:40])
+        self.assertEqual(counters["unreadable"], 1)
+
+    def test_a_post_check_swap_for_a_different_regular_file_is_refused(self):
+        # O_NOFOLLOW alone cannot see this one: the leaf is a perfectly
+        # ordinary regular file, just not the file that was admitted. The
+        # identity check is what catches it.
+        record, counters = self.admit()
+        os.unlink(self.record)
+        with open(self.record, "w", encoding="utf-8") as handle:
+            handle.write("substituted content\n")
+        self.assertIsNone(capture_usage_series.open_record_file(record, counters))
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_a_post_check_hard_link_swap_is_refused(self):
+        # A hard link to the outside file is a regular file AND is not a
+        # symlink, so only the identity comparison refuses it.
+        record, counters = self.admit()
+        os.unlink(self.record)
+        os.link(self.outside, self.record)
+        self.assertIsNone(capture_usage_series.open_record_file(record, counters))
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_a_post_check_fifo_swap_is_refused(self):
+        # Not merely a privacy question: opening a fifo read-only BLOCKS
+        # until a writer appears, so a swapped-in fifo would hang this hourly
+        # unattended job forever. O_NONBLOCK is what makes the open return,
+        # and the descriptor fstat is what refuses the leaf as not a regular
+        # file — before any read. This test hangs against a build without
+        # O_NONBLOCK, which is how it earns its place.
+        record, counters = self.admit()
+        os.unlink(self.record)
+        os.mkfifo(self.record)
+        handle = None
+        try:
+            handle = capture_usage_series.open_record_file(record, counters)
+        except OSError:
+            self.fail("the open raised instead of refusing a non-regular leaf")
+        self.assertIsNone(handle)
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_a_swapped_record_contributes_nothing_to_the_emission(self):
+        # The end-to-end statement, covering the OTHER half of the window: a
+        # leaf swapped before the walk is refused by the walk's own symlink
+        # check, exactly as a leaf swapped after it is refused by the open
+        # above. Either way the run emits nothing derived from outside the
+        # root — here by refusing outright, because a tree whose only record
+        # is unreadable has no series to report and inventing one would be
+        # the failure this tool exists to avoid.
+        os.unlink(self.record)
+        os.symlink(self.outside, self.record)
+        with self.assertRaises(CaptureError):
+            capture_usage_series.capture(
+                self.root, capture_usage_series.FORMAT_MESSAGES
+            )
