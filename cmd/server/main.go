@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -215,27 +216,100 @@ func panelsRefreshConfiguration(value string) (bool, error) {
 	return false, errors.New("PANELS_REFRESH must be true or false")
 }
 
+// canonicalRoot turns an operator-supplied root into the one path the kernel
+// would actually open, and it is the first half of the separation the
+// 2026-08-25 round-4 review found missing at this boundary (finding 2).
+//
+// WHY LEXICAL CLEANING IS NOT ENOUGH, AND WHY THIS RESOLVES SYMLINKS. The
+// chart refuses overlapping data and state roots, but the CHART IS NOT THE
+// BOUNDARY — the binary is. The reviewer ran the exact shipped image with
+// both roots set to one directory and watched it serve the staged document
+// as `ok` while writing its floor marker beside the ciphertext it is
+// supposed to only read. Everything this capability claims about a read-only
+// projection and a separate writable surface was untrue in that
+// configuration, and nothing in the process objected.
+//
+// String comparison cannot answer the question being asked. `/a` and `/a/`
+// and `/a/../a` and `/a//b/..` are one directory spelled four ways, and
+// `filepath.Clean` folds exactly those. A symlink is the same problem one
+// level deeper: two entirely different-looking paths can be the same
+// directory, and no amount of lexical work sees it. EvalSymlinks does, so it
+// is what runs here.
+//
+// Resolution requires the directory to EXIST, which is deliberate rather
+// than incidental: an unopenable root already fails this boot loudly as
+// operator misconfiguration, so a root that cannot be resolved is refused on
+// the same grounds instead of being carried forward as a string that might
+// mean anything later. Messages name the variable and never the path.
+func canonicalRoot(variable, value string) (string, error) {
+	if !strings.HasPrefix(value, "/") {
+		return "", errors.New(variable + " must be an absolute path")
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(value))
+	if err != nil {
+		return "", errors.New(variable + " does not resolve to an existing directory")
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		return "", errors.New(variable + " must name a directory")
+	}
+	return resolved, nil
+}
+
+// separateRoots refuses any overlap between the read-only data root and the
+// writable state root, in BOTH directions, on already-canonical paths.
+//
+// The two roots carry opposite trust and the whole design rests on that: the
+// data root is the pushed sealed series and is mounted read-only in every
+// layer, while the state root is the single place this process may write. If
+// the writable root sits inside the read-only one, the origin can write into
+// the projection it must only read. If the read-only root sits inside the
+// writable one, that is the same breach stated backwards. Equal roots are
+// both at once.
+//
+// The trailing separator on each side is what makes the containment test
+// exact: without it `/mnt/panels-data-two` reads as a child of
+// `/mnt/panels-data`, and the check would refuse a perfectly good sibling
+// while still missing real nesting elsewhere.
+func separateRoots(dataRoot, stateRoot string) error {
+	if dataRoot == stateRoot {
+		return errors.New("PANELS_DATA_STATE and PANELS_DATA_ROOT resolve to the same directory; the writable state may never share the read-only projection")
+	}
+	if strings.HasPrefix(stateRoot, strings.TrimSuffix(dataRoot, "/")+"/") {
+		return errors.New("PANELS_DATA_STATE resolves inside PANELS_DATA_ROOT; the writable state may never live within the read-only projection")
+	}
+	if strings.HasPrefix(dataRoot, strings.TrimSuffix(stateRoot, "/")+"/") {
+		return errors.New("PANELS_DATA_ROOT resolves inside PANELS_DATA_STATE; the read-only projection may never live within the writable state")
+	}
+	return nil
+}
+
 // panelsDataConfiguration validates the optional panels data root path.
 // Empty keeps the capability entirely absent — no root is opened and no loop
 // starts — and a relative path fails the boot instead of being resolved
-// against a working directory nobody chose on purpose.
+// against a working directory nobody chose on purpose. A set path is
+// canonicalized, so everything downstream compares the directory rather than
+// one of its spellings.
 func panelsDataConfiguration(value string) (string, error) {
 	if value == "" {
 		return "", nil
 	}
-	if !strings.HasPrefix(value, "/") {
-		return "", errors.New("PANELS_DATA_ROOT must be an absolute path")
-	}
-	return value, nil
+	return canonicalRoot("PANELS_DATA_ROOT", value)
 }
 
 // panelsDataStateConfiguration validates the optional writable state path
 // the replay-floor marker persists in (2026-08-24 review finding H2). Empty
 // runs the data-root loop with the process-memory floor only — the
-// documented degraded mode. Set, it demands the same absolute-path shape as
-// the data root, and it is meaningless without one: state describes where
-// the data root's floor lives, so state-without-root is a misconfiguration
-// that fails the boot loudly rather than dangling.
+// documented degraded mode. Set, it demands the same absolute, resolvable
+// shape as the data root, and it is meaningless without one: state describes
+// where the data root's floor lives, so state-without-root is a
+// misconfiguration that fails the boot loudly rather than dangling.
+//
+// It additionally refuses any overlap with the data root, in both directions
+// (2026-08-25 round-4 review, finding 2). The chart enforces the same
+// property at render time; both are kept because they guard different
+// boundaries — a chart cannot constrain a hand-run container, and a binary
+// cannot stop a bad values file from being applied.
 func panelsDataStateConfiguration(value, dataRoot string) (string, error) {
 	if value == "" {
 		return "", nil
@@ -243,10 +317,14 @@ func panelsDataStateConfiguration(value, dataRoot string) (string, error) {
 	if dataRoot == "" {
 		return "", errors.New("PANELS_DATA_STATE requires PANELS_DATA_ROOT")
 	}
-	if !strings.HasPrefix(value, "/") {
-		return "", errors.New("PANELS_DATA_STATE must be an absolute path")
+	stateRoot, err := canonicalRoot("PANELS_DATA_STATE", value)
+	if err != nil {
+		return "", err
 	}
-	return value, nil
+	if err := separateRoots(dataRoot, stateRoot); err != nil {
+		return "", err
+	}
+	return stateRoot, nil
 }
 
 // listenPort validates the only runtime listener setting. The stable 8080
