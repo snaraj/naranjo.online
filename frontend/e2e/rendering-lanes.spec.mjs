@@ -996,11 +996,6 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
         n.hasAttribute('data-panel-status')
       ),
       viewport: window.document.documentElement.clientWidth,
-      /* The content column's end edge. The chrome is aligned with the column
-         rather than with the window (issue 134 made the page one centred
-         container), so "in the corner" is a statement about the column and
-         measuring it against the viewport would measure the centring. */
-      columnEnd: window.document.querySelector('main').getBoundingClientRect().right,
       icons: icons.map((node) => {
         const box = node.getBoundingClientRect();
         const style = getComputedStyle(node);
@@ -1052,20 +1047,19 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
       touchFloorPx - subPixel
     );
   }
-  /* The pair sits in the corner and reads as a pair: the same row, adjacent
-     rather than spread across the header, and the last of them against the
-     end edge of the column it belongs to. The arrangement the owner rejected —
-     one control above the title and one below it — fails the first of these by
-     hundreds of pixels. */
-  const [first, second] = observed.icons;
-  expect(Math.abs(first.top - second.top), 'the two icons are stacked, not paired').toBeLessThan(4);
+  /* Pinned to the VIEWPORT'S own corner, not the column's (owner directive,
+     issue 168): "push the icons all the way to the top right, outside of the
+     feed." Measuring against the column would measure the centring instead
+     of the thing that actually changed — the header used to share the
+     column's own inline-size rule and does not any more. A single gutter's
+     worth of gap on each edge is what a fixed corner control with no notch
+     to clear resolves to (env(safe-area-inset-*) is 0 on every engine this
+     lane runs without a device that reports one). */
+  const [icon] = observed.icons;
+  expect(icon.top, `the icon sits ${icon.top}px from the top edge`).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
   expect(
-    second.left - first.right,
-    'the two icons are not beside each other'
-  ).toBeLessThan(touchFloorPx / 2);
-  expect(
-    observed.columnEnd - second.right,
-    `the pair sits ${observed.columnEnd - second.right}px from the column's end edge`
+    observed.viewport - icon.right,
+    `the icon sits ${observed.viewport - icon.right}px from the viewport's end edge`
   ).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
 });
 
@@ -2297,22 +2291,17 @@ test('pointing at a swatch changes its presence and nothing else', async ({ page
     });
   const before = await geometry();
 
-  /* The reference first: the chrome answers a pointer by moving its ink to
-     the brand token, and this reads that answer off the chrome ITSELF rather
-     than from a variable name — so the comparison below is between two
-     rendered colors and cannot pass by both sides agreeing about a token
-     neither of them paints. The reading-mode trigger is the only chrome icon
-     left (issue 179 retired the manual refresh that used to sit beside it);
-     hovering it while its own popover is open is still a plain :hover, since
-     the disclosure opens and closes on press and focus, never on hover. */
+  /* The reference: the chrome answers a pointer by moving its ink to the
+     brand token, and this reads that answer off the chrome ITSELF rather
+     than from a variable name. The reading-mode trigger is the only chrome
+     icon left (issue 179 retired the manual refresh that used to sit beside
+     it), and while its own popover is open it already carries that answer
+     permanently — aria-expanded="true" paints it in the same brand ink hover
+     does, per the shared .icon-button rule — so its color right now, with no
+     further interaction needed, IS the target color a pointed-at swatch has
+     to reach. (Hovering it to look for a CHANGE, tried first, is exactly the
+     comparison that cannot work here: there is nothing left to change.) */
   const chromeIcon = page.locator('.theme-menu .trigger');
-  const chromeRest = await chromeIcon.evaluate((node) => getComputedStyle(node).color);
-  await chromeIcon.hover();
-  await expect
-    .poll(() => chromeIcon.evaluate((node) => getComputedStyle(node).color), {
-      message: 'pointing at a chrome icon no longer moves its ink; there is no family hover left',
-    })
-    .not.toBe(chromeRest);
   const chromeHover = await chromeIcon.evaluate((node) => getComputedStyle(node).color);
 
   /* An UNCHOSEN swatch, deliberately: the chosen one is already at full
@@ -2493,7 +2482,6 @@ test('the reading-mode popover fits the narrowest phone this site supports', asy
       right: box.right,
       viewport: root.clientWidth,
       scrollWidth: root.scrollWidth,
-      columnEnd: window.document.querySelector('main').getBoundingClientRect().right,
     };
   });
   /* Inside the viewport on both edges, and not by making the page scroll to
@@ -2513,7 +2501,11 @@ test('the reading-mode popover fits the narrowest phone this site supports', asy
     observed.width,
     `the popover is ${observed.width}px wide in a ${observed.viewport}px viewport`
   ).toBeLessThan(observed.viewport - gutterPx);
-  expect(observed.columnEnd - observed.right).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
+  // The header pins to the VIEWPORT corner now (owner directive, issue 168),
+  // so the popover it hangs from is measured against the window's own edge
+  // rather than the column's — the two only used to coincide because the
+  // header shared the column's rule, which it no longer does.
+  expect(observed.viewport - observed.right).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
 });
 
 /* ===========================================================================
@@ -3424,7 +3416,7 @@ async function loadAndObserve(context, stored) {
   return { column, ...observed };
 }
 
-test('each column edge carries a handle, flush with the column and quiet until touched', async ({
+test('each column edge carries a handle, flush with the column and painting nothing (issue 177)', async ({
   page
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -3450,23 +3442,19 @@ test('each column edge carries a handle, flush with the column and quiet until t
         max: Number(handle.getAttribute('aria-valuemax')),
         focusable: handle.tabIndex,
         cursor: getComputedStyle(handle).cursor,
-        markWidth: mark.inlineSize === 'auto' ? mark.width : mark.inlineSize,
-        markInk: mark.backgroundColor
+        /* No bar at all now (issue 177): a pseudo-element with no `content`
+           paints nothing regardless of what any other property says, so this
+           is the one property that can prove absence rather than merely
+           echo a resting color that happens to be transparent. */
+        markContent: mark.content
       });
     }
-    const root = getComputedStyle(window.document.documentElement);
-    return {
-      seen,
-      quietInk: root.getPropertyValue('--page-rail-ink').trim(),
-      liveInk: root.getPropertyValue('--page-rail-ink-live').trim(),
-      quietLine: root.getPropertyValue('--page-rail-line').trim(),
-      liveLine: root.getPropertyValue('--page-rail-line-live').trim()
-    };
+    return { seen };
   });
 
   for (const handle of measured.seen) {
-    /* A hit lane, not a hairline: the mark is two pixels and the target is the
-       same 44px every other control on this page clears. */
+    /* A hit lane, not a hairline: the target is the same 44px every other
+       control on this page clears. */
     expect(handle.width, `the ${handle.edge} handle is ${handle.width}px wide`).toBeGreaterThanOrEqual(
       touchFloorPx - subPixel
     );
@@ -3482,17 +3470,8 @@ test('each column edge carries a handle, flush with the column and quiet until t
     expect(handle.min).toBeLessThan(handle.now);
     expect(handle.now).toBeLessThan(handle.max);
     expect(handle.now, 'the reported width is not the width on screen').toBeCloseTo(column.width, 0);
-    /* Quiet at rest: the idle ink token is transparent by design, so the mark
-       paints NOTHING and the hairline that used to sit on the column edge is
-       gone — only the 44px hit lane remains. The geometry is unaffected: the
-       (invisible) mark still measures the hairline width. */
-    expect(handle.markInk, `the ${handle.edge} handle paints at rest`).toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
-    expect(Number.parseFloat(handle.markWidth)).toBeCloseTo(
-      Number.parseFloat(measured.quietLine),
-      1
-    );
+    expect(handle.markContent, `the ${handle.edge} handle still paints a bar`).toBe('none');
   }
-  expect(measured.quietInk, 'the idle rail ink token is no longer transparent').toBe('transparent');
   expect(
     new Set(measured.seen.map((handle) => handle.label)).size,
     'both handles answer to the same name'
@@ -3510,61 +3489,41 @@ test('each column edge carries a handle, flush with the column and quiet until t
   expect(start.left).toBeGreaterThanOrEqual(0);
   expect(end.right).toBeLessThanOrEqual(column.clientWidth + subPixel);
 
-  /* Hover answers in the brand ink, and it is a DIFFERENT ink from the resting
-     one: a mark that painted the same colour in both states would satisfy a
-     one-sided assertion while offering the reader no feedback at all. */
-  const mark = () =>
+  /* Pointing at the edge changes NOTHING visible (issue 177: "no bar, no
+     highlight, no animation"). The cursor is the whole affordance, and it
+     was already asserted above — this proves hovering adds no second one. */
+  const boxAndMark = () =>
     page.evaluate(() => {
-      const style = getComputedStyle(
-        window.document.querySelector('.column-handle[data-edge="end"]'),
-        '::before'
-      );
+      const handle = window.document.querySelector('.column-handle[data-edge="end"]');
+      const box = handle.getBoundingClientRect();
       return {
-        width: style.inlineSize === 'auto' ? style.width : style.inlineSize,
-        ink: style.backgroundColor
+        box: [box.left, box.top, box.width, box.height],
+        markContent: getComputedStyle(handle, '::before').content
       };
     });
-  const resting = measured.seen[0];
+  const resting = await boxAndMark();
   await page.locator('.column-handle[data-edge="end"]').hover();
-  /* Polled rather than read once: the mark fades between the two inks where
-     the reader has not asked for less motion, so a single read taken on the
-     hover would measure the resting colour and call it the hovered one. */
-  await expect
-    .poll(
-      async () => {
-        const now = await mark();
-        return now.ink !== resting.markInk && Number.parseFloat(now.width) > Number.parseFloat(measured.quietLine);
-      },
-      { message: 'the handle never answered the pointer' }
-    )
-    .toBe(true);
-  await expect
-    .poll(async () => Number.parseFloat((await mark()).width), {
-      message: 'the hovered mark never reached its full width'
-    })
-    .toBeCloseTo(Number.parseFloat(measured.liveLine), 1);
-  const hovered = await mark();
-  expect(hovered.ink, 'the handle paints the same ink hovered as at rest').not.toBe(resting.markInk);
-  expect(
-    contrastRatio(hovered.ink, resting.markInk),
-    'the hovered mark is indistinguishable from the resting one'
-  ).toBeGreaterThan(1.2);
+  const hovered = await boxAndMark();
+  expect(hovered, 'hovering the handle changed something it must not').toEqual(resting);
 
-  /* Focus wears the site's own ring — the same width, token and offset as
-     every other focusable thing on the page. */
+  /* Focus is the one exception, and it is the SITE'S own ring — the same
+     width, token and offset as every other focusable thing on the page —
+     never a bar of the handle's own invention. This is the "invisible until
+     addressed" non-pointer affordance the owner asked to keep on issue 168:
+     a mouse or touch drag never reaches :focus-visible, so it never sees it. */
   await page.locator('.column-handle[data-edge="end"]').focus();
   const focused = await page.evaluate(() => {
-    const ring = getComputedStyle(window.document.querySelector('.column-handle[data-edge="end"]'));
-    const icon = getComputedStyle(window.document.querySelector('.icon-button'));
+    const handle = window.document.querySelector('.column-handle[data-edge="end"]');
+    const ring = getComputedStyle(handle);
     return {
-      handle: [ring.outlineWidth, ring.outlineStyle, ring.outlineColor, ring.outlineOffset],
-      accent: getComputedStyle(window.document.documentElement).getPropertyValue('--color-accent').trim(),
-      iconFocusable: icon.outlineColor
+      ring: [ring.outlineWidth, ring.outlineStyle, ring.outlineColor, ring.outlineOffset],
+      markContent: getComputedStyle(handle, '::before').content
     };
   });
-  expect(focused.handle[1], 'a focused handle draws no ring').not.toBe('none');
-  expect(Number.parseFloat(focused.handle[0])).toBeGreaterThanOrEqual(2);
-  expect(Number.parseFloat(focused.handle[3])).toBeGreaterThanOrEqual(2);
+  expect(focused.ring[1], 'a focused handle draws no ring').not.toBe('none');
+  expect(Number.parseFloat(focused.ring[0])).toBeGreaterThanOrEqual(2);
+  expect(Number.parseFloat(focused.ring[3])).toBeGreaterThanOrEqual(2);
+  expect(focused.markContent, 'focus painted a bar; the ring alone is the affordance now').toBe('none');
 });
 
 test('a real pointer drag moves the edge exactly as far as the pointer', async ({ page }) => {
@@ -3579,6 +3538,10 @@ test('a real pointer drag moves the edge exactly as far as the pointer', async (
      locator.focus(), whose wait is bounded only by the test timeout.) */
   await expect(handles(page)).toHaveCount(2);
   const before = await columnBox(page);
+  /* The header icon, before anything is dragged — the reference for the
+     decoupling check below (owner directive, issue 168: "I don't like how
+     they move when I drag the feed in and out"). */
+  const iconBefore = await page.evaluate(() => window.document.querySelector('.icon-button').getBoundingClientRect());
 
   await dragHandle(page, 'end', 160);
   const after = await columnBox(page);
@@ -3591,6 +3554,14 @@ test('a real pointer drag moves the edge exactly as far as the pointer', async (
   expect(after.width - before.width, 'a centred column must grow from both sides').toBeCloseTo(320, 0);
   expect(after.left - before.left).toBeCloseTo(-160, 0);
   expect(after.scrollWidth).toBe(after.clientWidth);
+  /* The header pinned to the viewport corner, decoupled from the column
+     entirely (issue 168): the exact drag above that just moved the column's
+     own edge by 160px must move the icon by nothing at all. */
+  const iconAfter = await page.evaluate(() => window.document.querySelector('.icon-button').getBoundingClientRect());
+  expect(
+    { top: iconAfter.top, right: iconAfter.right },
+    'dragging the feed moved the header icon; it must be independent of the column'
+  ).toEqual({ top: iconBefore.top, right: iconBefore.right });
 
   /* The start handle mirrors it, and undoes it. */
   await dragHandle(page, 'start', 160);
@@ -4017,13 +3988,33 @@ test('the drag writes once a frame and never stalls on layout', async ({ page })
   expect(swept.moves, `120 pointer moves took ${swept.moves.toFixed(1)}ms`).toBeLessThan(250);
 });
 
-test('the reading-mode popover still fits the column at its narrowest', async ({ page }) => {
-  /* The popover is anchored to the end edge of the header, and the header IS
-     the column — so the narrowest column the handle can reach is the width the
-     popover has to live in. It was measured against a 320px PHONE before this
-     feature existed; a reader can now produce that same 288px column on a
-     desktop, with a popover that phone never had to fit beside anything. */
+// SUPERSEDED (owner directive, issue 168). This lane used to REQUIRE the
+// popover to fit inside whatever the reader had dragged the column down to,
+// because the header used to take the column's own width and the popover
+// hangs off the header. That coupling is exactly what issue 168 removed: the
+// header pins to the viewport corner now, independent of the column
+// entirely, so the correct claim inverts — narrowing the column to its
+// minimum must move the popover NOT AT ALL, never merely "fit" inside it.
+test('the reading-mode popover is unaffected by the column, even at its narrowest (issue 168)', async ({
+  page
+}) => {
   await page.setViewportSize({ width: railsBreakpointPx, height: 900 });
+
+  await visit(page);
+  await openReadingModes(page);
+  const shipped = await page.evaluate(() => {
+    const box = window.document.querySelector('#reading-mode-menu').getBoundingClientRect();
+    // Rounded to the nearest pixel: two separate page loads can each settle a
+    // fraction of a pixel apart (font-metric timing, not a real position
+    // change), and the invariant under test is "the same place", not
+    // "byte-identical floats".
+    return { left: Math.round(box.left), right: Math.round(box.right), top: Math.round(box.top) };
+  });
+
+  // A fresh visit rather than closing and reopening the first one: the
+  // column-width override below must apply before the popover ever opens,
+  // and a fresh load is also what keeps this test from depending on how the
+  // disclosure happens to dismiss.
   await visit(page);
   await expect(handles(page)).toHaveCount(2);
   await page.evaluate(() => {
@@ -4033,38 +4024,25 @@ test('the reading-mode popover still fits the column at its narrowest', async ({
     );
   });
   await settled(page);
+  const column = await columnBox(page);
+  expect(column.width, 'the column did not reach its minimum').toBeLessThan(300);
+
   await openReadingModes(page);
   const observed = await page.evaluate(() => {
-    const popover = window.document.querySelector('#reading-mode-menu').getBoundingClientRect();
-    const column = window.document.querySelector('main').getBoundingClientRect();
+    const box = window.document.querySelector('#reading-mode-menu').getBoundingClientRect();
     const root = window.document.documentElement;
     return {
-      popover: { left: popover.left, right: popover.right, width: popover.width },
-      column: { left: column.left, right: column.right, width: column.width },
+      popover: { left: Math.round(box.left), right: Math.round(box.right), top: Math.round(box.top) },
       swatches: window.document.querySelectorAll('#reading-mode-menu button').length,
       scrollWidth: root.scrollWidth,
       clientWidth: root.clientWidth
     };
   });
-  /* Every choice still rendered, the whole popover still on the page, and the
-     page still not scrolling sideways. (Measured at the shipped minimum: a
-     270px popover inside a 288px column, 414px clear of the page edge.) */
-  expect(observed.swatches, 'the reading modes lost a swatch in a narrow column').toBe(5);
-  expect(observed.column.width, 'the column did not reach its minimum').toBeLessThan(300);
+
+  expect(observed.swatches, 'the reading modes lost a swatch at the narrowest column').toBe(5);
   expect(
-    observed.popover.left,
-    `the popover starts ${observed.popover.left}px from the page edge`
-  ).toBeGreaterThanOrEqual(0);
-  expect(observed.popover.right).toBeLessThanOrEqual(observed.clientWidth + subPixel);
-  /* And it belongs to its column rather than merely to the window: a popover
-     hanging past the card it opens over reads as a control that came loose. */
-  expect(
-    observed.popover.right,
-    'the popover no longer ends on the column edge it is anchored to'
-  ).toBeLessThanOrEqual(observed.column.right + subPixel);
-  expect(
-    observed.popover.width,
-    `a ${observed.popover.width}px popover does not fit a ${observed.column.width}px column`
-  ).toBeLessThanOrEqual(observed.column.width);
+    observed.popover,
+    'narrowing the column moved the popover; it is meant to be independent of the column now (issue 168)'
+  ).toEqual(shipped);
   expect(observed.scrollWidth).toBe(observed.clientWidth);
 });

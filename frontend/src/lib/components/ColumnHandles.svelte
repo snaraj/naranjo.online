@@ -44,10 +44,6 @@
   let fits = $state(false);
   let width = $state(0);
   let bounds = $state<ColumnBounds>({ min: 0, max: 0 });
-  // Both marks go live during a drag, not just the grabbed one: both edges are
-  // moving, and lighting only the one under the finger would make the other
-  // look like it had come loose.
-  let dragging = $state(false);
 
   // One drag at a time, tracked by pointer id so a second finger arriving
   // mid-gesture cannot steer the column.
@@ -157,7 +153,6 @@
     } catch {
       /* Uncapturable pointer; the gesture proceeds without capture. */
     }
-    dragging = true;
     // The whole page stops selecting text and wears the resize cursor for the
     // duration, so the gesture reads as one action rather than as a control
     // the pointer keeps sliding off.
@@ -191,7 +186,6 @@
     drag = null;
     capturedBy = null;
     pointerId = -1;
-    dragging = false;
     document.documentElement.removeAttribute('data-column-resizing');
     // Persisted once, at the end. Writing storage on every frame would put a
     // synchronous disk-backed call inside the drag's hot path.
@@ -270,7 +264,6 @@
     <div
       class="column-handle"
       data-edge={handle.edge}
-      data-live={dragging || undefined}
       role="separator"
       tabindex="0"
       aria-orientation="vertical"
@@ -290,53 +283,26 @@
 {/if}
 
 <style>
-  /* The rails' geometry is in styles.css, in the same rule as the column
+  /* The rail's geometry is in styles.css, in the same rule as the column
      itself, because a handle that computed the column's edge from its own copy
-     of that expression would be a second derivation free to drift. What is
-     here is what the handle LOOKS like, which is the part that belongs to the
-     handle.
+     of that expression would be a second derivation free to drift.
 
-     Quiet until touched, which is what "seamless" has to mean for a control
-     that is always on screen: at rest the mark paints NOTHING, because the
-     ink token resolves to transparent, so there is no hairline sitting on
-     the column edge for a reader who is not interacting with it. The 44px
-     lane around it is still fully reserved and still invisible; the live
-     mark — hover or keyboard focus, in the brand ink every other hover on
-     this page answers in — is the only paint this control ever puts on the
-     page. */
+     Bare drag, with no visible bar at rest OR during the gesture (owner
+     directive, issue 177: "no bar, no animation... the edge is simply
+     draggable and the width follows the pointer"; issue 168: "I don't like...
+     how the ugly bars show when I drag it, lets also remove those bars").
+     This element paints NOTHING itself, ever — the cursor (col-resize,
+     styles.css) over the 44px hot zone is the whole pointer affordance, and
+     the drag itself is instant with zero easing (columnWidth.ts's
+     dragColumnRem tracks the pointer 1:1, and nothing here adds a transition
+     on top of that). The only visible mark this control ever draws is the
+     ordinary site focus ring below, and it is invisible until a keyboard
+     reader actually focuses the handle — the non-pointer affordance the
+     owner asked to keep, in the one state a mouse or touch drag never
+     reaches. */
   .column-handle {
     -webkit-user-select: none;
     user-select: none;
-  }
-
-  .column-handle::before {
-    content: '';
-    position: absolute;
-    inset-block: 0;
-    inline-size: var(--page-rail-line);
-    background: var(--page-rail-ink);
-  }
-
-  /* The mark sits on the INNER edge of each lane — against the column, where
-     the boundary actually is — rather than in the middle of a 44px strip of
-     empty margin. */
-  .column-handle[data-edge='start']::before {
-    inset-inline-end: 0;
-  }
-
-  .column-handle[data-edge='end']::before {
-    inset-inline-start: 0;
-  }
-
-  /* Hover, focus and the drag itself are one state as far as the mark is
-     concerned: the reader is acting on the width, so the edge answers in the
-     brand ink every other hover on this page uses and thickens enough to be
-     unmistakable without becoming furniture. */
-  .column-handle:hover::before,
-  .column-handle:focus-visible::before,
-  .column-handle[data-live]::before {
-    inline-size: var(--page-rail-line-live);
-    background: var(--page-rail-ink-live);
   }
 
   /* The site's focus ring, to the letter — the same width, the same token and
@@ -346,13 +312,5 @@
   .column-handle:focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
-  }
-
-  @media (prefers-reduced-motion: no-preference) {
-    .column-handle::before {
-      transition:
-        background-color 120ms ease-out,
-        inline-size 120ms ease-out;
-    }
   }
 </style>

@@ -207,26 +207,30 @@
   --page-column-max: 100rem;
   --page-gutter: 1rem;
   --page-stack-gap: 0.75rem;
-  --page-header-height: 3.5rem;
 
-  /* The resize rails. --page-rail-size is a HIT LANE, not a visible object:
-     44px of grab area reserved beside each column edge, the same floor every
-     other control on this page clears. The quiet state paints NOTHING — no
-     hairline sits at the column edge until a pointer or a focus ring arrives
-     — because a mark that is always there reads as a border the page never
-     asked for, not as a control waiting to be found. The 44px lane is still
-     exactly where it was; only the resting paint is gone.
-
-     The inks resolve through the reading-mode roles like every other color
-     here: the quiet state is transparent in every mode, so a control that
-     nobody is touching is invisible everywhere at once, and the live state
-     is the same brand mark that already answers for hover on the nav links
-     and the icon controls. No reading mode knows this rail exists. */
+  /* --page-rail-size is a HIT LANE, not a visible object: 44px of grab area
+     reserved beside each column edge, the same floor every other control on
+     this page clears. It paints NOTHING at rest or during a drag (owner
+     directive, issue 177: "no bar, no highlight, no animation" — the
+     resting/live ink pair this rail used to carry is retired along with the
+     mark it drew). The affordance is the cursor (col-resize, below) over the
+     hot zone, plus the ordinary site focus ring for a keyboard reader
+     (ColumnHandles.svelte) — invisible until addressed either way, per the
+     owner's a11y instruction on issue 168. */
   --page-rail-size: 2.75rem;
-  --page-rail-line: 2px;
-  --page-rail-line-live: 4px;
-  --page-rail-ink: transparent;
-  --page-rail-ink-live: var(--color-brand);
+
+  /* The header's own fixed position (owner directive, issue 168): pinned to
+     the viewport's top-end corner, independent of the column's width, so
+     dragging the feed never moves it. Insets rather than a bare page-gutter
+     literal so a notch or a home indicator is cleared the same way the rest
+     of the page already clears one; the second declaration of each is the
+     same progressive-with-a-plain-base pattern #app's own safe-area padding
+     uses below, kept in one rule rather than a second one only @supports
+     could add. */
+  --header-inset-inline: var(--page-gutter);
+  --header-inset-inline: max(var(--page-gutter), env(safe-area-inset-right));
+  --header-inset-block: var(--page-gutter);
+  --header-inset-block: max(var(--page-gutter), env(safe-area-inset-top));
 
   /* The feed-card token layer (owner directive, issue 134). The page is
      becoming a feed of many content types, so the card is a primitive with
@@ -613,10 +617,11 @@ textarea {
   }
 }
 
-/* The header and the hero both take the column's width so the controls sit
-   directly over the cards they act on.
+/* The column's own width, decoupled from the header (owner directive, issue
+   168: the header pins to the viewport corner now, independent of whatever
+   the reader drags this to).
 
-   Three declarations now, and the outer two are the reason a dragged width
+   Three declarations, and the outer two are the reason a dragged width
    cannot break this page. The knob is clamped HERE, in the browser,
    independently of whatever wrote it: a value under the floor is widened back
    to the floor, a value over the ceiling is narrowed back to it, and because
@@ -627,7 +632,6 @@ textarea {
    less its gutters and its safe-area insets. The script that writes the knob
    clamps too; neither clamp is the other's excuse, and each alone still holds
    the page. */
-#app > .page-header,
 #app > main {
   inline-size: min(var(--page-column-width), 100%);
   min-inline-size: min(var(--page-column-min), 100%);
@@ -702,7 +706,6 @@ html[data-column-resizing] {
    have. A frontend test recomputes 67.5 from the four tokens it is made of,
    so the breakpoint cannot drift away from what it means. */
 @media (min-width: 67.5rem) {
-  #app > .page-header,
   #app > main {
     max-inline-size: min(var(--page-column-max), calc(100% - 2 * var(--page-rail-size)));
   }
@@ -713,15 +716,26 @@ html[data-column-resizing] {
 }
 
 /* The chrome row is styled HERE rather than inside PageHeader.svelte because
-   the static shell renders the same empty row and must reserve the identical
-   height — a component-scoped rule would style only the hydrated one, and the
-   controls arriving would push the page down. */
+   the static shell renders the same empty row, before any icon has hydrated
+   into it — a component-scoped rule would style only the hydrated one.
+
+   Pinned to the viewport's top-end corner (owner directive, issue 168):
+   "push the icons all the way to the top right, outside of the feed... I
+   don't like how they move when I drag the feed in and out." Fixed
+   positioning is what makes that true — the header no longer takes the
+   column's width or sits in its flow at all, so nothing the reader drags
+   can move it, and it needs no reserved row height either, because fixed
+   chrome never occupies one. The insets clear the same safe areas #app
+   pads by. z-index reuses the popover's own layer: the header CONTAINS the
+   reading-mode trigger, so anything that must out-rank the resize rails
+   (--layer-rail) already has to out-rank it by exactly that much. */
 .page-header {
+  position: fixed;
+  inset-block-start: var(--header-inset-block);
+  inset-inline-end: var(--header-inset-inline);
+  z-index: var(--layer-menu);
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  min-block-size: var(--page-header-height);
 }
 
 /* The column, and — since the resize handles are drawn against its edges —

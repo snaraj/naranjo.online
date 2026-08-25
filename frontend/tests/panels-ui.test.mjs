@@ -146,7 +146,14 @@ test('the panels are one centered column, not a rail', () => {
   assert.match(pageSection, /\{#if section\.layout === 'stack'\}\s*<div class="panel-stack">/);
   assert.match(styles, /\.panel-stack\s*\{[^}]*display:\s*grid/);
   assert.match(styles, /\.panel-stack\s*\{[^}]*gap:\s*var\(--page-stack-gap\)/);
-  assert.match(styles, /#app > \.page-header,\s*\n#app > main\s*\{[^}]*inline-size:\s*min\(var\(--page-column-width\), 100%\)/);
+  // The header no longer shares this rule (owner directive, issue 168): it
+  // pinned to the viewport corner and decoupled from the column entirely.
+  assert.match(styles, /#app > main\s*\{[^}]*inline-size:\s*min\(var\(--page-column-width\), 100%\)/);
+  assert.doesNotMatch(
+    styles,
+    /#app > \.page-header/,
+    'the header still shares a rule with the column it was told to decouple from'
+  );
 });
 
 // The page is ONE CENTRED COLUMN and everything stacks down it (owner
@@ -345,13 +352,21 @@ test('the refresh control is gone, and nothing it owned survives as dead code', 
 // reserved gutters. Every one of them existed because chrome FLOATED over the
 // document: the bar over the token panel, the open rail over the token panel,
 // the reading-mode control buried under the rail, the rail and bar tied at one
-// layer, and 100vh floors. Removing the fixed positioning removes the whole
-// class — so the pin is now the absence of fixed chrome, which is a stronger
-// guarantee than any arbitration between overlapping things.
+// layer, and 100vh floors. Removing the fixed positioning removed the whole
+// class — until issue 168 put ONE piece of chrome back: the header, now
+// pinned to the viewport corner on purpose. So the pin below is narrowed to
+// name that one exception rather than lifted; every OTHER float is still
+// exactly as forbidden as it was.
 test('no page chrome floats over the document', () => {
+  // The header's own rule is carved out of styles.css before the blanket
+  // sweep below, and checked separately underneath — it is the one deliberate
+  // exception now, not an absence to prove.
+  const headerRule = /\.page-header\s*\{([^}]*)\}/.exec(styles);
+  assert.ok(headerRule, 'the page header rule is not where this pin expects it');
+  const stylesWithoutHeader = styles.slice(0, headerRule.index) + styles.slice(headerRule.index + headerRule[0].length);
   // styles.css is in this sweep deliberately and is the load-bearing entry:
-  // the page header's own rule lives THERE, not in a component, so a scan of
-  // components alone would let the exact drift this PR is named for return
+  // most page chrome's rule lives THERE, not in a component, so a scan of
+  // components alone would let the exact drift this test is named for return
   // with the suite green.
   for (const [name, source] of Object.entries({
     pageHeaderSource,
@@ -362,7 +377,7 @@ test('no page chrome floats over the document', () => {
     pageSection,
     blockHost,
     shell,
-    styles
+    styles: stylesWithoutHeader
   })) {
     assert.doesNotMatch(
       // Comment-blind, for the reason experience.test.mjs records about its
@@ -374,8 +389,23 @@ test('no page chrome floats over the document', () => {
       `${name} floats over the page again; fixed chrome is what made the controls drift`
     );
   }
-  /* ONE narrow, named exception, stated here where the owner will read it:
-     the hover-detail primitive (owner directive, 2026-08-24). It is fixed so
+  /* TWO narrow, named exceptions, stated here where the owner will read them.
+
+     The page header (owner directive, issue 168): "push the icons all the
+     way to the top right, outside of the feed... I don't like how they move
+     when I drag the feed in and out." Fixed positioning is the fix rather
+     than the defect this time, because it is what decouples the header from
+     the column it used to share a rule with — the exact coupling that made
+     it drift. It stays safe for a different reason than the detail below:
+     it is real interactive chrome, so it keeps the pointer and stays visible,
+     but it reserves no layout space (nothing above it needs to hold a gap
+     open any more) and clears the same safe-area insets #app does, through
+     its own inset tokens. */
+  assert.match(headerRule[1], /position:\s*fixed/, 'the header is no longer pinned to the viewport corner; this exception is stale and should go');
+  assert.match(headerRule[1], /inset-block-start:\s*var\(--header-inset-block\)/);
+  assert.match(headerRule[1], /inset-inline-end:\s*var\(--header-inset-inline\)/);
+
+  /* The hover-detail primitive (owner directive, 2026-08-24). It is fixed so
      it can follow the cursor, and fixed positioning is what makes its
      containment structural — a fixed box sits outside the document's
      scrollable overflow, so no position it takes can drag the page sideways,
@@ -396,8 +426,9 @@ test('no page chrome floats over the document', () => {
     /--page-[a-z-]*gutter|reserve/,
     'the detail reserves page space; a transient overlay must cost the layout nothing'
   );
-  // With nothing floating there is nothing to reserve space for, so the
-  // gutter tokens that existed only to hold space open must stay gone.
+  // With nothing floating but real chrome there is nothing left to reserve
+  // space for, so the gutter tokens that existed only to hold space open for
+  // the OLD, defective floats must stay gone.
   assert.doesNotMatch(styles, /--page-activity-gutter|--panel-activity-reserve/);
   // The page pads itself by the safe-area insets ONCE, for everything inside
   // it — each fixed element used to have to do this for itself.
@@ -426,21 +457,21 @@ test('no page chrome floats over the document', () => {
   }
 });
 
-// The header's one remaining control sits in the top-end corner, in flow, and
-// is an ICON rather than a button (owner directive, issue 127): no disc, no
+// The header's one remaining control is pinned to the viewport's top-end
+// corner (owner directive, issue 168), OUTSIDE the feed column, and is an
+// ICON rather than a button (owner directive, issue 127): no disc, no
 // border, no fill. What is NOT negotiable is the box — 44px on both axes
 // stays, because a bare glyph is no easier to hit than a framed one. A
 // second icon — the manual refresh — used to sit beside it and is gone now
 // (issue 179), which is what turns "two plain icons" into one.
-test('the page header is one plain icon in the top-end corner', () => {
+test('the page header is one plain icon pinned to the viewport corner', () => {
   assert.match(app, /<PageHeader \/>/);
   assert.match(pageHeaderSource, /<ThemeMenu \/>/);
   assert.doesNotMatch(pageHeaderSource, /<button/, 'the header composes controls, it does not spell them');
   assert.match(themeMenu, /class="icon-button trigger"/);
-  assert.match(styles, /\.page-header\s*\{[^}]*justify-content:\s*flex-end/);
-  // The static shell reserves the row, so the controls arriving at hydration
-  // fill held-open space instead of pushing the page down.
-  assert.match(styles, /\.page-header\s*\{[^}]*min-block-size:\s*var\(--page-header-height\)/);
+  // The static shell renders the identical empty header tag, so the exact
+  // same fixed-position rule applies to it before a single icon hydrates —
+  // there is no in-flow row left to reserve or to have arrive late.
   assert.match(fallbackShell, /<header class="page-header"><\/header>/);
   // The chrome is gone, and its absence is the pin: a circle, a border or a
   // fill on this rule is what the owner rejected, and each would come back
