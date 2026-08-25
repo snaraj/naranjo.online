@@ -7,6 +7,37 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.39] - 2026-08-25
+
+### Added
+
+- Observability (issue #183): the origin now emits OpenTelemetry-conformant
+  structured logs to stdout with the standard library only — one JSON
+  object per line via `log/slog` (text on an interactive terminal),
+  attribute names following OTel semantic conventions, tuned by
+  `LOG_FORMAT`/`LOG_LEVEL` whose unrecognized values fail closed to the
+  default with one WARN naming the value. Every record carries the
+  resource identity (`service.name`, plus `service.version` and
+  `vcs.ref.head.revision` when the build embeds them — never invented).
+  Each request produces exactly one completion record
+  (`http.request.method`, `url.path`, `http.response.status_code`,
+  `http.response.body.size`, `network.protocol.version`, `request_id`,
+  `duration_ms`) at INFO/WARN/ERROR by status class, with an
+  injection-safe `X-Request-Id` contract (strict inbound shape or a
+  generated identity; always set on the response) and spec-exact W3C
+  `traceparent` handling — passed through untouched, never minted, its
+  `trace_id`/`span_id` correlating every record for that request. The
+  panel-refresh loops narrate themselves: per-cycle INFO summaries,
+  failure WARNs with the error chain and exact next-retry instant,
+  per-source degrade WARNs, and DEBUG upstream detail naming bare hosts
+  only. Privacy is pinned by tests: URL paths only (never query
+  strings), no client IPs at any level, `user_agent.original` at debug
+  only, no upstream URLs, credentials, or payload bytes, and no media
+  root path. The full lifecycle logs — startup summary, shutdown signal,
+  drain outcome, final exit — and README's new "Observability contract"
+  section documents the Logs Data Model mapping, the correlation rules,
+  and the collector/SDK roadmap.
+
 ## [0.1.38] - 2026-08-25
 
 ### Changed
