@@ -77,8 +77,14 @@ func requestLog(logger *slog.Logger, next http.Handler) http.Handler {
 				slog.Int64("bytes", recorder.bytes),
 				slog.String("proto", r.Proto),
 			)
-			if traceID := traceIdentity(r.Header.Get(traceparentHeader)); traceID != "" {
-				attrs = append(attrs, slog.String("trace_id", traceID))
+			if traceID, spanID := traceContext(r.Header.Get(traceparentHeader)); traceID != "" {
+				// Named for the OpenTelemetry log data model's TraceId/SpanId
+				// pair: span_id is the traceparent's parent-id — the caller's
+				// span, the closest honest correlate an origin that mints no
+				// spans of its own can report. A collector reading this
+				// stream can attach every record to the distributed trace
+				// with no SDK in the binary.
+				attrs = append(attrs, slog.String("trace_id", traceID), slog.String("span_id", spanID))
 			}
 			// The User-Agent is a debugging detail, not routine telemetry: it
 			// rides only when the operator explicitly runs at debug.
@@ -120,21 +126,23 @@ func requestIdentity(inbound string) string {
 	return hex.EncodeToString(identity)
 }
 
-// traceIdentity extracts the trace-id from a W3C traceparent header, or ""
-// when the header is absent or not exactly valid. Validation is fail-closed
-// to the spec's version-00 shape: lowercase hex, exact field lengths, a
-// version that is not the forbidden ff, and non-zero trace and parent ids.
-// The header itself is never modified — mesh-ready passthrough with no
-// tracing dependency.
-func traceIdentity(value string) string {
+// traceContext extracts the trace-id and parent span-id from a W3C
+// traceparent header, or "","" when the header is absent or not exactly
+// valid. Validation is fail-closed to the spec's version-00 shape:
+// lowercase hex, exact field lengths, a version that is not the forbidden
+// ff, and non-zero trace and parent ids. The header itself is never
+// modified — mesh-ready passthrough with no tracing dependency — and the
+// two values land in the record as the OTel log data model's TraceId/SpanId
+// correlation pair.
+func traceContext(value string) (string, string) {
 	if !traceparentShape.MatchString(value) {
-		return ""
+		return "", ""
 	}
 	version, traceID, parentID := value[:2], value[3:35], value[36:52]
 	if version == "ff" || traceID == zeroTraceID || parentID == zeroParentID {
-		return ""
+		return "", ""
 	}
-	return traceID
+	return traceID, parentID
 }
 
 // Unwrap exposes the wrapped writer so http.ResponseController — and through

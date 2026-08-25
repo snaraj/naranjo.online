@@ -230,13 +230,14 @@ func TestHostileHeadersCannotSplitOrForgeRecords(t *testing.T) {
 }
 
 // TestTraceparentPassthroughAndTraceIDLogging pins the mesh-ready contract:
-// a valid W3C traceparent is left untouched on the request and its trace-id
-// lands in the record; every invalid shape — wrong version, zero ids,
-// uppercase hex, truncation — yields no trace_id at all.
+// a valid W3C traceparent is left untouched on the request and its
+// trace-id/parent-id pair lands in the record as the OTel log data model's
+// TraceId/SpanId correlation; every invalid shape — wrong version, zero
+// ids, uppercase hex, truncation — yields neither attribute.
 func TestTraceparentPassthroughAndTraceIDLogging(t *testing.T) {
 	t.Parallel()
 	const valid = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-	t.Run("valid header logs its trace id and is not modified", func(t *testing.T) {
+	t.Run("valid header logs its trace and span ids and is not modified", func(t *testing.T) {
 		t.Parallel()
 		site, out := captureSite(t, slog.LevelInfo)
 		request := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -245,6 +246,9 @@ func TestTraceparentPassthroughAndTraceIDLogging(t *testing.T) {
 		record := singleRecord(t, out.String())
 		if record["trace_id"] != "4bf92f3577b34da6a3ce929d0e0e4736" {
 			t.Errorf("trace_id = %v, want the header's trace-id field", record["trace_id"])
+		}
+		if record["span_id"] != "00f067aa0ba902b7" {
+			t.Errorf("span_id = %v, want the header's parent-id field", record["span_id"])
 		}
 		if got := request.Header.Get("Traceparent"); got != valid {
 			t.Errorf("traceparent was modified to %q; passthrough must leave it untouched", got)
@@ -269,8 +273,9 @@ func TestTraceparentPassthroughAndTraceIDLogging(t *testing.T) {
 					request.Header.Set("Traceparent", header)
 				}
 				site.ServeHTTP(httptest.NewRecorder(), request)
-				if record := singleRecord(t, out.String()); record["trace_id"] != nil {
-					t.Errorf("invalid traceparent %q logged trace_id %v, want none", header, record["trace_id"])
+				record := singleRecord(t, out.String())
+				if record["trace_id"] != nil || record["span_id"] != nil {
+					t.Errorf("invalid traceparent %q logged trace_id %v span_id %v, want neither", header, record["trace_id"], record["span_id"])
 				}
 			})
 		}
