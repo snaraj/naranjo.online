@@ -140,6 +140,36 @@ describe('loadPanel', () => {
     });
     assert.equal(calls, 1);
   });
+
+  // "A data-retrieval failure logs an error … it is not an expected state a
+  // visitor manages with a manual refresh control" (owner directive, issue
+  // 179, which retired that control). Executed against a captured
+  // console.error rather than trusted from the shape of the catch block.
+  it('logs an error for every fault, and stays silent on a real read (issue 179)', async () => {
+    const faults = [
+      () => Promise.reject(new Error('offline')),
+      () => jsonResponse({}, 500),
+      () => jsonResponse({ wrong: 'shape' })
+    ];
+    const originalError = console.error;
+    const logged = [];
+    console.error = (...args) => logged.push(args);
+    try {
+      for (const fetcher of faults) {
+        await loadPanel('boss-log', fetcher);
+      }
+      assert.equal(logged.length, faults.length, 'every fault must be logged, not swallowed');
+      for (const [message] of logged) {
+        assert.match(String(message), /"boss-log"/, 'the logged message must name the panel that failed');
+      }
+
+      logged.length = 0;
+      await loadPanel('boss-log', () => jsonResponse(goodEnvelope));
+      assert.deepEqual(logged, [], 'a successful read must log nothing at all');
+    } finally {
+      console.error = originalError;
+    }
+  });
 });
 
 describe('loadPanelIndex', () => {

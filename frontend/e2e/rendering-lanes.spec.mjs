@@ -1028,9 +1028,12 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
      status the badge used to read from. */
   expect(observed.badges, 'a freshness badge is rendering again').toBe(0);
   expect(observed.provenance, 'a card lost the status the badge used to display').toBe(true);
-  /* Both controls, together, in the top-end corner — not one above the title
-     and one below it. */
-  expect(observed.icons.length, 'the page chrome is not two icons').toBe(2);
+  /* The one remaining control, in the top-end corner. A second — the manual
+     refresh — used to sit beside it and is retired now (issue 179); before
+     that, the reading mode alone sat above the title while the refresh
+     headed the panel stack below it (issue 127). Neither stacked arrangement
+     survives. */
+  expect(observed.icons.length, 'the page chrome is not one icon').toBe(1);
   for (const icon of observed.icons) {
     expect(icon.top, `"${icon.label}" is not in the top row`).toBeLessThan(64);
     expect(
@@ -2180,7 +2183,7 @@ const readFamily = (page) =>
       const style = getComputedStyle(node);
       const glyph = node.querySelector('svg');
       const glyphBox = glyph === null ? null : glyph.getBoundingClientRect();
-      const stroked = node.querySelector('.chip, .ray, .chip-edge, .refresh-glyph path');
+      const stroked = node.querySelector('.chip, .ray, .chip-edge');
       const hit = node.getBoundingClientRect();
       return {
         label: node.getAttribute('aria-label'),
@@ -2197,39 +2200,36 @@ const readFamily = (page) =>
       };
     };
     return {
+      /* The chrome's own line weight used to be readable off a second,
+         independently-stroked header icon (the manual refresh, retired by
+         issue 179); with one filled chrome icon left, the token it and the
+         swatches both derive from is the only source of truth. */
+      chromeStroke: Number.parseFloat(
+        getComputedStyle(window.document.documentElement).getPropertyValue('--chrome-icon-stroke')
+      ),
       chrome: [...window.document.querySelectorAll('.icon-button')].map(painted),
       swatches: [...window.document.querySelectorAll('.swatch')].map(painted),
     };
   });
 
-test('a reading-mode swatch is painted at the same scale as the chrome icons beside it', async ({
+test('a reading-mode swatch is painted at the same scale as the chrome icon beside it', async ({
   page,
 }) => {
   await visit(page);
   await openedAndStill(page);
-  const { chrome, swatches } = await readFamily(page);
-  expect(chrome.length, 'the page chrome is not two icons').toBe(2);
+  const { chrome, swatches, chromeStroke } = await readFamily(page);
+  // One chrome icon now (issue 179 retired the manual refresh that used to
+  // sit beside the reading-mode trigger).
+  expect(chrome.length, 'the page chrome is not one icon').toBe(1);
   expect(swatches.length, 'the popover renders no swatches').toBe(5);
   expect(
     swatches.filter((swatch) => swatch.pressed).length,
     'the popover shows no chosen mode; the rest/active split below would prove nothing'
   ).toBe(1);
 
-  /* The reference, measured rather than assumed: both header icons must agree
-     with each other, or "the parent grammar" is not one thing. */
   const [reference] = chrome;
-  for (const icon of chrome) {
-    expect(icon.glyph, `"${icon.label}" paints no glyph`).not.toBeNull();
-    expect(icon.glyph.width, `the two chrome icons paint different glyph widths`).toBeCloseTo(
-      reference.glyph.width,
-      1
-    );
-    expect(icon.glyph.height).toBeCloseTo(reference.glyph.height, 1);
-  }
-  /* The chrome's line weight comes from the stroked one; the filled moon has
-     none, so it is read from the refresh glyph and it must be a real number. */
-  const chromeStroke = chrome.map((icon) => icon.strokeWidth).find((width) => width > 0);
-  expect(chromeStroke, 'no chrome icon is drawn as a stroked line icon any more').toBeGreaterThan(0);
+  expect(reference.glyph, `"${reference.label}" paints no glyph`).not.toBeNull();
+  expect(chromeStroke, 'the shared --chrome-icon-stroke token could not be read').toBeGreaterThan(0);
 
   for (const swatch of swatches) {
     /* The eye gets the chrome's glyph — this is the whole complaint, and the
@@ -2301,16 +2301,19 @@ test('pointing at a swatch changes its presence and nothing else', async ({ page
      the brand token, and this reads that answer off the chrome ITSELF rather
      than from a variable name — so the comparison below is between two
      rendered colors and cannot pass by both sides agreeing about a token
-     neither of them paints. */
-  const refresh = page.getByRole('button', { name: 'Refresh all trackers' });
-  const chromeRest = await refresh.evaluate((node) => getComputedStyle(node).color);
-  await refresh.hover();
+     neither of them paints. The reading-mode trigger is the only chrome icon
+     left (issue 179 retired the manual refresh that used to sit beside it);
+     hovering it while its own popover is open is still a plain :hover, since
+     the disclosure opens and closes on press and focus, never on hover. */
+  const chromeIcon = page.locator('.theme-menu .trigger');
+  const chromeRest = await chromeIcon.evaluate((node) => getComputedStyle(node).color);
+  await chromeIcon.hover();
   await expect
-    .poll(() => refresh.evaluate((node) => getComputedStyle(node).color), {
+    .poll(() => chromeIcon.evaluate((node) => getComputedStyle(node).color), {
       message: 'pointing at a chrome icon no longer moves its ink; there is no family hover left',
     })
     .not.toBe(chromeRest);
-  const chromeHover = await refresh.evaluate((node) => getComputedStyle(node).color);
+  const chromeHover = await chromeIcon.evaluate((node) => getComputedStyle(node).color);
 
   /* An UNCHOSEN swatch, deliberately: the chosen one is already at full
      presence, so hovering it would prove nothing about the state change. */

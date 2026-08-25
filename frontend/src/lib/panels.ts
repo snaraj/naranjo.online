@@ -256,7 +256,12 @@ const defaultFetcher: PanelFetcher = (url) => globalThis.fetch(url);
 
 /* loadPanel performs exactly one same-origin request — no retries, no
  * backoff; the origin already serves prepared bytes and a failure simply
- * renders as unavailable until the next natural page load. */
+ * renders as unavailable until the next natural page load. It also logs why
+ * (owner directive, issue 179): the page carries no manual refresh control
+ * any more, so a failure has to say so somewhere instead of silently
+ * degrading and waiting for a visitor to notice and press a button that no
+ * longer exists. The non-ok branch throws into the same catch precisely so
+ * there is one call site for that, not two. */
 export async function loadPanel<Data = unknown>(
   id: string,
   fetcher: PanelFetcher = defaultFetcher
@@ -265,10 +270,11 @@ export async function loadPanel<Data = unknown>(
   try {
     const response = await fetcher(url);
     if (!response.ok) {
-      return unavailablePanel(id);
+      throw new Error(`panel "${id}" responded ${response.status}`);
     }
     return parsePanelEnvelope(await response.json()) as PanelEnvelope<Data>;
-  } catch {
+  } catch (error) {
+    console.error(`panel "${id}" failed to load`, error);
     return unavailablePanel(id);
   }
 }
@@ -340,35 +346,17 @@ export interface PanelWatchOptions {
 }
 
 /* PanelWatcher is what watchPanel hands back. Calling it stops the loop for
- * good — the whole contract every caller had before — and refresh() forces one
- * immediate read past both the cadence and the hidden-page check, which is
- * what a visitor pressing the panel's refresh control needs. It is a callable
+ * good — the whole contract every caller had before — and refresh() forces
+ * one immediate read past both the cadence and the hidden-page check; the
+ * watcher rides it itself for the visibility catch-up, and it is exposed so
+ * any future caller with a reason to force a read can join the same
+ * single-flight request rather than opening a second one. It is a callable
  * carrying a method rather than an object so no existing call site changes
  * shape, and refresh() resolves only when the read it is riding has settled,
- * so a control can stay busy for exactly as long as the request is. */
+ * so a caller can stay busy for exactly as long as the request is. */
 export interface PanelWatcher {
   (): void;
   refresh(): Promise<void>;
-}
-
-/* liveWatchers is every watcher currently running. The page's own refresh
- * control has to force ONE read across all mounted panels, and it cannot ask
- * the components for their watchers without every panel growing a prop that
- * exists only to be handed back up. A watcher joins this set when it starts
- * and leaves when it stops, so the set is exactly what is mounted — an
- * unmounted panel can never be refreshed, and a panel added later needs no
- * registration code of its own. */
-const liveWatchers = new Set<PanelWatcher>();
-
-/* refreshPanels forces every mounted panel to re-read and resolves when the
- * last of them has settled, so a control can stay busy for exactly as long as
- * the slowest read really is. It rides each panel's own single-flight read:
- * pressing the page control while a panel is already reading JOINS that read
- * instead of opening a second, so this costs the origin at most one request
- * per panel however hard it is pressed. A page with nothing mounted resolves
- * immediately — an empty refresh is a no-op, never an error. */
-export function refreshPanels(): Promise<void> {
-  return Promise.all(Array.from(liveWatchers, (watcher) => watcher.refresh())).then(() => undefined);
 }
 
 /* watchPanel keeps one panel current: an immediate first read, then one read
@@ -419,19 +407,14 @@ export function watchPanel<Data = unknown>(
   read(true);
   const handle = host.schedule(() => read(false), options.intervalMs ?? panelRefreshIntervalMs);
   const unsubscribe = host.onVisible(() => read(true));
-  /* The watcher leaves the live set inside its own stop, so the page-level
-     refresh follows mounting exactly — with no unmount bookkeeping in any
-     component, and no way for a stopped watcher to be woken by it. */
   const watcher: PanelWatcher = Object.assign(
     () => {
       stopped = true;
       host.cancel(handle);
       unsubscribe();
-      liveWatchers.delete(watcher);
     },
     { refresh: () => read(true) }
   );
-  liveWatchers.add(watcher);
   return watcher;
 }
 

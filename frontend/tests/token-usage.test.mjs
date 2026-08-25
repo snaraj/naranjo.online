@@ -184,11 +184,11 @@ describe('UsageTracker source contract', () => {
     assert.match(component, /import PanelShell from '\.\/PanelShell\.svelte'/);
     assert.match(component, /<PanelShell \{title\} \{status\} \{generatedAt\}>/);
     assert.match(component, /<\/PanelShell>/);
-    // Refreshing is one gesture for the whole stack, not a per-card decision,
-    // so this panel hands its shell no refresher and holds no watcher handle
-    // of its own — the block host enrols it through watchPanel, and
-    // RefreshAll drives them all through the same single-flight read the
-    // periodic poll uses.
+    // No panel offers a manual refresh any more (owner directive, issue 179):
+    // this panel hands its shell no refresher and holds no watcher handle of
+    // its own — the block host enrols it through watchPanel, which keeps
+    // itself current, and a failed read logs an error instead of waiting on
+    // a visitor to press a control that does not exist.
     assert.doesNotMatch(component, /\{refresh\}|const refresh =|watcher/);
     // The envelope facts ride the adapter into the shell unchanged, and the
     // empty-title fallback the unavailablePanel case needs is preserved.

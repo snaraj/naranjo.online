@@ -58,7 +58,6 @@ const reducedContextNote = fullCheckout
 const [
   app,
   shell,
-  refreshAll,
   pageHeaderSource,
   fallbackShell,
   statTracker,
@@ -79,7 +78,6 @@ const [
 ] = await Promise.all([
   read('../src/App.svelte'),
   read('../src/lib/components/PanelShell.svelte'),
-  read('../src/lib/components/RefreshAll.svelte'),
   read('../src/lib/components/PageHeader.svelte'),
   read('../index.html'),
   read('../src/lib/components/StatTracker.svelte'),
@@ -273,9 +271,12 @@ test('no card announces its own age, and none keeps a control', () => {
   //
   // What this comment used to say next — "reaching a watcher is what makes a
   // control a refresher, whatever it is named" — is FALSE and was retracted.
-  // A card needs no watcher handle at all: refreshPanels() is module-level.
-  // The refreshPanels assertion below exists precisely because that sentence
-  // was wrong, so the sentence is not left standing above it.
+  // A card needs no watcher handle at all: refreshPanels() used to be
+  // module-level. It is gone now too (owner directive, issue 179), along with
+  // the page-header control that was its only caller — so this loop still
+  // guards a panel growing ANY refresher of its own, whether by reaching a
+  // watcher directly or by reaching for a page-level helper that no longer
+  // exists to reach.
   // PanelShell is swept with the cards, not instead of them: it is the ONE
   // component that renders for all three, so a control added there appears
   // on every card at once — the widest version of the regression these
@@ -296,72 +297,47 @@ test('no card announces its own age, and none keeps a control', () => {
       `${name} still hands a refresher to its shell`
     );
     assert.doesNotMatch(source, /\.refresh\(\)/, `${name} drives a watcher refresh of its own`);
-    // The module-level refresher is the third door, and the one the delta
-    // review actually walked through: a card that imports refreshPanels()
-    // needs no watcher handle at all, so pinning "reaches a watcher" missed
-    // it completely. Zero panel component references it today, and the
-    // refresh control belongs to the page header for all of them at once.
     assert.doesNotMatch(
       source,
       /refreshPanels/,
-      `${name} reaches the all-panels refresher; one control refreshes every tracker, and it lives in the page header`
+      `${name} reaches for the retired all-panels refresher; no control refreshes any tracker any more (issue 179)`
     );
   }
 });
 
-// One control for the whole page, and it sits with the other one. The
-// refresh used to head the panel stack on the argument that it acts on the
-// data rather than on the document; the owner overruled that argument on what
-// it looked like (issue 127), because it put one control above the centered
-// title and one below it. Both now sit together in the header's corner.
-test('one refresh serves every tracker, and it sits with the reading mode', () => {
-  assert.match(pageHeaderSource, /import RefreshAll from '\.\/RefreshAll\.svelte'/);
+// The manual "refresh all trackers" control is gone entirely (owner
+// directive, issue 179): "the site is expected to be responsive on its own;
+// a data-retrieval failure logs an error … it is not an expected state a
+// visitor manages with a manual refresh control." It used to sit beside the
+// reading mode in the header's corner (issue 127); the reading mode is now
+// the header's only control, and nothing it left behind survives as
+// reachable code.
+test('the refresh control is gone, and nothing it owned survives as dead code', () => {
+  assert.equal(
+    existsSync(new URL('../src/lib/components/RefreshAll.svelte', import.meta.url)),
+    false,
+    'the refresh component must not come back'
+  );
+  assert.doesNotMatch(pageHeaderSource, /RefreshAll/, 'the header still names the retired control');
   assert.match(
     pageHeaderSource,
-    /<header class="page-header">\s*<RefreshAll \/>\s*<ThemeMenu \/>\s*<\/header>/,
-    'both chrome icons sit in the header, reading mode last so its popover opens inside the page'
+    /<header class="page-header">\s*<ThemeMenu \/>\s*<\/header>/,
+    'the reading mode is the header’s only control now'
   );
-  // The stack is panels and nothing else, so a card added later inherits a
-  // column of cards rather than a column with a control stuck on top.
-  assert.doesNotMatch(app, /RefreshAll/, 'the refresh must not head the panel stack again');
-  assert.match(refreshAll, /aria-label="Refresh all trackers"/);
-  // It renders no wrapper: the header owns the row, and a control that also
-  // positioned itself would fight it.
-  assert.doesNotMatch(refreshAll, /class="refresh-all"/, 'the control must not lay itself out');
-  assert.match(refreshAll, /refreshPanels\(\)/);
-  // One source pin survives here, and deliberately: a watcher LEAVING the
-  // live set is unobservable through the public API, because stop() also sets
-  // the stopped flag and read() short-circuits on it — so a watcher that
-  // stayed in the set would behave identically while the set grew without
-  // bound. The delta review caught exactly this: deleting the delete was red
-  // before and green after, a real net loss. Behavior proves the rest; only
-  // the leak needs the pin.
-  assert.match(
-    panelsSource,
-    /liveWatchers\.delete\(watcher\)/,
-    'a stopped watcher must leave the live set, or the set grows without bound'
-  );
-  // What refreshPanels actually DOES is proven behaviorally in
-  // panel-refresh.test.mjs — that it reads every mounted panel, that a
-  // stopped panel leaves the set, that an empty page is a no-op, and that a
-  // second press joins the read in flight. Source pins were tried here first
-  // and were wrong for the job: every one of them matches an empty function
-  // body, which is exactly the regression that would matter, because the
-  // button would still render, still go busy, and still settle while
-  // refreshing nothing.
-  // In flight it is disabled, announces itself busy, and releases in a
-  // finally so a failed read cannot latch it off forever.
-  assert.match(refreshAll, /aria-busy=\{busy\}/);
-  assert.match(refreshAll, /disabled=\{busy\}/);
-  assert.match(refreshAll, /\} finally \{[\s\S]*?busy = false;/);
-  assert.match(refreshAll, /@media \(prefers-reduced-motion: reduce\)/);
-  // 44px minimum touch target, from the one shared icon-control rule. BOTH
-  // axes are pinned: a rule that bounded only the width would let the shared
-  // control shrink to an unhittable strip and take every icon button on the
-  // page with it.
-  assert.match(refreshAll, /class="icon-button"/);
-  assert.match(styles, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
-  assert.match(styles, /\.icon-button\s*\{[^}]*block-size:\s*2\.75rem/);
+  assert.doesNotMatch(app, /RefreshAll/, 'the refresh must not head the panel stack again either');
+  // The page-wide fan-out it drove is gone with it: no export, no set, no
+  // caller anywhere in the tree that was just swept above.
+  assert.doesNotMatch(panelsSource, /refreshPanels|liveWatchers/, 'the all-panels refresher survives in panels.ts');
+  // Its own forced-read primitive is a different, independently useful thing
+  // and stays (proven behaviorally in panel-refresh.test.mjs): watchPanel
+  // still exposes refresh() on the watcher it returns, and still rides it
+  // itself for the visibility catch-up.
+  assert.match(panelsSource, /refresh:\s*\(\)\s*=>\s*read\(true\)/);
+  // And a failed read no longer degrades silently: loadPanel now logs the
+  // fault it is about to hand back as an honest unavailable envelope, which
+  // is the replacement for a visitor pressing a button that no longer
+  // exists. panels.test.mjs executes this rather than trusting the shape.
+  assert.match(panelsSource, /console\.error\(/);
 });
 
 // Five collisions were confirmed on real viewports before the previous fix
@@ -378,7 +354,6 @@ test('no page chrome floats over the document', () => {
   // components alone would let the exact drift this PR is named for return
   // with the suite green.
   for (const [name, source] of Object.entries({
-    refreshAll,
     pageHeaderSource,
     themeMenu,
     activityTracker,
@@ -442,7 +417,7 @@ test('no page chrome floats over the document', () => {
   });
   assert.ok(layers[1] > layers[0], `the stacking scale is not ordered: ${layers.join(' < ')}`);
   assert.match(themeMenu, /z-index:\s*var\(--layer-menu,/);
-  for (const [name, source] of Object.entries({ refreshAll, pageHeaderSource, themeMenu, activityTracker })) {
+  for (const [name, source] of Object.entries({ pageHeaderSource, themeMenu, activityTracker })) {
     assert.doesNotMatch(
       source,
       /z-index:\s*\d/,
@@ -451,16 +426,17 @@ test('no page chrome floats over the document', () => {
   }
 });
 
-// Both page-level controls sit in the top-end corner, in flow, and they are
-// ICONS rather than buttons (owner directive, issue 127): no disc, no border,
-// no fill. What is NOT negotiable is the box — 44px on both axes stays,
-// because a bare glyph is no easier to hit than a framed one.
-test('the page header is two plain icons in the top-end corner', () => {
+// The header's one remaining control sits in the top-end corner, in flow, and
+// is an ICON rather than a button (owner directive, issue 127): no disc, no
+// border, no fill. What is NOT negotiable is the box — 44px on both axes
+// stays, because a bare glyph is no easier to hit than a framed one. A
+// second icon — the manual refresh — used to sit beside it and is gone now
+// (issue 179), which is what turns "two plain icons" into one.
+test('the page header is one plain icon in the top-end corner', () => {
   assert.match(app, /<PageHeader \/>/);
   assert.match(pageHeaderSource, /<ThemeMenu \/>/);
   assert.doesNotMatch(pageHeaderSource, /<button/, 'the header composes controls, it does not spell them');
   assert.match(themeMenu, /class="icon-button trigger"/);
-  assert.match(refreshAll, /class="icon-button"/);
   assert.match(styles, /\.page-header\s*\{[^}]*justify-content:\s*flex-end/);
   // The static shell reserves the row, so the controls arriving at hydration
   // fill held-open space instead of pushing the page down.
@@ -997,7 +973,6 @@ test('a token source with no series renders no graph, and one with a series stil
 test('panel sources stay local-origin', () => {
   for (const [name, source] of Object.entries({
     shell,
-    refreshAll,
     statTracker,
     panelsSource,
     iconsSource,

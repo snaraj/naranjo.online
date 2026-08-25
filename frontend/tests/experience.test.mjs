@@ -1009,16 +1009,23 @@ test('every reading mode declares the identical token set', () => {
  * "These icons are not matching the small, sleek, translucid, appearance of
  * the parent icons, they should not look this overwhelming." The reading-mode
  * popover's five swatches were 2.75rem filled discs, each rimmed and — when
- * chosen — ringed a further two pixels, sitting directly under two 18px line
- * glyphs that wear no chrome at all. They are one family now, and these pins
+ * chosen — ringed a further two pixels, sitting directly under an 18px line
+ * glyph that wears no chrome at all. They are one family now, and these pins
  * are what stops the two halves of it drifting apart again.
  *
- * The drift they guard is a real one rather than a theoretical one, because
- * the family is expressed in two different places: the header icons carry
- * their size and line weight as SVG ATTRIBUTES, which no custom property can
- * reach, while the swatches read tokens. So the attributes are read back out
- * of the chrome components here and compared with the tokens the swatches
- * consume — and the browser lanes measure the same pair in a real engine.
+ * A second chrome icon used to sit beside that glyph — the manual refresh
+ * control's stroked arrow — and its own hardcoded stroke-width attribute was
+ * this suite's second, independent data point for the swatch stroke pin
+ * below. It is gone now (owner directive, issue 179: the site is responsive
+ * on its own, and a failed read logs an error rather than waiting on a
+ * visitor to press something), so only the reading-mode trigger remains, and
+ * the stroke pin rests on the token alone.
+ *
+ * The drift this still guards is real rather than theoretical: the trigger
+ * carries its size as an SVG ATTRIBUTE, which no custom property can reach,
+ * while the swatches read a token. So the attribute is read back out of the
+ * chrome component here and compared with the token the swatches consume —
+ * and the browser lanes measure the same pair in a real engine.
  * ======================================================================== */
 
 // The chrome's own glyph, as the markup states it: the size attribute both
@@ -1071,22 +1078,13 @@ test('the reading-mode swatches are drawn in the header chrome grammar', () => {
      made of, in the opposite direction. */
   const glyphPx = lengthInPx(glyphSize);
   assert.ok(glyphPx !== null, `--chrome-icon-glyph-size is "${glyphSize}", which this pin cannot measure`);
-  for (const file of ['lib/components/RefreshAll.svelte', menuFile]) {
-    const painted = chromeGlyphAttributes(componentSources[file]);
-    assert.equal(
-      painted.width,
-      glyphPx,
-      `${file} paints its chrome glyph at ${painted.width}px while the shared token says ${glyphPx}px`
-    );
-    assert.equal(painted.height, glyphPx, `${file} paints a chrome glyph that is not square`);
-  }
-  const chromeStroke = /stroke-width="([\d.]+)"/.exec(componentSources['lib/components/RefreshAll.svelte']);
-  assert.ok(chromeStroke, 'the refresh glyph is no longer a stroked line icon; the family has no line weight left to share');
+  const painted = chromeGlyphAttributes(componentSources[menuFile]);
   assert.equal(
-    Number(chromeStroke[1]),
-    Number(strokeWidth),
-    `the refresh glyph is drawn at ${chromeStroke[1]} while the shared token says ${strokeWidth}`
+    painted.width,
+    glyphPx,
+    `${menuFile} paints its chrome glyph at ${painted.width}px while the shared token says ${glyphPx}px`
   );
+  assert.equal(painted.height, glyphPx, `${menuFile} paints a chrome glyph that is not square`);
 
   /* The swatch wears the chrome's absence of chrome. Each of these is one
      innocent-looking declaration away from returning, and together they are
