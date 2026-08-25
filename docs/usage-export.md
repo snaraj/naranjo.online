@@ -30,15 +30,23 @@ keeps the last good payload and says so in the envelope `status`.
 
 ## Security properties, stage by stage
 
-- **Capture cannot spawn or connect — enforced by the kernel, not by a
-  lint.** The push script starts `scripts/export_usage_series.py` inside the
-  sandbox profile `scripts/usage-export/producer.sb`, which denies
+- **Capture cannot fork and cannot reach a network — enforced by the kernel,
+  not by a lint.** The push script starts `scripts/export_usage_series.py`
+  inside the sandbox profile `scripts/usage-export/producer.sb`, which denies
   `process-fork` and `network*`. For the whole walk of the raw records no
   process can be created by any spelling and no network endpoint can be
-  opened, so a capture can never start a session or spend anything. There is
-  no flag, environment variable, or configuration key that runs the producer
-  unconfined: a workstation without the sandbox refuses to walk raw records
-  at all.
+  opened, so a capture cannot reach a vendor API and cannot spend anything.
+  There is no flag, environment variable, or configuration key that runs the
+  producer unconfined: a workstation without the sandbox refuses to walk raw
+  records at all.
+
+  Those two denials are the whole enforced capability, and the profile is
+  otherwise `(allow default)`: exec IN PLACE and filesystem access remain,
+  which `producer.sb` states in full and at length. The residual is small —
+  the sandbox is inherited across an in-place exec, so exec buys no
+  capability back, and the walk reads records the producer must read
+  anyway — but it is real, so the claim here stops where the enforcement
+  does.
 
   This replaced an overstatement (2026-08-24 security review, round 3,
   finding 1). The guarantee used to rest on an AST test
@@ -113,10 +121,17 @@ keeps the last good payload and says so in the envelope `status`.
   dependency is unlanded: this work stays Draft until website-infrastructure
   #212 merges and releases AND the #141/#189 live convergence receipt posts
   on the pull request. What changed is the direction of the gap.
-- **One writer, by construction.** `replicaCount` defaults to 1 whenever
-  `panels.data` is enabled, the state claim is `ReadWriteOncePod`, and the
-  render REFUSES `replicaCount > 1` with the capability on (2026-08-24
-  round-3 review, finding 3). The floor marker is a single-writer structure
+- **One writer, and the mechanism named honestly.** `replicaCount` defaults
+  to 1 whenever `panels.data` is enabled and the render REFUSES
+  `replicaCount > 1` with the capability on (2026-08-24 round-3 review,
+  finding 3). That refusal and the origin's locked monotonic compare-and-swap
+  are the whole enforcement. The state claim is `ReadWriteOnce`, which is
+  node-scoped and restricts nothing on a one-node cluster; round 3 claimed
+  `ReadWriteOncePod` instead, and the 2026-08-25 round-4 review established
+  that Kubernetes supports that mode for CSI volumes only while this target
+  has zero CSI drivers and zero StorageClasses, so it named a guarantee
+  nothing enforced. It becomes the correct mode the day the platform gains a
+  CSI driver. The floor marker is a single-writer structure
   and two pods writing it concurrently is a race whose loser silently lowers
   the floor. The availability tradeoff is stated in full in
   `chart/values.yaml`; the short version is that this is one personal site on
@@ -173,12 +188,20 @@ keeps the last good payload and says so in the envelope `status`.
     discard the error) let a pod serve an instant no restart could remember,
     after which an older but perfectly authentic file was re-admitted as
     fresh.
-  - A marker that is genuinely ABSENT is a first boot and is benign. A
-    marker that EXISTS and cannot be trusted — unreadable, oversized,
-    unauthentic, unparsable, or dated in the future — refuses the tick and
-    reports `stale` instead of quietly reverting to the embedded floor. The
-    load is retried every tick, so repairing or removing the marker recovers
-    the pod without a restart.
+  - A marker that is genuinely ABSENT — with no `token-usage.floor.init`
+    tombstone beside it — is a first boot and is benign. Any other unhappy
+    state (a marker that exists and cannot be trusted; a marker gone from a
+    directory whose tombstone says it was used; a marker sealed under a
+    rotated key) refuses the tick and reports `stale` instead of quietly
+    reverting to the embedded floor. There is exactly ONE way out of those
+    states, [the floor reset ceremony](#the-floor-reset-ceremony-and-what-it-costs),
+    and it is written once, below. Pushing a fresh document does NOT clear
+    them: the store loads the persisted floor BEFORE it looks at any
+    document, and a load that errors refuses the store — which is the point,
+    since overwriting a marker nobody could read is the silent floor reset
+    the mechanism exists to prevent. Removing the marker alone does not clear
+    them either; that is the exact state the tombstone was added to refuse.
+    The ceremony needs no restart: the load is retried every tick.
 
 ## The payload ceiling — one number, five stages
 
@@ -229,11 +252,25 @@ and is checked by reading, so treat a disagreement between it and the suite as
 the prose being wrong.
 
 Raising the origin's own read from 64 KiB is therefore a unification of five
-disagreeing numbers, not a weakening. The tighter gate is downstream and
+disagreeing numbers, not a weakening. The BINDING gate is downstream and
 unchanged: the merged payload must still fit the panels response budget
 (`MaxPanelResponseBytes`) before it is served, so a document under this
 ceiling is not promised to be servable — only to be transported and parsed
 without truncation.
+
+The owner's 2026-08-24 raise set that response budget to the same VALUE as
+this ceiling, and equal values are easy to misread as one ceiling. They are
+not (2026-08-25 round-4 review, finding 7). The two bound different bytes:
+this one bounds the sealed FILE, the response budget bounds the finished
+ENVELOPE — the payload merged onto the embedded snapshot, plus the envelope
+around it — so the served bytes always exceed the transported ones. The
+maximal document the origin admits measures the gap at +517 bytes (87,791
+sealed, 88,308 served; `TestTheServedEnvelopeExceedsTheFileItCameFrom` in
+`internal/panels/dataroot_test.go` logs both), and a larger snapshot widens
+it. A file sealed at exactly 131,072 bytes is therefore refused at serve
+time. What equality buys is only that the last step no longer hides a
+SMALLER ceiling than the four before it; what makes an over-budget document
+safe is the refusal itself, which keeps the last good response serving.
 
 ## Workstation setup
 
@@ -501,21 +538,27 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | panel `status: stale`, sealed file gone from the data dir | the runtime document this pod had already served from was deleted or unmounted: the data is retained, the freshness claim is not (2026-08-24 security review, finding 5). Before the FIRST push an absent file is the ordinary cold state and stays `ok` on the embedded snapshot |
 | panel serves embedded snapshot | `panels.data.enabled=false` (the default — the documented as-of-release decision), or no sealed file yet — the shipped state, not an error |
 | floor marker absent in the state dir, no `token-usage.floor.init` beside it | a first boot: benign, the floor is the embedded snapshot's, and the first published push writes both files |
-| floor marker absent but `token-usage.floor.init` present | the durable floor was INITIALIZED and its marker is now gone — deleted, or lost with the volume. Durable mode refuses the tick and reports `stale` instead of cold-starting on a floor of zero (2026-08-24 round-3 review, finding 4). Recover by pushing a fresh document, or run the reset ceremony below and accept what it costs |
-| floor marker present but corrupt, unauthentic, or future-dated | durable mode refuses the tick and reports `stale` rather than serving on a silently lowered floor. Push a fresh document; if the marker is genuinely unrecoverable, run the reset ceremony below |
+| floor marker absent but `token-usage.floor.init` present | the durable floor was INITIALIZED and its marker is now gone — deleted, or lost with the volume. Durable mode refuses the tick and reports `stale` instead of cold-starting on a floor of zero (2026-08-24 round-3 review, finding 4). The reset ceremony below is the only way out |
+| floor marker present but corrupt, unauthentic, or future-dated | durable mode refuses the tick and reports `stale` rather than serving on a silently lowered floor. The reset ceremony below is the only way out |
 | boot log line `panel=token-usage` describing the floor state | the one operator-facing statement of WHICH state the state directory is in — recovered, rotated, lost, or untrusted. It carries no path, no key, and no payload |
-| floor marker present but sealed under a previous key | the key was rotated without the floor being reset. Durable mode refuses rather than migrating: the marker's key identifier is UNAUTHENTICATED, so honouring it would let anyone who can write the state directory lower the floor by editing a header. Run the reset ceremony below as part of the rotation |
+| floor marker present but sealed under a previous key | the key was rotated without the floor being reset. Durable mode refuses rather than migrating: the marker's key identifier is UNAUTHENTICATED, so honouring it would let anyone who can write the state directory lower the floor by editing a header. The reset ceremony below is the only way out, and it is part of the rotation ceremony for exactly that reason |
 | panel `status: stale` right after a push, state volume full or read-only | the floor could not be persisted, so the payload was not published; free or remount the state directory and the next tick publishes the same file |
 | pod Pending on the state claim | the state PV or its host directory was not created before enabling `panels.data` — finish the ceremony above |
 
 ### The floor reset ceremony, and what it costs
 
-There is one supported way to declare a cold start, and it is deliberately
-not "delete a file until the error goes away". An earlier revision of this
-document told operators to delete the marker; that instruction was the
-finding-4 hole written down, because a deleted marker was indistinguishable
-from a first boot and silently reset the replay floor to the embedded
-snapshot's instant.
+This is the ONLY recovery ceremony in this document, and the only way out of
+every refusing floor state above: marker gone from a used directory, marker
+present but untrusted, marker sealed under a rotated key. Nothing else works,
+and the two things an operator reaches for first both fail by design —
+pushing a fresh document does not clear a refusing floor, because the store
+loads the persisted marker before it considers any document and a load that
+errors refuses the store; and deleting the marker alone does not either,
+because the tombstone left beside it is what makes that state distinguishable
+from a first boot. An earlier revision of this document offered both as
+alternatives (2026-08-25 round-4 review, finding 6). They were not
+alternatives; one was ineffective and the other was the finding-4 hole
+written down as instructions, and they are deleted rather than qualified.
 
 **Say plainly what it does: it LOWERS the replay protection.** Every sealed
 document whose capture instant is after the embedded snapshot's becomes

@@ -291,8 +291,14 @@ load-bearing: an allowed import can re-export a refused one, so no allowlist
 of import names can establish that a program cannot spawn. When the runtime
 producer runs, it runs inside a kernel sandbox that denies process creation
 and network access outright (`scripts/usage-export/producer.sb`, applied by
-the scheduled push and refused-if-absent), and that is what carries the
-"cannot start a session, cannot reach a network" guarantee.
+the scheduled push and refused-if-absent), and that is the enforced
+capability: **no fork, no network**. State it that narrowly, because that
+profile is `(allow default)` with two denials — exec IN PLACE and filesystem
+access remain, as the profile itself says in full. Neither buys anything for
+an attacker here (the sandbox is inherited across an in-place exec, and the
+walk is over records the producer must read anyway), but they are the
+difference between the enforced boundary and a wider claim, and the wider
+claim is not made.
 
 **The recent commit list.** The rows are public commits from the repositories
 `internal/panels/config/fetch.json` already names as commit sources, read the
@@ -337,9 +343,12 @@ of serving ahead of it. An initialization tombstone sits beside the marker,
 so a marker that has been DELETED is distinguishable from a first boot and
 refuses rather than cold-starting on a lowered floor; declaring a cold start
 is an explicit operator ceremony that says in the manual what protection it
-gives up. The floor is single-writer by construction — the state claim is
-`ReadWriteOncePod` and the render refuses more than one replica while the
-capability is on. The capability defaults OFF in the chart
+gives up. The floor has one writer, enforced by the locked monotonic
+compare-and-swap in the origin and by a render that refuses more than one
+replica while the capability is on — not by the access mode: the state claim
+is `ReadWriteOnce`, and the mode that would enforce it in the storage layer,
+`ReadWriteOncePod`, is supported for CSI volumes only and this target runs
+none. The capability defaults OFF in the chart
 (`panels.data.enabled=false`): a fresh install schedules with no storage
 ceremony and serves the embedded release-time snapshot — an explicit,
 documented as-of-release state — and enabling the sealed feed is the

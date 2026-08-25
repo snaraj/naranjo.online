@@ -28,11 +28,14 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   panel refreshes without a release, and every failure (tamper, replay,
   wrong key, over-cap, malformed, non-partitioning categories) keeps the
   last good payload and says so in the envelope status instead of crashing
-  or fabricating. The export step cannot spawn a process or open a network
+  or fabricating. The export step cannot fork and cannot open a network
   endpoint because the kernel refuses: the scheduled push runs it inside
   `scripts/usage-export/producer.sb`, a seatbelt profile denying
   `process-fork` and `network*`, and a workstation without the sandbox
-  refuses to walk raw records at all. Its import surface is additionally
+  refuses to walk raw records at all. Those two denials are the whole
+  enforced capability — the profile is otherwise `(allow default)`, so
+  exec-in-place and filesystem access remain, and the claim is stated that
+  narrowly rather than as a general confinement. Its import surface is additionally
   pinned by an AST test against a closed allowlist — a REVIEW BOUND, not a
   capability proof — and every emission passes through the capture tool's
   own dates-and-integers guard with counts-only diagnostics.
@@ -43,8 +46,13 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   volumeName/claimRef double-pinning — the DATA pair read-only at BOTH the
   claim reference and the mount, and the replay-floor STATE pair (the
   security review's H2 remedy below) explicitly writable at both and
-  `ReadWriteOncePod`, on a sibling node directory the push pipeline never
-  touches. The capability
+  `ReadWriteOnce`, on a sibling node directory the push pipeline never
+  touches. `ReadWriteOnce` is the honest mode for this target rather than
+  the stronger-looking `ReadWriteOncePod`, which Kubernetes supports for CSI
+  volumes only while the target runs none: single writing is enforced by the
+  origin's locked monotonic compare-and-swap and by the single-replica
+  render, and the chart says so instead of naming a mode nothing performs.
+  The capability
   defaults OFF (`panels.data.enabled=false`, the review's M6 remedy
   below): its claims bind statically to admin-provisioned volumes, so a
   default render carries none of it and a fresh install schedules; the
@@ -54,10 +62,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   bypass the namespace's restricted Pod Security posture. A storage pin
   script (`scripts/ci/chart-storage-pin.sh`, wired into the chart CI job)
   renders all four directions (enabled, with-pv, untouched default,
-  explicit disabled) and kills 43 hostile mutations — writable data
+  explicit disabled) and kills 44 hostile mutations — writable data
   mounts, read-only state mounts, dropped or emptied storageClassName pins,
   smuggled PVs, moved node paths, a reverted hostPath source, reclaim
-  weakenings, dropped or widened nodeAffinity, a second replica, and every
+  weakenings, dropped or widened nodeAffinity, a second replica, a state
+  access mode widened to `ReadWriteMany` OR re-claiming the CSI-only
+  `ReadWriteOncePod`, and every
   overlap of the two roots and the two mount paths in both directions
   including dot-dot, duplicated-separator and trailing-separator aliases.
 - The panel's per-source category lens: a second radiogroup slices the
@@ -142,12 +152,15 @@ could not carry it:
   recovery binds the accepted CIPHERTEXT DIGEST rather than the instant
   alone, so a different document at the same instant is refused.
 - 3 — the floor was not single-writer. `replicaCount` defaults to 1 while
-  the capability is on, the state claim is `ReadWriteOncePod` rather than
-  node-scoped `ReadWriteOnce`, the render refuses more than one replica, and
-  the marker is written through a unique temp file under an exclusive
-  `flock` with a monotonic compare-and-swap and an fsync of both the file
-  and its parent directory before success is reported. The availability
-  tradeoff is stated where the value is set.
+  the capability is on, the render refuses more than one replica, and the
+  marker is written through a unique temp file under an exclusive `flock`
+  with a monotonic compare-and-swap — rejecting an equal instant unless the
+  ciphertext digest is identical — and an fsync of both the file and its
+  parent directory before success is reported. The availability tradeoff is
+  stated where the value is set. This first shipped with a state claim of
+  `ReadWriteOncePod`; the mode is CSI-only and the target has no CSI driver,
+  so the claim named an enforcement that did not exist and the state pair is
+  `ReadWriteOnce` with the mechanism stated plainly instead.
 - 4 — deleting the marker silently reset the floor, and the runbook told
   operators to do exactly that. An initialization tombstone makes
   absent-after-initialized distinguishable from a first boot: the origin
