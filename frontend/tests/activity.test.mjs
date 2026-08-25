@@ -386,6 +386,51 @@ describe('commitReferenceUrl', () => {
   });
 });
 
+describe('destination precedence — sha over reference (issue 157, Daybreak Blue round 3 finding 3)', () => {
+  // This exercises the SAME precedence rule ActivityBar.svelte's
+  // {@const shaHref = commitShaUrl(commit)} / {@const referenceHref =
+  // shaHref ? null : commitReferenceUrl(commit)} pair implements, computed
+  // here directly from the two pure builders so the rule is proven
+  // independent of the component's own markup (the structural test above
+  // proves the MARKUP encodes this precedence; this proves the RULE ITSELF
+  // is the one Daybreak asked for).
+  function chooseDestination(commit) {
+    const shaHref = commitShaUrl(commit);
+    const referenceHref = shaHref ? null : commitReferenceUrl(commit);
+    return { shaHref, referenceHref };
+  }
+
+  it('prefers the validated SHA permalink over an unverifiable trailing reference on the SAME row', () => {
+    // The exact case Daybreak Blue's probe used: a proven commit identity
+    // alongside a syntactically-valid but nothing-proves-it-real reference
+    // number. Before this fix, the reference always won — an unverifiable
+    // "(#9999999)" outlinked a commit this document could actually vouch
+    // for.
+    const commit = {
+      repo: 'naranjo.online',
+      sha: '0123456789abcdef0123456789abcdef01234567',
+      message: 'handwritten reference to nowhere (#9999999)'
+    };
+    const { shaHref, referenceHref } = chooseDestination(commit);
+    assert.equal(shaHref, `${projectHost}/naranjo.online/commit/0123456789abcdef0123456789abcdef01234567`);
+    assert.equal(referenceHref, null, 'the reference destination must not be computed once a valid sha wins');
+  });
+
+  it('falls back to the reference destination only when no valid sha is present', () => {
+    const commit = { repo: 'naranjo.online', sha: '', message: 'release (#152)' };
+    const { shaHref, referenceHref } = chooseDestination(commit);
+    assert.equal(shaHref, null);
+    assert.equal(referenceHref, `${projectHost}/naranjo.online/issues/152`);
+  });
+
+  it('renders neither destination when both fail to validate', () => {
+    const commit = { repo: 'naranjo.online', sha: '', message: 'fixture: subject line' };
+    const { shaHref, referenceHref } = chooseDestination(commit);
+    assert.equal(shaHref, null);
+    assert.equal(referenceHref, null);
+  });
+});
+
 describe('isValidCommitSha / commitShaUrl', () => {
   const validSha = '0123456789abcdef0123456789abcdef01234567';
 
@@ -533,13 +578,19 @@ test('every commit-row href is built from the validated helpers, never raw inter
     'a commit field must never be interpolated directly into an href — go through the const below'
   );
   // Every href is bound once, from the imported validators, before the
-  // markup ever reads it. The message cell tries its reference destination
-  // first and its SHA-permalink destination only once that resolves to
-  // null (shaHref is computed FROM referenceHref's own nullness, never
-  // independently, so the two branches can never both fire for one row).
+  // markup ever reads it. The message cell tries its SHA-permalink
+  // destination FIRST and its reference destination only once that
+  // resolves to null (referenceHref is computed FROM shaHref's own
+  // nullness, never independently, so the two branches can never both fire
+  // for one row). This precedence — SHA over syntactic reference — is
+  // itself the fix for Daybreak Blue's round-3 finding 3: shaHref is the
+  // one association this document can actually prove, so an unverifiable
+  // trailing "(#N)" must never outrank it. A mutation that swapped this
+  // order back (referenceHref computed unconditionally, shaHref gated on
+  // referenceHref's nullness) would fail this exact assertion.
   assert.match(component, /\{@const repoHref = commitRepoUrl\(commit\.repo\)\}/);
-  assert.match(component, /\{@const referenceHref = commitReferenceUrl\(commit\)\}/);
-  assert.match(component, /\{@const shaHref = referenceHref \? null : commitShaUrl\(commit\)\}/);
+  assert.match(component, /\{@const shaHref = commitShaUrl\(commit\)\}/);
+  assert.match(component, /\{@const referenceHref = shaHref \? null : commitReferenceUrl\(commit\)\}/);
   assert.match(component, /href=\{repoHref\}/);
   assert.match(component, /href=\{referenceHref\}/);
   assert.match(component, /href=\{shaHref\}/);
@@ -547,8 +598,8 @@ test('every commit-row href is built from the validated helpers, never raw inter
   // same escaped interpolation — never a link, never markup.
   assert.match(component, /\{#if repoHref\}/);
   assert.match(component, /<span class="activity-commit-repo">\{commit\.repo\}<\/span>/);
-  assert.match(component, /\{#if referenceHref\}/);
-  assert.match(component, /\{:else if shaHref\}/);
+  assert.match(component, /\{#if shaHref\}/);
+  assert.match(component, /\{:else if referenceHref\}/);
   assert.match(
     component,
     /<span class="activity-commit-message" title=\{commit\.message\}>\{commit\.message\}<\/span>/

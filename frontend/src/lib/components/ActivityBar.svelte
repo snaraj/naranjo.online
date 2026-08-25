@@ -30,13 +30,16 @@
   and a wide window scrolls inside the grid, never the page.
 
   Every commit row is real navigation now (issue 157). The repo name links to
-  the repository, and the subject links to its trailing "(#N)" reference when
-  the subject resolves one, else to the commit's own permalink when its SHA
-  validates — every href comes from lib/activity.ts's validated builders,
-  never from interpolating the payload's own strings, so a row this document
-  cannot vouch for renders as the plain text it always was rather than as a
-  link nobody addressed. Text stays text either way: neither branch below
-  renders payload data as markup. -->
+  the repository, and the subject PREFERS the commit's own permalink whenever
+  its SHA validates, falling back to its trailing "(#N)" reference only when
+  no valid SHA is present (Daybreak Blue's review, round 3, finding 3: the
+  SHA is the one association this document can actually prove, so it must
+  never be outranked by a syntactic guess a subject line happens to carry) —
+  every href comes from lib/activity.ts's validated builders, never from
+  interpolating the payload's own strings, so a row this document cannot
+  vouch for renders as the plain text it always was rather than as a link
+  nobody addressed. Text stays text either way: neither branch below renders
+  payload data as markup. -->
 <script lang="ts">
   import PanelShell from './PanelShell.svelte';
   import ContributionGrid from './ContributionGrid.svelte';
@@ -112,8 +115,8 @@
         {:else}
           {#each commits as commit}
             {@const repoHref = commitRepoUrl(commit.repo)}
-            {@const referenceHref = commitReferenceUrl(commit)}
-            {@const shaHref = referenceHref ? null : commitShaUrl(commit)}
+            {@const shaHref = commitShaUrl(commit)}
+            {@const referenceHref = shaHref ? null : commitReferenceUrl(commit)}
             <li class="activity-commit">
               {#if repoHref}
                 <a
@@ -126,16 +129,7 @@
               {:else}
                 <span class="activity-commit-repo">{commit.repo}</span>
               {/if}
-              {#if referenceHref}
-                <a
-                  class="activity-commit-message"
-                  href={referenceHref}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={commit.message}
-                  aria-label={commitReferenceLinkLabel(commit.message)}
-                >{commit.message}</a>
-              {:else if shaHref}
+              {#if shaHref}
                 <a
                   class="activity-commit-message"
                   href={shaHref}
@@ -143,6 +137,15 @@
                   rel="noopener noreferrer"
                   title={commit.message}
                   aria-label={commitShaLinkLabel(commit.message, commit.sha)}
+                >{commit.message}</a>
+              {:else if referenceHref}
+                <a
+                  class="activity-commit-message"
+                  href={referenceHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={commit.message}
+                  aria-label={commitReferenceLinkLabel(commit.message)}
                 >{commit.message}</a>
               {:else}
                 <span class="activity-commit-message" title={commit.message}>{commit.message}</span>

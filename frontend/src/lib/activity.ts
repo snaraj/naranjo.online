@@ -131,14 +131,25 @@ export function activityCells(activity: VCSActivityData): GridCell[] {
 
 /* Outbound navigation for the recent-commits rows (issue 157). Every entry
  * becomes real navigation, but only from fields the payload actually proves:
- * the repository slug always; the title's destination is either the
- * trailing "(#N)" a squash merge writes at the end of the subject ("…
- * (#123)", this very repository's own convention), or — when no such
- * reference resolves — the commit's own validated SHA, carried through the
- * wire contract precisely so this fallback has something real to point at
- * (VCSCommit.sha in panels.ts, mirroring internal/panels/mapping.go, which
- * validates the identical 40-lowercase-hex shape before this module ever
- * sees it).
+ * the repository slug always; the title's destination PREFERS the commit's
+ * own validated SHA permalink whenever the row carries a valid one, and
+ * falls back to the trailing "(#N)" a squash merge writes at the end of the
+ * subject ("… (#123)", this very repository's own convention) only when no
+ * valid SHA is present.
+ *
+ * This precedence is deliberate, not incidental (Daybreak Blue's review,
+ * round 3, finding 3): a valid 40-lowercase-hex SHA is the ONE association
+ * this module can actually prove — it is the exact identity
+ * internal/panels/mapping.go validated through isCommitIdentity before ever
+ * serving the row. A trailing "(#N)" is a weaker claim: pure subject-line
+ * syntax this repository's own squash-merge convention happens to write,
+ * true of nothing about the target beyond "some number was typed here" —
+ * `(#9999999)` parses exactly as cleanly as a real one. Preferring the
+ * syntactic guess over the proven identity, as an earlier revision of this
+ * module did, meant a fabricated or stale trailing number could silently
+ * outrank a row's own verified commit — this module now falls back to that
+ * guess only when there is nothing stronger to link to at all (an old
+ * rolling-compatible row with no sha, or a malformed one).
  *
  * The "(#N)" destination is deliberately /issues/N, never /pull/N, and the
  * accessible name calls it a "reference", never a "pull request": this
@@ -204,7 +215,10 @@ export function commitPullRequestNumber(message: string): number | null {
 
 /* The commit's "(#N)" reference destination: /issues/N (never /pull/N — see
  * the block comment above) when the repo validates and the subject resolves
- * a trailing reference number, otherwise null. */
+ * a trailing reference number, otherwise null. This is the WEAKER of the two
+ * destination candidates (see the precedence note above commitShaUrl) — the
+ * caller consults commitShaUrl FIRST and only falls back to this one when no
+ * valid SHA exists for the same row. */
 export function commitReferenceUrl(commit: { repo: string; message: string }): string | null {
   const repo = commitRepoUrl(commit.repo);
   if (repo === null) {
@@ -233,10 +247,15 @@ export function isValidCommitSha(sha: string): boolean {
   return commitShaPattern.test(sha);
 }
 
-/* The commit's own permalink — the fallback destination used only once
- * commitReferenceUrl has already returned null for the same commit. Null
- * when the repo or the SHA fails to validate, in which case the entry
- * renders as plain text rather than link to an address nobody served. */
+/* The commit's own permalink — the PREFERRED destination whenever the row
+ * carries a valid SHA (Daybreak Blue's review, round 3, finding 3): it is
+ * the one thing this module can prove is THIS commit, rather than a number
+ * that merely appears at the end of the subject. The caller tries this
+ * FIRST and falls back to commitReferenceUrl only when it returns null —
+ * never the other order. Null when the repo or the SHA fails to validate,
+ * in which case the caller falls through to the reference link or, with
+ * neither available, plain text rather than a link to an address nobody
+ * served. */
 export function commitShaUrl(commit: { repo: string; sha: string }): string | null {
   const repo = commitRepoUrl(commit.repo);
   if (repo === null || !isValidCommitSha(commit.sha)) {

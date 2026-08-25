@@ -1636,9 +1636,11 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
      makes a real outbound request to github.com. Matching markup with no
      working key handler would pass every assertion above and still leave a
      keyboard reader stranded; this is what rules that out. */
-  await page.context().route('https://github.com/**', (route) =>
-    route.fulfill({ status: 200, contentType: 'text/plain', body: 'ok' })
-  );
+  let capturedReferer;
+  await page.context().route('https://github.com/**', (route) => {
+    capturedReferer = route.request().headers()['referer'];
+    return route.fulfill({ status: 200, contentType: 'text/plain', body: 'ok' });
+  });
   const [popup] = await Promise.all([
     page.context().waitForEvent('page'),
     page.keyboard.press('Enter'),
@@ -1647,7 +1649,167 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
   expect(popup.url(), 'Enter on the focused title link did not navigate to its own href').toBe(
     attrs.message.href
   );
+
+  /* Popup isolation, BEHAVIOR not just markup (issue 157, Daybreak Blue's
+     review, round 3, finding 6): rel="noopener noreferrer" is asserted
+     above as an ATTRIBUTE — a click handler that flipped rel to plain
+     "opener" immediately before the default activation would contradict it
+     without failing a single assertion before this point, and Daybreak
+     Blue proved exactly that survives every check that stops at the
+     attribute string. These two checks close that gap on the REAL,
+     browser-mediated activation: the opened page must carry no
+     window.opener back to this one, and the request that opened it must
+     have carried no Referer header — the two actual security properties
+     noopener/noreferrer exist to guarantee. */
+  const openerIsNull = await popup.evaluate(() => window.opener === null);
+  expect(openerIsNull, 'the opened page can reach back to this one via window.opener').toBe(true);
+  expect(capturedReferer, 'the activating request leaked a Referer header').toBeUndefined();
+
   await popup.close();
+});
+
+test('a valid-SHA commit row with no resolvable reference is real, keyboard-reachable navigation to its own commit permalink (issue 157, Daybreak Blue round 3 finding 5)', async ({
+  page,
+}) => {
+  /* The positive browser-lane case Daybreak Blue's review found missing:
+     every existing lane exercised either the hostile SHA path (rejected) or
+     a row with sha: '' falling back to a resolvable "(#N)" reference. None
+     exercised the {:else if shaHref} branch actually WINNING — the happy
+     path for a commit with a real identity but no trailing reference number
+     in its subject, which is exactly what an ordinary non-squash commit (or
+     one from a repository with a different merge convention) looks like.
+     Adding `inert` to only this one anchor branch survived every other
+     lane; this test is what makes that mutant fail. */
+  const validSha = '0123456789abcdef0123456789abcdef01234567';
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.recentCommits = [
+      {
+        repo: 'naranjo.online',
+        sha: validSha,
+        message: 'a commit with no trailing reference number at all',
+        at: '2026-08-24T00:00:00Z',
+      },
+    ];
+    await route.fulfill({ response, json: envelope });
+  });
+  await visit(page);
+
+  const messageLink = page.locator('.activity-commit-message').first();
+  await messageLink.scrollIntoViewIfNeeded();
+
+  const attrs = await page.evaluate(() => {
+    const row = window.document.querySelector('.activity-commit');
+    const message = row.querySelector('.activity-commit-message');
+    return {
+      tag: message.tagName,
+      href: message.getAttribute('href'),
+      target: message.getAttribute('target'),
+      rel: message.getAttribute('rel'),
+      label: message.getAttribute('aria-label'),
+    };
+  });
+
+  expect(attrs.tag, 'the sha-fallback branch did not render as a link at all').toBe('A');
+  expect(attrs.href).toBe(`https://github.com/snaraj/naranjo.online/commit/${validSha}`);
+  expect(attrs.target).toBe('_blank');
+  expect(attrs.rel).toBe('noopener noreferrer');
+  expect(attrs.label).toContain('opens in a new tab');
+  expect(attrs.label).toContain(`commit ${validSha.slice(0, 7)}`);
+
+  const engineTabsLinks = await engineTabsToPlainLinks(page);
+
+  await page.locator('[data-activity-panel] .grid-strip').evaluate((node) => node.focus());
+  await page.keyboard.press('Tab'); // repo link
+  await page.keyboard.press('Tab'); // message link (the sha-fallback anchor under test)
+  const focus = await page.evaluate(() => {
+    const el = window.document.activeElement;
+    const style = getComputedStyle(el);
+    return {
+      tag: el.tagName,
+      isMessageLink: el.classList.contains('activity-commit-message'),
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+    };
+  });
+  test.skip(
+    !engineTabsLinks,
+    "this engine's default keyboard configuration does not include plain links in the tab order, measured independently against the page's own nav link — nothing left to measure here"
+  );
+  /* This is exactly the assertion an `inert` mutant on ONLY the
+     {:else if shaHref} anchor branch must now fail: every OTHER lane in
+     this file exercises a different branch (the reference link, or the
+     hostile/rejected paths), so a mutation scoped to just this branch left
+     every one of them green. */
+  expect(focus.tag, 'a real Tab sequence did not land on any anchor at all').toBe('A');
+  expect(focus.isMessageLink, 'a real Tab sequence did not land on the sha-fallback link').toBe(true);
+  expect(focus.outlineStyle, 'the sha-fallback link has no visible keyboard focus ring').not.toBe(
+    'none'
+  );
+  expect(
+    parseFloat(focus.outlineWidth),
+    'the sha-fallback link focus ring has zero width'
+  ).toBeGreaterThan(0);
+
+  /* ACTIVATION, plus the same post-activation popup-isolation proof as the
+     reference-link test above (finding 6): both anchor branches are
+     independent <a> elements in the source, so a mutation scoped to only
+     one of them needs its own activation+isolation proof. */
+  let capturedReferer;
+  await page.context().route('https://github.com/**', (route) => {
+    capturedReferer = route.request().headers()['referer'];
+    return route.fulfill({ status: 200, contentType: 'text/plain', body: 'ok' });
+  });
+  const [popup] = await Promise.all([
+    page.context().waitForEvent('page'),
+    page.keyboard.press('Enter'),
+  ]);
+  await popup.waitForLoadState('domcontentloaded').catch(() => {});
+  expect(popup.url(), 'Enter on the focused sha-fallback link did not navigate to its own href').toBe(
+    attrs.href
+  );
+  const openerIsNull = await popup.evaluate(() => window.opener === null);
+  expect(openerIsNull, 'the opened page can reach back to this one via window.opener').toBe(true);
+  expect(capturedReferer, 'the activating request leaked a Referer header').toBeUndefined();
+  await popup.close();
+});
+
+test('a valid SHA outranks an unverifiable trailing reference on the SAME row (issue 157, Daybreak Blue round 3 finding 3)', async ({
+  page,
+}) => {
+  /* Daybreak Blue's own product probe, reproduced verbatim: a rendered row
+     carrying BOTH a proven commit identity AND a syntactically-valid but
+     nothing-proves-it-real trailing reference number. Before this fix, the
+     reference always won — this exact row linked to /issues/9999999,
+     outlinking a commit this document could actually vouch for. */
+  const validSha = '0123456789abcdef0123456789abcdef01234567';
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.recentCommits = [
+      {
+        repo: 'naranjo.online',
+        sha: validSha,
+        message: 'handwritten reference to nowhere (#9999999)',
+        at: '2026-08-24T00:00:00Z',
+      },
+    ];
+    await route.fulfill({ response, json: envelope });
+  });
+  await visit(page);
+
+  const attrs = await page.evaluate(() => {
+    const message = window.document.querySelector('.activity-commit-message');
+    return { tag: message.tagName, href: message.getAttribute('href') };
+  });
+
+  expect(attrs.tag).toBe('A');
+  expect(
+    attrs.href,
+    'the row linked to the unverifiable /issues/9999999 reference instead of its own proven commit'
+  ).toBe(`https://github.com/snaraj/naranjo.online/commit/${validSha}`);
+  expect(attrs.href).not.toContain('/issues/9999999');
 });
 
 test('the shortest admitted repo slug still clears the touch floor on both axes (issue 157)', async ({
