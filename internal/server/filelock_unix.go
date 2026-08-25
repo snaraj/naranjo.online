@@ -10,9 +10,14 @@
 // is advisory, per open-file-description, and released automatically when the
 // descriptor closes or the process dies, so a crash mid-store cannot leave a
 // stale lock wedged. It coordinates writers on ONE host, which is exactly the
-// scope of the claim — cross-host exclusion is the storage layer's job, and
-// the chart buys it structurally with a ReadWriteOncePod claim and a single
-// replica rather than pretending a file lock could.
+// scope of the claim — cross-host exclusion is the storage layer's job. The
+// chart's part of that is a single-replica render; it does NOT include a
+// ReadWriteOncePod claim, which round 3 believed and the 2026-08-25 round-4
+// review corrected: that mode is CSI-only and the target has no CSI driver.
+// So this lock plus the monotonic compare-and-swap above it is not a
+// belt-and-braces echo of a storage guarantee — on this target it IS the
+// enforcement, which is why an equal instant with a different ciphertext
+// digest is refused rather than accepted as a harmless replay.
 
 package server
 

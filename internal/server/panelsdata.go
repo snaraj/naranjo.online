@@ -115,6 +115,13 @@ var (
 	// exactly the rollback the tombstone above closes. The reset is an
 	// explicit operator ceremony instead.
 	errFloorKeyRotated = errors.New("panels floor marker was sealed under a different key; the documented reset ceremony is required")
+	// errFloorDivergedAtInstant reports a store at the instant already
+	// persisted but carrying a DIFFERENT document digest. It is refused
+	// rather than merged because the persisted digest is what restart
+	// recovery authenticates against, and a competing writer that could
+	// rewrite it could lend its own document the other's provenance
+	// (2026-08-25 round-4 review, finding 1).
+	errFloorDivergedAtInstant = errors.New("panels floor marker refuses a different document at the instant already persisted")
 	// errFloorNotMonotonic reports a store that would LOWER the persisted
 	// floor. Two processes over one state directory made this reachable
 	// (2026-08-24 round-3 review, finding 3).
@@ -183,8 +190,13 @@ func describeFloorState(marker *panels.FloorMarker) string {
 			"The panel will report stale until the documented reset ceremony runs; " +
 			"see docs/usage-export.md."
 	case err != nil:
-		return "panels replay floor: the persisted marker exists and cannot be trusted; " +
-			"the panel will report stale until it is repaired or explicitly reset."
+		// "Repaired" was the word here until the 2026-08-25 round-4 review's
+		// finding 6: nothing an operator can do repairs a sealed marker, and
+		// offering it as an option was one of three contradictory recovery
+		// stories. There is ONE ceremony, and this line names it.
+		return "panels replay floor: the persisted marker exists and cannot be trusted. " +
+			"The panel will report stale until the documented reset ceremony runs; " +
+			"see docs/usage-export.md."
 	case !present:
 		return ""
 	default:
@@ -457,8 +469,33 @@ func storeFloorMarker(state *os.Root, lookupEnv func(string) string, floor panel
 	if err != nil {
 		return err
 	}
-	if present && current.Instant.After(floor.Instant) {
-		return errFloorNotMonotonic
+	if present {
+		switch {
+		case current.Instant.After(floor.Instant):
+			return errFloorNotMonotonic
+		case current.Instant.Equal(floor.Instant) && current.Digest != floor.Digest:
+			// EQUAL INSTANT, DIFFERENT DOCUMENT (2026-08-25 round-4 review,
+			// finding 1). The monotonic test above compares instants only,
+			// and the reviewer walked straight through the gap it leaves:
+			// two roots on one state directory stored the same instant with
+			// two different ciphertext digests, the second store succeeded,
+			// and the durable digest was replaced.
+			//
+			// That digest is not bookkeeping. It is the whole of what makes
+			// restart recovery safe — the marker exists so a restarted
+			// process can tell "the file my predecessor published" from "a
+			// different authentic file wearing its instant". Letting a
+			// competing writer overwrite it hands the second document the
+			// first one's provenance, and the next restart admits it as
+			// recovery.
+			//
+			// So an equal instant is admitted only when the digest is
+			// IDENTICAL — the idempotent re-store of a floor already held,
+			// which is the case a retry produces and which changes nothing.
+			// Anything else at that instant is a divergence, and the
+			// persisted floor wins.
+			return errFloorDivergedAtInstant
+		}
 	}
 
 	payload := floor.Instant.UTC().Format(time.RFC3339Nano) + "\n" + floor.Digest + "\n"
@@ -478,6 +515,25 @@ func storeFloorMarker(state *os.Root, lookupEnv func(string) string, floor panel
 	return ensureFloorTombstone(state)
 }
 
+// syncFile and syncDirectory ARE the durability barriers. They are held in
+// variables for exactly one reason, and it is worth stating plainly: the
+// 2026-08-25 round-4 review removed `file.Sync()` and no-oped the directory
+// fsync, and this package's suite stayed green both times (finding 5). The
+// round-3 commit claimed those two lines were guarded by regressions and
+// they were not.
+//
+// A barrier cannot be tested by watching a successful write — the bytes land
+// either way, and only a power cut tells the difference. What CAN be tested
+// is the contract around it: a barrier that FAILS must refuse the commit, so
+// nothing is published on a floor that may not have reached the disk. A
+// fault test makes each barrier fail and requires exactly that, which is red
+// against both mutations — remove the call and the store no longer fails
+// when the barrier does.
+var (
+	syncFile      = func(file *os.File) error { return file.Sync() }
+	syncDirectory = func(directory *os.File) error { return directory.Sync() }
+)
+
 // writeFloorFile writes one state file durably: a uniquely named O_EXCL
 // temporary, fsync, atomic rename, then fsync of the directory so the rename
 // itself survives a crash.
@@ -496,7 +552,7 @@ func writeFloorFile(state *os.Root, name string, contents []byte) error {
 		file.Close()
 		return errors.New("panels state root write failed")
 	}
-	if err := file.Sync(); err != nil {
+	if err := syncFile(file); err != nil {
 		file.Close()
 		return errors.New("panels state root could not be synced")
 	}
@@ -540,7 +596,7 @@ func syncFloorDirectory(state *os.Root) error {
 		return errors.New("panels state root could not be opened for sync")
 	}
 	defer directory.Close()
-	if err := directory.Sync(); err != nil {
+	if err := syncDirectory(directory); err != nil {
 		return errors.New("panels state root directory could not be synced")
 	}
 	return nil

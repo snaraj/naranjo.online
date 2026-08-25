@@ -794,22 +794,86 @@ func TestTheMaximalDocumentFitsTheRaisedBudget(t *testing.T) {
 		len(sealed), served, MaxPanelResponseBytes)
 }
 
+// TestTheServedEnvelopeExceedsTheFileItCameFrom pins the fact that killed the
+// old framing of the two ceilings (2026-08-25 round-4 review, finding 7).
+//
+// MaxPanelResponseBytes and seal.MaxSealedBytes hold the same value, and the
+// comments here and in types.go used to read that as "a document the pipeline
+// can transport is a document the origin can serve". That implication is
+// false, and this test is the proof rather than the assertion: the two bounds
+// measure different bytes, so the SERVED envelope is strictly larger than the
+// sealed file it came from — payload merged onto the embedded snapshot, plus
+// the envelope scaffolding around it.
+//
+// The test is deliberately directional rather than pinned to an exact delta:
+// the overhead is not a constant (it grows with whatever the snapshot
+// contributes), and pinning today's number would turn an honest structural
+// fact into a brittle assertion about one fixture. What must never become
+// true is the reverse — a served envelope no larger than its file, which
+// would mean the equality really did carry the implication, and this comment
+// would then be the stale claim.
+func TestTheServedEnvelopeExceedsTheFileItCameFrom(t *testing.T) {
+	t.Parallel()
+	reg, state := usageDataRootRegistry(t, dataRootSnapshot)
+	sealed := sealDocument(t, maximalDocument())
+	if _, err := refreshDirect(t, reg, state, seriesFS(sealed), productionUnsealer(dataRootTestKeyHex)); err != nil {
+		t.Fatalf("the maximal admissible document was refused: %v", err)
+	}
+	served := len(state.current.Load().response.body)
+	if served <= len(sealed) {
+		t.Fatalf("the envelope served in %d bytes from a %d-byte file; transport size would then bound serve size and the equality of the two ceilings WOULD carry the implication the comments now deny",
+			served, len(sealed))
+	}
+	t.Logf("envelope overhead over the transported file: %d bytes (%d sealed, %d served)",
+		served-len(sealed), len(sealed), served)
+
+	// The consequence, stated as arithmetic rather than as prose: a file
+	// sealed at exactly the transport ceiling cannot serve within a serve
+	// budget of the same value. This is why the refusal path — not the
+	// equality — is the guarantee.
+	if seal.MaxSealedBytes+(served-len(sealed)) <= MaxPanelResponseBytes {
+		t.Fatal("a file at the transport ceiling would still fit the serve budget; the finding-7 correction assumes an overhead this fixture no longer shows")
+	}
+}
+
 func TestDataRootTreatsAbsentFileAndUnchangedFileAsBenign(t *testing.T) {
 	t.Parallel()
 	reg, state := usageDataRootRegistry(t, dataRootSnapshot)
 	if _, err := refreshDirect(t, reg, state, fstest.MapFS{}, productionUnsealer(dataRootTestKeyHex)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("absent file: got %v, want fs.ErrNotExist", err)
 	}
-	// Accept once, then re-read the identical file with the accepted instant
-	// as the floor: the loop reports unchanged, not a fault.
-	fsys := seriesFS(sealDocument(t, validDocument()))
+	// Accept once, then re-read the identical file with the accepted floor —
+	// instant AND digest, exactly as the loop carries it forward. The loop
+	// reports unchanged, not a fault.
 	unseal := productionUnsealer(dataRootTestKeyHex)
-	accepted, err := refreshDirect(t, reg, state, fsys, unseal)
+	sealed := sealDocument(t, validDocument())
+	fsys := seriesFS(sealed)
+	floor := FloorState{Instant: reg.embeddedUsageInstant(state)}
+	accepted, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, floor, false, nil)
 	if err != nil {
 		t.Fatalf("first refresh: %v", err)
 	}
-	if _, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, FloorState{Instant: accepted}, false, nil); !errors.Is(err, errSeriesUnchanged) {
+	if accepted.Digest == "" {
+		t.Fatal("acceptance recorded no document digest; the unchanged check would be comparing instants alone")
+	}
+	if _, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, accepted, false, nil); !errors.Is(err, errSeriesUnchanged) {
 		t.Fatalf("unchanged file: got %v, want errSeriesUnchanged", err)
+	}
+
+	// 2026-08-25 round-4 review, finding 3: the SAME instant carrying a
+	// DIFFERENT document is not the unchanged state, and reporting it as
+	// unchanged is how a running panel kept serving `ok` while the file
+	// underneath it had been replaced. Re-sealing the identical document is
+	// enough to produce it — AES-GCM draws a fresh nonce per seal, so the
+	// ciphertext differs even though the plaintext does not, which is
+	// exactly the "authentic but not the file we accepted" case.
+	replaced := seriesFS(sealDocument(t, validDocument()))
+	_, err = reg.refreshFromDataRoot(state, replaced, unseal, fixedNow, accepted, false, nil)
+	if err == nil || errors.Is(err, errSeriesUnchanged) {
+		t.Fatalf("a different ciphertext at the accepted instant returned %v; want a refusal that reaches the envelope as stale", err)
+	}
+	if !strings.Contains(err.Error(), "different document at the instant already accepted") {
+		t.Fatalf("refused for the wrong reason: %v", err)
 	}
 }
 
@@ -1587,5 +1651,78 @@ func TestDataRootStartGuards(t *testing.T) {
 	other.startDataRoot(ctx, fstest.MapFS{}, productionUnsealer(dataRootTestKeyHex), nil, time.Now)
 	if len(other.states) != 0 {
 		t.Fatal("unexpected states")
+	}
+}
+
+// TestEnvelopeInstantIsTheOldestSourcesCapture is the fourth claim the
+// 2026-08-25 round-4 review found vacuous: disabling `captured.Before(oldest)`
+// left this package green, so nothing pinned the rule that decides what the
+// envelope's `generatedAt` MEANS.
+//
+// The rule exists because one envelope carries one instant for a payload
+// assembled from several sources. Taking the export's own instant, or the
+// newest source's, would let a document dressed as current carry a section
+// captured days earlier — the exact relabelling round-3 finding 5 was about,
+// moved from the producer to the merge. The oldest capture is the only choice
+// that cannot overstate: whatever the envelope claims, every source is at
+// least that fresh.
+func TestEnvelopeInstantIsTheOldestSourcesCapture(t *testing.T) {
+	t.Parallel()
+	reg, state := usageDataRootRegistry(t, dataRootSnapshot)
+	fallback, err := reg.loadSnapshotUsageData(state)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+
+	const emitted = "2026-08-24T12:00:00Z"
+	for name, testCase := range map[string]struct {
+		alpha, beta string
+		want        string
+	}{
+		"beta lags behind alpha":       {alpha: emitted, beta: "2026-08-24T09:30:00Z", want: "2026-08-24T09:30:00Z"},
+		"alpha lags behind beta":       {alpha: "2026-08-22T04:00:00Z", beta: emitted, want: "2026-08-22T04:00:00Z"},
+		"both lag, the older one wins": {alpha: "2026-08-23T01:00:00Z", beta: "2026-08-22T23:59:59Z", want: "2026-08-22T23:59:59Z"},
+		"both current":                 {alpha: emitted, beta: emitted, want: emitted},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			document := validDocument()
+			document["generatedAt"] = emitted
+			alphaSection(document)["capturedAt"] = testCase.alpha
+			betaSection(document)["capturedAt"] = testCase.beta
+
+			var decoded usageSeriesDocument
+			raw, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			_, instant, err := mergeSeriesDocument(decoded, fallback, fixedNow())
+			if err != nil {
+				t.Fatalf("merge: %v", err)
+			}
+			if instant != testCase.want {
+				t.Fatalf("the envelope claims %s; the oldest source was captured at %s", instant, testCase.want)
+			}
+			// Stated as the property rather than the value, so a future
+			// change that picks the newest or the export instant fails here
+			// with the reason rather than with a mismatched string.
+			for label, section := range decoded.Sources {
+				captured, err := time.Parse(time.RFC3339, section.CapturedAt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				claimed, err := time.Parse(time.RFC3339, instant)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if captured.Before(claimed) {
+					t.Fatalf("source %q was captured at %s, BEFORE the %s the envelope claims for the whole payload",
+						label, section.CapturedAt, instant)
+				}
+			}
+		})
 	}
 }

@@ -155,8 +155,10 @@ func (reg *Registry) DataRootOwnsTokenUsage() bool {
 // In durable mode the floor is resolved from the marker before ANY attempt,
 // and an unreadable or future-dated marker refuses the tick outright instead
 // of quietly reverting to the embedded floor (2026-08-24 review finding 2).
-// Resolution is retried on each tick, so repairing the state directory
-// recovers the loop without a restart.
+// Resolution is retried on each tick, so the documented reset ceremony
+// recovers the loop without a restart. That ceremony is the only thing that
+// does: a fresh push cannot, because the floor is resolved BEFORE any
+// document is considered (2026-08-25 round-4 review, finding 6).
 //
 // One deliberate asymmetry: when the floor came from the marker, the FIRST
 // acceptance of this process may equal it exactly — that is the very file
@@ -403,21 +405,34 @@ func readBoundedFile(fsys fs.FS, name string, cap int64) ([]byte, error) {
 // admitSeriesInstant validates the document identity and its capture instant
 // against the replay floor and the local clock.
 //
-// Equality with the floor has THREE meanings and they are deliberately kept
-// apart (2026-08-24 round-3 review, finding 2).
+// EQUALITY WITH THE FLOOR IS DECIDED BY THE DOCUMENT, NOT BY THE CLOCK. The
+// instant alone cannot tell three different situations apart, and the digest
+// can, so the digest is asked first (2026-08-24 round-3 review finding 2;
+// 2026-08-25 round-4 review finding 3):
 //
-//   - Not recovering: the ordinary steady state between pushes. The same
-//     file this process already published is still there, nothing is wrong,
-//     and errSeriesUnchanged says exactly that.
-//   - Recovering, and the file is the one the marker recorded: a restarted
-//     process re-reading what its predecessor published. That is recovery,
-//     and it is admitted — once, on the first marker-floored attempt.
-//   - Recovering, and the file is a DIFFERENT ciphertext at the same
-//     instant: refused, loudly. Bound to the instant alone this was the third
-//     case masquerading as the second, so a captured document could be
-//     replayed once per restart. It is also not the benign unchanged state —
-//     the file on the volume is not the file the floor was recorded from —
-//     so it must reach the envelope as stale rather than as silence.
+//   - Same digest, not recovering: the ordinary steady state between pushes.
+//     The exact file this process already published is still there, nothing
+//     is wrong, and errSeriesUnchanged says exactly that.
+//   - Same digest, recovering: a restarted process re-reading what its
+//     predecessor published. That is recovery, and it is admitted — once, on
+//     the first marker-floored attempt.
+//   - A DIFFERENT digest at that instant: refused, in BOTH states.
+//
+// The round-3 repair asked `!recovering` FIRST, which meant the digest was
+// never consulted while the loop was simply running. The reviewer replaced an
+// accepted document with a different authentic document at the same instant
+// and the panel kept serving the old envelope at `status: ok` — the source on
+// the volume was no longer the source the panel claimed to be serving from,
+// and nothing said so. Restart-only binding is not binding; it is a check
+// that happens to run at boot.
+//
+// The empty-digest case is refused too, and that is deliberate rather than
+// incidental. A floor with no recorded digest is the pre-acceptance
+// process-memory state, where the floor is the embedded snapshot's own
+// instant. A pushed document landing on exactly that instant is not something
+// this process published, carries no more freshness than the snapshot it
+// equals, and cannot be distinguished from a crafted replay. Refusing states
+// the ambiguity instead of resolving it in the pusher's favour.
 func admitSeriesInstant(document usageSeriesDocument, floor FloorState, digest string, current time.Time, recovering bool) (time.Time, error) {
 	if document.Schema != usageSeriesSchema {
 		return time.Time{}, fmt.Errorf("data root: schema %q is not %q", document.Schema, usageSeriesSchema)
@@ -428,13 +443,15 @@ func admitSeriesInstant(document usageSeriesDocument, floor FloorState, digest s
 	}
 	if instant.Equal(floor.Instant) {
 		switch {
+		case floor.Digest == "":
+			return time.Time{}, errors.New("data root: the series file shares the instant of a floor recorded without a document identity; refused")
+		case floor.Digest != digest:
+			return time.Time{}, errors.New("data root: the series file is a different document at the instant already accepted; refused")
 		case !recovering:
 			return time.Time{}, errSeriesUnchanged
-		case floor.Digest != "" && floor.Digest == digest:
-			// The exact document the previous process published.
-		default:
-			return time.Time{}, errors.New("data root: the series file is a different document at the instant already accepted; refused")
 		}
+		// Same digest while recovering: the exact document the previous
+		// process published.
 	}
 	if instant.Before(floor.Instant) {
 		return time.Time{}, errors.New("data root: the series file is older than the data already accepted; replay refused")
