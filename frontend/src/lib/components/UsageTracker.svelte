@@ -1,202 +1,155 @@
-<!-- TokenUsagePanel renders the token-usage/v1 panel inside the shared
-  PanelShell chrome: one block per source, iterated straight from the API
-  payload. Source labels are data supplied by the origin — this component
-  knows no vendor, so a new tool appears by shipping data, never by editing
-  code.
+<!-- UsageTracker renders per-source usage inside the shared PanelShell: one
+  block per source, straight from UsageTrackerProps (lib/blocks.ts). It is a
+  generic primitive with NO domain knowledge — every source label, figure,
+  heading and noun arrives as data built by an adapter in the binding layer,
+  so a new tool appears by shipping data, never by editing code.
 
   Each source block is, top to bottom: a tile grid of headline figures (a
   final odd tile spans the full width); the usage windows with their
-  utilization meters, the numeric value always rendered beside the fill so
-  severity is never color alone; a "Token activity" section whose
+  utilization meters, the numeric reading always rendered beside the fill so
+  severity is never color alone; an activity section whose
   Daily/Weekly/Cumulative toggle re-reads ONE daily series through three
-  lenses with no extra payload; and an "Activity insights" list.
+  lenses with no extra payload; and an insights list.
 
   Every section is optional and every absence is honest. A figure the origin
-  does not report renders as an explicit dash, and a payload that fails
-  admission renders an empty state, never invented numbers.
+  does not report arrives as an explicit dash, and a payload that fails
+  admission arrives as no sections at all, rendering the empty state — never
+  invented numbers.
 
   Provenance is drawn by EXCEPTION rather than on every figure (owner
   directive, issue 134). The suffix used to render on each tile and each
   insight — around a hundred repetitions on one screen, every one of them the
-  same word — which is a label that distinguishes nothing. provenanceIsMixed
-  decides per source: figures that all share one provenance carry no marker,
-  because the envelope's status already says where the payload came from;
-  figures that DISAGREE mark the recorded ones, because those are the ones
-  that would otherwise borrow the freshness of the live figures beside them.
-  Nothing left the payload — `recorded` still rides every figure — and the
-  mixed case is exactly what a successful refresh produces.
+  same word — which is a label that distinguishes nothing. The adapter
+  decides per source (provenanceIsMixed beside the data): figures that all
+  share one provenance carry no marker, because the envelope's status already
+  says where the payload came from; figures that DISAGREE arrive with
+  `marked` set on the recorded ones, because those are the ones that would
+  otherwise borrow the freshness of the live figures beside them. Nothing
+  left the payload, and the mixed case is exactly what a successful refresh
+  produces.
 
   A source with no daily series renders NO graph region at all (owner ruling,
   2026-08-24) — not an empty one, not a dimmed one, not a placeholder one.
   The two designs before it were both wrong in the same direction. First a
   line of text where the graph belongs, which explained the ORIGIN's refresh
-  configuration to a visitor who had asked about tokens. Then the graph's
+  configuration to a visitor who had asked about usage. Then the graph's
   chrome under a note calling the series unarrived, which was honest about its
   cells — every one absent, valueless and undated — and false about its
   premise, because nothing was on its way. A source that reports no daily
   record is not waiting for one, and space held for data that can never arrive
-  is a permanent hole rather than layout stability. So the region is gated on
+  is a permanent hole rather than layout stability. So the adapter carries an
+  activity region only when there is a series, the render below still gates on
   there being columns to draw, and a seriesless source keeps every figure it
   genuinely has — its tiles, its windows, its insights — with no graph on it.
   (The retired wording is quoted in the tests that pin its absence, so this
   file cannot be the place it comes back from.)
-  The envelope's status rides the shell's badge, and watchPanel keeps the
-  whole block current while the tab is visible.
 
   Every color and metric reads a custom property with a dark-native default,
   so themes restyle by overriding variables. -->
 <script lang="ts">
-  import type { PanelEnvelope, TokenUsageData, TokenUsageSource } from '../panels';
-  import { watchPanel } from '../panels';
-  import {
-    formatStatValue,
-    formatTokenCount,
-    formatUtilization,
-    meterFillPct,
-    meterSeverity,
-    provenanceIsMixed,
-    resetsIn,
-    tokenUsageSources
-  } from '../token-usage';
-  import { peakValue, seriesCells, seriesViews, toColumns, viewValues, type SeriesView } from '../grid';
+  import type { UsageActivity, UsageTrackerProps } from '../blocks.ts';
+  import { seriesCells, seriesViews, toColumns, viewValues, type SeriesView } from '../grid';
   import ContributionGrid from './ContributionGrid.svelte';
   import PanelShell from './PanelShell.svelte';
 
-  let envelope = $state<PanelEnvelope<TokenUsageData> | undefined>(undefined);
-
-  $effect(() => {
-    return watchPanel<TokenUsageData>('token-usage', (loaded) => (envelope = loaded));
-  });
+  let { id, title, status, generatedAt, sections, emptyNote }: UsageTrackerProps = $props();
 
   /* One view choice for the whole panel: the sources are read side by side,
-     so switching lens on one and not the other would be a comparison trap. */
+     so switching lens on one and not the other would be a comparison trap.
+     The lens is the ONE piece of state that stays here rather than in the
+     adapter, because it is presentation — the same series read three ways —
+     and the lens math (lib/grid.ts) knows no source either. */
   let view = $state<SeriesView>('daily');
 
-  const sources = $derived(envelope ? tokenUsageSources(envelope.data) : []);
-  /* The unavailablePanel fallback carries an empty title; the panel's own
-     registry title stands in so the shell heading never renders blank. */
-  const title = $derived(envelope?.title || 'Token usage');
-
-  /* gridColumns re-reads a source's daily series through the active lens and
-     lays it out as grid columns. A source without a series simply has none. */
-  function gridColumns(source: TokenUsageSource) {
-    if (!source.series) {
-      return [];
-    }
-    return toColumns(seriesCells(source.series.startDate, viewValues(source.series.totals, view)));
-  }
-
-  function seriesTotal(source: TokenUsageSource): number {
-    return source.series ? source.series.totals.reduce((sum, total) => sum + total, 0) : 0;
-  }
-
-  function seriesPeak(source: TokenUsageSource): number {
-    return source.series ? peakValue(seriesCells(source.series.startDate, source.series.totals)) : 0;
-  }
-
-  /* The summary line's day count, read through a helper for the same reason
-     the two above are: the markup asks a source a question and gets an answer
-     for every source, so no branch in the template has to prove a series
-     exists before it may mention one. */
-  function seriesDays(source: TokenUsageSource): number {
-    return source.series ? source.series.totals.length : 0;
+  /* activityColumns re-reads a region's daily series through the active lens
+     and lays it out as grid columns. */
+  function activityColumns(activity: UsageActivity) {
+    return toColumns(seriesCells(activity.series.startDate, viewValues([...activity.series.totals], view)));
   }
 </script>
 
-{#if envelope}
-  <aside class="token-usage" data-panel-id="token-usage" aria-label={title}>
-    <PanelShell {title} status={envelope.status} generatedAt={envelope.generatedAt}>
-      {#if sources.length === 0}
-        <p class="usage-empty">No usage data available.</p>
-      {:else}
-        {#each sources as source (source.label)}
-          <!-- Provenance marks are drawn by EXCEPTION, once per source: see
-            provenanceIsMixed. A source whose figures all share one provenance
-            marks none of them. -->
-          {@const mixed = provenanceIsMixed(source)}
-          <!-- The graph's columns, read once per source through the active
-            lens. They are also what DECIDES whether this source has a graph
-            region at all, so the gate below and the graph it guards can never
-            read two different things. -->
-          {@const activityColumns = gridColumns(source)}
-          <section class="usage-source">
-            <header class="usage-source-head">
-              <h3 class="usage-source-label">{source.label}</h3>
-              {#if source.account}<span class="usage-account">{source.account}</span>{/if}
-            </header>
+<aside class="usage-tracker" data-panel-id={id} aria-label={title}>
+  <PanelShell {title} {status} {generatedAt}>
+    {#if sections.length === 0}
+      <p class="usage-empty">{emptyNote}</p>
+    {:else}
+      {#each sections as source (source.key)}
+        <section class="usage-source">
+          <header class="usage-source-head">
+            <h3 class="usage-source-label">{source.label}</h3>
+            {#if source.sublabel}<span class="usage-account">{source.sublabel}</span>{/if}
+          </header>
 
-            {#if source.stats && source.stats.length > 0}
-              <ul class="usage-tiles">
-                {#each source.stats as stat (stat.key)}
-                  <li class="usage-tile" data-usage-tile>
-                    <span class="usage-tile-value">{formatStatValue(stat.value, stat.unit)}</span>
-                    <span class="usage-tile-label">
-                      {stat.label}{#if mixed && stat.recorded}<span
-                          class="usage-recorded"
-                          title="recorded out of band, not fetched live">· recorded</span
-                        >{/if}
-                    </span>
-                  </li>
-                {/each}
-              </ul>
-            {/if}
+          {#if source.tiles && source.tiles.length > 0}
+            <ul class="usage-tiles">
+              {#each source.tiles as tile (tile.key)}
+                <li class="usage-tile" data-usage-tile>
+                  <span class="usage-tile-value">{tile.figure}</span>
+                  <span class="usage-tile-label">
+                    {tile.label}{#if tile.marked}<span
+                        class="usage-recorded"
+                        title="recorded out of band, not fetched live">· recorded</span
+                      >{/if}
+                  </span>
+                </li>
+              {/each}
+            </ul>
+          {/if}
 
-            {#if source.windows.length === 0 && (!source.stats || source.stats.length === 0)}
-              <p class="usage-empty">No usage recorded for this source yet.</p>
-            {:else if source.windows.length > 0}
-              <ul class="usage-windows">
-                {#each source.windows as usageWindow}
-                  {@const reset = resetsIn(usageWindow.resetsAt)}
-                  <li class="usage-window">
-                    <div class="usage-window-head">
-                      <span class="usage-period">{usageWindow.period}</span>
-                      {#if reset}<span class="usage-reset">{reset}</span>{/if}
-                    </div>
-                    {#if usageWindow.utilizationPct !== undefined}
-                      <div class="usage-meter" data-severity={meterSeverity(usageWindow.utilizationPct)}>
-                        <div class="usage-meter-track" aria-hidden="true">
-                          <div
-                            class="usage-meter-fill"
-                            style:inline-size={`${meterFillPct(usageWindow.utilizationPct)}%`}
-                          ></div>
-                        </div>
-                        <span class="usage-meter-value">
-                          {formatUtilization(usageWindow.utilizationPct)}
-                        </span>
+          {#if source.note}
+            <p class="usage-empty">{source.note}</p>
+          {/if}
+
+          {#if source.windows && source.windows.length > 0}
+            <ul class="usage-windows">
+              {#each source.windows as usageWindow}
+                <li class="usage-window">
+                  <div class="usage-window-head">
+                    <span class="usage-period">{usageWindow.period}</span>
+                    {#if usageWindow.reset}<span class="usage-reset">{usageWindow.reset}</span>{/if}
+                  </div>
+                  {#if usageWindow.meter}
+                    <div class="usage-meter" data-severity={usageWindow.meter.severity}>
+                      <div class="usage-meter-track" aria-hidden="true">
+                        <div
+                          class="usage-meter-fill"
+                          style:inline-size={`${usageWindow.meter.fillPct}%`}
+                        ></div>
                       </div>
-                    {/if}
-                    <p
-                      class="usage-tokens"
-                      title={`${usageWindow.inputTokens} input tokens, ${usageWindow.outputTokens} output tokens`}
-                    >
-                      <span class="usage-token">
-                        <span class="usage-token-label">in</span>
-                        <span class="usage-token-value">{formatTokenCount(usageWindow.inputTokens)}</span>
+                      <span class="usage-meter-value">
+                        {usageWindow.meter.reading}
                       </span>
-                      <span class="usage-token">
-                        <span class="usage-token-label">out</span>
-                        <span class="usage-token-value">{formatTokenCount(usageWindow.outputTokens)}</span>
+                    </div>
+                  {/if}
+                  <p class="usage-pairs" title={usageWindow.pairsLabel}>
+                    {#each usageWindow.pairs as pair (pair.key)}
+                      <span class="usage-pair">
+                        <span class="usage-pair-label">{pair.label}</span>
+                        <span class="usage-pair-value">{pair.figure}</span>
                       </span>
-                    </p>
-                  </li>
-                {/each}
-              </ul>
-            {/if}
+                    {/each}
+                  </p>
+                </li>
+              {/each}
+            </ul>
+          {/if}
 
-            <!-- The whole region, heading and lens toggle included, and not
-              merely the graph inside it: a "Token activity" heading over a
-              three-way toggle with nothing to toggle is the hole by another
-              name. A source with no columns to draw renders none of this and
-              reads as what it is — a source that reports figures and no daily
-              record. See the ruling in this file's opening comment. -->
-            {#if activityColumns.length > 0}
+          <!-- The whole region, heading and lens toggle included, and not
+            merely the graph inside it: a heading over a three-way toggle with
+            nothing to toggle is the hole by another name. A source with no
+            columns to draw renders none of this and reads as what it is — a
+            source that reports figures and no daily record. See the ruling in
+            this file's opening comment. -->
+          {#if source.activity}
+            {@const columns = activityColumns(source.activity)}
+            {#if columns.length > 0}
               <section class="usage-activity">
                 <header class="usage-activity-head">
-                  <h4 class="usage-section-title">Token activity</h4>
+                  <h4 class="usage-section-title">{source.activity.heading}</h4>
                   <!-- One radio group, styled as a segmented pill: the choice
                     is exclusive, so radios carry the right semantics for
                     free. -->
-                  <div class="usage-views" role="radiogroup" aria-label="Token activity view">
+                  <div class="usage-views" role="radiogroup" aria-label={`${source.activity.heading} view`}>
                     {#each seriesViews as candidate}
                       <button
                         type="button"
@@ -211,59 +164,56 @@
                   </div>
                 </header>
                 <ContributionGrid
-                  columns={activityColumns}
-                  noun="token"
+                  {columns}
+                  noun={source.activity.noun}
                   {view}
-                  label={`${source.label} token activity, ${view} view`}
+                  label={`${source.activity.label}, ${view} view`}
                 />
                 <p class="usage-activity-total">
-                  {formatTokenCount(seriesTotal(source))} tokens over
-                  {seriesDays(source)}
-                  {seriesDays(source) === 1 ? 'day' : 'days'}, peaking at
-                  {formatTokenCount(seriesPeak(source))}
+                  {source.activity.summary}
                 </p>
               </section>
             {/if}
+          {/if}
 
-            {#if source.insights && source.insights.length > 0}
-              <section class="usage-insights">
-                <h4 class="usage-section-title">Activity insights</h4>
-                <ul class="usage-insight-rows">
-                  {#each source.insights as insight (insight.label)}
-                    <li class="usage-insight">
-                      <span class="usage-insight-label">
-                        {insight.label}{#if mixed && insight.recorded}<span
-                            class="usage-recorded"
-                            title="recorded out of band, not fetched live">· recorded</span
-                          >{/if}
-                      </span>
-                      <span class="usage-insight-track" aria-hidden="true">
-                        <span
-                          class="usage-insight-fill"
-                          style:inline-size={`${insight.pct === null ? 0 : meterFillPct(insight.pct)}%`}
-                        ></span>
-                      </span>
-                      <span class="usage-insight-value">
-                        {insight.pct === null ? '--' : formatUtilization(insight.pct)}
-                      </span>
-                    </li>
-                  {/each}
-                </ul>
-              </section>
-            {/if}
-          </section>
-        {/each}
-      {/if}
-    </PanelShell>
-  </aside>
-{/if}
+          {#if source.insights && source.insights.rows.length > 0}
+            <section class="usage-insights">
+              <h4 class="usage-section-title">{source.insights.heading}</h4>
+              <ul class="usage-insight-rows">
+                {#each source.insights.rows as insight (insight.key)}
+                  <li class="usage-insight">
+                    <span class="usage-insight-label">
+                      {insight.label}{#if insight.marked}<span
+                          class="usage-recorded"
+                          title="recorded out of band, not fetched live">· recorded</span
+                        >{/if}
+                    </span>
+                    <span class="usage-insight-track" aria-hidden="true">
+                      <span
+                        class="usage-insight-fill"
+                        style:inline-size={`${insight.fillPct}%`}
+                      ></span>
+                    </span>
+                    <span class="usage-insight-value">
+                      {insight.reading}
+                    </span>
+                  </li>
+                {/each}
+              </ul>
+            </section>
+          {/if}
+        </section>
+      {/each}
+    {/if}
+  </PanelShell>
+</aside>
 
 <style>
   /* An ordinary block in the page's panel stack. This panel used to be the
      only one laid out in the document, so it centred itself and reserved its
      own page padding; the stack owns both now, and a panel that decided its
      own page position would fight whatever the stack decided. */
-  .token-usage {
+  .usage-tracker {
     display: block;
   }
 
@@ -426,17 +376,17 @@
     color: var(--panel-text, rgb(230, 230, 230));
   }
 
-  .usage-tokens {
+  .usage-pairs {
     margin: 0;
     display: flex;
-    gap: var(--usage-token-gap, 0.75rem);
+    gap: var(--usage-pair-gap, 0.75rem);
   }
 
-  .usage-token-label {
+  .usage-pair-label {
     color: var(--panel-muted, rgb(158, 158, 158));
   }
 
-  .usage-token-value {
+  .usage-pair-value {
     font-weight: 650;
     color: var(--panel-text, rgb(230, 230, 230));
   }

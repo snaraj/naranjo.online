@@ -1,19 +1,9 @@
 <script lang="ts">
-  import PageHeader from './lib/components/PageHeader.svelte';
-  import SectionNav from './lib/components/SectionNav.svelte';
-  import WorkSection from './lib/components/WorkSection.svelte';
-  import ProjectsSection from './lib/components/ProjectsSection.svelte';
-  import AboutSection from './lib/components/AboutSection.svelte';
   import ColumnHandles from './lib/components/ColumnHandles.svelte';
-
-  /* Panel mount imports. One import line per panel, matching the one mount
-     line inside the panels-mount fences below. Sibling changes insert their
-     line anywhere between a fence pair so parallel additions merge cleanly. */
-  /* panels:imports:begin -- exactly one import line per panel */
-  import BossLog from './lib/components/BossLog.svelte';
-  import TokenUsagePanel from './lib/components/TokenUsagePanel.svelte';
-  import ActivityBar from './lib/components/ActivityBar.svelte';
-  /* panels:imports:end */
+  import PageHeader from './lib/components/PageHeader.svelte';
+  import PageSection from './lib/components/PageSection.svelte';
+  import SectionNav from './lib/components/SectionNav.svelte';
+  import { page } from './page.ts';
 </script>
 
 <svelte:head>
@@ -32,40 +22,23 @@
   30rem ribbon that arrangement replaced, which is why the column token grew
   rather than reverting.
 
-  The sections are components rather than markup here for the same reason the
-  panels are: this file stays a table of contents, and a section's copy,
-  structure and styling live with the section. -->
+  What the sections ARE lives in src/page.ts, the manifest (owner directive,
+  issue 165): this file renders that array and is otherwise inert. It used to
+  be the table of contents itself — one import and one mount line per section
+  and per panel, held in step by fence comments — and the manifest replaced
+  the fences, because an ordered array whose entries are the page needs no
+  markers to keep its halves aligned: there is only one half. Adding a block
+  or reordering the page happens there; this file changes when the page's
+  CHROME changes, nothing else. -->
 <main aria-labelledby="page-title">
   <div class="page-intro">
     <h1 id="page-title">Samuel Naranjo</h1>
     <SectionNav />
   </div>
 
-  <WorkSection />
-  <ProjectsSection />
-
-  <!-- The trackers section holds the panel stack: each panel a self-contained
-    tracker — OSRS stats, then the version-control calendar, then token usage,
-    then whatever lands next. They used to be the page's whole content; they
-    are one section of it now, and the nav names them.
-
-    The stack holds ONLY panels. Both page-level controls — the reading mode
-    and the refresh — sit together in the header's top-end corner (owner
-    directive, issue 127): the refresh used to head this stack, which put one
-    control above the centered title and the other beside it, so the two read
-    as unrelated chrome flanking the page's name. -->
-  <section class="page-section" id="trackers" aria-labelledby="trackers-title">
-    <h2 class="section-title" id="trackers-title">Trackers</h2>
-    <div class="panel-stack">
-      <!-- panels:mount:begin -- exactly one line per panel, anywhere between the fences -->
-      <BossLog />
-      <ActivityBar />
-      <TokenUsagePanel />
-      <!-- panels:mount:end -->
-    </div>
-  </section>
-
-  <AboutSection />
+  {#each page as section (section.id)}
+    <PageSection {section} />
+  {/each}
 
   <!-- The reader's grip on the column (owner directive, 2026-08-24). It sits
     INSIDE main because main is the column: the two handles are drawn against

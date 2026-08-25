@@ -4,6 +4,8 @@ import { describe, it, test } from 'node:test';
 
 import {
   activityCells,
+  activityEntriesNote,
+  activityFiguresNote,
   activityPanelId,
   commitPullRequestNumber,
   commitReferenceLinkLabel,
@@ -12,9 +14,12 @@ import {
   commitRepoUrl,
   commitShaLinkLabel,
   commitShaUrl,
+  commitTitleLink,
   isValidCommitSha,
   isValidRepoSlug,
-  parseVCSActivity
+  parseVCSActivity,
+  shownEntryRows,
+  vcsActivityProps
 } from '../src/lib/activity.ts';
 import { toColumns } from '../src/lib/grid.ts';
 import { projectHost, projectHostLabel } from '../src/lib/projects.ts';
@@ -399,18 +404,12 @@ describe('commitReferenceUrl', () => {
 });
 
 describe('destination precedence — sha over reference (issue 157, Daybreak Blue round 3 finding 3)', () => {
-  // This exercises the SAME precedence rule ActivityBar.svelte's
-  // {@const shaHref = commitShaUrl(commit)} / {@const referenceHref =
-  // shaHref ? null : commitReferenceUrl(commit)} pair implements, computed
-  // here directly from the two pure builders so the rule is proven
-  // independent of the component's own markup (the structural test above
-  // proves the MARKUP encodes this precedence; this proves the RULE ITSELF
-  // is the one Daybreak asked for).
-  function chooseDestination(commit) {
-    const shaHref = commitShaUrl(commit);
-    const referenceHref = shaHref ? null : commitReferenceUrl(commit);
-    return { shaHref, referenceHref };
-  }
+  // commitTitleLink is the ONE place the rule lives (issue 165): the
+  // adapter hands its result straight to the generic component, which
+  // renders whatever href it is given and computes none of its own. These
+  // tests execute that production function directly, so the rule is proven
+  // where it is decided — a swapped order (reference consulted before the
+  // sha) flips the winning href below and fails here.
 
   it('prefers the validated SHA permalink over an unverifiable trailing reference on the SAME row', () => {
     // The exact case Daybreak Blue's probe used: a proven commit identity
@@ -418,28 +417,28 @@ describe('destination precedence — sha over reference (issue 157, Daybreak Blu
     // number. Before this fix, the reference always won — an unverifiable
     // "(#9999999)" outlinked a commit this document could actually vouch
     // for.
+    const sha = '0123456789abcdef0123456789abcdef01234567';
     const commit = {
       repo: 'naranjo.online',
-      sha: '0123456789abcdef0123456789abcdef01234567',
+      sha,
       message: 'handwritten reference to nowhere (#9999999)'
     };
-    const { shaHref, referenceHref } = chooseDestination(commit);
-    assert.equal(shaHref, `${projectHost}/naranjo.online/commit/0123456789abcdef0123456789abcdef01234567`);
-    assert.equal(referenceHref, null, 'the reference destination must not be computed once a valid sha wins');
+    const title = commitTitleLink(commit);
+    assert.equal(title.href, `${projectHost}/naranjo.online/commit/${sha}`);
+    assert.doesNotMatch(title.href, /issues\/9999999/, 'a syntactic guess must never outrank the proven identity');
+    assert.equal(title.label, commitShaLinkLabel(commit.message, sha));
   });
 
   it('falls back to the reference destination only when no valid sha is present', () => {
-    const commit = { repo: 'naranjo.online', sha: '', message: 'release (#152)' };
-    const { shaHref, referenceHref } = chooseDestination(commit);
-    assert.equal(shaHref, null);
-    assert.equal(referenceHref, `${projectHost}/naranjo.online/issues/152`);
+    const title = commitTitleLink({ repo: 'naranjo.online', sha: '', message: 'release (#152)' });
+    assert.equal(title.href, `${projectHost}/naranjo.online/issues/152`);
+    assert.equal(title.label, commitReferenceLinkLabel('release (#152)'));
   });
 
   it('renders neither destination when both fail to validate', () => {
-    const commit = { repo: 'naranjo.online', sha: '', message: 'fixture: subject line' };
-    const { shaHref, referenceHref } = chooseDestination(commit);
-    assert.equal(shaHref, null);
-    assert.equal(referenceHref, null);
+    const title = commitTitleLink({ repo: 'naranjo.online', sha: '', message: 'fixture: subject line' });
+    assert.equal(title.href, null, 'plain text is the honest state when nothing validates');
+    assert.equal(title.text, 'fixture: subject line');
   });
 });
 
@@ -489,33 +488,72 @@ describe('isValidCommitSha / commitShaUrl', () => {
   });
 });
 
-const [component, appShell, helpers, grid] = await Promise.all([
-  readFile(new URL('../src/lib/components/ActivityBar.svelte', import.meta.url), 'utf8'),
-  readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
+const [component, manifest, binding, helpers, grid] = await Promise.all([
+  readFile(new URL('../src/lib/components/ActivityTracker.svelte', import.meta.url), 'utf8'),
+  readFile(new URL('../src/page.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../src/lib/blocks/vcsActivity.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/activity.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/components/ContributionGrid.svelte', import.meta.url), 'utf8')
 ]);
 
 // Browser execution is deliberately outside this dependency-free test; these
 // assertions pin the component source's structural contracts the same way
-// experience.test.mjs pins the shells.
+// experience.test.mjs pins the shells. What the component used to compute it
+// now receives (issue 165): the adapter below is EXECUTED, and the component
+// pins hold that the generic tracker renders exactly what it is handed.
 test('the calendar renders through the one shared grid component', () => {
   // The ramp, the cell labels, the month axis, and the absent-day rendering
-  // live in ContributionGrid — the same component the token-activity heatmap
-  // uses — so the two grids cannot drift apart.
+  // live in ContributionGrid — the same component the usage tracker's
+  // heatmap uses — so the two grids cannot drift apart.
   assert.match(component, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
   assert.match(component, /<ContributionGrid/);
-  assert.match(component, /noun="contribution"/);
+  assert.match(component, /noun=\{strip\.noun\}/);
   // Totals and streak ride beside the grid as plain text, so a count is
-  // never encoded by color alone.
-  assert.match(component, /contributions</);
-  assert.match(component, /-day streak</);
-  assert.match(component, /formatWhole\(activity\.totalContributions\)/);
+  // never encoded by color alone. The words arrive as data with the figure.
+  assert.match(component, /<span><strong>\{figure\.lead\}<\/strong>\{figure\.rest\}<\/span>/);
+});
+
+test('the adapter renders the figures, the strip, and the noun the panel always showed', () => {
+  const envelope = {
+    schema: 'panel/v1',
+    id: activityPanelId,
+    kind: 'vcs-activity/v1',
+    title: 'Fixture Activity',
+    status: 'ok',
+    generatedAt: '2026-08-11T00:12:00Z',
+    data: goodActivity
+  };
+  const rendered = vcsActivityProps(envelope);
+  assert.equal(rendered.title, 'Fixture Activity');
+  assert.equal(rendered.status, 'ok');
+  assert.equal(rendered.generatedAt, '2026-08-11T00:12:00Z');
+  assert.deepEqual(
+    rendered.figures.map((figure) => figure.lead + figure.rest),
+    ['1,287 contributions', '9-day streak'],
+    'the two headline figures read exactly as the panel always has'
+  );
+  assert.equal(rendered.strip.noun, 'contribution');
+  assert.equal(rendered.strip.label, 'contribution calendar: 2 weeks of daily counts, newest last');
+  assert.deepEqual(rendered.strip.columns, toColumns(activityCells(parseVCSActivity(goodActivity))));
+  // The payload renders only under its pinned kind: a mislabeled envelope is
+  // the honest empty state, exactly as the retired component decided it.
+  const mislabeled = vcsActivityProps({ ...envelope, kind: 'boss-log/v1' });
+  assert.deepEqual(mislabeled.figures, []);
+  assert.deepEqual(mislabeled.strip.columns, []);
+  assert.equal(mislabeled.strip.label, 'contribution calendar');
 });
 
 test('an empty commit list says so instead of showing invented history', () => {
-  assert.match(component, /\{#if commits\.length === 0\}/);
-  assert.match(component, /no recent commits reported/);
+  assert.match(component, /\{#if entries\.length === 0\}/);
+  assert.match(component, /\{entriesNote\}/);
+  // The wording is the adapter's, verbatim from the retired component.
+  assert.equal(activityEntriesNote, 'no recent commits reported');
+  assert.equal(activityFiguresNote, 'no activity data');
+  assert.equal(vcsActivityProps(null).entriesNote, 'no recent commits reported');
+  assert.equal(vcsActivityProps(null).figuresNote, 'no activity data');
+  assert.equal(vcsActivityProps(null).strip.emptyNote, 'activity data unavailable');
+  assert.equal(vcsActivityProps(null).title, 'Version-control activity');
+  assert.equal(vcsActivityProps(null).status, 'unavailable');
 });
 
 test('the cell ramp is themeable custom properties with the validated dark defaults', () => {
@@ -558,11 +596,30 @@ test('the strip owns fixed geometry and its own overflow', () => {
   // Fixed block sizes per region: data arriving never shifts layout.
   assert.match(grid, /\.grid-strip \{[^}]*block-size: 7rem/);
   assert.match(component, /\.activity-totals \{[^}]*block-size: 1\.25rem/);
-  // Five rows at the 44px touch floor (issue 157): every commit row carries
-  // two real links now, so the fixed reservation grew from 5.625rem to
+  // Five rows at the 44px touch floor (issue 157): every entry row can carry
+  // two real links, so the fixed reservation grew from 5.625rem to
   // 13.75rem (5 * 2.75rem) rather than staying a decorative-text height.
-  assert.match(component, /\.activity-commits \{[^}]*block-size: 13\.75rem/);
-  assert.match(component, /\.activity-commit \{[^}]*min-block-size: 2\.75rem/);
+  assert.match(component, /\.activity-entries \{[^}]*block-size: 13\.75rem/);
+  assert.match(component, /\.activity-entry \{[^}]*min-block-size: 2\.75rem/);
+  // The reservation and the row cap agree by construction: the adapter shows
+  // at most the rows the fixed box holds.
+  assert.equal(shownEntryRows, 5);
+  const overfull = vcsActivityProps({
+    schema: 'panel/v1',
+    id: activityPanelId,
+    kind: 'vcs-activity/v1',
+    title: 'Fixture Activity',
+    status: 'ok',
+    data: {
+      ...goodActivity,
+      recentCommits: Array.from({ length: 9 }, (_, index) => ({
+        repo: 'fixture-repo',
+        message: `fixture: subject ${index}`,
+        at: '2026-08-11T00:12:00Z'
+      }))
+    }
+  });
+  assert.equal(overfull.entries.length, 5, 'the payload may carry more rows; the rest do not render');
   // A wide window scrolls inside the strip, never the page.
   assert.match(grid, /\.grid-strip \{[^}]*overflow-x: auto/);
   // The panel is an ordinary block in the page's stack. It used to dock to
@@ -571,67 +628,96 @@ test('the strip owns fixed geometry and its own overflow', () => {
   // against that same reserve so the two could not disagree — two facts that
   // only existed because it floated. It takes the column's width now, so it
   // declares neither.
-  assert.match(component, /\.activity-bar \{[^}]*display: block/);
+  assert.match(component, /\.activity-tracker \{[^}]*display: block/);
   assert.doesNotMatch(component, /position: fixed/, 'the panel must not dock again');
   assert.doesNotMatch(component, /--page-activity-gutter/, 'a card reserves no gutter');
 });
 
-test('every commit-row href is built from the validated helpers, never raw interpolation', () => {
-  // The structural half of the mutation guard above: even if a hostile
-  // payload could somehow slip past the pure-function tests, this pins that
-  // the COMPONENT never has a second, unvalidated way to build a link. A
-  // mutation that inlined `href={`${projectHost}/${commit.repo}`}` (or any
-  // other direct interpolation of a commit field — repo, message, OR the
-  // newer sha — into an href) would match this pattern and fail the
-  // assertion below.
-  assert.doesNotMatch(
-    component,
-    /href=\{[^}]*commit\.(?:repo|message|sha)[^}]*\}/,
-    'a commit field must never be interpolated directly into an href — go through the const below'
+test('every entry-row href is built by the validated helpers, and the component builds none', () => {
+  // The adapter half, EXECUTED with a hostile payload: a repo that fails the
+  // slug pattern, a subject that resolves no reference, and a sha shaped
+  // like an injection must all arrive at the component as null hrefs — the
+  // plain-text branch — while their text survives verbatim as data. A
+  // reversion to raw interpolation inside the adapter flips one of these
+  // from null to a string and fails here. The title destinations encode the
+  // precedence Daybreak Blue asked for (round 3, finding 3): the validated
+  // SHA permalink outranks the trailing "(#N)" reference, and the reference
+  // is consulted only when no valid sha exists for the same row.
+  const validSha = '0123456789abcdef0123456789abcdef01234567';
+  const hostileSha = `${validSha.slice(0, 33)}"onmouseover="x`;
+  const hostile = vcsActivityProps({
+    schema: 'panel/v1',
+    id: activityPanelId,
+    kind: 'vcs-activity/v1',
+    title: 'Fixture Activity',
+    status: 'ok',
+    data: {
+      ...goodActivity,
+      recentCommits: [
+        { repo: 'evil.com/x', sha: '', message: 'release (#152)', at: '2026-08-11T00:12:00Z' },
+        { repo: 'naranjo.online', sha: '', message: 'fixture: subject line', at: '2026-08-11T00:12:00Z' },
+        { repo: 'naranjo.online', sha: '', message: 'release (#152)', at: '2026-08-11T00:12:00Z' },
+        { repo: 'naranjo.online', sha: validSha, message: 'a commit with no trailing reference', at: '2026-08-11T00:12:00Z' },
+        { repo: 'naranjo.online', sha: hostileSha, message: 'release (#152)', at: '2026-08-11T00:12:00Z' }
+      ]
+    }
+  });
+  const [badRepo, noReference, referenced, shaOnly, badSha] = hostile.entries;
+  assert.equal(badRepo.source.href, null, 'a hostile repo must never become an href');
+  assert.equal(badRepo.source.text, 'evil.com/x', 'the text still renders, as text');
+  assert.equal(badRepo.title.href, null, 'a hostile repo poisons the entry link too');
+  assert.equal(noReference.source.href, `${projectHost}/naranjo.online`);
+  assert.equal(
+    noReference.title.href,
+    null,
+    'a subject with no reference and no sha renders as plain text'
   );
-  // Every href is bound once, from the imported validators, before the
-  // markup ever reads it. The message cell tries its SHA-permalink
-  // destination FIRST and its reference destination only once that
-  // resolves to null (referenceHref is computed FROM shaHref's own
-  // nullness, never independently, so the two branches can never both fire
-  // for one row). This precedence — SHA over syntactic reference — is
-  // itself the fix for Daybreak Blue's round-3 finding 3: shaHref is the
-  // one association this document can actually prove, so an unverifiable
-  // trailing "(#N)" must never outrank it. A mutation that swapped this
-  // order back (referenceHref computed unconditionally, shaHref gated on
-  // referenceHref's nullness) would fail this exact assertion.
-  assert.match(component, /\{@const repoHref = commitRepoUrl\(commit\.repo\)\}/);
-  assert.match(component, /\{@const shaHref = commitShaUrl\(commit\)\}/);
-  assert.match(component, /\{@const referenceHref = shaHref \? null : commitReferenceUrl\(commit\)\}/);
-  assert.match(component, /href=\{repoHref\}/);
-  assert.match(component, /href=\{referenceHref\}/);
-  assert.match(component, /href=\{shaHref\}/);
-  // A row the validators reject falls back to a plain <span> carrying the
-  // same escaped interpolation — never a link, never markup.
-  assert.match(component, /\{#if repoHref\}/);
-  assert.match(component, /<span class="activity-commit-repo">\{commit\.repo\}<\/span>/);
-  assert.match(component, /\{#if shaHref\}/);
-  assert.match(component, /\{:else if referenceHref\}/);
+  // /issues/N, never /pull/N, and a neutral "reference" accessible name —
+  // the destination and label commitReferenceUrl's own tests justify above.
+  assert.equal(referenced.title.href, `${projectHost}/naranjo.online/issues/152`);
+  assert.equal(referenced.source.label, commitRepoLinkLabel('naranjo.online'));
+  assert.equal(referenced.title.label, commitReferenceLinkLabel('release (#152)'));
+  assert.match(referenced.age, /\S/, 'an entry states its age');
+  // The sha-permalink branch: a row with a proven identity and no reference
+  // still gets real navigation — its own commit.
+  assert.equal(shaOnly.title.href, `${projectHost}/naranjo.online/commit/${validSha}`);
+  assert.equal(
+    shaOnly.title.label,
+    commitShaLinkLabel('a commit with no trailing reference', validSha)
+  );
+  // A PRESENT-but-invalid sha loses only its own permalink capability: the
+  // row falls back to its reference exactly as if it carried no sha at all,
+  // and the hostile bytes never reach an href.
+  assert.equal(badSha.title.href, `${projectHost}/naranjo.online/issues/152`);
+  assert.doesNotMatch(badSha.title.href, /onmouseover/);
+
+  // The structural half: the generic component renders the href it is handed
+  // or renders text — it never assembles one. Any interpolation beyond the
+  // two data fields would fail these pins.
+  const hrefs = [...component.matchAll(/href=\{([^}]*)\}/g)].map(([, expression]) => expression);
+  assert.deepEqual(
+    hrefs.sort(),
+    ['entry.source.href', 'entry.title.href'],
+    'the component may render exactly the two validated hrefs and construct neither'
+  );
+  assert.match(component, /\{#if entry\.source\.href\}/);
+  assert.match(component, /<span class="activity-entry-source">\{entry\.source\.text\}<\/span>/);
+  assert.match(component, /\{#if entry\.title\.href\}/);
   assert.match(
     component,
-    /<span class="activity-commit-message" title=\{commit\.message\}>\{commit\.message\}<\/span>/
+    /<span class="activity-entry-title" title=\{entry\.title\.text\}>\{entry\.title\.text\}<\/span>/
   );
   // Text, never markup: this component must never reach for {@html} anywhere,
-  // now that three of its fields are payload-controlled link targets.
-  assert.doesNotMatch(component, /\{@html/, 'commit fields must never render as markup');
-  // All three outbound-link branches close the same way: a new tab that says
-  // so, and the two attributes the threat model requires on anything
-  // leaving the page. Only one of the message cell's two branches ever
-  // renders for a given row, but both exist in the SOURCE, so the static
-  // count is three (repo, reference, sha) even though a rendered row shows
-  // at most two anchors.
+  // now that two of its fields are payload-controlled link targets.
+  assert.doesNotMatch(component, /\{@html/, 'entry fields must never render as markup');
+  // Both outbound links close the same way: a new tab that says so, and the
+  // two attributes the threat model requires on anything leaving the page.
   const targetBlank = component.match(/target="_blank"/g) ?? [];
   const relSafe = component.match(/rel="noopener noreferrer"/g) ?? [];
-  assert.equal(targetBlank.length, 3, 'all three anchor branches must open a new tab');
-  assert.equal(relSafe.length, 3, 'all three anchor branches must carry rel="noopener noreferrer"');
-  assert.match(component, /aria-label=\{commitRepoLinkLabel\(commit\.repo\)\}/);
-  assert.match(component, /aria-label=\{commitReferenceLinkLabel\(commit\.message\)\}/);
-  assert.match(component, /aria-label=\{commitShaLinkLabel\(commit\.message, commit\.sha\)\}/);
+  assert.equal(targetBlank.length, 2, 'both the source and the title anchor must open a new tab');
+  assert.equal(relSafe.length, 2, 'both anchors must carry rel="noopener noreferrer"');
+  assert.match(component, /aria-label=\{entry\.source\.label\}/);
+  assert.match(component, /aria-label=\{entry\.title\.label\}/);
 });
 
 test('activity sources stay local-origin and provider-neutral', () => {
@@ -643,15 +729,23 @@ test('activity sources stay local-origin and provider-neutral', () => {
   }
 });
 
-test('the app mounts exactly one activity line per fence', () => {
-  const importLines = appShell.match(/^.*import ActivityBar from '\.\/lib\/components\/ActivityBar\.svelte';.*$/gm);
-  assert.equal(importLines?.length, 1, 'exactly one ActivityBar import line');
-  const mountLines = appShell.match(/^\s*<ActivityBar \/>\s*$/gm);
-  assert.equal(mountLines?.length, 1, 'exactly one ActivityBar mount line');
-  // Each line sits inside its designated fence pair.
-  assert.match(
-    appShell,
-    /panels:imports:begin[\s\S]*import ActivityBar[\s\S]*panels:imports:end/
+test('the manifest mounts the activity block exactly once, bound to its panel', () => {
+  // The fences retired with the table-of-contents App (issue 165): the
+  // manifest IS the mount list, so the pin moves to it. Exactly one block
+  // module binds the tracker to the panel id, and the trackers section lists
+  // that block exactly once.
+  const importLines = manifest.match(/^import \{ vcsActivity \} from '\.\/lib\/blocks\/vcsActivity\.ts';$/gm);
+  assert.equal(importLines?.length, 1, 'exactly one import line for the activity block');
+  const body = manifest.replace(/^import[^\n]*\n/gm, '');
+  assert.equal(
+    (body.match(/\bvcsActivity\b/g) ?? []).length,
+    1,
+    'the manifest lists the activity block exactly once'
   );
-  assert.match(appShell, /panels:mount:begin[\s\S]*<ActivityBar \/>[\s\S]*panels:mount:end/);
+  assert.match(
+    manifest,
+    /section\('trackers', 'Trackers', \[osrsStats, vcsActivity, tokenUsage\], \{ layout: 'stack' \}\)/,
+    'the trackers section lists the activity block in the stacked order the page renders'
+  );
+  assert.match(binding, /panelBlock\(\s*'vcs-activity',\s*ActivityTracker,\s*activityPanelId,\s*vcsActivityProps\s*\)/);
 });

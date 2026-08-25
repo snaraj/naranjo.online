@@ -7,10 +7,15 @@
  * internal/panels/types.go: the hiscores legitimately return no figure, and
  * null is data that must survive the round trip. */
 
-import { skillSlug } from './bossIcons.ts';
+import type { StatGrid, StatTrackerProps } from './blocks.ts';
+import { bossInitials, bossSlug, skillSlug } from './bossIcons.ts';
 import { formatWhole } from './grid.ts';
-import type { BossLogEntry, BossLogSkill } from './panels';
+import type { BossLogData, BossLogEntry, BossLogSkill, PanelEnvelope } from './panels';
 import type { TipDetail } from './tooltip.ts';
+
+/* The registry identifier the stats block loads; the one place the id is
+ * spelled on the frontend. */
+export const bossLogPanelId = 'boss-log';
 
 /* The rendering for a figure the hiscores do not report. It is deliberately
  * NOT "0": zero kills and no reported figure are different claims, and a
@@ -148,4 +153,107 @@ export function skillDetail(skill: BossLogSkill): TipDetail {
  * heading, which is exactly the room the tile did not have. */
 export function summaryDetail(cell: SkillSummaryCell): TipDetail {
   return { name: cell.name, rows: [{ label: cell.label, value: cell.value }] };
+}
+
+/* ---------------------------------------------------------------------------
+ * The adapter (issue 165): boss-log envelope in, StatTracker props out. This
+ * is where the game becomes rows in a generic grid — every name, figure and
+ * detail below rides a domain-free field, and the component that renders the
+ * result knows none of this file.
+ * ------------------------------------------------------------------------ */
+
+/* The icon URLs the adapter draws from, keyed by the same slug rule the icon
+ * files are named by. The maps are built by the binding module
+ * (lib/blocks/osrsStats.ts), because content-hashed asset URLs come from the
+ * bundler and this module stays executable under plain node. */
+export interface StatIconSet {
+  /* Icons for the compact levels grid (assets/icons/skills). */
+  readonly levels: ReadonlyMap<string, string>;
+  /* Icons for the roomy tallies grid (assets/icons/bosses). */
+  readonly tallies: ReadonlyMap<string, string>;
+}
+
+/* The shell heading before any envelope arrives; afterwards the ORIGIN's own
+ * title rides the envelope, exactly as it always has. */
+export const bossLogFallbackTitle = 'Old School RuneScape Stats';
+
+/* The three honest non-data states, verbatim from the retired component. */
+export const bossLogLoadingNote = 'Loading the boss log.';
+export const bossLogUnavailableNote = 'Boss data is unavailable right now.';
+export const bossLogEmptySkillsNote = 'No skill levels reported.';
+
+/* osrsStatsProps renders the whole panel as data:
+ *
+ *   no envelope yet   -> the fallback title over the loading note;
+ *   envelope, no data -> the envelope's own title over the unavailable note;
+ *   data              -> the compact levels grid (icon, level, the two totals
+ *                        closing the last row) and the roomy tallies grid, in
+ *                        the RuneLite arrangement the owner asked for.
+ *
+ * The levels grid carries an emptyNote and the tallies grid deliberately does
+ * NOT: a payload without skills says so in words, while a payload without
+ * bosses renders the empty table it always rendered — same two shapes the
+ * retired component drew, decided by the same data. Unranked rows arrive
+ * muted (true or false, so the tallies grid always states the distinction);
+ * the levels grid never sets the flag, because the hiscores rank skills too
+ * and the retired grid never drew that state — an attribute would claim a
+ * distinction the rendering does not make. */
+export function osrsStatsProps(envelope: PanelEnvelope | null, icons: StatIconSet): StatTrackerProps {
+  if (envelope === null) {
+    return { title: bossLogFallbackTitle, status: 'unavailable', grids: [], note: bossLogLoadingNote };
+  }
+  /* The registry id names the kind, the same trust the retired mount
+   * expressed through watchPanel's type parameter. */
+  const data = (envelope.data ?? undefined) as BossLogData | undefined;
+  if (!data) {
+    return {
+      title: envelope.title,
+      status: envelope.status,
+      generatedAt: envelope.generatedAt,
+      grids: [],
+      note: bossLogUnavailableNote
+    };
+  }
+  const skills = data.skills ?? [];
+  const levels: StatGrid = {
+    key: 'levels',
+    label: 'Skill levels',
+    size: 'compact',
+    emptyNote: bossLogEmptySkillsNote,
+    cells: skills.map((skill) => ({
+      key: skill.name,
+      icon: icons.levels.get(skillSlug(skill.name)),
+      glyph: bossInitials(skill.name),
+      figure: tally(skill.level),
+      label: skillLabel(skill),
+      detail: skillDetail(skill)
+    })),
+    closing: skillSummary(skills).map((cell) => ({
+      key: cell.key,
+      caption: cell.label,
+      figure: cell.value,
+      label: summaryLabel(cell),
+      detail: summaryDetail(cell)
+    }))
+  };
+  const tallies: StatGrid = {
+    key: 'tallies',
+    label: 'Boss tallies',
+    size: 'roomy',
+    cells: data.bosses.map((boss) => ({
+      key: boss.name,
+      icon: icons.tallies.get(bossSlug(boss.name)),
+      glyph: bossInitials(boss.name),
+      figure: tally(boss.kc),
+      label: cellLabel(boss),
+      detail: bossDetail(boss),
+      muted: boss.rank === null
+    }))
+  };
+  return {
+    title: envelope.title,
+    status: envelope.status,
+    generatedAt: envelope.generatedAt,
+    grids: [levels, tallies]
+  };
 }

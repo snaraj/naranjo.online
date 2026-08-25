@@ -1,24 +1,31 @@
 /* The stacked page's sections and the feed primitive they are built from
- * (owner directive, issue 134).
+ * (owner directive, issue 134), reorganized by the block architecture (owner
+ * directive, issue 165): the page is ONE manifest of sections and blocks in
+ * src/page.ts, each block a generic component bound to an information source
+ * through a small adapter.
  *
  * Two kinds of assertion live here and they answer different questions. The
- * pure logic — which regions a card draws, what a nav link points at, how a
- * count is worded, what URL a picture resolves to — is EXECUTED, because those
- * are the places a defect would be invisible to a pattern match: a card that
- * renders an empty header band, a link that points at a section nobody
- * rendered, "1 commits", a media URL the origin refuses. The markup and the
- * styling are pinned as source, the way the rest of this suite pins them,
- * because there is no DOM here by contract and the browser lanes in
- * e2e/rendering-lanes.spec.mjs measure the rendered result instead.
+ * pure logic — the manifest constructors, what a nav link points at, which
+ * regions a card draws, how a count is worded, what URL a picture resolves
+ * to, what props each adapter builds — is EXECUTED, because those are the
+ * places a defect would be invisible to a pattern match: a card that renders
+ * an empty header band, a link that points at a section nobody rendered,
+ * "1 commits", a media URL the origin refuses. The markup and the styling are
+ * pinned as source, the way the rest of this suite pins them, because there
+ * is no DOM here by contract and the browser lanes in
+ * e2e/rendering-lanes.spec.mjs measure the rendered result instead. The
+ * manifest itself is pinned as source too: it imports components, so node
+ * cannot execute it — the constructors it is written in are executed instead.
  */
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
 
+import { section, sectionHref, staticBlock } from '../src/lib/blocks.ts';
 import { feedCardRegions, feedCardVariants, formatIsoDate } from '../src/lib/feed.ts';
-import { pageSections, sectionHref } from '../src/lib/sections.ts';
-import { workEntries, workPlaceholderNote } from '../src/lib/work.ts';
+import { workEntries, workHistoryProps, workPlaceholderNote } from '../src/lib/work.ts';
 import {
+  codingProjectsProps,
   projectCounts,
   projectHost,
   projectLinkLabel,
@@ -26,35 +33,53 @@ import {
   projectsCapturedOn,
   projectUrl,
 } from '../src/lib/projects.ts';
-import { artLabel, artPieces, artSource, artUnavailableNote } from '../src/lib/art.ts';
+import {
+  artGalleryProps,
+  artLabel,
+  artPieces,
+  artSource,
+  artUnavailableNote,
+} from '../src/lib/art.ts';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
-const [app, styles, feedCard, sectionNav, workSection, projectsSection, artGallery, aboutSection] =
+const [app, styles, manifest, feedCard, sectionNav, pageSectionSource, blockHost, entryLog, mediaGallery, emptyNote] =
   await Promise.all([
     read('../src/App.svelte'),
     read('../src/styles.css'),
+    read('../src/page.ts'),
     read('../src/lib/components/FeedCard.svelte'),
     read('../src/lib/components/SectionNav.svelte'),
-    read('../src/lib/components/WorkSection.svelte'),
-    read('../src/lib/components/ProjectsSection.svelte'),
-    read('../src/lib/components/ArtGallery.svelte'),
-    read('../src/lib/components/AboutSection.svelte'),
+    read('../src/lib/components/PageSection.svelte'),
+    read('../src/lib/components/Block.svelte'),
+    read('../src/lib/components/EntryLog.svelte'),
+    read('../src/lib/components/MediaGallery.svelte'),
+    read('../src/lib/components/EmptyNote.svelte'),
   ]);
 
-/* The sources this pass introduced, markup and scoped styles together. */
+/* The binding modules that introduce each block to the page; they import
+ * components, so they are source-pinned rather than executed. */
+const [workBinding, artBinding, projectsBinding, aboutBinding] = await Promise.all([
+  read('../src/lib/blocks/workHistory.ts'),
+  read('../src/lib/blocks/artGallery.ts'),
+  read('../src/lib/blocks/codingProjects.ts'),
+  read('../src/lib/blocks/about.ts'),
+]);
+
+/* The generic components this architecture renders the page through. */
 const introduced = {
   FeedCard: feedCard,
   SectionNav: sectionNav,
-  WorkSection: workSection,
-  ProjectsSection: projectsSection,
-  ArtGallery: artGallery,
-  AboutSection: aboutSection,
+  PageSection: pageSectionSource,
+  Block: blockHost,
+  EntryLog: entryLog,
+  MediaGallery: mediaGallery,
+  EmptyNote: emptyNote,
 };
 
 /* Every component in the tree, discovered by walking it rather than listed by
- * hand, so a section component added later is covered without anyone
- * remembering to add it here. */
+ * hand, so a component added later is covered without anyone remembering to
+ * add it here. */
 const componentSources = Object.fromEntries(
   await Promise.all(
     (await readdir(new URL('../src', import.meta.url), { recursive: true }))
@@ -65,61 +90,105 @@ const componentSources = Object.fromEntries(
 
 const styleBlock = (source) => /<style[^>]*>([\s\S]*?)<\/style>/.exec(source)?.[1] ?? '';
 
+/* The manifest's section calls, read from the one module the page is. Each
+ * captured id and label is then driven through the EXECUTED constructor the
+ * manifest is written in, so the assertions bind to the real page rather
+ * than to a copy of it. */
+const manifestSections = [...manifest.matchAll(
+  /section\('([a-z-]+)', '([^']+)', \[([^\]]*)\](?:, (\{ layout: 'stack' \}))?\)/g
+)].map(([, id, label, blocks, stack]) => ({
+  id,
+  label,
+  blocks: blocks.split(',').map((name) => name.trim()).filter(Boolean),
+  layout: stack ? 'stack' : 'flow',
+}));
+
 // ---------------------------------------------------------------------------
-// The nav and the sections it points at
+// The manifest, the nav, and the sections it points at
 // ---------------------------------------------------------------------------
 
-test('the nav names the owner’s four sections, in the order the page stacks them', () => {
+test('the manifest names the owner’s four sections, in the order the page stacks them', () => {
   assert.deepEqual(
-    pageSections.map((section) => section.label),
+    manifestSections.map((entry) => entry.label),
     ['Work', 'Projects', 'Trackers', 'About Me'],
-    'the nav labels are the owner’s words and their order is the page’s order'
+    'the section labels are the owner’s words and their order is the page’s order'
   );
   assert.deepEqual(
-    pageSections.map((section) => section.id),
+    manifestSections.map((entry) => entry.id),
     ['work', 'projects', 'trackers', 'about']
   );
-  // The href is built by a function rather than concatenated in markup, so a
-  // lost '#' is one red test instead of four links to the page root.
   assert.deepEqual(
-    pageSections.map(sectionHref),
-    ['#work', '#projects', '#trackers', '#about']
+    manifestSections.map((entry) => entry.blocks),
+    [
+      ['workHistory'],
+      ['artGallery', 'codingProjects'],
+      ['osrsStats', 'vcsActivity', 'tokenUsage'],
+      ['about'],
+    ],
+    'each section holds exactly its blocks; reordering the page is moving one name here'
   );
+  assert.deepEqual(
+    manifestSections.map((entry) => entry.layout),
+    ['flow', 'flow', 'stack', 'flow'],
+    'the trackers section is the one panel stack'
+  );
+  // The constructors the manifest is written in, executed with its own ids:
+  // the id in, the id out, the layout defaulted to flow, and the href built
+  // by a function rather than concatenated in markup — a lost '#' is one red
+  // test instead of four links to the page root.
+  for (const entry of manifestSections) {
+    const built = section(entry.id, entry.label, [], entry.layout === 'stack' ? { layout: 'stack' } : {});
+    assert.equal(built.id, entry.id);
+    assert.equal(built.label, entry.label);
+    assert.equal(built.layout, entry.layout);
+    assert.equal(sectionHref(built), `#${entry.id}`);
+  }
+  // And a block constructor holds a block together: key, component, binding
+  // and presentation survive construction unchanged.
+  const marker = () => {};
+  const block = staticBlock('probe', marker, { note: 'x' }, { heading: 'H', note: 'N' });
+  assert.equal(block.key, 'probe');
+  assert.equal(block.component, marker);
+  assert.deepEqual(block.binding, { source: 'static', props: { note: 'x' } });
+  assert.equal(block.heading, 'H');
+  assert.equal(block.note, 'N');
 });
 
-test('every nav link lands on a section that exists', () => {
-  for (const section of pageSections) {
-    const targets = Object.entries(componentSources).filter(([, source]) =>
-      source.includes(`id="${section.id}"`)
-    );
-    assert.equal(
-      targets.length,
-      1,
-      `${targets.length} components carry id="${section.id}"; a nav link must land on exactly one section — ` +
-        `an in-page link to nothing is a click that silently does nothing`
-    );
-  }
-  // And the nav renders from the list rather than spelling its own copy of it,
-  // which is what makes the check above a guarantee rather than a coincidence.
-  assert.match(sectionNav, /from '\.\.\/sections\.ts'/);
-  assert.match(sectionNav, /\{#each pageSections as section \(section\.id\)\}/);
+test('every nav link lands on the section the manifest renders', () => {
+  // Structural now, not counted: the nav and the sections read the SAME
+  // manifest entry, so a link cannot point at a section nobody rendered.
+  assert.match(sectionNav, /import \{ page \} from '\.\.\/\.\.\/page\.ts'/);
+  assert.match(sectionNav, /\{#each page as section \(section\.id\)\}/);
   assert.match(sectionNav, /href=\{sectionHref\(section\)\}/);
   assert.match(sectionNav, /class="section-link"/);
+  assert.match(pageSectionSource, /<section class="page-section" id=\{section\.id\}/);
+  assert.match(app, /\{#each page as section \(section\.id\)\}\s*<PageSection \{section\} \/>/);
+  // No component may spell a section of its own beside the manifest: one
+  // renderer, zero hardcoded ids, or the counting guarantee above is gone.
+  for (const [name, source] of Object.entries(componentSources)) {
+    assert.doesNotMatch(
+      source,
+      /<section class="page-section" id="/,
+      `${name} hardcodes a page section beside the manifest`
+    );
+  }
 });
 
-test('the page stacks the name, the nav and the four sections in one column', () => {
+test('the page stacks the name, the nav and the sections in one column', () => {
   // The nav sits WITH the name (owner sketch: the links are under it), not one
   // page gap away from it.
   assert.match(app, /<div class="page-intro">\s*<h1 id="page-title">[^<]+<\/h1>\s*<SectionNav \/>/);
-  for (const component of ['WorkSection', 'ProjectsSection', 'AboutSection']) {
-    assert.match(app, new RegExp(`<${component} />`), `the page does not mount ${component}`);
-  }
-  // The trackers are one section of the page now rather than the whole of it,
-  // and the panel stack lives inside that section.
+  // The trackers are one section of the page rather than the whole of it, and
+  // the panel stack renders behind the manifest's one stack layout.
   assert.match(
-    app,
-    /<section class="page-section" id="trackers"[^>]*>\s*<h2[^>]*>Trackers<\/h2>\s*<div class="panel-stack">/,
-    'the trackers section must hold the panel stack'
+    pageSectionSource,
+    /\{#if section\.layout === 'stack'\}\s*<div class="panel-stack">/,
+    'the stack layout must hold the panel stack'
+  );
+  assert.match(
+    pageSectionSource,
+    /<h2 class="section-title" id=\{`\$\{section\.id\}-title`\}>\{section\.label\}<\/h2>/,
+    'every section opens with its manifest label'
   );
   // A section link has to be a real touch target: 44px on both axes, as a
   // minimum rather than a fixed box so an enlarged base font grows it.
@@ -321,12 +390,11 @@ test('the card token defaults are global, and resolve through the reading modes'
   assert.match(styles, /font-family:\s*var\(--font-sans\)/);
 });
 
-test('every section this pass introduced renders through the card primitive', () => {
+test('every content component renders through the card primitive', () => {
   for (const [name, source] of Object.entries({
-    WorkSection: workSection,
-    ProjectsSection: projectsSection,
-    ArtGallery: artGallery,
-    AboutSection: aboutSection,
+    EntryLog: entryLog,
+    MediaGallery: mediaGallery,
+    EmptyNote: emptyNote,
   })) {
     assert.match(
       source,
@@ -335,9 +403,9 @@ test('every section this pass introduced renders through the card primitive', ()
     );
     assert.match(source, /<FeedCard/, `${name} imports the primitive without using it`);
   }
-  // And none of them paints a color of its own: the whole point of the token
-  // layer is that a reading mode — including one landing later — restyles
-  // every one of these without touching a component.
+  // And none of the architecture's components paints a color of its own: the
+  // whole point of the token layer is that a reading mode — including one
+  // landing later — restyles every one of these without touching a component.
   for (const [name, source] of Object.entries(introduced)) {
     assert.doesNotMatch(
       source,
@@ -376,11 +444,18 @@ test('the work section carries two complete placeholder entries', () => {
   // Placeholder copy says so on the page. Latin under a real name reads as a
   // real job otherwise, which is the honest-states floor applied to content.
   assert.ok(workPlaceholderNote.trim().length > 0);
-  assert.match(workSection, /\{workPlaceholderNote\}/);
-  assert.match(workSection, /data-placeholder="true"/);
-  // Role as the card's title, location as its byline: the entry is data, the
+  assert.match(workBinding, /note: workPlaceholderNote/, 'the section note must be the stated placeholder line');
+  // The adapter marks every entry placeholder, and the log says so in the
+  // DOM — role as the title, location as the byline: the entry is data, the
   // card is the shape.
-  assert.match(workSection, /<FeedCard title=\{entry\.title\} byline=\{entry\.location\}/);
+  assert.deepEqual(
+    workHistoryProps.entries.map((entry) => [entry.title, entry.byline, entry.summary, entry.placeholder]),
+    workEntries.map((entry) => [entry.title, entry.location, entry.summary, true])
+  );
+  assert.equal(workHistoryProps.titleLevel, 3, 'work entries head straight under the section h2');
+  assert.equal(workHistoryProps.variant, undefined, 'work entries keep the framed default card');
+  assert.match(entryLog, /data-placeholder=\{entry\.placeholder \? 'true' : undefined\}/);
+  assert.match(entryLog, /<FeedCard \{variant\} title=\{entry\.title\} byline=\{entry\.byline\} \{titleLevel\}>/);
 });
 
 // ---------------------------------------------------------------------------
@@ -409,14 +484,27 @@ test('the six repositories are the owner’s, at the addresses the owner gave', 
       );
     }
   }
-  // An outbound link says where it goes and that it leaves the page.
+  // The adapter hands the log exactly those addresses and labels, and an
+  // outbound link says where it goes and that it leaves the page.
   assert.equal(
     projectLinkLabel(projects[0]),
     'naranjo.online on GitHub, opens in a new tab'
   );
-  assert.match(projectsSection, /target="_blank"/);
-  assert.match(projectsSection, /rel="noopener noreferrer"/);
-  assert.match(projectsSection, /aria-label=\{projectLinkLabel\(project\)\}/);
+  assert.deepEqual(
+    codingProjectsProps.entries.map((entry) => [entry.title, entry.href, entry.linkLabel, entry.summary]),
+    projects.map((project) => [project.name, projectUrl(project), projectLinkLabel(project), project.description])
+  );
+  assert.equal(codingProjectsProps.variant, 'compact');
+  assert.equal(codingProjectsProps.titleLevel, 4, 'project entries sit under the subsection h3');
+  assert.match(entryLog, /target="_blank"/);
+  assert.match(entryLog, /rel="noopener noreferrer"/);
+  assert.match(entryLog, /aria-label=\{entry\.linkLabel\}/);
+  // The log renders the href it is handed and never assembles one.
+  assert.deepEqual(
+    [...entryLog.matchAll(/href=\{([^}]*)\}/g)].map(([, expression]) => expression),
+    ['entry.href'],
+    'the entry log may render exactly the one validated href and construct none'
+  );
 });
 
 test('a count of one is a count of one thing', () => {
@@ -437,9 +525,20 @@ test('a count of one is a count of one thing', () => {
     projectCounts({ name: 'x', description: 'x', commits: 1234, stars: 5678 }).map((count) => count.label),
     ['1,234 commits', '5,678 stars']
   );
+  // The adapter carries the same labels into the log, with the glyph beside
+  // the words rather than instead of them.
+  assert.deepEqual(
+    codingProjectsProps.entries[0].counts.map((count) => count.label),
+    projectCounts(projects[0]).map((count) => count.label)
+  );
+  assert.deepEqual(
+    codingProjectsProps.entries[0].counts.map((count) => count.glyph),
+    ['node', 'star'],
+    'each count names its generic glyph; the drawing is the component’s'
+  );
   // The figure is TEXT beside the glyph, never carried by the glyph alone.
-  assert.match(projectsSection, /\{count\.label\}/);
-  assert.match(projectsSection, /aria-hidden="true"/);
+  assert.match(entryLog, /\{count\.label\}/);
+  assert.match(entryLog, /aria-hidden="true"/);
 });
 
 test('projectsCapturedOn is a well-formed date, and formatIsoDate renders every stated date honestly', () => {
@@ -461,24 +560,36 @@ test('projectsCapturedOn is a well-formed date, and formatIsoDate renders every 
 
 test('the Coding Projects feed renders no capture-date or no-fetch caption (issue 167)', () => {
   // The owner: "why would a user care to know that this fetches nothing?
-  // remove this." Both halves are gone from the rendered markup — a
-  // regression back to either is what this pins against, not merely an
-  // absence of a check that used to require them.
+  // remove this." Both halves are gone — a regression back to either is what
+  // this pins against, not merely an absence of a check that used to require
+  // them. In this architecture the caption has exactly two channels back onto
+  // the page, and both are checked: the EXECUTED props the adapter hands the
+  // log (data no source scan can be blinded to by indirection), and the
+  // binding's presentation, which must declare no note line at all. The
+  // rendered-DOM guard lives in e2e/rendering-lanes.spec.mjs, against what a
+  // visitor's browser actually painted.
+  const renderedData = JSON.stringify(codingProjectsProps);
   assert.doesNotMatch(
-    projectsSection,
+    renderedData,
     /Counts captured from/,
-    'the maintainer-facing capture-date caption returned to the visitor-facing markup'
+    'the maintainer-facing capture-date caption returned to the rendered props'
   );
   assert.doesNotMatch(
-    projectsSection,
+    renderedData,
     /fetches nothing/,
-    'the maintainer-facing no-fetch caption returned to the visitor-facing markup'
+    'the maintainer-facing no-fetch caption returned to the rendered props'
   );
   assert.doesNotMatch(
-    projectsSection,
-    /formatIsoDate\(projectsCapturedOn\)/,
-    'the component still renders the capture date somewhere'
+    renderedData,
+    /2026-08-23|23 August 2026/,
+    'the capture date reached the rendered props in some form'
   );
+  assert.doesNotMatch(
+    projectsBinding,
+    /\bnote:/,
+    'the coding-projects binding declares a section note again — the removed caption’s channel'
+  );
+  assert.doesNotMatch(projectsBinding, /projectsCapturedOn|Counts captured from|fetches nothing/);
 });
 
 test('nothing in the work, projects, art, or trackers surfaces reaches the network', async () => {
@@ -526,7 +637,14 @@ test('every picture is an immutable publication the origin can serve', () => {
     assert.equal(artSource(piece), `/media/immutable/${piece.sha256}/${piece.file}`);
     assert.match(artSource(piece), /^\/media\//, 'a media URL is same-origin and path-only');
   }
-  assert.match(artGallery, /artSource\(piece\)/, 'the gallery must build its URLs through media.ts');
+  // The gallery receives those exact URLs through the adapter, and the
+  // component renders the src it is handed — it could not build one.
+  assert.deepEqual(
+    artGalleryProps.items.map((item) => [item.key, item.src]),
+    artPieces.map((piece) => [piece.sha256, artSource(piece)])
+  );
+  assert.match(mediaGallery, /src=\{item\.src\}/, 'the gallery renders the adapter’s URL, never its own');
+  assert.doesNotMatch(mediaGallery, /mediaUrl|\/media\//, 'the gallery must not know the media route');
 });
 
 test('the pictures are described as what they verifiably are', () => {
@@ -535,30 +653,35 @@ test('the pictures are described as what they verifiably are', () => {
   // inventing a figure.
   assert.equal(artLabel(0, 8), 'Placeholder photograph 1 of 8');
   assert.equal(artLabel(7, 8), 'Placeholder photograph 8 of 8');
-  assert.match(artGallery, /alt=\{artLabel\(index, artPieces\.length\)\}/);
+  assert.deepEqual(
+    artGalleryProps.items.map((item) => item.alt),
+    artPieces.map((_, index) => artLabel(index, artPieces.length))
+  );
+  assert.match(mediaGallery, /alt=\{item\.alt\}/);
 });
 
 test('an origin that serves no media shows frames, not broken pictures', () => {
   // Media delivery is off unless an operator turns it on, so this is the
   // ORDINARY state and it is designed rather than handled.
   assert.ok(artUnavailableNote.trim().length > 0);
+  assert.equal(artGalleryProps.unavailableNote, artUnavailableNote);
   assert.doesNotMatch(
     artUnavailableNote,
     /error|failed|broken|missing/i,
     'the unavailable state must not read as a failure; media being off is a configuration, not a fault'
   );
-  assert.match(artGallery, /onerror=\{\(\) => markMissing\(piece\.sha256\)\}/);
-  assert.match(artGallery, /data-art-pending="true"/);
-  assert.match(artGallery, /data-art-unserved="true"/);
+  assert.match(mediaGallery, /onerror=\{\(\) => markMissing\(item\.key\)\}/);
+  assert.match(mediaGallery, /data-gallery-pending="true"/);
+  assert.match(mediaGallery, /data-gallery-unserved="true"/);
   // The explanation hangs off the FIRST picture, which is the only one always
   // requested: every other is lazy, so a reader at the top of the feed has
   // asked for one of them. Keyed on all eight — the shape this started as —
   // the note never appeared for anyone who did not scroll the whole gallery,
   // measured at two, three and six of eight answered across the engines.
-  assert.match(artGallery, /missing\.includes\(artPieces\[0\]\?\.sha256/);
+  assert.match(mediaGallery, /missing\.includes\(items\[0\]\?\.key/);
   assert.doesNotMatch(
-    artGallery,
-    /missing\.length === artPieces\.length/,
+    mediaGallery,
+    /missing\.length === items\.length/,
     'keyed on every picture, the honest note waits for pictures nobody requested'
   );
 });
@@ -568,17 +691,19 @@ test('the heavy pictures cost the page no layout shift', () => {
   // holds open is the ratio the markup declares — two statements of one shape
   // that cannot disagree because both read the same token and the same
   // constants.
-  assert.match(artGallery, /aspect-ratio:\s*var\(--card-media-aspect\)/);
+  assert.match(mediaGallery, /aspect-ratio:\s*var\(--card-media-aspect\)/);
   // The cap (issue 157) is a SECOND, independent ceiling on the same
   // reservation, not a second timing: it still resolves before any byte
   // arrives, through the one global token every frame shares.
-  assert.match(artGallery, /max-block-size:\s*var\(--card-media-max-block-size\)/);
-  assert.match(artGallery, /width=\{artWidth\}/);
-  assert.match(artGallery, /height=\{artHeight\}/);
+  assert.match(mediaGallery, /max-block-size:\s*var\(--card-media-max-block-size\)/);
+  assert.match(mediaGallery, /\{width\}/);
+  assert.match(mediaGallery, /\{height\}/);
+  assert.equal(artGalleryProps.width, 3840);
+  assert.equal(artGalleryProps.height, 2160);
   // The first is the one a visitor is looking at; the rest wait until they are
   // scrolled toward.
-  assert.match(artGallery, /loading=\{index === 0 \? 'eager' : 'lazy'\}/);
-  assert.match(artGallery, /decoding="async"/);
+  assert.match(mediaGallery, /loading=\{index === 0 \? 'eager' : 'lazy'\}/);
+  assert.match(mediaGallery, /decoding="async"/);
 });
 
 test('the gallery frame cap is pinned at its literal value, independent of computed style', () => {
@@ -614,12 +739,25 @@ test('no picture entered the repository', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// About
+// The art and about bindings
 // ---------------------------------------------------------------------------
 
+test('the art block introduces itself with its heading and both provenance lines', () => {
+  assert.match(artBinding, /heading: 'Art'/);
+  assert.match(artBinding, /intro: artNote/);
+  assert.match(artBinding, /note: artProvenance/);
+  // The section chrome renders those lines beside the block, in the
+  // established secondary styles.
+  assert.match(pageSectionSource, /<h3 class="subsection-title">\{block\.heading\}<\/h3>/);
+  assert.match(pageSectionSource, /<p class="subsection-intro">\{block\.intro\}<\/p>/);
+  assert.match(pageSectionSource, /<p class="section-note">\{block\.note\}<\/p>/);
+});
+
 test('the about section says it is empty rather than inventing a biography', () => {
-  assert.match(aboutSection, /has not been written yet/);
-  assert.match(aboutSection, /<FeedCard variant="flat">/);
+  assert.match(aboutBinding, /has not been written yet/);
+  assert.match(emptyNote, /<FeedCard variant="flat">/);
   // Nothing about the owner is asserted anywhere in it.
-  assert.doesNotMatch(aboutSection, /\bI am\b|\byears of\b|\bspecialis|\bspecializ/i);
+  for (const [name, source] of Object.entries({ aboutBinding, EmptyNote: emptyNote })) {
+    assert.doesNotMatch(source, /\bI am\b|\byears of\b|\bspecialis|\bspecializ/i, `${name} invents a biography`);
+  }
 });
