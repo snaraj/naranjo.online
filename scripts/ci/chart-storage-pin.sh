@@ -11,7 +11,7 @@
 #   pinned to its PersistentVolume by name and to the enumerated
 #   storageClassName (an omitted name would let the default StorageClass
 #   capture the claim; the empty name this replaced merely excluded a default
-#   provisioner), ReadOnlyMany/ReadWriteOncePod respectively, at the
+#   provisioner), ReadOnlyMany/ReadWriteOnce respectively, at the
 #   declared capacities; the Deployment mounts the data claim readOnly at
 #   BOTH the claim reference and the volumeMount, mounts the state claim
 #   EXPLICITLY writable at both (a silently read-only state root loses the
@@ -141,7 +141,7 @@ echo "chart-storage-pin: (d) explicit disabled render: no claim, no volume, no w
 # the checker red. sed operates on the RENDER, so what is proven is that the
 # checker catches the outcome, whatever template edit might produce it.
 mutation_count=0
-minimum_mutations=43
+minimum_mutations=44
 
 mutate_must_fail() {
   local description="$1" mode="$2" expression="$3" source="$4"
@@ -224,14 +224,20 @@ mutate_must_fail "state claim unpinned from its volume" enabled \
   's/volumeName: '"${STATE_VOLUME_NAME}"'/volumeName: somebody-elses-volume/' \
   "${enabled_render}"
 mutate_must_fail "state access mode widened to ReadWriteMany" enabled \
-  's/- ReadWriteOncePod/- ReadWriteMany/' \
+  's/- ReadWriteOnce$/- ReadWriteMany/' \
   "${enabled_render}"
-# ReadWriteOnce is the SPECIFIC weakening round-3 finding 3 names: it reads
-# as single-writer and is not one. It admits any number of pods on a single
-# node, which is every pod on a one-node cluster.
-mutate_must_fail "state access mode relaxed to node-scoped ReadWriteOnce" enabled \
-  's/- ReadWriteOncePod/- ReadWriteOnce/' \
+# The OPPOSITE direction, and the one round-4 finding 1 added: a render that
+# CLAIMS the CSI-only ReadWriteOncePod must fail too. Round 3 required that
+# mode here; the target has no CSI driver, so requiring it made this gate
+# enforce a promise nothing keeps. Refusing it keeps the honest statement from
+# regressing quietly the next time somebody reads "ReadWriteOnce" and reaches
+# for the stronger-looking word.
+mutate_must_fail "state access mode claiming the CSI-only ReadWriteOncePod" enabled \
+  's/- ReadWriteOnce$/- ReadWriteOncePod/' \
   "${enabled_render}"
+mutate_must_fail "state PV claiming the CSI-only ReadWriteOncePod" with-pv \
+  's/- ReadWriteOnce$/- ReadWriteOncePod/' \
+  "${with_pv_render}"
 mutate_must_fail "a second replica racing the floor marker" enabled \
   's/^  replicas: 1$/  replicas: 2/' \
   "${enabled_render}"

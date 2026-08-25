@@ -15,16 +15,28 @@
 #   strategy below is maxSurge 0 / maxUnavailable 1, which drops to one
 #   serving pod during every upgrade anyway.
 #
-#   WHAT IS GAINED. Single-writer BY CONSTRUCTION for the replay-floor state
-#   (issue #142). The floor marker is one file guarding against replayed
-#   sealed payloads; two pods writing it concurrently is a race whose loser
-#   silently lowers the floor. The state claim below is ReadWriteOncePod and
-#   the panels-data render refuses replicaCount > 1 outright, so the unsafe
-#   configuration cannot be expressed rather than merely being avoided.
+#   WHAT IS GAINED. One writer for the replay-floor state (issue #142). The
+#   floor marker is one file guarding against replayed sealed payloads; two
+#   pods writing it concurrently is a race whose loser silently lowers the
+#   floor. The panels-data render REFUSES replicaCount > 1 outright whenever
+#   the capability is on, so the unsafe configuration cannot be expressed
+#   rather than merely being avoided.
+#
+#   Round 3 also set the state claim to ReadWriteOncePod and called the
+#   result single-writer "by construction". That phrase is retired
+#   (2026-08-25 round-4 review, finding 1): ReadWriteOncePod is supported for
+#   CSI volumes only and the target has no CSI driver, so on a native `local`
+#   volume it names a guarantee nothing enforces. The claim below and the
+#   template comments now say what actually holds this property here — the
+#   locked monotonic compare-and-swap in the origin, plus this replica policy
+#   — and name ReadWriteOncePod as the upgrade for the day the platform gains
+#   a CSI driver.
 #
 #   WHAT UNDOES IT. Nothing here: raising the default back to 2 requires the
 #   floor to become a genuinely multi-writer structure (a lease, or state that
-#   is not per-pod), not a values edit. Setting replicaCount: 2 with
+#   is not per-pod), not a values edit. The compare-and-swap makes a second
+#   writer SAFE — it refuses to lower the floor — but safe is not the same as
+#   supported, and the render still refuses it. Setting replicaCount: 2 with
 #   panels.data.enabled: false remains fully supported and unchanged — the
 #   refusal is scoped to the capability that needs the invariant.
 replicaCount: 1
@@ -189,7 +201,10 @@ panels:
     keySecret: naranjo-online-panels-data
     capacity: 16Mi
     # The replay-floor STATE pair (2026-08-24 security review, finding H2):
-    # a second statically bound local PV/PVC, WRITABLE by the pod, holding
+    # a second statically bound local PV/PVC (ReadWriteOnce — see the
+    # panels-data template header for why the CSI-only ReadWriteOncePod is
+    # not available on this target and what carries the single-writer
+    # property instead), WRITABLE by the pod, holding
     # exactly one sealed marker file — the capture instant of the last
     # ACCEPTED series file — so the replay floor survives a restart instead
     # of resetting to the embedded snapshot's. It is deliberately a SEPARATE

@@ -100,7 +100,7 @@
         },
         "data": {
           "type": "object",
-          "description": "The panels data root (issue #142): a read-only statically bound local PV/PVC pair on the platform StorageClass, carrying one sealed usage-series file, plus its writable replay-floor sibling. Every field is required so a values file cannot half-describe the capability: the decision and every fact it depends on are explicit, and a disabled render emits none of the objects. The hostPath shape it replaced is one the platform storage acceptance denies outright (originating issue website-infrastructure #211, carried by website-infrastructure PR #212; round-3 finding 7).",
+          "description": "The panels data root (issue #142): a read-only statically bound local PV/PVC pair on the platform StorageClass, carrying one sealed usage-series file, plus its writable ReadWriteOnce replay-floor sibling. Every field is required so a values file cannot half-describe the capability: the decision and every fact it depends on are explicit, and a disabled render emits none of the objects. The hostPath shape it replaced is one the platform storage acceptance denies outright (originating issue website-infrastructure #211, carried by website-infrastructure PR #212; round-3 finding 7).",
           "additionalProperties": false,
           "required": ["enabled", "storageClass", "localVolumeRoot", "node", "path", "mountPath", "volumeName", "keySecret", "capacity", "statePath", "stateMountPath", "stateVolumeName", "stateCapacity", "persistentVolume"],
           "properties": {

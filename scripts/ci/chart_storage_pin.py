@@ -19,13 +19,27 @@ outright and admits only enumerated
 classes, so the chart adopted the platform shape and this pin moved with it:
 it now requires `local` and refuses a hostPath source, requires the enumerated
 class rather than the empty one, and requires nodeAffinity to be REQUIRED,
-singular, operator In, with a non-empty value. Two further holes closed here:
-the state pair is ReadWriteOncePod (ReadWriteOnce admits several pods on one
-node — exactly what a one-node cluster produces), and the sibling check runs
-in BOTH directions over NORMALIZED paths, for the node directories and the
-container mount paths alike. The old check compared raw strings in one
-direction only, so `/x/data/../data/state` and a data root nested inside the
-writable state root both passed.
+singular, operator In, with a non-empty value. One further hole closed here:
+the sibling check runs in BOTH directions over NORMALIZED paths, for the node
+directories and the container mount paths alike. The old check compared raw
+strings in one direction only, so `/x/data/../data/state` and a data root
+nested inside the writable state root both passed.
+
+WHAT CHANGED IN THE 2026-08-25 ROUND-4 REVIEW (finding 1). Round 3 also moved
+the state pair to ReadWriteOncePod and this module REQUIRED that mode. The
+reasoning was right — ReadWriteOnce is node-scoped, and on a one-node cluster
+it restricts nothing — but the mechanism was not: Kubernetes supports
+ReadWriteOncePod for CSI volumes only, and the live target has zero CSI
+drivers and zero StorageClasses. Requiring it here made this gate enforce a
+promise the target cannot keep, which is the worse failure: a reader who sees
+the mode stops looking for the real mechanism. The state pair is
+ReadWriteOnce again, and this module now does three things instead of one — it
+requires the mode the target actually supports, it refuses any WIDENING of it,
+and it separately refuses ANY object that claims ReadWriteOncePod, so the
+overstatement cannot return through a values edit. The single-writer property
+is carried where it is actually enforced: the origin's locked monotonic
+compare-and-swap (internal/server/panelsdata.go) and the replica policy this
+module also pins.
 
 HOW IT READS THE RENDER. Through chart_render_census's own document reader —
 the fail-closed YAML-subset reader issue #86 built precisely so no second,
@@ -165,12 +179,34 @@ def _one_claim(objects: list[dict], name: str) -> dict:
     return claims[0]
 
 
+def _refuse_unsupported_access_modes(kind: str, name: str, modes) -> None:
+    """No rendered object may CLAIM ReadWriteOncePod on this target.
+
+    2026-08-25 round-4 finding 1. Kubernetes supports ReadWriteOncePod for CSI
+    volumes only, and this target has zero CSI drivers and zero StorageClasses;
+    a native `local` volume that names the mode does not become single-writer,
+    it becomes a manifest that READS as if it were. The check is explicit
+    rather than implied by the expected-mode comparison below, so a regression
+    fails with the reason rather than with a string mismatch that invites
+    somebody to "fix" it by widening the expectation.
+    """
+    for mode in modes or []:
+        if mode == "ReadWriteOncePod":
+            raise StoragePinError(
+                "%s %s claims ReadWriteOncePod; Kubernetes supports that mode for CSI "
+                "volumes only and this target has no CSI driver, so it would name a "
+                "guarantee nothing enforces. Single writing is held by the origin's "
+                "locked monotonic compare-and-swap and by the single-replica render."
+                % (kind, name))
+
+
 def _check_claim_common(claim: dict, facts: argparse.Namespace, name: str,
                         access_mode: str, capacity: str) -> None:
     metadata = claim.get("metadata") or {}
     if metadata.get("namespace") != facts.namespace:
         raise StoragePinError("claim %s is not in the release namespace" % name)
     spec = claim.get("spec") or {}
+    _refuse_unsupported_access_modes("claim", name, spec.get("accessModes"))
     if spec.get("accessModes") != [access_mode]:
         raise StoragePinError("claim %s's access mode is not exactly %s" % (name, access_mode))
     if spec.get("storageClassName") != facts.storage_class:
@@ -206,19 +242,21 @@ def check_claims(objects: list[dict], facts: argparse.Namespace) -> None:
     _check_claim_common(_one_claim(objects, facts.volume_name), facts,
                         facts.volume_name, "ReadOnlyMany", facts.capacity)
     _check_claim_common(_one_claim(objects, facts.state_volume_name), facts,
-                        facts.state_volume_name, "ReadWriteOncePod", facts.state_capacity)
+                        facts.state_volume_name, "ReadWriteOnce", facts.state_capacity)
 
 
 def check_deployment_wiring(objects: list[dict], facts: argparse.Namespace) -> None:
     deployment = _deployment(objects)
     container = _container(deployment)
 
-    # Single writer by construction (round-3 finding 3). ReadWriteOncePod on
-    # the state claim is the enforcement; this is the render-time statement of
-    # the same fact, so a replica count that WOULD race the floor marker fails
-    # here rather than as a mysteriously Pending second pod. The two are not
-    # redundant: the claim binds the cluster, this binds the chart, and the
-    # chart is what review reads.
+    # Single writer, ENFORCED HERE (round-3 finding 3, corrected by round-4
+    # finding 1). Round 3 read this as the render-time echo of a claim-level
+    # ReadWriteOncePod enforcement. There is no such enforcement on this
+    # target — RWOP is CSI-only and the target has no CSI driver — so this
+    # check is not an echo of anything: together with the origin's locked
+    # monotonic compare-and-swap it is the whole mechanism, and a replica
+    # count that would race the floor marker must fail HERE, at render, rather
+    # than in a cluster that would happily schedule the second writer.
     replicas = (deployment.get("spec") or {}).get("replicas")
     if replicas != 1:
         raise StoragePinError(
@@ -307,6 +345,7 @@ def _one_volume(objects: list[dict], name: str) -> dict:
 def _check_volume_common(volume: dict, facts: argparse.Namespace, name: str,
                          access_mode: str, capacity: str, path: str) -> None:
     spec = volume.get("spec") or {}
+    _refuse_unsupported_access_modes("PV", name, spec.get("accessModes"))
     if spec.get("accessModes") != [access_mode]:
         raise StoragePinError("PV %s's access mode is not exactly %s" % (name, access_mode))
     if spec.get("persistentVolumeReclaimPolicy") != "Retain":
@@ -394,7 +433,7 @@ def check_volumes(objects: list[dict], facts: argparse.Namespace) -> None:
     _check_volume_common(_one_volume(objects, facts.volume_name), facts,
                          facts.volume_name, "ReadOnlyMany", facts.capacity, facts.path)
     _check_volume_common(_one_volume(objects, facts.state_volume_name), facts,
-                         facts.state_volume_name, "ReadWriteOncePod", facts.state_capacity,
+                         facts.state_volume_name, "ReadWriteOnce", facts.state_capacity,
                          facts.state_path)
     _require_disjoint("the data path", facts.path, "the state path", facts.state_path)
 

@@ -13,9 +13,17 @@ ever be writable.
 
 The 2026-08-24 round-3 review moved the fixtures onto the platform storage
 shape (findings 3 and 7): `local` volumes on the enumerated StorageClass with
-bounded required nodeAffinity, a ReadWriteOncePod state pair, a single
-replica, and disjointness proven in BOTH directions over normalized paths.
-The refusals that shape adds are pinned here alongside the ones it kept.
+bounded required nodeAffinity, a single replica, and disjointness proven in
+BOTH directions over normalized paths. The refusals that shape adds are pinned
+here alongside the ones it kept.
+
+The 2026-08-25 round-4 review (finding 1) took the state pair back to
+ReadWriteOnce. Round 3 had set ReadWriteOncePod, which Kubernetes supports for
+CSI volumes only; the live target has no CSI driver, so the mode named a
+guarantee nothing enforced. The fixtures therefore carry ReadWriteOnce, and
+the suite pins the refusal in BOTH directions — a WIDENING to ReadWriteMany
+and a re-CLAIM of the CSI-only ReadWriteOncePod both fail, so neither the
+weaker mode nor the dishonest one can arrive quietly.
 """
 
 from __future__ import annotations
@@ -83,7 +91,7 @@ metadata:
   namespace: default
 spec:
   accessModes:
-    - ReadWriteOncePod
+    - ReadWriteOnce
   storageClassName: example-class
   volumeName: example-panels-state
   resources:
@@ -129,7 +137,7 @@ spec:
   capacity:
     storage: 1Mi
   accessModes:
-    - ReadWriteOncePod
+    - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
   storageClassName: example-class
   claimRef:
@@ -331,15 +339,26 @@ class StoragePinRefusesHostileRenders(unittest.TestCase):
             self.reject("enabled", mutated + STATE_CLAIM + DEPLOYMENT, field)
 
     def test_state_claim_access_mode_widened(self):
-        mutated = STATE_CLAIM.replace("- ReadWriteOncePod", "- ReadWriteMany")
-        self.reject("enabled", CLAIM + mutated + DEPLOYMENT, "ReadWriteOncePod")
+        mutated = STATE_CLAIM.replace("- ReadWriteOnce", "- ReadWriteMany")
+        self.reject("enabled", CLAIM + mutated + DEPLOYMENT, "ReadWriteOnce")
 
-    def test_state_claim_relaxed_to_node_scoped_single_writer(self):
-        # ReadWriteOnce READS as single-writer and is not one: it admits any
-        # number of pods on a single node, which on a one-node cluster is
-        # every pod. The floor marker needs one writer, not one node.
-        mutated = STATE_CLAIM.replace("- ReadWriteOncePod", "- ReadWriteOnce")
-        self.reject("enabled", CLAIM + mutated + DEPLOYMENT, "ReadWriteOncePod")
+    def test_state_claim_reclaiming_the_csi_only_mode(self):
+        # 2026-08-25 round-4 finding 1. ReadWriteOncePod is the mode round 3
+        # required here, and it is CSI-only; this target has no CSI driver, so
+        # a claim naming it would advertise single-writer enforcement that
+        # nothing performs. The refusal must name the REASON, not merely a
+        # mismatch, or the next reader "fixes" it by widening the expectation.
+        mutated = STATE_CLAIM.replace("- ReadWriteOnce", "- ReadWriteOncePod")
+        self.reject("enabled", CLAIM + mutated + DEPLOYMENT, "no CSI driver")
+
+    def test_state_volume_reclaiming_the_csi_only_mode(self):
+        mutated = STATE_VOLUME.replace("- ReadWriteOnce", "- ReadWriteOncePod")
+        self.reject("with-pv", CLAIMS + VOLUME + mutated + DEPLOYMENT, "no CSI driver")
+
+    def test_data_claim_reclaiming_the_csi_only_mode(self):
+        # The refusal is not scoped to the state pair: no object may claim it.
+        mutated = CLAIM.replace("- ReadOnlyMany", "- ReadWriteOncePod")
+        self.reject("enabled", mutated + STATE_CLAIM + DEPLOYMENT, "no CSI driver")
 
     def test_a_second_replica_racing_the_floor(self):
         mutated = DEPLOYMENT.replace("  replicas: 1", "  replicas: 2")

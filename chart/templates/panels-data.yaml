@@ -38,10 +38,31 @@ series, and the writable STATE pair carrying the replay-floor marker
 (2026-08-24 security review, finding H2) so the floor survives restarts.
 They are separate on purpose — the data projection stays read-only in every
 layer exactly as reviewed, and the origin's one writable surface is a
-sibling directory the push pipeline never touches. The state pair is
-ReadWriteOncePod rather than ReadWriteOnce (round-3 finding 3): the floor
-marker is a single-writer structure, and ReadWriteOnce admits several pods
-on one node — precisely the case a one-node cluster always produces.
+sibling directory the push pipeline never touches.
+
+THE STATE PAIR IS ReadWriteOnce, AND THE SINGLE-WRITER GUARANTEE DOES NOT
+COME FROM IT (2026-08-25 round-4 review, finding 1). Round 3 set
+ReadWriteOncePod here, reasoning that ReadWriteOnce is node-scoped and a
+one-node cluster makes that no restriction at all. The reasoning was right
+and the mechanism was wrong: Kubernetes supports ReadWriteOncePod for CSI
+volumes ONLY, and the target has zero CSI drivers and zero StorageClasses
+live. A native `local` PersistentVolume does not acquire a CSI-only
+guarantee by naming the access mode — it names a promise nothing enforces,
+which is worse than the weaker mode, because a reader stops looking.
+
+So the access mode is the one the target actually supports, and the
+single-writer property is carried by mechanisms that are real here:
+
+  * the locked monotonic compare-and-swap in internal/server/panelsdata.go —
+    an exclusive flock, a re-read under the lock, and a refusal to record an
+    older instant or a different document at the same instant. That holds
+    across processes on one node, which is the case this deployment is in;
+  * the replica policy below — replicaCount 1 whenever this capability is
+    enabled, refused at render time rather than merely defaulted.
+
+ReadWriteOncePod is the correct mode the day the platform gains a CSI
+driver, and it is named here as that upgrade rather than claimed as today's
+control.
 
 naranjo-online.panelsDataPaths (chart/templates/_helpers.tpl) validates the
 geometry before any of this renders: normalized absolute paths under the
@@ -90,9 +111,11 @@ The replay-floor STATE PersistentVolume (2026-08-24 security review, finding
 H2): the writable sibling of the read-only data volume above, holding one
 sealed floor-marker file so the replay floor survives restarts. Same admin
 ceremony, same static double-pinning, same Retain posture; the one deliberate
-difference is ReadWriteOncePod — this is the single place the origin may
-write, it is a directory the push pipeline never touches, and one writer is
-a correctness property of the floor rather than a capacity choice.
+difference is ReadWriteOnce — this is the single place the origin may write,
+and it is a directory the push pipeline never touches. ReadWriteOnce is
+node-scoped and therefore does NOT by itself establish one writer on a
+one-node cluster; the header above says what does, and why the CSI-only
+ReadWriteOncePod is not available on this target.
 */ -}}
 apiVersion: v1
 kind: PersistentVolume
@@ -104,7 +127,7 @@ spec:
   capacity:
     storage: {{ .Values.panels.data.stateCapacity }}
   accessModes:
-    - ReadWriteOncePod
+    - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
   storageClassName: {{ .Values.panels.data.storageClass }}
   claimRef:
@@ -147,7 +170,7 @@ metadata:
     {{- include "naranjo-online.labels" . | nindent 4 }}
 spec:
   accessModes:
-    - ReadWriteOncePod
+    - ReadWriteOnce
   storageClassName: {{ .Values.panels.data.storageClass }}
   volumeName: {{ .Values.panels.data.stateVolumeName }}
   resources:

@@ -107,6 +107,6 @@ and a bare prefix test says it does.
 {{- end -}}
 {{- end -}}
 {{- if gt (int .Values.replicaCount) 1 -}}
-{{- fail "panels.data.enabled requires replicaCount 1: the replay-floor state claim is a single-writer surface (ReadWriteOncePod), and a second replica would either be refused the volume or race the floor marker" -}}
+{{- fail "panels.data.enabled requires replicaCount 1: the replay floor has exactly one writer, and this refusal is one half of what enforces it (the other is the locked monotonic compare-and-swap in the origin). The state claim is ReadWriteOnce, which is node-scoped and would NOT stop a second pod here, so a second replica would simply race the floor marker" -}}
 {{- end -}}
 {{- end -}}
