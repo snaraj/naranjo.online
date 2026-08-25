@@ -1083,7 +1083,8 @@ func TestMapCommitsReadsARealisticDocument(t *testing.T) {
 		t.Errorf("row 1 instant = %q, want the UTC normalization of the offset form", got)
 	}
 	// The authorship name and email in the document reached nothing: the
-	// served rows carry three fields and none of them is a contact detail.
+	// served rows carry four fields (repo, sha, message, at) and none of
+	// them is a contact detail.
 	marshaled, err := json.Marshal([]VCSCommit{rows[0].row, rows[1].row})
 	if err != nil {
 		t.Fatalf("marshal served rows: %v", err)
