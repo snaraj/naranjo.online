@@ -187,7 +187,7 @@ test('every control clears the touch floor on both axes', async ({ page }) => {
   await openReadingModes(page);
   /* Controls, meaning things with an activation behavior. A focusable scroll
      region, or a boss cell that takes focus only so its tooltip can appear
-     ("there is no action to perform", BossLog.svelte), is not a target you tap
+     ("there is no action to perform", StatTracker.svelte), is not a target you tap
      to do something, and sizing a data cell like a button would make the table
      unreadable. */
   const controls = page.locator(
@@ -934,9 +934,9 @@ test('the boss log is three columns that never scroll', async ({
 }) => {
   await visit(page);
   const table = await page.evaluate(() => {
-    const box = window.document.querySelector('.boss-grid');
+    const box = window.document.querySelector('.stat-grid[data-cells="roomy"]');
     const style = getComputedStyle(box);
-    const cells = [...box.querySelectorAll('.boss-cell')];
+    const cells = [...box.querySelectorAll('.stat-cell')];
     const distinct = (values) => new Set(values.map((value) => Math.round(value))).size;
     return {
       overflowX: style.overflowX,
@@ -951,7 +951,7 @@ test('the boss log is three columns that never scroll', async ({
          for as many rows as the payload needs. */
       columns: distinct(cells.map((cell) => cell.getBoundingClientRect().left)),
       rows: distinct(cells.map((cell) => cell.getBoundingClientRect().top)),
-      icons: box.querySelectorAll('img.boss-icon').length,
+      icons: box.querySelectorAll('img.stat-icon').length,
     };
   });
   /* The owner asked for the scrolling to go away, not to be pointed in
@@ -1395,10 +1395,10 @@ test('a hostile commit row renders as text and never becomes a live link', async
   await visit(page);
 
   const rendered = await page.evaluate(() => {
-    const rows = [...window.document.querySelectorAll('.activity-commit')];
-    const repoCell = rows[0]?.querySelector('.activity-commit-repo');
-    const messageCell = rows[1]?.querySelector('.activity-commit-message');
-    const shaMessageCell = rows[2]?.querySelector('.activity-commit-message');
+    const rows = [...window.document.querySelectorAll('.activity-entry')];
+    const repoCell = rows[0]?.querySelector('.activity-entry-source');
+    const messageCell = rows[1]?.querySelector('.activity-entry-title');
+    const shaMessageCell = rows[2]?.querySelector('.activity-entry-title');
     return {
       repoTag: repoCell?.tagName ?? null,
       repoText: repoCell?.textContent ?? null,
@@ -1478,14 +1478,14 @@ test('an old-shape vcs-activity/v1 payload with no sha key on any row still rend
     'no activity data'
   );
 
-  const rows = page.locator('.activity-commit');
+  const rows = page.locator('.activity-entry');
   const rowCount = await rows.count();
   expect(rowCount, 'no commit rows rendered from an old-shape payload — this is the outage Daybreak Blue proved').toBeGreaterThan(0);
 
   /* Each row's repo cell is still real navigation — the sha's absence must
      degrade only that row's own sha-permalink capability, never the repo
      link, never the row itself, never the rest of the payload. */
-  const repoLinks = await page.locator('.activity-commit-repo').count();
+  const repoLinks = await page.locator('.activity-entry-source').count();
   expect(repoLinks, 'every row lost its repo link too, not just its sha capability').toBeGreaterThan(0);
 });
 
@@ -1528,13 +1528,13 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
   });
   await visit(page);
 
-  const messageLink = page.locator('.activity-commit-message').first();
+  const messageLink = page.locator('.activity-entry-title').first();
   await messageLink.scrollIntoViewIfNeeded();
 
   const attrs = await page.evaluate(() => {
-    const row = window.document.querySelector('.activity-commit');
-    const repo = row.querySelector('.activity-commit-repo');
-    const message = row.querySelector('.activity-commit-message');
+    const row = window.document.querySelector('.activity-entry');
+    const repo = row.querySelector('.activity-entry-source');
+    const message = row.querySelector('.activity-entry-title');
     const read = (el) => ({
       tag: el.tagName,
       href: el.getAttribute('href'),
@@ -1577,7 +1577,7 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
      the commit list in both the DOM and the tab order — the same "focus a
      known preceding control, then real Tab" shape the nav test below uses,
      anchored on a control that is neither of the two links this test
-     checks. Scoped to [data-activity-panel] because TokenUsagePanel renders
+     checks. Scoped to [data-activity-panel] because UsageTracker renders
      the identical ContributionGrid component for its own heatmap and would
      otherwise make '.grid-strip' ambiguous. */
   await page.locator('[data-activity-panel] .grid-strip').evaluate((node) => node.focus());
@@ -1587,7 +1587,7 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
     const style = getComputedStyle(el);
     return {
       tag: el.tagName,
-      isRepoLink: el.classList.contains('activity-commit-repo'),
+      isRepoLink: el.classList.contains('activity-entry-source'),
       outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth,
     };
@@ -1613,7 +1613,7 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
     const el = window.document.activeElement;
     const style = getComputedStyle(el);
     return {
-      isMessageLink: el.classList.contains('activity-commit-message'),
+      isMessageLink: el.classList.contains('activity-entry-title'),
       outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth,
     };
@@ -1696,12 +1696,12 @@ test('a valid-SHA commit row with no resolvable reference is real, keyboard-reac
   });
   await visit(page);
 
-  const messageLink = page.locator('.activity-commit-message').first();
+  const messageLink = page.locator('.activity-entry-title').first();
   await messageLink.scrollIntoViewIfNeeded();
 
   const attrs = await page.evaluate(() => {
-    const row = window.document.querySelector('.activity-commit');
-    const message = row.querySelector('.activity-commit-message');
+    const row = window.document.querySelector('.activity-entry');
+    const message = row.querySelector('.activity-entry-title');
     return {
       tag: message.tagName,
       href: message.getAttribute('href'),
@@ -1728,7 +1728,7 @@ test('a valid-SHA commit row with no resolvable reference is real, keyboard-reac
     const style = getComputedStyle(el);
     return {
       tag: el.tagName,
-      isMessageLink: el.classList.contains('activity-commit-message'),
+      isMessageLink: el.classList.contains('activity-entry-title'),
       outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth,
     };
@@ -1800,7 +1800,7 @@ test('a valid SHA outranks an unverifiable trailing reference on the SAME row (i
   await visit(page);
 
   const attrs = await page.evaluate(() => {
-    const message = window.document.querySelector('.activity-commit-message');
+    const message = window.document.querySelector('.activity-entry-title');
     return { tag: message.tagName, href: message.getAttribute('href') };
   });
 
@@ -1820,8 +1820,8 @@ test('the shortest admitted repo slug still clears the touch floor on both axes 
      shortest string the pattern accepts — rendered a 6.625px-wide anchor
      even though the row already cleared the 44px touch floor on its BLOCK
      axis. max-inline-size alone bounds the upper end of
-     .activity-commit-repo; nothing bounded the lower end until
-     min-inline-size was added (ActivityBar.svelte), so a column sized
+     .activity-entry-source; nothing bounded the lower end until
+     min-inline-size was added (ActivityTracker.svelte), so a column sized
      purely to this content's own width. */
   await page.route('**/api/panels/vcs-activity', async (route) => {
     const response = await route.fetch();
@@ -1833,7 +1833,7 @@ test('the shortest admitted repo slug still clears the touch floor on both axes 
   });
   await visit(page);
 
-  const repoLink = page.locator('.activity-commit-repo').first();
+  const repoLink = page.locator('.activity-entry-source').first();
   await repoLink.scrollIntoViewIfNeeded();
   const box = await repoLink.boundingBox();
   expect(box, 'the shortest admitted repo slug rendered no box at all').not.toBeNull();
@@ -1935,7 +1935,7 @@ test('the nav link is quiet at rest and marks itself the moment intent shows (is
      and the Coding Projects feed (a fact this exploits rather than assumes:
      if that ever stops being true, this walk lands somewhere unexpected and
      the assertion below fails loudly rather than skipping quietly) — to
-     the feed's first project link: a plain anchor with nothing to do with
+     the feed's first entry link: a plain anchor with nothing to do with
      the nav. */
   const navCount = await page.locator('.section-link').count();
   await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
@@ -1944,9 +1944,9 @@ test('the nav link is quiet at rest and marks itself the moment intent shows (is
   }
   const probe = await page.evaluate(() => {
     const el = window.document.activeElement;
-    return { tag: el.tagName, isProjectLink: el.classList.contains('project-link') };
+    return { tag: el.tagName, isEntryLink: el.classList.contains('entry-link') };
   });
-  const engineTabsLinks = probe.tag === 'A' && probe.isProjectLink;
+  const engineTabsLinks = probe.tag === 'A' && probe.isEntryLink;
 
   /* Keyboard focus keeps the site's own ring — a real Tab from a throwaway
      starting point, the same pattern this file uses everywhere else it
@@ -1999,14 +1999,14 @@ test('the art feed shows its frames when the origin serves no media', async ({ p
      what the visitor sees has to be a designed empty frame. The count is
      awaited rather than read once — the frames answer as their requests
      resolve. */
-  const frames = page.locator('.art-frame');
+  const frames = page.locator('.gallery-frame');
   const total = await frames.count();
   expect(total, 'the art feed rendered no frames').toBeGreaterThan(0);
   /* The explanation appears for a reader who has not scrolled anywhere: only
      the first picture is fetched eagerly, so keying the note on all of them
      would hide it behind pictures nobody asked for. */
-  await expect(page.locator('[data-art-unserved]')).toHaveCount(1);
-  await expect(page.locator('[data-art-pending]')).not.toHaveCount(0);
+  await expect(page.locator('[data-gallery-unserved]')).toHaveCount(1);
+  await expect(page.locator('[data-gallery-pending]')).not.toHaveCount(0);
   /* And the deferred ones answer the same way once they are scrolled toward,
      which is the other half of the lazy path. The scroll walks the feed a
      viewport at a time rather than jumping to the end: a lazy picture is only
@@ -2019,17 +2019,17 @@ test('the art feed shows its frames when the origin serves no media', async ({ p
       await new Promise((resolve) => window.setTimeout(resolve, 50));
     }
   });
-  await expect(page.locator('[data-art-pending]')).toHaveCount(total);
+  await expect(page.locator('[data-gallery-pending]')).toHaveCount(total);
   const observed = await page.evaluate(() => {
-    const boxes = [...window.document.querySelectorAll('.art-frame')];
+    const boxes = [...window.document.querySelectorAll('.gallery-frame')];
     return {
-      images: window.document.querySelectorAll('img.art-image').length,
+      images: window.document.querySelectorAll('img.gallery-image').length,
       inCards: boxes.every((frame) => frame.closest('.feed-card') !== null),
       /* No ART card carries a title today (the owner asked for none) and the
          region is ABSENT rather than empty, while the work feed's cards — the
          same primitive — do carry one. Both branches, in one measurement. */
-      artTitles: window.document.querySelectorAll('.art-feed .feed-card-title').length,
-      workTitles: window.document.querySelectorAll('.work-feed .feed-card-title').length,
+      artTitles: window.document.querySelectorAll('.gallery-feed .feed-card-title').length,
+      workTitles: window.document.querySelectorAll('#work .entry-log .feed-card-title').length,
       sizes: boxes.map((frame) => {
         const box = frame.getBoundingClientRect();
         return { width: Math.round(box.width), height: Math.round(box.height) };
@@ -2098,12 +2098,13 @@ test('the art feed shows its frames when the origin serves no media', async ({ p
 test('the Coding Projects subsection renders no capture-date or no-fetch caption, in the actual DOM (issue 167, Daybreak Blue round 3 finding 4)', async ({
   page,
 }) => {
-  /* The pre-existing pin at tests/sections.test.mjs scans the COMPONENT
-     SOURCE TEXT for the removed caption's exact spellings. Daybreak Blue
-     proved that pin vacuous against indirection: exporting the identical
-     removed sentence as a constant from projects.ts and rendering it via
-     `{projectCaption}` left every source-text scan green while the caption
-     still reached the page. A source scan can only ever see literal bytes;
+  /* The node-level pin at tests/sections.test.mjs checks the adapter's
+     executed props and the binding's source for the removed caption's exact
+     spellings. Daybreak Blue proved a source-only pin vacuous against
+     indirection: exporting the identical removed sentence as a constant
+     from projects.ts and rendering it through a variable left every
+     source-text scan green while the caption still reached the page. A
+     source scan can only ever see literal bytes;
      it cannot see what actually painted. This lane instead reads the REAL
      RENDERED TEXT of the Coding Projects subsection after a real navigation
      — robust against ANY indirection technique, because it is checking the
@@ -2645,8 +2646,8 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
      them had a designed readout. Identical measurement, identical result, is
      what "aligned" means once one component renders both. */
   for (const [selector, index] of [
-    ['.boss-cell', 5],
-    ['.skill-cell', 4],
+    ['[data-cells="roomy"] .stat-cell', 5],
+    ['[data-cells="compact"] .stat-cell', 4],
   ]) {
     const at = await hoverAt(page, selector, index, (box) => ({
       x: Math.round(box.x + box.width / 2),
@@ -2695,7 +2696,7 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
       open: node.getAttribute('data-tip-open'),
       visibility: getComputedStyle(node).visibility,
     };
-  }, ['.boss-cell', 7]);
+  }, ['[data-cells="roomy"] .stat-cell', 7]);
   expect(
     finger.open,
     'a finger opened the following branch; on a touchscreen laptop that box would chase a cursor that is not there'
@@ -2738,7 +2739,7 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
       }
       return { placed, expected: `${spot.x + gapPx}px`, frames, visible: getComputedStyle(node).visibility };
     },
-    ['.boss-cell', 5, gap]
+    ['[data-cells="roomy"] .stat-cell', 5, gap]
   );
   expect(
     latency.placed,
@@ -2752,13 +2753,13 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
 
   /* A multi-step move: the box re-anchors on every one of them rather than
      being placed once where the pointer entered. */
-  const start = await hoverAt(page, '.boss-cell', 5, (box) => ({
+  const start = await hoverAt(page, '[data-cells="roomy"] .stat-cell', 5, (box) => ({
     x: Math.round(box.x + 4),
     y: Math.round(box.y + box.height / 2),
   }));
   for (const step of [2, 6, 10, 14]) {
     await page.mouse.move(start.x + step, start.y);
-    const moved = await detailBox(page, '.boss-cell', 5);
+    const moved = await detailBox(page, '[data-cells="roomy"] .stat-cell', 5);
     expect(
       moved.left - (start.x + step),
       `the detail lagged ${moved.left - (start.x + step) - gap}px behind step ${step} of the move`
@@ -2772,7 +2773,7 @@ test('a flood of pointer moves costs one placement per frame, using the newest p
   await visit(page);
   test.skip(!(await followsPointer(page)), 'no fine pointer here; there is nothing to follow');
   const { gap } = await tipTokens(page);
-  const at = await hoverAt(page, '.boss-cell', 5, (box) => ({
+  const at = await hoverAt(page, '[data-cells="roomy"] .stat-cell', 5, (box) => ({
     x: Math.round(box.x + 4),
     y: Math.round(box.y + box.height / 2),
   }));
@@ -2831,7 +2832,7 @@ test('a flood of pointer moves costs one placement per frame, using the newest p
       observer.disconnect();
       return { before, during, after, midFlood, writes, scheduled, moves, last: x + moves };
     },
-    ['.boss-cell', 5, at.x, at.y]
+    ['[data-cells="roomy"] .stat-cell', 5, at.x, at.y]
   );
 
   expect(
@@ -2870,7 +2871,7 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
   await page.setViewportSize({ width: phoneWidths[0], height: 640 });
   await settled(page);
   const lastColumn = await page.evaluate(() => {
-    const cells = [...window.document.querySelectorAll('.boss-cell')];
+    const cells = [...window.document.querySelectorAll('[data-cells="roomy"] .stat-cell')];
     const rightmost = Math.max(...cells.map((cell) => Math.round(cell.getBoundingClientRect().right)));
     return cells.findLastIndex(
       (cell) => Math.round(cell.getBoundingClientRect().right) === rightmost
@@ -2878,7 +2879,7 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
   });
   expect(lastColumn, 'no tile sits in the last column; this lane proves nothing').toBeGreaterThan(0);
 
-  const corner = page.locator('.boss-cell').nth(lastColumn);
+  const corner = page.locator('[data-cells="roomy"] .stat-cell').nth(lastColumn);
   await corner.scrollIntoViewIfNeeded();
   await corner.evaluate((cell) => {
     const box = cell.getBoundingClientRect();
@@ -2896,7 +2897,7 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
   };
   await page.mouse.move(0, 0);
   await page.mouse.move(at.x, at.y);
-  const edge = await detailBox(page, '.boss-cell', lastColumn);
+  const edge = await detailBox(page, '[data-cells="roomy"] .stat-cell', lastColumn);
 
   expect(edge.open, 'the corner tile did not open its detail').toBe('true');
   /* Flipped, not merely clamped. A clamped box near the end edge sits ON the
@@ -2938,7 +2939,7 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
      Removing the clamp and keeping the flip therefore passes every assertion
      above and fails this one. */
   const widest = await page.evaluate(() => {
-    const cells = [...window.document.querySelectorAll('.boss-cell')];
+    const cells = [...window.document.querySelectorAll('[data-cells="roomy"] .stat-cell')];
     let index = 0;
     let width = 0;
     cells.forEach((cell, at) => {
@@ -2950,7 +2951,7 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
     });
     return { index, width };
   });
-  const wide = page.locator('.boss-cell').nth(widest.index);
+  const wide = page.locator('[data-cells="roomy"] .stat-cell').nth(widest.index);
   await wide.scrollIntoViewIfNeeded();
   const wideBox = await settledBox(page, wide);
   const aim = {
@@ -2970,7 +2971,7 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
   ).toBeLessThan(margin);
   await page.mouse.move(0, 0);
   await page.mouse.move(aim.x, aim.y);
-  const clamped = await detailBox(page, '.boss-cell', widest.index);
+  const clamped = await detailBox(page, '[data-cells="roomy"] .stat-cell', widest.index);
   expect(clamped.open, 'the widest tile did not open its detail').toBe('true');
   expect(
     clamped.left,
@@ -2980,7 +2981,7 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
 
   /* The other corner: a tile at the very top of the screen, where the box
      must clamp rather than flip off the top. */
-  const first = page.locator('.boss-cell').first();
+  const first = page.locator('[data-cells="roomy"] .stat-cell').first();
   await first.scrollIntoViewIfNeeded();
   await first.evaluate((cell) => {
     window.scrollBy(0, cell.getBoundingClientRect().top - 1);
@@ -2988,7 +2989,7 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
   const head = await settledBox(page, first);
   await page.mouse.move(0, 0);
   await page.mouse.move(Math.ceil(head.x) + 2, Math.ceil(head.y) + 2);
-  const top = await detailBox(page, '.boss-cell', 0);
+  const top = await detailBox(page, '[data-cells="roomy"] .stat-cell', 0);
   expect(top.open, 'the top tile did not open its detail').toBe('true');
   expect(top.top, 'the detail reaches past the top edge').toBeGreaterThanOrEqual(margin - subPixel);
   expect(top.left, 'the detail reaches past the start edge').toBeGreaterThanOrEqual(margin - subPixel);
@@ -3001,11 +3002,11 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
   for (const width of [phoneWidths[0], phoneWidths[2], 768, 1280]) {
     await page.setViewportSize({ width, height: 720 });
     await settled(page);
-    const spot = await hoverAt(page, '.boss-cell', 5, (tile) => ({
+    const spot = await hoverAt(page, '[data-cells="roomy"] .stat-cell', 5, (tile) => ({
       x: Math.round(tile.x + tile.width / 2),
       y: Math.round(tile.y + tile.height / 2),
     }));
-    const shown = await detailBox(page, '.boss-cell', 5);
+    const shown = await detailBox(page, '[data-cells="roomy"] .stat-cell', 5);
     expect(shown.open, `the detail did not open at ${width}px`).toBe('true');
     expect(shown.left, `the detail reaches past the start edge at ${width}px`).toBeGreaterThanOrEqual(margin - subPixel);
     expect(shown.right, `the detail reaches past the end edge at ${width}px`).toBeLessThanOrEqual(
@@ -3027,10 +3028,10 @@ test('a tap opens the detail over its own tile, and a second tap closes it', asy
   /* No cursor, so nothing to follow: the box anchors to the TILE, which is
      the arrangement the pointer branch replaced and the correct one here. A
      finger covers the tile it is on, so the box goes above it. */
-  const tile = page.locator('.boss-cell').nth(5);
+  const tile = page.locator('[data-cells="roomy"] .stat-cell').nth(5);
   await tile.scrollIntoViewIfNeeded();
   await tile.tap();
-  const shown = await detailBox(page, '.boss-cell', 5);
+  const shown = await detailBox(page, '[data-cells="roomy"] .stat-cell', 5);
   expect(shown.open, 'a tap opened no detail').toBe('true');
   expect(shown.visibility, 'a tap opened an invisible detail').toBe('visible');
   expect(
@@ -3054,7 +3055,7 @@ test('a tap opens the detail over its own tile, and a second tap closes it', asy
      closes it, and there is no state in which a reader is stuck with a box
      they cannot dismiss. */
   await tile.tap();
-  const closed = await detailBox(page, '.boss-cell', 5);
+  const closed = await detailBox(page, '[data-cells="roomy"] .stat-cell', 5);
   expect(closed.open, 'a second tap left the detail open').toBe('false');
   expect(closed.visibility, 'a second tap left the detail visible').toBe('hidden');
 });
@@ -3069,8 +3070,8 @@ test('keyboard focus opens the detail on both grids', async ({ page }) => {
      affordable — the alternative is ninety-odd tab stops from the top of the
      page. */
   for (const [selector, index] of [
-    ['.boss-cell', 5],
-    ['.skill-cell', 4],
+    ['[data-cells="roomy"] .stat-cell', 5],
+    ['[data-cells="compact"] .stat-cell', 4],
   ]) {
     const tile = page.locator(selector).nth(index);
     await tile.scrollIntoViewIfNeeded();
@@ -3140,8 +3141,8 @@ test('the skill detail and the boss detail are the same object, measured', async
       rows: node.querySelectorAll('span').length,
     };
   };
-  const boss = await page.evaluate(measure, ['.boss-cell', 5]);
-  const skill = await page.evaluate(measure, ['.skill-cell', 4]);
+  const boss = await page.evaluate(measure, ['[data-cells="roomy"] .stat-cell', 5]);
+  const skill = await page.evaluate(measure, ['[data-cells="compact"] .stat-cell', 4]);
 
   for (const property of [
     'padding',
@@ -3861,10 +3862,10 @@ test('every width the handle can reach keeps every section intact', async ({ pag
     }, target);
     await settled(page);
     const state = await page.evaluate(() => {
-      const grid = window.document.querySelector('.boss-grid');
-      const cells = [...grid.querySelectorAll('.boss-cell')];
+      const grid = window.document.querySelector('.stat-grid[data-cells="roomy"]');
+      const cells = [...grid.querySelectorAll('.stat-cell')];
       const distinct = (values) => new Set(values.map((value) => Math.round(value))).size;
-      const frames = [...window.document.querySelectorAll('.art-frame')].map((frame) => {
+      const frames = [...window.document.querySelectorAll('.gallery-frame')].map((frame) => {
         const box = frame.getBoundingClientRect();
         return { width: box.width, height: box.height };
       });

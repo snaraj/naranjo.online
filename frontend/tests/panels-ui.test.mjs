@@ -3,13 +3,23 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
 
+import { vcsActivityProps } from '../src/lib/activity.ts';
 import { bossInitials, bossSlug, skillSlug } from '../src/lib/bossIcons.ts';
 import {
+  bossDetail,
+  bossLogEmptySkillsNote,
+  bossLogFallbackTitle,
+  bossLogLoadingNote,
+  bossLogPanelId,
+  bossLogUnavailableNote,
   cellLabel,
   noTally,
+  osrsStatsProps,
   rankLabel,
+  skillDetail,
   skillLabel,
   skillSummary,
+  summaryDetail,
   summaryLabel,
   tally,
   unrankedLabel,
@@ -51,59 +61,69 @@ const [
   refreshAll,
   pageHeaderSource,
   fallbackShell,
-  bossLog,
+  statTracker,
   panelsSource,
   iconsSource,
   viteConfig,
   grid,
   gridSource,
-  activityBar,
-  tokenUsage,
+  activityTracker,
+  usageTracker,
   styles,
   themeMenu,
   detailTip,
+  manifest,
+  pageSection,
+  blockHost,
+  osrsBinding,
 ] = await Promise.all([
   read('../src/App.svelte'),
   read('../src/lib/components/PanelShell.svelte'),
   read('../src/lib/components/RefreshAll.svelte'),
   read('../src/lib/components/PageHeader.svelte'),
   read('../index.html'),
-  read('../src/lib/components/BossLog.svelte'),
+  read('../src/lib/components/StatTracker.svelte'),
   read('../src/lib/panels.ts'),
   read('../src/lib/bossIcons.ts'),
   read('../vite.config.ts'),
   read('../src/lib/components/ContributionGrid.svelte'),
   read('../src/lib/grid.ts'),
-  read('../src/lib/components/ActivityBar.svelte'),
-  read('../src/lib/components/TokenUsagePanel.svelte'),
+  read('../src/lib/components/ActivityTracker.svelte'),
+  read('../src/lib/components/UsageTracker.svelte'),
   read('../src/styles.css'),
   read('../src/lib/ThemeMenu.svelte'),
   read('../src/lib/components/DetailTip.svelte'),
+  read('../src/page.ts'),
+  read('../src/lib/components/PageSection.svelte'),
+  read('../src/lib/components/Block.svelte'),
+  read('../src/lib/blocks/osrsStats.ts'),
 ]);
+
+/* The two sibling binding modules, read beside the one above so the
+ * stays-current pin can sweep all three panel bindings. */
+const bindingSourceCache = {
+  vcs: await read('../src/lib/blocks/vcsActivity.ts'),
+  usage: await read('../src/lib/blocks/tokenUsage.ts'),
+};
+
+/* The adapter module beside the boss-log data, for the account-privacy pin. */
+const bossLogHelperSource = await read('../src/lib/bossLog.ts');
 
 // Like the experience suite, these are structural regex pins over source:
 // they hold the shapes the owner specified — chrome values, grid density,
 // fail-soft rendering — while leaving copy and styling free to evolve.
-test('panel mount region keeps its fences and mounts exactly one panel line', () => {
-  for (const marker of [
-    'panels:imports:begin',
-    'panels:imports:end',
-    'panels:mount:begin',
-    'panels:mount:end',
-  ]) {
-    assert.match(app, new RegExp(marker), `App.svelte lost the ${marker} fence`);
-  }
-  const mounted = app
-    .split(/<!-- panels:mount:begin[^>]*-->/)[1]
-    .split(/<!-- panels:mount:end -->/)[0]
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  assert.deepEqual(
-    mounted,
-    ['<BossLog />', '<ActivityBar />', '<TokenUsagePanel />'],
-    'the mount fence must hold exactly one line per panel'
+test('the manifest mounts exactly the three tracker blocks, in the stacked order', () => {
+  // The fences retired with the table-of-contents App (issue 165): the
+  // manifest IS the mount list, one ordered entry per block, and the page
+  // renders it verbatim. Adding a tracker is adding one block to this line.
+  assert.match(
+    manifest,
+    /section\('trackers', 'Trackers', \[osrsStats, vcsActivity, tokenUsage\], \{ layout: 'stack' \}\)/,
+    'the trackers section must list exactly one entry per panel, in the order the page stacks them'
   );
+  // The page renders the manifest rather than spelling its own copy of it.
+  assert.match(app, /import \{ page \} from '\.\/page\.ts'/);
+  assert.match(app, /\{#each page as section \(section\.id\)\}\s*<PageSection \{section\} \/>\s*\{\/each\}/);
 });
 
 // The side rail is GONE (owner directive): the OSRS panel was a collapsible
@@ -119,12 +139,13 @@ test('the panels are one centered column, not a rail', () => {
   );
   // Nothing anywhere still reaches for the rail's geometry or its published
   // open-state attribute; a leftover reference is a gutter nobody reserves.
-  for (const [name, source] of Object.entries({ app, styles, themeMenu, activityBar, bossLog })) {
+  for (const [name, source] of Object.entries({ app, styles, themeMenu, activityTracker, statTracker, pageSection })) {
     assert.doesNotMatch(source, /data-rail-open|--page-rail-gutter|--panel-rail-|SideRail/, `${name} still references the retired rail`);
   }
   // The stack owns the column width and the gap; panels own neither, so a
   // panel added later cannot pick a width that disagrees with its siblings.
-  assert.match(app, /<div class="panel-stack">/);
+  // The stack renders in PageSection, behind the manifest's one stack layout.
+  assert.match(pageSection, /\{#if section\.layout === 'stack'\}\s*<div class="panel-stack">/);
   assert.match(styles, /\.panel-stack\s*\{[^}]*display:\s*grid/);
   assert.match(styles, /\.panel-stack\s*\{[^}]*gap:\s*var\(--page-stack-gap\)/);
   assert.match(styles, /#app > \.page-header,\s*\n#app > main\s*\{[^}]*inline-size:\s*min\(var\(--page-column-width\), 100%\)/);
@@ -229,16 +250,16 @@ test('no card announces its own age, and none keeps a control', () => {
     /generatedAt\?:\s*string;/,
     'the shell must still accept the envelope timestamp, or its callers stop passing one'
   );
-  // Honest states are unaffected — they live in each panel's own body, and
-  // this is what makes the badge removal safe to make: a panel with nothing
-  // true to show still says so in words.
-  for (const [name, source] of Object.entries({ bossLog, activityBar, tokenUsage })) {
-    assert.match(
-      source,
-      /unavailable|No usage data|no activity data/i,
-      `${name} lost its explicit unavailable state, which the badge is not there to replace`
-    );
-  }
+  // Honest states are unaffected — they are DATA now (issue 165), carried by
+  // each panel's adapter and rendered by its generic component's note and
+  // empty fields; this is what makes the badge removal safe to make: a panel
+  // with nothing true to show still says so in words. EXECUTED where the
+  // words live, structural where they render.
+  assert.equal(osrsStatsProps(null, { levels: new Map(), tallies: new Map() }).note, bossLogLoadingNote);
+  assert.equal(bossLogUnavailableNote, 'Boss data is unavailable right now.');
+  assert.match(statTracker, /\{#if grids\.length === 0 && note\}\s*<p class="stat-note">\{note\}<\/p>/);
+  assert.match(activityTracker, /<span class="activity-empty">\{figuresNote\}<\/span>/);
+  assert.match(usageTracker, /<p class="usage-empty">\{emptyNote\}<\/p>/);
   // No per-card control, and no panel hands one up any more.
   assert.doesNotMatch(shell, /panel-refresh|<button/, 'a card grew its own refresh control back');
   // Two spellings, because a bespoke refresher does not have to be CALLED
@@ -247,7 +268,7 @@ test('no card announces its own age, and none keeps a control', () => {
   // so the call itself is pinned rather than one identifier.
   //
   // A blanket ban on <button> inside a panel was tried here and is wrong:
-  // TokenUsagePanel legitimately owns a daily/weekly/cumulative radiogroup,
+  // UsageTracker legitimately owns a daily/weekly/cumulative radiogroup,
   // which is a view control, not a refresher.
   //
   // What this comment used to say next — "reaching a watcher is what makes a
@@ -259,7 +280,16 @@ test('no card announces its own age, and none keeps a control', () => {
   // component that renders for all three, so a control added there appears
   // on every card at once — the widest version of the regression these
   // assertions exist to stop, and the one the per-card loop used to miss.
-  for (const [name, source] of Object.entries({ bossLog, activityBar, tokenUsage, panelShell: shell })) {
+  // Block.svelte joins the sweep for the same reason PanelShell is in it: it
+  // is the ONE host every panel block renders through, so a control added
+  // there appears on every card at once.
+  for (const [name, source] of Object.entries({
+    statTracker,
+    activityTracker,
+    usageTracker,
+    panelShell: shell,
+    blockHost,
+  })) {
     assert.doesNotMatch(
       source,
       /\{\s*refresh\s*\}|(?:const|let|var)\s+refresh\s*=/,
@@ -351,9 +381,11 @@ test('no page chrome floats over the document', () => {
     refreshAll,
     pageHeaderSource,
     themeMenu,
-    activityBar,
-    bossLog,
-    tokenUsage,
+    activityTracker,
+    statTracker,
+    usageTracker,
+    pageSection,
+    blockHost,
     shell,
     styles
   })) {
@@ -410,7 +442,7 @@ test('no page chrome floats over the document', () => {
   });
   assert.ok(layers[1] > layers[0], `the stacking scale is not ordered: ${layers.join(' < ')}`);
   assert.match(themeMenu, /z-index:\s*var\(--layer-menu,/);
-  for (const [name, source] of Object.entries({ refreshAll, pageHeaderSource, themeMenu, activityBar })) {
+  for (const [name, source] of Object.entries({ refreshAll, pageHeaderSource, themeMenu, activityTracker })) {
     assert.doesNotMatch(
       source,
       /z-index:\s*\d/,
@@ -456,20 +488,23 @@ test('the page header is two plain icons in the top-end corner', () => {
   assert.match(styles, /\.icon-button\s*\{[^}]*block-size:\s*2\.75rem/);
 });
 
-test('boss log renders the dense fixed-cell table with tooltips and -- tallies', () => {
-  assert.match(bossLog, /block-size:\s*var\(--boss-cell-height/, 'cells must keep a fixed height (no CLS)');
-  assert.match(bossLog, /tally\(boss\.kc\)/, 'tallies must go through the tested renderer');
-  // The rank is rendered by the detail now, and the detail is built by
-  // bossDetail — which runs tally and rankLabel itself and is executed row by
-  // row in tests/tooltip.test.mjs, including the unranked and no-figure
-  // cases. The pin follows the renderer rather than staying where it used to
-  // live: what it has always guarded is that no figure is formatted here.
-  assert.match(bossLog, /bossDetail\(boss\)/, 'ranks must go through the tested renderer');
+test('the stats tracker renders the dense fixed-cell table with tooltips and -- tallies', () => {
+  assert.match(statTracker, /block-size:\s*var\(--stat-cell-height/, 'cells must keep a fixed height (no CLS)');
+  // Figures and details are built by the adapter through the tested
+  // renderers — tally, cellLabel, bossDetail — executed below and in
+  // tests/tooltip.test.mjs, including the unranked and no-figure cases. The
+  // component may format nothing.
   assert.doesNotMatch(
-    bossLog,
+    statTracker,
     /toLocaleString|Intl\.NumberFormat/,
     'a figure is being formatted in the component instead of by the tested renderers'
   );
+  const tallies = osrsStatsTallies();
+  assert.equal(tallies.cells[0].figure, tally(1192), 'tallies must go through the tested renderer');
+  assert.equal(tallies.cells[0].label, cellLabel({ name: 'Zulrah', kc: 1192, rank: 111737 }));
+  assert.deepEqual(tallies.cells[0].detail, bossDetail({ name: 'Zulrah', kc: 1192, rank: 111737 }));
+  assert.equal(tallies.cells[1].muted, true, 'a null rank arrives muted, never hidden');
+  assert.equal(tallies.cells[1].figure, tally(null), 'a null tally arrives as the no-figure marker');
   // Three columns wrapping downward, and NO scroll region (owner directive,
   // issue 134: "it doesn't need scrolling if it just goes down in columns of
   // 3"). The table has now been all three arrangements — a tall vertical
@@ -482,48 +517,86 @@ test('boss log renders the dense fixed-cell table with tooltips and -- tallies',
   // track width would lay out 252px of columns in the 266px a 320px card
   // leaves, and would scroll on the first narrower device.
   assert.match(
-    bossLog,
-    /\.boss-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
-    'the boss table must be three shrinkable columns, exactly like the skills table above it'
+    statTracker,
+    /\.stat-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
+    'both stat tables must be three shrinkable columns'
   );
   assert.doesNotMatch(
-    bossLog,
-    /\.boss-grid\s*\{[^}]*grid-auto-flow/,
+    statTracker,
+    /grid-auto-flow/,
     'a column flow is the sideways strip the owner replaced'
   );
-  // The absence of overflow is now the load-bearing pin, and it protects two
+  // The absence of overflow is the load-bearing pin, and it protects two
   // things at once: the table the owner asked not to scroll, and the tooltip
   // below, which an overflow ancestor would clip the moment one came back.
   assert.doesNotMatch(
-    bossLog,
-    /\.boss-grid\s*\{[^}]*overflow/,
-    'an overflow on the boss table is a scroll region the owner removed and a clipping ancestor for the detail'
+    statTracker,
+    /\.stat-grid\s*\{[^}]*overflow/,
+    'an overflow on the stat table is a scroll region the owner removed and a clipping ancestor for the detail'
   );
   // The fill variant existed only to claim the retired rail's height; a card
   // in the stack grows to its content, so it must not come back.
   assert.doesNotMatch(shell, /panel-shell-fill/, 'the rail-filling variant must stay retired');
   // The detail moved OUT of this component (owner directive, 2026-08-24):
-  // there is one hover-detail primitive now, DetailTip, and both grids render
+  // there is one hover-detail primitive, DetailTip, and both grids render
   // it. Its own pins — the fixed anchor, the viewport clamping that replaced
   // the per-column anchoring, the absent minimum width, the token layer —
   // live in tests/tooltip.test.mjs beside the arithmetic they guard, and the
   // browser lanes measure all of it at 320px. What stays pinned HERE is that
   // this component still delegates rather than growing its own again.
   assert.doesNotMatch(
-    bossLog,
+    statTracker,
     /role="tooltip"|boss-tip|nth-child\(3n/,
-    'the boss log grew a second tooltip implementation; there is one primitive and it is DetailTip'
+    'the stat tracker grew a second tooltip implementation; there is one primitive and it is DetailTip'
   );
-  assert.match(bossLog, /<DetailTip detail=\{bossDetail\(boss\)\} \/>/);
-  assert.match(bossLog, /tabindex="0"/, 'cells must be focusable for the tooltip');
-  assert.match(bossLog, /aria-label=\{cellLabel\(boss\)\}/);
-  // Data flows only through the shared layer and shell; the sole
-  // name-shaped logic is the slug lookup with the initials fallback.
-  assert.match(bossLog, /watchPanel<BossLogData>\('boss-log'/);
-  assert.match(bossLog, /import PanelShell from '\.\/PanelShell\.svelte'/);
-  assert.match(bossLog, /bossSlug/);
-  assert.match(bossLog, /bossInitials/);
+  assert.match(statTracker, /<DetailTip detail=\{cell\.detail\} \/>/);
+  assert.match(statTracker, /tabindex="0"/, 'cells must be focusable for the tooltip');
+  assert.match(statTracker, /aria-label=\{cell\.label\}/);
+  // Data flows only through the shared layer and shell; the component knows
+  // no panel, no slug and no name — the binding layer holds all three.
+  assert.match(statTracker, /import PanelShell from '\.\/PanelShell\.svelte'/);
+  assert.doesNotMatch(
+    statTracker,
+    /watchPanel|boss|skill|osrs|runelite|hiscore/i,
+    'the component names its domain; names live in the adapter and the binding layer (issue 165)'
+  );
+  assert.match(osrsBinding, /bossLogPanelId/);
+  assert.equal(bossLogPanelId, 'boss-log');
 });
+
+/* One fixture drive of the adapter, shared by the structural tests above and
+ * below: the exact grids the retired component rendered, decided by the same
+ * data. */
+function osrsStatsFixture() {
+  return osrsStatsProps(
+    {
+      schema: 'panel/v1',
+      id: bossLogPanelId,
+      kind: 'boss-log/v1',
+      title: 'Fixture Stats',
+      status: 'ok',
+      data: {
+        account: 'fixture',
+        skills: [
+          { name: 'Overall', level: 2274, rank: 138220, xp: 453846899 },
+          { name: 'Attack', level: 99, rank: 124252, xp: 19794965 },
+        ],
+        bosses: [
+          { name: 'Zulrah', kc: 1192, rank: 111737 },
+          { name: 'Artio', kc: null, rank: null },
+        ],
+      },
+    },
+    {
+      levels: new Map([['attack', '/assets/attack.png']]),
+      tallies: new Map([['zulrah', '/assets/zulrah.png']]),
+    }
+  );
+}
+
+function osrsStatsTallies() {
+  return osrsStatsFixture().grids[1];
+}
 
 // The owner reviewed the vendored boss art and locked it exactly as rendered
 // (issue 127: "gorgeous… LOCK THOSE IN"). The layout around it changed in the
@@ -532,56 +605,80 @@ test('boss log renders the dense fixed-cell table with tooltips and -- tallies',
 // in one place: the file the slug selects, the declared box, the loading
 // behavior, and the painted size.
 test('the boss icons are locked exactly as they render', () => {
+  // The tile declares its box, its lazy loading and its async decode; the
+  // box is the grid scale's, stated once beside the scale decision.
   assert.match(
-    bossLog,
-    /<img\s+class="boss-icon"\s+src=\{icons\.get\(bossSlug\(boss\.name\)\)\}\s+alt=""\s+width="26"\s+height="26"\s+loading="lazy"\s+decoding="async"/,
-    'a boss tile is sourced by slug and declares its box, its lazy loading and its async decode'
+    statTracker,
+    /<img\s+class="stat-icon"\s+src=\{cell\.icon\}\s+alt=""\s+width=\{iconSize\}\s+height=\{iconSize\}\s+loading="lazy"\s+decoding="async"/,
+    'a tile icon declares its box, its lazy loading and its async decode'
   );
+  assert.match(statTracker, /\{@const iconSize = grid\.size === 'compact' \? 18 : 26\}/);
   assert.match(
-    bossLog,
-    /\.boss-icon\s*\{[^}]*inline-size:\s*26px[^}]*block-size:\s*26px[^}]*object-fit:\s*contain/,
-    'the painted icon box is 26px square and never distorts the art inside it'
+    statTracker,
+    /\.stat-grid\[data-cells='roomy'\] \.stat-icon\s*\{[^}]*inline-size:\s*26px[^}]*block-size:\s*26px[^}]*object-fit:\s*contain/,
+    'the painted tally-icon box is 26px square and never distorts the art inside it'
   );
   // The designed hole for a row that ships upstream before its art does.
-  assert.match(bossLog, /<span class="boss-icon boss-glyph" aria-hidden="true">\{bossInitials\(boss\.name\)\}<\/span>/);
+  assert.match(statTracker, /<span class="stat-icon stat-glyph" aria-hidden="true">\{cell\.glyph\}<\/span>/);
+  // WHICH art a row shows is the adapter's slug lookup, executed: a mapped
+  // slug arrives as the icon URL, an unmapped row arrives as its initials.
+  const tallies = osrsStatsTallies();
+  assert.equal(tallies.cells[0].icon, '/assets/zulrah.png', 'a vendored icon is selected by slug');
+  assert.equal(tallies.cells[1].icon, undefined, 'a row without art carries none');
+  assert.equal(tallies.cells[1].glyph, bossInitials('Artio'), 'the initials fallback rides every cell');
 });
 
 // The skills grid is the half of the panel the payload always carried and
 // nothing ever rendered: internal/panels parsed the hiscores skill table and
 // then dropped it on the floor (issue #78).
-test('the skills grid mirrors the hiscore panel and renders levels honestly', () => {
+test('the skills grid mirrors the reference panel and renders levels honestly', () => {
   assert.match(
-    bossLog,
-    /\.skill-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
-    'the skills table must stay three columns that can shrink'
+    statTracker,
+    /\.stat-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
+    'the compact table must stay three columns that can shrink'
   );
-  assert.match(bossLog, /\.skill-cell\s*\{[^}]*block-size:\s*1\.625rem/, 'skill cells need a fixed height (no CLS)');
-  assert.match(bossLog, /width="18"\s+height="18"/, 'skill icons must declare their box (no CLS)');
-  assert.match(bossLog, /tally\(skill\.level\)/, 'levels must go through the tested renderer');
-  assert.match(bossLog, /aria-label=\{skillLabel\(skill\)\}/);
-  // The bare `title=` attribute the skills used to carry is GONE. It was the
-  // browser's own tooltip — unstyled, half a second late, a different shape
-  // per operating system — and beside the real detail these tiles now render
-  // it would simply double-tooltip. Its absence is pinned across every tile
-  // in tests/tooltip.test.mjs; this is the skill half said where the skill
-  // grid is described.
-  assert.match(bossLog, /<DetailTip detail=\{skillDetail\(skill\)\} \/>/);
-  assert.match(bossLog, /skillSlug/);
+  assert.match(
+    statTracker,
+    /\.stat-grid\[data-cells='compact'\] \.stat-cell\s*\{[^}]*block-size:\s*1\.625rem/,
+    'compact cells need a fixed height (no CLS)'
+  );
+  // The levels grid is the adapter's, through the tested renderers, executed.
+  const [levels] = osrsStatsFixture().grids;
+  assert.equal(levels.size, 'compact');
+  assert.equal(levels.label, 'Skill levels');
+  assert.equal(levels.cells[1].figure, tally(99), 'levels must go through the tested renderer');
+  assert.equal(
+    levels.cells[1].label,
+    skillLabel({ name: 'Attack', level: 99, rank: 124252, xp: 19794965 })
+  );
+  assert.deepEqual(
+    levels.cells[1].detail,
+    skillDetail({ name: 'Attack', level: 99, rank: 124252, xp: 19794965 })
+  );
+  assert.equal(levels.cells[1].icon, '/assets/attack.png', 'a level icon is selected by the same slug rule');
   // The totals are cells of the same grid, keyed and labelled like the rest,
   // so the last row ends flush instead of trailing two blank tiles.
-  assert.match(bossLog, /\{#each summary as cell \(cell\.key\)\}/);
-  assert.match(bossLog, /<li class="skill-cell skill-summary" tabindex="0" aria-label=\{summaryLabel\(cell\)\}>/);
-  assert.match(bossLog, /<DetailTip detail=\{summaryDetail\(cell\)\} \/>/);
-  assert.match(bossLog, /const summary = \$derived\(skillSummary\(skills\)\)/, 'the totals must be derived from the payload');
+  assert.match(statTracker, /\{#each grid\.closing \?\? \[\] as cell \(cell\.key\)\}/);
+  assert.match(statTracker, /<li class="stat-cell stat-closing" tabindex="0" aria-label=\{cell\.label\}>/);
+  const summary = skillSummary([{ name: 'Overall', level: 2274, rank: 138220, xp: 453846899 }]);
+  assert.deepEqual(
+    levels.closing.map((cell) => [cell.caption, cell.figure, cell.label]),
+    summary.map((cell) => [cell.label, cell.value, summaryLabel(cell)]),
+    'the closing cells are the payload totals through the tested builders'
+  );
+  assert.deepEqual(levels.closing.map((cell) => cell.detail), summary.map((cell) => summaryDetail(cell)));
   // One line, whatever the width: a wrapped nine-digit figure in a 1.625rem
   // cell spills over the row below it.
-  assert.match(bossLog, /\.skill-summary\s*\{[^}]*white-space:\s*nowrap/);
+  assert.match(statTracker, /\.stat-closing\s*\{[^}]*white-space:\s*nowrap/);
   // A payload with no skill table says so; it never renders an empty grid
-  // that reads as "this account has no levels".
-  assert.match(bossLog, /\{:else\}\s*<p class="boss-note">No skill levels reported\.<\/p>/);
+  // that reads as "this account has no levels". The words are the adapter's,
+  // the empty-note branch the component's.
+  assert.equal(bossLogEmptySkillsNote, 'No skill levels reported.');
+  assert.equal(levels.emptyNote, bossLogEmptySkillsNote);
+  assert.match(statTracker, /\{:else\}\s*<p class="stat-note">\{grid\.emptyNote\}<\/p>/);
   // The levels are right-aligned digits in tabular figures, like the counts.
-  assert.match(bossLog, /\.skill-level,\s*\n\s*\.boss-kc\s*\{[^}]*text-align:\s*right/);
-  assert.match(bossLog, /\.skill-level,\s*\n\s*\.boss-kc\s*\{[^}]*font-variant-numeric:\s*tabular-nums/);
+  assert.match(statTracker, /\.stat-figure\s*\{[^}]*text-align:\s*right/);
+  assert.match(statTracker, /\.stat-figure\s*\{[^}]*font-variant-numeric:\s*tabular-nums/);
 });
 
 // The icon set is now COMPLETE (issue #78: the owner reviewed and approved
@@ -660,9 +757,11 @@ test('the icon set covers exactly the rows the origin serves', { skip: reducedCo
     }
   }
   // The fallback is still reachable code, and still tested, because upstream
-  // ships new content without asking.
-  assert.match(bossLog, /bossInitials\(boss\.name\)/);
-  assert.match(bossLog, /bossInitials\(skill\.name\)/);
+  // ships new content without asking: the adapter hands every row its
+  // initials, and the fixture's unmapped rows arrive glyph-first.
+  const { grids } = osrsStatsFixture();
+  assert.equal(grids[0].cells[0].glyph, bossInitials('Overall'));
+  assert.equal(grids[1].cells[1].glyph, bossInitials('Artio'));
 });
 
 test('the boss list is derived from the upstream, never enumerated in config', {
@@ -704,9 +803,22 @@ test('the panel heading is data the origin serves, not a string in either tree',
     'GitHub',
     'the owner-chosen heading must live in config data, where a vendor name is allowed to be'
   );
-  // The component renders whatever the envelope carries. A hardcoded heading
-  // here would render the same page today and make the config data a lie.
-  assert.match(activityBar, /title=\{envelope\?\.title \|\| 'Version-control activity'\}/);
+  // The adapter renders whatever the envelope carries. A hardcoded heading
+  // would render the same page today and make the config data a lie —
+  // EXECUTED both ways: the origin's title wins, and only its absence (or
+  // the unavailable fallback's empty title) reads the neutral name.
+  assert.equal(
+    vcsActivityProps({
+      schema: 'panel/v1',
+      id: 'vcs-activity',
+      kind: 'vcs-activity/v1',
+      title: 'GitHub',
+      status: 'ok',
+      data: null
+    }).title,
+    'GitHub'
+  );
+  assert.equal(vcsActivityProps(null).title, 'Version-control activity');
   // And the Go source keeps the neutral name as its fallback, so a config
   // that fails to load degrades to a truthful heading rather than a blank.
   const panelConfig = await read('../../internal/panels/config.go');
@@ -752,18 +864,34 @@ test(
 test('every mounted panel stays current instead of painting once', () => {
   // The defect this pins: each panel used to read its envelope exactly once,
   // so a backend refresh was invisible until the visitor reloaded the page.
-  for (const [name, source] of Object.entries({ bossLog, activityBar, tokenUsage })) {
-    assert.match(source, /watchPanel/, `${name} no longer keeps itself current`);
+  // The subscription lives in the ONE block host now (issue 165), so a panel
+  // cannot even grow a one-shot read of its own: the host watches, re-runs
+  // the adapter on every delivery, and the components read no wire at all.
+  assert.match(blockHost, /watchPanel\(block\.binding\.panelId/, 'the block host no longer keeps panels current');
+  assert.doesNotMatch(
+    blockHost,
+    /\bloadPanel\b/,
+    'the block host reads an envelope directly; the one-shot read is the bug'
+  );
+  for (const [name, source] of Object.entries({ statTracker, activityTracker, usageTracker })) {
     assert.doesNotMatch(
       source,
-      /\bloadPanel\b/,
-      `${name} reads its envelope directly again; the one-shot read is the bug`
+      /\bloadPanel\b|\bwatchPanel\b|\bfetch\(/,
+      `${name} reads the wire itself; the block host owns the subscription`
     );
+  }
+  // And every tracker block is a panel binding, so all three ride that host.
+  for (const [name, source] of Object.entries({
+    osrsBinding,
+    vcsBinding: bindingSourceCache.vcs,
+    usageBinding: bindingSourceCache.usage,
+  })) {
+    assert.match(source, /panelBlock\(/, `${name} no longer binds through the panel host`);
   }
 });
 
 test('the contribution grid is one component both panels render', () => {
-  assert.match(tokenUsage, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
+  assert.match(usageTracker, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
   // Fixed geometry: data arriving must never move the page.
   assert.match(grid, /block-size:\s*7rem/);
   assert.match(grid, /overflow-x:\s*auto/);
@@ -821,26 +949,26 @@ test('the grid opens on its newest column and lets history scroll back', () => {
 // panel that dropped every graph would satisfy the first half perfectly.
 test('a token source with no series renders no graph, and one with a series still renders it', () => {
   const region =
-    /\{#if activityColumns\.length > 0\}\s*<section class="usage-activity">([\s\S]*?)<\/section>\s*\{\/if\}/.exec(
-      tokenUsage
+    /\{#if columns\.length > 0\}\s*<section class="usage-activity">([\s\S]*?)<\/section>\s*\{\/if\}/.exec(
+      usageTracker
     );
   assert.ok(region, 'the graph region is no longer gated on there being columns to draw');
   // The gate reads the SAME columns the grid is handed, so the two can never
   // disagree about whether this source has a graph.
   assert.match(
     region[1],
-    /<ContributionGrid\s+columns=\{activityColumns\}/,
+    /<ContributionGrid\s+\{columns\}/,
     'the gate and the graph read different things'
   );
-  // The heading and the lens toggle are inside the gate with it: a "Token
-  // activity" heading over a toggle with nothing to toggle is the same hole
-  // wearing different markup.
-  assert.match(region[1], /Token activity/, 'the heading survived its graph');
+  // The heading and the lens toggle are inside the gate with it: an activity
+  // heading over a toggle with nothing to toggle is the same hole wearing
+  // different markup.
+  assert.match(region[1], /\{source\.activity\.heading\}/, 'the heading survived its graph');
   assert.match(region[1], /role="radiogroup"/, 'the lens toggle survived its series');
   // And the panel never asks the shared component for its empty treatment.
-  assert.doesNotMatch(tokenUsage, /emptyNote/, 'the panel asks for an empty grid again');
-  assert.doesNotMatch(tokenUsage, /series pending/, 'the retired "pending" claim is back');
-  assert.doesNotMatch(tokenUsage, /pendingColumns/, 'the panel reaches for placeholder columns');
+  assert.doesNotMatch(usageTracker, /emptyNote=/, 'the panel asks for an empty grid again');
+  assert.doesNotMatch(usageTracker, /series pending/, 'the retired "pending" claim is back');
+  assert.doesNotMatch(usageTracker, /pendingColumns/, 'the panel reaches for placeholder columns');
   // The component KEEPS that treatment, and this is the line between the two
   // cases rather than an exception to the ruling: the version-control
   // calendar's payload is genuinely in flight, and its reserve holds exactly
@@ -855,9 +983,9 @@ test('a token source with no series renders no graph, and one with a series stil
   assert.match(grid, /<div class="grid-cells" aria-hidden="true">/);
   assert.match(grid, /\.grid-empty\s*\{[^}]*position:\s*absolute/);
   // Exactly one caller may ask for it, and it is the one whose data is coming.
-  assert.match(activityBar, /emptyNote=/, 'the calendar stopped labelling its waiting state');
+  assert.match(activityTracker, /emptyNote=/, 'the calendar stopped labelling its waiting state');
   // The retired sentence must not come back anywhere.
-  for (const [name, source] of Object.entries({ grid, tokenUsage, activityBar })) {
+  for (const [name, source] of Object.entries({ grid, usageTracker, activityTracker })) {
     assert.doesNotMatch(
       source,
       /live refresh is off/,
@@ -870,13 +998,16 @@ test('panel sources stay local-origin', () => {
   for (const [name, source] of Object.entries({
     shell,
     refreshAll,
-    bossLog,
+    statTracker,
     panelsSource,
     iconsSource,
     grid,
     gridSource,
-    activityBar,
-    tokenUsage,
+    activityTracker,
+    usageTracker,
+    blockHost,
+    pageSection,
+    manifest,
   })) {
     assert.doesNotMatch(source, /https?:\/\//, `${name} introduces a remote origin`);
   }
@@ -956,24 +1087,29 @@ test('a skill label carries the whole row, including its nulls', () => {
 // carries the account, because what the origin serves is a data question and
 // this pass is a display one.
 test('the boss panel displays no account name anywhere', () => {
+  // The adapter is the only code that touches the payload, and it never
+  // reads the account field; the component could not name it if it tried.
+  const helpers = bossLogHelperSource;
   assert.doesNotMatch(
-    bossLog,
-    /data\.account/,
+    helpers,
+    /\.account\b/,
     'the account name reaches a rendering again; a label read aloud is still displayed'
   );
-  assert.doesNotMatch(bossLog, /panelSummary/, 'the account subtitle came back');
+  assert.doesNotMatch(statTracker, /account|panelSummary/, 'the account subtitle came back');
   // The grids keep accessible names — losing the account must not cost a
-  // screen reader the ability to tell the two tables apart.
-  assert.match(bossLog, /<ul class="skill-grid" aria-label="Skill levels">/);
-  // And the boss table is no longer a focus stop. The tabindex it used to
+  // screen reader the ability to tell the two tables apart. The names are
+  // adapter data on the one grid template.
+  assert.match(statTracker, /<ul class="stat-grid" data-cells=\{grid\.size\} aria-label=\{grid\.label\}>/);
+  const { grids } = osrsStatsFixture();
+  assert.deepEqual(grids.map((grid) => grid.label), ['Skill levels', 'Boss tallies']);
+  // And the tally table is no longer a focus stop. The tabindex it used to
   // carry existed because a scrollable box is keyboard-reachable only when
   // focusable; with the scroll region gone (issue 134) it is a tab stop that
   // does nothing, which costs every keyboard reader a press for no action.
-  assert.match(bossLog, /<ul class="boss-grid" aria-label="Boss tallies">/);
   assert.doesNotMatch(
-    bossLog,
-    /<ul class="boss-grid"[^>]*tabindex/,
-    'the boss table is not a scroll region any more, so it must not be a focus stop either'
+    statTracker,
+    /<ul class="stat-grid"[^>]*tabindex/,
+    'the stat tables are not scroll regions, so they must not be focus stops either'
   );
 });
 

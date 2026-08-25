@@ -27,6 +27,7 @@
  * failure as a panel inventing a figure. Each is described as what it
  * verifiably is: one placeholder, numbered, of eight. */
 
+import type { MediaGalleryProps } from './blocks.ts';
 import { mediaUrl, type MediaPublication } from './media.ts';
 
 export interface ArtPiece {
@@ -93,3 +94,18 @@ export function artSource(piece: ArtPiece): string {
 export function artLabel(index: number, total: number): string {
   return `Placeholder photograph ${index + 1} of ${total}`;
 }
+
+/* The adapter (issue 165): the rows above as MediaGallery props. Static —
+ * the addresses and the shared frame box are build-time facts — so the
+ * manifest binds it once and the component that renders it knows no digest,
+ * no URL builder and no provenance note of its own. */
+export const artGalleryProps: MediaGalleryProps = {
+  items: artPieces.map((piece, index) => ({
+    key: piece.sha256,
+    src: artSource(piece),
+    alt: artLabel(index, artPieces.length)
+  })),
+  width: artWidth,
+  height: artHeight,
+  unavailableNote: artUnavailableNote
+};

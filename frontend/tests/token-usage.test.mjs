@@ -11,14 +11,30 @@ import {
   meterSeverity,
   provenanceIsMixed,
   resetsIn,
+  tokenUsagePanelId,
+  tokenUsageProps,
   tokenUsageSources
 } from '../src/lib/token-usage.ts';
 
-const [component, helper, app] = await Promise.all([
-  readFile(new URL('../src/lib/components/TokenUsagePanel.svelte', import.meta.url), 'utf8'),
+const [component, helper, manifest, binding] = await Promise.all([
+  readFile(new URL('../src/lib/components/UsageTracker.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/token-usage.ts', import.meta.url), 'utf8'),
-  readFile(new URL('../src/App.svelte', import.meta.url), 'utf8')
+  readFile(new URL('../src/page.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../src/lib/blocks/tokenUsage.ts', import.meta.url), 'utf8')
 ]);
+
+/* One well-formed envelope around the shipped payload, for driving the
+ * adapter the way the block host does. */
+const envelopeFor = (data, overrides = {}) => ({
+  schema: 'panel/v1',
+  id: tokenUsagePanelId,
+  kind: 'token-usage/v1',
+  title: 'Fixture Usage',
+  status: 'ok',
+  generatedAt: '2026-08-11T03:00:00Z',
+  data,
+  ...overrides
+});
 
 // The exact payload shape internal/panels serves for token-usage/v1. The two
 // source labels are DATA — they appear here exactly as the origin ships them,
@@ -163,25 +179,38 @@ describe('tokenUsageSources admission', () => {
   });
 });
 
-describe('TokenUsagePanel source contract', () => {
+describe('UsageTracker source contract', () => {
   it('renders inside the shared PanelShell with the envelope status, age, and no per-card control', () => {
     assert.match(component, /import PanelShell from '\.\/PanelShell\.svelte'/);
-    assert.match(
-      component,
-      /<PanelShell \{title\} status=\{envelope\.status\} generatedAt=\{envelope\.generatedAt\}>/
-    );
+    assert.match(component, /<PanelShell \{title\} \{status\} \{generatedAt\}>/);
     assert.match(component, /<\/PanelShell>/);
     // Refreshing is one gesture for the whole stack, not a per-card decision,
     // so this panel hands its shell no refresher and holds no watcher handle
-    // of its own — watchPanel enrols itself, and RefreshAll drives them all
-    // through the same single-flight read the periodic poll uses.
+    // of its own — the block host enrols it through watchPanel, and
+    // RefreshAll drives them all through the same single-flight read the
+    // periodic poll uses.
     assert.doesNotMatch(component, /\{refresh\}|const refresh =|watcher/);
-    assert.match(component, /return watchPanel<TokenUsageData>\('token-usage'/);
+    // The envelope facts ride the adapter into the shell unchanged, and the
+    // empty-title fallback the unavailablePanel case needs is preserved.
+    const rendered = tokenUsageProps(envelopeFor(shippedPayload));
+    assert.equal(rendered.title, 'Fixture Usage');
+    assert.equal(rendered.status, 'ok');
+    assert.equal(rendered.generatedAt, '2026-08-11T03:00:00Z');
+    assert.equal(tokenUsageProps(envelopeFor(null, { title: '' })).title, 'Token usage');
+    // Before the first envelope the block renders NOTHING — the same face the
+    // retired component's {#if envelope} guard gave the page.
+    assert.equal(tokenUsageProps(null), null);
   });
 
   it('iterates payload sources and takes every label from the data', () => {
-    assert.match(component, /\{#each sources as source \(source\.label\)\}/);
+    assert.match(component, /\{#each sections as source \(source\.key\)\}/);
     assert.match(component, /\{source\.label\}/);
+    const rendered = tokenUsageProps(envelopeFor(shippedPayload));
+    assert.deepEqual(
+      rendered.sections.map((section) => section.label),
+      shippedPayload.sources.map((source) => source.label),
+      'every section label is the payload’s, in the payload’s order'
+    );
     // Vendor and tool names are payload data, never component or helper
     // logic. The needles are assembled from fragments so this test file's
     // own scan subject stays clean, mirroring the Go doctrine pin.
@@ -196,7 +225,23 @@ describe('TokenUsagePanel source contract', () => {
   it('never lets color carry the meter alone: the graphic is hidden, the value visible', () => {
     assert.match(component, /class="usage-meter-track" aria-hidden="true"/);
     assert.match(component, /class="usage-meter-value"/);
-    assert.match(component, /\{formatUtilization\(usageWindow\.utilizationPct\)\}/);
+    assert.match(component, /\{usageWindow\.meter\.reading\}/);
+    // The reading beside the fill is the true figure through the tested
+    // renderer, and the fill saturates while the reading does not.
+    const [first] = tokenUsageProps(envelopeFor(shippedPayload)).sections;
+    assert.equal(first.windows[0].meter.reading, formatUtilization(36.4));
+    assert.equal(first.windows[0].meter.severity, meterSeverity(36.4));
+    assert.equal(first.windows[0].meter.fillPct, meterFillPct(36.4));
+    // A window without a reported utilization draws no meter at all.
+    const [, second] = tokenUsageProps(envelopeFor(shippedPayload)).sections;
+    assert.equal(second.windows[0].meter, undefined);
+    // The pair row: compact figures visible, exact figures on the title.
+    assert.deepEqual(
+      first.windows[0].pairs.map((pair) => `${pair.label} ${pair.figure}`),
+      [`in ${formatTokenCount(182340)}`, `out ${formatTokenCount(45120)}`]
+    );
+    assert.equal(first.windows[0].pairsLabel, '182340 input tokens, 45120 output tokens');
+    assert.equal(first.windows[0].reset, resetsIn('2026-08-11T07:00:00Z'));
   });
 
   it('renders honest empty states for a refused payload and for a windowless source', () => {
@@ -222,30 +267,21 @@ describe('TokenUsagePanel source contract', () => {
   });
 });
 
-describe('panel mount region', () => {
-  it('keeps the fences intact and mounts this panel exactly one line per fence', () => {
-    const importsFence = app.match(/panels:imports:begin[^\n]*\n([^]*?)\n\s*\/\* panels:imports:end/);
-    const mountFence = app.match(/panels:mount:begin[^\n]*-->\n([^]*?)\n\s*<!-- panels:mount:end/);
-    assert.ok(importsFence, 'imports fence missing');
-    assert.ok(mountFence, 'mount fence missing');
-    const importLines = importsFence[1].split('\n').map((line) => line.trim()).filter(Boolean);
-    const mountLines = mountFence[1].split('\n').map((line) => line.trim()).filter(Boolean);
-    // Exactly one import line and one mount line for THIS panel — the fence
-    // contract, asserted per-panel so sibling panels (and shared chrome like
-    // the side rail, which imports separately but shares its panel's mount
-    // line) stay this test's neighbors, never its subjects. The canonical
-    // whole-fence listing lives in panels-ui.test.mjs.
-    const myImport = "import TokenUsagePanel from './lib/components/TokenUsagePanel.svelte';";
+describe('manifest mount', () => {
+  it('lists this block exactly once, bound to its panel id', () => {
+    // The fences retired with the table-of-contents App (issue 165): the
+    // manifest IS the mount list, so the per-panel pin moves to it. The
+    // canonical whole-section listing lives in panels-ui.test.mjs.
+    const importLines = manifest.match(/^import \{ tokenUsage \} from '\.\/lib\/blocks\/tokenUsage\.ts';$/gm);
+    assert.equal(importLines?.length, 1, 'exactly one import line for the usage block');
+    const body = manifest.replace(/^import[^\n]*\n/gm, '');
     assert.equal(
-      importLines.filter((line) => line === myImport).length,
+      (body.match(/\btokenUsage\b/g) ?? []).length,
       1,
-      'token-usage import line must appear exactly once in its fence'
+      'the manifest lists the usage block exactly once'
     );
-    assert.equal(
-      mountLines.filter((line) => line === '<TokenUsagePanel />').length,
-      1,
-      'token-usage mount line must appear exactly once in its fence'
-    );
+    assert.match(binding, /panelBlock\(\s*'token-usage',\s*UsageTracker,\s*tokenUsagePanelId,\s*tokenUsageProps\s*\)/);
+    assert.equal(tokenUsagePanelId, 'token-usage');
   });
 });
 
@@ -419,38 +455,81 @@ describe('provenanceIsMixed', () => {
   });
 });
 
-describe('TokenUsagePanel live surface', () => {
-  it('keeps itself current instead of painting once at mount', () => {
-    assert.match(component, /watchPanel<TokenUsageData>\('token-usage'/);
+describe('UsageTracker live surface', () => {
+  it('keeps itself current through the block host instead of painting once at mount', () => {
+    // The subscription moved to the ONE host every panel block shares
+    // (issue 165): Block.svelte runs watchPanel and re-runs this adapter on
+    // every envelope, so a panel cannot drift into a one-shot read of its
+    // own. The component itself fetches nothing.
     assert.doesNotMatch(component, /onMount/, 'a one-shot mount read is the bug this panel had');
+    assert.doesNotMatch(component, /watchPanel|loadPanel|fetch\(/, 'the component reads no wire; the block host does');
   });
 
   it('renders the owner\'s tile grid: two columns, a final odd tile spanning the row', () => {
     assert.match(component, /grid-template-columns:\s*repeat\(2,/);
     assert.match(component, /\.usage-tile:last-child:nth-child\(odd\)\s*\{\s*grid-column:\s*1 \/ -1/);
-    assert.match(component, /class="usage-tile-value">\{formatStatValue\(stat\.value, stat\.unit\)\}/);
+    assert.match(component, /class="usage-tile-value">\{tile\.figure\}/);
+    // The figure the tile shows is the tested renderer's, via the adapter.
+    const payload = {
+      sources: [
+        {
+          label: 'fixture',
+          windows: [],
+          stats: [{ key: 'lifetime', label: 'Lifetime tokens', value: 22_700_000_000, unit: 'tokens', recorded: true }]
+        }
+      ]
+    };
+    const [section] = tokenUsageProps(envelopeFor(payload)).sections;
+    assert.equal(section.tiles[0].figure, formatStatValue(22_700_000_000, 'tokens'));
+    assert.equal(section.tiles[0].label, 'Lifetime tokens');
   });
 
   it('marks provenance by exception, never once per figure', () => {
     // The marker is still here and still says the same thing — what changed
-    // is that it is gated on the source's provenance being MIXED, so a panel
-    // whose figures all came the same way stops repeating the word about a
-    // hundred times on one screen (owner directive, issue 134).
-    assert.match(component, /\{@const mixed = provenanceIsMixed\(source\)\}/);
-    assert.match(component, /\{#if mixed && stat\.recorded\}/);
-    assert.match(component, /\{#if mixed && insight\.recorded\}/);
+    // with issue 134 is that it is gated on the source's provenance being
+    // MIXED, and with issue 165 the gate is decided in the adapter, beside
+    // provenanceIsMixed itself, so the component renders a plain flag.
+    assert.match(component, /\{#if tile\.marked\}/);
+    assert.match(component, /\{#if insight\.marked\}/);
     assert.match(component, /class="usage-recorded"/);
     // The ungated forms are what this replaces; either one returning is the
     // regression, and both are cheap to name exactly.
-    assert.doesNotMatch(component, /\{#if stat\.recorded\}/);
+    assert.doesNotMatch(component, /\{#if stat\.recorded\}|\{#if tile\.recorded\}/);
     assert.doesNotMatch(component, /\{#if insight\.recorded\}/);
+    // EXECUTED both ways: a uniform source marks nothing, a mixed source
+    // marks exactly the recorded figures.
+    const figure = (key, recorded) => ({ key, label: key, value: 1, unit: 'tokens', recorded });
+    const uniform = tokenUsageProps(
+      envelopeFor({ sources: [{ label: 's', windows: [], stats: [figure('a', true), figure('b', true)] }] })
+    );
+    assert.deepEqual(uniform.sections[0].tiles.map((tile) => tile.marked), [false, false]);
+    const mixed = tokenUsageProps(
+      envelopeFor({
+        sources: [
+          {
+            label: 's',
+            windows: [],
+            stats: [figure('a', true), figure('b', false)],
+            insights: [{ label: 'i', pct: 4, recorded: true }]
+          }
+        ]
+      })
+    );
+    assert.deepEqual(mixed.sections[0].tiles.map((tile) => tile.marked), [true, false]);
+    assert.equal(mixed.sections[0].insights.rows[0].marked, true);
+    // An unreported insight draws no fill and reads as the explicit dash.
+    const dashed = tokenUsageProps(
+      envelopeFor({ sources: [{ label: 's', windows: [], insights: [{ label: 'i', pct: null }] }] })
+    );
+    assert.equal(dashed.sections[0].insights.rows[0].fillPct, 0);
+    assert.equal(dashed.sections[0].insights.rows[0].reading, '--');
   });
 
   it('switches the activity view client-side over one series', () => {
     assert.match(component, /role="radiogroup"/);
     assert.match(component, /\{#each seriesViews as candidate\}/);
     assert.match(component, /aria-checked=\{view === candidate\}/);
-    assert.match(component, /viewValues\(source\.series\.totals, view\)/);
+    assert.match(component, /viewValues\(\[\.\.\.activity\.series\.totals\], view\)/);
     // Touch target floor for the segmented control.
     assert.match(component, /min-block-size:\s*2\.75rem/);
   });
@@ -465,17 +544,41 @@ describe('TokenUsagePanel live surface', () => {
     // pending, and the panel was reserving a graph-shaped box for something
     // that can never arrive. It now renders no graph region at all, and keeps
     // every figure the source genuinely reports.
-    assert.doesNotMatch(component, /emptyNote/, 'the panel asks for an empty grid again');
+    assert.doesNotMatch(component, /emptyNote=/, 'the panel asks for an empty grid again');
     assert.doesNotMatch(component, /series pending/, 'the retired "pending" claim is back');
-    // Both halves of the guarantee: the region is gated, and the gated region
-    // is the whole graph — heading, lens toggle and grid together.
+    // Both halves of the guarantee, now decided twice on the same data: the
+    // adapter carries an activity region only when the series has days in it,
+    // and the render still gates on there being columns to draw. The gated
+    // region is the whole graph — heading, lens toggle and grid together.
     const region =
-      /\{#if activityColumns\.length > 0\}\s*<section class="usage-activity">([\s\S]*?)<\/section>\s*\{\/if\}/.exec(
+      /\{#if columns\.length > 0\}\s*<section class="usage-activity">([\s\S]*?)<\/section>\s*\{\/if\}/.exec(
         component
       );
     assert.ok(region, 'the graph region is no longer gated on there being columns to draw');
     assert.match(region[1], /<ContributionGrid/, 'the gate does not contain the graph');
     assert.match(region[1], /role="radiogroup"/, 'the lens toggle is outside the gate it belongs to');
     assert.doesNotMatch(component, /live refresh is off/);
+    // The adapter half, executed: no series (or an empty one) means no
+    // activity region at all; a real series carries the region and its
+    // whole-series summary sentence.
+    const seriesless = tokenUsageProps(envelopeFor({ sources: [{ label: 's', windows: [] }] }));
+    assert.equal(seriesless.sections[0].activity, undefined);
+    const empty = tokenUsageProps(
+      envelopeFor({ sources: [{ label: 's', windows: [], series: { startDate: '2026-08-01', totals: [] } }] })
+    );
+    assert.equal(empty.sections[0].activity, undefined);
+    const drawn = tokenUsageProps(
+      envelopeFor({ sources: [{ label: 's', windows: [], series: { startDate: '2026-08-01', totals: [1, 2, 3] } }] })
+    );
+    assert.equal(drawn.sections[0].activity.heading, 'Token activity');
+    assert.equal(drawn.sections[0].activity.label, 's token activity');
+    assert.equal(drawn.sections[0].activity.noun, 'token');
+    assert.equal(drawn.sections[0].activity.summary, '6 tokens over 3 days, peaking at 3');
+    // A windowless, statless source states its honest empty line; a source
+    // with figures does not.
+    assert.equal(seriesless.sections[0].note, 'No usage recorded for this source yet.');
+    const withWindows = tokenUsageProps(envelopeFor(shippedPayload));
+    assert.equal(withWindows.sections[0].note, undefined);
+    assert.equal(withWindows.emptyNote, 'No usage data available.');
   });
 });

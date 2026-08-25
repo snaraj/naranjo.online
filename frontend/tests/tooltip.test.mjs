@@ -21,6 +21,7 @@ import test from 'node:test';
 
 import {
   bossDetail,
+  osrsStatsProps,
   skillDetail,
   summaryDetail,
   skillSummary,
@@ -36,11 +37,11 @@ import {
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
-const [styles, tooltipSource, tipComponent, bossLog] = await Promise.all([
+const [styles, tooltipSource, tipComponent, statTracker] = await Promise.all([
   read('../src/styles.css'),
   read('../src/lib/tooltip.ts'),
   read('../src/lib/components/DetailTip.svelte'),
-  read('../src/lib/components/BossLog.svelte'),
+  read('../src/lib/components/StatTracker.svelte'),
 ]);
 
 /* Every .svelte file under src/, discovered by walking the tree rather than
@@ -233,6 +234,36 @@ test('both grids build the same detail shape from the same nullable renderers', 
   });
 });
 
+/* The tiles are data now (issue 165): the adapter builds every cell's detail
+ * with the builders above, and the generic tracker renders whatever detail
+ * its cell carries. EXECUTED rather than pattern-matched, because this is the
+ * link the source pins on the component can no longer see — a component that
+ * renders {cell.detail} faithfully proves nothing about WHICH detail the
+ * adapter put there. */
+test('the adapter feeds every tile the same tested detail builders', () => {
+  const icons = { levels: new Map(), tallies: new Map() };
+  const envelope = {
+    schema: 'panel/v1',
+    id: 'boss-log',
+    kind: 'boss-log/v1',
+    title: 'Fixture Stats',
+    status: 'ok',
+    data: {
+      account: 'fixture',
+      skills: [
+        { name: 'Overall', level: 2277, rank: 138220, xp: 453846899 },
+        { name: 'Attack', level: 99, rank: 124252, xp: 19794965 },
+      ],
+      bosses: [{ name: 'Zulrah', kc: 1234, rank: 5678, score: 90 }],
+    },
+  };
+  const [levels, tallies] = osrsStatsProps(envelope, icons).grids;
+  assert.deepEqual(levels.cells[1].detail, skillDetail(envelope.data.skills[1]));
+  assert.deepEqual(tallies.cells[0].detail, bossDetail(envelope.data.bosses[0]));
+  const summary = skillSummary(envelope.data.skills);
+  assert.deepEqual(levels.closing.map((cell) => cell.detail), summary.map(summaryDetail));
+});
+
 /* Tooltip content is PAYLOAD: boss and skill names arrive over the network
  * from the origin's hiscore snapshot. The primitive must therefore render
  * them as text and never as markup, and this is the pin that says so in both
@@ -298,15 +329,19 @@ test('exactly one component in the tree implements a hover detail', () => {
   }
 });
 
-test('every tile in both boss-log grids carries the shared detail and no browser tooltip', () => {
-  const tiles = [...bossLog.matchAll(/<li\b[\s\S]*?<\/li>/g)].map(([tile]) => tile);
-  // Three tile kinds: a skill, the totals cell that closes the grid, and a
-  // boss. Fewer means this walk stopped seeing one of them.
-  assert.equal(tiles.length, 3, `the boss-log renders ${tiles.length} kinds of tile, not 3`);
+test('every tile in the stat tracker carries the shared detail and no browser tooltip', () => {
+  const tiles = [...statTracker.matchAll(/<li\b[\s\S]*?<\/li>/g)].map(([tile]) => tile);
+  // Two tile TEMPLATES render every tile of both grids now: a stat cell and
+  // the captioned closing cell. The walk used to find three, because each
+  // grid spelled its own; the merge is the strengthening — a detail added or
+  // dropped on one template moves every grid at once, so a grid can no
+  // longer drift away from the rule. Fewer than two means this walk stopped
+  // seeing one of them.
+  assert.equal(tiles.length, 2, `the stat tracker renders ${tiles.length} kinds of tile, not 2`);
   for (const tile of tiles) {
     assert.match(
       tile,
-      /<DetailTip detail=\{\w+\(\w+\)\} \/>/,
+      /<DetailTip detail=\{cell\.detail\} \/>/,
       `a tile renders no shared detail: ${tile.slice(0, 80)}…`
     );
     // The browser's own tooltip is what the skills used to have. Beside a
@@ -319,17 +354,17 @@ test('every tile in both boss-log grids carries the shared detail and no browser
     );
     // Both grids' tiles are keyboard-reachable, because the detail is.
     assert.match(tile, /tabindex="0"/, 'a tile with a detail no keyboard can reach is half the feature');
-    assert.match(tile, /aria-label=\{\w+\(\w+\)\}/, 'a tile must carry its whole row in its accessible name');
+    assert.match(tile, /aria-label=\{cell\.label\}/, 'a tile must carry its whole row in its accessible name');
   }
   // The old implementation is GONE from this component rather than
   // overridden: no markup, no styling, no reveal rule, no per-column anchor.
-  assert.doesNotMatch(bossLog, /boss-tip/, 'the retired per-cell tooltip is still in the boss log');
+  assert.doesNotMatch(statTracker, /boss-tip|stat-tip/, 'the retired per-cell tooltip is back in the stat grids');
   assert.doesNotMatch(
-    bossLog,
+    statTracker,
     /nth-child\(3n/,
-    'the retired per-column anchoring is still in the boss log; containment is viewport clamping now'
+    'the retired per-column anchoring is back in the stat grids; containment is viewport clamping now'
   );
-  assert.match(bossLog, /import DetailTip from '\.\/DetailTip\.svelte'/);
+  assert.match(statTracker, /import DetailTip from '\.\/DetailTip\.svelte'/);
 });
 
 test('the detail follows a fine pointer and is anchored for everyone else', () => {
