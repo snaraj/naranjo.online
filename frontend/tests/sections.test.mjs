@@ -911,6 +911,101 @@ test('clicking the photograph enlarges it; only the full derivative loads on dem
   assert.match(mediaGallery, /src=\{item\.previewSrc\}/, 'the feed frame must show the small preview');
 });
 
+/* The component's own markup, with every HTML comment removed. Prose about
+ * an attribute is not that attribute, and the gallery's header comment
+ * describes the very things the two tests below forbid — so they read the
+ * markup rather than the file, which is what makes "nowhere" mean nowhere. */
+const galleryMarkup = mediaGallery.replace(/<!--[\s\S]*?-->/g, '');
+
+test('a moving item shows a poster in the strip — never a <video> element there (issue 207)', () => {
+  // The single visible frame is an <img> for every kind of item. A gallery
+  // that mounted a <video> to show a thumbnail would reintroduce, in a
+  // heavier form, exactly the weight the one-frame redesign removed.
+  const enlargedBlock = /\{#if enlarged\}([\s\S]*?)\{\/if\}/.exec(galleryMarkup)?.[1] ?? '';
+  assert.match(enlargedBlock, /<video/, 'the video element must mount inside the enlarged branch');
+  assert.doesNotMatch(
+    galleryMarkup.replace(enlargedBlock, ''),
+    /<video|<source/,
+    'no video or source element may exist outside the enlarged branch'
+  );
+  // The strip's one difference between a film and a photograph: a drawn,
+  // aria-hidden mark. It is signposting, not a second control — the frame
+  // itself already opens the lightbox.
+  assert.match(mediaGallery, /class="gallery-play-mark" aria-hidden="true"/);
+});
+
+test('nothing in the gallery ever autoplays, and reduced motion is structural (issue 207)', () => {
+  // The strongest form this assertion has: the ATTRIBUTE cannot appear
+  // anywhere in the file, so there is no conditional, muted, or
+  // "just-for-the-poster" branch that could reintroduce it. Reduced motion is
+  // then honoured by construction rather than by a media query — there is no
+  // motion until a reader presses play, and a reader pressing play asked.
+  assert.doesNotMatch(galleryMarkup, /autoplay/i, 'no autoplay attribute may exist anywhere in the gallery markup');
+  assert.match(galleryMarkup, /<video[\s\S]*?\n\s+controls\n/, 'the video must carry native controls');
+  assert.match(
+    galleryMarkup,
+    /<video[\s\S]*?\n\s+playsinline\n/,
+    'the video must play inline (rendering lanes stage 1)'
+  );
+  assert.match(
+    galleryMarkup,
+    /<video[\s\S]*?preload="none"/,
+    'the video must not preload: an enlarged frame costs a poster, not a film'
+  );
+  assert.match(galleryMarkup, /poster=\{item\.video\.posterSrc\}/);
+});
+
+test('the source ladder renders in the manifest’s own order, never re-ranked (issue 207)', () => {
+  // The browser takes the first source it can decode, so ORDER is the
+  // preference. A sort, filter or reverse here would silently hand a reader
+  // different bytes than the operator published.
+  assert.match(mediaGallery, /\{#each item\.video\.sources as source \(source\.src\)\}/);
+  assert.match(mediaGallery, /<source src=\{source\.src\} type=\{source\.type\} \/>/);
+  for (const forbidden of [/item\.video\.sources\.sort/, /item\.video\.sources\.filter/, /item\.video\.sources\.reverse/]) {
+    assert.doesNotMatch(mediaGallery, forbidden, 'the component must not re-rank the manifest’s source ladder');
+  }
+});
+
+test('the Art block renders the vendored set first and lets a runtime manifest replace it (issue 182/207)', () => {
+  // The cutover's whole shape, pinned where it is decided: the build's own
+  // props are the block's FALLBACK — they render before any request exists —
+  // and the volume's manifest is a one-shot read that may replace them. A
+  // read that answers null changes nothing, which is why an absent media
+  // volume looks like a gallery instead of a fault.
+  assert.match(artBinding, /runtimeBlock\(/);
+  assert.match(artBinding, /loadGalleryManifest\(\)/);
+  assert.match(artBinding, /if \(items === null\) \{\n\s+return null;/);
+  // The adapter still resolves the vendored file names through the bundler,
+  // and still never assembles a media URL of its own: the manifest reader
+  // built those through lib/media.ts before this module saw them.
+  assert.match(artBinding, /import\.meta\.glob\('\.\.\/\.\.\/assets\/images\/gallery\/\*\.webp'/);
+  assert.doesNotMatch(artBinding, /\/media\/|mediaUrl\(/, 'the adapter must never build a media URL itself');
+  // Manifest order is the operator's order here too, and this is the assertion
+  // that has to survive somebody being clever: the adapter may not reorder the
+  // items OR a film's source ladder, by any means — a spread and a reverse, a
+  // sort, a toSorted. The mapping expression is pinned exactly, so a rewrite
+  // that inserts anything between `item.sources` and `.map` is a diff.
+  assert.match(
+    artBinding,
+    /sources: item\.sources\.map\(\(source\) => \(\{ src: source\.url, type: source\.type \}\)\)/,
+    'the ladder must be mapped straight through, with nothing between the manifest order and the props'
+  );
+  for (const forbidden of [/\.reverse\(/, /\.sort\(/, /\.toSorted\(/, /\.toReversed\(/]) {
+    assert.doesNotMatch(artBinding, forbidden, 'the adapter must not reorder items or renditions');
+  }
+});
+
+test('the runtime binding renders its fallback until a non-null replacement arrives', () => {
+  // Block.svelte is the only place the three binding kinds meet, and the two
+  // lines below are the whole honest-states contract for the runtime one: a
+  // null result is never rendered, and the fallback is what shows until a
+  // complete replacement exists. There is no loading state because nothing
+  // is ever waiting — the first paint is already true.
+  assert.match(blockHost, /runtime \?\? block\.binding\.fallback/);
+  assert.match(blockHost, /if \(mounted && loaded !== null\)/);
+  assert.match(blockHost, /mounted = false/, 'a block torn down mid-flight must not write into a gone component');
+});
+
 test('the lightbox is a native <dialog>: Escape/backdrop/close all close it, arrow keys navigate', () => {
   assert.match(mediaGallery, /<dialog[\s\S]*?bind:this=\{dialogEl\}/);
   assert.match(mediaGallery, /dialogEl\.showModal\(\)/);
@@ -1226,8 +1321,15 @@ test('the visible frame reserves its box before any byte arrives, and lazy-loads
   // reservation, not a second timing: it still resolves before any byte
   // arrives, through the one global token every frame shares.
   assert.match(style, /max-block-size:\s*var\(--card-media-max-block-size\)/);
-  assert.match(mediaGallery, /\{width\}/);
-  assert.match(mediaGallery, /\{height\}/);
+  // The intrinsic box the markup DECLARES moved to a per-item value with
+  // issue 207, because a runtime manifest's items each carry their own
+  // dimensions. It is a size hint, not the reservation: the reservation is
+  // the token pair above, identical for every item, which is why swapping the
+  // vendored set for a volume-served one shifts nothing.
+  assert.match(mediaGallery, /const itemWidth = \$derived\(item\.width \?\? width\)/);
+  assert.match(mediaGallery, /const itemHeight = \$derived\(item\.height \?\? height\)/);
+  assert.match(mediaGallery, /width=\{itemWidth\}/);
+  assert.match(mediaGallery, /height=\{itemHeight\}/);
   assert.match(mediaGallery, /loading="lazy"/);
   assert.match(mediaGallery, /decoding="async"/);
 });

@@ -471,6 +471,21 @@ carve-out with provenance recorded in its `SOURCES.md`, an exact-file
 allowlist plus size ceiling pinned by test, and replacement by the real
 media pipeline tracked in issue #182.
 
+Media is still **disabled**, and enabling it remains an operator decision
+that needs ADR 0012's storage evidence and a provisioned claim. What is
+prepared (issue #207) is everything on this side of that decision: the chart
+can now DESCRIBE an enabled deployment — `media.enabled: true` is
+representable only together with a reviewed profile, a named claim, a mount
+path and a measured transfer budget, all four, and the mount it renders is
+read-only — while the shipped defaults stay off and
+`scripts/ci/chart-media-pin.sh` proves the default render carries no media
+volume, no mount and no media environment. On the frontend, the gallery reads
+a `gallery/v1` manifest from the media volume when one is served and falls
+back to the vendored set above when it is not, and it renders film as well as
+photography: poster in the strip, click-to-play in the lightbox, never
+autoplay. `docs/media-manifest.md` is the whole contract, including how an
+operator publishes without touching git, CI, or a release.
+
 ## License
 
 Code is [MIT](LICENSE). Site content — text, images, video, audio, branding

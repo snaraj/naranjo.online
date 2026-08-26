@@ -84,11 +84,48 @@ ingress:
   peerAppName: cloudflare-public
   peerInstance: naranjo-online-tunnel
 
-# Persistent media is deliberately impossible to enable before Pi storage,
-# backup, reclaim, and saturation evidence satisfies ADR 0012.
+# Persistent media stays OFF in every deployment this repository describes,
+# and turning it on is an operator decision that needs ADR 0012's Pi storage,
+# backup, reclaim, and saturation evidence AND the platform lane's own
+# provisioning receipt for the claim named below. Nothing here asserts that
+# either exists; the defaults are the refusal.
+#
+# What issue 207 changed is the SHAPE of the decision, never the answer. The
+# schema used to pin `enabled: false` and the sentinel profile as the only
+# representable values, which made the chart unable to DESCRIBE an enabled
+# deployment even after the evidence lands. It now describes one — and
+# describes it strictly: enabling requires a real profile, a named claim, a
+# mount path, and a measured transfer budget, all four together, or the render
+# fails validation. `scripts/ci/chart-media-pin.sh` proves the default render
+# still carries no volume, no mount, and no media environment at all.
 media:
   enabled: false
+  # The reviewed storage arrangement an enabled deployment runs under.
+  # UNRESOLVED_PI_MEDIA_STORAGE is not a profile: it is the NAME OF THE
+  # UNANSWERED QUESTION, and the schema refuses it the moment `enabled` is
+  # true. So the sentinel keeps doing exactly what it did before — an enabled
+  # deployment cannot inherit it by forgetting to choose.
   profile: UNRESOLVED_PI_MEDIA_STORAGE
+  # The operator-provisioned PersistentVolumeClaim the read-only media tree
+  # lives on. Empty is the honest value while media is off; the schema
+  # requires it non-empty when enabled is true, so no render can mount a claim
+  # nobody named. This chart never creates the claim: provisioning the volume
+  # is the platform lane's step, and this value only points at its result.
+  claimName: ""
+  # Where that tree appears inside the container. Declared HERE rather than in
+  # the template because it is two facts that must agree — the volumeMount's
+  # path and the MEDIA_ROOT the process reads — and one value cannot disagree
+  # with itself.
+  mountPath: /data/media
+  # The measured transfer budget (MEDIA_MAX_CONCURRENT). 0 is the same kind of
+  # sentinel the profile above uses — "no budget has been measured" — and the
+  # schema refuses it whenever enabled is true, so an enabled deployment must
+  # state a real figure. This chart deliberately offers no default: the number
+  # comes from saturation measurement against the actual storage, and inventing
+  # one here would be a guess wearing an operator's authority. (It is a
+  # sentinel rather than `null` because Helm strips null values out of
+  # values.yaml entirely, which would delete the key a reader came to read.)
+  maxConcurrent: 0
 
 # The panel API's background refresh loops, off in every deployment this
 # repository describes. Off means NO loop is started at all, so egress is

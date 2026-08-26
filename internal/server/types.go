@@ -158,12 +158,25 @@ var (
 	immutableDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	// mediaTypes avoids host registry differences and never lets content sniffing
 	// turn an unknown operator file into active browser content.
+	//
+	// ".json" is here for the runtime gallery manifest (issue #207): the volume
+	// serves a JSON DOCUMENT, and typing it as application/octet-stream with an
+	// attachment disposition was simply the wrong answer for one. It widens no
+	// capability -- application/json is not active browser content, every media
+	// response still carries X-Content-Type-Options: nosniff, and the frontend
+	// loader reads bytes and parses the text itself rather than trusting the
+	// served type, so nothing about admission or the byte cap depends on this
+	// row. What changes is that a human opening the manifest URL reads it
+	// instead of being offered a download. Adding a media MIME type together
+	// with its row in TestMediaMIMETypes is sanctioned evolution in AGENTS.md,
+	// and this is that conscious edit.
 	mediaTypes = map[string]string{
 		".avif": "image/avif",
 		".flac": "audio/flac",
 		".gif":  "image/gif",
 		".jpeg": "image/jpeg",
 		".jpg":  "image/jpeg",
+		".json": "application/json",
 		".mp4":  "video/mp4",
 		".png":  "image/png",
 		".webm": "video/webm",

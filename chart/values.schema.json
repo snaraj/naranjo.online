@@ -72,11 +72,50 @@
     },
     "media": {
       "type": "object",
+      "description": "The read-only media delivery boundary. Disabled in every deployment this repository describes; the default values are the refusal, not a placeholder. Enabling it is an operator decision gated on ADR 0012's storage evidence and the platform lane's provisioning receipt for the claim, and the conditional below is what makes 'enabled' mean something: it is representable ONLY together with a reviewed profile, a named claim, a mount path, and a measured transfer budget. Every key is required so a values file cannot omit one and have the chart or the origin guess.",
       "additionalProperties": false,
-      "required": ["enabled", "profile"],
+      "required": ["enabled", "profile", "claimName", "mountPath", "maxConcurrent"],
       "properties": {
-        "enabled": {"type": "boolean", "const": false},
-        "profile": {"type": "string", "const": "UNRESOLVED_PI_MEDIA_STORAGE"}
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Render the media volume, its read-only mount, and the origin's media environment. false (the default) renders none of the three, so the process has no media capability at all rather than an unused one."
+        },
+        "profile": {
+          "type": "string",
+          "enum": ["UNRESOLVED_PI_MEDIA_STORAGE", "pi-local-static"],
+          "description": "The reviewed storage arrangement. UNRESOLVED_PI_MEDIA_STORAGE names the unanswered question rather than an arrangement, and the conditional below refuses it whenever enabled is true — so an enabled deployment cannot inherit the sentinel by failing to choose."
+        },
+        "claimName": {
+          "type": "string",
+          "description": "The operator-provisioned PersistentVolumeClaim carrying the media tree. Empty while media is off; required non-empty when enabled, so no render can mount a claim nobody named. This chart never creates the claim.",
+          "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$"
+        },
+        "mountPath": {
+          "type": "string",
+          "description": "Absolute container path the read-only media tree is mounted at, and the exact value MEDIA_ROOT is set to. Each segment must open with an alphanumeric, which is what makes a relative or dot-dot path unrepresentable rather than merely discouraged.",
+          "pattern": "^(/[A-Za-z0-9][A-Za-z0-9._-]*)+$"
+        },
+        "maxConcurrent": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 4096,
+          "description": "MEDIA_MAX_CONCURRENT: the measured bound on simultaneous media transfers. 0 is the no-budget-measured sentinel and is refused whenever enabled is true (see the conditional below), so an enabled deployment must carry a real figure. The maximum mirrors server.MaxMediaConcurrency in internal/server/types.go — an implementation safety bound, never a recommended value; the real figure comes from saturation measurement against the actual storage."
+        }
+      },
+      "if": {
+        "type": "object",
+        "required": ["enabled"],
+        "properties": {"enabled": {"const": true}}
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "profile": {"not": {"const": "UNRESOLVED_PI_MEDIA_STORAGE"}},
+          "claimName": {"minLength": 1},
+          "maxConcurrent": {"minimum": 1}
+        }
       }
     },
     "panels": {

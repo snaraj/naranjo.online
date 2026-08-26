@@ -258,6 +258,7 @@ func TestMediaMIMETypes(t *testing.T) {
 		".gif":  "image/gif",
 		".jpeg": "image/jpeg",
 		".jpg":  "image/jpeg",
+		".json": "application/json",
 		".mp4":  "video/mp4",
 		".png":  "image/png",
 		".webm": "video/webm",
@@ -271,6 +272,19 @@ func TestMediaMIMETypes(t *testing.T) {
 		if got := response.Header().Get("Content-Type"); got != want {
 			t.Errorf("%s Content-Type = %q, want %q", extension, got, want)
 		}
+	}
+
+	// The runtime gallery manifest is a JSON DOCUMENT, and the point of giving
+	// it a reviewed type (issue #207) is that it stops being offered as a
+	// download. nosniff still rides every media response, so widening the table
+	// widens no capability -- assert both halves together so a future edit
+	// cannot keep the type and lose the guard.
+	manifest := mediaRequest(t, site, http.MethodGet, "/media/mutable/sample.json", nil)
+	if got := manifest.Header().Get("Content-Disposition"); got != "" {
+		t.Errorf("json Content-Disposition = %q, want none", got)
+	}
+	if got := manifest.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("json X-Content-Type-Options = %q, want nosniff", got)
 	}
 
 	unknown := mediaRequest(t, site, http.MethodGet, "/media/mutable/unknown.bin", nil)

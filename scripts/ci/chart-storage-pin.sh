@@ -59,17 +59,56 @@ command -v python3 >/dev/null || fail "python3 is required"
 
 # The expected facts, read from the values file — the single designated
 # binding point — with the same tolerance for quoting the ingress pin uses.
+#
+# The read is SCOPED to the panels.data block, and that scoping is
+# load-bearing rather than tidiness. The earlier reader matched the first
+# `<key>:` at any indentation anywhere in the file, which is only unambiguous
+# while no other block declares a key of the same name. Issue #207's media
+# block declares `mountPath` ABOVE panels.data, so the unscoped reader silently
+# resolved the media mount path and the pin then measured the render against a
+# value from a different subsystem. Reading exactly one designated block —
+# refusing an absent block, an absent key, and a duplicate key alike — is
+# strictly narrower than what it replaced: no unrelated key can capture it, in
+# either direction, however the file is later reordered.
 read_value() {
   python3 -I -B - "$1" <<'PY'
-import re
 import sys
 
 key = sys.argv[1]
-text = open("chart/values.yaml", encoding="utf-8").read()
-match = re.search(r"^\s+%s:\s*(\S+)\s*$" % re.escape(key), text, re.MULTILINE)
-if not match:
-    sys.exit("chart/values.yaml carries no %s" % key)
-print(match.group(1).strip("'\""))
+lines = open("chart/values.yaml", encoding="utf-8").read().splitlines()
+
+
+def indent_of(line):
+    return len(line) - len(line.lstrip(" "))
+
+
+def block(lines, header, indent):
+    """The lines strictly nested under `header` at exactly `indent`."""
+    want = " " * indent + header + ":"
+    for start, line in enumerate(lines):
+        if line.rstrip() == want:
+            break
+    else:
+        sys.exit("chart/values.yaml carries no %s block" % header)
+    body = []
+    for line in lines[start + 1 :]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if indent_of(line) <= indent:
+            break
+        body.append(line)
+    return body
+
+
+scope = block(block(lines, "panels", 0), "data", 2)
+found = []
+for line in scope:
+    stripped = line.strip()
+    if indent_of(line) == 4 and stripped.startswith(key + ":"):
+        found.append(stripped[len(key) + 1 :].strip())
+if len(found) != 1:
+    sys.exit("chart/values.yaml panels.data carries %d %s keys, want exactly 1" % (len(found), key))
+print(found[0].strip("'\""))
 PY
 }
 

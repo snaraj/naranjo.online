@@ -235,6 +235,8 @@ jobs:
         run: ./scripts/ci/chart-egress-pin.sh
       - name: The panels data root must render read-only, pinned, and absent when disabled
         run: ./scripts/ci/chart-storage-pin.sh
+      - name: Media must stay off by default and read-only when enabled
+        run: ./scripts/ci/chart-media-pin.sh
       - name: Chart version must match VERSION
         run: |
           IFS= read -r version < VERSION

@@ -257,9 +257,10 @@ Build and test, in this order (the same gate CI enforces):
    `CGO_ENABLED=0 go test ./...`; `go test -race ./...`. CI additionally
    enforces the coverage floor on the scaffolding-filtered profile.
 3. `helm lint chart && helm template smoke chart --kube-version v1.36.0`
-   then `./scripts/ci/chart-ingress-pin.sh` for chart changes (the chart
-   requires the platform's Kubernetes target; plain `helm template`
-   defaults to older capabilities).
+   then the chart pin scripts — `./scripts/ci/chart-ingress-pin.sh`,
+   `./scripts/ci/chart-egress-pin.sh`, `./scripts/ci/chart-media-pin.sh` —
+   for chart changes (the chart requires the platform's Kubernetes target;
+   plain `helm template` defaults to older capabilities).
 4. `docker build .` when the Dockerfile or build inputs change.
 
 Releases: every artifact-classified PR advances numeric `VERSION`, chart
@@ -314,7 +315,15 @@ conscious edits, never fights:
   plumbing (reserved namespaces, root validation, concurrency budget) IS
   the future music/video path and stays fail-closed until the reviewed
   root and measured concurrency budget exist. Enabling media is chart
-  configuration plus discovery evidence — never code weakening.
+  configuration plus discovery evidence — never code weakening. The chart
+  now DESCRIBES that enabled deployment (issue #207) without being one: the
+  values schema admits `media.enabled: true` only together with a reviewed
+  profile, a named claim, a mount path, and a measured transfer budget, the
+  defaults remain the refusal, and `scripts/ci/chart-media-pin.sh` pins all
+  three directions. The gallery reads its items from a runtime `gallery/v1`
+  manifest on that volume when one is served and falls back to the vendored
+  bootstrap set when it is not, so publishing media becomes an operator file
+  copy with no git, CI, or release consequence (`docs/media-manifest.md`).
 - Ingress provider changes: a values override of the `ingress` block per
   the deployment-provider contract.
 
@@ -702,6 +711,8 @@ included; it is the same battery CI enforces:
     helm lint chart && helm template smoke chart \
       --kube-version v1.36.0                    # chart changes
     ./scripts/ci/chart-ingress-pin.sh           # chart changes
+    ./scripts/ci/chart-egress-pin.sh            # chart changes
+    ./scripts/ci/chart-media-pin.sh             # chart changes
     docker build .                              # Dockerfile/build-input changes
     gitleaks git --no-banner --redact --max-target-megabytes=2 .
     gitleaks dir --no-banner --redact .
@@ -776,7 +787,11 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   (toolchain pinned AND verified — Node 24.19.0, npm 11.17.0,
   Go 1.26.6; frontend check/test/build; gofmt/vet/tests/race; the
   coverage floor), `chart` (the ingress peer-identity pin,
-  `scripts/ci/chart-ingress-pin.sh`; helm lint + render at
+  `scripts/ci/chart-ingress-pin.sh`; the whole-render outbound-deny census,
+  `scripts/ci/chart-egress-pin.sh`; the media enablement pin,
+  `scripts/ci/chart-media-pin.sh` — media off by default, an incompletely
+  specified enablement unrepresentable, and a read-only mount when enabled;
+  helm lint + render at
   `--kube-version v1.36.0`; the numeric VERSION ↔ numeric chart `version` ↔
   numeric `appVersion` ↔ plain-v chart `image.tag` four-way lock, plus a render
   assertion that the emitted reference still carries a full digest),

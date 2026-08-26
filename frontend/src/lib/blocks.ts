@@ -49,13 +49,27 @@ export type BlockComponent = Component<BlockProps>;
  *   panel  — the props derive from a live panel envelope. The Block host
  *            keeps the envelope current through watchPanel and re-runs the
  *            adapter on every delivery; an adapter returning null renders
- *            nothing, which is how a block waits for its first envelope. */
+ *            nothing, which is how a block waits for its first envelope.
+ *   runtime — the build carries a complete set of props AND a one-shot read
+ *            of something that exists only at run time (issue 207: the media
+ *            volume's gallery manifest). The build's props render first and
+ *            immediately, so there is no loading state and nothing is
+ *            reserved for late content; if the read answers with props they
+ *            replace them, and if it answers null — absent, unreachable,
+ *            malformed — the build's own props simply stay. That null branch
+ *            is the honest-states floor made structural: the fallback is a
+ *            true thing to show, not a placeholder pretending to be one. */
 export type BlockBinding =
   | { readonly source: 'static'; readonly props: BlockProps }
   | {
       readonly source: 'panel';
       readonly panelId: string;
       readonly adapt: (envelope: PanelEnvelope | null) => BlockProps | null;
+    }
+  | {
+      readonly source: 'runtime';
+      readonly fallback: BlockProps;
+      readonly load: () => Promise<BlockProps | null>;
     };
 
 /* What a block may say about itself to the section around it. The heading
@@ -116,6 +130,25 @@ export function staticBlock<P extends BlockProps>(
        fit this component, and the erased slot is only ever spread with them. */
     component: component as unknown as BlockComponent,
     binding: { source: 'static', props },
+    ...presentation
+  };
+}
+
+/* A block whose props the build already carries AND which may be replaced
+ * once, by a read that can only happen at run time. Generic over the same P
+ * on both halves, so a fallback and a runtime result can never be different
+ * shapes — the swap is a change of CONTENT, never of contract. */
+export function runtimeBlock<P extends BlockProps>(
+  key: string,
+  component: Component<P>,
+  fallback: P,
+  load: () => Promise<P | null>,
+  presentation: BlockPresentation = {}
+): PageBlock {
+  return {
+    key,
+    component: component as unknown as BlockComponent,
+    binding: { source: 'runtime', fallback, load },
     ...presentation
   };
 }
@@ -377,10 +410,34 @@ export type MediaGalleryLink = {
   readonly label: string;
 };
 
+/* One playable rendition of a moving item. `type` is the browser's whole
+ * basis for choosing — a plain media type, or one carrying a codecs
+ * parameter when several rungs share it — and the ORDER of the list is the
+ * preference, because a browser takes the first source it can play. */
+export type MediaGallerySource = {
+  readonly src: string;
+  readonly type: string;
+};
+
+/* What makes an item MOVE (issue 207). Its presence is the discriminator:
+ * an item without it is a still, and every still renders exactly as it did
+ * before this field existed. Nothing here autoplays — `preload` is none and
+ * no autoplay attribute exists anywhere in the component — so a reader who
+ * has asked for reduced motion gets none until they press play themselves. */
+export type MediaGalleryVideo = {
+  /* The frame shown before play. Distinct from fullSrc so the operator can
+   * publish a dedicated poster, and defaulted to fullSrc by the adapter when
+   * they have not. */
+  readonly posterSrc: string;
+  /* One to three renditions, best first. */
+  readonly sources: readonly MediaGallerySource[];
+};
+
 export type MediaGalleryItem = {
   readonly key: string;
   /* The small derivative the feed frame shows; loaded eagerly-lazy like any
-   * other card. */
+   * other card. For a moving item this is the poster's small derivative —
+   * the strip shows a picture, never a video element. */
   readonly previewSrc: string;
   /* The full-resolution derivative, loaded for the first time only when a
    * reader enlarges the frame. */
@@ -390,12 +447,21 @@ export type MediaGalleryItem = {
    * Every one of the three is independently optional, and ABSENT MEANS
    * NOTHING RENDERS: no empty row, no placeholder dash, no reserved band.
    * The component decides only WHERE each renders, never whether an item
-   * "should" have one — that is the manifest's call (lib/gallery.ts), so a
-   * media-volume item and a vendored bootstrap item carry metadata the same
-   * way (issue 182). */
+   * "should" have one — that is the manifest's call (lib/gallery.ts for the
+   * vendored bootstrap set, lib/galleryManifest.ts for the media volume), so
+   * a volume item and a vendored item carry metadata the same way. */
   readonly title?: string;
   readonly description?: string;
   readonly link?: MediaGalleryLink;
+  /* Present exactly when the item moves; see MediaGalleryVideo. */
+  readonly video?: MediaGalleryVideo;
+  /* This item's own intrinsic box, when it differs from the gallery's
+   * declared one. It is the element's intrinsic-size HINT, not the reserved
+   * box: the frame's reservation is token-driven and identical for every
+   * item, which is why swapping the vendored set for a runtime one shifts
+   * nothing. */
+  readonly width?: number;
+  readonly height?: number;
 };
 
 export type MediaGalleryProps = {
