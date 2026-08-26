@@ -7,6 +7,60 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.45] - 2026-08-26
+
+### Changed
+
+- The Art gallery answers three owner findings from a live review (issue
+  #202). The visible frame is CENTRED in its track: its inline size is
+  transferred from the 20rem block cap through the shared 16/9 ratio, and
+  `justify-self: normal` behaves as start rather than stretch for a box with
+  an aspect ratio, so the whole surplus used to land on one side — measured
+  at a 1280px viewport, a 568.9px frame against the start edge of an 842px
+  track, 273px of dead gutter on the right alone. A `.gallery-stage` wrapper
+  now carries a definite width built from the same two tokens the reserved
+  box is and centres itself with auto margins; the wrapper exists because an
+  ALIGNED grid item is sized by its content, which with the lazy image
+  blocked reserved 0x0 on Gecko, 194.6x109.4 on Blink and 0x0 on WebKit.
+  Measured after: 150.6px of gutter on each side at 1280px and 14px on each
+  side at 390px, on all three engines, with the images blocked.
+- The lightbox close control stops sitting on the photograph. The 44px filled
+  disc stamped over the picture's top-right corner becomes a 1.125rem mark —
+  59% narrower — in a reserved lane above the frame, translucent at rest and
+  full-strength on hover or keyboard focus; the 44px touch target survives as
+  an invisible hit box, which still overlaps the artwork's top-right corner
+  and is disclosed rather than claimed away. Measured: the mark's box ends
+  14px above the framed photograph's, on three engines at two viewports.
+  Placing the control outside the dialog was measured and rejected — a native
+  `<dialog>` is `width: fit-content` with UA `overflow: auto`, and the outside
+  placement turned it scrollable (scrollWidth 1194 against clientWidth 1154).
+- Nine gallery style dimensions move from component-local `var(--token,
+  fallback)` reads into the `styles.css` token layer, and the token pin
+  covers all of them. `--gallery-meta-ink` gains a real definition beside its
+  `--gallery-close-ink` sibling instead of existing only as a literal in a
+  component. Defaults are the exact fallbacks the component still carries, so
+  this is a token move and not a look change — pinned in both directions.
+
+### Added
+
+- Gallery items may carry optional `title`, `description` and `link`
+  metadata, rendered in the lightbox and (title/description) as a caption
+  after the counter, with absence rendering NOTHING: no empty row, no
+  placeholder, no reserved band, and no default anywhere on the path from
+  manifest to DOM. The fields live in the per-entry manifest shape so issue
+  #182's media-volume cutover carries them unchanged. The eight bootstrap
+  rows publish exactly the one fact `SOURCES.md` verifies — the fixed-seed
+  source each vendored file came from, as an outbound link carrying
+  `rel="noopener noreferrer"` — and no row claims a title or a description,
+  because nobody has reviewed what a placeholder depicts.
+- Escape now returns focus to the frame that opened the lightbox. The native
+  dialog's own restoration is not enough: a mouse click does not focus a
+  `<button>` on macOS WebKit, so on the engine every iOS browser runs the
+  reader was landing on the document body.
+- A rendering lane refuses every gallery byte and asserts the frame reserves
+  the identical box it does with the photograph served, so the zero-CLS
+  reservation is pinned in a real engine and not only at source.
+
 ## [0.1.44] - 2026-08-25
 
 ### Added
