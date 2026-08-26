@@ -208,6 +208,23 @@
   --page-gutter: 1rem;
   --page-stack-gap: 0.75rem;
 
+  /* The space above the page's name (owner directive, 2026-08-25: "Samuel
+     Naranjo" sat hard against the top of the viewport — "it almost feels
+     like it's about to escape"). The header row is FIXED (.page-header,
+     below), so it occupies no flow space and reserved none: #app declared a
+     block-start padding of zero and the h1 began at the very first pixel of
+     the document.
+
+     Derived rather than picked, so the rhythm cannot drift away from the
+     thing it clears: the chrome row starts at its own top inset and is
+     --page-rail-size tall (the same 44px hit box every other control on this
+     page carries), so its bottom edge is exactly these two lengths added
+     together. The name begins where the chrome ends. A frontend test
+     recomputes that sum from the same two tokens and a rendering lane
+     measures the two boxes against each other in a real engine, so a change
+     to either token moves this with it or turns a build red. */
+  --page-top-space: calc(var(--page-gutter) + var(--page-rail-size));
+
   /* --page-rail-size is a HIT LANE, not a visible object: 44px of grab area
      reserved beside each column edge, the same floor every other control on
      this page clears. It paints NOTHING at rest or during a drag (owner
@@ -652,13 +669,13 @@ textarea {
   display: grid;
   justify-items: center;
   padding-inline: var(--page-gutter);
-  padding-block: 0 2rem;
+  padding-block: var(--page-top-space) 2rem;
 }
 
 @supports (padding: env(safe-area-inset-top)) {
   #app {
     padding-inline: max(var(--page-gutter), env(safe-area-inset-left)) max(var(--page-gutter), env(safe-area-inset-right));
-    padding-block: max(0px, env(safe-area-inset-top)) calc(2rem + env(safe-area-inset-bottom));
+    padding-block: max(var(--page-top-space), env(safe-area-inset-top)) calc(2rem + env(safe-area-inset-bottom));
   }
 }
 

@@ -99,7 +99,8 @@
     stripColumns,
     weekdayAxis,
     type GridCell,
-    type SeriesView
+    type SeriesView,
+    type ValueFormat
   } from '../grid';
   import DetailTip from './DetailTip.svelte';
 
@@ -111,7 +112,8 @@
     showMonths = true,
     emptyNote = 'no activity data',
     fullWidth = false,
-    cardTitle
+    cardTitle,
+    formatValue = formatWhole
   }: {
     columns: GridCell[][];
     noun?: string;
@@ -119,11 +121,25 @@
     label: string;
     showMonths?: boolean;
     emptyNote?: string;
+    /* How a cell's figure is written out, in the card AND in the accessible
+       text, so the two can never disagree (owner directive, 2026-08-25). The
+       default is exact digits, which is right for the calendar: a reader
+       wants "3 contributions", not "3.0". A series whose days run to nine
+       digits passes formatMagnitude instead — "627.7M tokens on Aug 11"
+       rather than the log line that was there. */
+    formatValue?: ValueFormat;
     /* The strip claims its container's full width instead of just the
        columns it draws (issue 178: the token panel's graph rendered as a
-       tiny left-aligned block beside a card the other trackers fill). Opt-in
-       so the version-control calendar this component also renders — which
-       genuinely wants its own year of columns, not a stretch — is untouched. */
+       tiny left-aligned block beside a card the other trackers fill).
+       BOTH of this site's grids ask for it now (owner directive,
+       2026-08-25: the contribution calendar "stops well short of the card's
+       right edge", the same dead gap the token panel was fixed for). It
+       stays a prop rather than becoming the component's only behaviour
+       because the two questions are genuinely separate — how many columns
+       there are is the caller's data, whether the block stretches to its
+       container is the caller's layout — and a caller that wants a
+       content-sized strip is a prop away rather than a fork of this
+       component. */
     fullWidth?: boolean;
     /* When set, a cell's detail is the page's OSRS-style card (DetailTip)
        instead of the browser's native title= tooltip, titled with this text
@@ -237,7 +253,7 @@
         <div class="grid-cells">
           {#each columns as column}
             {#each column as cell}
-              {@const text = cellLabel(cell, noun, view)}
+              {@const text = cellLabel(cell, noun, view, formatValue)}
               {#if cardTitle && !cell.absent}
                 <!-- Mirrors BossLog's own cell: the visible tile doubles as the
                   DetailTip host, so the card is the whole of adding a detail
@@ -262,7 +278,7 @@
                     detail={{
                       name: cardTitle,
                       rows: [
-                        { label: '', value: formatWhole(cell.value) },
+                        { label: '', value: formatValue(cell.value) },
                         { label: '', value: cellPeriod(cell, view) }
                       ]
                     }}
@@ -427,7 +443,18 @@
        silently disagree about how wide "the gutter" is the moment a theme's
        font metrics shifted by a pixel. Reading the SAME token both places
        makes the two provably agree instead. 1.25rem clears "Wed"/"Fri" at
-       the axis font size in every shipped theme, right-aligned inside it. */
+       the axis font size in every shipped theme, right-aligned inside it.
+
+       flex: none is what makes "fixed" true rather than nearly true, and it
+       is load-bearing under a full-width strip (owner directive, 2026-08-25).
+       A declared inline-size is still a flex BASIS: the item may shrink below
+       it when the row's items ask for more than the row has. MEASURED, the
+       moment the calendar started stretching: the strip's own basis grows
+       with its month labels, so this gutter was squeezed to 19.45px in a
+       series state and stayed 20px in the empty one — the reserve and the
+       arrival disagreeing about the box by half a pixel, which is the
+       zero-CLS floor failing quietly. */
+    flex: none;
     inline-size: var(--grid-axis-width, 1.25rem);
     font-size: var(--grid-axis-size, 0.5625rem);
     line-height: 1;
@@ -440,14 +467,34 @@
     justify-content: flex-end;
   }
 
-  /* 7 cell rows plus their 6 gaps measure 5.5rem, the month axis 0.75rem, and
-     the remaining 0.75rem is the horizontal scrollbar's reserved gutter — so
-     a wide window scrolling inside the strip never changes its outer height
-     and data arriving shifts nothing. Unaffected by the weekday gutter
-     beside it (.grid-body, above): that gutter changes this row's INLINE
-     size only. */
+  /* The strip's box, DERIVED from the rows it holds rather than stated as one
+     number (issue 130). It used to read `block-size: 7rem` under a comment
+     claiming "5.5rem of cells, 0.75rem of month axis, 0.75rem of scrollbar
+     gutter" — arithmetic that came to 7rem only because it forgot the month
+     axis's own 0.1875rem top margin. The real reserve was 0.5625rem: 9px for a
+     scrollbar that is 15px on a classic Windows or Linux theme, so the month
+     row clipped there (issue 130 reported ~3px against a 12px reserve; the
+     margin is why it was worse than that).
+
+     Every term below is now the SAME token the thing it measures is laid out
+     with — the cell rows and their gaps from .grid-cells, the axis margin and
+     height from .grid-months — so the box cannot be computed from one set of
+     numbers while its contents are drawn from another.
+
+     The last term is measured rather than guessed. lib/scrollbar.ts probes the
+     platform's real scrollbar thickness before the application mounts and
+     writes it here; the fallback is the 12px reserve the stylesheet ships
+     with, and the measurement only ever widens past it, never under. A wide
+     window scrolling inside the strip still never changes its outer height,
+     and data arriving still shifts nothing. Unaffected by the weekday gutter
+     beside it (.grid-body, above): that gutter changes this row's INLINE size
+     only. */
   .grid-strip {
-    block-size: 7rem;
+    block-size: calc(
+      7 * var(--grid-cell-size, 0.625rem) + 6 * var(--grid-cell-gap, 0.1875rem) +
+        var(--grid-month-gap, 0.1875rem) + var(--grid-month-size, 0.75rem) +
+        var(--grid-scrollbar-size, 0.75rem)
+    );
     overflow-x: auto;
     overflow-y: hidden;
     flex: 1 1 auto;
@@ -521,14 +568,17 @@
     outline-offset: 1px;
   }
 
+  /* Its margin and its height are tokens because .grid-strip's own box is
+     computed from them (issue 130): two literals here and two more up there
+     would be two copies of one fact, free to disagree the day either moved. */
   .grid-months {
-    margin: 0.1875rem 0 0;
+    margin: var(--grid-month-gap, 0.1875rem) 0 0;
     display: grid;
     grid-auto-flow: column;
     grid-auto-columns: var(--grid-cell-size, 0.625rem);
     gap: var(--grid-cell-gap, 0.1875rem);
     inline-size: max-content;
-    block-size: 0.75rem;
+    block-size: var(--grid-month-size, 0.75rem);
     /* The SAME two axis tokens the weekday gutter reads (.grid-weekday-axis,
        above), so the month row and the weekday column always render at one
        shared size and ink rather than two that happen to agree today. */

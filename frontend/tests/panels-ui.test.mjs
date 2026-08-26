@@ -114,9 +114,12 @@ test('the manifest mounts exactly the three tracker blocks, in the stacked order
   // The fences retired with the table-of-contents App (issue 165): the
   // manifest IS the mount list, one ordered entry per block, and the page
   // renders it verbatim. Adding a tracker is adding one block to this line.
+  // The owner reversed the section's two ends on 2026-08-25 — the token
+  // tracker opens it and the game tracker closes it, with the
+  // version-control tracker unmoved between them.
   assert.match(
     manifest,
-    /section\('trackers', 'Trackers', \[osrsStats, vcsActivity, tokenUsage\], \{ layout: 'stack' \}\)/,
+    /section\('trackers', 'Trackers', \[tokenUsage, vcsActivity, osrsStats\], \{ layout: 'stack' \}\)/,
     'the trackers section must list exactly one entry per panel, in the order the page stacks them'
   );
   // The page renders the manifest rather than spelling its own copy of it.
@@ -923,13 +926,15 @@ test('the contribution grid is one component both panels render', () => {
   assert.match(grid, /data-grid-absent=\{cell\.absent \? 'true' : 'false'\}/);
 });
 
-// Full width and the OSRS-style card (issue #178): the daily heatmap used to
-// render as a tiny left-aligned block, and its value popover was a bare
-// title= tooltip reading "1,025,755,735 tokens on 2026-08-22" — a log line,
-// not a designed readout. Both are OPT-IN props on the shared component so
-// the version-control calendar this component also renders keeps its own
-// year-wide reserve and native tooltip untouched.
-test('the token panel opts the shared grid into full width and the OSRS-style card', () => {
+// Full width (issue #178, extended to both grids by the owner on 2026-08-25)
+// and the OSRS-style card (issue #178). The daily heatmap used to render as a
+// tiny left-aligned block, and its value popover was a bare title= tooltip
+// reading "1,025,755,735 tokens on 2026-08-22" — a log line, not a designed
+// readout. The calendar was left content-sized then, on the argument that it
+// genuinely has a year of columns to show; the owner reports the same dead gap
+// on it and wants the same stretch, so BOTH callers opt in now. The hover card
+// stays the token panel's alone: a commit count needs no designed readout.
+test('both panels opt the shared grid into full width; only the token panel takes the card', () => {
   assert.match(
     usageTracker,
     /<ContributionGrid[\s\S]*?fullWidth[\s\S]*?\/>/,
@@ -940,11 +945,16 @@ test('the token panel opts the shared grid into full width and the OSRS-style ca
     /<ContributionGrid[\s\S]*?cardTitle="Tokens used"[\s\S]*?\/>/,
     'the token panel does not name the hover card'
   );
-  assert.doesNotMatch(activityTracker, /fullWidth/, 'the version-control calendar opted into full width too');
+  assert.match(
+    activityTracker,
+    /<ContributionGrid[\s\S]*?fullWidth[\s\S]*?\/>/,
+    'the version-control calendar stopped filling its card'
+  );
   assert.doesNotMatch(activityTracker, /cardTitle/, 'the version-control calendar opted into the OSRS card too');
 
-  // The shared component: both props are opt-in, so the default path — the
-  // calendar's own — is untouched by either.
+  // The shared component: both remain props rather than becoming its only
+  // behaviour, so how many columns there are (the caller's data) and whether
+  // the block stretches (the caller's layout) stay separate questions.
   assert.match(grid, /fullWidth\?: boolean/);
   assert.match(grid, /cardTitle\?: string/);
   assert.match(grid, /data-grid-fullwidth=\{fullWidth\}/);
@@ -956,10 +966,61 @@ test('the token panel opts the shared grid into full width and the OSRS-style ca
   // not a value alone). Both rows stay label-less, mirroring BossLog's own
   // DetailTip usage; cellPeriod is the ONE function that phrase comes from,
   // so this card and cellLabel's own accessible text can never drift apart.
+  //
+  // The value is written by the CALLER's formatter (owner directive,
+  // 2026-08-25), which is the whole of the magnitude fix: the same function
+  // formats the card and the accessible text below, so a cell can never show
+  // "627.7M" while its aria-label reads nine raw digits, and the calendar —
+  // which passes none — keeps the exact counts a reader of commits wants.
   assert.match(
     grid,
-    /rows: \[\s*\{ label: '', value: formatWhole\(cell\.value\) \},\s*\{ label: '', value: cellPeriod\(cell, view\) \}\s*\]/
+    /rows: \[\s*\{ label: '', value: formatValue\(cell\.value\) \},\s*\{ label: '', value: cellPeriod\(cell, view\) \}\s*\]/
   );
+  assert.match(grid, /formatValue = formatWhole/, 'the shared grid defaults to anything but exact digits');
+  assert.match(grid, /\{@const text = cellLabel\(cell, noun, view, formatValue\)\}/);
+  assert.match(
+    usageTracker,
+    /<ContributionGrid[\s\S]*?formatValue=\{formatMagnitude\}[\s\S]*?\/>/,
+    'the token panel renders nine-digit cells with exact digits again'
+  );
+  assert.doesNotMatch(
+    activityTracker,
+    /formatValue/,
+    'the contribution calendar compacted counts a reader wants exactly'
+  );
+});
+
+/* One lens PER SOURCE (owner directive, 2026-08-25).
+ *
+ * The panel held a single `view` for every source in it, on the argument that
+ * two series read side by side should not be compared through different
+ * lenses. The owner reversed that after using the page: each source renders
+ * its own graph with its own toggle over it, and pressing one re-read the
+ * other — a control beside one graph that changes a different graph.
+ *
+ * Source-pinned here, because the state machine is a component's and there is
+ * no DOM in this runner; the BEHAVIOUR — press one, watch the other stay put —
+ * is measured in a real engine by e2e/rendering-lanes.spec.mjs. */
+test('each usage source keeps its own lens, and the shared one cannot come back', () => {
+  assert.match(usageTracker, /let views = \$state<Record<string, SeriesView>>\(\{\}\);/);
+  assert.match(usageTracker, /return views\[key\] \?\? 'daily';/, 'a source nobody has pressed no longer reads daily');
+  assert.match(usageTracker, /\{@const view = viewOf\(source\.key\)\}/);
+  assert.match(usageTracker, /onclick=\{\(\) => \(views\[source\.key\] = candidate\)\}/);
+  // Keyed by the source rather than parked in a child instance, so a refresh
+  // that rebuilds every section does not reset the reader's lens to daily.
+  assert.match(usageTracker, /source\.key/);
+  // The retired single-panel lens, in both the state and the write.
+  assert.doesNotMatch(usageTracker, /let view = \$state/, 'the panel-wide lens is back');
+  assert.doesNotMatch(usageTracker, /\(view = candidate\)/, 'a toggle writes the panel-wide lens again');
+  // The audible half: each group names its own source, so a screen reader
+  // hears which graph it belongs to instead of three identical groups.
+  assert.match(
+    usageTracker,
+    /aria-label=\{`\$\{source\.label\} \$\{source\.activity\.heading\} view`\}/
+  );
+  // And the grid still reads the SAME lens the toggle above it wrote.
+  assert.match(usageTracker, /const columns = activityColumns\(source\.activity, view\)/);
+  assert.match(usageTracker, /<ContributionGrid\s+\{columns\}[\s\S]*?\{view\}/);
 });
 
 // The calendar opens on TODAY at its end edge (owner directive, issue 127).

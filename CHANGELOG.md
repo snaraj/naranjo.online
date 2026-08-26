@@ -7,6 +7,61 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.44] - 2026-08-25
+
+### Added
+
+- Professional Experience replaces the Work section's placeholder copy
+  (issue #203): four real roles, newest first, each with its employer,
+  role, span, place and its own list of accomplishments. The
+  "placeholder entries" note and the `data-placeholder` marker go with
+  the filler they described; the marker stays available in the shared
+  entry-log primitive for the next call site that genuinely needs it.
+  `EntryLogEntry` grows an optional `points` list beside its optional
+  paragraph, and a card still draws only the regions it has.
+- The platform's real scrollbar thickness is measured before the
+  application mounts and published as `--grid-scrollbar-size`
+  (`lib/scrollbar.ts`, issue #130). The contribution strip's block size
+  is derived from the rows it holds — cells, gaps, month axis and that
+  measured gutter — instead of a 7rem literal whose arithmetic had
+  forgotten the month axis's own margin, leaving 9px of reserve for a
+  15px classic scrollbar. The measurement only ever widens the reserve
+  the stylesheet ships with, so no platform loses layout and nothing
+  shifts at hydration.
+
+### Changed
+
+- No link on the site wears a resting underline (issue #203): the repo
+  card titles rendered ruled off under their heading. Hover and keyboard
+  focus still mark every link, and position and role carry it at rest —
+  the same a11y position the nav row already rested on.
+- The page reserves the space above its own name, derived from the fixed
+  chrome row it clears (`--page-top-space`, issue #203). The header is
+  fixed and reserved no flow space, so the h1 began at the document's
+  first pixel.
+- The contribution calendar fills its card, like the token heatmap
+  already did (issue #203). Both grids opt into the shared component's
+  full-width treatment; the weekday gutter is `flex: none`, so the
+  fixed token width it and the block's own arithmetic both read can no
+  longer be shrunk out from under either.
+- The recent-commits log reads as ruled rows at the 44px touch pitch
+  rather than text floating in it (issue #203): the panel's own type
+  step, and an inset-shadow rule per row so the five-row reservation is
+  unchanged.
+- The trackers stack opens with token usage and closes with the game
+  tracker (issue #203); About Me is still the page's last section.
+- Each usage source keeps its own daily/weekly/cumulative lens (issue
+  #203). One lens for the whole panel meant a toggle beside one graph
+  re-read the graph next to it, and each lens group now names its own
+  source for assistive technology.
+- Token magnitudes read the same way everywhere (issue #203):
+  `formatMagnitude` in `lib/grid.ts` is the one implementation, gains a
+  T step, and formats heatmap cells and their accessible text through a
+  caller-supplied formatter — so a card no longer reads "627,742,457"
+  under a summary line reading "7.7B". The contribution calendar keeps
+  exact counts, which is the right reading for commits, and the exact
+  figures survive on the usage pair row's own tooltip, now grouped.
+
 ## [0.1.43] - 2026-08-25
 
 ### Security
