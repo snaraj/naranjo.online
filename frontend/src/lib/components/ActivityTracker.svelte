@@ -58,11 +58,19 @@
           <span class="activity-empty">{figuresNote}</span>
         {/if}
       </p>
+      <!-- fullWidth (owner directive, 2026-08-25): the calendar used to be
+        sized to its own columns, which left a dead gap between the last week
+        of the year and the card's right edge — the identical complaint issue
+        178 fixed for the token panel, on the other grid. The stretch is the
+        shared component's own opt-in, so the two heatmaps still cannot drift
+        apart, and a year of columns still scrolls inside the strip on a phone
+        rather than taking the page's scrollbar sideways with it. -->
       <ContributionGrid
         columns={strip.columns}
         noun={strip.noun}
         label={strip.label}
         emptyNote={strip.emptyNote}
+        fullWidth
       />
       <ol class="activity-entries">
         {#if entries.length === 0}
@@ -151,14 +159,29 @@
      real rather than decorative; the list's own fixed block-size grew with
      it, five times over, so the box is still reserved up front and nothing
      here shifts when the payload lands — the reservation is simply taller
-     than it used to be. */
+     than it used to be.
+
+     What that left, and what the owner reported on 2026-08-25, is a column of
+     12px text floating in 44px rows: "awkward large vertical gaps between
+     rows, almost like there should be something there". The pitch itself
+     cannot close — it IS the touch floor, measured per engine in the
+     rendering lanes ("the shortest admitted repo slug still clears the touch
+     floor on both axes"), and shrinking it would be trading an accessibility
+     floor for whitespace. So the rhythm is normalized the other way: the row
+     is set at the panel's own type step instead of a step below it, and each
+     row is closed by the page's border token, which is what turns 44px of
+     pitch into a legible list rather than dead air. The rule is drawn as an
+     INSET SHADOW rather than a border, for the same reason the empty grid's
+     frame is: a border would add its pixel to every row's box, and five of
+     them would push the last row out of a reservation that is exactly five
+     rows tall. */
   .activity-entries {
     margin: 0;
     padding: 0;
     list-style: none;
-    block-size: 13.75rem;
+    block-size: calc(5 * 2.75rem);
     overflow: hidden;
-    font-size: 0.75rem;
+    font-size: var(--panel-font-size, 0.8125rem);
     line-height: 1.5;
   }
 
@@ -169,6 +192,14 @@
     gap: 0.5rem;
     min-block-size: 2.75rem;
     white-space: nowrap;
+    box-shadow: inset 0 -1px 0 var(--panel-border, rgb(23, 23, 23));
+  }
+
+  /* The list's last row closes on the panel's own edge, not on a rule of its
+     own: a trailing line under the final entry reads as a table missing its
+     next row. */
+  .activity-entry:last-child {
+    box-shadow: none;
   }
 
   /* min-block-size plus a matching line-height is what makes the touch floor

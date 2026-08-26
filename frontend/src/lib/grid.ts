@@ -425,13 +425,27 @@ export function cellPeriod(cell: GridCell, view: SeriesView): string {
   return view === 'cumulative' ? `through ${phrase}` : phrase;
 }
 
+/* How a cell's figure is written out. Exact digits are right for a count a
+ * reader wants exactly — commits, kills, sessions — and wrong for a count in
+ * the hundreds of millions, which is why this is the caller's decision rather
+ * than this file's: ContributionGrid draws both kinds of series and knows
+ * neither of them. */
+export type ValueFormat = (value: number) => string;
+
 /* cellLabel is the one accessible text a cell carries — tooltip and
- * aria-label alike — so a magnitude is never encoded by color alone. */
-export function cellLabel(cell: GridCell, noun: string, view: SeriesView = 'daily'): string {
+ * aria-label alike — so a magnitude is never encoded by color alone. The
+ * formatter defaults to exact digits, so a caller that says nothing gets the
+ * reading this function has always produced. */
+export function cellLabel(
+  cell: GridCell,
+  noun: string,
+  view: SeriesView = 'daily',
+  format: ValueFormat = formatWhole
+): string {
   if (cell.absent) {
     return 'no data for this day';
   }
-  const counted = `${formatWhole(cell.value)} ${cell.value === 1 ? noun : `${noun}s`}`;
+  const counted = `${format(cell.value)} ${cell.value === 1 ? noun : `${noun}s`}`;
   const period = cellPeriod(cell, view);
   return period ? `${counted} ${period}` : counted;
 }
@@ -450,4 +464,57 @@ export function formatWhole(value: number): string {
     grouped += digits[index];
   }
   return grouped;
+}
+
+/* The magnitude steps, smallest first. T is not decoration: this site already
+ * serves a token series whose cumulative lens passes a trillion, and without
+ * the step it would read "7700B". */
+const magnitudeSteps: ReadonlyArray<readonly [number, string]> = [
+  [1_000, 'K'],
+  [1_000_000, 'M'],
+  [1_000_000_000, 'B'],
+  [1_000_000_000_000, 'T']
+];
+
+/* magnitudeFloor is where compaction starts. Below it the exact figure is
+ * both readable and more informative — "1,284" says more than "1.3K" — so
+ * nothing is rounded away that a reader could have used. */
+export const magnitudeFloor = 10_000;
+
+/* formatMagnitude is how a large count is written for a person to read:
+ * exact grouped digits below ten thousand, then one-decimal K, M, B and T
+ * steps with a trailing .0 trimmed. 1,284 stays "1,284"; 12,900 becomes
+ * "12.9K"; 627,742,457 becomes "627.7M".
+ *
+ * It lives beside formatWhole rather than in a panel's adapter because it is
+ * arithmetic about magnitudes, not knowledge about any source — the same
+ * reason the level ramp and the calendar arithmetic live here. lib/token-usage
+ * calls it for every figure it renders, and the heatmap calls it for the
+ * cells of a series whose counts run to nine digits, so the panel's summary
+ * line and the tooltip above it cannot come to write the same number two
+ * different ways.
+ *
+ * A rounded figure is still a MEASURED figure: this shortens a reading, and
+ * nothing here ever turns an absent value into a zero — cellLabel refuses to
+ * read a value off an absent cell before this function is ever reached, and
+ * an unreported figure renders as its own explicit dash upstream. */
+export function formatMagnitude(value: number): string {
+  if (!Number.isFinite(value)) {
+    return formatWhole(value);
+  }
+  if (Math.abs(value) < magnitudeFloor) {
+    return formatWhole(value);
+  }
+  let index = 0;
+  while (index + 1 < magnitudeSteps.length && Math.abs(value) >= magnitudeSteps[index + 1][0]) {
+    index += 1;
+  }
+  let scaled = Math.round((value / magnitudeSteps[index][0]) * 10) / 10;
+  /* A figure that rounds to 1000 of its own unit reads better one unit up:
+   * 999,950 is "1M", never "1000K". */
+  if (Math.abs(scaled) >= 1000 && index + 1 < magnitudeSteps.length) {
+    index += 1;
+    scaled = Math.round((value / magnitudeSteps[index][0]) * 10) / 10;
+  }
+  return `${scaled}${magnitudeSteps[index][1]}`;
 }

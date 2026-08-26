@@ -15,6 +15,7 @@ import {
   tokenUsageProps,
   tokenUsageSources
 } from '../src/lib/token-usage.ts';
+import { formatMagnitude } from '../src/lib/grid.ts';
 
 const [component, helper, manifest, binding] = await Promise.all([
   readFile(new URL('../src/lib/components/UsageTracker.svelte', import.meta.url), 'utf8'),
@@ -69,17 +70,37 @@ describe('formatTokenCount', () => {
     assert.equal(formatTokenCount(9999), '9,999');
   });
 
-  it('compacts large counts to one-decimal K, M, and B figures', () => {
+  it('compacts large counts to one-decimal K, M, B and T figures', () => {
     assert.equal(formatTokenCount(12900), '12.9K');
     assert.equal(formatTokenCount(100000), '100K');
     assert.equal(formatTokenCount(182340), '182.3K');
     assert.equal(formatTokenCount(9421770), '9.4M');
     assert.equal(formatTokenCount(2103980), '2.1M');
     assert.equal(formatTokenCount(1250000000), '1.3B');
+    // The T step (owner directive, 2026-08-25): this panel's own cumulative
+    // lens passes a trillion, which used to read "7700B".
+    assert.equal(formatTokenCount(7700000000000), '7.7T');
   });
 
   it('promotes a figure that would round to 1000 of its own unit', () => {
     assert.equal(formatTokenCount(999950), '1M');
+  });
+
+  it('is a NAME for the shared magnitude formatter, never a second copy of it', () => {
+    // The panel's summary line and the heatmap cell above it are formatted by
+    // two different modules, and until 2026-08-25 they were two different
+    // implementations: "7.7B tokens over 15 days" under a tooltip reading
+    // "627,742,457". One function is what makes those the same reading, so
+    // this pin drives both names across the whole interesting range rather
+    // than trusting the delegation to stay.
+    for (const value of [0, 999, 9999, 10_000, 12_900, 999_950, 627_742_457, 7.7e12]) {
+      assert.equal(formatTokenCount(value), formatMagnitude(value), `the two readings of ${value} diverged`);
+    }
+    assert.doesNotMatch(
+      helper.replace(/\/\*[\s\S]*?\*\//g, ' '),
+      /\[1_000_000_000, 'B'\]/,
+      'the panel grew its own copy of the magnitude steps again'
+    );
   });
 });
 
@@ -240,7 +261,11 @@ describe('UsageTracker source contract', () => {
       first.windows[0].pairs.map((pair) => `${pair.label} ${pair.figure}`),
       [`in ${formatTokenCount(182340)}`, `out ${formatTokenCount(45120)}`]
     );
-    assert.equal(first.windows[0].pairsLabel, '182340 input tokens, 45120 output tokens');
+    // The exact figures stay exact (owner directive, 2026-08-25: the compact
+    // reading is what surfaces, the exact one survives here) — but GROUPED,
+    // because nine undelimited digits on a tooltip is a log line, not a
+    // figure a reader can size at a glance.
+    assert.equal(first.windows[0].pairsLabel, '182,340 input tokens, 45,120 output tokens');
     assert.equal(first.windows[0].reset, resetsIn('2026-08-11T07:00:00Z'));
   });
 

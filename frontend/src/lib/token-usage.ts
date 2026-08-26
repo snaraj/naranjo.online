@@ -4,7 +4,7 @@
  * admission bug is a one-file fix with a failing test beside it. */
 
 import type { UsageSection, UsageTrackerProps, UsageWindow } from './blocks.ts';
-import { peakValue, seriesCells } from './grid.ts';
+import { formatMagnitude, formatWhole, peakValue, seriesCells } from './grid.ts';
 import type {
   PanelEnvelope,
   TokenStatUnit,
@@ -60,30 +60,19 @@ export function formatUtilization(pct: number): string {
 }
 
 /* formatTokenCount is the auto-compact figure used across the panel: exact
- * comma-grouped digits below ten thousand, then one-decimal K, M, and B steps
- * with a trailing .0 trimmed — 1284 renders "1,284", 12900 renders "12.9K",
- * 9421770 renders "9.4M". Counts are non-negative by admission below. */
+ * comma-grouped digits below ten thousand, then one-decimal K, M, B and T
+ * steps with a trailing .0 trimmed — 1284 renders "1,284", 12900 renders
+ * "12.9K", 9421770 renders "9.4M". Counts are non-negative by admission below.
+ *
+ * The arithmetic moved to lib/grid.ts's formatMagnitude (owner directive,
+ * 2026-08-25), and this is now the panel's name for it rather than a second
+ * implementation. It had one already: the heatmap under this panel's own
+ * summary line rendered its cells with exact digits, so the same day's usage
+ * read "7.7B tokens over 15 days" in the sentence and "627,742,457" in the
+ * tooltip above it. One function, called from both places, is what makes
+ * those two readings the same reading. */
 export function formatTokenCount(count: number): string {
-  if (count < 10_000) {
-    return groupThousands(Math.round(count));
-  }
-  const steps: Array<[number, string]> = [
-    [1_000, 'K'],
-    [1_000_000, 'M'],
-    [1_000_000_000, 'B']
-  ];
-  let index = 0;
-  while (index + 1 < steps.length && count >= steps[index + 1][0]) {
-    index += 1;
-  }
-  let scaled = Math.round((count / steps[index][0]) * 10) / 10;
-  /* A figure that rounds to 1000 of its own unit reads better one unit up:
-   * 999,950 is "1M", never "1000K". */
-  if (scaled >= 1000 && index + 1 < steps.length) {
-    index += 1;
-    scaled = Math.round((count / steps[index][0]) * 10) / 10;
-  }
-  return `${scaled}${steps[index][1]}`;
+  return formatMagnitude(count);
 }
 
 /* groupThousands inserts comma separators by hand so the output is identical
@@ -423,7 +412,11 @@ function usageWindowProps(entry: TokenUsageWindow): UsageWindow {
       { key: 'in', label: 'in', figure: formatTokenCount(entry.inputTokens) },
       { key: 'out', label: 'out', figure: formatTokenCount(entry.outputTokens) }
     ],
-    pairsLabel: `${entry.inputTokens} input tokens, ${entry.outputTokens} output tokens`
+    /* The one place an EXACT figure survives (owner directive, 2026-08-25):
+       the pair row above is compacted, and this is the tooltip a reader opens
+       when the compaction is not enough. Grouped rather than raw — it used to
+       render nine undelimited digits, which is a log line, not a figure. */
+    pairsLabel: `${formatWhole(entry.inputTokens)} input tokens, ${formatWhole(entry.outputTokens)} output tokens`
   };
 }
 

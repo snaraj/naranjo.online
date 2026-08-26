@@ -36,7 +36,7 @@
   real heading as though it described a real record. -->
 <script lang="ts">
   import FeedCard from './FeedCard.svelte';
-  import type { EntryLogProps } from '../blocks.ts';
+  import type { EntryLogEntry, EntryLogProps } from '../blocks.ts';
 
   let { entries, variant, titleLevel = 3 }: EntryLogProps = $props();
 </script>
@@ -109,16 +109,36 @@
               {/if}
             </div>
           {/snippet}
-          <p class="entry-summary">{entry.summary}</p>
+          {@render body(entry)}
         </FeedCard>
       {:else}
         <FeedCard {variant} title={entry.title} byline={entry.byline} {titleLevel}>
-          <p class="entry-summary">{entry.summary}</p>
+          {@render body(entry)}
         </FeedCard>
       {/if}
     </li>
   {/each}
 </ol>
+
+<!-- One entry's body, shared by both card shapes above so the linked and the
+  unlinked branch cannot grow different bodies. Each region is drawn only when
+  the entry has it: a paragraph, a list of points, or both. An entry with
+  neither renders an empty body, which is a call site with nothing to say —
+  refused for every entry this site ships by tests/sections.test.mjs rather
+  than papered over here. Points are TEXT, never markup, exactly like every
+  other value on this card. -->
+{#snippet body(entry: EntryLogEntry)}
+  {#if entry.summary}
+    <p class="entry-summary">{entry.summary}</p>
+  {/if}
+  {#if entry.points && entry.points.length > 0}
+    <ul class="entry-points">
+      {#each entry.points as point (point)}
+        <li>{point}</li>
+      {/each}
+    </ul>
+  {/if}
+{/snippet}
 
 <style>
   .entry-log {
@@ -165,7 +185,24 @@
      with the padding pulled back on the inline start so the glyph still lines
      up with the description under it. The size is a MINIMUM rather than a
      fixed box — a reader who enlarges their base font gets a taller target,
-     never a clipped one. */
+     never a clipped one.
+
+     The resting underline is gone (owner directive, 2026-08-25: the repo
+     card titles "rendered underlined" and the owner wants no always-on
+     underline anywhere on the site). This rule used to TINT the browser's
+     default underline rather than remove it, which is why three card titles
+     shipped ruled off under a heading.
+
+     The a11y position is the one .section-link already rests on, and it is
+     about channels rather than taste: identifying a link by color alone
+     serves fewer readers, so a resting link here is identified by POSITION
+     and ROLE before color enters — a card TITLE, at the card's own title
+     type step and weight, in the header region of every entry, where this
+     feed puts nothing else. None of these links sits in running prose, which
+     is the case the underline convention exists for. And the moment intent
+     is shown the mark returns: hover and keyboard focus both add the
+     underline back along with the brand ink, and focus-visible keeps the
+     site-wide ring below untouched. */
   .entry-link {
     display: inline-flex;
     align-items: center;
@@ -174,13 +211,14 @@
     min-inline-size: 2.75rem;
     padding-inline-end: 0.5rem;
     color: var(--card-ink);
-    text-decoration-color: var(--color-border-strong);
+    text-decoration: none;
     text-underline-offset: 0.2em;
   }
 
   .entry-link:hover .entry-name,
   .entry-link:focus-visible .entry-name {
     color: var(--color-brand);
+    text-decoration: underline;
   }
 
   .entry-link:focus-visible {
@@ -228,6 +266,23 @@
   .entry-summary {
     margin: 0;
     max-inline-size: var(--card-measure);
+  }
+
+  /* An entry's points, at the card's own body rhythm: the reading measure the
+     paragraph uses, the card's body gap between items, and the marker pulled
+     just far enough in that a wrapped line still lines up under the first
+     word rather than under the bullet. Every length is a token or derived
+     from one — nothing here is a value this component chose for itself. */
+  .entry-points {
+    margin: 0;
+    /* Stated rather than inherited: this list sits inside the log's own <ol>,
+       so the browser's nesting rule would pick its marker for it — the card
+       would change bullet the day the log stopped being an ordered list. */
+    list-style-type: disc;
+    padding-inline-start: 1.125rem;
+    max-inline-size: var(--card-measure);
+    display: grid;
+    gap: var(--card-body-gap);
   }
 
   /* The compact log reads its summaries at the meta step — the same line the

@@ -933,6 +933,107 @@ test('every control the markup declares clears the 44px touch floor (issue #26)'
   );
 });
 
+/* Every class an <a> carries in the markup, dropping the parts built at
+ * runtime — the same walk controlClasses does, narrowed to links, because the
+ * question below is about link paint rather than control size. */
+const anchorClasses = (source) =>
+  [...source.matchAll(/<a\b[^>]*?\bclass="([^"]*)"/g)]
+    .flatMap(([, list]) => list.split(/\s+/))
+    .filter((name) => name.length > 0 && !name.includes('{') && !name.includes('}'));
+
+/* No resting underline anywhere, and no link identified by color alone
+ * (owner directive, 2026-08-25: the repo card titles "render underlined",
+ * and the owner wants every always-on underline off the site).
+ *
+ * Both halves ride here because either alone is the other's defect. Removing
+ * the underline and stopping there identifies a link by color for readers who
+ * can tell the two colors apart and by nothing at all for the rest — which is
+ * why this walks EVERY link class the markup declares rather than the one that
+ * was reported, and why it insists each one still marks itself the moment
+ * intent is shown. What replaces the resting mark is position and role: a nav
+ * link sits in one labelled row under the page name, and a card title sits in
+ * a card's header at the card's own title step — neither is a link buried in
+ * running prose, which is the case the underline convention exists for. */
+test('no link wears a resting underline, and every one marks itself on intent', () => {
+  const classes = new Set(Object.values(componentSources).flatMap(anchorClasses));
+  assert.ok(
+    classes.size >= 4,
+    `the markup walk found ${classes.size} link classes; the page declares at least four, so the walk is broken`
+  );
+  for (const name of classes) {
+    /* The link's RESTING rules: the selector list contains the bare class, so
+       a :hover or :focus-visible rule (a different selector string) is not one
+       of them. */
+    const resting = sweptRules.filter((rule) => selectorParts(rule.selector).includes(`.${name}`));
+    assert.ok(
+      resting.length > 0,
+      `".${name}" is a link with no rule of its own, so nothing removes the browser's default underline from it`
+    );
+    const declarations = resting.flatMap((rule) => declarationsOf(rule.body));
+    assert.ok(
+      declarations.some(({ property, value }) => property === 'text-decoration' && value === 'none'),
+      `".${name}" never states text-decoration: none, so it wears the browser's default underline at rest`
+    );
+    assert.ok(
+      !declarations.some(({ property, value }) => property.startsWith('text-decoration') && /underline/.test(value)),
+      `".${name}" draws an underline at rest`
+    );
+    /* And the other direction: hover or keyboard focus must change something
+       a reader can see. An underline, or the ink — either is a second channel
+       on top of position and role. */
+    const marksIntent = sweptRules.some(
+      (rule) =>
+        selectorParts(rule.selector).some(
+          (part) => part.includes(`.${name}`) && /:hover|:focus-visible/.test(part)
+        ) &&
+        declarationsOf(rule.body).some(
+          ({ property, value }) =>
+            (property === 'text-decoration' && /underline/.test(value)) || property === 'color'
+        )
+    );
+    assert.ok(
+      marksIntent,
+      `".${name}" never marks itself on hover or focus, so with the resting underline gone it is a link nothing announces`
+    );
+  }
+});
+
+/* The page's own top rhythm (owner directive, 2026-08-25: "Samuel Naranjo"
+ * sat hard against the top of the viewport, "it almost feels like it's about
+ * to escape"). The header row is fixed, so it reserves no flow space and
+ * #app reserved none either — the h1 began at the document's first pixel.
+ *
+ * Recomputed here from the two tokens it is derived from rather than compared
+ * with a number somebody typed: the reserve is the chrome row's own top inset
+ * plus the 44px hit box it is, so the name begins exactly where the chrome
+ * ends and a change to either token moves it or turns this red. */
+test('the page reserves the space above its name, derived from the chrome that space clears', () => {
+  const token = (name) => {
+    const found = new RegExp(`--${name}:\\s*([^;]+);`).exec(stylesCode);
+    assert.ok(found, `--${name} is gone; the top rhythm is derived from it`);
+    return found[1].trim();
+  };
+  assert.equal(token('page-top-space'), 'calc(var(--page-gutter) + var(--page-rail-size))');
+  const gutter = lengthInPx(token('page-gutter'));
+  const rail = lengthInPx(token('page-rail-size'));
+  assert.ok(gutter !== null && rail !== null, 'the top rhythm is built from a length this pin cannot read');
+  assert.equal(gutter + rail, 60, 'the reserved top space is no longer the 60px the chrome row occupies');
+  // Used in BOTH branches of #app's padding, and the guarded one still
+  // widens for a notch rather than replacing the rhythm with it: max() takes
+  // the larger, so an inset shorter than the rhythm changes nothing and a
+  // taller one wins.
+  assert.match(stylesCode, /#app \{[^}]*padding-block: var\(--page-top-space\) 2rem;/);
+  assert.match(
+    stylesCode,
+    /padding-block: max\(var\(--page-top-space\), env\(safe-area-inset-top\)\) calc\(2rem \+ env\(safe-area-inset-bottom\)\);/
+  );
+  assert.doesNotMatch(
+    stylesCode,
+    /padding-block: max\(0px, env\(safe-area-inset-top\)\)/,
+    'the zero-height top reserve is back; the page name touches the top of the viewport again'
+  );
+});
+
 test('motion exists only where the reader has not asked for less of it (issue #26)', () => {
   const motion = /^(?:animation|transition)(?:-.+)?$/;
   const moving = sweptRules.filter(

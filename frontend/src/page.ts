@@ -19,9 +19,22 @@ import { tokenUsage } from './lib/blocks/tokenUsage.ts';
 import { vcsActivity } from './lib/blocks/vcsActivity.ts';
 import { workHistory } from './lib/blocks/workHistory.ts';
 
+/* Two owner directives of 2026-08-25 are visible here, and both are one line
+ * each, which is the whole point of the manifest.
+ *
+ * The first section is "Professional Experience" now that it holds the real
+ * history rather than placeholder copy. Its ID stays `work`: the id is the
+ * fragment a nav link jumps to and an address a reader may already have
+ * shared, and renaming it would break those to change a word nobody reads
+ * off the URL.
+ *
+ * The trackers stack reversed its two ends — the token tracker used to render
+ * under the game one and now opens the section, with the game tracker at the
+ * bottom. The version-control tracker between them did not move, and About Me
+ * is still the last thing on the page. */
 export const page: readonly PageSection[] = [
-  section('work', 'Work', [workHistory]),
+  section('work', 'Professional Experience', [workHistory]),
   section('projects', 'Projects', [codingProjects, artGallery]),
-  section('trackers', 'Trackers', [osrsStats, vcsActivity, tokenUsage], { layout: 'stack' }),
+  section('trackers', 'Trackers', [tokenUsage, vcsActivity, osrsStats], { layout: 'stack' }),
   section('about', 'About Me', [about])
 ];

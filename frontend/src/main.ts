@@ -2,6 +2,7 @@ import { mount } from 'svelte';
 import App from './App.svelte';
 import './styles.css';
 import { applyStoredColumnWidth, browserStore, documentHost } from './lib/columnWidth';
+import { applyScrollbarGutter } from './lib/scrollbar';
 
 const target = document.getElementById('app');
 
@@ -33,6 +34,15 @@ if (!target) {
 // usual pre-paint trick would need. So the width is applied here, and the
 // browser lanes MEASURE the resulting layout shift rather than asserting it.
 applyStoredColumnWidth(documentHost(), browserStore());
+
+// And the platform's real scrollbar thickness, for the same reason and in the
+// same window (issue 130): the contribution strips reserve a gutter inside a
+// fixed box, and a reserve that guessed 12px clipped its own month axis under a
+// 15px classic scrollbar. Measured here, before a single grid exists, so no
+// strip is ever painted at one gutter and re-laid at another; the static shell
+// renders no grid at all, so there is nothing earlier to shift. It only ever
+// widens the reserve past what the stylesheet ships with — see lib/scrollbar.ts.
+applyScrollbarGutter(document);
 
 target.replaceChildren();
 mount(App, { target });

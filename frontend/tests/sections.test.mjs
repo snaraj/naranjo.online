@@ -23,7 +23,7 @@ import test from 'node:test';
 
 import { section, sectionHref, staticBlock } from '../src/lib/blocks.ts';
 import { feedCardRegions, feedCardVariants, formatIsoDate } from '../src/lib/feed.ts';
-import { workEntries, workHistoryProps, workPlaceholderNote } from '../src/lib/work.ts';
+import { workByline, workBylineSeparator, workEntries, workHistoryProps } from '../src/lib/work.ts';
 import {
   codingProjectsProps,
   projectCounts,
@@ -53,6 +53,8 @@ const [app, styles, manifest, feedCard, sectionNav, pageSectionSource, blockHost
 
 /* The binding modules that introduce each block to the page; they import
  * components, so they are source-pinned rather than executed. */
+const workSource = await read('../src/lib/work.ts');
+
 const [workBinding, artBinding, projectsBinding, aboutBinding] = await Promise.all([
   read('../src/lib/blocks/workHistory.ts'),
   read('../src/lib/blocks/artGallery.ts'),
@@ -104,7 +106,7 @@ const manifestSections = [...manifest.matchAll(
 test('the manifest names the owner’s four sections, in the order the page stacks them', () => {
   assert.deepEqual(
     manifestSections.map((entry) => entry.label),
-    ['Work', 'Projects', 'Trackers', 'About Me'],
+    ['Professional Experience', 'Projects', 'Trackers', 'About Me'],
     'the section labels are the owner’s words and their order is the page’s order'
   );
   assert.deepEqual(
@@ -116,7 +118,7 @@ test('the manifest names the owner’s four sections, in the order the page stac
     [
       ['workHistory'],
       ['codingProjects', 'artGallery'],
-      ['osrsStats', 'vcsActivity', 'tokenUsage'],
+      ['tokenUsage', 'vcsActivity', 'osrsStats'],
       ['about'],
     ],
     'each section holds exactly its blocks; reordering the page is moving one name here'
@@ -451,39 +453,126 @@ test('every content component renders through the card primitive', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Work
+// Professional Experience
+//
+// The section shipped two lorem-ipsum entries under a "placeholder entries"
+// note until the owner supplied the real history (2026-08-25). Both the copy
+// and its disclaimer are gone, so these pins changed direction rather than
+// value: what used to be proven was that the filler ANNOUNCED itself, and what
+// is proven now is that no filler and no disclaimer survive anywhere in the
+// section — a stale "placeholder entries" line over four real roles would be
+// its own false statement, which is exactly what the honest-states floor is
+// about.
 // ---------------------------------------------------------------------------
 
-test('the work section carries two complete placeholder entries', () => {
-  assert.equal(workEntries.length, 2, 'the owner asked for exactly two entries');
+test('the experience section carries four complete real entries, newest first', () => {
+  assert.equal(workEntries.length, 4, 'the owner supplied exactly four roles');
   for (const entry of workEntries) {
-    for (const [field, value] of Object.entries(entry)) {
-      assert.ok(value.trim().length > 0, `a work entry has an empty ${field}`);
+    for (const field of ['company', 'role', 'dates', 'location']) {
+      assert.ok(entry[field].trim().length > 0, `an experience entry has an empty ${field}`);
+    }
+    assert.ok(entry.points.length > 0, `${entry.company} lists no accomplishments`);
+    for (const point of entry.points) {
+      assert.ok(point.trim().length > 0, `${entry.company} carries an empty accomplishment`);
+    }
+    // Every point is its own sentence, not a duplicate of a sibling: a list
+    // that repeats itself is the shortcut this catches.
+    assert.equal(
+      new Set(entry.points).size,
+      entry.points.length,
+      `${entry.company} repeats one of its accomplishments`
+    );
+  }
+  // Every employer appears once, so the keyed each below cannot collide.
+  assert.equal(new Set(workEntries.map((entry) => entry.company)).size, workEntries.length);
+
+  // NEWEST FIRST, read off the entries themselves rather than asserted about
+  // them: the first entry is the current role, and every later one names an
+  // earlier start year than the entry above it.
+  assert.match(workEntries[0].dates, /Present$/, 'the current role is not at the top');
+  const startYears = workEntries.map((entry) => Number(/(\d{4})/.exec(entry.dates)?.[1]));
+  for (const [index, year] of startYears.entries()) {
+    assert.ok(Number.isInteger(year), `${workEntries[index].company} carries no readable start year`);
+    if (index > 0) {
+      assert.ok(
+        year < startYears[index - 1],
+        `${workEntries[index].company} starts in ${year}, no earlier than the entry above it`
+      );
     }
   }
-  // The owner asked for a DIFFERENT paragraph on the second entry; two copies
-  // of one paragraph is the shortcut this catches.
-  assert.notEqual(
-    workEntries[0].summary,
-    workEntries[1].summary,
-    'both entries carry the same paragraph; the owner asked for a different one'
+
+  // No placeholder copy, and no disclaimer for it, survives anywhere in the
+  // section — the data, the adapter, and the block that introduces it.
+  // Comment-blind, deliberately: both files still EXPLAIN what they used to
+  // ship and why it went, which is the record this repository keeps, and a
+  // scan that read prose would be a scan nobody could write that record past.
+  const withoutComments = (source) => source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ');
+  for (const [name, source] of Object.entries({ workBinding, workSource })) {
+    assert.doesNotMatch(
+      withoutComments(source),
+      /lorem|ipsum|placeholder/i,
+      `${name} still carries placeholder copy or its note`
+    );
+  }
+  for (const entry of workHistoryProps.entries) {
+    assert.equal(entry.placeholder, undefined, 'a real role is still marked placeholder');
+  }
+  // The block declares no section note at all now: staticBlock's presentation
+  // argument is where one would go, and there is nothing left to disclaim.
+  assert.match(
+    workBinding,
+    /staticBlock\('work-history', EntryLog, workHistoryProps\)/,
+    'the experience block still declares a section note'
   );
-  assert.notEqual(workEntries[0].location, workEntries[1].location);
-  // Placeholder copy says so on the page. Latin under a real name reads as a
-  // real job otherwise, which is the honest-states floor applied to content.
-  assert.ok(workPlaceholderNote.trim().length > 0);
-  assert.match(workBinding, /note: workPlaceholderNote/, 'the section note must be the stated placeholder line');
-  // The adapter marks every entry placeholder, and the log says so in the
-  // DOM — role as the title, location as the byline: the entry is data, the
-  // card is the shape.
-  assert.deepEqual(
-    workHistoryProps.entries.map((entry) => [entry.title, entry.byline, entry.summary, entry.placeholder]),
-    workEntries.map((entry) => [entry.title, entry.location, entry.summary, true])
-  );
-  assert.equal(workHistoryProps.titleLevel, 3, 'work entries head straight under the section h2');
-  assert.equal(workHistoryProps.variant, undefined, 'work entries keep the framed default card');
+  // The MARKER stays in the component, because it is the generic primitive's
+  // honest-state channel and a future placeholder entry must still be able to
+  // say so; what changed is that nothing ships one.
   assert.match(entryLog, /data-placeholder=\{entry\.placeholder \? 'true' : undefined\}/);
+
+  // The adapter: the employer is the card's title, the composed byline is its
+  // meta line, and the accomplishments are its points. The byline is read
+  // BACK APART here — each of the three facts must be findable in the line the
+  // card renders, so a composition that silently dropped the location or the
+  // dates fails rather than merely looking different.
+  assert.deepEqual(
+    workHistoryProps.entries.map((entry) => [entry.key, entry.title, entry.byline, entry.points]),
+    workEntries.map((entry) => [entry.company, entry.company, workByline(entry), entry.points])
+  );
+  for (const entry of workEntries) {
+    const parts = workByline(entry).split(workBylineSeparator);
+    assert.deepEqual(parts, [entry.role, entry.dates, entry.location]);
+  }
+  assert.equal(workHistoryProps.titleLevel, 3, 'experience entries head straight under the section h2');
+  assert.equal(workHistoryProps.variant, undefined, 'experience entries keep the framed default card');
   assert.match(entryLog, /<FeedCard \{variant\} title=\{entry\.title\} byline=\{entry\.byline\} \{titleLevel\}>/);
+});
+
+test('an entry draws only the body regions it has, and every shipped entry has one', () => {
+  // The card's own doctrine, one level in: a region is drawn only when it
+  // holds something, so an entry with points and no paragraph must not render
+  // an empty <p>, and an entry with a paragraph and no points must not render
+  // an empty <ul>. Both branches are in the one shared body snippet, so the
+  // linked and the unlinked card cannot grow different bodies.
+  assert.match(entryLog, /\{#snippet body\(entry: EntryLogEntry\)\}/);
+  assert.match(entryLog, /\{#if entry\.summary\}\s*<p class="entry-summary">\{entry\.summary\}<\/p>/);
+  assert.match(entryLog, /\{#if entry\.points && entry\.points\.length > 0\}/);
+  assert.equal(
+    (entryLog.match(/\{@render body\(entry\)\}/g) ?? []).length,
+    2,
+    'the two card shapes no longer share one body'
+  );
+  // And nothing this site ships is an entry with neither: an empty body is a
+  // call site with nothing to say, and the type cannot refuse it, so this
+  // does — over every adapter that feeds the log.
+  for (const [name, props] of Object.entries({ workHistoryProps, codingProjectsProps })) {
+    assert.ok(props.entries.length > 0, `${name} feeds the log no entries at all`);
+    for (const entry of props.entries) {
+      assert.ok(
+        (entry.summary ?? '').trim().length > 0 || (entry.points ?? []).length > 0,
+        `${name} ships "${entry.key}" with neither a paragraph nor points`
+      );
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------

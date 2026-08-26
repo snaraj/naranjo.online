@@ -10,12 +10,14 @@ import {
   calendarColumns,
   cellLabel,
   cellPeriod,
+  formatMagnitude,
   formatWhole,
   gridLevel,
   gridLevels,
   gridMinColumns,
   gridRows,
   isSeriesView,
+  magnitudeFloor,
   monthTicks,
   peakValue,
   pendingColumns,
@@ -396,6 +398,54 @@ test('thousands grouping is locale-independent', () => {
   assert.equal(formatWhole(999), '999');
   assert.equal(formatWhole(1000), '1,000');
   assert.equal(formatWhole(1234567), '1,234,567');
+});
+
+/* Human-readable magnitudes (owner directive, 2026-08-25: a heatmap cell read
+ * "627,742,457 on Aug 11" while the sentence under the same graph read "7.7B
+ * tokens over 15 days" — two ways of writing one number, on one card). This
+ * is the ONE implementation both readings now come from; lib/token-usage's
+ * formatTokenCount is a name for it, pinned against it in its own suite. */
+test('a magnitude is written the way a person reads one', () => {
+  // Below the floor the exact figure is both readable and more informative,
+  // so nothing is rounded away that a reader could have used.
+  assert.equal(formatMagnitude(0), '0');
+  assert.equal(formatMagnitude(1284), '1,284');
+  assert.equal(formatMagnitude(9999), '9,999');
+  assert.equal(magnitudeFloor, 10_000);
+  // ...and above it, one decimal, with a trailing .0 trimmed.
+  assert.equal(formatMagnitude(10_000), '10K');
+  assert.equal(formatMagnitude(12_900), '12.9K');
+  assert.equal(formatMagnitude(9_421_770), '9.4M');
+  assert.equal(formatMagnitude(627_742_457), '627.7M');
+  assert.equal(formatMagnitude(7_700_000_000), '7.7B');
+  // The T step, which is not decoration: this site's own cumulative lens
+  // passes a trillion, and without it the reading would be "7700B".
+  assert.equal(formatMagnitude(1_000_000_000_000), '1T');
+  assert.equal(formatMagnitude(7_700_000_000_000), '7.7T');
+  // A figure that rounds to 1000 of its own unit reads one unit up...
+  assert.equal(formatMagnitude(999_950), '1M');
+  assert.equal(formatMagnitude(999_950_000_000), '1T');
+  // ...except at the top, where there is no unit above it to promote to and
+  // the honest reading is the big one rather than a wrong one.
+  assert.equal(formatMagnitude(999_950_000_000_000), '1000T');
+  // Nothing a caller can hand it turns into a lie: a value this cannot scale
+  // falls back to the exact rendering rather than inventing a unit.
+  assert.equal(formatMagnitude(Number.NaN), 'NaN');
+  // The magnitude reading rides the cell label too, so the tooltip and the
+  // accessible text of one cell can never be two different numbers — and the
+  // default is still exact, for the grid that counts commits.
+  const cell = { value: 627_742_457, date: '2026-08-11' };
+  assert.equal(cellLabel(cell, 'token', 'daily'), '627,742,457 tokens on Aug 11');
+  assert.equal(
+    cellLabel(cell, 'token', 'daily', formatMagnitude),
+    '627.7M tokens on Aug 11'
+  );
+  // An absent cell has no value to format, and no formatter is ever asked for
+  // one: the honesty floor sits ahead of the formatting step.
+  assert.equal(
+    cellLabel({ value: 0, date: '2026-08-11', absent: true }, 'token', 'daily', () => 'INVENTED'),
+    'no data for this day'
+  );
 });
 
 // The graph a panel renders while it waits for its series (owner directive,

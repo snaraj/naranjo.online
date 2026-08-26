@@ -368,7 +368,15 @@ export type EntryLogEntry = {
   /* The mark drawn before a linked title; omitted means none. */
   readonly glyph?: 'code';
   readonly counts?: readonly EntryCount[];
-  readonly summary: string;
+  /* The entry's paragraph, where it has one. */
+  readonly summary?: string;
+  /* The entry's own list of points, where a paragraph is the wrong shape:
+   * a role's accomplishments, a release's changes. Optional exactly like the
+   * paragraph is, and for the same reason — a card draws a region only when
+   * it has something in it — and an entry carrying neither is a call site
+   * with nothing to say, which tests/sections.test.mjs refuses for every
+   * entry this site actually ships. */
+  readonly points?: readonly string[];
   /* Placeholder entries say so in the DOM, honest-states floor. */
   readonly placeholder?: boolean;
 };

@@ -23,6 +23,13 @@ import {
 } from '../src/lib/activity.ts';
 import { toColumns } from '../src/lib/grid.ts';
 import { projectHost, projectHostLabel } from '../src/lib/projects.ts';
+import {
+  applyScrollbarGutter,
+  measureScrollbarPx,
+  scrollbarGutterFallbackPx,
+  scrollbarGutterProperty,
+  scrollbarGutterPx
+} from '../src/lib/scrollbar.ts';
 
 // A well-formed vcs-activity/v1 payload in the exact shape internal/panels
 // serves; tests clone and break one field at a time so every admission rule
@@ -594,13 +601,58 @@ test('the cell ramp is themeable custom properties with the validated dark defau
 
 test('the strip owns fixed geometry and its own overflow', () => {
   // Fixed block sizes per region: data arriving never shifts layout.
-  assert.match(grid, /\.grid-strip \{[^}]*block-size: 7rem/);
+  //
+  // The strip's own box is DERIVED now (issue 130) rather than stated as one
+  // number. It read `block-size: 7rem` under a comment claiming "5.5rem of
+  // cells, 0.75rem of month axis, 0.75rem of scrollbar gutter" — arithmetic
+  // that only came to 7rem because it had forgotten the month axis's own
+  // 0.1875rem top margin, leaving 9px of real reserve for a scrollbar that is
+  // 15px on a classic Windows or Linux theme. Every term below is the SAME
+  // token the thing it measures is laid out with, so a box computed from one
+  // set of numbers while its contents are drawn from another is no longer
+  // expressible.
+  const stripBox = /\.grid-strip \{[^}]*?block-size: calc\(([\s\S]*?)\);/.exec(grid);
+  assert.ok(stripBox, 'the strip no longer derives its own block size from its rows');
+  for (const term of [
+    '7 * var(--grid-cell-size, 0.625rem)',
+    '6 * var(--grid-cell-gap, 0.1875rem)',
+    'var(--grid-month-gap, 0.1875rem)',
+    'var(--grid-month-size, 0.75rem)',
+    `var(${scrollbarGutterProperty}, 0.75rem)`,
+  ]) {
+    assert.ok(
+      stripBox[1].replace(/\s+/g, ' ').includes(term),
+      `the strip's box no longer accounts for "${term}"`
+    );
+  }
+  // ...and the two axis terms are what .grid-months is actually laid out
+  // with, or the box and its contents are two different measurements again.
+  assert.match(grid, /\.grid-months \{[^}]*margin: var\(--grid-month-gap, 0\.1875rem\) 0 0/);
+  assert.match(grid, /\.grid-months \{[^}]*block-size: var\(--grid-month-size, 0\.75rem\)/);
   assert.match(component, /\.activity-totals \{[^}]*block-size: 1\.25rem/);
   // Five rows at the 44px touch floor (issue 157): every entry row can carry
   // two real links, so the fixed reservation grew from 5.625rem to
-  // 13.75rem (5 * 2.75rem) rather than staying a decorative-text height.
-  assert.match(component, /\.activity-entries \{[^}]*block-size: 13\.75rem/);
-  assert.match(component, /\.activity-entry \{[^}]*min-block-size: 2\.75rem/);
+  // 13.75rem (5 * 2.75rem) rather than staying a decorative-text height. The
+  // reservation is written as that multiplication, and this pin recomputes it
+  // from shownEntryRows and the row's own floor — so the box and the number
+  // of rows the adapter hands it cannot drift apart.
+  const rowFloorRem = 2.75;
+  assert.match(
+    component,
+    new RegExp(`\\.activity-entries \\{[^}]*block-size: calc\\(${shownEntryRows} \\* ${rowFloorRem}rem\\)`)
+  );
+  assert.match(component, new RegExp(`\\.activity-entry \\{[^}]*min-block-size: ${rowFloorRem}rem`));
+  // The row separator is an INSET SHADOW, never a border (owner directive,
+  // 2026-08-25): a border would add its pixel to every row's box and five of
+  // them would push the last row out of a reservation that is exactly five
+  // rows tall — the zero-CLS reserve turned into a clipped row.
+  assert.match(component, /\.activity-entry \{[^}]*box-shadow: inset 0 -1px 0 var\(--panel-border/);
+  assert.match(component, /\.activity-entry:last-child \{[^}]*box-shadow: none/);
+  assert.doesNotMatch(
+    component,
+    /\.activity-entry \{[^}]*border-block-end/,
+    'a row separator drawn as a border grows the row box the reservation is built on'
+  );
   // The reservation and the row cap agree by construction: the adapter shows
   // at most the rows the fixed box holds.
   assert.equal(shownEntryRows, 5);
@@ -729,6 +781,91 @@ test('activity sources stay local-origin and provider-neutral', () => {
   }
 });
 
+/* The scrollbar gutter (issue 130), executed rather than pattern matched.
+ *
+ * The strip reserves room for a horizontal scrollbar inside a FIXED box,
+ * because the box has to be identical before and after its data arrives. A
+ * reserve is a guess about a length only the platform knows, and the guess was
+ * short: 9px of real reserve against a 15px classic scrollbar, so the month
+ * axis clipped on Linux and Windows. lib/scrollbar.ts measures it instead —
+ * and the DECISION it makes from that measurement is a plain function, driven
+ * here with the values a real platform produces. */
+test('the scrollbar gutter is measured, floors at the shipped reserve, and never shrinks a strip', () => {
+  // The stylesheet's fallback and the module's floor are ONE fact in two
+  // places (the strip's calc() writes `0.75rem`, this module writes 12), so
+  // the pin converts one into the other rather than restating either.
+  assert.equal(scrollbarGutterFallbackPx, 12);
+  const fallbackRem = /var\(--grid-scrollbar-size, ([\d.]+)rem\)/.exec(grid);
+  assert.ok(fallbackRem, 'the strip no longer reads the measured gutter at all');
+  assert.equal(
+    Number(fallbackRem[1]) * 16,
+    scrollbarGutterFallbackPx,
+    'the stylesheet reserve and lib/scrollbar.ts’s floor disagree; they are one number'
+  );
+
+  // Overlay scrollbars (macOS, phones) measure zero and keep exactly the box
+  // the page has always had: this may widen a strip, never narrow one, so no
+  // platform loses layout to the fix.
+  assert.equal(scrollbarGutterPx(0), scrollbarGutterFallbackPx);
+  assert.equal(scrollbarGutterPx(11), scrollbarGutterFallbackPx);
+  // A classic scrollbar is honoured, and a fractional one is rounded UP: a
+  // gutter half a pixel short is a clipped row.
+  assert.equal(scrollbarGutterPx(15), 15);
+  assert.equal(scrollbarGutterPx(17), 17);
+  assert.equal(scrollbarGutterPx(15.2), 16);
+  // Nothing a host can fail to report is read as "no gutter".
+  for (const nonsense of [Number.NaN, Number.POSITIVE_INFINITY, -4]) {
+    assert.equal(scrollbarGutterPx(nonsense), scrollbarGutterFallbackPx);
+  }
+
+  // The probe itself, against a hand-written document: it must force the box
+  // to scroll (`overflow: scroll`, not `auto` — the probe has no content, and
+  // the question is how thick THIS platform's bar is, not whether one strip
+  // happens to overflow), take it out of view, and remove it again.
+  const events = [];
+  const probe = {
+    style: { cssText: '' },
+    offsetHeight: 100,
+    clientHeight: 85,
+    remove: () => events.push('remove'),
+  };
+  const written = {};
+  const doc = {
+    createElement: (tag) => {
+      events.push(`create:${tag}`);
+      return probe;
+    },
+    body: { appendChild: () => events.push('append') },
+    documentElement: { style: { setProperty: (name, value) => (written[name] = value) } },
+  };
+  assert.equal(measureScrollbarPx(doc), 15);
+  assert.deepEqual(events, ['create:div', 'append', 'remove']);
+  assert.match(probe.style.cssText, /overflow:scroll/);
+  assert.doesNotMatch(probe.style.cssText, /overflow:auto/);
+  assert.match(probe.style.cssText, /position:absolute/);
+
+  // And the whole application: measure, decide, publish, under the name the
+  // stylesheet reads.
+  events.length = 0;
+  assert.equal(applyScrollbarGutter(doc), 15);
+  assert.deepEqual(written, { [scrollbarGutterProperty]: '15px' });
+  // The same host with an overlay scrollbar publishes the floor instead.
+  probe.clientHeight = probe.offsetHeight;
+  assert.equal(applyScrollbarGutter(doc), scrollbarGutterFallbackPx);
+  assert.deepEqual(written, { [scrollbarGutterProperty]: `${scrollbarGutterFallbackPx}px` });
+});
+
+test('the gutter is published before the application mounts, so no grid is re-laid', async () => {
+  const main = await readFile(new URL('../src/main.ts', import.meta.url), 'utf8');
+  const applied = main.indexOf('applyScrollbarGutter(document)');
+  const mounted = main.indexOf('mount(App');
+  assert.ok(applied > 0, 'main.ts never publishes the measured scrollbar gutter');
+  assert.ok(
+    applied < mounted,
+    'the gutter is published after the application mounts, so every strip is laid out twice'
+  );
+});
+
 test('the manifest mounts the activity block exactly once, bound to its panel', () => {
   // The fences retired with the table-of-contents App (issue 165): the
   // manifest IS the mount list, so the pin moves to it. Exactly one block
@@ -744,7 +881,7 @@ test('the manifest mounts the activity block exactly once, bound to its panel', 
   );
   assert.match(
     manifest,
-    /section\('trackers', 'Trackers', \[osrsStats, vcsActivity, tokenUsage\], \{ layout: 'stack' \}\)/,
+    /section\('trackers', 'Trackers', \[tokenUsage, vcsActivity, osrsStats\], \{ layout: 'stack' \}\)/,
     'the trackers section lists the activity block in the stacked order the page renders'
   );
   assert.match(binding, /panelBlock\(\s*'vcs-activity',\s*ActivityTracker,\s*activityPanelId,\s*vcsActivityProps\s*\)/);

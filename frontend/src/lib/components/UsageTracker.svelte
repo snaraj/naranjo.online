@@ -48,27 +48,53 @@
   so themes restyle by overriding variables. -->
 <script lang="ts">
   import type { UsageActivity, UsageTrackerProps } from '../blocks.ts';
-  import { calendarColumns, seriesCells, seriesViews, viewColumns, type SeriesView } from '../grid';
+  import {
+    calendarColumns,
+    formatMagnitude,
+    seriesCells,
+    seriesViews,
+    viewColumns,
+    type SeriesView
+  } from '../grid';
   import ContributionGrid from './ContributionGrid.svelte';
   import PanelShell from './PanelShell.svelte';
 
   let { id, title, status, generatedAt, sections, emptyNote }: UsageTrackerProps = $props();
 
-  /* One view choice for the whole panel: the sources are read side by side,
-     so switching lens on one and not the other would be a comparison trap.
-     The lens is the ONE piece of state that stays here rather than in the
+  /* One view choice PER SOURCE (owner directive, 2026-08-25).
+
+     This used to be a single `view` for the whole panel, on the argument that
+     sources read side by side should not be compared through different
+     lenses. The owner reversed it after using the page: the panel renders a
+     graph per source, each with its own toggle sitting over its own strip,
+     and pressing one toggle re-read the OTHER source's graph too — which
+     reads as a bug whatever the rationale, because a control beside one graph
+     that changes a different graph is not a control that says what it does.
+
+     Keyed by the source's own key rather than held in a child component, so
+     the state survives a payload refresh: the adapter rebuilds its sections
+     every delivery, and a lens parked in a component instance would reset to
+     daily every sixty seconds. A source whose key has never been pressed
+     reads `daily`, the shipped default, so a source appearing mid-session
+     needs no initialisation.
+
+     It is still the ONE piece of state that lives here rather than in the
      adapter, because it is presentation — the same series read three ways —
      and the lens math (lib/grid.ts) knows no source either. */
-  let view = $state<SeriesView>('daily');
+  let views = $state<Record<string, SeriesView>>({});
+
+  function viewOf(key: string): SeriesView {
+    return views[key] ?? 'daily';
+  }
 
   /* activityColumns realigns a region's daily series onto true calendar
      weeks (issue 189: calendarColumns, so the shared weekday axis is
      truthful for every column) and only THEN re-reads the aligned columns
-     through the active lens (viewColumns) — the order matters, because a
-     weekly or cumulative reading has to sum real calendar weeks, and only
-     calendarColumns knows where those actually fall once the series has
-     been padded to the fixed trailing window. */
-  function activityColumns(activity: UsageActivity) {
+     through that source's active lens (viewColumns) — the order matters,
+     because a weekly or cumulative reading has to sum real calendar weeks,
+     and only calendarColumns knows where those actually fall once the series
+     has been padded to the fixed trailing window. */
+  function activityColumns(activity: UsageActivity, view: SeriesView) {
     return viewColumns(calendarColumns(seriesCells(activity.series.startDate, activity.series.totals)), view);
   }
 </script>
@@ -146,7 +172,8 @@
             source that reports figures and no daily record. See the ruling in
             this file's opening comment. -->
           {#if source.activity}
-            {@const columns = activityColumns(source.activity)}
+            {@const view = viewOf(source.key)}
+            {@const columns = activityColumns(source.activity, view)}
             {#if columns.length > 0}
               <section class="usage-activity">
                 <header class="usage-activity-head">
@@ -154,14 +181,22 @@
                   <!-- One radio group, styled as a segmented pill: the choice
                     is exclusive, so radios carry the right semantics for
                     free. -->
-                  <div class="usage-views" role="radiogroup" aria-label={`${source.activity.heading} view`}>
+                  <!-- Named for its own source, so a screen reader hears
+                    which graph the group belongs to rather than three
+                    identically named groups on one panel — the audible half
+                    of the same decoupling. -->
+                  <div
+                    class="usage-views"
+                    role="radiogroup"
+                    aria-label={`${source.label} ${source.activity.heading} view`}
+                  >
                     {#each seriesViews as candidate}
                       <button
                         type="button"
                         class="usage-view"
                         role="radio"
                         aria-checked={view === candidate}
-                        onclick={() => (view = candidate)}
+                        onclick={() => (views[source.key] = candidate)}
                       >
                         {candidate}
                       </button>
@@ -175,6 +210,7 @@
                   label={`${source.activity.label}, ${view} view`}
                   fullWidth
                   cardTitle="Tokens used"
+                  formatValue={formatMagnitude}
                 />
                 <p class="usage-activity-total">
                   {source.activity.summary}
