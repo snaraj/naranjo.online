@@ -2191,6 +2191,226 @@ test('clicking the photograph opens a real modal dialog with a framed, larger im
 
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
+  /* And focus comes back to the frame it was invoked from (issue 202). The
+     native dialog's own restoration cannot be relied on here: a mouse click
+     does not focus a <button> on macOS WebKit, so on the engine every iOS
+     browser runs the "previously focused element" is the body — this
+     assertion is exactly what fails if the component stops restoring it
+     explicitly. */
+  const focused = await page.evaluate(() =>
+    window.document.activeElement?.classList.contains('gallery-image-button')
+  );
+  expect(focused, 'Escape left focus somewhere other than the frame that opened the lightbox').toBe(true);
+});
+
+test('the gallery frame is centred in its track, with no dead gutter (issue 202)', async ({ page }) => {
+  /* The owner's complaint, measured: the frame's inline size is TRANSFERRED
+     from its block cap through aspect-ratio, so on a column wider than
+     35.5rem the button is narrower than its own 1fr track. Before this
+     landed it sat at the track's start edge — 568.9px of frame at the left
+     of an 842px track at a 1280px viewport, 273px of dead space on the right
+     alone. Both gutters are measured against the ARROWS that bound the
+     track, so this compares two rendered boxes and derives its expectation
+     from neither the stylesheet nor a token. */
+  await visit(page);
+  const frame = page.locator('.gallery-image-button');
+  await frame.scrollIntoViewIfNeeded();
+  const observed = await page.evaluate(() => {
+    const row = window.document.querySelector('.gallery-frame');
+    const button = row.querySelector('.gallery-image-button').getBoundingClientRect();
+    const [previous, next] = [...row.querySelectorAll('.icon-button')].map((control) =>
+      control.getBoundingClientRect()
+    );
+    return {
+      left: button.left - previous.right,
+      right: next.left - button.right,
+      arrows: [
+        { width: previous.width, height: previous.height },
+        { width: next.width, height: next.height },
+      ],
+    };
+  });
+  expect(observed.left, 'the frame sits against the start edge of its track').toBeGreaterThanOrEqual(0);
+  expect(
+    observed.left,
+    `the gutters are ${observed.left.toFixed(1)}px and ${observed.right.toFixed(1)}px — the frame is off centre`
+  ).toBeCloseTo(observed.right, 0);
+  /* Centring must not have been bought by shrinking the controls that flank
+     it: both arrows still clear the touch floor at every viewport this lane
+     runs. */
+  for (const arrow of observed.arrows) {
+    expect(arrow.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+    expect(arrow.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+  }
+});
+
+test('the lightbox close mark is small, off the artwork, and still a 44px target (issue 202)', async ({
+  page,
+}) => {
+  await visit(page);
+  await page.locator('.gallery-image-button').click();
+  const dialog = page.locator('dialog.gallery-lightbox');
+  await expect(dialog).toBeVisible();
+
+  const observed = await page.evaluate(() => {
+    const rect = (node) => {
+      const box = node.getBoundingClientRect();
+      return { top: box.top, right: box.right, bottom: box.bottom, left: box.left, width: box.width, height: box.height };
+    };
+    const control = window.document.querySelector('.gallery-lightbox-close');
+    const mark = window.document.querySelector('.gallery-close-mark');
+    const border = window.document.querySelector('.gallery-lightbox-border');
+    const image = window.document.querySelector('.gallery-lightbox-image');
+    const dialogNode = window.document.querySelector('dialog.gallery-lightbox');
+    return {
+      hit: rect(control),
+      mark: rect(mark),
+      border: rect(border),
+      image: rect(image),
+      controlBackground: getComputedStyle(control).backgroundColor,
+      markBackground: getComputedStyle(mark).backgroundColor,
+      label: control.getAttribute('aria-label'),
+      overflow: {
+        inline: dialogNode.scrollWidth - dialogNode.clientWidth,
+        block: dialogNode.scrollHeight - dialogNode.clientHeight,
+      },
+    };
+  });
+
+  /* The touch floor survives the shrink: what got smaller is the PAINT, not
+     the target. */
+  expect(observed.hit.width, 'the close control fell under the touch floor').toBeGreaterThanOrEqual(
+    touchFloorPx - subPixel
+  );
+  expect(observed.hit.height, 'the close control fell under the touch floor').toBeGreaterThanOrEqual(
+    touchFloorPx - subPixel
+  );
+  /* At least half off, measured against the target it sits in — the owner
+     asked for "at least 50% smaller" than the 44px disc this replaced. */
+  expect(
+    observed.mark.width,
+    `the visible mark is ${observed.mark.width.toFixed(1)}px inside a ${observed.hit.width.toFixed(1)}px control`
+  ).toBeLessThanOrEqual(observed.hit.width / 2 + subPixel);
+  expect(observed.mark.height).toBeLessThanOrEqual(observed.hit.height / 2 + subPixel);
+  /* And the control itself paints nothing — the disc is gone, not merely
+     shrunk behind a smaller one. */
+  expect(observed.controlBackground, 'the close control still paints a surface of its own').toMatch(
+    /rgba\(0, 0, 0, 0\)|transparent/
+  );
+  expect(observed.markBackground, 'the mark paints nothing, so there is no close affordance at all').not.toMatch(
+    /rgba\(0, 0, 0, 0\)|transparent/
+  );
+
+  /* "It pollutes the image" — answered as geometry rather than taste: the
+     painted mark's box does not intersect the framed photograph's box at
+     all. */
+  const intersects =
+    observed.mark.left < observed.border.right &&
+    observed.mark.right > observed.border.left &&
+    observed.mark.top < observed.border.bottom &&
+    observed.mark.bottom > observed.border.top;
+  expect(
+    intersects,
+    `the close mark (${observed.mark.top.toFixed(1)}-${observed.mark.bottom.toFixed(1)}) overlaps the framed photograph (${observed.border.top.toFixed(1)}-${observed.border.bottom.toFixed(1)})`
+  ).toBe(false);
+  // It is at the photograph's TOP-RIGHT, not merely somewhere else.
+  expect(observed.mark.bottom).toBeLessThanOrEqual(observed.image.top + subPixel);
+  expect(observed.mark.right).toBeGreaterThan(observed.image.left + observed.image.width / 2);
+
+  /* Reserving the lane inside the dialog rather than pushing the control
+     outside it is what keeps the dialog from scrolling: a native <dialog> is
+     width:fit-content with UA overflow:auto, and the outside placement was
+     MEASURED turning it scrollable (scrollWidth 1194 against clientWidth
+     1154 at 1280px). */
+  expect(observed.overflow.inline, 'the lightbox scrolls sideways').toBeLessThanOrEqual(subPixel);
+  expect(observed.overflow.block, 'the lightbox scrolls').toBeLessThanOrEqual(subPixel);
+  expect(observed.label).toBe('Close enlarged photograph');
+});
+
+test('optional metadata renders what an item has and nothing it has not (issue 202)', async ({ page }) => {
+  /* Both shapes are live on this page at once, which is what makes this a
+     measurement rather than a demonstration: every bootstrap row carries a
+     link (the fixed-seed source SOURCES.md records) and NO row carries a
+     title or a description, because nobody has reviewed what a placeholder
+     depicts. So the present branch and the absent branch are both exercised
+     against the real DOM. */
+  await visit(page);
+  const frame = page.locator('.gallery-image-button');
+  await frame.scrollIntoViewIfNeeded();
+
+  // Absent, on the feed surface: no caption element exists at all — not an
+  // empty one, not a hidden one.
+  expect(await page.locator('.gallery-caption').count()).toBe(0);
+
+  /* Zero CLS across the whole cycle: the frame and the counter occupy the
+     identical box for every one of the eight items, so nothing an item does
+     or does not carry moves the picture. */
+  const geometry = [];
+  for (let step = 0; step < 8; step += 1) {
+    geometry.push(
+      await page.evaluate(() => {
+        /* Measured as RELATIONSHIPS inside the block, never as viewport
+           coordinates: a panel painting elsewhere on the page would move
+           every absolute y at once and make this test read as a gallery
+           shift it is not. What must not move is the frame's own size, its
+           two gutters, and how far the counter sits under it. */
+        const round = (value) => Math.round(value * 100) / 100;
+        const row = window.document.querySelector('.gallery-frame');
+        const frame = row.querySelector('.gallery-image-button').getBoundingClientRect();
+        const [previous, next] = [...row.querySelectorAll('.icon-button')].map((control) =>
+          control.getBoundingClientRect()
+        );
+        const counter = window.document.querySelector('.gallery-count').getBoundingClientRect();
+        return {
+          width: round(frame.width),
+          height: round(frame.height),
+          left: round(frame.left - previous.right),
+          right: round(next.left - frame.right),
+          counterHeight: round(counter.height),
+          counterGap: round(counter.top - frame.bottom),
+          captions: window.document.querySelectorAll('.gallery-caption').length,
+        };
+      })
+    );
+    await page.getByRole('button', { name: 'Next photograph' }).click();
+  }
+  const [first] = geometry;
+  for (const [index, state] of geometry.entries()) {
+    expect(state.captions, `item ${index + 1} rendered a caption element with nothing to say`).toBe(0);
+    expect(state, `the gallery block reshaped between item 1 and item ${index + 1}`).toEqual(first);
+  }
+
+  // Present, on the lightbox surface: the link the manifest gave, and only
+  // the link.
+  await page.locator('.gallery-image-button').click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
+  const meta = await page.evaluate(() => {
+    const link = window.document.querySelector('.gallery-meta-link');
+    const box = link.getBoundingClientRect();
+    return {
+      blocks: window.document.querySelectorAll('.gallery-lightbox-meta').length,
+      titles: window.document.querySelectorAll('.gallery-meta-title').length,
+      texts: window.document.querySelectorAll('.gallery-meta-text').length,
+      text: link.textContent.trim(),
+      href: link.getAttribute('href'),
+      target: link.getAttribute('target'),
+      rel: link.getAttribute('rel'),
+      label: link.getAttribute('aria-label'),
+      height: box.height,
+      ink: getComputedStyle(link).color,
+    };
+  });
+  expect(meta.blocks, 'the metadata block did not render for an item that has metadata').toBe(1);
+  expect(meta.titles, 'a title element rendered for an item with no title').toBe(0);
+  expect(meta.texts, 'a description element rendered for an item with no description').toBe(0);
+  expect(meta.text).toBe('Lorem Picsum source');
+  expect(meta.href).toMatch(/^https:\/\/picsum\.photos\/seed\/naranjo-gallery-\d{2}\/3840\/2160$/);
+  expect(meta.target).toBe('_blank');
+  expect(meta.rel, 'the outbound link can reach back into this page').toBe('noopener noreferrer');
+  expect(meta.label).toBe('Lorem Picsum source (opens in a new tab)');
+  expect(meta.height, 'the link is under the touch floor').toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+  // It reads against the scrim it sits on, which is near-black in every mode.
+  expect(meta.ink).toBe('rgb(255, 255, 255)');
 });
 
 test('the lightbox also closes on a backdrop click and its own close button', async ({ page }) => {

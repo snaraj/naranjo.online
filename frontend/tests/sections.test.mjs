@@ -33,7 +33,13 @@ import {
   projectsCapturedOn,
   projectUrl,
 } from '../src/lib/projects.ts';
-import { galleryHeight, galleryLicenseNote, galleryPhotos, galleryWidth } from '../src/lib/gallery.ts';
+import {
+  galleryHeight,
+  galleryLicenseNote,
+  galleryPhotos,
+  gallerySourceLinkLabel,
+  galleryWidth,
+} from '../src/lib/gallery.ts';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
@@ -53,11 +59,16 @@ const [app, styles, manifest, feedCard, sectionNav, pageSectionSource, blockHost
 
 /* The binding modules that introduce each block to the page; they import
  * components, so they are source-pinned rather than executed. */
-const [workBinding, artBinding, projectsBinding, aboutBinding] = await Promise.all([
+const [workBinding, artBinding, projectsBinding, aboutBinding, galleryModule] = await Promise.all([
   read('../src/lib/blocks/workHistory.ts'),
   read('../src/lib/blocks/artGallery.ts'),
   read('../src/lib/blocks/codingProjects.ts'),
   read('../src/lib/blocks/about.ts'),
+  /* The data module is executed above; its SOURCE is read too, because the
+     optionality of a TypeScript field is erased before Node ever sees it —
+     "this entry has no title" and "this field may be absent" are different
+     claims and only one of them survives to runtime. */
+  read('../src/lib/gallery.ts'),
 ]);
 
 /* The generic components this architecture renders the page through. */
@@ -787,11 +798,21 @@ test('prev/next are icon-only, and both wrap around the eight photographs', () =
   assert.match(mediaGallery, /index = \(index - 1 \+ total\) % total/, 'previous must wrap backward');
 });
 
+/* The enlarged branch, extracted whole. Issue 202 nested a further {#if}
+ * inside it (the optional metadata block), and the non-greedy extraction
+ * this replaces stopped at that inner {/if} — it would still have found
+ * item.fullSrc, so it would still have PASSED while measuring a fraction of
+ * the branch it names. Anchoring on the dialog's closing tag and taking the
+ * greedy span keeps the pin honest as the branch grows. */
+const enlargedBranch = (source) =>
+  /\{#if enlarged\}([\s\S]*)\{\/if\}\s*<\/dialog>/.exec(source)?.[1] ?? '';
+
 test('clicking the photograph enlarges it; only the full derivative loads on demand', () => {
   assert.match(mediaGallery, /onclick=\{\(\) => \(enlarged = true\)\}/);
   // The full derivative mounts only inside the enlarged branch — never
   // alongside the small preview the feed frame always shows.
-  const enlargedBlock = /\{#if enlarged\}([\s\S]*?)\{\/if\}/.exec(mediaGallery)?.[1] ?? '';
+  const enlargedBlock = enlargedBranch(mediaGallery);
+  assert.ok(enlargedBlock.length > 0, 'the enlarged branch is not where this pin expects it');
   assert.match(enlargedBlock, /src=\{item\.fullSrc\}/, 'the full derivative must load inside the enlarged branch');
   assert.doesNotMatch(
     mediaGallery.replace(enlargedBlock, ''),
@@ -846,6 +867,11 @@ test('the lightbox scrim, close control and size caps are tokens too (coordinato
     backdrop: /\.gallery-lightbox::backdrop\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
     image: /\.gallery-lightbox-image\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
     close: /\.gallery-lightbox-close\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
+    /* Issue 202 moved the painted surface off the 44px hit box and onto the
+       small mark inside it; the token obligation moved with it rather than
+       being dropped, which is why this rule joined the list instead of
+       --gallery-close-surface leaving it. */
+    closeMark: /\.gallery-close-mark\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
   };
   for (const [rule, body] of Object.entries(rules)) {
     assert.ok(body.length > 0, `the ${rule} rule is not where this pin expects it`);
@@ -854,7 +880,7 @@ test('the lightbox scrim, close control and size caps are tokens too (coordinato
     ['lightbox', '--gallery-lightbox-max-inline'],
     ['backdrop', '--gallery-scrim'],
     ['image', '--gallery-image-max-block'],
-    ['close', '--gallery-close-surface'],
+    ['closeMark', '--gallery-close-surface'],
     ['close', '--gallery-close-ink'],
   ];
   for (const [rule, token] of expectations) {
@@ -872,6 +898,192 @@ test('the lightbox scrim, close control and size caps are tokens too (coordinato
   assert.match(styles, /--gallery-scrim:\s*rgba\(0, 0, 0, 0\.7\);/);
   assert.match(styles, /--gallery-close-surface:\s*rgba\(0, 0, 0, 0\.5\);/);
   assert.match(styles, /--gallery-close-ink:\s*white;/);
+});
+
+// ---------------------------------------------------------------------------
+// Projects, the art half: the gallery EXPERIENCE (owner directives
+// 2026-08-25, issue 202) — a centred frame, a close mark that is not stamped
+// on the artwork, and metadata that is absent when it is absent.
+// ---------------------------------------------------------------------------
+
+test('the visible frame is centred in its track, so no gutter is dead space (issue 202)', () => {
+  /* The defect the owner saw: aspect-ratio TRANSFERS the frame's block cap
+     into an inline cap, so on a wide column the button is narrower than its
+     own 1fr track and stretch degenerates to start alignment — MEASURED at
+     1280px before this landed: a 568.9px frame at the left of an 842px
+     track. Nothing but an explicit centring keeps the two gutters equal, so
+     that declaration is what this pins; e2e/rendering-lanes.spec.mjs
+     measures the resulting boxes on three engines. */
+  const style = styleBlock(mediaGallery);
+  const stage = /\.gallery-stage\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(stage.length > 0, 'the stage rule is not where this pin expects it');
+  assert.match(
+    stage,
+    /margin-inline:\s*auto/,
+    'the frame does not centre itself in its track, so a column wider than the frame leaves the whole surplus on one side'
+  );
+  /* The centring must not have cost the reservation. An ALIGNED grid item is
+     sized by its content, so centring the button directly would have made
+     the reserved box depend on the lazy image — measured as 0x0 on Gecko.
+     The stage's width is definite instead, and it is derived from the same
+     two tokens the reserved box is, so the width and the ratio cannot drift
+     apart. */
+  assert.match(
+    stage,
+    /inline-size:\s*min\(100%, calc\(var\(--card-media-max-block-size\) \* \(var\(--card-media-aspect\)\)\)\)/,
+    'the stage states no definite width, so the frame reserves nothing until the photograph loads'
+  );
+  for (const property of ['aspect-ratio: var(--card-media-aspect)', 'max-block-size: var(--card-media-max-block-size)']) {
+    assert.ok(stage.includes(property), `the reserved box lost "${property}" when it moved onto the stage`);
+  }
+  /* And the control inside states no size of ITS own — a <button> is a form
+     control whose auto inline size is fit-content, so a size here would put
+     the reservation back under the image's control. */
+  const frameButton = /\.gallery-image-button\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(frameButton.length > 0, 'the frame-button rule is not where this pin expects it');
+  assert.match(frameButton, /inset:\s*0/, 'the frame button no longer fills the box that was reserved for it');
+  assert.doesNotMatch(
+    frameButton,
+    /(^|[\s;])(inline-size|block-size|width|height|aspect-ratio):/,
+    'the frame button sizes itself, so the reserved box is whatever fits inside the button instead'
+  );
+  // The track arrangement the centring depends on: a middle column that can
+  // be wider than the frame is exactly what makes the alignment matter.
+  const frame = /\.gallery-frame\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.match(frame, /grid-template-columns:\s*auto 1fr auto/);
+});
+
+test('the lightbox close control paints a small mark, never a disc over the photograph (issue 202)', () => {
+  const style = styleBlock(mediaGallery);
+  const close = /\.gallery-lightbox-close\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  const mark = /\.gallery-close-mark\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(close.length > 0 && mark.length > 0, 'the close rules are not where this pin expects it');
+
+  /* The hit box paints nothing of its own. It used to BE the visible chrome —
+     a 2.75rem filled disc — which is precisely what the owner called ugly. */
+  assert.match(close, /background:\s*none/, 'the close control paints a surface of its own again');
+  assert.doesNotMatch(close, /border-radius/, 'the close control wears a disc of its own again');
+
+  /* Half or smaller, stated as a resolvable length rather than a promise:
+     1.125rem against the 2.75rem hit box the .icon-button shape still
+     supplies, which is what keeps the touch floor while shrinking the paint. */
+  const size = /--gallery-close-size,\s*([\d.]+)rem/.exec(mark)?.[1];
+  assert.ok(size !== undefined, 'the close mark states no size this pin can measure');
+  assert.ok(
+    Number.parseFloat(size) <= 2.75 / 2,
+    `the close mark is ${size}rem against a 2.75rem control — the owner asked for at least half off`
+  );
+  for (const axis of ['inline-size', 'block-size']) {
+    assert.match(mark, new RegExp(`${axis}:\\s*var\\(--gallery-close-size`), `the mark does not size its ${axis}`);
+  }
+
+  /* The mark tucks into the reserved lane above the frame — that lane, and
+     the start-end alignment that puts the mark in it, are together why the
+     mark never overlaps the picture. */
+  const lightbox = /\.gallery-lightbox\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.match(lightbox, /padding:\s*var\(--gallery-close-lane/, 'the lightbox reserves no lane for the close mark');
+  assert.match(close, /place-items:\s*start end/, 'the mark is not aligned into the lane it was given');
+
+  // Still a control, still named, still the shared 44px shape.
+  assert.match(mediaGallery, /class="icon-button gallery-lightbox-close"/);
+  assert.match(mediaGallery, /aria-label="Close enlarged photograph"/);
+  assert.match(styles, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
+});
+
+test('Escape closes the lightbox and hands focus back to the frame it came from (issue 202)', () => {
+  /* The dialog's native focus restoration is not enough on its own: a mouse
+     click does not focus a <button> on macOS WebKit, so "the previously
+     focused element" is the body there and a reader who presses Escape lands
+     nowhere. The component keeps the invoking button and focuses it on the
+     dialog's own close event — the one path Escape, the close control and a
+     backdrop click all pass through. */
+  assert.match(mediaGallery, /bind:this=\{frameButtonEl\}/, 'the invoking frame button is not captured');
+  assert.match(
+    mediaGallery,
+    /function onDialogClose\(\): void \{\s*enlarged = false;\s*frameButtonEl\?\.focus\(\);/,
+    'closing the lightbox does not return focus to the frame'
+  );
+});
+
+test('gallery metadata is optional in the data, and every row states only what SOURCES.md verifies', () => {
+  for (const [i, entry] of galleryPhotos.entries()) {
+    /* Honest states: nobody has reviewed what these placeholders depict, so
+       no row claims a title or a description. The one fact SOURCES.md does
+       verify is where each file came from, and that — and only that — is
+       what the row publishes as a link. */
+    assert.equal(entry.title, undefined, `row ${i + 1} invents a title nobody reviewed`);
+    assert.equal(entry.description, undefined, `row ${i + 1} invents a description nobody reviewed`);
+    assert.equal(
+      entry.link?.href,
+      entry.sourceUrl,
+      `row ${i + 1}'s link points somewhere other than the fixed-seed source the manifest records`
+    );
+    assert.equal(entry.link?.label, gallerySourceLinkLabel);
+  }
+  assert.equal(gallerySourceLinkLabel, 'Lorem Picsum source');
+  // Optionality is real in the TYPE, not merely unused: all three fields are
+  // declared optional, which is what lets a media-volume row (issue 182)
+  // carry a title while a bootstrap row carries none.
+  const gallerySource = galleryModule;
+  for (const field of ['title', 'description', 'link']) {
+    assert.match(
+      gallerySource,
+      new RegExp(`readonly ${field}\\?:`),
+      `gallery.ts declares ${field} as required, so an entry without one cannot exist`
+    );
+  }
+});
+
+test('absent metadata renders NOTHING — no empty row, no default, no reserved band (issue 202)', () => {
+  /* The whole contract, pinned where it is decided. Each field is guarded on
+     its OWN {#if}: a single combined guard would render an empty <p> for a
+     description-less item that happens to carry a title. */
+  for (const field of ['item.title', 'item.description', 'item.link']) {
+    assert.ok(
+      mediaGallery.includes(`{#if ${field}}`),
+      `${field} is rendered without a guard of its own, so an item lacking it renders an empty row`
+    );
+  }
+  // Both containers are conditional too, so an item with no metadata at all
+  // contributes no element — the absent state is the absence of the box.
+  assert.match(mediaGallery, /\{#if hasCaption\}\s*<div class="gallery-caption">/);
+  assert.match(mediaGallery, /\{#if hasMeta\}\s*<div class="gallery-lightbox-meta">/);
+  assert.match(mediaGallery, /const hasCaption = \$derived\(Boolean\(item\.title\) \|\| Boolean\(item\.description\)\)/);
+  assert.match(mediaGallery, /const hasMeta = \$derived\(hasCaption \|\| item\.link !== undefined\)/);
+  /* No default anywhere on the path: a ?? or a literal placeholder is how an
+     honest empty state becomes a fabricated one. */
+  for (const field of ['title', 'description', 'link']) {
+    assert.doesNotMatch(
+      mediaGallery,
+      new RegExp(`item\\.${field}\\s*(\\?\\?|\\|\\|)\\s*['"\`]`),
+      `the component substitutes copy of its own for a missing ${field}`
+    );
+    assert.doesNotMatch(
+      artBinding,
+      new RegExp(`${field}:\\s*[^,\\n]*(\\?\\?|\\|\\|)`),
+      `the adapter defaults ${field}, so absence never reaches the component`
+    );
+    assert.match(artBinding, new RegExp(`${field}: photo\\.${field}`), `the adapter drops ${field} on the way through`);
+  }
+  // The caption is the LAST thing in the block, after the counter: an item
+  // that carries one therefore moves neither the photograph nor the arrows
+  // nor the counter (zero-CLS floor).
+  assert.ok(
+    mediaGallery.indexOf('class="gallery-caption"') > mediaGallery.indexOf('class="gallery-count"'),
+    'the caption sits above the counter, so metadata arriving would move the frame'
+  );
+});
+
+test('a metadata link is real outbound navigation, isolated and named (issue 202)', () => {
+  const meta = /<div class="gallery-lightbox-meta">([\s\S]*?)<\/div>/.exec(mediaGallery)?.[1] ?? '';
+  assert.ok(meta.length > 0, 'the lightbox metadata block is not where this pin expects it');
+  assert.match(meta, /href=\{item\.link\.href\}/);
+  assert.match(meta, /target="_blank"/);
+  assert.match(meta, /rel="noopener noreferrer"/, 'the outbound link can reach back into this page');
+  assert.match(meta, /aria-label=\{`\$\{item\.link\.label\} \(opens in a new tab\)`\}/);
+  // The label is the manifest's, never the component's: nothing here writes
+  // link copy of its own.
+  assert.match(meta, />\{item\.link\.label\}</);
 });
 
 test('the visible frame reserves its box before any byte arrives, and lazy-loads', () => {

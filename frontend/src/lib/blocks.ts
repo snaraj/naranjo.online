@@ -329,6 +329,13 @@ export type UsageTrackerProps = {
 /* --- MediaGallery: one visible frame, prev/next, a click-to-enlarge lightbox
  * (issue 176) --------------------------------------------------------------- */
 
+/* An outbound link an item may carry. Href and label travel together: the
+ * component renders the label and never invents one. */
+export type MediaGalleryLink = {
+  readonly href: string;
+  readonly label: string;
+};
+
 export type MediaGalleryItem = {
   readonly key: string;
   /* The small derivative the feed frame shows; loaded eagerly-lazy like any
@@ -338,6 +345,16 @@ export type MediaGalleryItem = {
    * reader enlarges the frame. */
   readonly fullSrc: string;
   readonly alt: string;
+  /* Optional per-item metadata (owner directive 2026-08-25, issue 202).
+   * Every one of the three is independently optional, and ABSENT MEANS
+   * NOTHING RENDERS: no empty row, no placeholder dash, no reserved band.
+   * The component decides only WHERE each renders, never whether an item
+   * "should" have one — that is the manifest's call (lib/gallery.ts), so a
+   * media-volume item and a vendored bootstrap item carry metadata the same
+   * way (issue 182). */
+  readonly title?: string;
+  readonly description?: string;
+  readonly link?: MediaGalleryLink;
 };
 
 export type MediaGalleryProps = {
