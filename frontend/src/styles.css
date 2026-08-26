@@ -198,9 +198,12 @@
      100rem is 1600px: wide enough to fill a 1920px monitor with the page's
      own gutters and both rails still on screen (1600 + 32 + 88 = 1720), and
      short of the 2560px and 3840px widths where one column becomes a line
-     nobody can track back to its own start. Prose never runs that far anyway
-     — --card-measure holds it to 42rem — so the extra width goes to the
-     trackers, which is what asked for it. */
+     nobody can track back to its own start. This ceiling is now the ONLY
+     thing bounding a line of prose on this page: --card-measure used to hold
+     card text to 42rem and no longer does (owner directive 2026-08-26, issue
+     212 — filled width wins over the measure cap), so a reader who drags the
+     column out gets the width in the cards as well as in the trackers, and
+     100rem is the width at which that stops being a favour. */
   --page-column-base: 60rem;
   --page-column-width: var(--page-column-base);
   --page-column-min: 18rem;
@@ -341,10 +344,29 @@
   /* The space BETWEEN cards in a feed, as opposed to --card-gap, which is the
      space between one card's own regions. */
   --feed-gap: 1rem;
-  /* A comfortable reading measure. The page column is wide because the
-     trackers need the room; prose set to the full width of a tracker card is
-     a line nobody wants to follow back to the start of. */
-  --card-measure: 42rem;
+  /* The card's optional reading-measure cap — NONE by default (owner
+     directive, 2026-08-26, issue 212).
+
+     It used to be 42rem, and that number is the whole of the defect the owner
+     reported three separate times: a capped block start-ALIGNS inside a
+     full-width card, so at the shipped 60rem column every summary, bullet
+     list and empty note broke at 672px and left the last ~270px of the card
+     blank. The typographic argument for a measure is real — a long line is
+     harder to track back to its own start — but the owner has ruled on the
+     trade for THIS site: filled width wins. The standing rule the ruling sets
+     is measurable rather than aesthetic, which is why it can be pinned: any
+     content block that ends noticeably short of its container's inline end,
+     without being a deliberately centred composition, is a defect.
+
+     The token survives the ruling rather than being deleted, and the
+     declarations that read it survive with it, because between them they are
+     the card primitive's per-instance channel: `none` is the default every
+     card gets, and a single surface that genuinely wants a measure sets
+     `style="--card-measure: 42rem"` on that one card — a local custom-property
+     override, exactly as the block above describes, never a component edit and
+     never a literal at a call site. Deleting the pair would replace that
+     channel with a fork the day one surface needs it. */
+  --card-measure: none;
 
   /* The panel theme layer. Every panel component was built "shaped, not
      styled" — each color reads a --panel-* custom property with a
@@ -912,9 +934,14 @@ main {
   letter-spacing: -0.01em;
 }
 
+/* A subsection's opening line. It carried a hand-written `max-inline-size:
+   42rem` — a second, UNTOKENISED copy of the reading measure the card layer
+   had already decided — so it leaned left exactly the way the cards did, and
+   it leaned from a literal no token could ever move. Both halves go under the
+   2026-08-26 ruling (issue 212): the line fills its section, and the number it
+   duplicated no longer exists anywhere to be duplicated from. */
 .subsection-intro {
   margin: 0;
-  max-inline-size: 42rem;
   font-size: 0.9375rem;
   line-height: 1.55;
 }
