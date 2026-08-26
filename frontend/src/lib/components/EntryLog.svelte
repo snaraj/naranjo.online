@@ -263,16 +263,24 @@
     white-space: nowrap;
   }
 
+  /* The measure token, which now resolves to `none` (owner directive
+     2026-08-26, issue 212: a summary fills the card and stops at its padding,
+     never two thirds of the way across it). The declaration stays because the
+     token is the card primitive's per-instance channel — one card that wants a
+     measure back sets --card-measure on itself — and because a component that
+     dropped the read would have to grow a fork to get it back. */
   .entry-summary {
     margin: 0;
     max-inline-size: var(--card-measure);
   }
 
-  /* An entry's points, at the card's own body rhythm: the reading measure the
-     paragraph uses, the card's body gap between items, and the marker pulled
-     just far enough in that a wrapped line still lines up under the first
-     word rather than under the bullet. Every length is a token or derived
-     from one — nothing here is a value this component chose for itself. */
+  /* An entry's points, at the card's own body rhythm: the same measure token
+     the paragraph reads, the card's body gap between items, and the marker
+     pulled just far enough in that a wrapped line still lines up under the
+     first word rather than under the bullet. Every length is a token or
+     derived from one — nothing here is a value this component chose for
+     itself, which is why the 2026-08-26 ruling moved these bullets by editing
+     one token and touching no component. */
   .entry-points {
     margin: 0;
     /* Stated rather than inherited: this list sits inside the log's own <ol>,

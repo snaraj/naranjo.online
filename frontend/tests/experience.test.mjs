@@ -689,18 +689,39 @@ const declarationsOf = (body) =>
 // A selector list, split into the individual selectors it stands for.
 const selectorParts = (selector) => selector.split(',').map((part) => part.trim());
 
+/* The units this parser can convert, and their exact ratio to one CSS pixel.
+ * The absolute family is FIXED by the spec — 1in = 96px = 72pt = 6pc = 2.54cm
+ * = 25.4mm = 101.6Q — so converting it is arithmetic rather than a guess. rem
+ * is resolved at the 16px root default the page ships with; a reader who
+ * enlarges that only ever makes these boxes bigger.
+ *
+ * Deliberately ABSENT, and this is a choice rather than an oversight: ch, em,
+ * ex, cap, ic and lh are font-relative. Resolving them needs a computed font
+ * size for the exact element the declaration lands on — a font a SOURCE pin
+ * does not have and must not invent, since a guessed ratio would report a
+ * confident wrong number instead of an honest refusal. They take the null
+ * path, and every caller fails loudly on null (below). */
+const lengthUnitsInPx = {
+  px: 1,
+  rem: 16,
+  in: 96,
+  pc: 16,
+  pt: 96 / 72,
+  cm: 96 / 2.54,
+  mm: 96 / 25.4,
+  q: 96 / 101.6,
+};
+
 /* A length literal in CSS pixels, or null when this parser cannot read it.
  * Null is never treated as "fine": every caller fails loudly on it, because a
  * value the parser does not understand is precisely where an undersized one
- * would hide. rem is resolved at the 16px root default the page ships with —
- * a reader who enlarges that only ever makes these boxes bigger. */
+ * would hide. CSS unit identifiers are ASCII case-insensitive, so `Q` and `q`
+ * are the same unit and both are read. */
 function lengthInPx(value) {
-  const trimmed = value.trim();
-  const px = /^([\d.]+)px$/.exec(trimmed);
-  if (px) return Number(px[1]);
-  const rem = /^([\d.]+)rem$/.exec(trimmed);
-  if (rem) return Number(rem[1]) * 16;
-  return null;
+  const parsed = /^([\d.]+)([a-z]+)$/i.exec(value.trim());
+  if (!parsed) return null;
+  const perPx = lengthUnitsInPx[parsed[2].toLowerCase()];
+  return perPx === undefined ? null : Number(parsed[1]) * perPx;
 }
 
 /* The SMALLEST size a value can resolve to. max() is the form the 16px floor
@@ -1295,4 +1316,216 @@ test('the reading-mode swatches are drawn in the header chrome grammar', () => {
       );
     }
   }
+});
+
+/* ===========================================================================
+ * Filled width beats the reading measure (owner directive 2026-08-26,
+ * issue 212 — the THIRD report of the same shape)
+ *
+ * The live Professional Experience section broke every bullet at 672px inside
+ * a 934px card, because --card-measure was 42rem and a capped block
+ * start-ALIGNS in a full-width parent: the last ~28% of every card was blank.
+ * The owner ruled the trade for this site — filled width wins over the
+ * typographic measure — and set a standing rule with it: a content block
+ * ending noticeably short of its container's inline end, without being a
+ * deliberately centred composition, is a defect.
+ *
+ * This is the SOURCE half of that rule, and it is deliberately not a
+ * measurement: the rendering lanes measure the boxes in a real engine, but a
+ * lane only ever measures the surfaces the page happens to render today. A
+ * width cap is decided in a DECLARATION, so a declaration is where the rule
+ * binds the surfaces nobody has written yet. Both halves ship together, per
+ * the two-halves convention the rendering-lane floors already follow.
+ * ======================================================================== */
+
+/* The ONE cap that survives the ruling, and the reason it does. It is not a
+ * prose measure: .activity-entry-source is the first of three tracks in the
+ * commit row (source | title | age), and the row's own last track ends exactly
+ * on the panel's content edge — measured 0.0px short at 1440 and 1024 — so
+ * capping the middle of a filled row bounds a repository slug rather than
+ * leaving a right-hand side empty. Removing the cap would let one long slug
+ * take the row from the commit message, which is the thing a reader is
+ * actually scanning for. */
+const admittedInlineCaps = new Map([
+  [
+    '.activity-entry-source',
+    'a track cap inside a row that fills: source | title | age, with the age column flush to the panel edge',
+  ],
+]);
+
+/* How this pin reads ONE declared max-inline-size/max-width value. Exactly
+ * three verdicts, and the third is why this function exists at all:
+ *
+ *   'fluid'      — the value cannot pin a box to a width its container knows
+ *                  nothing about, so the pin says nothing about it. Three
+ *                  forms qualify, and the reason differs per form:
+ *                    · a FUNCTION — var(), min(), max(), clamp(), calc(),
+ *                      env(), fit-content() — is either a token read (the
+ *                      token layer is where a measure is allowed to live) or a
+ *                      value computed against the space the box is given;
+ *                    · a PERCENTAGE or a viewport/container-relative length
+ *                      resolves against the container or the screen, so it
+ *                      scales with the space instead of ignoring it;
+ *                    · a KEYWORD that states no number: none/auto/initial/
+ *                      unset/revert/revert-layer remove the cap outright, and
+ *                      min-content/max-content/fit-content/stretch size from
+ *                      the content or the container.
+ *   a NUMBER     — a bare absolute length, in px: the refusable form, and the
+ *                  exact shape --card-measure and .subsection-intro carried.
+ *   'unreadable' — a bare length in a unit lengthInPx will not resolve, ch and
+ *                  em foremost. It is NOT skipped. `max-inline-size: 65ch` is
+ *                  the canonical spelling of a reading measure, so treating an
+ *                  unreadable value as fine would wave through the precise
+ *                  regression this pin exists to stop, wearing a different
+ *                  unit — and it would break lengthInPx's own stated contract
+ *                  that null is never treated as "fine".
+ */
+function inlineCapVerdict(value) {
+  const trimmed = value.trim();
+  if (trimmed.includes('(')) return 'fluid';
+  if (/^[\d.]+(?:%|[dsl]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max))$/i.test(trimmed)) return 'fluid';
+  if (
+    /^(?:none|auto|initial|unset|revert|revert-layer|min-content|max-content|fit-content|stretch)$/i.test(
+      trimmed
+    )
+  ) {
+    return 'fluid';
+  }
+  const px = lengthInPx(trimmed);
+  return px === null ? 'unreadable' : px;
+}
+
+test('the cap reader resolves every unit a measure can be written in (issue 212)', () => {
+  /* 672px is 42rem, the number issue 212 removed — and it has a spelling in
+     every absolute unit CSS has. Each of these is the SAME cap wearing a
+     different unit, so each must reach the refusal rather than slip past the
+     parser: pt, cm and Q were three of the five units that did slip past. */
+  for (const [value, expected] of [
+    ['672px', 672],
+    ['42rem', 672],
+    ['504pt', 672],
+    ['17.8cm', 672.76],
+    ['672Q', 634.96],
+    ['672q', 634.96],
+    ['7in', 672],
+    ['42pc', 672],
+    ['177.8mm', 672],
+  ]) {
+    const verdict = inlineCapVerdict(value);
+    assert.equal(
+      typeof verdict,
+      'number',
+      `${value} is a bare absolute cap and must reach the refusal, not be skipped as fluid or unreadable`
+    );
+    assert.equal(Math.round(verdict * 100) / 100, expected, `${value} resolved to the wrong width`);
+  }
+
+  /* The font-relative family, which this pin refuses to guess at. `65ch` and
+     `42em` are the other two units that slipped past, and `65ch` in particular
+     is how anyone restoring "a comfortable reading measure" would write it.
+     They fail loudly at the call site instead of being converted from a font
+     size a source pin cannot know. */
+  for (const value of ['65ch', '42em', '80ex', '12lh', '30cap', '40ic', '672']) {
+    assert.equal(
+      inlineCapVerdict(value),
+      'unreadable',
+      `${value} must be refused as unreadable, never silently skipped — an unreadable cap is where an undersized one hides`
+    );
+  }
+
+  // And the forms that genuinely cannot produce the defect stay skipped.
+  for (const value of [
+    'none',
+    'auto',
+    'fit-content',
+    'max-content',
+    '100%',
+    '90vw',
+    '80dvw',
+    '50cqi',
+    'var(--card-measure)',
+    'min(var(--page-column-max), 100%)',
+    'calc(100% - 2 * var(--page-rail-size))',
+    'clamp(20rem, 50%, 60rem)',
+  ]) {
+    assert.equal(
+      inlineCapVerdict(value),
+      'fluid',
+      `${value} is tied to the space the box is given; refusing it would fail a page that fills correctly`
+    );
+  }
+});
+
+test('no surface caps its prose short of the container it sits in (issue 212)', () => {
+  /* The token itself. `none` is the whole ruling in one value, and the
+     declaration is still READ by three components, which is what keeps the
+     per-card override channel alive instead of forcing a fork. */
+  const declared = /--card-measure:\s*([^;]+);/.exec(stylesCode);
+  assert.ok(declared, '--card-measure is gone; the card primitive lost its measure channel');
+  assert.equal(
+    declared[1].trim(),
+    'none',
+    'the card measure is a cap again; card text will stop short of the card edge, which is the defect issue 212 closed'
+  );
+  const readers = sweptRules.filter((rule) =>
+    declarationsOf(rule.body).some(
+      ({ property, value }) =>
+        (property === 'max-inline-size' || property === 'max-width') &&
+        value.includes('var(--card-measure)')
+    )
+  );
+  assert.deepEqual(
+    readers.map((rule) => `${rule.file}: ${rule.selector}`).sort(),
+    [
+      'lib/components/EmptyNote.svelte: .empty-note',
+      'lib/components/EntryLog.svelte: .entry-points',
+      'lib/components/EntryLog.svelte: .entry-summary',
+    ],
+    'the card-body surfaces that read --card-measure changed; the override channel exists only where it is read, and a surface that stopped reading it can no longer be given a measure without a component fork'
+  );
+
+  /* And nowhere is the number written down again. Any absolute-length inline
+     cap anywhere in the page's styles is refused unless it is named above with
+     its reason — which is what stops 42rem coming back as a literal in one
+     component, the exact shape .subsection-intro carried for four releases
+     while the token layer was believed to be the only copy. */
+  assert.ok(
+    sweptRules.length > 50,
+    'the swept-rule set collapsed; this pin would pass by scanning nothing'
+  );
+  let refusable = 0;
+  for (const rule of sweptRules) {
+    for (const { property, value } of declarationsOf(rule.body)) {
+      if (property !== 'max-inline-size' && property !== 'max-width') continue;
+      /* Three verdicts, per inlineCapVerdict above: a fluid form is skipped
+         because it is tied to the space the box is given, a bare absolute
+         length is refused, and a bare length this parser cannot resolve is
+         refused just as loudly rather than skipped — because the unit a
+         returning measure is most likely to wear (65ch) is one of those. */
+      const verdict = inlineCapVerdict(value);
+      if (verdict === 'fluid') continue;
+      const admitted = selectorParts(rule.selector).find((part) =>
+        [...admittedInlineCaps.keys()].some((key) => part.includes(key))
+      );
+      if (verdict === 'unreadable') {
+        assert.ok(
+          admitted,
+          `${rule.file}: "${rule.selector}" sets ${property}: ${value} — an unparseable bare cap; tokenise it or admit it in admittedInlineCaps. This pin will not guess a font-relative unit into pixels, so it cannot tell whether this cap leaves the container's inline end blank the way issue 212's 42rem did — and a cap it cannot read is exactly where one hides.`
+        );
+        continue;
+      }
+      const length = verdict;
+      refusable += 1;
+      assert.ok(
+        admitted,
+        `${rule.file}: "${rule.selector}" caps ${property} at ${value} (${length}px). A capped block start-aligns in a full-width parent, so this leaves the container's inline end blank — the defect of issue 212. Fill the width, or add the selector to admittedInlineCaps with the reason it is not a prose measure.`
+      );
+    }
+  }
+  /* The refusal has to be reachable, or it is decoration: the one admitted cap
+     is itself proof that a bare length still reaches the assertion above. */
+  assert.ok(
+    refusable > 0,
+    'no absolute inline cap exists anywhere any more, so this pin can no longer fail — retire it or the exception list with it'
+  );
 });

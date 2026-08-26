@@ -25,6 +25,11 @@
 </FeedCard>
 
 <style>
+  /* The card's measure token, which resolves to `none` since the 2026-08-26
+     ruling (issue 212): one sentence now runs the width of the card it sits
+     in rather than stopping short of it. The read stays for the same reason
+     the summary's does — it is the primitive's per-card override channel, not
+     a value this component owns. */
   .empty-note {
     margin: 0;
     max-inline-size: var(--card-measure);
