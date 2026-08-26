@@ -63,8 +63,7 @@
   import ContributionGrid from './ContributionGrid.svelte';
   import PanelShell from './PanelShell.svelte';
 
-  let { id, title, status, generatedAt, sections, emptyNote, totalLens }: UsageTrackerProps =
-    $props();
+  let { id, title, status, generatedAt, sections, emptyNote }: UsageTrackerProps = $props();
 
   /* One view choice PER SOURCE (owner directive, 2026-08-25).
 
@@ -100,15 +99,18 @@
      not — and forcing one choice across sources would render a lens a source
      cannot answer. A source without categories simply has no lens row and
      always reads as total. The component knows no category by name: every
-     key, label, palette slot, and per-lens summary arrives as data built by
-     the adapter.
+     key, label, palette slot, and per-lens noun arrives as data built by the
+     adapter.
 
-     The key meaning "no category" is `totalLens`, and it arrives as a PROP
-     rather than being declared here: the adapter states that sentinel once
-     and resolves every category's dailies through the same function that
-     honours it, so this file carries no second copy of the vocabulary to
-     drift from. */
+     `totalLens` is the key meaning "no category", and it is stated HERE, once
+     in the whole tree. The adapter used to export a copy of it beside a lens
+     RESOLVER that nothing called; both were deleted rather than wired in, so
+     the sentinel now lives in the one file that decides anything with it —
+     this component, which resolves the lens and falls back to the plain
+     series. */
   let lenses = $state<Record<string, string>>({});
+
+  const totalLens = 'total';
 
   function lensOf(key: string): string {
     return lenses[key] ?? totalLens;

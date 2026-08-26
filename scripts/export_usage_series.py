@@ -118,9 +118,11 @@ WEEK_DAYS = 7
 MAX_SOURCE_KEY_LENGTH = 32
 
 # THE payload ceiling, in SEALED bytes — one number every stage of the
-# pipeline enforces (2026-08-24 review finding 4). Stated in Go at
-# internal/seal/types.go (MaxSealedBytes/Overhead), restated here and in
-# scripts/usage-export/push-usage-series.sh and docs/usage-export.md, and
+# pipeline enforces (2026-08-24 review finding 4). Canonical in Go at
+# internal/seal/types.go (MaxSealedBytes/Overhead), restated in
+# internal/panels/types.go (maxSealedSeriesBytes — that package's zero-egress
+# doctrine pin forbids importing internal/seal), here, in
+# scripts/usage-export/push-usage-series.sh and in docs/usage-export.md, and
 # pinned across all five by CapParityTest in
 # scripts/ci/test_capture_usage_series.py.
 #

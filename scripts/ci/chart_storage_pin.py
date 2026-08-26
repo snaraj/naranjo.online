@@ -80,7 +80,17 @@ class StoragePinError(ValueError):
 
 
 def _documents(text: str) -> list[dict]:
-    return census.parse_documents(text, "<render>")
+    """Every installable object in the render, through the census's own reader.
+
+    `parse_documents` answers `list[object]`, because a YAML stream may hold
+    anything; `flatten` is the census's narrowing step and the one this module's
+    header always claimed to use. It is not a cast: it drops empty documents,
+    REFUSES a document that is not a mapping or that declares no string `kind`
+    instead of letting it reach a `.get` call below, and unwraps `List`
+    wrappers — so a PersistentVolume smuggled inside one is counted by the
+    checks here rather than hidden from them.
+    """
+    return census.flatten(census.parse_documents(text, "<render>"))
 
 
 def _of_kind(objects: list[dict], kind: str) -> list[dict]:
@@ -151,7 +161,7 @@ def _require_disjoint(a_name: str, a: str, b_name: str, b: str) -> None:
             "within the writable surface" % (a_name, left, b_name, right))
 
 
-def check_disabled(objects: list[dict], facts: argparse.Namespace) -> None:
+def check_disabled(objects: list[dict]) -> None:
     """A disabled render carries no trace of the capability."""
     for kind in ("PersistentVolume", "PersistentVolumeClaim"):
         if _of_kind(objects, kind):
@@ -418,7 +428,7 @@ def _check_volume_common(volume: dict, facts: argparse.Namespace, name: str,
     if not isinstance(values, list) or len(values) != 1 or not values[0]:
         raise StoragePinError(
             "PV %s's node selector must carry exactly one non-empty value" % name)
-    if facts.node and values[0] != facts.node:
+    if values[0] != facts.node:
         raise StoragePinError(
             "PV %s is bound to node %r, not the stated %r" % (name, values[0], facts.node))
 
@@ -441,7 +451,9 @@ def check_volumes(objects: list[dict], facts: argparse.Namespace) -> None:
 def run(mode: str, text: str, facts: argparse.Namespace) -> None:
     objects = _documents(text)
     if mode == "disabled":
-        check_disabled(objects, facts)
+        # A disabled render is checked for ABSENCE, so it reads no values fact:
+        # every expectation it has is "none of it is here".
+        check_disabled(objects)
         return
     check_claims(objects, facts)
     check_deployment_wiring(objects, facts)
@@ -459,7 +471,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--path", required=True)
     parser.add_argument("--storage-class", required=True)
     parser.add_argument("--local-root", required=True)
-    parser.add_argument("--node", default="")
+    # Required like every other stated fact. It defaulted to "" and the node
+    # comparison was guarded by `if facts.node and ...`, so omitting it did
+    # not relax the check loudly — it SKIPPED it silently, and a PV bound to
+    # the wrong node passed the pin. A fact the checker asserts against is a
+    # fact the caller must state.
+    parser.add_argument("--node", required=True)
     parser.add_argument("--volume-name", required=True)
     parser.add_argument("--key-secret", required=True)
     parser.add_argument("--capacity", required=True)

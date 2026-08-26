@@ -641,6 +641,51 @@ func TestSealedSeriesCapParity(t *testing.T) {
 	}
 }
 
+// TestWindowServeOrderCoversTheClosedVocabulary pins the two window lists
+// against each other, because admitSeriesWindows reads one and serves from
+// the other and NOTHING previously held them equal.
+//
+// admitSeriesWindows admits a section only when it carries exactly
+// len(usageSeriesWindowKeys) windows, every key inside that closed
+// vocabulary. It then serves by ranging over windowServeOrder and skipping
+// any key the map lacks. Today those two describe the same set, so the skip
+// is unreachable — which is exactly what makes the coupling dangerous: add a
+// window to usageSeriesWindowKeys and forget windowServeOrder, and admission
+// still REQUIRES the new window while the serve loop silently DROPS it. The
+// payload would then be short a window it had just insisted on, with no
+// error anywhere and no test going red.
+//
+// The skip itself stays (requirement 4: it is a fail-closed guard, and this
+// package never trusts a map it did not build in the same function). What
+// changes is that drift is now caught here, at test time, instead of in a
+// served payload.
+func TestWindowServeOrderCoversTheClosedVocabulary(t *testing.T) {
+	t.Parallel()
+	if len(windowServeOrder) != len(usageSeriesWindowKeys) {
+		t.Fatalf("windowServeOrder has %d entries and usageSeriesWindowKeys has %d; admitSeriesWindows requires every vocabulary key and serves only the ordered ones, so a key in one and not the other is a window admitted and then dropped",
+			len(windowServeOrder), len(usageSeriesWindowKeys))
+	}
+	seen := make(map[string]bool, len(windowServeOrder))
+	for _, key := range windowServeOrder {
+		if _, ok := usageSeriesWindowKeys[key]; !ok {
+			t.Fatalf("windowServeOrder carries %q, which usageSeriesWindowKeys does not define; the serve order may only name keys admission can admit", key)
+		}
+		if seen[key] {
+			t.Fatalf("windowServeOrder names %q twice; a duplicate would serve one window as two rows", key)
+		}
+		seen[key] = true
+	}
+	for key := range usageSeriesWindowKeys {
+		if !seen[key] {
+			t.Fatalf("usageSeriesWindowKeys defines %q but windowServeOrder never serves it; admission would REQUIRE this window and the serve loop would silently drop it", key)
+		}
+	}
+	// Non-vacuity: an empty pair of lists would satisfy every check above.
+	if len(windowServeOrder) == 0 {
+		t.Fatal("the window vocabulary is empty, so this pin proves nothing")
+	}
+}
+
 // TestDataRootRefusesOversizeBeforeDecryption pins the byte cap AND its
 // position: an oversized file is refused before a single cryptographic or
 // parsing operation touches it.

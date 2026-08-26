@@ -231,7 +231,10 @@ MAX_SERIES_DAYS = 732
 # THE upper bound on every count this pipeline emits, and it is ONE number
 # three languages agree on (2026-08-24 round-3 review, finding 9). It mirrors
 # maxCountValue in internal/panels/types.go and Number.isSafeInteger in
-# frontend/src/lib/token-usage.ts; CountBoundParityTest pins all three.
+# frontend/src/lib/token-usage.ts (countBound). All three are pinned BY VALUE
+# — each language's own spelling evaluated, not matched as text — by
+# "the count bound is the same number in Go, Python and TypeScript" in
+# frontend/tests/panels-ui.test.mjs.
 #
 # Python integers are arbitrary precision, so nothing here overflows — which
 # is precisely the problem the bound solves. An unbounded figure emitted here
@@ -395,7 +398,11 @@ def admitted_records(root, counters=None):
     admitted = []
     try:
         root_identity = _identity(os.fstat(anchor))
-        pending = [(anchor, (), 0)]
+        # Annotated because the seed's empty tuple would otherwise narrow the
+        # element type to the EMPTY tuple, and every descent below pushes a
+        # populated path onto it. The stack holds (open directory descriptor,
+        # path components below the root, depth).
+        pending: list[tuple[int, tuple[str, ...], int]] = [(anchor, (), 0)]
         try:
             while pending:
                 directory, components, depth = pending.pop()

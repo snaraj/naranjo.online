@@ -149,8 +149,10 @@ sandbox-exec -f "$PRODUCER_PROFILE" \
     || fail "sealing refused"
 
 # THE payload ceiling, in SEALED bytes — one number every stage enforces
-# (2026-08-24 security review, finding 4). Stated in Go at
+# (2026-08-24 security review, finding 4). Canonical in Go at
 # internal/seal/types.go (MaxSealedBytes), restated in
+# internal/panels/types.go (maxSealedSeriesBytes — that package's zero-egress
+# doctrine pin forbids importing internal/seal), in
 # scripts/export_usage_series.py, in the forced command in
 # docs/usage-export.md, and here; pinned across all five by CapParityTest in
 # scripts/ci/test_capture_usage_series.py. Checking only "not empty" here let

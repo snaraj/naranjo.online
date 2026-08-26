@@ -100,10 +100,6 @@ export interface TokenUsageSource {
   insights?: TokenUsageInsight[];
 }
 
-export interface TokenUsageData {
-  sources: TokenUsageSource[];
-}
-
 /* vcs-activity/v1 — contribution weeks, totals, streak, recent commits. */
 export interface VCSCommit {
   repo: string;

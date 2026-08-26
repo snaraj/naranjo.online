@@ -82,22 +82,6 @@ export function formatTokenCount(count: number): string {
   return formatMagnitude(count);
 }
 
-/* groupThousands inserts comma separators by hand so the output is identical
- * in every runtime locale — a formatted figure is part of the tested contract
- * and must never depend on the visitor's environment. */
-function groupThousands(value: number): string {
-  const digits = String(value);
-  let grouped = '';
-  for (let index = 0; index < digits.length; index += 1) {
-    const fromEnd = digits.length - index;
-    if (index > 0 && fromEnd % 3 === 0) {
-      grouped += ',';
-    }
-    grouped += digits[index];
-  }
-  return grouped;
-}
-
 /* resetsIn renders a window's resetsAt as the same coarse relative language
  * panelAge uses for freshness — a glance, not a clock. Absent, malformed, and
  * already-passed instants all render as nothing: the status badge already
@@ -141,8 +125,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * number. Number.isFinite admitted that silently, and admitted 1.5 and -0.5
  * as counts besides. Number.isSafeInteger refuses the lot: non-integers,
  * values past the exact-representation boundary, NaN and both infinities.
- * The countBound export below pins the shared ceiling so the parity test can
- * compare it against the Go and Python constants by value. */
+ * The countBound export below exists so the shared ceiling has a name to
+ * compare: "the count bound is the same number in Go, Python and TypeScript"
+ * (frontend/tests/panels-ui.test.mjs) reads this file, internal/panels/types.go
+ * and scripts/capture_usage_series.py, and compares all three BY VALUE —
+ * evaluating each language's own spelling, since Go writes the shift, Python
+ * the power, and TypeScript the built-in constant. */
 export const countBound = Number.MAX_SAFE_INTEGER;
 
 function isCount(value: unknown): value is number {
@@ -208,8 +196,15 @@ export function formatStatValue(value: number | null, unit: TokenStatUnit): stri
   if (unit === 'count') {
     /* A plain tally, grouped but never abbreviated: 25 sessions is a number a
        reader wants exactly, and "25" compacted to "25" gains nothing while
-       17,069 compacted to "17.1K" loses the figure the tile exists to show. */
-    return groupThousands(Math.round(value));
+       17,069 compacted to "17.1K" loses the figure the tile exists to show.
+
+       formatWhole (lib/grid.ts) is THE hand-rolled thousands grouper — it
+       rounds internally, so this is exactly what the local copy did, and it
+       carries a negative-sign guard the local copy lacked (which rendered
+       -123 as "-,123"). Unreachable today, since isCount admits no negative,
+       but a second grouper that formats one case differently is a defect
+       waiting for the first signed figure this site serves. */
+    return formatWhole(value);
   }
   return formatTokenCount(value);
 }
@@ -511,24 +506,6 @@ export function categoryLabel(key: string): string {
   return key.replace(/-/g, ' ');
 }
 
-/* The category lens: 'total' reads the series as ever; a category key reads
- * that category's own dailies through the same grid. */
-export const totalLens = 'total';
-
-/* lensValues resolves the active lens to the dailies the grid should draw.
- * An unknown lens — a category that source does not report — falls back to
- * the plain series, which is always real data, never a guess. */
-export function lensValues(series: TokenUsageSeries, lens: string): number[] {
-  if (lens !== totalLens && series.categories) {
-    for (const category of series.categories) {
-      if (category.key === lens) {
-        return category.totals;
-      }
-    }
-  }
-  return series.totals;
-}
-
 export interface CategoryShare {
   key: string;
   /* The category's total across the whole series window. */
@@ -704,27 +681,23 @@ const tokenActivityNoun = 'token';
  * Undefined when the series carries no breakdown, so a source without
  * categories renders no lens row at all.
  *
- * The dailies are resolved THROUGH lensValues rather than read off the
- * category directly, so ONE function owns lens resolution for the whole
- * panel: the sentinel it honours (totalLens), the served-category lookup,
- * and the fall back to the plain series for a lens no source reports. Its
- * assertions in token-usage.test.mjs therefore pin shipped behaviour rather
- * than an unreached export, and a change to what a lens means cannot land in
- * one of two places. */
+ * The dailies are the served category's own, read directly. There is no
+ * resolver step between the two: the served order IS the lens vocabulary the
+ * component offers, and the component's own `activeLensCategory` does the one
+ * lookup anybody performs — by key, over exactly this list, falling back to
+ * the plain series for the total sentinel, for a series with no breakdown, and
+ * for a stale key naming a category this source does not report. */
 function usageCategories(series: TokenUsageSeries): UsageCategory[] | undefined {
   if (!series.categories || series.categories.length === 0) {
     return undefined;
   }
-  return series.categories.map((category) => {
-    const totals = lensValues(series, category.key);
-    return {
-      key: category.key,
-      label: categoryLabel(category.key),
-      slot: categorySlot(category.key),
-      totals,
-      noun: `${categoryLabel(category.key)} ${tokenActivityNoun}`
-    };
-  });
+  return series.categories.map((category) => ({
+    key: category.key,
+    label: categoryLabel(category.key),
+    slot: categorySlot(category.key),
+    totals: category.totals,
+    noun: `${categoryLabel(category.key)} ${tokenActivityNoun}`
+  }));
 }
 
 /* usageComposition shapes the composition strip's rows from categoryShares:
@@ -760,7 +733,6 @@ export function tokenUsageProps(envelope: PanelEnvelope | null): UsageTrackerPro
     status: envelope.status,
     generatedAt: envelope.generatedAt,
     sections: tokenUsageSources(envelope.data).map(usageSection),
-    emptyNote: tokenUsageEmptyNote,
-    totalLens
+    emptyNote: tokenUsageEmptyNote
   };
 }

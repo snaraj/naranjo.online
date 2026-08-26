@@ -1053,6 +1053,33 @@ test('each usage source keeps its own lens, and the shared one cannot come back'
     /\{@const windowed = windowedColumns\(source\.activity, range, lensCategory\)\}/,
     'the window no longer reads the source’s own category lens'
   );
+
+  /* The lookup ITSELF, and the fallback it feeds. These two lines are the
+     whole of lens resolution on this page — an adapter-side resolver helper
+     was deleted as dead code (coordinator ruling, 2026-08-26) rather than
+     wired in beside them, so the behaviour its suite pinned is pinned here,
+     where it actually happens.
+
+     Three inputs reach the plain series, and all three are in these lines:
+     the total sentinel, a source whose payload carries no breakdown at all,
+     and a stale or unknown key that `find` cannot match. None of them is a
+     zero and none is a guess — every one of them draws real delivered
+     totals. */
+  assert.match(
+    usageTracker,
+    /if \(lens === totalLens \|\| !activity\.categories\) \{\s*return undefined;\s*\}/,
+    'the total sentinel and the breakdown-less series no longer fall back to the plain totals'
+  );
+  assert.match(
+    usageTracker,
+    /return activity\.categories\.find\(\(category\) => category\.key === lens\);/,
+    'an unreported lens key no longer resolves to nothing and falls back'
+  );
+  assert.match(
+    usageTracker,
+    /const totals = category \? category\.totals : activity\.series\.totals;/,
+    'the window stopped falling back to the plain series'
+  );
   assert.match(usageTracker, /onclick=\{\(\) => \(lenses\[source\.key\] = category\.key\)\}/);
   assert.match(usageTracker, /onclick=\{\(\) => \(lenses\[source\.key\] = totalLens\)\}/);
   assert.doesNotMatch(usageTracker, /let lens = \$state/, 'a panel-wide category lens is back');
@@ -1061,24 +1088,13 @@ test('each usage source keeps its own lens, and the shared one cannot come back'
     /aria-label=\{`\$\{source\.label\} \$\{source\.activity\.noun\} category`\}/
   );
 
-  /* And the sentinel those four assertions read is DATA, not a component
-     literal: `totalLens` is destructured from the adapter's props, and the
-     component declares no copy of it. One statement of the lens vocabulary,
-     in the adapter that also resolves every category's dailies through it —
-     so a change to what "no category" means cannot land in one of two
-     places and leave the other reading the old word. */
-  assert.match(usageTracker, /\}: UsageTrackerProps =\s*\$props\(\);/);
-  assert.match(usageTracker, /sections,\s*emptyNote,\s*totalLens\s*\}: UsageTrackerProps/);
-  assert.doesNotMatch(
-    usageTracker,
-    /(const|let|var)\s+totalLens\s*=/,
-    'the component restated the total-lens key instead of reading it from the adapter'
-  );
-  assert.doesNotMatch(
-    usageTracker,
-    /'total'|"total"/,
-    'the total-lens literal came back into the component'
-  );
+  /* And the sentinel those assertions read is stated ONCE, here, in the only
+     file that decides anything with it. The adapter used to export a copy of
+     it beside a lens resolver nothing called; both were deleted rather than
+     wired in, so there is no second statement of "no category" left to drift
+     from this one. */
+  assert.match(usageTracker, /const totalLens = 'total';/);
+  assert.equal(usageTracker.match(/const totalLens =/g).length, 1, 'the sentinel is stated twice');
 });
 
 /* One RANGE per source too (issue 158), held exactly like the lens beside it.

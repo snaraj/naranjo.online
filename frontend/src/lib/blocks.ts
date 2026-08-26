@@ -399,13 +399,6 @@ export type UsageTrackerProps = {
   readonly generatedAt?: string;
   readonly sections: readonly UsageSection[];
   readonly emptyNote: string;
-  /* The lens key meaning "no category — read the plain series", supplied as
-   * DATA so the component holds no copy of it. The adapter owns the whole
-   * lens vocabulary: it states this sentinel once, resolves every category's
-   * dailies through the same function that honours it, and hands the key
-   * down here. A component-local literal would be a second statement of one
-   * fact, and two statements of one fact can disagree. */
-  readonly totalLens: string;
 };
 
 /* --- MediaGallery: one visible frame, prev/next, a click-to-enlarge lightbox

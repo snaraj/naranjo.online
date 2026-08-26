@@ -11,15 +11,13 @@ import {
   formatStatValue,
   formatTokenCount,
   formatUtilization,
-  lensValues,
   meterFillPct,
   meterSeverity,
   provenanceIsMixed,
   resetsIn,
   tokenUsagePanelId,
   tokenUsageProps,
-  tokenUsageSources,
-  totalLens
+  tokenUsageSources
 } from '../src/lib/token-usage.ts';
 import { formatMagnitude } from '../src/lib/grid.ts';
 
@@ -796,21 +794,32 @@ describe('category lens helpers', () => {
     assert.equal(categoryLabel('input'), 'input');
   });
 
-  it('resolves the lens to its dailies and falls back to the truth', () => {
-    assert.deepEqual(lensValues(series, totalLens), [10, 20, 30]);
-    assert.deepEqual(lensValues(series, 'cache-read'), [9, 18, 27]);
-    /* A lens the source does not report yields the plain series — real data,
-       never a guess. */
-    assert.deepEqual(lensValues(series, 'reasoning'), [10, 20, 30]);
-    assert.deepEqual(lensValues({ startDate: '2026-08-10', totals: [5] }, 'input'), [5]);
-  });
+  /* Lens RESOLUTION used to be a helper here (`lensValues`), and its unit test
+     sat in this spot. Both are gone: main's block architecture moved lens
+     resolution into the component, which resolves an `UsageCategory` from the
+     adapter-built list and falls back to the plain series when the active lens
+     names nothing — so the helper had no production caller left, and a test
+     whose only subject is unshipped code measures nothing. The behaviour it
+     described is still pinned, in the two places that now decide it: the
+     component's own fallback expression, asserted ABOVE by `switches the
+     activity view client-side over one series`, and the real-engine lens
+     behaviour in `e2e/rendering-lanes.spec.mjs` :: `a source lens moves its
+     own graph and leaves its neighbour on daily`. */
 
-  /* lensValues is the panel's ONE lens resolver, and this pins that it is
-     genuinely the shipped path rather than an export the site never calls.
-     The adapter builds each UsageCategory's dailies THROUGH it, so the four
-     assertions above measure what the page draws; the component holds no
-     copy of the sentinel and receives it as data. */
-  it('is the adapter’s own lens resolver, not a helper the site skips', () => {
+  /* The lens VOCABULARY is what the adapter delivers, and the lens LOOKUP is
+     the component's `activeLensCategory` over exactly this list. A resolver
+     helper in this module was deleted as dead code (coordinator ruling,
+     2026-08-26): nothing on main ever called it, and the component already
+     resolves its own lens, so keeping it would have been a second
+     lens-resolution path pinned by tests that only it satisfied.
+
+     The four behaviours those tests pinned still SHIP, so they are asserted
+     here against the surviving path instead: a named lens reads its own
+     dailies, an unreported lens has no entry to find, a series with no
+     breakdown offers no lens at all, and the total sentinel travels as data.
+     The component-side half of each — the guard and the fallback expression
+     that consume them — is pinned in panels-ui.test.mjs. */
+  it('delivers the lens vocabulary the component looks up, and nothing to resolve it with', () => {
     const props = tokenUsageProps(
       envelopeFor({ sources: [{ label: 'alpha', windows: [], series }] })
     );
@@ -819,14 +828,41 @@ describe('category lens helpers', () => {
       categories.map((category) => category.key),
       ['input', 'cache-read']
     );
-    /* Every delivered lens equals what lensValues resolves for that key. */
-    for (const category of categories) {
-      assert.deepEqual(category.totals, lensValues(series, category.key));
-    }
-    /* The sentinel travels as data, stated exactly once, in this module. */
-    assert.equal(props.totalLens, totalLens);
-    assert.match(helper, /const totals = lensValues\(series, category\.key\);/);
-    assert.match(helper, /export const totalLens = 'total';/);
+    /* A named lens reads its OWN dailies, delivered unchanged from the
+       served category — the value the retired helper's second assertion
+       measured. */
+    assert.deepEqual(
+      categories.find((category) => category.key === 'cache-read').totals,
+      [9, 18, 27]
+    );
+    assert.deepEqual(
+      categories.find((category) => category.key === 'input').totals,
+      [1, 2, 3]
+    );
+    /* A lens this source does not report has no entry to find, which is what
+       sends the component's lookup to the plain series — real data, never a
+       guess. */
+    assert.equal(
+      categories.find((category) => category.key === 'reasoning'),
+      undefined
+    );
+    /* And a series with no breakdown at all offers no lens row: the second
+       half of the same fallback. */
+    const plain = tokenUsageProps(
+      envelopeFor({
+        sources: [
+          { label: 'alpha', windows: [], series: { startDate: '2026-08-10', totals: [5] } }
+        ]
+      })
+    );
+    assert.equal(plain.sections[0].activity.categories, undefined);
+    assert.deepEqual(plain.sections[0].activity.series.totals, [5]);
+    /* Neither the resolver nor its sentinel came back here, and the adapter
+       reads the served category directly rather than through one. The
+       sentinel is stated once, in the component that decides with it. */
+    assert.doesNotMatch(helper, /lensValues/, 'the dead lens resolver is back');
+    assert.doesNotMatch(helper, /totalLens/, 'the adapter grew back a second copy of the sentinel');
+    assert.match(helper, /totals: category\.totals,/);
     /* A category carries a NOUN, never a finished sentence: the reading is
        built by lib/periods.ts from the cells actually drawn, so a lens and a
        window cannot describe two different graphs. */
@@ -836,9 +872,6 @@ describe('category lens helpers', () => {
     }
     assert.match(helper, /noun: `\$\{categoryLabel\(category\.key\)\} \$\{tokenActivityNoun\}`/);
     assert.doesNotMatch(helper, /function usageActivitySummary/, 'the adapter grew back a window-blind sentence');
-    /* And exactly one statement of it: the component reads the prop. */
-    assert.doesNotMatch(component, /(const|let|var)\s+totalLens\s*=/);
-    assert.match(component, /emptyNote,\s*totalLens\s*\}: UsageTrackerProps/);
   });
 
   it('summarizes shares from the same integers the grid draws', () => {
