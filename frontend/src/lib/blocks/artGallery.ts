@@ -28,11 +28,19 @@ export const artGallery: PageBlock = staticBlock(
   'art-gallery',
   MediaGallery,
   {
+    /* The three optional metadata fields pass through UNCHANGED and
+     * UNDEFAULTED (issue 202): an absent title stays undefined here rather
+     * than becoming '' or a placeholder, because the component's whole
+     * absent-renders-nothing contract depends on absence surviving this
+     * layer. The adapter's job is URL resolution and nothing else. */
     items: galleryPhotos.map((photo) => ({
       key: photo.src,
       previewSrc: resolve(photo.previewSrc),
       fullSrc: resolve(photo.src),
-      alt: photo.alt
+      alt: photo.alt,
+      title: photo.title,
+      description: photo.description,
+      link: photo.link
     })),
     width: galleryWidth,
     height: galleryHeight

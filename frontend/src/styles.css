@@ -1039,7 +1039,23 @@ h1 {
    close control deliberately do not branch by reading mode -- a backdrop
    behind an enlarged photograph is legitimately the same near-black surface
    in every mode, the way a photograph itself is not re-tinted per mode
-   either -- so the token layer states one value, not five. */
+   either -- so the token layer states one value, not five.
+
+   Nine more join them for the gallery-experience work (issue 202): the close
+   mark's size, lane and resting opacity, the caption's and the lightbox
+   metadata's rhythm, that metadata's ink, and the metadata link's padding.
+   They shipped as component-local var(--token, fallback) reads for one
+   revision only, because a parallel lane held styles.css that wave; the
+   adversarial review of PR 204 (finding 1) named the promotion, and this is
+   it. (Written without a leading hash on purpose: this file's own dedup pin
+   reads "hash plus three hex digits" as a colour literal outside the palette
+   block, and an issue number is exactly that shape.)
+   Defaults are the exact fallbacks that revision carried, so nothing about
+   the rendered page moves. --gallery-meta-ink is the one the review singled
+   out: a COLOUR whose only definition anywhere was a literal in a component,
+   where its sibling --gallery-close-ink already had a home here. It does not
+   branch by reading mode for the same reason that sibling does not -- it is
+   read against the scrim, which is the same near-black in every mode. */
 :root {
   --gallery-frame-width: 2px;
   --gallery-frame-color: var(--color-border-strong);
@@ -1049,6 +1065,15 @@ h1 {
   --gallery-scrim: rgba(0, 0, 0, 0.7);
   --gallery-close-surface: rgba(0, 0, 0, 0.5);
   --gallery-close-ink: white;
+  --gallery-close-size: 1.125rem;
+  --gallery-close-lane: 1.5rem;
+  --gallery-close-rest-opacity: 0.55;
+  --gallery-caption-gap: 0.125rem;
+  --gallery-caption-space: 0.25rem;
+  --gallery-meta-gap: 0.125rem;
+  --gallery-meta-space: 0.5rem;
+  --gallery-meta-ink: white;
+  --gallery-meta-link-padding: 0.5rem;
   --gallery-lightbox-max-inline: min(94vw, 90rem);
   /* --gallery-image-max-block is the fixed cap only; the dynamic-unit upgrade
      stays a literal inside its own @supports guard in MediaGallery.svelte,
