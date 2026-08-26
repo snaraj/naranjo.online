@@ -3,16 +3,21 @@
 // registrable FetchSource and rejects every unsafe spec, the production
 // host allowlist is pinned to the exact owner-approved set, and a host off
 // that list is refused at runtime before a single byte leaves the process.
-// Every test is hermetic: hand-written doers, no sockets.
+// Every test is hermetic: hand-written doers, and real sockets only as
+// loopback httptest servers where the bound under test is the number of BYTES
+// that actually cross a connection (the commit-document cap, issue #185).
 package panels
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -999,4 +1004,303 @@ func TestBuiltinFetchPanelsComeFromTheConstructor(t *testing.T) {
 			t.Errorf("panel %s uses %T; only SnapshotSource and *FetchSource may serve production panels", definition.id, definition.source)
 		}
 	}
+}
+
+// The measured upstream reality behind issue #185. Every figure below was
+// captured from the three CONFIGURED repositories' own public commit
+// documents on 2026-08-25 — 280 commits of real history, 274 three-commit
+// windows — and is wire-accurate: the upstream serves compact JSON, and
+// re-serializing the decoded documents reproduced the measured transfer sizes
+// to within 0.4%. The bound these numbers justify is data
+// (config/fetch.json), so THIS is where raising it stays a conscious edit
+// with a reason, exactly as the shared bound's ratchet above is.
+//
+// What the measurement found, and why the answer is a raised bound rather
+// than a narrowed request:
+//
+//   - The retired 131072 cap is genuinely outgrown, not marginally: 9 of the
+//     274 windows exceed it and the worst reaches 209808 bytes, 1.60× the
+//     cap. That is the intermittent degrade the issue reported.
+//   - The cause is not upstream API growth. It is this platform's own
+//     rich-history commit contract (median message 2417 characters, longest
+//     56659) doubled by the upstream embedding the entire raw commit object
+//     in its verification payload — that duplication plus the detached
+//     signature is ~48% of every largest-observed entry.
+//   - Narrowing the request cannot fix it. There is no field selector on the
+//     list-commits API (five Accept media types were probed; all returned the
+//     byte-identical 44078-byte document), the item count is already minimal
+//     for what the panel serves (3 sources × per_page 3 = the 9 rows `max`
+//     merges), and the arithmetic is decisive anyway: one single commit entry
+//     measured 120414 bytes, so even per_page=1 would sit at 92% of the
+//     retired cap with no headroom, and per_page=2's worst window (188281)
+//     still exceeds it.
+//   - 262144 is the smallest reviewed step that clears the measurement: zero
+//     of the 274 windows reach it, it stays HALF the 524288 cap the same
+//     panel's calendar endpoint already carries, and it changes no memory
+//     posture — the process's worst-case transient read was already governed
+//     by that larger sibling bound.
+//
+// Honest residual: three consecutive commits each as large as the largest
+// ever observed (3 × 120414 = 361242) would still exceed 262144. That
+// refusal is the fail-closed direction — the panel keeps its last good list
+// and says stale — and it self-heals as the window moves.
+const (
+	// measuredWorstCommitWindowBytes is the largest three-commit document
+	// observed across all three configured repositories.
+	measuredWorstCommitWindowBytes = 209808
+	// measuredWorstCommitEntryBytes is the largest SINGLE commit entry
+	// observed: the reason no per_page value fits under the retired cap.
+	measuredWorstCommitEntryBytes = 120414
+	// retiredCommitDocumentCap is the bound issue #185 reported degrading the
+	// commit source to stale. It stays named here as the refusal side of the
+	// proof below: the measured document must be admitted by the shipped cap
+	// and refused by this one, or the raise was cosmetic.
+	retiredCommitDocumentCap = 131072
+	// shippedCommitDocumentCap is the reviewed replacement config must carry.
+	shippedCommitDocumentCap = 262144
+	// commitSourcePageSize is the item count every configured commit endpoint
+	// requests. The cap above is justified against THIS shape, so the shape is
+	// pinned with it: raising per_page without re-measuring would silently
+	// invalidate the bound's justification.
+	commitSourcePageSize = 3
+)
+
+// TestCommitDocumentBoundMatchesTheMeasuredUpstream pins the issue #185
+// decision as data: the reviewed cap, the request shape it was measured
+// against, and the direction of every relationship around it.
+func TestCommitDocumentBoundMatchesTheMeasuredUpstream(t *testing.T) {
+	t.Parallel()
+	document, bounds, err := loadFetchConfig(fetchConfigBytes)
+	if err != nil {
+		t.Fatalf("embedded fetch config refused: %v", err)
+	}
+	commits := document.VCSActivity.Commits
+	if commits == nil {
+		t.Fatal("embedded config configures no commit producer")
+	}
+	if commits.MaxBytes != shippedCommitDocumentCap {
+		t.Errorf("commit document cap = %d, want the reviewed %d; changing it is a re-measurement, not an edit", commits.MaxBytes, shippedCommitDocumentCap)
+	}
+	// The raise stays a TIGHTENING of the shared bound, never a widening of
+	// it: validateBodyCap admits a per-endpoint cap only at or below shared,
+	// and the shared bound itself is untouched by issue #185.
+	if commits.MaxBytes > bounds.MaxBytes {
+		t.Errorf("commit cap %d exceeds the shared bound %d", commits.MaxBytes, bounds.MaxBytes)
+	}
+	if commits.MaxBytes > bounds.MaxBytes/2 {
+		t.Errorf("commit cap %d is over half the shared bound %d; the endpoint's own limit must stay the tighter of the two", commits.MaxBytes, bounds.MaxBytes)
+	}
+	// Headroom over what the upstream really produces, stated as the
+	// measurement rather than as a feeling.
+	if commits.MaxBytes <= measuredWorstCommitWindowBytes {
+		t.Errorf("commit cap %d does not clear the measured worst document %d", commits.MaxBytes, measuredWorstCommitWindowBytes)
+	}
+	// The request shape the cap was measured against. Both halves matter: the
+	// per-source item count sets how many entries a document can carry, and
+	// `max` is what the merged list serves from them.
+	if len(commits.Sources) == 0 {
+		t.Fatal("the commit producer configures no source")
+	}
+	for _, source := range commits.Sources {
+		parsed, err := url.Parse(source.Endpoint)
+		if err != nil {
+			t.Fatalf("parse configured endpoint for %s: %v", source.Repo, err)
+		}
+		if got := parsed.Query().Get("per_page"); got != strconv.Itoa(commitSourcePageSize) {
+			t.Errorf("source %s requests per_page=%q, want %d — the cap above is measured against that shape", source.Repo, got, commitSourcePageSize)
+		}
+	}
+	if want := len(commits.Sources) * commitSourcePageSize; commits.Max != want {
+		t.Errorf("merged commit limit = %d, want %d (%d sources × per_page %d): asking for rows the merge discards is wasted egress, and asking for fewer than it serves silently shortens the panel", commits.Max, want, len(commits.Sources), commitSourcePageSize)
+	}
+	// A document may still carry no more entries than the mapper's own row
+	// bound, whatever configuration asks for.
+	if commits.Max > maxServedCommits || commitSourcePageSize > maxCommitDocumentItems {
+		t.Errorf("configured shape (max %d, per_page %d) escapes the mapper's bounds (%d served, %d per document)", commits.Max, commitSourcePageSize, maxServedCommits, maxCommitDocumentItems)
+	}
+}
+
+// TestCommitDocumentCapAdmitsTheMeasuredUpstream is issue #185's regression,
+// run over a real loopback socket so the bytes under test really cross a
+// connection: the shipped cap admits a realistically shaped document at the
+// worst size ever measured, the retired cap refuses that same document, and
+// every existing refusal — one byte over, truncated, malformed — still
+// refuses. Nothing here relaxes a check; the over-cap direction is asserted
+// on the SHIPPED cap, so a document too large is still discarded whole and
+// the panel keeps its last good list.
+func TestCommitDocumentCapAdmitsTheMeasuredUpstream(t *testing.T) {
+	t.Parallel()
+	document, bounds, err := loadFetchConfig(fetchConfigBytes)
+	if err != nil {
+		t.Fatalf("embedded fetch config refused: %v", err)
+	}
+	shipped := document.VCSActivity.Commits.MaxBytes
+	now := time.Now().UTC()
+	measured := realisticCommitDocument(t, commitSourcePageSize, measuredWorstCommitWindowBytes, now)
+
+	bodies := map[string]string{
+		"/measured":  measured,
+		"/lone":      realisticCommitDocument(t, 1, measuredWorstCommitEntryBytes, now),
+		"/at-bound":  realisticCommitDocument(t, commitSourcePageSize, int(shipped), now),
+		"/one-over":  realisticCommitDocument(t, commitSourcePageSize, int(shipped)+1, now),
+		"/truncated": measured[:len(measured)/2],
+		"/malformed": `[{"sha":`,
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, ok := bodies[r.URL.Path]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+	_, config := loopbackConfig(t, server.URL)
+	// The SHARED bound is the shipped one, so every refusal below is the
+	// per-endpoint cap doing the work rather than the wider limit.
+	config.MaxBytes = bounds.MaxBytes
+	source := &FetchSource{config: config, gates: map[string]time.Time{}}
+	doer := loopbackDoer(server)
+	fetch := func(path string, cap int64) ([]byte, error) {
+		return source.fetchDocument(t.Context(), doer, fetchRequest{
+			source:      roleVCSCommits,
+			endpoint:    server.URL + path,
+			headers:     map[string]string{"Accept": "application/json"},
+			maxBytes:    cap,
+			contentType: "application/json",
+		})
+	}
+
+	t.Run("the shipped cap admits the worst document ever measured", func(t *testing.T) {
+		body, err := fetch("/measured", shipped)
+		if err != nil {
+			t.Fatalf("the shipped cap refused a %d byte document: %v", len(measured), err)
+		}
+		if len(body) != measuredWorstCommitWindowBytes {
+			t.Fatalf("read %d bytes, want the measured %d", len(body), measuredWorstCommitWindowBytes)
+		}
+		// Admission is not enough: the document must still MAP, or a cap that
+		// admits bytes nothing can read would pass this test.
+		rows, err := mapCommits(body, "fixture-repo", now)
+		if err != nil {
+			t.Fatalf("the admitted document did not map: %v", err)
+		}
+		if len(rows) != commitSourcePageSize {
+			t.Fatalf("mapped %d rows, want %d", len(rows), commitSourcePageSize)
+		}
+	})
+
+	t.Run("the retired cap refuses that same document", func(t *testing.T) {
+		// The load-bearing half of the regression: restore 131072 in
+		// config/fetch.json and the admission case above goes red for
+		// exactly the reason issue #185 reported.
+		if _, err := fetch("/measured", retiredCommitDocumentCap); err == nil {
+			t.Fatal("the retired cap admitted the measured document; the raise would then be cosmetic")
+		} else if !strings.Contains(err.Error(), "exceeds the") {
+			t.Fatalf("error = %v, want the byte-bound refusal", err)
+		}
+	})
+
+	t.Run("one measured entry already leaves the retired cap no headroom", func(t *testing.T) {
+		// Why narrowing the request is not the alternative fix: a per_page=1
+		// document carrying the largest entry ever observed still fits the
+		// retired cap, but with so little room left that the next verbose
+		// commit takes it — so no page size makes 131072 a working bound.
+		body, err := fetch("/lone", retiredCommitDocumentCap)
+		if err != nil {
+			t.Fatalf("the retired cap refused even ONE measured entry: %v", err)
+		}
+		if spare := float64(retiredCommitDocumentCap-len(body)) / retiredCommitDocumentCap; spare > 0.10 {
+			t.Errorf("one measured entry leaves %.1f%% spare under the retired cap; the 'even per_page=1 has no headroom' claim needs re-measuring", spare*100)
+		}
+		if _, err := fetch("/lone", shipped); err != nil {
+			t.Fatalf("the shipped cap refused a single measured entry: %v", err)
+		}
+	})
+
+	t.Run("a document exactly at the bound is admitted", func(t *testing.T) {
+		if _, err := fetch("/at-bound", shipped); err != nil {
+			t.Fatalf("a document at the bound was refused: %v", err)
+		}
+	})
+
+	t.Run("one byte over the bound is still refused", func(t *testing.T) {
+		if _, err := fetch("/one-over", shipped); err == nil {
+			t.Fatal("a document over the shipped bound was admitted")
+		} else if !strings.Contains(err.Error(), strconv.FormatInt(shipped, 10)) {
+			t.Fatalf("error = %v, want the refusal to name the %d byte bound", err, shipped)
+		}
+		// And it is the ENDPOINT's cap refusing, not the shared one: the body
+		// is comfortably inside the shared bound.
+		if int64(len(bodies["/one-over"])) >= bounds.MaxBytes {
+			t.Fatalf("the over-cap fixture is %d bytes, at or over the shared %d bound; this case would then prove the wrong refusal", len(bodies["/one-over"]), bounds.MaxBytes)
+		}
+	})
+
+	for name, path := range map[string]string{
+		"a truncated document": "/truncated",
+		"a malformed document": "/malformed",
+	} {
+		t.Run(name+" is still refused by the mapper", func(t *testing.T) {
+			body, err := fetch(path, shipped)
+			if err != nil {
+				t.Fatalf("the fetch refused an under-cap body before the mapper saw it: %v", err)
+			}
+			if _, err := mapCommits(body, "fixture-repo", now); err == nil {
+				t.Fatalf("%s mapped; a raised byte cap may never soften what the mapper refuses", name)
+			}
+		})
+	}
+}
+
+// realisticCommitDocument builds a commit document of an EXACT byte size with
+// the upstream's real proportions. The shape matters as much as the size: the
+// verification block carries a payload that repeats the whole commit message
+// and a detached signature beside it, which together are about half of every
+// large entry measured — a fixture with those fields null (as the mapper's
+// other fixtures carry them, since they test the projection rather than the
+// bound) is a document a byte cap has never had to admit.
+//
+// Size is hit in two passes so the padding lands where the real bytes are:
+// message padding first, which costs two bytes per character because the
+// payload repeats it, then a few signature characters for the remainder.
+func realisticCommitDocument(t *testing.T, entries, totalBytes int, now time.Time) string {
+	t.Helper()
+	build := func(messagePad, signaturePad int) string {
+		rows := make([]string, 0, entries)
+		for index := range entries {
+			sha := fmt.Sprintf("%040x", index+1)
+			at := now.Add(-time.Duration(index+1) * time.Hour).Format(time.RFC3339)
+			message := fmt.Sprintf("fix(panels): fixture subject %d\n\nevidence body\n%s", index+1, strings.Repeat("A", messagePad))
+			// The upstream's payload is the raw commit object, message and
+			// all; reproducing that duplication is the point of this fixture.
+			payload := fmt.Sprintf("tree %s\nauthor Fixture Author <fixture@example.invalid>\n\n%s", sha, message)
+			signature := "-----BEGIN SSH SIGNATURE-----\n" + strings.Repeat("Zm", 256)
+			if index == entries-1 {
+				signature += strings.Repeat("Z", signaturePad)
+			}
+			signature += "\n-----END SSH SIGNATURE-----"
+			rows = append(rows, fmt.Sprintf(
+				`{"sha":%q,"node_id":"fixture","commit":{"author":{"name":"Fixture Author","email":"fixture@example.invalid","date":%q},`+
+					`"committer":{"name":"Fixture Author","email":"fixture@example.invalid","date":%q},"message":%q,`+
+					`"tree":{"sha":%q,"url":"https://api.example.test/tree"},"url":"https://api.example.test/commit",`+
+					`"comment_count":0,"verification":{"verified":true,"reason":"valid","signature":%q,"payload":%q}},`+
+					`"url":"https://api.example.test/commit","html_url":"https://api.example.test/c","comments_url":"https://api.example.test/cc",`+
+					`"author":null,"committer":null,"parents":[]}`,
+				sha, at, at, message, sha, signature, payload,
+			))
+		}
+		return "[" + strings.Join(rows, ",") + "]"
+	}
+	extra := totalBytes - len(build(0, 0))
+	if extra < 0 {
+		t.Fatalf("a %d-entry document cannot be built as small as %d bytes", entries, totalBytes)
+	}
+	messagePad := extra / (2 * entries)
+	built := build(messagePad, extra-2*messagePad*entries)
+	if len(built) != totalBytes {
+		t.Fatalf("fixture is %d bytes, want exactly %d", len(built), totalBytes)
+	}
+	return built
 }

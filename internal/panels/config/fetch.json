@@ -43,7 +43,7 @@
     "minIntervalMinutes": 15,
     "commits": {
       "headers": { "Accept": "application/json" },
-      "maxBytes": 131072,
+      "maxBytes": 262144,
       "contentType": "application/json",
       "minIntervalMinutes": 10,
       "max": 9,
