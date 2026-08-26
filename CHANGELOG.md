@@ -34,12 +34,26 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 ### Added
 
 - Both halves of the standing rule are pinned. A source pin
-  (`tests/experience.test.mjs`) refuses any bare absolute
-  `max-inline-size`/`max-width` anywhere in `styles.css` or a component
-  style, with exactly one named exception — `.activity-entry-source`'s 9rem
-  track cap, which bounds a repository slug inside a commit row whose last
-  column is already flush to the panel edge — so the number cannot return
-  as a literal in a component the way it did in `.subsection-intro`. A
+  (`tests/experience.test.mjs`) reads every `max-inline-size`/`max-width`
+  in `styles.css` and in every component style, and refuses a bare length
+  unless the selector is named with its reason — the one named exception
+  being `.activity-entry-source`'s 9rem track cap, which bounds a
+  repository slug inside a commit row whose last column is already flush
+  to the panel edge. The pin converts the absolute family exactly (px,
+  rem, pt, pc, in, cm, mm, Q — the spec fixes 1in = 96px = 72pt = 6pc =
+  2.54cm = 25.4mm = 101.6Q) and names the width it found. It will NOT
+  convert a font-relative unit, because resolving `65ch` or `42em` needs a
+  computed font this pin does not have; such a cap is refused as
+  unreadable rather than skipped, since `65ch` is the canonical spelling
+  of a reading measure and a cap the pin cannot read is exactly where one
+  hides. Only genuinely fluid forms are passed over, and the list is
+  closed: any function value (`var()`, `min()`, `max()`, `clamp()`,
+  `calc()`, `env()`, `fit-content()`), a percentage, a viewport- or
+  container-relative unit, and the keywords that state no number at all
+  (`none`, `auto`, `initial`, `unset`, `revert`, `min-content`,
+  `max-content`, `fit-content`, `stretch`). So the number cannot return as
+  a literal in a component the way it did in `.subsection-intro`, in any
+  unit it could be written in. A
   rendering lane (`e2e/rendering-lanes.spec.mjs`) measures the rendered
   boxes in all five projects at 1440px and 1920px: every card-body block
   ends on the card's content edge, and every block that WRAPPED has at
