@@ -1019,10 +1019,7 @@ test('each usage source keeps its own lens, and the shared one cannot come back'
     /aria-label=\{`\$\{source\.label\} \$\{source\.activity\.heading\} view`\}/
   );
   // And the grid still reads the SAME lens the toggle above it wrote.
-  assert.match(
-    usageTracker,
-    /const columns = activityColumns\(source\.activity, view, lensCategory\)/
-  );
+  assert.match(usageTracker, /const columns = viewColumns\(windowed, view\)/);
   assert.match(usageTracker, /<ContributionGrid\s+\{columns\}[\s\S]*?\{view\}/);
 
   /* The CATEGORY lens (issue #142) is a second toggle over the same graph,
@@ -1031,9 +1028,16 @@ test('each usage source keeps its own lens, and the shared one cannot come back'
      graph, which says nothing about WHICH control. So the category lens is
      per-source state keyed the same way, its default reads total for a
      source nobody has pressed, its write is keyed by the source, its
-     radiogroup names its own source aloud, and the third argument the grid
-     call above now takes is resolved from that same per-source key — not
-     from a panel-wide choice reintroduced beside the retired one. */
+     radiogroup names its own source aloud, and the third argument the WINDOW
+     step now takes is resolved from that same per-source key — not from a
+     panel-wide choice reintroduced beside the retired one.
+
+     That third argument sits on windowedColumns rather than on the view step
+     deliberately (issue 158 composition): the category lens chooses WHICH
+     series is read, so it has to apply before the window is cut and before
+     the view aggregates, which is also what makes the readings below —
+     taken from those same windowed cells — describe the lens the reader
+     actually pressed. */
   assert.match(usageTracker, /let lenses = \$state<Record<string, string>>\(\{\}\);/);
   assert.match(
     usageTracker,
@@ -1043,6 +1047,11 @@ test('each usage source keeps its own lens, and the shared one cannot come back'
   assert.match(
     usageTracker,
     /\{@const lensCategory = activeLensCategory\(source\.activity, lensOf\(source\.key\)\)\}/
+  );
+  assert.match(
+    usageTracker,
+    /\{@const windowed = windowedColumns\(source\.activity, range, lensCategory\)\}/,
+    'the window no longer reads the source’s own category lens'
   );
   assert.match(usageTracker, /onclick=\{\(\) => \(lenses\[source\.key\] = category\.key\)\}/);
   assert.match(usageTracker, /onclick=\{\(\) => \(lenses\[source\.key\] = totalLens\)\}/);
@@ -1070,6 +1079,55 @@ test('each usage source keeps its own lens, and the shared one cannot come back'
     /'total'|"total"/,
     'the total-lens literal came back into the component'
   );
+});
+
+/* One RANGE per source too (issue 158), held exactly like the lens beside it.
+ *
+ * The two are separate controls because they answer separate questions — how
+ * a day is READ, and how much history is DRAWN — and a single list of seven
+ * options would make "monthly" and "90d" alternatives, which they are not.
+ *
+ * Source-pinned here for the same reason the lens is; the behaviour is
+ * measured in a real engine by e2e/rendering-lanes.spec.mjs. */
+test('each usage source keeps its own range, defaulting to the window the strip already drew', () => {
+  assert.match(usageTracker, /let ranges = \$state<Record<string, SeriesRange>>\(\{\}\);/);
+  assert.match(
+    usageTracker,
+    /return ranges\[key\] \?\? defaultSeriesRange;/,
+    'a source nobody has pressed must open on the shipped default range'
+  );
+  assert.match(usageTracker, /\{@const range = rangeOf\(source\.key\)\}/);
+  assert.match(usageTracker, /onclick=\{\(\) => \(ranges\[source\.key\] = candidate\)\}/);
+  // Its own group, named for its own source AND its own question, so a reader
+  // on a screen reader hears four distinguishable groups on a two-source card
+  // rather than four identical ones.
+  assert.match(
+    usageTracker,
+    /aria-label=\{`\$\{source\.label\} \$\{source\.activity\.heading\} range`\}/
+  );
+  // The graph's own accessible name carries BOTH choices, so an assistive
+  // reading of the strip says which lens and which window it is looking at —
+  // the same reason the lens was folded into that label to begin with.
+  assert.match(usageTracker, /\$\{view\} view, \$\{range\} range/);
+  // Both readings under the strip are taken from the WINDOWED cells, never
+  // from the lens' output (which repeats one aggregate across every day it
+  // covers) and never from the whole payload behind the window.
+  //
+  // The reading's NOUN is the category lens's when one is pressed and the
+  // region's otherwise — the only thing that lens contributes to the sentence,
+  // because those windowed cells already carry its dailies. Pinned as one
+  // expression so a future edit cannot quietly go back to reading a
+  // sentence the adapter built.
+  assert.match(
+    usageTracker,
+    /activityReading\(\s*windowed,\s*lensCategory \? lensCategory\.noun : source\.activity\.noun,\s*formatMagnitude\s*\)/
+  );
+  assert.match(usageTracker, /coverageReading\(windowed\)/);
+  // The retired adapter-built sentences, which described the whole series and
+  // could not know which window a reader had chosen — in BOTH their forms, the
+  // region's and the per-category one the lens work briefly carried.
+  assert.doesNotMatch(usageTracker, /source\.activity\.summary/, 'the window-blind summary is back');
+  assert.doesNotMatch(usageTracker, /lensCategory\.summary/, 'the window-blind category summary is back');
 });
 
 // The calendar opens on TODAY at its end edge (owner directive, issue 127).

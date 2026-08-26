@@ -560,18 +560,24 @@ describe('UsageTracker live surface', () => {
     assert.match(component, /role="radiogroup"/);
     assert.match(component, /\{#each seriesViews as candidate\}/);
     assert.match(component, /aria-checked=\{view === candidate\}/);
-    // The view lens re-reads the CATEGORY-lensed dailies of the one shipped
-    // series — still client-side, still no extra payload. The lens resolver
-    // sits between the series and the calendar realignment precisely so both
-    // toggles read one data set: activityColumns takes the active category's
-    // dailies and falls back to the plain totals whenever no category lens
-    // applies.
+    // THREE toggles, ONE delivered payload, one pipeline, in this order:
+    // the CATEGORY lens picks which dailies are read, the RANGE cuts the
+    // trailing window out of them, and the VIEW lens aggregates the cut. All
+    // of it is client-side with no extra bytes, and the order is what makes
+    // the readings under the graph describe the graph — they are taken from
+    // the windowed cells, which already carry the category's dailies.
     assert.match(
       component,
-      /viewColumns\(calendarColumns\(seriesCells\(activity\.series\.startDate, totals\)\), view\)/
+      /rangeColumns\(seriesCells\(activity\.series\.startDate, totals\), range\)/
     );
     assert.match(component, /const totals = category \? category\.totals : activity\.series\.totals;/);
-    // Touch target floor for the segmented control.
+    assert.match(component, /const columns = viewColumns\(windowed, view\)/);
+    // The range control is the second radiogroup, over the same closed
+    // vocabulary the engine admits (issue 158).
+    assert.match(component, /\{#each seriesRanges as candidate\}/);
+    assert.match(component, /aria-checked=\{range === candidate\}/);
+    // Touch target floor for BOTH segmented controls — one rule, both groups,
+    // because they are the same pill.
     assert.match(component, /min-block-size:\s*2\.75rem/);
   });
 
@@ -614,7 +620,15 @@ describe('UsageTracker live surface', () => {
     assert.equal(drawn.sections[0].activity.heading, 'Token activity');
     assert.equal(drawn.sections[0].activity.label, 's token activity');
     assert.equal(drawn.sections[0].activity.noun, 'token');
-    assert.equal(drawn.sections[0].activity.summary, '6 tokens over 3 days, peaking at 3');
+    /* The adapter carries the SERIES and no sentence about it (issue 158).
+       The sentence moved to lib/periods.ts, where the chosen window is known;
+       an adapter-built one would keep describing the whole capture while the
+       graph above it drew ninety days. What that sentence says for exactly
+       this payload, through exactly the default window this panel opens on,
+       is pinned in tests/periods.test.mjs — including that it is the same
+       string this assertion used to hold. */
+    assert.equal(drawn.sections[0].activity.summary, undefined);
+    assert.deepEqual(drawn.sections[0].activity.series, { startDate: '2026-08-01', totals: [1, 2, 3] });
     // A windowless, statless source states its honest empty line; a source
     // with figures does not.
     assert.equal(seriesless.sections[0].note, 'No usage recorded for this source yet.');
@@ -812,8 +826,16 @@ describe('category lens helpers', () => {
     /* The sentinel travels as data, stated exactly once, in this module. */
     assert.equal(props.totalLens, totalLens);
     assert.match(helper, /const totals = lensValues\(series, category\.key\);/);
-    assert.match(helper, /summary: usageActivitySummary\(series\.startDate, totals,/);
     assert.match(helper, /export const totalLens = 'total';/);
+    /* A category carries a NOUN, never a finished sentence: the reading is
+       built by lib/periods.ts from the cells actually drawn, so a lens and a
+       window cannot describe two different graphs. */
+    for (const category of categories) {
+      assert.equal(category.noun, `${category.label} token`);
+      assert.equal(category.summary, undefined);
+    }
+    assert.match(helper, /noun: `\$\{categoryLabel\(category\.key\)\} \$\{tokenActivityNoun\}`/);
+    assert.doesNotMatch(helper, /function usageActivitySummary/, 'the adapter grew back a window-blind sentence');
     /* And exactly one statement of it: the component reads the prop. */
     assert.doesNotMatch(component, /(const|let|var)\s+totalLens\s*=/);
     assert.match(component, /emptyNote,\s*totalLens\s*\}: UsageTrackerProps/);

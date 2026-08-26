@@ -10,7 +10,7 @@ import type {
   UsageTrackerProps,
   UsageWindow
 } from './blocks.ts';
-import { formatMagnitude, formatWhole, peakValue, seriesCells } from './grid.ts';
+import { formatMagnitude, formatWhole } from './grid.ts';
 import type {
   PanelEnvelope,
   TokenStatUnit,
@@ -634,9 +634,8 @@ function usageSection(source: TokenUsageSource): UsageSection {
       ? {
           heading: 'Token activity',
           label: `${source.label} token activity`,
-          noun: 'token',
+          noun: tokenActivityNoun,
           series: { startDate: source.series.startDate, totals: source.series.totals },
-          summary: usageActivitySummary(source.series.startDate, source.series.totals, 'tokens'),
           categories: usageCategories(source.series),
           composition: usageComposition(source.series)
         }
@@ -676,22 +675,32 @@ function usageSection(source: TokenUsageSource): UsageSection {
   };
 }
 
-/* The whole-series sentence under the activity strip: it describes the one
- * daily series the view lens re-reads. View-lens-independent by design; the
- * CATEGORY lens gets its own sentence per category, built from that
- * category's dailies through the identical arithmetic, so the two readings
- * of one series can never disagree about what they describe. */
-function usageActivitySummary(startDate: string, totals: readonly number[], nounPhrase: string): string {
-  const total = totals.reduce((sum, value) => sum + value, 0);
-  const days = totals.length;
-  const peak = peakValue(seriesCells(startDate, totals));
-  return `${formatTokenCount(total)} ${nounPhrase} over ${days} ${days === 1 ? 'day' : 'days'}, peaking at ${formatTokenCount(peak)}`;
-}
+/* The sentence under the activity strip used to be built HERE, over the whole
+ * series, and it moved to lib/periods.ts (issue 158) rather than growing a
+ * second copy. The reason is the window control the strip now carries: an
+ * adapter cannot see which trailing window a reader has chosen, so a sentence
+ * written here would go on describing the whole capture while the graph above
+ * it drew ninety days — the panel's own doctrine ("a figure says where it
+ * came from") failing at the sentence level. periods.ts' activityReading
+ * builds it from the cells actually drawn, in this adapter's own noun and
+ * figure format, and the component renders that.
+ *
+ * That applies to the CATEGORY lens (issue #142) identically, and composing
+ * the two is what settled it: a per-category sentence built here would have
+ * been wrong in exactly the same way, one lens later. So a category carries
+ * its own NOUN rather than its own sentence, activityReading pluralizes and
+ * measures it from the same drawn cells, and the panel has one reading
+ * implementation rather than one per lens.
+ *
+ * tokenActivityNoun is stated once for the same reason: the region's noun and
+ * every category's noun phrase are built from it, so they cannot drift.
+ */
+const tokenActivityNoun = 'token';
 
 /* usageCategories shapes the admitted per-day breakdown into the component's
  * category lens options: key, display label, the fixed palette slot the
- * entity owns, the dailies the lens draws, and the summary sentence for that
- * lens — all data, so the component names no category and formats no figure.
+ * entity owns, the dailies the lens draws, and the singular noun its reading
+ * uses — all data, so the component names no category and formats no figure.
  * Undefined when the series carries no breakdown, so a source without
  * categories renders no lens row at all.
  *
@@ -713,7 +722,7 @@ function usageCategories(series: TokenUsageSeries): UsageCategory[] | undefined 
       label: categoryLabel(category.key),
       slot: categorySlot(category.key),
       totals,
-      summary: usageActivitySummary(series.startDate, totals, `${categoryLabel(category.key)} tokens`)
+      noun: `${categoryLabel(category.key)} ${tokenActivityNoun}`
     };
   });
 }

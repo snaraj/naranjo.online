@@ -327,17 +327,27 @@ export type UsageSeries = {
 
 /* One accounting category of a source's series: the same days re-read
  * through one class of usage. Key, label, palette slot, dailies, and the
- * per-lens summary sentence are all adapter-built data, so the component
- * names no category and formats no figure. The slot is the fixed palette
- * slot the ENTITY owns (--usage-cat-N), never its position in this payload,
- * so a category keeps its hue whichever subset a source reports. */
+ * lens's own noun are all adapter-built data, so the component names no
+ * category and formats no figure. The slot is the fixed palette slot the
+ * ENTITY owns (--usage-cat-N), never its position in this payload, so a
+ * category keeps its hue whichever subset a source reports. */
 export type UsageCategory = {
   readonly key: string;
   readonly label: string;
   readonly slot: number;
   readonly totals: readonly number[];
-  /* The whole-series sentence under the strip while this lens is active. */
-  readonly summary: string;
+  /* The SINGULAR noun the reading under the strip uses while this lens is
+   * active — "input token", pluralized by the reading builder exactly as the
+   * region's own noun is.
+   *
+   * A noun rather than a finished SENTENCE, and that is the whole shape of
+   * the reconciliation between the category lens and the range control: an
+   * adapter cannot see which trailing window a reader chose, so a sentence
+   * built here would describe the entire capture while the graph above it
+   * drew ninety days of it. lib/periods.ts builds every reading from the
+   * cells actually drawn — one implementation, whichever lens is active —
+   * and this field is the only thing the category has to contribute to it. */
+  readonly noun: string;
 };
 
 /* One row of the composition strip: how the series' grand total divides
@@ -360,8 +370,6 @@ export type UsageActivity = {
   readonly label: string;
   readonly noun: string;
   readonly series: UsageSeries;
-  /* The whole-series sentence under the strip, lens-independent. */
-  readonly summary: string;
   /* Present exactly when the source's series carries an admitted per-day
    * category breakdown: the category lens options, in served order. */
   readonly categories?: readonly UsageCategory[];

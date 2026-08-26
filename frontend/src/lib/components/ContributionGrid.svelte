@@ -396,6 +396,24 @@
        columns. MEASURED: that is exactly what shipped here once already. */
     grid-template-columns: repeat(var(--grid-columns), minmax(var(--grid-cell-size, 0.625rem), 1fr));
     inline-size: 100%;
+    /* An upper bound on how far a FEW columns may stretch (issue 158). A
+       full-width strip divides its container between however many columns it
+       drew, which is right at a year's width and wrong at a month's: five
+       columns of a thirty-day window drew 88px-wide cells in a 914px card,
+       and a heatmap cell nine times wider than it is tall has stopped being
+       a heatmap cell. MEASURED at 1440px before this bound existed.
+
+       The bound is per-cell and the caller's to set, because how wide a cell
+       may honestly be is a question about the series, not about this
+       component. Its default is deliberately unreachable — 100vw per cell
+       means the cap can never bind — so a call site that says nothing keeps
+       the stretching behaviour it has today, byte for byte. --grid-columns is
+       written by the component just above, so this arithmetic is over the
+       columns actually drawn rather than an assumption about them; the month
+       axis shares the rule so the two can never disagree about their width. */
+    max-inline-size: calc(
+      var(--grid-columns) * (var(--grid-day-max, 100vw) + var(--grid-cell-gap, 0.1875rem))
+    );
   }
 
   /* The track above stretches; the cell inside it does not, by default — a
