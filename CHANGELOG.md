@@ -7,6 +7,33 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.45] - 2026-08-25
+
+### Fixed
+
+- The version-control panel's commit source no longer degrades to stale
+  when a repository's recent history is verbose (issue #185). The
+  embedded fetch configuration's commit-document cap moves from 131072
+  to 262144 bytes, measured rather than guessed: across the three
+  configured repositories' 274 three-commit windows of real history, 9
+  exceed the retired bound and the worst reaches 209808 bytes, while
+  none reaches the new one. Narrowing the request was measured first and
+  rejected — the list-commits API exposes no field selector, the item
+  count is already the minimum the merged list serves, and one single
+  commit entry measured 120414 bytes, so no page size fits under the old
+  bound with headroom. The bound stays a bound: it is still half the cap
+  the same panel's calendar endpoint carries, still under the shared
+  ceiling, and an over-cap document is still refused whole.
+
+### Added
+
+- A regression pinning that decision as data and as behavior
+  (`internal/panels/fetch_test.go`): the reviewed cap, the `per_page`
+  request shape it was measured against, and a loopback-socket matrix
+  proving the shipped cap admits a realistically shaped document at the
+  worst measured size while the retired cap refuses it — and that one
+  byte over, truncated, and malformed documents are all still refused.
+
 ## [0.1.44] - 2026-08-25
 
 ### Added
