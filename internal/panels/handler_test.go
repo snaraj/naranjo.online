@@ -1,7 +1,7 @@
 // handler_test locks the HTTP contract of both panel routes — headers,
 // conditional revalidation, opaque 404s, the read-only method policy — and
 // enforces the owner's performance budgets as tests: the index answer stays
-// within 4 KiB, every panel envelope within 32 KiB, and the numbers
+// within 4 KiB, every panel envelope within 128 KiB, and the numbers
 // themselves are pinned so the budget cannot drift silently.
 package panels
 
@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/snaraj/naranjo.online/internal/seal"
 )
 
 // panelsGet performs one recorded GET against the production registry.
@@ -196,16 +198,50 @@ func TestPanelRoutesRefuseEveryMutatingMethod(t *testing.T) {
 
 // TestResponsesStayWithinTheOwnerBudgets enforces the performance budgets as
 // tests, per the owner's standing priority: the index body at or under
-// 4 KiB, every panel envelope at or under 32 KiB — measured on the exact
+// 4 KiB, every panel envelope at or under 128 KiB — measured on the exact
 // bytes the handler serves — and the budget constants pinned to the numbers
-// the issue set, so neither can drift without a conscious edit here.
+// the owner set, so neither can drift without a conscious edit here.
+//
+// The panel budget moved from 32 KiB to 128 KiB on 2026-08-24 by owner
+// direction; the reasoning and the measurement are recorded at the constant
+// in types.go. Equal to seal.MaxSealedBytes is NOT equal in meaning: see the
+// comment on that comparison below, and the 2026-08-25 round-4 review's
+// finding 7. The pin below moved WITH it in the same commit, which is the
+// point of pinning a budget rather than merely documenting one: the number
+// cannot change quietly, and changing it is a conscious edit that lands in
+// the diff a reviewer reads.
 func TestResponsesStayWithinTheOwnerBudgets(t *testing.T) {
 	t.Parallel()
 	if MaxIndexResponseBytes != 4096 {
 		t.Errorf("MaxIndexResponseBytes = %d, want the owner's 4 KiB budget", MaxIndexResponseBytes)
 	}
-	if MaxPanelResponseBytes != 32768 {
-		t.Errorf("MaxPanelResponseBytes = %d, want the owner's 32 KiB budget", MaxPanelResponseBytes)
+	if MaxPanelResponseBytes != 131072 {
+		t.Errorf("MaxPanelResponseBytes = %d, want the owner's 128 KiB budget", MaxPanelResponseBytes)
+	}
+	// The serve gate and the transport ceiling hold the same VALUE, and this
+	// pins that — but only the weaker, true property it supports.
+	//
+	// The 2026-08-25 round-4 review found the stronger claim here and in
+	// types.go: that equal values mean "a document the pipeline can carry is
+	// a document the origin can serve". They do not, because the two bounds
+	// measure different bytes. This one bounds the finished ENVELOPE — the
+	// payload merged onto the embedded snapshot, plus the envelope
+	// scaffolding — and seal.MaxSealedBytes bounds the sealed FILE, so the
+	// served bytes are strictly more than the transported ones. The maximal
+	// admissible document measures the gap at +517 bytes (87,791 sealed,
+	// 88,308 served; TestTheMaximalDocumentFitsTheRaisedBudget in
+	// dataroot_test.go logs both), and a snapshot with more rows widens it
+	// without bound. A file sealed at exactly the ceiling is refused at
+	// serve time, and TestDataRootRefusesAnOverBudgetEnvelope drives exactly
+	// that case.
+	//
+	// So what equality buys is narrower and still worth pinning: the LAST
+	// step no longer hides a smaller ceiling than the four before it, which
+	// is the regression this catches. The guarantee is the refusal path, not
+	// the arithmetic.
+	if MaxPanelResponseBytes != seal.MaxSealedBytes {
+		t.Errorf("the panel budget (%d) and the sealed-payload ceiling (%d) have diverged; the serve step would again be the surprising one",
+			MaxPanelResponseBytes, seal.MaxSealedBytes)
 	}
 	registry := New(nil)
 	index := panelsGet(t, registry, IndexPath)

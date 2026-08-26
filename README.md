@@ -266,11 +266,23 @@ are counts rather than names — a file it cannot read is tallied, never
 identified. `scripts/ci/test_capture_usage_series.py` asserts that directly,
 by walking a fixture tree seeded with paths and identifiers — one per record
 shape — and proving none of them survive into the emission. The same suite
-pins the module's import surface to a closed allowlist, so the capture is
-structurally incapable of spawning a process or opening a socket: `os` is
-refused along with `subprocess`, `socket` and `urllib`, because `os.system`,
-`os.popen` and `os.exec*` would reach straight past a promise. Adding any of
-them turns the suite red before it can turn into a commit.
+pins the module's import surface to a closed allowlist held against a refused
+set, so widening the reviewed surface is a conscious edit naming the module
+that got in; adding one turns the suite red before it can turn into a commit.
+
+That pin is a review bound, not a capability proof, and the difference is
+load-bearing: an allowed import can re-export a refused one, so no allowlist
+of import names can establish that a program cannot spawn. When the runtime
+producer runs, it runs inside a kernel sandbox that denies process creation
+and network access outright (`scripts/usage-export/producer.sb`, applied by
+the scheduled push and refused-if-absent), and that is the enforced
+capability: **no fork, no network**. State it that narrowly, because that
+profile is `(allow default)` with two denials — exec IN PLACE and filesystem
+access remain, as the profile itself says in full. Neither buys anything for
+an attacker here (the sandbox is inherited across an in-place exec, and the
+walk is over records the producer must read anyway), but they are the
+difference between the enforced boundary and a wider claim, and the wider
+claim is not made.
 
 **The recent commit list.** The rows are public commits from the repositories
 `internal/panels/config/fetch.json` already names as commit sources, read the
@@ -284,6 +296,52 @@ The contribution calendar half keeps its own capture instant and its own
 fixture (`internal/panels/testdata/contributions-fragment.html`); a suite pin
 cross-checks the shipped calendar against that fixture, so refreshing the
 calendar means refreshing both together.
+
+### Sealed runtime data (the panels data root)
+
+Between shipped snapshots and live refresh sits a third path with neither's
+costs: the workstation exports the local usage records as a sanitized
+`usage-series/v1` document (`scripts/export_usage_series.py` — the same
+dates-and-integers guard as the capture step, plus per-day category
+breakdowns that must partition each day's total), seals it with AES-256-GCM
+(`cmd/usageseal`), and pushes the ciphertext over an ssh session that reads
+no configuration file at all — `-F /dev/null`, every option stated
+explicitly, and the resolved configuration checked with `ssh -G` before a
+connection is opened — to a node path the chart projects into the pod as a
+read-only `local` PersistentVolume/PersistentVolumeClaim pair on the
+platform's enumerated StorageClass. The origin re-reads that file every five minutes, unseals it with
+`PANELS_DATA_KEY` (read at decrypt time only, from a Secret the chart
+references but never contains), strict-decodes it under the pipeline's single
+128 KiB sealed-payload ceiling and a monotonic replay floor, and serves the
+result — so the token-usage panel
+refreshes without a release and without any egress from the cluster.
+
+Fail-closed at every absence: no `PANELS_DATA_ROOT`, no key, no file, or a
+file that is tampered, replayed, oversized, or malformed all leave the last
+good payload serving, with the envelope `status` saying so. The replay
+floor persists across restarts as a sealed marker in a separate writable
+state volume, so a restarted pod refuses ciphertext older than what any
+previous process published — and that marker is written BEFORE the payload
+is published, so a floor that cannot be persisted refuses the push instead
+of serving ahead of it. An initialization tombstone sits beside the marker,
+so a marker that has been DELETED is distinguishable from a first boot and
+refuses rather than cold-starting on a lowered floor; declaring a cold start
+is an explicit operator ceremony that says in the manual what protection it
+gives up. The floor has one writer, enforced by the locked monotonic
+compare-and-swap in the origin and by a render that refuses more than one
+replica while the capability is on — not by the access mode: the state claim
+is `ReadWriteOnce`, and the mode that would enforce it in the storage layer,
+`ReadWriteOncePod`, is supported for CSI volumes only and this target runs
+none. The capability defaults OFF in the chart
+(`panels.data.enabled=false`): a fresh install schedules with no storage
+ceremony and serves the embedded release-time snapshot — an explicit,
+documented as-of-release state — and enabling the sealed feed is the
+deliberate last step of the storage ceremony. The end-to-end operator
+manual — key generation, the forced-command push identity, the
+cluster-side directory and PV ceremonies, enablement order, verification,
+and the deliberate failure modes — is `docs/usage-export.md`; the chart
+contract is pinned by `scripts/ci/chart-storage-pin.sh` in the same CI job
+as the ingress and egress pins.
 
 ### Enabling live refresh (not enabled anywhere today)
 
@@ -315,6 +373,14 @@ requires all of the following, together:
    allowance means naming exact destinations in a separately reviewed change
    (issue #79); it never means removing the deny. Until that lands, setting
    `panels.refresh.enabled` buys nothing but failed attempts.
+
+One panel is claimed rather than refreshed when both capabilities are on.
+With `PANELS_DATA_ROOT` set, the sealed data root OWNS the token-usage panel:
+the live path starts no loop for it and never reaches its credentialed
+endpoints, so the credential-free sealed feed is the only producer writing
+it, and the pod logs that decision once at startup. Every OTHER
+refresh-backed panel is unaffected — enabling the sealed feed never silently
+disables the rest (2026-08-24 security review, finding 8).
 
 **Cluster enablement is a separate owner-reviewed step** (standing audit item
 S2) covering the Secret material, the egress policy, and the review of what

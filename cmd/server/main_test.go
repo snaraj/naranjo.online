@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // TestMediaConfigurationRejectsPartialEnablement keeps the runtime aligned with
 // the chart's fail-closed storage sentinel and prevents silently ignored paths.
@@ -42,6 +47,149 @@ func TestPanelsRefreshConfigurationFailsClosed(t *testing.T) {
 			t.Errorf("panelsRefreshConfiguration(%q) accepted an unrecognized value", value)
 		}
 	}
+}
+
+// TestPanelsDataConfigurationFailsClosed pins the data-root gate: unset
+// leaves the capability entirely absent, an absolute path passes through
+// untouched, and a relative path refuses the boot instead of being resolved
+// against a working directory nobody chose.
+func TestPanelsDataConfigurationFailsClosed(t *testing.T) {
+	t.Parallel()
+	if root, err := panelsDataConfiguration(""); err != nil || root != "" {
+		t.Errorf("panelsDataConfiguration(\"\") = %q, %v; want empty, nil", root, err)
+	}
+	real := resolved(t, t.TempDir())
+	if root, err := panelsDataConfiguration(real); err != nil || root != real {
+		t.Errorf("panelsDataConfiguration(abs) = %q, %v", root, err)
+	}
+	for _, value := range []string{"relative/dir", "./here", "~", "data"} {
+		if _, err := panelsDataConfiguration(value); err == nil {
+			t.Errorf("panelsDataConfiguration(%q) accepted a relative path", value)
+		}
+	}
+	// A root that does not resolve to an existing directory fails the boot,
+	// on the same grounds an unopenable root already did: the capability
+	// projects real bytes, and a path that names nothing cannot be carried
+	// forward as a string that might mean something later.
+	if _, err := panelsDataConfiguration(filepath.Join(real, "absent")); err == nil {
+		t.Error("panelsDataConfiguration accepted a path that does not exist")
+	}
+	file := filepath.Join(real, "afile")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := panelsDataConfiguration(file); err == nil {
+		t.Error("panelsDataConfiguration accepted a regular file as a root")
+	}
+	// The messages name the VARIABLE and never the path: this text reaches a
+	// startup log, and a path is a host fact.
+	if _, err := panelsDataConfiguration("relative/dir"); err == nil || strings.Contains(err.Error(), "relative/dir") {
+		t.Errorf("the refusal leaked the supplied path: %v", err)
+	}
+}
+
+// resolved is what the boundary itself computes: the one path the kernel
+// would open. Tests compare against it rather than against the string they
+// passed in, because on this platform a temporary directory is reached
+// through a symlinked prefix and the two spellings are the same directory.
+func resolved(t *testing.T, dir string) string {
+	t.Helper()
+	value, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", dir, err)
+	}
+	return value
+}
+
+// TestPanelsDataRootsMustBeSeparateDirectories is the executable half of the
+// separation the chart already enforces (2026-08-25 round-4 review, finding
+// 2). The chart is not the boundary — this binary is, and the reviewer ran
+// the exact shipped image with BOTH roots pointed at one directory: it served
+// the staged document as `ok` and wrote its floor marker beside the
+// ciphertext it is supposed to only read.
+//
+// The hostile table is the same one the chart's storage pin carries, because
+// the property is the same: equal roots, nesting in either direction, and the
+// alias spellings a string comparison calls different — `..` traversal and
+// duplicated separators. Symlink aliasing is covered too, which no lexical
+// check can see.
+func TestPanelsDataRootsMustBeSeparateDirectories(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	data := filepath.Join(base, "panels-data")
+	state := filepath.Join(base, "panels-state")
+	inside := filepath.Join(data, "state")
+	for _, dir := range []string{data, state, inside} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A sibling that merely SHARES A PREFIX must still be admitted; a check
+	// that refuses this one is broken rather than strict.
+	sibling := filepath.Join(base, "panels-data-two")
+	if err := os.MkdirAll(sibling, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "alias")
+	if err := os.Symlink(data, link); err != nil {
+		t.Fatal(err)
+	}
+	canonicalData, err := panelsDataConfiguration(data)
+	if err != nil {
+		t.Fatalf("data root: %v", err)
+	}
+
+	for name, value := range map[string]string{
+		"the same directory":               data,
+		"a trailing separator alias":       data + "/",
+		"a duplicated separator alias":     filepath.Dir(data) + "//" + filepath.Base(data),
+		"a dot-dot alias":                  filepath.Join(data, "..", "panels-data"),
+		"a symlink to the data root":       link,
+		"a directory inside the data root": inside,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got, err := panelsDataStateConfiguration(value, canonicalData); err == nil {
+				t.Fatalf("the binary accepted a state root that is %s (resolved %q)", name, got)
+			}
+		})
+	}
+
+	t.Run("the data root inside the state root", func(t *testing.T) {
+		t.Parallel()
+		outerData, err := panelsDataConfiguration(inside)
+		if err != nil {
+			t.Fatalf("inner data root: %v", err)
+		}
+		if _, err := panelsDataStateConfiguration(data, outerData); err == nil {
+			t.Fatal("the binary accepted a data root nested inside the state root")
+		}
+	})
+
+	t.Run("a genuine sibling is admitted", func(t *testing.T) {
+		t.Parallel()
+		got, err := panelsDataStateConfiguration(state, canonicalData)
+		if err != nil || got != resolved(t, state) {
+			t.Fatalf("panelsDataStateConfiguration(sibling) = %q, %v", got, err)
+		}
+		if got, err := panelsDataStateConfiguration(sibling, canonicalData); err != nil {
+			t.Fatalf("a prefix-sharing sibling was refused: %q %v", got, err)
+		}
+	})
+
+	t.Run("state without a data root is refused", func(t *testing.T) {
+		t.Parallel()
+		if _, err := panelsDataStateConfiguration(state, ""); err == nil {
+			t.Fatal("PANELS_DATA_STATE was accepted without PANELS_DATA_ROOT")
+		}
+	})
+
+	t.Run("empty state keeps the documented process-memory mode", func(t *testing.T) {
+		t.Parallel()
+		if got, err := panelsDataStateConfiguration("", canonicalData); err != nil || got != "" {
+			t.Fatalf("panelsDataStateConfiguration(\"\") = %q, %v", got, err)
+		}
+	})
 }
 
 func TestListenPort(t *testing.T) {

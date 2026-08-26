@@ -292,6 +292,35 @@ export type UsageSeries = {
   readonly totals: readonly number[];
 };
 
+/* One accounting category of a source's series: the same days re-read
+ * through one class of usage. Key, label, palette slot, dailies, and the
+ * per-lens summary sentence are all adapter-built data, so the component
+ * names no category and formats no figure. The slot is the fixed palette
+ * slot the ENTITY owns (--usage-cat-N), never its position in this payload,
+ * so a category keeps its hue whichever subset a source reports. */
+export type UsageCategory = {
+  readonly key: string;
+  readonly label: string;
+  readonly slot: number;
+  readonly totals: readonly number[];
+  /* The whole-series sentence under the strip while this lens is active. */
+  readonly summary: string;
+};
+
+/* One row of the composition strip: how the series' grand total divides
+ * across categories. Weight drives the bar segment's flex share (the
+ * category's own series total — the same integers the grid draws); figure
+ * and tooltip carry the written count and share, so identity is never color
+ * alone. */
+export type UsageCompositionRow = {
+  readonly key: string;
+  readonly label: string;
+  readonly slot: number;
+  readonly weight: number;
+  readonly figure: string;
+  readonly tooltip: string;
+};
+
 export type UsageActivity = {
   readonly heading: string;
   /* The strip's accessible name; the component appends the active lens. */
@@ -300,6 +329,11 @@ export type UsageActivity = {
   readonly series: UsageSeries;
   /* The whole-series sentence under the strip, lens-independent. */
   readonly summary: string;
+  /* Present exactly when the source's series carries an admitted per-day
+   * category breakdown: the category lens options, in served order. */
+  readonly categories?: readonly UsageCategory[];
+  /* The composition strip's rows, present exactly when categories are. */
+  readonly composition?: readonly UsageCompositionRow[];
 };
 
 export type UsageSection = {
@@ -324,6 +358,13 @@ export type UsageTrackerProps = {
   readonly generatedAt?: string;
   readonly sections: readonly UsageSection[];
   readonly emptyNote: string;
+  /* The lens key meaning "no category — read the plain series", supplied as
+   * DATA so the component holds no copy of it. The adapter owns the whole
+   * lens vocabulary: it states this sentinel once, resolves every category's
+   * dailies through the same function that honours it, and hands the key
+   * down here. A component-local literal would be a second statement of one
+   * fact, and two statements of one fact can disagree. */
+  readonly totalLens: string;
 };
 
 /* --- MediaGallery: one visible frame, prev/next, a click-to-enlarge lightbox

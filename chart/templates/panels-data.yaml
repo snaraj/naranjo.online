@@ -1,0 +1,179 @@
+{{- /*
+The panels data root's storage pair (issue #142): a statically bound `local`
+PersistentVolume and its PersistentVolumeClaim, on the platform's own
+StorageClass. Static binding is pinned from BOTH sides — the PV's claimRef
+names exactly this namespace and claim, the claim's volumeName names exactly
+this PV — and the enumerated storageClassName is named explicitly on both,
+so no other provisioner can intercept the pair and no foreign claim can
+capture the volume.
+
+THE SHAPE CHANGED IN THE 2026-08-24 ROUND-3 REVIEW (finding 7). It was a
+hostPath PV with an empty storageClassName. That is not a dated shape, it is
+a REFUSED one: the platform storage acceptance — originating issue
+website-infrastructure #211, now carried by website-infrastructure PR #212 —
+denies hostPath outright, admits a persistent volume only as `local` or `csi`,
+requires the path under the enumerated local-volume root, requires the
+enumerated StorageClass on both objects, and requires bounded nodeAffinity
+(operator In, non-empty values). Shipping the old shape would have meant
+shipping something the platform rejects on arrival, so the chart adopts the
+platform design instead. The dependency is still UNLANDED and this stays
+Draft until website-infrastructure #212 merges and releases AND the
+#141/#189 live convergence receipt posts; what changed is that the receipt
+now confirms the chart rather than contradicting it.
+
+A `local` volume is node-bound by definition, so nodeAffinity is not
+decoration — Kubernetes requires it, and the node name is supplied at
+ceremony time because a node name is a private host fact that never enters
+this repository (requirement 12). An empty panels.data.node fails the render.
+
+The claim reconciles through the normal release. The PersistentVolume is
+cluster-scoped and renders only when persistentVolume.enabled is set: the
+release identity is a least-privilege namespace reconciler that deliberately
+holds no PersistentVolume authority, so the PV is applied once by an admin
+from THIS template — the object in the cluster stays the object in git — and
+the flag flips the day the platform grants the reconciler that authority.
+
+Two pairs render here: the read-only DATA pair carrying the pushed sealed
+series, and the writable STATE pair carrying the replay-floor marker
+(2026-08-24 security review, finding H2) so the floor survives restarts.
+They are separate on purpose — the data projection stays read-only in every
+layer exactly as reviewed, and the origin's one writable surface is a
+sibling directory the push pipeline never touches.
+
+THE STATE PAIR IS ReadWriteOnce, AND THE SINGLE-WRITER GUARANTEE DOES NOT
+COME FROM IT (2026-08-25 round-4 review, finding 1). Round 3 set
+ReadWriteOncePod here, reasoning that ReadWriteOnce is node-scoped and a
+one-node cluster makes that no restriction at all. The reasoning was right
+and the mechanism was wrong: Kubernetes supports ReadWriteOncePod for CSI
+volumes ONLY, and the target has zero CSI drivers and zero StorageClasses
+live. A native `local` PersistentVolume does not acquire a CSI-only
+guarantee by naming the access mode — it names a promise nothing enforces,
+which is worse than the weaker mode, because a reader stops looking.
+
+So the access mode is the one the target actually supports, and the
+single-writer property is carried by mechanisms that are real here:
+
+  * the locked monotonic compare-and-swap in internal/server/panelsdata.go —
+    an exclusive flock, a re-read under the lock, and a refusal to record an
+    older instant or a different document at the same instant. That holds
+    across processes on one node, which is the case this deployment is in;
+  * the replica policy below — replicaCount 1 whenever this capability is
+    enabled, refused at render time rather than merely defaulted.
+
+ReadWriteOncePod is the correct mode the day the platform gains a CSI
+driver, and it is named here as that upgrade rather than claimed as today's
+control.
+
+naranjo-online.panelsDataPaths (chart/templates/_helpers.tpl) validates the
+geometry before any of this renders: normalized absolute paths under the
+enumerated root, the two data roots and the two mount paths disjoint in BOTH
+directions, and replicaCount 1.
+scripts/ci/chart-storage-pin.sh holds every invariant stated here, in every
+direction.
+*/ -}}
+{{- if .Values.panels.data.enabled }}
+{{- include "naranjo-online.panelsDataPaths" . }}
+{{- if .Values.panels.data.persistentVolume.enabled }}
+{{- if not .Values.panels.data.node }}
+{{- fail "panels.data.persistentVolume.enabled requires panels.data.node: a local PersistentVolume is node-bound, and the empty default is a fail-closed sentinel because a node name never enters this repository — supply it at ceremony time with --set panels.data.node=<node>" }}
+{{- end }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Values.panels.data.volumeName }}
+  labels:
+    {{- include "naranjo-online.labels" . | nindent 4 }}
+spec:
+  capacity:
+    storage: {{ .Values.panels.data.capacity }}
+  accessModes:
+    - ReadOnlyMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: {{ .Values.panels.data.storageClass }}
+  claimRef:
+    namespace: {{ .Release.Namespace }}
+    name: {{ .Values.panels.data.volumeName }}
+  local:
+    path: {{ .Values.panels.data.path }}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - {{ .Values.panels.data.node }}
+---
+{{- end }}
+{{- if .Values.panels.data.persistentVolume.enabled }}
+{{- /*
+The replay-floor STATE PersistentVolume (2026-08-24 security review, finding
+H2): the writable sibling of the read-only data volume above, holding one
+sealed floor-marker file so the replay floor survives restarts. Same admin
+ceremony, same static double-pinning, same Retain posture; the one deliberate
+difference is ReadWriteOnce — this is the single place the origin may write,
+and it is a directory the push pipeline never touches. ReadWriteOnce is
+node-scoped and therefore does NOT by itself establish one writer on a
+one-node cluster; the header above says what does, and why the CSI-only
+ReadWriteOncePod is not available on this target.
+*/ -}}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Values.panels.data.stateVolumeName }}
+  labels:
+    {{- include "naranjo-online.labels" . | nindent 4 }}
+spec:
+  capacity:
+    storage: {{ .Values.panels.data.stateCapacity }}
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: {{ .Values.panels.data.storageClass }}
+  claimRef:
+    namespace: {{ .Release.Namespace }}
+    name: {{ .Values.panels.data.stateVolumeName }}
+  local:
+    path: {{ .Values.panels.data.statePath }}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - {{ .Values.panels.data.node }}
+---
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.panels.data.volumeName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "naranjo-online.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: {{ .Values.panels.data.storageClass }}
+  volumeName: {{ .Values.panels.data.volumeName }}
+  resources:
+    requests:
+      storage: {{ .Values.panels.data.capacity }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.panels.data.stateVolumeName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "naranjo-online.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.panels.data.storageClass }}
+  volumeName: {{ .Values.panels.data.stateVolumeName }}
+  resources:
+    requests:
+      storage: {{ .Values.panels.data.stateCapacity }}
+{{- end }}

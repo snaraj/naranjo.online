@@ -3,11 +3,18 @@
  * whatever these helpers return; it never computes, so a formatting or
  * admission bug is a one-file fix with a failing test beside it. */
 
-import type { UsageSection, UsageTrackerProps, UsageWindow } from './blocks.ts';
+import type {
+  UsageCategory,
+  UsageCompositionRow,
+  UsageSection,
+  UsageTrackerProps,
+  UsageWindow
+} from './blocks.ts';
 import { formatMagnitude, formatWhole, peakValue, seriesCells } from './grid.ts';
 import type {
   PanelEnvelope,
   TokenStatUnit,
+  TokenUsageCategory,
   TokenUsageInsight,
   TokenUsageSeries,
   TokenUsageSource,
@@ -122,7 +129,36 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/* isCount is the LAST stage of one numeric contract that spans three
+ * languages, and all three admit exactly the same set (2026-08-24 round-3
+ * review finding 9). The producer bounds every counter at MAX_COUNT
+ * (scripts/capture_usage_series.py), the server refuses a category total or
+ * sum outside maxCountValue (internal/panels/types.go), and this admits only
+ * what both of those can have produced. 2^53 - 1 is the largest integer
+ * JavaScript represents exactly, so a value above it has ALREADY lost
+ * precision by the time it reaches here — 9007199254740993 parses as
+ * ...992, and two different producer totals become one indistinguishable
+ * number. Number.isFinite admitted that silently, and admitted 1.5 and -0.5
+ * as counts besides. Number.isSafeInteger refuses the lot: non-integers,
+ * values past the exact-representation boundary, NaN and both infinities.
+ * The countBound export below pins the shared ceiling so the parity test can
+ * compare it against the Go and Python constants by value. */
+export const countBound = Number.MAX_SAFE_INTEGER;
+
 function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/* isRate admits the two payload fields the server declares *float64 rather
+ * than int64 — a window's utilizationPct and an insight's pct. They are
+ * NOT counts: a percentage is a rate, and 36.4 is a correct value for one,
+ * so the integer contract above would refuse real data. Splitting them out
+ * is what lets isCount tighten at all; before this the single predicate had
+ * to stay loose enough for the fractional cases, which is exactly how
+ * fractional and precision-losing token totals got in. No upper bound is
+ * asserted on purpose: utilization above 100 is a real overage reading, and
+ * inventing a ceiling here would refuse a truthful number. */
+function isRate(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
@@ -249,7 +285,7 @@ export function tokenUsageSources(data: unknown): TokenUsageSource[] {
       if (!isCount(entry.inputTokens) || !isCount(entry.outputTokens)) {
         return [];
       }
-      if (entry.utilizationPct !== undefined && !isCount(entry.utilizationPct)) {
+      if (entry.utilizationPct !== undefined && !isRate(entry.utilizationPct)) {
         return [];
       }
       if (entry.resetsAt !== undefined && typeof entry.resetsAt !== 'string') {
@@ -337,7 +373,7 @@ function admitInsights(value: unknown): TokenUsageInsight[] | null {
     if (!isRecord(entry) || typeof entry.label !== 'string' || entry.label === '') {
       return null;
     }
-    if (entry.pct !== null && !isCount(entry.pct)) {
+    if (entry.pct !== null && !isRate(entry.pct)) {
       return null;
     }
     if (entry.recorded !== undefined && typeof entry.recorded !== 'boolean') {
@@ -352,10 +388,22 @@ function admitInsights(value: unknown): TokenUsageInsight[] | null {
   return insights;
 }
 
+/* maxCategories bounds how many categories one series may carry — the same
+ * bound the Go boundary enforces (maxSeriesCategories in
+ * internal/panels/types.go). The closed vocabulary below is already tighter;
+ * this is the structural guard that still holds if the vocabulary is ever
+ * widened, so a payload can never inflate the render with hundreds of
+ * entries. */
+const maxCategories = 8;
+
 /* admitSeries returns the admitted series, undefined when the section is
  * absent, or null when it exists and is malformed. The start date must be a
  * plain calendar date: the grid does day arithmetic on it, and an instant or
- * a locale string would silently shift every cell. */
+ * a locale string would silently shift every cell. The optional categories
+ * section is held to the same three-state contract: absent is fine, and any
+ * malformed corner — a non-array, a bad key, a length that disagrees with
+ * the series, a negative count, a duplicate key — refuses the whole payload
+ * rather than rendering a half-true breakdown. */
 function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
   if (value === undefined || value === null) {
     return undefined;
@@ -369,7 +417,166 @@ function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
   if (!Array.isArray(value.totals) || !value.totals.every(isCount)) {
     return null;
   }
-  return { startDate: value.startDate, totals: value.totals as number[] };
+  const totals = value.totals as number[];
+  const series: TokenUsageSeries = { startDate: value.startDate, totals };
+  if (value.categories !== undefined) {
+    const categories = admitCategories(value.categories, totals);
+    if (categories === null) {
+      return null;
+    }
+    if (categories.length > 0) {
+      series.categories = categories;
+    }
+  }
+  return series;
+}
+
+/* admitCategories validates the optional per-day breakdown against the SAME
+ * three rules the Go boundary applies, not a weaker shape check
+ * (2026-08-24 security review, finding 6):
+ *
+ *   1. CLOSED MEMBERSHIP. A key must be one of the canonical accounting
+ *      classes — the keys categorySlots declares, which is the frontend's
+ *      single statement of the vocabulary and is pinned against the capture
+ *      tool and the Go admission list by CategoryVocabularyParityTest. The
+ *      previous check was a label SHAPE (`/^[a-z][a-z0-9-]{0,31}$/`), and
+ *      shape admits far more than the vocabulary does: `private-feature` is
+ *      perfectly label-shaped, and categoryLabel would have humanized it
+ *      into public copy. The origin blocks such a payload today, so this is
+ *      defense in depth — which is exactly what it must be, because the
+ *      claim that hostile keys cannot reach rendering has to survive a
+ *      future boundary regression rather than depend on one.
+ *   2. COUNT. At most maxCategories entries, and no key twice.
+ *   3. PARTITION. The categories must sum to the day's own total on EVERY
+ *      day, so the stacked reading and the plain reading cannot disagree.
+ *      A breakdown that says something different from the graph above it is
+ *      not a smaller error than a missing one.
+ *
+ * Any failing corner refuses the whole payload rather than rendering a
+ * half-true breakdown. */
+function admitCategories(value: unknown, totals: number[]): TokenUsageCategory[] | null {
+  if (!Array.isArray(value) || value.length > maxCategories) {
+    return null;
+  }
+  const days = totals.length;
+  const seen = new Set<string>();
+  const categories: TokenUsageCategory[] = [];
+  const sums = new Array<number>(days).fill(0);
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.key !== 'string' || !categorySlots.has(entry.key)) {
+      return null;
+    }
+    if (seen.has(entry.key)) {
+      return null;
+    }
+    seen.add(entry.key);
+    if (!Array.isArray(entry.totals) || entry.totals.length !== days || !entry.totals.every(isCount)) {
+      return null;
+    }
+    const dailies = entry.totals as number[];
+    for (let day = 0; day < days; day += 1) {
+      /* CHECKED summation, the frontend end of finding 9's one numeric
+       * contract. Go refuses an int64 category sum that overflows and
+       * Python refuses a counter past MAX_COUNT; here the hazard is
+       * different in kind but identical in effect. JavaScript addition
+       * does not overflow — it silently stops being exact, so eight
+       * admissible categories can sum past 2^53-1 and land on a number
+       * that is merely NEAR the truth. The equality check below would
+       * then be comparing two approximations, and could pass on a
+       * document whose parts do not actually add up. Refusing the moment
+       * the running sum leaves the exact range keeps the comparison
+       * meaningful instead of decorative. */
+      const running = sums[day] + dailies[day];
+      if (!Number.isSafeInteger(running)) {
+        return null;
+      }
+      sums[day] = running;
+    }
+    categories.push({ key: entry.key, totals: dailies });
+  }
+  if (categories.length > 0) {
+    for (let day = 0; day < days; day += 1) {
+      if (sums[day] !== totals[day]) {
+        return null;
+      }
+    }
+  }
+  return categories;
+}
+
+/* categoryLabel renders a category key as display copy: hyphens become
+ * spaces and nothing else changes, so the shown word list is exactly the
+ * data's vocabulary in the panel's own lowercase voice. */
+export function categoryLabel(key: string): string {
+  return key.replace(/-/g, ' ');
+}
+
+/* The category lens: 'total' reads the series as ever; a category key reads
+ * that category's own dailies through the same grid. */
+export const totalLens = 'total';
+
+/* lensValues resolves the active lens to the dailies the grid should draw.
+ * An unknown lens — a category that source does not report — falls back to
+ * the plain series, which is always real data, never a guess. */
+export function lensValues(series: TokenUsageSeries, lens: string): number[] {
+  if (lens !== totalLens && series.categories) {
+    for (const category of series.categories) {
+      if (category.key === lens) {
+        return category.totals;
+      }
+    }
+  }
+  return series.totals;
+}
+
+export interface CategoryShare {
+  key: string;
+  /* The category's total across the whole series window. */
+  total: number;
+  /* Its share of the window's grand total, in percent (0 when the window is
+   * empty); shares are computed from the same integers the grid draws, so
+   * the bar and the numbers can never disagree. */
+  pct: number;
+}
+
+/* categoryShares summarizes the breakdown for the composition strip: one
+ * row per category in served (canonical) order. */
+export function categoryShares(series: TokenUsageSeries): CategoryShare[] {
+  if (!series.categories || series.categories.length === 0) {
+    return [];
+  }
+  const grand = series.totals.reduce((sum, total) => sum + total, 0);
+  return series.categories.map((category) => {
+    const total = category.totals.reduce((sum, value) => sum + value, 0);
+    return {
+      key: category.key,
+      total,
+      pct: grand > 0 ? (total / grand) * 100 : 0
+    };
+  });
+}
+
+/* categorySlots is the frontend's single statement of the CLOSED category
+ * vocabulary, and the fixed palette slot each member owns. Two jobs, one
+ * list, on purpose: admission (admitCategories checks membership here) and
+ * color (categorySlot reads the slot here) can then never disagree about
+ * what a category is. The list is pinned against the capture tool's
+ * CATEGORY_KEYS and the Go categoryServeOrder by
+ * CategoryVocabularyParityTest in scripts/ci, so adding an accounting class
+ * is one deliberate edit made in three places together.
+ *
+ * Color follows the ENTITY, never its position in this payload: the
+ * canonical vocabulary owns slots 1..5. */
+const categorySlots: ReadonlyMap<string, number> = new Map([
+  ['input', 1],
+  ['output', 2],
+  ['cache-read', 3],
+  ['cache-write', 4],
+  ['reasoning', 5]
+]);
+
+export function categorySlot(key: string): number {
+  return categorySlots.get(key) ?? 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -428,8 +635,10 @@ function usageSection(source: TokenUsageSource): UsageSection {
           heading: 'Token activity',
           label: `${source.label} token activity`,
           noun: 'token',
-          series: source.series,
-          summary: usageActivitySummary(source.series)
+          series: { startDate: source.series.startDate, totals: source.series.totals },
+          summary: usageActivitySummary(source.series.startDate, source.series.totals, 'tokens'),
+          categories: usageCategories(source.series),
+          composition: usageComposition(source.series)
         }
       : undefined;
   return {
@@ -467,13 +676,65 @@ function usageSection(source: TokenUsageSource): UsageSection {
   };
 }
 
-/* The whole-series sentence under the activity strip, lens-independent: it
- * describes the one daily series every lens re-reads. */
-function usageActivitySummary(series: TokenUsageSeries): string {
-  const total = series.totals.reduce((sum, value) => sum + value, 0);
-  const days = series.totals.length;
-  const peak = peakValue(seriesCells(series.startDate, series.totals));
-  return `${formatTokenCount(total)} tokens over ${days} ${days === 1 ? 'day' : 'days'}, peaking at ${formatTokenCount(peak)}`;
+/* The whole-series sentence under the activity strip: it describes the one
+ * daily series the view lens re-reads. View-lens-independent by design; the
+ * CATEGORY lens gets its own sentence per category, built from that
+ * category's dailies through the identical arithmetic, so the two readings
+ * of one series can never disagree about what they describe. */
+function usageActivitySummary(startDate: string, totals: readonly number[], nounPhrase: string): string {
+  const total = totals.reduce((sum, value) => sum + value, 0);
+  const days = totals.length;
+  const peak = peakValue(seriesCells(startDate, totals));
+  return `${formatTokenCount(total)} ${nounPhrase} over ${days} ${days === 1 ? 'day' : 'days'}, peaking at ${formatTokenCount(peak)}`;
+}
+
+/* usageCategories shapes the admitted per-day breakdown into the component's
+ * category lens options: key, display label, the fixed palette slot the
+ * entity owns, the dailies the lens draws, and the summary sentence for that
+ * lens — all data, so the component names no category and formats no figure.
+ * Undefined when the series carries no breakdown, so a source without
+ * categories renders no lens row at all.
+ *
+ * The dailies are resolved THROUGH lensValues rather than read off the
+ * category directly, so ONE function owns lens resolution for the whole
+ * panel: the sentinel it honours (totalLens), the served-category lookup,
+ * and the fall back to the plain series for a lens no source reports. Its
+ * assertions in token-usage.test.mjs therefore pin shipped behaviour rather
+ * than an unreached export, and a change to what a lens means cannot land in
+ * one of two places. */
+function usageCategories(series: TokenUsageSeries): UsageCategory[] | undefined {
+  if (!series.categories || series.categories.length === 0) {
+    return undefined;
+  }
+  return series.categories.map((category) => {
+    const totals = lensValues(series, category.key);
+    return {
+      key: category.key,
+      label: categoryLabel(category.key),
+      slot: categorySlot(category.key),
+      totals,
+      summary: usageActivitySummary(series.startDate, totals, `${categoryLabel(category.key)} tokens`)
+    };
+  });
+}
+
+/* usageComposition shapes the composition strip's rows from categoryShares:
+ * the bar weight is the category's own series total — the same integers the
+ * grid draws — and the written figure and tooltip carry the count and share,
+ * so identity is never color alone. */
+function usageComposition(series: TokenUsageSeries): UsageCompositionRow[] | undefined {
+  const shares = categoryShares(series);
+  if (shares.length === 0) {
+    return undefined;
+  }
+  return shares.map((share) => ({
+    key: share.key,
+    label: categoryLabel(share.key),
+    slot: categorySlot(share.key),
+    weight: share.total,
+    figure: `${formatTokenCount(share.total)} · ${formatUtilization(share.pct)}`,
+    tooltip: `${categoryLabel(share.key)}: ${formatTokenCount(share.total)} tokens (${formatUtilization(share.pct)})`
+  }));
 }
 
 /* tokenUsageProps renders the whole panel as data, or null before the first
@@ -490,6 +751,7 @@ export function tokenUsageProps(envelope: PanelEnvelope | null): UsageTrackerPro
     status: envelope.status,
     generatedAt: envelope.generatedAt,
     sections: tokenUsageSources(envelope.data).map(usageSection),
-    emptyNote: tokenUsageEmptyNote
+    emptyNote: tokenUsageEmptyNote,
+    totalLens
   };
 }

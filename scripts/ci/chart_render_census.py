@@ -293,6 +293,14 @@ EXPECTED_INVENTORY = (
     ("networking.k8s.io/v1", "NetworkPolicy"),
     ("v1", "Service"),
     ("v1", "ServiceAccount"),
+    # The panels data root (issue #142) is deliberately ABSENT here: since
+    # the 2026-08-24 security review (finding M6) panels.data.enabled
+    # defaults to false, so the default render carries neither of its two
+    # statically bound PersistentVolumeClaims (the read-only data claim and
+    # the writable replay-floor state claim of finding H2) — a fresh install
+    # must never render claims against volumes only an admin ceremony can
+    # provide. The enabled, with-pv, and disabled directions are all pinned
+    # by scripts/ci/chart-storage-pin.sh.
 )
 
 # A list wrapper may nest, but not indefinitely; a render that needs more
@@ -1530,9 +1538,11 @@ _DNS_SUBDOMAIN_RE = re.compile(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?"
                                r"(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*")
 
 # Kinds whose `metadata.name` is a DNS-1123 LABEL rather than a subdomain.
-# The inventory above pins the render to four kinds, so this set is complete
+# The inventory above pins the render to five kinds, so this set is complete
 # for what this gate can ever see; growing the inventory is the moment to
-# re-measure it.
+# re-measure it. Measured for the fifth kind: PersistentVolumeClaim names
+# are DNS-1123 subdomains (RFC 1123 per the API reference), so Service
+# remains the only label-named kind here.
 _DNS_LABEL_NAME_KINDS = frozenset({"Service"})
 
 # Mappings that are label maps wherever they appear, at any depth.

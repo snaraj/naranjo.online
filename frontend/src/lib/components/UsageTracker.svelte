@@ -47,7 +47,7 @@
   Every color and metric reads a custom property with a dark-native default,
   so themes restyle by overriding variables. -->
 <script lang="ts">
-  import type { UsageActivity, UsageTrackerProps } from '../blocks.ts';
+  import type { UsageActivity, UsageCategory, UsageTrackerProps } from '../blocks.ts';
   import {
     calendarColumns,
     formatMagnitude,
@@ -59,7 +59,8 @@
   import ContributionGrid from './ContributionGrid.svelte';
   import PanelShell from './PanelShell.svelte';
 
-  let { id, title, status, generatedAt, sections, emptyNote }: UsageTrackerProps = $props();
+  let { id, title, status, generatedAt, sections, emptyNote, totalLens }: UsageTrackerProps =
+    $props();
 
   /* One view choice PER SOURCE (owner directive, 2026-08-25).
 
@@ -87,15 +88,51 @@
     return views[key] ?? 'daily';
   }
 
+  /* The CATEGORY lens is a second piece of per-source presentation state,
+     held here for exactly the reasons `views` is: the adapter rebuilds its
+     sections every delivery, and a lens parked anywhere else would reset
+     every sixty seconds. Per source because category vocabularies genuinely
+     differ between sources — one tool reports reasoning tokens, another does
+     not — and forcing one choice across sources would render a lens a source
+     cannot answer. A source without categories simply has no lens row and
+     always reads as total. The component knows no category by name: every
+     key, label, palette slot, and per-lens summary arrives as data built by
+     the adapter.
+
+     The key meaning "no category" is `totalLens`, and it arrives as a PROP
+     rather than being declared here: the adapter states that sentinel once
+     and resolves every category's dailies through the same function that
+     honours it, so this file carries no second copy of the vocabulary to
+     drift from. */
+  let lenses = $state<Record<string, string>>({});
+
+  function lensOf(key: string): string {
+    return lenses[key] ?? totalLens;
+  }
+
+  /* activeLensCategory resolves a source's lens to the adapter-built
+     category it names, or undefined for the total reading — including an
+     unknown or stale lens, which falls back to the plain totals because
+     those are always real data, never a guess. */
+  function activeLensCategory(activity: UsageActivity, lens: string): UsageCategory | undefined {
+    if (lens === totalLens || !activity.categories) {
+      return undefined;
+    }
+    return activity.categories.find((category) => category.key === lens);
+  }
+
   /* activityColumns realigns a region's daily series onto true calendar
      weeks (issue 189: calendarColumns, so the shared weekday axis is
      truthful for every column) and only THEN re-reads the aligned columns
      through that source's active lens (viewColumns) — the order matters,
      because a weekly or cumulative reading has to sum real calendar weeks,
      and only calendarColumns knows where those actually fall once the series
-     has been padded to the fixed trailing window. */
-  function activityColumns(activity: UsageActivity, view: SeriesView) {
-    return viewColumns(calendarColumns(seriesCells(activity.series.startDate, activity.series.totals)), view);
+     has been padded to the fixed trailing window. The dailies are the
+     category lens's when one is active: both lenses re-read ONE delivered
+     series with no extra payload. */
+  function activityColumns(activity: UsageActivity, view: SeriesView, category: UsageCategory | undefined) {
+    const totals = category ? category.totals : activity.series.totals;
+    return viewColumns(calendarColumns(seriesCells(activity.series.startDate, totals)), view);
   }
 </script>
 
@@ -173,7 +210,8 @@
             this file's opening comment. -->
           {#if source.activity}
             {@const view = viewOf(source.key)}
-            {@const columns = activityColumns(source.activity, view)}
+            {@const lensCategory = activeLensCategory(source.activity, lensOf(source.key))}
+            {@const columns = activityColumns(source.activity, view, lensCategory)}
             {#if columns.length > 0}
               <section class="usage-activity">
                 <header class="usage-activity-head">
@@ -203,18 +241,90 @@
                     {/each}
                   </div>
                 </header>
+                {#if source.activity.categories && source.activity.categories.length > 0}
+                  <!-- The category lens: the same grid re-read through one
+                    accounting category. A second, per-source radio group —
+                    vocabularies differ per source, so a panel-global choice
+                    would name a lens some source cannot answer. Every key,
+                    label, and slot arrives as adapter data; only the
+                    always-available total reading is the component's own. -->
+                  <div
+                    class="usage-views usage-category-views"
+                    role="radiogroup"
+                    aria-label={`${source.label} ${source.activity.noun} category`}
+                  >
+                    <button
+                      type="button"
+                      class="usage-view"
+                      role="radio"
+                      aria-checked={lensOf(source.key) === totalLens}
+                      onclick={() => (lenses[source.key] = totalLens)}
+                    >
+                      total
+                    </button>
+                    {#each source.activity.categories as category (category.key)}
+                      <button
+                        type="button"
+                        class="usage-view"
+                        role="radio"
+                        aria-checked={lensOf(source.key) === category.key}
+                        onclick={() => (lenses[source.key] = category.key)}
+                      >
+                        {category.label}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
                 <ContributionGrid
                   {columns}
                   noun={source.activity.noun}
                   {view}
-                  label={`${source.activity.label}, ${view} view`}
+                  label={`${source.activity.label}, ${view} view${
+                    lensCategory ? `, ${lensCategory.label} only` : ''
+                  }`}
                   fullWidth
                   cardTitle="Tokens used"
                   formatValue={formatMagnitude}
                 />
                 <p class="usage-activity-total">
-                  {source.activity.summary}
+                  {lensCategory ? lensCategory.summary : source.activity.summary}
                 </p>
+                {#if source.activity.composition && source.activity.composition.length > 0}
+                  <!-- The composition strip: how the window's total divides
+                    across categories. Identity is never color alone — every
+                    segment's category is named in its tooltip, and the rows
+                    beneath repeat hue as a chip BESIDE the written label,
+                    count, and share. The same integers feed the bar, the
+                    rows, and the grid above, so no two readings of this
+                    panel can disagree. -->
+                  <figure class="usage-composition">
+                    <div class="usage-composition-bar" aria-hidden="true">
+                      {#each source.activity.composition as share (share.key)}
+                        {#if share.weight > 0}
+                          <span
+                            class="usage-composition-segment"
+                            data-category-slot={share.slot}
+                            style:flex-grow={share.weight}
+                            title={share.tooltip}
+                          ></span>
+                        {/if}
+                      {/each}
+                    </div>
+                    <figcaption class="usage-composition-rows">
+                      {#each source.activity.composition as share (share.key)}
+                        <span class="usage-composition-row">
+                          <span
+                            class="usage-composition-chip"
+                            data-category-slot={share.slot}
+                            aria-hidden="true"
+                          ></span>
+                          <span class="usage-composition-label">{share.label}</span>
+                          <span class="usage-composition-value">{share.figure}</span>
+                        </span>
+                      {/each}
+                    </figcaption>
+                  </figure>
+                {/if}
               </section>
             {/if}
           {/if}
@@ -493,6 +603,98 @@
     margin: 0;
     font-size: var(--panel-badge-size, 0.6875rem);
     color: var(--panel-muted, rgb(158, 158, 158));
+  }
+
+  /* The category lens row reuses the segmented-pill pattern above and may
+     carry more segments than fit one line on a narrow viewport, so it wraps
+     instead of forcing horizontal body scroll. */
+  .usage-category-views {
+    align-self: flex-start;
+    flex-wrap: wrap;
+  }
+
+  /* The composition strip. Category hues resolve from the global tokens
+     (--usage-cat-1..5, one fixed slot per category key; slot 0 is the
+     neutral for keys outside the canonical vocabulary), with dark-native
+     fallbacks like every other color in this file. Values are never encoded
+     by color alone: each segment is named in its tooltip and each row pairs
+     the chip with the written label, count, and share. */
+  .usage-composition {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--usage-row-gap, 0.375rem);
+  }
+
+  .usage-composition-bar {
+    display: flex;
+    gap: 2px;
+    block-size: var(--usage-composition-thickness, 0.5rem);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+
+  .usage-composition-segment {
+    flex-basis: 0;
+    min-inline-size: 2px;
+    border-radius: 2px;
+  }
+
+  .usage-composition-chip {
+    inline-size: 0.625rem;
+    block-size: 0.625rem;
+    border-radius: 2px;
+    flex: none;
+  }
+
+  .usage-composition-segment[data-category-slot='0'],
+  .usage-composition-chip[data-category-slot='0'] {
+    background: var(--usage-cat-0, rgb(110, 110, 110));
+  }
+
+  .usage-composition-segment[data-category-slot='1'],
+  .usage-composition-chip[data-category-slot='1'] {
+    background: var(--usage-cat-1, rgb(63, 129, 217));
+  }
+
+  .usage-composition-segment[data-category-slot='2'],
+  .usage-composition-chip[data-category-slot='2'] {
+    background: var(--usage-cat-2, rgb(184, 126, 31));
+  }
+
+  .usage-composition-segment[data-category-slot='3'],
+  .usage-composition-chip[data-category-slot='3'] {
+    background: var(--usage-cat-3, rgb(31, 158, 125));
+  }
+
+  .usage-composition-segment[data-category-slot='4'],
+  .usage-composition-chip[data-category-slot='4'] {
+    background: var(--usage-cat-4, rgb(138, 104, 216));
+  }
+
+  .usage-composition-segment[data-category-slot='5'],
+  .usage-composition-chip[data-category-slot='5'] {
+    background: var(--usage-cat-5, rgb(207, 85, 133));
+  }
+
+  .usage-composition-rows {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    font-size: var(--panel-badge-size, 0.6875rem);
+    color: var(--panel-muted, rgb(158, 158, 158));
+  }
+
+  .usage-composition-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+
+  /* Figures wear the text token, never the series color (dataviz floor). */
+  .usage-composition-value {
+    font-variant-numeric: tabular-nums;
+    color: var(--panel-text, rgb(230, 230, 230));
   }
 
   .usage-insight-rows {

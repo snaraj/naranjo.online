@@ -20,6 +20,7 @@ import ast
 import importlib.util
 import json
 import os
+import shutil
 import pathlib
 import tempfile
 import unittest
@@ -437,15 +438,79 @@ class ImportSurfaceTest(unittest.TestCase):
     doctrine test applies to Go: the module's import surface is a closed
     allowlist, read out of the parsed source rather than out of prose.
 
-    `os` is on the refused list and that is the load-bearing decision here.
-    It is the obvious module for a directory walk, it was in this file until
-    this pin existed, and it carries `system`, `popen`, `fork`, `spawn*` and
-    `exec*` — so an allowlist that admitted it could not keep the promise the
-    ruling makes. `pathlib` does the same walk with none of that reach.
+    `os` WAS on the refused list, and it moved (2026-08-25 round-4 review,
+    finding 4). That is a widening of the reviewed surface and it is recorded
+    here rather than absorbed quietly.
+
+    Why it was refused: `os` carries `system`, `popen`, `fork`, `spawn*` and
+    `exec*`, and while this lint was believed to BE the capability boundary,
+    admitting it would have dissolved the boundary outright.
+
+    Why that reasoning no longer holds: round 3 established the lint cannot
+    carry a capability claim at all — `pathlib` is admitted and re-exports
+    `os`, so `pathlib.os.system` was always reachable and every test here
+    stayed green. The enforced boundary is the kernel sandbox the scheduled
+    push runs the producer inside (`scripts/usage-export/producer.sb`, which
+    denies `process-fork` and `network*`). Against that boundary, importing
+    `os` changes nothing about what this program CAN do.
+
+    Why it had to move: the final open of a transcript file needs
+    `O_NOFOLLOW` and an `fstat` on the descriptor, and Python exposes neither
+    outside `os`. `pathlib.Path.open()` follows whatever the leaf has become,
+    which is the TOCTOU the round-4 review demonstrated. Refusing the import
+    would have meant keeping a real symlink escape to preserve a smaller
+    reviewed surface that no longer carries a security claim — trading a
+    property for an appearance.
+
+    What replaces it: an enumerated ATTRIBUTE allowlist below. Every `os.`
+    attribute this module may name is listed, so a spawn or exec call site
+    cannot appear without a deliberate widening a reader sees. Like the
+    import pin, it is a REVIEW BOUND and not a capability proof — a computed
+    `getattr` walks past it exactly as round 2 showed — and it is written
+    down as one.
     """
 
     ALLOWED = frozenset(
-        {"__future__", "argparse", "datetime", "json", "pathlib", "re", "sys"}
+        {
+            "__future__",
+            "argparse",
+            "datetime",
+            # `errno` joined in round 5: the descriptor-rooted descent tells a
+            # symlink swap (ELOOP/ENOTDIR) apart from an ordinary unreadable
+            # entry, and a bare `except OSError` cannot. It is a table of
+            # integers with no callables at all.
+            "errno",
+            "json",
+            "os",
+            "pathlib",
+            "re",
+            "sys",
+        }
+    )
+
+    # Every `os.` attribute the module is allowed to name. Descriptor-rooted
+    # reading and nothing else: no process, no network, no filesystem
+    # mutation.
+    ALLOWED_OS_ATTRIBUTES = frozenset(
+        {
+            "O_CLOEXEC",
+            # O_DIRECTORY joined in round 5: each intermediate component must
+            # open as a real directory, or the descent is not a descent.
+            "O_DIRECTORY",
+            "O_NOFOLLOW",
+            "O_NONBLOCK",
+            "O_RDONLY",
+            "close",
+            "fdopen",
+            "fstat",
+            # listdir and lstat joined in round 5 for the same reason: the
+            # walk reads entries and their types THROUGH a directory
+            # descriptor now, where it previously asked pathlib to re-resolve
+            # each name from the filesystem root.
+            "listdir",
+            "lstat",
+            "open",
+        }
     )
 
     # Not an exhaustive index of the standard library — it does not need to
@@ -461,7 +526,6 @@ class ImportSurfaceTest(unittest.TestCase):
             "http",
             "importlib",
             "multiprocessing",
-            "os",
             "pickle",
             "platform",
             "posix",
@@ -522,6 +586,39 @@ class ImportSurfaceTest(unittest.TestCase):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         }
         self.assertEqual(called & self.REFUSED_BUILTINS, set())
+
+    def test_the_os_surface_is_exactly_the_enumerated_attributes(self):
+        # The narrower pin that replaced refusing `os` outright. Equality,
+        # not containment: an attribute arriving and an attribute leaving are
+        # both changes a reader must see.
+        named = {
+            node.attr
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "os"
+        }
+        self.assertEqual(named, set(self.ALLOWED_OS_ATTRIBUTES))
+
+    def test_the_enumerated_os_attributes_cannot_spawn_or_connect(self):
+        # Guards the attribute allowlist against itself, the way the module
+        # allowlist above is guarded: widening it to admit one of these would
+        # otherwise make every other assertion here pass unchanged.
+        forbidden = {
+            "abort", "execl", "execle", "execlp", "execv", "execve", "execvp",
+            "fork", "forkpty", "kill", "popen", "posix_spawn", "posix_spawnp",
+            "putenv", "remove", "rename", "rmdir", "setuid", "spawnl", "spawnv",
+            "startfile", "system", "unlink", "write",
+        }
+        self.assertEqual(set(self.ALLOWED_OS_ATTRIBUTES) & forbidden, set())
+
+    def test_the_os_pin_is_honest_about_what_it_cannot_prove(self):
+        # The round-2 lesson, kept where it applies: an attribute allowlist
+        # is defeated by a computed getattr exactly as an attribute denylist
+        # was. The docstring must say so, because a pin whose limits are
+        # undocumented gets read as a guarantee.
+        self.assertIn("REVIEW BOUND", ImportSurfaceTest.__doc__)
+        self.assertIn("getattr", ImportSurfaceTest.__doc__)
 
     def test_the_pin_is_reading_a_real_import_surface(self):
         # Non-vacuity: an assertion about a set that turned out to be empty
@@ -616,6 +713,65 @@ class EmissionGuardTest(unittest.TestCase):
                 with self.assertRaises(CaptureError):
                     capture_usage_series.assert_only_dates_and_integers({leak: 1})
 
+    def test_refuses_a_label_shaped_key_outside_the_closed_vocabulary(self):
+        # MEMBERSHIP, not shape (2026-08-24 review finding H1). Every key
+        # here satisfies KEY_PATTERN — the original guard admitted all of
+        # them, and each would have rendered publicly as panel copy.
+        for leak in ("private-feature", "internal-project-name", "clientname", "acme-migration"):
+            with self.subTest(leak=leak):
+                with self.assertRaises(CaptureError):
+                    capture_usage_series.assert_only_dates_and_integers({leak: 1})
+                with self.assertRaises(CaptureError):
+                    # Nested exactly where a hostile merge file would put it.
+                    capture_usage_series.assert_only_dates_and_integers(
+                        {"categories": {leak: [1, 2]}}
+                    )
+
+    def test_admits_extra_keys_only_when_the_caller_declares_them(self):
+        payload = {"my-source": {"series": {"startDate": "2026-08-10", "totals": [1], "recorded": True}}}
+        with self.assertRaises(CaptureError):
+            capture_usage_series.assert_only_dates_and_integers(payload)
+        capture_usage_series.assert_only_dates_and_integers(
+            payload, extra_keys=frozenset({"my-source"})
+        )
+
+    def test_refuses_an_impossible_calendar_date(self):
+        # Shape says yes, the calendar says no (2026-08-24 review finding
+        # H1: 2026-99-99 passed the digit pattern).
+        for leak in ("2026-99-99", "2026-02-30", "2026-13-01", "2026-00-10", "0000-00-00"):
+            with self.subTest(leak=leak):
+                with self.assertRaises(CaptureError):
+                    capture_usage_series.assert_only_dates_and_integers({"totals": [leak]})
+
+    def test_refuses_a_newline_suffixed_date(self):
+        # re.match with `$` tolerates exactly one trailing newline; the
+        # guard must not (2026-08-24 review finding H1).
+        for leak in ("2026-08-10\n", "2026-08-10 ", " 2026-08-10", "2026-08-10\t"):
+            with self.subTest(leak=repr(leak)):
+                with self.assertRaises(CaptureError):
+                    capture_usage_series.assert_only_dates_and_integers({"totals": [leak]})
+
+    def test_refuses_negative_integers(self):
+        # Every emitted figure is a count (2026-08-24 review finding H1:
+        # isinstance(int) admitted any sign).
+        for leak in (-1, -1000):
+            with self.subTest(leak=leak):
+                with self.assertRaises(CaptureError):
+                    capture_usage_series.assert_only_dates_and_integers({"totals": [leak]})
+
+    def test_admits_booleans_only_under_the_recorded_flag(self):
+        capture_usage_series.assert_only_dates_and_integers({"recorded": True})
+        for payload in ({"totals": [True]}, {"peak-day": False}):
+            with self.subTest(payload=payload):
+                with self.assertRaises(CaptureError):
+                    capture_usage_series.assert_only_dates_and_integers(payload)
+
+    def test_valid_calendar_day_is_membership_in_the_real_calendar(self):
+        for good in ("2026-08-10", "2024-02-29", "1999-12-31"):
+            self.assertTrue(capture_usage_series.valid_calendar_day(good), good)
+        for bad in ("2026-99-99", "2023-02-29", "2026-08-10\n", "2026-8-10", "20260810", 5, None):
+            self.assertFalse(capture_usage_series.valid_calendar_day(bad), repr(bad))
+
     def test_refuses_a_value_that_is_neither_a_date_nor_an_integer(self):
         for leak in (1.5, None, object()):
             with self.subTest(leak=repr(leak)):
@@ -631,6 +787,229 @@ class EmissionGuardTest(unittest.TestCase):
             self.assertIn("totals", str(error))
         else:
             self.fail("the guard admitted a path")
+
+
+class CategoryVocabularyParityTest(unittest.TestCase):
+    """The closed category vocabulary is ONE fact spelled in three places.
+
+    scripts/capture_usage_series.py CATEGORY_KEYS (the capture-side guard),
+    internal/panels/types.go categoryServeOrder (origin admission and serve
+    order), and frontend/src/lib/token-usage.ts categorySlots (the fixed
+    palette slots). A key admitted by one side and refused by another is a
+    pipeline that disagrees with itself, so each pin failure names the other
+    files (2026-08-24 review finding H1 closed the vocabulary; this keeps it
+    closed IN STEP).
+    """
+
+    REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+    def test_matches_the_go_admission_vocabulary(self):
+        source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
+        import re
+
+        match = re.search(r"categoryServeOrder = \[\]string\{([^}]*)\}", source)
+        self.assertIsNotNone(match, "internal/panels/types.go carries no categoryServeOrder")
+        go_keys = tuple(re.findall(r'"([^"]+)"', match.group(1)))
+        self.assertEqual(
+            go_keys,
+            capture_usage_series.CATEGORY_KEYS,
+            "categoryServeOrder in internal/panels/types.go and CATEGORY_KEYS in "
+            "scripts/capture_usage_series.py must stay identical, in order",
+        )
+
+    def test_matches_the_frontend_palette_slots(self):
+        source = (self.REPO_ROOT / "frontend/src/lib/token-usage.ts").read_text(encoding="utf-8")
+        import re
+
+        match = re.search(r"categorySlots[^(]*\(\[([^\]]*(?:\][^\]]*)*?)\]\);", source, re.DOTALL)
+        self.assertIsNotNone(match, "frontend/src/lib/token-usage.ts carries no categorySlots")
+        ts_keys = tuple(re.findall(r"\['([^']+)',\s*\d+\]", match.group(1)))
+        self.assertEqual(
+            ts_keys,
+            capture_usage_series.CATEGORY_KEYS,
+            "categorySlots in frontend/src/lib/token-usage.ts and CATEGORY_KEYS in "
+            "scripts/capture_usage_series.py must stay identical, in order",
+        )
+
+
+class CapParityTest(unittest.TestCase):
+    """The payload ceiling is ONE fact spelled in five places.
+
+    Producer, sealer, transport, receiver and origin each enforce it, and
+    before the 2026-08-24 security review (finding 4) they enforced five
+    DIFFERENT numbers: a valid export could be sealed and pushed and never
+    admitted, and an oversized one was truncated by the receiver, installed
+    over the last good file, and only then reported as a checksum mismatch.
+    Each pin failure names the other files, exactly as the category
+    vocabulary's parity pin does.
+
+    The canonical statement is `MaxSealedBytes` in internal/seal/types.go;
+    internal/panels restates it because its zero-egress doctrine pin forbids
+    importing that package, and the shell script and the operator manual
+    restate it because neither can read a Go constant.
+    """
+
+    REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+    def go_cap(self):
+        import re
+
+        source = (self.REPO_ROOT / "internal/seal/types.go").read_text(encoding="utf-8")
+        match = re.search(r"MaxSealedBytes = (\d+) << (\d+)", source)
+        self.assertIsNotNone(match, "internal/seal/types.go carries no MaxSealedBytes")
+        return int(match.group(1)) << int(match.group(2))
+
+    def structural_maximum(self, digits):
+        """Seal-sized bytes of the largest document the origin can admit.
+
+        MEASURED here rather than quoted from a comment (2026-08-24 round-3
+        review, which found the quoted figure off by the mandatory trailing
+        newline). The maximum is one document covering every label the
+        SHIPPED snapshot carries — a document can never name another — each
+        at the series-day bound with the complete category vocabulary and the
+        complete window and derived sets, emitted in the producer's own
+        compact form with its terminating newline, plus the AEAD overhead.
+        Re-deriving it from the shipped constants means the number cannot go
+        stale behind a document-shape change again.
+        """
+        snapshot = json.loads(
+            (self.REPO_ROOT / "internal/panels/snapshots/token-usage.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        labels = [source["label"] for source in snapshot["data"]["sources"]]
+        self.assertGreater(len(labels), 0, "the shipped snapshot carries no sources")
+        instant = "2026-08-24T12:00:00Z"
+        value = 10**digits - 1
+        total = value * len(capture_usage_series.CATEGORY_KEYS)
+        days = capture_usage_series.MAX_SERIES_DAYS
+        document = {
+            "schema": "usage-series/v1",
+            "generatedAt": instant,
+            "sources": {
+                label: {
+                    "capturedAt": instant,
+                    "series": {
+                        "startDate": "2024-01-01",
+                        "totals": [total] * days,
+                        "recorded": True,
+                    },
+                    "categories": {
+                        key: [value] * days for key in capture_usage_series.CATEGORY_KEYS
+                    },
+                    "windows": {
+                        "today": {"input": value, "output": value},
+                        "week": {"input": value, "output": value},
+                    },
+                    "derived": {
+                        "peak-day": total,
+                        "current-streak": days,
+                        "longest-streak": days,
+                    },
+                }
+                for label in labels
+            },
+        }
+        plaintext = json.dumps(document, separators=(",", ":")) + "\n"
+        return len(plaintext.encode("utf-8")) + 36
+
+    def test_the_canonical_cap_exceeds_the_measured_structural_maximum(self):
+        # Non-vacuity, and the one place the measurement is asserted rather
+        # than described: the ceiling must exceed the largest document the
+        # origin can admit, with real headroom, while staying a bound rather
+        # than an open door.
+        cap = self.go_cap()
+        self.assertEqual(cap, 131072)
+        maximum = self.structural_maximum(10)
+        self.assertGreater(cap, maximum)
+        # The headroom is three further decimal digits on every value: the
+        # same maximum still fits at thirteen digits and only crosses at
+        # fourteen. That is the claim docs/usage-export.md makes, measured.
+        self.assertLess(self.structural_maximum(13), cap)
+        self.assertGreater(self.structural_maximum(14), cap)
+
+    def test_matches_the_origin_admission_cap(self):
+        import re
+
+        source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
+        match = re.search(r"maxSealedSeriesBytes = (\d+) << (\d+)", source)
+        self.assertIsNotNone(match, "internal/panels/types.go carries no maxSealedSeriesBytes")
+        self.assertEqual(
+            int(match.group(1)) << int(match.group(2)),
+            self.go_cap(),
+            "maxSealedSeriesBytes in internal/panels/types.go and MaxSealedBytes in "
+            "internal/seal/types.go must state the identical ceiling",
+        )
+
+    def test_matches_the_exporter(self):
+        import re
+
+        source = (self.REPO_ROOT / "scripts/export_usage_series.py").read_text(encoding="utf-8")
+        cap = re.search(r"MAX_SEALED_BYTES = (\d+) \* 1024", source)
+        overhead = re.search(r"SEAL_OVERHEAD = (\d+)", source)
+        self.assertIsNotNone(cap, "scripts/export_usage_series.py carries no MAX_SEALED_BYTES")
+        self.assertIsNotNone(overhead, "scripts/export_usage_series.py carries no SEAL_OVERHEAD")
+        self.assertEqual(
+            int(cap.group(1)) * 1024,
+            self.go_cap(),
+            "MAX_SEALED_BYTES in scripts/export_usage_series.py and MaxSealedBytes in "
+            "internal/seal/types.go must state the identical ceiling",
+        )
+        # The overhead is what turns the sealed ceiling into the producer's
+        # plaintext bound, so it is pinned against the Go format too.
+        seal_source = (self.REPO_ROOT / "internal/seal/types.go").read_text(encoding="utf-8")
+        magic = re.search(r'magic = "([^"]+)"', seal_source)
+        nonce = re.search(r"nonceBytes = (\d+)", seal_source)
+        tag = re.search(r"tagBytes = (\d+)", seal_source)
+        self.assertIsNotNone(magic, "internal/seal/types.go carries no magic")
+        self.assertEqual(
+            int(overhead.group(1)),
+            len(magic.group(1)) + int(nonce.group(1)) + int(tag.group(1)),
+            "SEAL_OVERHEAD in scripts/export_usage_series.py must equal Overhead in "
+            "internal/seal/types.go (magic + nonce + tag)",
+        )
+
+    def test_matches_the_push_script(self):
+        import re
+
+        source = (
+            self.REPO_ROOT / "scripts/usage-export/push-usage-series.sh"
+        ).read_text(encoding="utf-8")
+        match = re.search(r"^MAX_SEALED_BYTES=(\d+)$", source, re.MULTILINE)
+        self.assertIsNotNone(
+            match, "scripts/usage-export/push-usage-series.sh carries no MAX_SEALED_BYTES"
+        )
+        self.assertEqual(
+            int(match.group(1)),
+            self.go_cap(),
+            "MAX_SEALED_BYTES in scripts/usage-export/push-usage-series.sh and "
+            "MaxSealedBytes in internal/seal/types.go must state the identical ceiling",
+        )
+
+    def test_matches_the_documented_forced_command_and_manual(self):
+        import re
+
+        cap = self.go_cap()
+        source = (self.REPO_ROOT / "docs/usage-export.md").read_text(encoding="utf-8")
+
+        # The receiver reads cap+1 so an over-cap payload is a DECISION about
+        # the real size, never a truncation, and refuses before any rename.
+        self.assertIn("head -c %d " % (cap + 1), source,
+                      "the documented forced command must read one byte past the ceiling")
+        self.assertIn('-gt %d ' % cap, source,
+                      "the documented forced command must refuse past the ceiling")
+        refusal = source.index("echo over-cap")
+        rename = source.index("&& mv ")
+        self.assertLess(refusal, rename,
+                        "the documented forced command must refuse BEFORE it renames over the last good file")
+
+        # And the operator manual states the same number in prose, so the
+        # ceiling an operator reads cannot drift from the one enforced.
+        self.assertIn(
+            "%s sealed bytes" % format(cap, ","),
+            source,
+            "docs/usage-export.md must state the ceiling in prose",
+        )
 
 
 class CaptureTest(unittest.TestCase):
@@ -769,3 +1148,232 @@ class SpliceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FinalOpenIsDescriptorRootedTest(unittest.TestCase):
+    """The check/open TOCTOU, in the two forms two review rounds found.
+
+    ROUND 4, FINDING 4 — THE LEAF. Every symlink, type, and containment check
+    the walk performed happened on a PATH, and the file was opened later with
+    `Path.open()`, which follows whatever the leaf has become. The reviewer
+    admitted a regular record, replaced it with a symlink pointing outside the
+    configured root, and the production open read the outside target.
+
+    ROUND 5, FINDING 1 — THE PARENT, and this is the one that mattered. The
+    round-4 repair added `O_NOFOLLOW` to a PATH-BASED open, which constrains
+    the FINAL component only. Everything above the leaf was still re-resolved
+    from the filesystem root on every call, so the reviewer moved one level up:
+    keep the leaf through the containment check, then rename its PARENT and put
+    a symlink to an outside tree in its place. The later path-based `lstat`
+    recorded the OUTSIDE file's identity, the open followed the intermediate
+    link, and the identity "matched" — because both sides of the comparison had
+    been taken through the attacker's path. An identity is only evidence when
+    it is obtained through a capability the attacker cannot redirect.
+
+    The fixture therefore nests the record one directory deep, so the parent
+    swap has somewhere to happen. Every refusal below is paired with a
+    non-vacuity case: the same call on an untouched tree must succeed.
+    """
+
+    def setUp(self):
+        self.scratch = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.root = os.path.join(self.scratch, "transcripts")
+        # One directory deep on purpose: a flat fixture cannot express the
+        # round-5 parent swap, and a test that cannot express the finding
+        # cannot regress on it.
+        self.inside = os.path.join(self.root, "inside")
+        os.makedirs(self.inside)
+        self.record = os.path.join(self.inside, "session.jsonl")
+        with open(self.record, "w", encoding="utf-8") as handle:
+            handle.write(transcript_line() + "\n")
+        # The outside tree the reviewer redirected to: same shape, same file
+        # name, different content, reachable only by escaping the root.
+        self.elsewhere = os.path.join(self.scratch, "elsewhere")
+        os.makedirs(self.elsewhere)
+        self.outside = os.path.join(self.elsewhere, "session.jsonl")
+        with open(self.outside, "w", encoding="utf-8") as handle:
+            handle.write("a private file the producer must never read\n")
+
+    def admit(self):
+        counters = capture_usage_series.new_counters()
+        admitted = capture_usage_series.admitted_records(self.root, counters)
+        self.assertEqual(len(admitted), 1, "the fixture must admit exactly one record")
+        return admitted[0], counters
+
+    def test_the_admitted_record_is_rooted_and_carries_its_identity(self):
+        (root, root_identity, components, identity), _ = self.admit()
+        # The record names the ROOT plus single components, never a rebased
+        # absolute path: that is what lets the open re-walk the chain instead
+        # of re-resolving a name the attacker controls.
+        self.assertEqual(root, self.root)
+        self.assertEqual(components, ("inside", "session.jsonl"))
+        for name in components:
+            self.assertNotIn("/", name)
+            self.assertNotIn(name, (".", ".."))
+        anchor = os.lstat(self.root)
+        self.assertEqual(root_identity, (anchor.st_dev, anchor.st_ino))
+        info = os.lstat(self.record)
+        self.assertEqual(identity, (info.st_dev, info.st_ino))
+
+    def test_the_happy_path_still_reads_the_admitted_file(self):
+        # Non-vacuity for every refusal below: with nothing swapped, the same
+        # call opens the record and returns its contents.
+        record, counters = self.admit()
+        handle = capture_usage_series.open_record_file(record, counters)
+        self.assertIsNotNone(handle, "an untouched admitted record was refused")
+        with handle:
+            self.assertIn("2026-08-10", handle.read())
+        self.assertEqual(counters["unreadable"], 0)
+        self.assertEqual(counters["symlinks"], 0)
+
+    def test_a_post_check_symlink_swap_is_refused(self):
+        # Round 4's probe: admit a regular file, then replace THE LEAF with a
+        # symlink out of the tree before the open.
+        record, counters = self.admit()
+        os.unlink(self.record)
+        os.symlink(self.outside, self.record)
+        handle = capture_usage_series.open_record_file(record, counters)
+        if handle is not None:
+            with handle:
+                content = handle.read()
+            self.fail("the final open followed a post-check symlink swap and read %r" % content[:40])
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_a_post_check_parent_directory_swap_is_refused(self):
+        # ROUND 5's probe, reproduced exactly as the reviewer described it:
+        # keep the leaf through admission, then rename the parent and replace
+        # it with a symlink to an outside tree holding a file of the same
+        # name. Against the round-4 build this read the outside content and
+        # the suite stayed green, because O_NOFOLLOW never looked above the
+        # leaf and the identity had been taken through the swapped parent.
+        record, counters = self.admit()
+        os.rename(self.inside, os.path.join(self.root, "moved-away"))
+        os.symlink(self.elsewhere, self.inside)
+        handle = capture_usage_series.open_record_file(record, counters)
+        if handle is not None:
+            with handle:
+                content = handle.read()
+            self.fail(
+                "the final open followed a swapped parent directory outside the root "
+                "and read %r" % content[:40]
+            )
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_a_post_check_root_swap_is_refused(self):
+        # The same escape one level higher again. The root is opened by path
+        # because it is the configured trust anchor, so the only thing that
+        # can refuse a root swapped between the walk and the read is the
+        # recorded root identity — which is why the record carries it.
+        record, counters = self.admit()
+        os.rename(self.root, os.path.join(self.scratch, "root-moved-away"))
+        os.symlink(self.elsewhere, self.root)
+        self.assertIsNone(capture_usage_series.open_record_file(record, counters))
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_an_intermediate_symlink_is_refused_even_when_it_resolves_to_the_same_file(self):
+        # THE DECISIVE ROUND-5 TEST, and the reason the two swap tests above
+        # are not enough on their own. Both of those are ALSO refused by a
+        # path-based build, because the identity comparison happens to catch
+        # them in this deterministic ordering — the reviewer's escape needed
+        # the swap to land while the walk was between its containment check
+        # and its stat, so that BOTH sides of the comparison were taken
+        # through the attacker's path. A test cannot schedule that window.
+        #
+        # So this pins the property that closes it instead of the race that
+        # exploits it: NO INTERMEDIATE COMPONENT IS EVER FOLLOWED. The link
+        # here resolves back to the very directory that was admitted, so the
+        # leaf is the same inode and every identity check in the world says
+        # yes. Only a descent that refuses a link at each component says no,
+        # which is why this is red against a path-based open and green only
+        # for a descriptor-rooted one.
+        record, counters = self.admit()
+        moved = os.path.join(self.root, "moved-away")
+        os.rename(self.inside, moved)
+        os.symlink(moved, self.inside)
+        handle = capture_usage_series.open_record_file(record, counters)
+        if handle is not None:
+            handle.close()
+            self.fail(
+                "the open followed an intermediate symlink; it was admitted only "
+                "because the link happened to resolve inside the root, which is "
+                "the attacker's choice rather than the producer's"
+            )
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_an_intermediate_swap_for_a_real_directory_is_refused(self):
+        # Not every substitution is a symlink. A genuine directory holding a
+        # genuine file of the same name defeats O_NOFOLLOW at every component,
+        # so the leaf identity is what refuses this one.
+        record, counters = self.admit()
+        os.rename(self.inside, os.path.join(self.root, "moved-away"))
+        os.makedirs(self.inside)
+        with open(self.record, "w", encoding="utf-8") as handle:
+            handle.write("substituted content in a substituted directory\n")
+        self.assertIsNone(capture_usage_series.open_record_file(record, counters))
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_a_symlinked_directory_is_never_walked_into(self):
+        # The walk's own half of the same property: a link that is a
+        # DIRECTORY is skipped rather than descended, so an outside tree
+        # linked into the root contributes no records at all.
+        os.symlink(self.elsewhere, os.path.join(self.root, "linked"))
+        admitted = capture_usage_series.admitted_records(
+            self.root, capture_usage_series.new_counters()
+        )
+        self.assertEqual(
+            [record[2] for record in admitted], [("inside", "session.jsonl")]
+        )
+
+    def test_a_post_check_swap_for_a_different_regular_file_is_refused(self):
+        # O_NOFOLLOW alone cannot see this one: the leaf is a perfectly
+        # ordinary regular file, just not the file that was admitted. The
+        # identity check is what catches it.
+        record, counters = self.admit()
+        os.unlink(self.record)
+        with open(self.record, "w", encoding="utf-8") as handle:
+            handle.write("substituted content\n")
+        self.assertIsNone(capture_usage_series.open_record_file(record, counters))
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_a_post_check_hard_link_swap_is_refused(self):
+        # A hard link to the outside file is a regular file AND is not a
+        # symlink, so only the identity comparison refuses it.
+        record, counters = self.admit()
+        os.unlink(self.record)
+        os.link(self.outside, self.record)
+        self.assertIsNone(capture_usage_series.open_record_file(record, counters))
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_a_post_check_fifo_swap_is_refused(self):
+        # Not merely a privacy question: opening a fifo read-only BLOCKS
+        # until a writer appears, so a swapped-in fifo would hang this hourly
+        # unattended job forever. O_NONBLOCK is what makes the open return,
+        # and the descriptor fstat is what refuses the leaf as not a regular
+        # file — before any read. This test hangs against a build without
+        # O_NONBLOCK, which is how it earns its place.
+        record, counters = self.admit()
+        os.unlink(self.record)
+        os.mkfifo(self.record)
+        handle = None
+        try:
+            handle = capture_usage_series.open_record_file(record, counters)
+        except OSError:
+            self.fail("the open raised instead of refusing a non-regular leaf")
+        self.assertIsNone(handle)
+        self.assertEqual(counters["symlinks"], 1)
+
+    def test_a_swapped_record_contributes_nothing_to_the_emission(self):
+        # The end-to-end statement, covering the OTHER half of the window: a
+        # leaf swapped before the walk is refused by the walk's own symlink
+        # check, exactly as a leaf swapped after it is refused by the open
+        # above. Either way the run emits nothing derived from outside the
+        # root — here by refusing outright, because a tree whose only record
+        # is unreadable has no series to report and inventing one would be
+        # the failure this tool exists to avoid.
+        os.unlink(self.record)
+        os.symlink(self.outside, self.record)
+        with self.assertRaises(CaptureError):
+            capture_usage_series.capture(
+                self.root, capture_usage_series.FORMAT_MESSAGES
+            )

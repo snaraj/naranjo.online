@@ -84,6 +84,7 @@
       "description": "The panel API's live-data behavior. Unlike media, this block is not frozen to a single value: enabling background refresh is an operational decision the operator is allowed to express here. What the schema enforces is that the decision is EXPLICIT — the key is required and boolean, so a values file cannot omit it and have the origin guess, and the default in values.yaml is off.",
       "additionalProperties": false,
       "required": ["refresh"],
+      "allOf": [{ "required": ["data"] }],
       "properties": {
         "refresh": {
           "type": "object",
@@ -94,6 +95,89 @@
               "type": "boolean",
               "default": false,
               "description": "Start the background refresh loops. false (the default) starts no loop at all, so the origin makes no outbound request and the panels serve their embedded snapshots as stale. true additionally requires the credential Secrets named by keyEnvName in internal/panels/config/fetch.json and an egress allowance for that file's hosts list; without the egress allowance the attempts fail and the panels keep serving snapshots, which is fail-soft, not an outage."
+            }
+          }
+        },
+        "data": {
+          "type": "object",
+          "description": "The panels data root (issue #142): a read-only statically bound local PV/PVC pair on the platform StorageClass, carrying one sealed usage-series file, plus its writable ReadWriteOnce replay-floor sibling. Every field is required so a values file cannot half-describe the capability: the decision and every fact it depends on are explicit, and a disabled render emits none of the objects. The hostPath shape it replaced is one the platform storage acceptance denies outright (originating issue website-infrastructure #211, carried by website-infrastructure PR #212; round-3 finding 7).",
+          "additionalProperties": false,
+          "required": ["enabled", "storageClass", "localVolumeRoot", "node", "path", "mountPath", "volumeName", "keySecret", "capacity", "statePath", "stateMountPath", "stateVolumeName", "stateCapacity", "persistentVolume"],
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Render both claims, the mounts, and the PANELS_DATA_ROOT / PANELS_DATA_STATE / PANELS_DATA_KEY wiring. Off by default (2026-08-24 review finding M6): false serves the embedded release-time snapshot — an explicit, documented as-of-release decision, not a silent fallback — and true requires the pre-provisioned PVs and host directories of docs/usage-export.md first, because defaults that render claims against absent volumes leave a fresh cluster's pod Pending. Enable deliberately, last."
+            },
+            "storageClass": {
+              "type": "string",
+              "description": "The platform StorageClass named on BOTH the PersistentVolume and its claim. It provisions nothing (kubernetes.io/no-provisioner); naming it binds the pair to the enumerated class, where the empty class it replaced merely excluded a default provisioner. The platform acceptance admits only enumerated classes (website-infrastructure #211, carried by PR #212).",
+              "pattern": "^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$"
+            },
+            "localVolumeRoot": {
+              "type": "string",
+              "description": "The platform's enumerated local-volume root. Every path below must live strictly under it or the render fails, so a path the platform would deny never reaches the platform.",
+              "pattern": "^(/[A-Za-z0-9_][A-Za-z0-9._-]*)+$"
+            },
+            "node": {
+              "type": "string",
+              "description": "The node this local volume is bound to, rendered as a bounded required nodeAffinity (operator In, exactly one non-empty value). Empty is the shipped fail-closed sentinel: a node name is a private host fact (requirement 12) that never enters this repository, and rendering the PersistentVolume without it fails the render rather than emitting a volume no scheduler can place.",
+              "pattern": "^$|^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$"
+            },
+            "path": {
+              "type": "string",
+              "description": "Directory backing the PersistentVolume, strictly under localVolumeRoot. It must already exist on the node; creating it is part of the admin ceremony. Absolute, already-normalized path. The pattern forbids an empty segment (//), a trailing separator, and any segment beginning with a dot — so '.' and '..' cannot appear at all. That is the schema half of round-3 finding 7: an alias of a reviewed directory is not the reviewed directory, and a string comparison cannot tell them apart. _helpers.tpl holds the other half, refusing overlap between the two roots in both directions after normalization.",
+              "pattern": "^(/[A-Za-z0-9_][A-Za-z0-9._-]*)+$"
+            },
+            "mountPath": {
+              "type": "string",
+              "description": "Where the pod sees the data volume, and the exact value of PANELS_DATA_ROOT. Held in values rather than hardcoded in the template so the storage pin reads its expectation from the designated binding point instead of the template under test.",
+              "pattern": "^(/[A-Za-z0-9_][A-Za-z0-9._-]*)+$"
+            },
+            "volumeName": {
+              "type": "string",
+              "description": "One DNS-1123 name shared by the PersistentVolume and the claim, making the statically bound pair legible as a pair.",
+              "pattern": "^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$"
+            },
+            "keySecret": {
+              "type": "string",
+              "description": "Secret feeding the PANELS_DATA_KEY environment variable. Referenced optional: absence degrades the panel, never the pod.",
+              "pattern": "^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$"
+            },
+            "capacity": {
+              "$ref": "#/definitions/memoryQuantity",
+              "description": "Declared PV capacity and PVC request. Static local binding does not meter it; it exists because both objects require the field and the two must agree."
+            },
+            "statePath": {
+              "type": "string",
+              "description": "Directory backing the replay-floor state PersistentVolume (2026-08-24 review finding H2), strictly under localVolumeRoot. A SEPARATE sibling of path — never the push directory, never inside it, and never containing it — writable by the pod's runtime user, created in the same admin ceremony. Absolute, already-normalized path. The pattern forbids an empty segment (//), a trailing separator, and any segment beginning with a dot — so '.' and '..' cannot appear at all. That is the schema half of round-3 finding 7: an alias of a reviewed directory is not the reviewed directory, and a string comparison cannot tell them apart. _helpers.tpl holds the other half, refusing overlap between the two roots in both directions after normalization.",
+              "pattern": "^(/[A-Za-z0-9_][A-Za-z0-9._-]*)+$"
+            },
+            "stateMountPath": {
+              "type": "string",
+              "description": "Where the pod sees the writable state volume, and the exact value of PANELS_DATA_STATE. Must not overlap mountPath in either direction; the render refuses it if it does.",
+              "pattern": "^(/[A-Za-z0-9_][A-Za-z0-9._-]*)+$"
+            },
+            "stateVolumeName": {
+              "type": "string",
+              "description": "One DNS-1123 name shared by the state PersistentVolume and its claim, distinct from volumeName so the two statically bound pairs stay legible as pairs.",
+              "pattern": "^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$"
+            },
+            "stateCapacity": {
+              "$ref": "#/definitions/memoryQuantity",
+              "description": "Declared state PV capacity and PVC request; the marker is under a kilobyte, the field exists because both objects require it and the two must agree."
+            },
+            "persistentVolume": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled"],
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Also render the two cluster-scoped PersistentVolumes. Off by default because the release reconciles through a least-privilege namespace identity that deliberately holds no PersistentVolume authority; the PVs are applied once by an admin from this chart's own template — with panels.data.node supplied on the command line, since the node name never enters this repository — and this flag flips the day the platform grants the reconciler that authority."
+                }
+              }
             }
           }
         }

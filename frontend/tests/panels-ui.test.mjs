@@ -1019,8 +1019,57 @@ test('each usage source keeps its own lens, and the shared one cannot come back'
     /aria-label=\{`\$\{source\.label\} \$\{source\.activity\.heading\} view`\}/
   );
   // And the grid still reads the SAME lens the toggle above it wrote.
-  assert.match(usageTracker, /const columns = activityColumns\(source\.activity, view\)/);
+  assert.match(
+    usageTracker,
+    /const columns = activityColumns\(source\.activity, view, lensCategory\)/
+  );
   assert.match(usageTracker, /<ContributionGrid\s+\{columns\}[\s\S]*?\{view\}/);
+
+  /* The CATEGORY lens (issue #142) is a second toggle over the same graph,
+     and it is held to this test's rule rather than exempted from it: the
+     owner's ruling is about a control beside one graph changing a different
+     graph, which says nothing about WHICH control. So the category lens is
+     per-source state keyed the same way, its default reads total for a
+     source nobody has pressed, its write is keyed by the source, its
+     radiogroup names its own source aloud, and the third argument the grid
+     call above now takes is resolved from that same per-source key — not
+     from a panel-wide choice reintroduced beside the retired one. */
+  assert.match(usageTracker, /let lenses = \$state<Record<string, string>>\(\{\}\);/);
+  assert.match(
+    usageTracker,
+    /return lenses\[key\] \?\? totalLens;/,
+    'a source nobody has pressed no longer reads the total'
+  );
+  assert.match(
+    usageTracker,
+    /\{@const lensCategory = activeLensCategory\(source\.activity, lensOf\(source\.key\)\)\}/
+  );
+  assert.match(usageTracker, /onclick=\{\(\) => \(lenses\[source\.key\] = category\.key\)\}/);
+  assert.match(usageTracker, /onclick=\{\(\) => \(lenses\[source\.key\] = totalLens\)\}/);
+  assert.doesNotMatch(usageTracker, /let lens = \$state/, 'a panel-wide category lens is back');
+  assert.match(
+    usageTracker,
+    /aria-label=\{`\$\{source\.label\} \$\{source\.activity\.noun\} category`\}/
+  );
+
+  /* And the sentinel those four assertions read is DATA, not a component
+     literal: `totalLens` is destructured from the adapter's props, and the
+     component declares no copy of it. One statement of the lens vocabulary,
+     in the adapter that also resolves every category's dailies through it —
+     so a change to what "no category" means cannot land in one of two
+     places and leave the other reading the old word. */
+  assert.match(usageTracker, /\}: UsageTrackerProps =\s*\$props\(\);/);
+  assert.match(usageTracker, /sections,\s*emptyNote,\s*totalLens\s*\}: UsageTrackerProps/);
+  assert.doesNotMatch(
+    usageTracker,
+    /(const|let|var)\s+totalLens\s*=/,
+    'the component restated the total-lens key instead of reading it from the adapter'
+  );
+  assert.doesNotMatch(
+    usageTracker,
+    /'total'|"total"/,
+    'the total-lens literal came back into the component'
+  );
 });
 
 // The calendar opens on TODAY at its end edge (owner directive, issue 127).
@@ -1277,5 +1326,49 @@ test('the skills grid tiles its columns exactly, with no cell left over', {
     0,
     `${snapshot.data.skills.length} skills plus ${cells - snapshot.data.skills.length} totals leave ` +
       `${cells % columns} blank tile(s) in a ${columns}-column grid; the grid must end flush`
+  );
+});
+
+// One numeric contract, three languages (2026-08-24 round-3 review finding
+// 9). A token count is produced by a Python capture tool, summed and served
+// by a Go origin, and admitted by this frontend, and every stage bounds it
+// at the SAME number: 2^53 - 1, the largest integer JavaScript represents
+// exactly. The bound is not arbitrary and it is not a JavaScript quirk being
+// pushed upstream — it is the point past which the three stages stop
+// agreeing about what a value IS. Go would keep counting in int64 and
+// Python in unbounded ints, and the number that arrives here would be a
+// nearby float wearing the same JSON text. Bounding at the narrowest stage
+// means every value that survives one stage means the identical thing in
+// the next.
+//
+// The pin compares by VALUE, not by spelling, because the three declare it
+// three ways that no textual match could reconcile: Go writes the shift
+// expression, Python writes the power, and TypeScript names the built-in
+// constant. Each side is evaluated the way its own language would.
+test('the count bound is the same number in Go, Python and TypeScript', {
+  skip: reducedContextNote,
+}, async () => {
+  const exact = Number.MAX_SAFE_INTEGER;
+
+  const goSource = await read('../../internal/panels/types.go');
+  const goDeclared = /maxCountValue\s*=\s*1<<(\d+)\s*-\s*1/.exec(goSource);
+  assert.ok(goDeclared, 'maxCountValue is not declared in internal/panels/types.go where this pin expects it');
+  assert.equal(2 ** Number(goDeclared[1]) - 1, exact, 'the Go count bound has drifted from the shared ceiling');
+
+  const pySource = await read('../../scripts/capture_usage_series.py');
+  const pyDeclared = /^MAX_COUNT\s*=\s*2\s*\*\*\s*(\d+)\s*-\s*1\s*$/m.exec(pySource);
+  assert.ok(pyDeclared, 'MAX_COUNT is not declared in scripts/capture_usage_series.py where this pin expects it');
+  assert.equal(2 ** Number(pyDeclared[1]) - 1, exact, 'the Python count bound has drifted from the shared ceiling');
+
+  const tsSource = await read('../src/lib/token-usage.ts');
+  assert.match(
+    tsSource,
+    /export const countBound = Number\.MAX_SAFE_INTEGER;/,
+    'the frontend no longer names the shared ceiling; the parity pin has nothing to compare'
+  );
+  assert.match(
+    tsSource,
+    /function isCount\(value: unknown\): value is number \{\s*return typeof value === 'number' && Number\.isSafeInteger\(value\) && value >= 0;/,
+    'frontend count admission no longer enforces the shared ceiling'
   );
 });

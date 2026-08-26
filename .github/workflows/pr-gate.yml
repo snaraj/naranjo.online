@@ -233,6 +233,8 @@ jobs:
         run: ./scripts/ci/chart-ingress-pin.sh
       - name: The application policy must deny every outbound connection
         run: ./scripts/ci/chart-egress-pin.sh
+      - name: The panels data root must render read-only, pinned, and absent when disabled
+        run: ./scripts/ci/chart-storage-pin.sh
       - name: Chart version must match VERSION
         run: |
           IFS= read -r version < VERSION

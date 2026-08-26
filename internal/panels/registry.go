@@ -36,7 +36,7 @@ func New(logger *slog.Logger) *Registry {
 // each complete HTTP response — envelope bytes plus digest ETag — so serving
 // never touches a source, a filesystem, or an encoder on a request.
 func newRegistry(fsys fs.FS, definitions []panelDefinition) *Registry {
-	reg := &Registry{byID: make(map[string]*panelState, len(definitions)), logger: discardLogger}
+	reg := &Registry{snapshots: fsys, byID: make(map[string]*panelState, len(definitions)), logger: discardLogger}
 	for _, definition := range definitions {
 		state := &panelState{definition: definition}
 		if fetch, ok := definition.source.(*FetchSource); ok {
