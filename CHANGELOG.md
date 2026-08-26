@@ -50,10 +50,10 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   closed: any function value (`var()`, `min()`, `max()`, `clamp()`,
   `calc()`, `env()`, `fit-content()`), a percentage, a viewport- or
   container-relative unit, and the keywords that state no number at all
-  (`none`, `auto`, `initial`, `unset`, `revert`, `min-content`,
-  `max-content`, `fit-content`, `stretch`). So the number cannot return as
-  a literal in a component the way it did in `.subsection-intro`, in any
-  unit it could be written in. A
+  (`none`, `auto`, `initial`, `unset`, `revert`, `revert-layer`,
+  `min-content`, `max-content`, `fit-content`, `stretch`). So the number
+  cannot return as a literal in a component the way it did in
+  `.subsection-intro`, in any unit it could be written in. A
   rendering lane (`e2e/rendering-lanes.spec.mjs`) measures the rendered
   boxes in all five projects at 1440px and 1920px: every card-body block
   ends on the card's content edge, and every block that WRAPPED has at
