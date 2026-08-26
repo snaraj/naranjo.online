@@ -7,6 +7,45 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.46] - 2026-08-26
+
+### Changed
+
+- Card text fills the card it sits in (owner directive 2026-08-26, issue
+  #212 — the third report of the same shape). `--card-measure` was a 42rem
+  reading cap on every summary, bullet list and empty note, and a capped
+  block start-ALIGNS in a full-width parent: measured on the live page at a
+  1440px viewport, `.entry-points` ran 672px inside a 934px card and left
+  262.0px blank (28.1%), `.entry-summary` left 270.0px (28.7%), and About
+  Me's `.empty-note` left 288.0px (30.0%) of a 960px card. Every one now
+  measures 0.0px short at 1440px and 1024px alike. The owner ruled the
+  trade for this site — filled width beats the typographic measure — and
+  set a standing rule with it: a content block ending noticeably short of
+  its container's inline end, without being a deliberately centred
+  composition, is a defect. The token survives at `none` and the three
+  declarations that read it survive with it, because together they are the
+  card primitive's per-instance override channel; `.subsection-intro`'s
+  hand-written `max-inline-size: 42rem` — a second, untokenised copy of the
+  same number — is gone outright. The lines that result are longer: at the
+  shipped 60rem column a bullet reaches ~133 characters where the cap held
+  it to ~96, and a reader who drags the column to its 100rem ceiling
+  reaches ~225.
+
+### Added
+
+- Both halves of the standing rule are pinned. A source pin
+  (`tests/experience.test.mjs`) refuses any bare absolute
+  `max-inline-size`/`max-width` anywhere in `styles.css` or a component
+  style, with exactly one named exception — `.activity-entry-source`'s 9rem
+  track cap, which bounds a repository slug inside a commit row whose last
+  column is already flush to the panel edge — so the number cannot return
+  as a literal in a component the way it did in `.subsection-intro`. A
+  rendering lane (`e2e/rendering-lanes.spec.mjs`) measures the rendered
+  boxes in all five projects at 1440px and 1920px: every card-body block
+  ends on the card's content edge, and every block that WRAPPED has at
+  least one line reaching within a third of the card, so a box that fills
+  while its text stays in a narrow column still fails.
+
 ## [0.1.45] - 2026-08-26
 
 ### Changed

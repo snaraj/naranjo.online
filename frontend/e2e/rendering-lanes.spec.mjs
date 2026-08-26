@@ -5147,3 +5147,192 @@ test('the reading-mode popover is unaffected by the column, even at its narrowes
   }
   expect(observed.scrollWidth).toBe(observed.clientWidth);
 });
+
+/* ===========================================================================
+ * Filled width beats the reading measure (owner directive 2026-08-26,
+ * issue 212)
+ *
+ * The rendered half of the standing rule. tests/experience.test.mjs pins the
+ * DECLARATIONS — no bare inline cap outside one named exception — which binds
+ * every surface including the ones this page does not render yet. This binds
+ * the ones it does: what an engine actually laid out.
+ *
+ * The two are not redundant and neither substitutes for the other. A source
+ * pin cannot see a box that a flex parent, a grid track or a shrink-to-fit
+ * ancestor left short with no cap anywhere in sight; a lane cannot see a cap
+ * written for a component that has not shipped. The measurement is the one
+ * the owner made by eye three times: where does the text stop, relative to
+ * where the card's padding says it should.
+ * ======================================================================== */
+
+/* The card-body surfaces the ruling covers, by the class the page gives them.
+ * A summary paragraph, a bullet list, an honest empty note — every block that
+ * used to read the 42rem measure. */
+const filledCardBodies = ['.entry-summary', '.entry-points', '.empty-note'];
+
+/* The widths this rule is measured at, and why they are COLUMN values rather
+ * than only viewport ones. The page column is a fixed 60rem token, so a 1440px
+ * and a 1920px viewport lay out the identical 960px column and the identical
+ * 934px card — measuring both proves the fill is viewport-independent and
+ * nothing else. The axis that genuinely changes a card's width is the reader's
+ * own column drag, so the sweep drives that token directly, exactly as the
+ * strip lane above drives it: the shipped default, and the 100rem ceiling,
+ * where a re-introduced cap would leave the widest dead band this page can
+ * produce (measured: 902px of a 1574px card). */
+const filledColumnWidths = ['60rem', '100rem'];
+
+/* One measurement pass over every card on the page. Returns one row per
+ * card-body block: how far its own box stops short of the card's content edge,
+ * how many lines the engine drew inside it, and how far the longest of those
+ * lines stops short. */
+const measureCardFill = (page) =>
+  page.evaluate((selectors) => {
+    const px = (value) => Number.parseFloat(value) || 0;
+    /* The card's own content edge, derived from the CARD exactly the way the
+       stylesheet derives it: its border box less its border and the padding
+       the token layer put there. Measuring against .feed-card-body's box
+       instead would compare the container with itself and stay green on a card
+       whose body was the thing that shrank. */
+    const contentEnd = (element) => {
+      const style = getComputedStyle(element);
+      return (
+        element.getBoundingClientRect().right - px(style.paddingRight) - px(style.borderRightWidth)
+      );
+    };
+    /* Every text RUN inside a block, as the list of line boxes the engine drew
+       for it. One run per text node, walked recursively, so a bullet list
+       reports each item separately — and that separation is the whole point.
+       Counting line boxes across the block would call a two-bullet card
+       "wrapped" when neither bullet wrapped at all, which is how a first
+       version of this lane produced a false failure at a 100rem column. */
+    const textRuns = (element) => {
+      const runs = [];
+      const walk = (node) => {
+        if (node.nodeType === 3) {
+          if (!node.data.trim()) return;
+          const range = window.document.createRange();
+          range.selectNodeContents(node);
+          const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+          if (rects.length > 0) runs.push(rects);
+          return;
+        }
+        if (node.nodeType !== 1) return;
+        if (getComputedStyle(node).display === 'none') return;
+        for (const child of node.childNodes) walk(child);
+      };
+      walk(element);
+      return runs;
+    };
+    const rows = [];
+    for (const card of window.document.querySelectorAll('.feed-card')) {
+      const edge = contentEnd(card);
+      for (const selector of selectors) {
+        for (const block of card.querySelectorAll(selector)) {
+          const runs = textRuns(block);
+          /* The line boxes that PROVE a width: every line of a wrapped run
+             except its last. A last line is as long as the sentence ran out —
+             a layout tells you nothing there — but a line the engine chose to
+             BREAK was broken because the next word did not fit, so it stands
+             within one word of the width actually available. */
+          const broken = runs.flatMap((rects) => rects.slice(0, -1));
+          rows.push({
+            selector,
+            card: Math.round(card.getBoundingClientRect().width),
+            short: edge - block.getBoundingClientRect().right,
+            runs: runs.length,
+            broken: broken.length,
+            /* The WORST of them: the broken line that stops furthest from the
+               card's edge. */
+            ink: broken.length === 0 ? 0 : Math.max(...broken.map((rect) => edge - rect.right)),
+          });
+        }
+      }
+    }
+    return rows;
+  }, filledCardBodies);
+
+/* The rule itself, applied to one measurement pass. `where` names the width
+ * the pass was taken at, so a failure says which one it was. */
+function expectCardsFilled(observed, where) {
+  /* Vacuity guards, both halves. This lane proves nothing if the page rendered
+     no cards, so all three surfaces must be present — the work log's bullets,
+     the project log's summaries, About Me's honest empty note... */
+  for (const selector of filledCardBodies) {
+    expect(
+      observed.filter((row) => row.selector === selector).length,
+      `${where} rendered no ${selector}; this lane measured nothing`
+    ).toBeGreaterThan(0);
+  }
+  /* ...and at least one line must have been BROKEN somewhere on the page, or
+     the line half of the rule never executes and this silently degrades to a
+     box-only check. */
+  expect(
+    observed.reduce((total, row) => total + row.broken, 0),
+    `nothing wrapped at ${where}, so the line-length half of this rule proved nothing`
+  ).toBeGreaterThan(0);
+
+  for (const row of observed) {
+    /* The card has to be wide enough for the defect to be visible at all, or
+       "it fills" is a claim about a box nobody could see leaning. */
+    expect(
+      row.card,
+      `a card holding ${row.selector} is only ${row.card}px wide at ${where}`
+    ).toBeGreaterThan(ribbonPx);
+    /* THE RULE. The block's own box ends ON the card's content edge: the
+       card's padding is the only thing between its text and its border, and
+       nothing narrows it further. Before the ruling this read 262.0px short for
+       .entry-points, 270.0px for .entry-summary and 288.0px for .empty-note. */
+    expect(
+      row.short,
+      `${row.selector} stops ${row.short.toFixed(1)}px short of the card's content edge at ${where} (${((row.short / row.card) * 100).toFixed(1)}% of the card left blank)`
+    ).toBeLessThanOrEqual(subPixel);
+    /* ...and does not overhang it either, which is the opposite defect and the
+       one that takes the document sideways. */
+    expect(
+      row.short,
+      `${row.selector} overhangs the card's content edge at ${where}`
+    ).toBeGreaterThanOrEqual(-subPixel);
+    /* The ink follows the box — but only where the engine made a width
+       DECISION. A run drawn on one line is as long as its sentence and no
+       longer ("Welcome to my personal website" is thirty characters; no width
+       made it that), so measuring it would refuse honest short copy. A line
+       the engine BROKE is different: it broke because the next word did not
+       fit, so it stands within one word of the width the block really had.
+       Every such line must run out to within a third of the card, or the box
+       is filling while the text inside it still sits in a narrow column —
+       which is the defect wearing a wider box, and the only way a cap
+       reintroduced anywhere but max-inline-size could hide from the check
+       above. */
+    if (row.broken > 0) {
+      expect(
+        row.ink,
+        `a line inside ${row.selector} was broken ${row.ink.toFixed(1)}px short of a ${row.card}px card at ${where}; the box fills but the text does not`
+      ).toBeLessThan(row.card / 3);
+    }
+  }
+}
+
+test('card text fills the card and stops at its padding, never two thirds of the way across (issue 212)', async ({
+  page,
+}) => {
+  await visit(page);
+  for (const width of desktopWidths) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled(page);
+    expectCardsFilled(await measureCardFill(page), `a ${width}px viewport`);
+  }
+  /* The reader's own column, across its range. This is the axis the viewport
+     loop above cannot reach: both of those widths resolve to the same 60rem
+     column, so without this the rule would only ever have been measured at one
+     card width. */
+  for (const column of filledColumnWidths) {
+    await page.evaluate((value) => {
+      window.document.documentElement.style.setProperty('--page-column-width', value);
+    }, column);
+    await settled(page);
+    expectCardsFilled(await measureCardFill(page), `a ${column} page column`);
+  }
+  await page.evaluate(() =>
+    window.document.documentElement.style.removeProperty('--page-column-width')
+  );
+});

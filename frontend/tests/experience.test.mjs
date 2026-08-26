@@ -1296,3 +1296,103 @@ test('the reading-mode swatches are drawn in the header chrome grammar', () => {
     }
   }
 });
+
+/* ===========================================================================
+ * Filled width beats the reading measure (owner directive 2026-08-26,
+ * issue 212 — the THIRD report of the same shape)
+ *
+ * The live Professional Experience section broke every bullet at 672px inside
+ * a 934px card, because --card-measure was 42rem and a capped block
+ * start-ALIGNS in a full-width parent: the last ~28% of every card was blank.
+ * The owner ruled the trade for this site — filled width wins over the
+ * typographic measure — and set a standing rule with it: a content block
+ * ending noticeably short of its container's inline end, without being a
+ * deliberately centred composition, is a defect.
+ *
+ * This is the SOURCE half of that rule, and it is deliberately not a
+ * measurement: the rendering lanes measure the boxes in a real engine, but a
+ * lane only ever measures the surfaces the page happens to render today. A
+ * width cap is decided in a DECLARATION, so a declaration is where the rule
+ * binds the surfaces nobody has written yet. Both halves ship together, per
+ * the two-halves convention the rendering-lane floors already follow.
+ * ======================================================================== */
+
+/* The ONE cap that survives the ruling, and the reason it does. It is not a
+ * prose measure: .activity-entry-source is the first of three tracks in the
+ * commit row (source | title | age), and the row's own last track ends exactly
+ * on the panel's content edge — measured 0.0px short at 1440 and 1024 — so
+ * capping the middle of a filled row bounds a repository slug rather than
+ * leaving a right-hand side empty. Removing the cap would let one long slug
+ * take the row from the commit message, which is the thing a reader is
+ * actually scanning for. */
+const admittedInlineCaps = new Map([
+  [
+    '.activity-entry-source',
+    'a track cap inside a row that fills: source | title | age, with the age column flush to the panel edge',
+  ],
+]);
+
+test('no surface caps its prose short of the container it sits in (issue 212)', () => {
+  /* The token itself. `none` is the whole ruling in one value, and the
+     declaration is still READ by three components, which is what keeps the
+     per-card override channel alive instead of forcing a fork. */
+  const declared = /--card-measure:\s*([^;]+);/.exec(stylesCode);
+  assert.ok(declared, '--card-measure is gone; the card primitive lost its measure channel');
+  assert.equal(
+    declared[1].trim(),
+    'none',
+    'the card measure is a cap again; card text will stop short of the card edge, which is the defect issue 212 closed'
+  );
+  const readers = sweptRules.filter((rule) =>
+    declarationsOf(rule.body).some(
+      ({ property, value }) =>
+        (property === 'max-inline-size' || property === 'max-width') &&
+        value.includes('var(--card-measure)')
+    )
+  );
+  assert.deepEqual(
+    readers.map((rule) => `${rule.file}: ${rule.selector}`).sort(),
+    [
+      'lib/components/EmptyNote.svelte: .empty-note',
+      'lib/components/EntryLog.svelte: .entry-points',
+      'lib/components/EntryLog.svelte: .entry-summary',
+    ],
+    'the card-body surfaces that read --card-measure changed; the override channel exists only where it is read, and a surface that stopped reading it can no longer be given a measure without a component fork'
+  );
+
+  /* And nowhere is the number written down again. Any absolute-length inline
+     cap anywhere in the page's styles is refused unless it is named above with
+     its reason — which is what stops 42rem coming back as a literal in one
+     component, the exact shape .subsection-intro carried for four releases
+     while the token layer was believed to be the only copy. */
+  assert.ok(
+    sweptRules.length > 50,
+    'the swept-rule set collapsed; this pin would pass by scanning nothing'
+  );
+  let refusable = 0;
+  for (const rule of sweptRules) {
+    for (const { property, value } of declarationsOf(rule.body)) {
+      if (property !== 'max-inline-size' && property !== 'max-width') continue;
+      /* Fluid forms cannot produce the defect: a percentage, a viewport unit,
+         a token, or anything inside min()/max()/clamp()/calc() is by
+         construction tied to the space it is given. Only a BARE absolute
+         length pins a box to a width its container knows nothing about. */
+      const length = lengthInPx(value);
+      if (length === null) continue;
+      refusable += 1;
+      const admitted = selectorParts(rule.selector).find((part) =>
+        [...admittedInlineCaps.keys()].some((key) => part.includes(key))
+      );
+      assert.ok(
+        admitted,
+        `${rule.file}: "${rule.selector}" caps ${property} at ${value} (${length}px). A capped block start-aligns in a full-width parent, so this leaves the container's inline end blank — the defect of issue 212. Fill the width, or add the selector to admittedInlineCaps with the reason it is not a prose measure.`
+      );
+    }
+  }
+  /* The refusal has to be reachable, or it is decoration: the one admitted cap
+     is itself proof that a bare length still reaches the assertion above. */
+  assert.ok(
+    refusable > 0,
+    'no absolute inline cap exists anywhere any more, so this pin can no longer fail — retire it or the exception list with it'
+  );
+});
