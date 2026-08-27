@@ -7,6 +7,53 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.50] - 2026-08-27
+
+### Added
+
+- A hand-rolled gesture layer (`src/lib/gesture.ts`, `src/lib/pullToRefresh.ts`)
+  built on Pointer Events with no third-party dependency: a shared exponential
+  rubber-band curve, a distance-or-velocity swipe decision, a horizontal claim
+  test that never takes a gesture the page's vertical scroll wanted, and a
+  settle that always returns the surface to rest.
+- Pull-to-refresh, reinstated as a custom gesture rather than the browser's.
+  It engages only at the top of the document, resists past its limit, arms at a
+  threshold the indicator announces with rotation and fill as well as colour,
+  refreshes the panels' own data in place, and settles home on every exit
+  including a failed request. `overscroll-behavior-y: none` — the defended fix
+  from issue #187 — stays exactly as it was; suppressing the native bounce is
+  what makes a settle guaranteeable instead of a race.
+- Swipe navigation on the media gallery, with a position readout and dot
+  controls that are reachable by pointer, keyboard and assistive technology.
+- Keyboard operation for the three token-usage segmented controls, which
+  declared `role="radio"` and handled no keys at all: arrow/Home/End movement
+  with a roving tabindex.
+
+### Fixed
+
+- Every contribution grid now answers a tap, a hover and a keyboard focus with
+  a real readout. The shared primitive rendered its detail card behind
+  `{#if cardTitle && !cell.absent}`, so the calendar grid carried one on none
+  of its cells and the token grid on 15 of 371; everything else fell back to a
+  native `title=`, which no engine triggers on touch. The gate is gone, cells
+  are `role="option"` in a `listbox` strip with arrow-key movement, and absent
+  cells report "no data" rather than being unreachable. Under the dataviz floor
+  a heatmap cell whose magnitude is legible only as a colour shade needs that
+  colour paired with text — so a grid that could not be interrogated on touch
+  was in breach of the floor on that device, not merely unpolished.
+- The fixed reading-mode control no longer renders over page content at phone
+  widths. It had a transparent background and reserved no flow space, so
+  right-aligned panel content passed underneath it; measured 30×33px of overlap
+  at 390×844.
+
+### Changed
+
+- The 44px touch-floor sweep now measures `min-inline-size`, `min-width`,
+  `min-block-size` and `min-height` as well as definite sizes. A control whose
+  only lower bound is a minimum previously sized no axis by the walk's
+  reckoning and passed a floor it could plainly break; the walk went from 4
+  measured dimensions to 18.
+
 ## [0.1.49] - 2026-08-26
 
 ### Added

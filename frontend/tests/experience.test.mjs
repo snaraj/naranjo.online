@@ -939,7 +939,24 @@ test('every control the markup declares clears the 44px touch floor (issue #26)'
   // 44px is the comfortable minimum for a finger; a control sized under it is
   // reliably missable on a phone however good it looks on a desktop.
   const touchFloorPx = 44;
-  const axes = { 'inline-size': 'inline', width: 'inline', 'block-size': 'block', height: 'block' };
+  /* The MINIMUMS are here beside the definite sizes, and their absence was a
+     real hole this walk had: a control declared `min-inline-size: 1px` sized
+     no axis by this map's old reckoning and passed a floor it plainly broke.
+     A minimum is the only lower bound a flexible control has, so it is exactly
+     the declaration the floor is about — and the two hidden-but-focusable
+     controls on this page (the refresh control, the gallery's position dots)
+     are sized this way and nothing else, so without these four rows the walk
+     measured neither of them. */
+  const axes = {
+    'inline-size': 'inline',
+    width: 'inline',
+    'min-inline-size': 'inline',
+    'min-width': 'inline',
+    'block-size': 'block',
+    height: 'block',
+    'min-block-size': 'block',
+    'min-height': 'block'
+  };
   const classes = new Set(Object.values(componentSources).flatMap(controlClasses));
   assert.ok(classes.size > 0, 'the markup walk found no control classes at all; it is broken');
   let measured = 0;
@@ -962,13 +979,18 @@ test('every control the markup declares clears the 44px touch floor (issue #26)'
       }
     }
   }
-  /* Both page-level controls size both of their axes, so four is the number
-     this walk must keep finding. A control sized only by its padding is a
-     legitimate shape this pin says nothing about — the browser lanes measure
-     those, because only a rendered box knows how big padding made it. */
+  /* The count is pinned because the DANGEROUS failure of a sweep is silence:
+     a control that stops matching measures nothing and reports nothing, and a
+     `>= 0` walk is green either way. Eighteen is what the four axis rows above
+     find today across the page-level controls and every control whose only
+     size is a minimum. It is a floor rather than an equality so that adding a
+     properly-sized control never fails this — but losing one does. A control
+     sized only by its padding is a legitimate shape this pin still says
+     nothing about; the browser lanes measure those, because only a rendered
+     box knows how big padding made it. */
   assert.ok(
-    measured >= 4,
-    `only ${measured} control dimensions were measured; the shared control rules size both axes each, so the walk has lost sight of one`
+    measured >= 18,
+    `only ${measured} control dimensions were measured; the walk found 18 when this floor was set, so it has lost sight of a control rather than gained one`
   );
 });
 

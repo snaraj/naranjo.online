@@ -139,6 +139,54 @@
      more. */
   let ranges = $state<Record<string, SeriesRange>>({});
 
+  /* THE SEGMENTED PILLS' KEYBOARD (issue 219). Every pill on this panel is a
+     real `radiogroup` of real `radio`s — the semantics were right — but a
+     radio group is a COMPOSITE widget, and WAI-ARIA gives composites one tab
+     stop with the arrows moving inside it. What shipped had neither half:
+     all sixteen segments were tab stops, and no arrow key did anything, so a
+     keyboard reader tabbed through every segment of every group while a
+     screen reader announced controls whose documented interaction was
+     missing.
+     Both halves land here. `tabindex` is roving — only the checked segment
+     is tabbable — and the arrows move the choice and the focus together,
+     which is exactly how a radio group behaves everywhere else and is also
+     the non-gesture equivalent this panel's gestures owe (AGENTS.md's
+     rendering floors, and the standing rule that a gesture-only affordance
+     is a defect). Home and End jump to the ends; the wrap is deliberate,
+     because a segmented control is a ring in every platform toolkit.
+     One helper drives all three groups, so a fourth group inherits the
+     behaviour by rendering the same markup rather than by remembering to. */
+  function onRadioKeydown(
+    event: KeyboardEvent,
+    options: readonly string[],
+    current: string,
+    choose: (next: string) => void
+  ): void {
+    const step =
+      event.key === 'ArrowRight' || event.key === 'ArrowDown'
+        ? 1
+        : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+          ? -1
+          : 0;
+    const jump = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : null;
+    if (step === 0 && jump === null) {
+      return;
+    }
+    /* The arrows belong to the group once focus is inside it, so the page
+       must not scroll underneath the reader as well. */
+    event.preventDefault();
+    const at = options.indexOf(current);
+    const next = jump ?? (at + step + options.length) % options.length;
+    choose(options[next]);
+    /* Focus follows selection: in a radio group the checked control IS the
+       tab stop, so leaving focus behind would strand it on a segment that
+       just became untabbable. */
+    const group = event.currentTarget;
+    if (group instanceof HTMLElement) {
+      group.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus();
+    }
+  }
+
   function rangeOf(key: string): SeriesRange {
     return ranges[key] ?? defaultSeriesRange;
   }
@@ -268,7 +316,15 @@
                     <div
                       class="usage-views"
                       role="radiogroup"
+                      tabindex="-1"
                       aria-label={`${source.label} ${source.activity.heading} view`}
+                      onkeydown={(event) =>
+                        onRadioKeydown(
+                          event,
+                          seriesViews,
+                          view,
+                          (next) => (views[source.key] = next as SeriesView)
+                        )}
                     >
                       {#each seriesViews as candidate}
                         <button
@@ -276,6 +332,7 @@
                           class="usage-view"
                           role="radio"
                           aria-checked={view === candidate}
+                          tabindex={view === candidate ? 0 : -1}
                           onclick={() => (views[source.key] = candidate)}
                         >
                           {candidate}
@@ -286,7 +343,15 @@
                       class="usage-views"
                       data-usage-ranges
                       role="radiogroup"
+                      tabindex="-1"
                       aria-label={`${source.label} ${source.activity.heading} range`}
+                      onkeydown={(event) =>
+                        onRadioKeydown(
+                          event,
+                          seriesRanges,
+                          range,
+                          (next) => (ranges[source.key] = next as SeriesRange)
+                        )}
                     >
                       {#each seriesRanges as candidate}
                         <button
@@ -294,6 +359,7 @@
                           class="usage-view"
                           role="radio"
                           aria-checked={range === candidate}
+                          tabindex={range === candidate ? 0 : -1}
                           onclick={() => (ranges[source.key] = candidate)}
                         >
                           {candidate}
@@ -309,16 +375,28 @@
                     would name a lens some source cannot answer. Every key,
                     label, and slot arrives as adapter data; only the
                     always-available total reading is the component's own. -->
+                  <!-- Bound here rather than inside the handler: the {#if}
+                    above narrows `categories` for the template, but a closure
+                    written in an attribute is checked outside that narrowing
+                    and would read as possibly-undefined. -->
+                  {@const lensKeys = [
+                    totalLens,
+                    ...source.activity.categories.map((one) => one.key)
+                  ]}
                   <div
                     class="usage-views usage-category-views"
                     role="radiogroup"
+                    tabindex="-1"
                     aria-label={`${source.label} ${source.activity.noun} category`}
+                    onkeydown={(event) =>
+                      onRadioKeydown(event, lensKeys, lensOf(source.key), (next) => (lenses[source.key] = next))}
                   >
                     <button
                       type="button"
                       class="usage-view"
                       role="radio"
                       aria-checked={lensOf(source.key) === totalLens}
+                      tabindex={lensOf(source.key) === totalLens ? 0 : -1}
                       onclick={() => (lenses[source.key] = totalLens)}
                     >
                       total
@@ -329,6 +407,7 @@
                         class="usage-view"
                         role="radio"
                         aria-checked={lensOf(source.key) === category.key}
+                        tabindex={lensOf(source.key) === category.key ? 0 : -1}
                         onclick={() => (lenses[source.key] = category.key)}
                       >
                         {category.label}

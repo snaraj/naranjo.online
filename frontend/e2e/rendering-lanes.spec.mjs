@@ -3004,7 +3004,7 @@ test('the token panel detail card shows the value and the view-scoped period, an
     await page.mouse.move(0, 0);
     const box = await cell.boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    const tip = cell.locator('.cell-tip');
+    const tip = panel.locator('.cell-tip').first();
     await expect(tip).toHaveAttribute('data-tip-open', 'true');
     const rows = await tip.locator('.cell-tip-row').allTextContents();
     await page.mouse.move(0, 0);
@@ -3466,7 +3466,19 @@ function detailBox(page, selector, index) {
   return page.evaluate(
     ([css, at]) => {
       const cell = window.document.querySelectorAll(css)[at];
-      const node = cell.querySelector('.cell-tip');
+      /* The detail is a child of a stat cell, and a SIBLING of the strip for a
+
+         heatmap (issue 219: one card per grid, not one per 10px cell). Both
+
+         shapes resolve here so this harness measures the same primitive
+
+         wherever it is mounted. */
+
+      const node =
+
+        cell.querySelector('.cell-tip') ??
+
+        cell.closest('.grid-block')?.querySelector('.cell-tip');
       const box = node.getBoundingClientRect();
       const tile = cell.getBoundingClientRect();
       const root = window.document.documentElement;
@@ -3591,7 +3603,19 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
   await page.mouse.move(0, 0);
   const finger = await page.evaluate(async ([css, at]) => {
     const cell = window.document.querySelectorAll(css)[at];
-    const node = cell.querySelector('.cell-tip');
+    /* The detail is a child of a stat cell, and a SIBLING of the strip for a
+
+       heatmap (issue 219: one card per grid, not one per 10px cell). Both
+
+       shapes resolve here so this harness measures the same primitive
+
+       wherever it is mounted. */
+
+    const node =
+
+      cell.querySelector('.cell-tip') ??
+
+      cell.closest('.grid-block')?.querySelector('.cell-tip');
     const box = cell.getBoundingClientRect();
     cell.dispatchEvent(
       new PointerEvent('pointerenter', {
@@ -3626,7 +3650,19 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
   const latency = await page.evaluate(
     async ([css, at, gapPx]) => {
       const cell = window.document.querySelectorAll(css)[at];
-      const node = cell.querySelector('.cell-tip');
+      /* The detail is a child of a stat cell, and a SIBLING of the strip for a
+
+         heatmap (issue 219: one card per grid, not one per 10px cell). Both
+
+         shapes resolve here so this harness measures the same primitive
+
+         wherever it is mounted. */
+
+      const node =
+
+        cell.querySelector('.cell-tip') ??
+
+        cell.closest('.grid-block')?.querySelector('.cell-tip');
       cell.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true, pointerType: 'mouse' }));
       await new Promise((frame) => requestAnimationFrame(frame));
       const box = cell.getBoundingClientRect();
@@ -3705,7 +3741,19 @@ test('a flood of pointer moves costs one placement per frame, using the newest p
   const flood = await page.evaluate(
     async ([sel, at, x, y]) => {
       const cell = window.document.querySelectorAll(sel)[at];
-      const node = cell.querySelector('.cell-tip');
+      /* The detail is a child of a stat cell, and a SIBLING of the strip for a
+
+         heatmap (issue 219: one card per grid, not one per 10px cell). Both
+
+         shapes resolve here so this harness measures the same primitive
+
+         wherever it is mounted. */
+
+      const node =
+
+        cell.querySelector('.cell-tip') ??
+
+        cell.closest('.grid-block')?.querySelector('.cell-tip');
       const placed = () => node.style.getPropertyValue('--tip-x');
       const before = placed();
       let delivered = 0;
@@ -3856,7 +3904,10 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
     let index = 0;
     let width = 0;
     cells.forEach((cell, at) => {
-      const box = cell.querySelector('.cell-tip').getBoundingClientRect();
+      const box = (
+        cell.querySelector('.cell-tip') ??
+        cell.closest('.grid-block').querySelector('.cell-tip')
+      ).getBoundingClientRect();
       if (box.width > width) {
         width = box.width;
         index = at;
@@ -4343,7 +4394,10 @@ test('the skill detail and the boss detail are the same object, measured', async
      also has to resolve from a token — a raw length would pass a parity
      check and still be the drift issue #136 rule 5 forbids. */
   const measure = ([css, at]) => {
-    const node = window.document.querySelectorAll(css)[at].querySelector('.cell-tip');
+    const target = window.document.querySelectorAll(css)[at];
+    const node =
+      target.querySelector('.cell-tip') ??
+      target.closest('.grid-block').querySelector('.cell-tip');
     const box = getComputedStyle(node);
     const title = getComputedStyle(node.querySelector('.cell-tip-name'));
     const row = getComputedStyle(node.querySelectorAll('span')[1]);
@@ -5479,4 +5533,689 @@ test('card text fills the card and stops at its padding, never two thirds of the
   await page.evaluate(() =>
     window.document.documentElement.style.removeProperty('--page-column-width')
   );
+});
+
+/* ===========================================================================
+ * MOBILE INTERACTION (issue 219). Four defects the owner reported from an
+ * iPhone, each measured here as behaviour in a real engine rather than as a
+ * declaration in the source. The source halves live in tests/gesture.test.mjs
+ * (the arithmetic), tests/grid.test.mjs and tests/panels-ui.test.mjs (the
+ * structure); neither half replaces the other.
+ * ======================================================================== */
+
+/* A FINGER, not a cursor, on every engine. The detail binding branches on
+ * `event.pointerType === 'touch'`, so proving the touch path means producing a
+ * touch pointer — and Playwright's touchscreen API exists only on the two
+ * projects configured with hasTouch. Dispatching the PointerEvents directly
+ * runs the identical code path on all five, which is the stronger coverage:
+ * the desktop engines are exactly where a hybrid laptop's touchscreen lives,
+ * and a touch regression there would otherwise be invisible to this matrix.
+ * The events are real PointerEvents delivered to the real element from
+ * elementFromPoint — what is synthesised is the hand, never the handler. */
+async function tapAt(page, x, y) {
+  await page.evaluate(
+    ([atX, atY]) => {
+      const target = window.document.elementFromPoint(atX, atY) ?? window.document.body;
+      for (const type of ['pointerdown', 'pointerup']) {
+        target.dispatchEvent(
+          new PointerEvent(type, {
+            pointerId: 33,
+            pointerType: 'touch',
+            clientX: atX,
+            clientY: atY,
+            bubbles: true,
+          }),
+        );
+      }
+    },
+    [x, y],
+  );
+  await page.waitForTimeout(120);
+}
+
+/* Scoped to a GRID's readout, never any readout on the page. The stat tracker
+ * mounts the same primitive per tile, so an unscoped query would report a
+ * stat tile's card as though a heatmap had answered — a dismissal tap landing
+ * on one is enough to make the whole assertion vacuous, which is exactly what
+ * it did on WebKit before this scope existed. */
+async function readoutState(page) {
+  return page.evaluate(() => {
+    const tip = window.document.querySelector('.grid-block .cell-tip[data-tip-open="true"]');
+    const selected = window.document.querySelector('.grid-cell[data-grid-selected="true"]');
+    return {
+      open: tip !== null,
+      text: tip === null ? null : tip.innerText.replace(/\s+/g, ' ').trim(),
+      selectedIndex: selected === null ? null : selected.dataset.gridIndex,
+      ringWidth: selected === null ? null : window.getComputedStyle(selected).outlineWidth,
+    };
+  });
+}
+
+/* DEFECT 1. The token grid answered a tap with nothing. The cause was not the
+ * touch handling — which always worked — but that 96% of its cells carried no
+ * detail to open: ContributionGrid gated the shared card behind
+ * `cardTitle && !cell.absent`, and the contribution calendar, passing no
+ * cardTitle at all, carried one on NONE of its 371 cells. Everything else fell
+ * back to the browser's `title=`, which has no touch trigger in any engine.
+ *
+ * A heatmap encodes magnitude as a colour shade, so a cell nobody can
+ * interrogate breaks AGENTS.md's dataviz floor — "a value is never encoded by
+ * color alone" — on every touch device. This lane measures the repair on EVERY
+ * grid, because the defect was an asymmetry between two consumers of one
+ * component and a fix that reached only the reported one would be the same
+ * bug with a different victim. */
+test('every grid answers a tap with a real readout, on every engine (issue 219)', async ({
+  page,
+  isMobile,
+}) => {
+  await visit(page);
+
+  const strips = page.locator('.grid-strip[role="listbox"]');
+  const count = await strips.count();
+  expect(count, 'the page rendered no interrogable grid at all').toBeGreaterThan(0);
+
+  // No grid cell may carry the browser tooltip any more: it is the attribute
+  // that had no touch trigger, and its absence is the fix.
+  expect(
+    await page.locator('.grid-cell[title]').count(),
+    'a grid cell still carries the browser tooltip, which no finger can open',
+  ).toBe(0);
+
+  // Every cell is a real option with an accessible name, absent ones included.
+  const cells = await page.evaluate(() => {
+    const all = [...window.document.querySelectorAll('.grid-strip[role="listbox"] .grid-cell')];
+    return {
+      total: all.length,
+      options: all.filter((cell) => cell.getAttribute('role') === 'option').length,
+      named: all.filter((cell) => (cell.getAttribute('aria-label') ?? '').length > 0).length,
+      absent: all.filter((cell) => cell.dataset.gridAbsent === 'true').length,
+    };
+  });
+  expect(cells.total).toBeGreaterThan(0);
+  expect(cells.options, 'a grid cell is not a selectable option').toBe(cells.total);
+  expect(cells.named, 'a grid cell carries no accessible reading').toBe(cells.total);
+  // The absent cells are the ones the old gate silenced, so their presence is
+  // what makes this measurement about the actual defect.
+  expect(cells.absent, 'no absent cells on the page; this lane proves less than it claims').toBeGreaterThan(0);
+
+  for (let index = 0; index < count; index += 1) {
+    const strip = strips.nth(index);
+    await strip.scrollIntoViewIfNeeded();
+    const box = await strip.boundingBox();
+    // Deliberately NOT a cell centre. A cell is 10px and a finger is 44px, so
+    // the interaction only works if the strip resolves the nearest cell to
+    // wherever the touch actually landed — including on the gap between two.
+    await tapAt(page, box.x + box.width / 2 + 3, box.y + box.height / 2 - 7);
+    const state = await readoutState(page);
+    expect(state.open, `grid ${index} answered a tap with no readout`).toBe(true);
+    expect(state.text, `grid ${index} opened an empty readout`).not.toBe('');
+    expect(state.selectedIndex, `grid ${index} opened a readout with no cell selected`).not.toBeNull();
+    // The ring the owner described seeing on the grid that worked. It is a
+    // real computed outline, not a class we hope resolves.
+    expect(
+      Number.parseFloat(state.ringWidth),
+      `grid ${index} selected a cell without marking it`,
+    ).toBeGreaterThan(0);
+    // Dismiss, and prove the dismissal is real: a ring left behind is a page
+    // claiming a selection it no longer has.
+    await tapAt(page, 5, Math.max(5, box.y - 60));
+    const after = await readoutState(page);
+    expect(after.selectedIndex, `grid ${index} left a cell marked after dismissal`).toBeNull();
+  }
+
+  // An ABSENT cell reads honestly rather than as a fabricated zero — the
+  // panels contract's rule, applied to the cell that used to say nothing.
+  const absentReading = await page.evaluate(() => {
+    const cell = window.document.querySelector(
+      '.grid-strip[role="listbox"] .grid-cell[data-grid-absent="true"]',
+    );
+    return cell === null ? null : cell.getAttribute('aria-label');
+  });
+  expect(absentReading).toBe('no data for this day');
+
+  // The keyboard reaches the identical readout. A gesture-only affordance is
+  // a defect, so this is the same assertion from the other side.
+  await page.evaluate(() => {
+    window.document.querySelector('.grid-strip[role="listbox"]').focus();
+  });
+  /* Home first, so the cursor starts at a KNOWN end with the whole window in
+     front of it. Starting from nothing selected puts it at the newest cell,
+     where a further step backwards can land on the boundary and legitimately
+     refuse to move — which would make the movement assertion below read as a
+     failure of the arrows rather than of the test's choice of direction. */
+  /* The poll PRESSES the key, rather than pressing once and then waiting for
+     the consequence. That is not belt-and-braces: a panel whose data arrives
+     while the reader is on the grid changes `columns`, and
+     ContributionGrid.svelte deliberately drops the selection when it does —
+     keeping the index would silently re-point the readout at a different day.
+     So a single press followed by a wait is a measurement racing a reset it
+     can never recover from, and it was measured failing exactly that way on
+     WebKit under full-matrix worker contention (2026-08-27) while passing
+     3/3 when the test ran alone. Re-pressing is also what a reader does.
+     `Home` is idempotent — it is always the first dated cell — so repeating it
+     asserts the same thing each time rather than drifting.
+     Both halves are read together because they land on independent clocks:
+     `aria-activedescendant` is a derived attribute Svelte writes on its own
+     effect flush, while the card's `data-tip-open` is written by
+     lib/tooltip.ts when the binding re-anchors, and waiting for either alone
+     just moves which assertion loses the race.
+     This does not make the assertion below decorative, because the thing
+     asserted is not the thing polled: the poll can only establish that a
+     cursor and a card both EXIST, and what is checked afterwards is that the
+     cursor names the cell the grid actually marked — agreement no amount of
+     waiting can manufacture. Mutating the cursor to name a fixed cell turns
+     that assertion red while this poll still passes. */
+  const keyboardCursor = async () => {
+    await page.keyboard.press('Home');
+    return page.evaluate(() => {
+      const strip = window.document.querySelector('.grid-strip[role="listbox"]');
+      const tip = window.document.querySelector('.grid-block .cell-tip[data-tip-open="true"]');
+      const active = strip === null ? null : strip.getAttribute('aria-activedescendant');
+      return tip !== null && active !== null && active.length > 0;
+    });
+  };
+  await expect
+    .poll(keyboardCursor, {
+      message: 'the keyboard opened no readout, or moved a cursor no assistive technology can hear',
+      timeout: 10_000,
+    })
+    .toBe(true);
+  const byKeyboard = await readoutState(page);
+  const active = await page.evaluate(() =>
+    window.document.querySelector('.grid-strip[role="listbox"]').getAttribute('aria-activedescendant'),
+  );
+  expect(active).toBe(`${await page.evaluate(() => window.document.querySelector('.grid-cell[data-grid-selected="true"]').id)}`);
+
+  /* ...and the arrows MOVE it, rather than opening the same cell forever.
+     Written as "landed on a real cell that is not the one Home chose" rather
+     than as a bare inequality, because the reset described above turns
+     selectedIndex into null and a bare `.not.toBe(firstCell)` is SATISFIED by
+     null — the arrow keys could stop working entirely and this would still
+     pass. Requiring a genuine index closes that, and pressing inside the poll
+     recovers from a reset instead of racing it. */
+  const firstCell = byKeyboard.selectedIndex;
+  await expect
+    .poll(
+      async () => {
+        await page.keyboard.press('ArrowRight');
+        const { selectedIndex } = await readoutState(page);
+        return selectedIndex !== null && selectedIndex !== firstCell;
+      },
+      {
+        message: 'the arrow keys do not move the cursor to another cell',
+        timeout: 10_000,
+      },
+    )
+    .toBe(true);
+
+  expect(isMobile === undefined || typeof isMobile === 'boolean').toBe(true);
+});
+
+/* DEFECT 1, second half: the strip's own horizontal pan is the BROWSER'S, and
+ * must stay that way. This is the "never fight native scrolling" rule measured
+ * rather than asserted — a touch-action of anything but auto here would mean
+ * the gesture layer had taken a scroll that was never its to take. */
+test('a wide grid still pans natively, and never takes the page sideways (issue 219)', async ({
+  page,
+}) => {
+  await visit(page);
+  /* Narrowed deliberately: a year of columns fits a desktop column, so a
+     1280px lane would measure a strip with nothing to pan and pass without
+     proving anything. A phone width is where the overflow — and therefore the
+     gesture question — actually exists. */
+  await page.setViewportSize({ width: 390, height: 844 });
+  await settled(page);
+  const pan = await page.evaluate(() => {
+    const strip = window.document.querySelector('.grid-strip');
+    const before = strip.scrollLeft;
+    strip.scrollLeft = Math.max(0, before - 120);
+    return {
+      touchAction: window.getComputedStyle(strip).touchAction,
+      overflowX: window.getComputedStyle(strip).overflowX,
+      scrollable: strip.scrollWidth > strip.clientWidth,
+      moved: strip.scrollLeft !== before,
+      docScrollWidth: window.document.documentElement.scrollWidth,
+      docClientWidth: window.document.documentElement.clientWidth,
+    };
+  });
+  expect(pan.scrollable, 'the strip has nothing to pan; this lane proves nothing').toBe(true);
+  expect(pan.touchAction, 'the grid strip stopped handing its pan to the browser').toBe('auto');
+  expect(pan.overflowX).toBe('auto');
+  expect(pan.moved).toBe(true);
+  expect(pan.docScrollWidth, 'wide grid content took the page sideways').toBeLessThanOrEqual(
+    pan.docClientWidth,
+  );
+});
+
+/* DEFECT 2. Nothing was swipeable. The gallery shows one photograph and had
+ * only two arrow buttons to move between them. */
+test('the gallery advances on a swipe and settles back on a fidget (issue 219)', async ({
+  page,
+}) => {
+  await visit(page);
+  const stage = page.locator('.gallery-stage').first();
+  await stage.scrollIntoViewIfNeeded();
+
+  const counter = page.locator('.gallery-count').first();
+  const readIndex = async () => (await counter.innerText()).trim();
+  const start = await readIndex();
+
+  const box = await stage.boundingBox();
+  const midY = box.y + box.height / 2;
+
+  // The vertical axis is the page's, unconditionally. This is the single
+  // declaration the whole feature rests on.
+  expect(
+    await stage.evaluate((node) => window.getComputedStyle(node).touchAction),
+    'the gallery stage stopped handing vertical panning to the page',
+  ).toBe('pan-y');
+
+  /* A finger, dispatched as real PointerEvents with pointerType "touch".
+     Playwright's touchscreen API offers only tap(), and its mouse API cannot
+     produce a touch pointer at all — so a synthesised sequence is the only way
+     to drive the path a thumb actually takes. The events are genuine
+     PointerEvents delivered to the real element, so everything downstream of
+     `pointerdown` is the shipping code path; what is synthesised is the hand,
+     not the handler. */
+  const drag = (offsets, gapMs = 0) =>
+    page.evaluate(
+      async ([xs, y, pause]) => {
+        const stageNode = window.document.querySelector('.gallery-stage');
+        const send = (type, x) =>
+          stageNode.dispatchEvent(
+            new PointerEvent(type, {
+              pointerId: 21,
+              pointerType: 'touch',
+              clientX: x,
+              clientY: y,
+              bubbles: true,
+            }),
+          );
+        send('pointerdown', xs[0]);
+        for (const x of xs.slice(1)) {
+          send('pointermove', x);
+          if (pause > 0) {
+            await new Promise((resolve) => setTimeout(resolve, pause));
+          }
+        }
+        send('pointerup', xs.at(-1));
+      },
+      [offsets, midY, gapMs],
+    );
+
+  // A real leftward drag: down, several moves (a single jump is not a drag and
+  // the binding is right to ignore it), up.
+  await drag([0.8, 0.7, 0.55, 0.4, 0.25].map((at) => box.x + box.width * at));
+  await page.waitForTimeout(320);
+  const advanced = await readIndex();
+  expect(advanced, 'a leftward swipe did not advance the gallery').not.toBe(start);
+
+  // A FIDGET — a few pixels, slowly — must put the surface back and change
+  // nothing. This is the half that stops a carousel turning on every touch.
+  // Slow AND short: 11px over 180ms clears neither the distance nor the
+  // velocity test, which is exactly what a fidget is.
+  const held = await readIndex();
+  const from = box.x + box.width * 0.6;
+  await drag([from, from - 4, from - 8, from - 11], 60);
+  await page.waitForTimeout(320);
+  expect(await readIndex(), 'a small slow drag turned the page anyway').toBe(held);
+
+  // ...and the surface is back where it started, with no residual offset. A
+  // gallery left displaced is the pull-to-refresh defect in another costume.
+  const resting = await page.evaluate(() => {
+    const button = window.document.querySelector('.gallery-image-button');
+    const matrix = new DOMMatrixReadOnly(window.getComputedStyle(button).transform);
+    return matrix.m41;
+  });
+  expect(Math.abs(resting), 'the gallery did not settle back to its resting position').toBeLessThan(1);
+});
+
+test('the gallery is reachable without a gesture, and says where it is (issue 219)', async ({
+  page,
+}) => {
+  await visit(page);
+  const counter = page.locator('.gallery-count').first();
+  const dots = page.locator('.gallery-dot');
+  const total = await dots.count();
+  expect(total, 'the gallery offers no visible position affordance').toBeGreaterThan(1);
+
+  // The position marks are real controls, at the touch floor on BOTH axes.
+  for (let index = 0; index < total; index += 1) {
+    const box = await dots.nth(index).boundingBox();
+    expect(box.width + subPixel, `position dot ${index} is under the touch floor`).toBeGreaterThanOrEqual(
+      touchFloorPx,
+    );
+    expect(box.height + subPixel, `position dot ${index} is under the touch floor`).toBeGreaterThanOrEqual(
+      touchFloorPx,
+    );
+  }
+
+  // The current position is never colour alone: the selected mark is also
+  // LARGER, which is the dataviz floor applied to a control.
+  const marks = await page.evaluate(() =>
+    [...window.document.querySelectorAll('.gallery-dot')].map((dot) => ({
+      selected: dot.getAttribute('aria-selected') === 'true',
+      width: dot.querySelector('.gallery-dot-mark').getBoundingClientRect().width,
+    })),
+  );
+  const current = marks.find((mark) => mark.selected);
+  const other = marks.find((mark) => !mark.selected);
+  expect(current, 'no position mark is marked current').toBeTruthy();
+  expect(
+    current.width,
+    'the current position is distinguished by colour alone',
+  ).toBeGreaterThan(other.width);
+
+  // Pressing one navigates — the non-gesture equivalent, exercised.
+  const before = (await counter.innerText()).trim();
+  await dots.nth(total - 1).click();
+  await page.waitForTimeout(150);
+  expect((await counter.innerText()).trim(), 'a position dot did not navigate').not.toBe(before);
+
+  // And so do the arrow keys on the frame itself.
+  const frame = page.locator('.gallery-image-button').first();
+  await frame.focus();
+  const held = (await counter.innerText()).trim();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForTimeout(150);
+  expect((await counter.innerText()).trim(), 'the arrow keys do not drive the gallery').not.toBe(held);
+});
+
+/* DEFECT 3. Pull-to-refresh. The browser's own was suppressed at issue 187
+ * because its rubber-band overshoot left the document translated down and
+ * never settled flush; that declaration stays, and this replacement owns its
+ * own travel and its own settle.
+ *
+ * The honest limit of this lane, stated rather than hidden: Playwright's
+ * synthetic touch events drive the pointer path, which is what the binding
+ * listens to — so the ARMING, the resistance, the refresh and the settle are
+ * all really measured. What no engine here can produce is the compositor-level
+ * native overscroll animation that issue 187 was about, and the pin for that
+ * remains the computed `overscroll-behavior-y` below. */
+test('the page is never left displaced by a pull, and the native bounce stays suppressed (issue 219, 187)', async ({
+  page,
+}) => {
+  await visit(page);
+
+  // Issue 187's fix is still in force in this engine — removing it would
+  // reintroduce exactly the defect this feature is a replacement for.
+  const overscroll = await page.evaluate(() => ({
+    html: window.getComputedStyle(window.document.documentElement).overscrollBehaviorY,
+    body: window.getComputedStyle(window.document.body).overscrollBehaviorY,
+  }));
+  expect(overscroll.html).toBe('none');
+  expect(overscroll.body).toBe('none');
+
+  // AT REST there must be no transform on the page column. This is not
+  // cosmetic: a transform of any value other than `none` makes its element a
+  // containing block for every fixed-position descendant, which would silently
+  // re-parent the pinned header and every detail card away from the viewport
+  // for the life of the page.
+  const atRest = await page.evaluate(() => ({
+    main: window.getComputedStyle(window.document.querySelector('main')).transform,
+    pulling: window.document.documentElement.hasAttribute('data-pulling'),
+  }));
+  expect(atRest.main, 'the page column carries a transform at rest').toBe('none');
+  expect(atRest.pulling).toBe(false);
+
+  // A real downward pull from the top.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const pulled = await page.evaluate(async () => {
+    const target = window.document.body;
+    const send = (type, y) =>
+      target.dispatchEvent(
+        new PointerEvent(type, {
+          pointerId: 1,
+          pointerType: 'touch',
+          clientX: 100,
+          clientY: y,
+          bubbles: true,
+        }),
+      );
+    send('pointerdown', 100);
+    const samples = [];
+    for (const y of [120, 140, 190, 260, 340]) {
+      send('pointermove', y);
+      /* The component writes the travel from a reactive effect, which lands on
+         a microtask rather than inside the dispatch. Reading synchronously
+         here would measure the frame BEFORE the pull — a harness racing the
+         framework, not a product fault. */
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      samples.push({
+        raw: y - 100,
+        moved: Number.parseFloat(
+          window.document.documentElement.style.getPropertyValue('--page-pull'),
+        ),
+        phase: window.document.querySelector('.pull-indicator').dataset.pullPhase,
+      });
+    }
+    return samples;
+  });
+
+  // It RESISTS: the surface always moves less than the finger did.
+  for (const sample of pulled) {
+    expect(sample.moved, `a ${sample.raw}px pull moved ${sample.moved}px, which is no resistance`).toBeLessThan(
+      sample.raw,
+    );
+    expect(sample.moved).toBeGreaterThan(0);
+  }
+  // ...and it ARMS, with a phase change the reader can see at the crossing.
+  expect(pulled.at(0).phase, 'a short pull already reads as armed').toBe('pulling');
+  expect(pulled.at(-1).phase, 'a long pull never armed; the gesture can never fire').toBe('armed');
+
+  // Releasing an armed pull refreshes and then SETTLES BACK TO PLACE — the
+  // exact property the removed gesture lacked.
+  await page.evaluate(() => {
+    window.document.body.dispatchEvent(
+      new PointerEvent('pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 100,
+        clientY: 340,
+        bubbles: true,
+      }),
+    );
+  });
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(
+          () => window.document.documentElement.style.getPropertyValue('--page-pull') === '0px',
+        ),
+      { message: 'the page never settled back after a pull', timeout: 10_000 },
+    )
+    .toBe(true);
+
+  const settledState = await page.evaluate(() => ({
+    main: window.getComputedStyle(window.document.querySelector('main')).transform,
+    pulling: window.document.documentElement.hasAttribute('data-pulling'),
+    phase: window.document.querySelector('.pull-indicator').dataset.pullPhase,
+    scrollY: window.scrollY,
+  }));
+  expect(settledState.main, 'the page column was left transformed after a pull').toBe('none');
+  expect(settledState.pulling, 'the pulling attribute outlived the pull').toBe(false);
+  expect(settledState.phase).toBe('idle');
+  expect(settledState.scrollY, 'the page was left scrolled by its own refresh gesture').toBe(0);
+});
+
+test('an upward drag from the top is the page’s scroll, never a pull (issue 219)', async ({
+  page,
+}) => {
+  await visit(page);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const moved = await page.evaluate(() => {
+    const target = window.document.body;
+    const send = (type, y) =>
+      target.dispatchEvent(
+        new PointerEvent(type, {
+          pointerId: 7,
+          pointerType: 'touch',
+          clientX: 100,
+          clientY: y,
+          bubbles: true,
+        }),
+      );
+    send('pointerdown', 300);
+    for (const y of [280, 240, 180]) send('pointermove', y);
+    const pull = window.document.documentElement.style.getPropertyValue('--page-pull');
+    send('pointerup', 180);
+    return pull;
+  });
+  // Either untouched or explicitly zero — never a positive travel.
+  expect(['', '0px']).toContain(moved);
+});
+
+test('the refresh gesture has a control a keyboard can reach (issue 219)', async ({ page }) => {
+  await visit(page);
+  const control = page.locator('.pull-control');
+  await expect(control, 'the pull gesture has no non-gesture equivalent').toHaveCount(1);
+
+  // Hidden by CLIPPING, not by shrinking: the box stays at the touch floor, so
+  // the control is a real target the instant it is revealed.
+  const box = await control.boundingBox();
+  expect(box.width + subPixel, 'the refresh control is under the touch floor').toBeGreaterThanOrEqual(
+    touchFloorPx,
+  );
+  expect(box.height + subPixel, 'the refresh control is under the touch floor').toBeGreaterThanOrEqual(
+    touchFloorPx,
+  );
+
+  /* It is the FIRST thing a keyboard reaches — where the engine tabs to
+     buttons at all. WebKit does not by default (its "press Tab to highlight
+     each item" setting is off, and Playwright inherits that), which is a
+     browser preference rather than anything this page controls, so the
+     Tab-order half is asserted only on the engines that HAVE a Tab order over
+     buttons. The reachability half below is asserted everywhere, because
+     focus() is what assistive technology uses regardless. */
+  await page.keyboard.press('Tab');
+  const focused = await page.evaluate(() => window.document.activeElement?.className ?? '');
+  if (focused !== '' && !focused.includes('gallery-dot')) {
+    expect(focused, 'the refresh control is not the first focus stop').toContain('pull-control');
+  }
+  await control.evaluate((node) => node.focus());
+  expect(
+    await page.evaluate(() => window.document.activeElement?.className ?? ''),
+    'the refresh control cannot be focused at all',
+  ).toContain('pull-control');
+
+  // Focusing it reveals it rather than leaving an invisible focused control.
+  expect(await control.evaluate((node) => window.getComputedStyle(node).clipPath)).toBe('none');
+
+  // And pressing it does the work, then returns to idle.
+  await page.keyboard.press('Enter');
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => window.document.querySelector('.pull-indicator').dataset.pullPhase),
+      { message: 'the refresh control never returned to idle', timeout: 10_000 },
+    )
+    .toBe('idle');
+});
+
+/* DEFECT 4. At iPhone width the fixed reading-mode control overlapped the
+ * token panel's segmented control, rendering "cumulative" underneath the moon
+ * icon. The header is fixed to the VIEWPORT while the column scrolls beneath
+ * it, and at a phone width the column IS the viewport, so right-aligned panel
+ * content passed through the corner the control owns — with nothing painted
+ * behind it, the label showed straight through.
+ *
+ * MEASURED before the fix at 390x844 in WebKit: icon x 330-374 y 16-60,
+ * "cumulative" x 283.19-360.0 y 26.98-70.98 — a 30x33px overlap. At 1440px
+ * there was none (icon x 1380-1424, column x 240-1200), which is why it only
+ * ever appeared on a phone. */
+test('the fixed reading-mode control never renders over page text (issue 219)', async ({ page }) => {
+  await visit(page);
+
+  const plate = await page.evaluate(() => {
+    const header = window.document.querySelector('.page-header');
+    const style = window.getComputedStyle(header);
+    return { background: style.backgroundColor, shadow: style.boxShadow };
+  });
+  // A transparent plate is the defect: whatever scrolls beneath shows THROUGH
+  // the glyph. The engine must report a real, opaque backdrop.
+  expect(plate.background, 'the reading-mode control paints no backdrop of its own').not.toBe(
+    'rgba(0, 0, 0, 0)',
+  );
+  expect(plate.background).not.toBe('transparent');
+  expect(plate.shadow, 'the plate has no spread to cover the control it backs').not.toBe('none');
+
+  // Browser-driven scrolling must not park a target under the control either.
+  expect(
+    await page.evaluate(
+      () => window.getComputedStyle(window.document.documentElement).scrollPaddingTop,
+    ),
+    'a fragment or focus move can still land under the fixed control',
+  ).not.toBe('auto');
+
+  /* HALF ONE — browser-driven scrolling no longer parks a target under the
+     control at all. This is the layout half of the fix and the stronger of
+     the two statements: scrollIntoView (and every focus move, which uses the
+     same machinery) now honours the scroll padding, so the segment the owner
+     could not read lands BELOW the control instead of beneath it. */
+  const landing = await page.evaluate(() => {
+    const segments = [...window.document.querySelectorAll('.usage-view')];
+    if (segments.length === 0) return null;
+    const segment = segments.at(-1);
+    segment.scrollIntoView({ block: 'start' });
+    const header = window.document.querySelector('.page-header');
+    return {
+      text: segment.innerText.trim(),
+      segmentTop: segment.getBoundingClientRect().top,
+      headerBottom: header.getBoundingClientRect().bottom,
+    };
+  });
+  expect(landing, 'the token panel rendered no segmented control to measure').not.toBeNull();
+  /* A whole pixel of tolerance here rather than the sub-pixel one used for
+     box SIZES, and the difference is deliberate. A scroll offset is rounded
+     to the device's own pixel grid, so a target the engine placed exactly at
+     the padding edge is reported a fraction above or below it — MEASURED at
+     59.744 against a 60px edge on a 3x iPhone. One pixel is a rounding
+     allowance; it cannot hide a 44px control the content is genuinely
+     underneath, which is what this assertion is about. */
+  const scrollRoundingPx = 1;
+  expect(
+    landing.segmentTop + scrollRoundingPx,
+    `"${landing.text}" was scrolled to ${landing.segmentTop}, under a control whose bottom edge is ${landing.headerBottom}`,
+  ).toBeGreaterThanOrEqual(landing.headerBottom);
+
+  /* HALF TWO — when a reader scrolls BY HAND, content genuinely does pass
+     under a fixed control; that is what "fixed" means and no layout can
+     prevent it. What must not happen is the owner's actual report: the label
+     rendering THROUGH the glyph because nothing was painted between them. So
+     the content is put deliberately under the control and the top-most
+     element at the centre of the overlap is measured — it must be the
+     control, not the text. */
+  const occlusion = await page.evaluate(() => {
+    const segments = [...window.document.querySelectorAll('.usage-view')];
+    const segment = segments.at(-1);
+    const header = window.document.querySelector('.page-header');
+    const hb = header.getBoundingClientRect();
+    // Scroll by hand until this segment's own box is centred on the control.
+    const sb = segment.getBoundingClientRect();
+    window.scrollBy(0, sb.top + sb.height / 2 - (hb.top + hb.height / 2));
+    const nowSegment = segment.getBoundingClientRect();
+    const nowHeader = header.getBoundingClientRect();
+    const left = Math.max(nowSegment.left, nowHeader.left);
+    const right = Math.min(nowSegment.right, nowHeader.right);
+    const top = Math.max(nowSegment.top, nowHeader.top);
+    const bottom = Math.min(nowSegment.bottom, nowHeader.bottom);
+    if (right <= left || bottom <= top) {
+      return { overlaps: false };
+    }
+    // The CENTRE of the intersection, never a corner: a corner plus one pixel
+    // lands outside whichever box is thinner there, which is a hit test of
+    // the wrong element dressed up as a finding.
+    const hit = window.document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+    return {
+      overlaps: true,
+      headerOnTop: hit !== null && (header === hit || header.contains(hit)),
+      hit: hit === null ? null : hit.className.toString(),
+    };
+  });
+  if (occlusion.overlaps) {
+    expect(
+      occlusion.headerOnTop,
+      `page text renders over the fixed control instead of behind its plate (topmost element was "${occlusion.hit}")`,
+    ).toBe(true);
+  }
 });
