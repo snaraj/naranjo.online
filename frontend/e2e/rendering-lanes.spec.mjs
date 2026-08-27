@@ -48,17 +48,34 @@ const subPixel = 0.01;
  * a fixed time, and it is the first thing every test does. (Measured: the
  * Pixel 5 lane read 431px of panel stack immediately after load and 2173px
  * once the panels landed.) */
+/* Height alone is not enough, and the 2026-08-26 round-5 review is why
+ * (finding 8): the static shell in index.html is deliberately the same
+ * HEIGHT as the hydrated chrome, so that a zero-CLS hydration is possible at
+ * all. A height that has stopped changing is therefore satisfied by the shell
+ * BEFORE the app mounts, and every assertion that followed was racing
+ * hydration against its own 5-second default. Under a loaded machine
+ * hydration lost once, and `[webkit] each column edge carries a handle`
+ * reported 0 separators instead of 2.
+ *
+ * The fix is a STRICTER precondition, not a longer tolerance anywhere: the
+ * shell carries `data-static-fallback` and mounting replaces it, so its
+ * absence is the document's own statement that hydration finished. Nothing
+ * any test asserts changed — what changed is that the wait now covers the
+ * thing it always meant to cover, on the 15s budget it always had. */
 async function settled(page) {
   let previous = -1;
   await expect
     .poll(
       async () => {
-        const height = await page.evaluate(() => window.document.documentElement.scrollHeight);
-        const stable = height > 0 && height === previous;
-        previous = height;
+        const measured = await page.evaluate(() => ({
+          height: window.document.documentElement.scrollHeight,
+          hydrated: window.document.querySelector('[data-static-fallback]') === null
+        }));
+        const stable = measured.height > 0 && measured.height === previous && measured.hydrated;
+        previous = measured.height;
         return stable;
       },
-      { message: 'the page never stopped growing', timeout: 15_000 }
+      { message: 'the page never stopped growing, or never hydrated', timeout: 15_000 }
     )
     .toBe(true);
 }

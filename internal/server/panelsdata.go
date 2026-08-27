@@ -522,13 +522,29 @@ func storeFloorMarker(state *os.Root, lookupEnv func(string) string, floor panel
 // round-3 commit claimed those two lines were guarded by regressions and
 // they were not.
 //
-// A barrier cannot be tested by watching a successful write — the bytes land
-// either way, and only a power cut tells the difference. What CAN be tested
-// is the contract around it: a barrier that FAILS must refuse the commit, so
-// nothing is published on a floor that may not have reached the disk. A
-// fault test makes each barrier fail and requires exactly that, which is red
-// against both mutations — remove the call and the store no longer fails
-// when the barrier does.
+// A barrier has two halves and one test cannot see both, so two tests pin it.
+// The first revision of this comment claimed a single fault test was "red
+// against both mutations"; it was not, and the 2026-08-26 round-5 review
+// proved it by shipping both bodies as `return nil` with the whole Go suite
+// still green (finding 1). The claim, not the code, was the defect:
+//
+//   - The CALL SITES are pinned by
+//     TestFloorCommitRefusesWhenADurabilityBarrierFails, which injects a
+//     FAILING stub into each variable and requires the commit to refuse.
+//     Delete either call and that test is red. It says nothing about what the
+//     production bodies do, because a stub reads the same either way.
+//   - The BODIES are pinned by TestDurabilityBarriersAreRealDescriptorSyncs,
+//     which calls each default against a CLOSED descriptor. A real Sync
+//     reaches the descriptor and fails as `sync … file already closed`; a
+//     no-op returns nil and cannot. Ship either body as a no-op and that
+//     test is red.
+//
+// What the pair does NOT prove, and no portable Go test can: that the kernel
+// put the bytes on stable storage. Only a power cut settles that, which is
+// why the durability argument rests on both halves together — each default is
+// an operation NAMED sync whose answer depends on the descriptor it is
+// handed, and a barrier that fails refuses the commit rather than publishing
+// on it.
 var (
 	syncFile      = func(file *os.File) error { return file.Sync() }
 	syncDirectory = func(directory *os.File) error { return directory.Sync() }

@@ -896,8 +896,13 @@ func TestPanelsFloorNoticeReachesTheCompositionRoot(t *testing.T) {
 // What it pins is the CONTRACT around each barrier rather than the barrier's
 // physics: a durability barrier that fails must refuse the commit outright,
 // because the caller publishes on that success and a floor that may not have
-// reached the disk is not a floor. Both mutations are red here — with the
-// call removed, the store no longer fails when the barrier does.
+// reached the disk is not a floor. Removing either CALL SITE is red here.
+//
+// It is deliberately not the whole guard, and saying otherwise was finding 1
+// of the 2026-08-26 round-5 review: a test that injects a failing stub cannot
+// tell a real `Sync()` from `return nil`, since both are replaced by the
+// stub. The BODIES are pinned separately, by
+// TestDurabilityBarriersAreRealDescriptorSyncs below.
 func TestFloorCommitRefusesWhenADurabilityBarrierFails(t *testing.T) {
 	// Not parallel: it swaps package-level barriers.
 	env := func(string) string { return panelsDataTestKeyHex }
@@ -967,6 +972,82 @@ func TestFloorCommitRefusesWhenADurabilityBarrierFails(t *testing.T) {
 	defer root.Close()
 	if err := newFloorMarker(root, env).Store(floor); err != nil {
 		t.Fatalf("the same store failed with the barriers intact: %v", err)
+	}
+}
+
+// TestDurabilityBarriersAreRealDescriptorSyncs pins the barrier BODIES, which
+// the fault test above structurally cannot (2026-08-26 round-5 review,
+// finding 1). That test replaces each default with a failing stub, so it
+// proves the call sites check the returned error and nothing about what the
+// defaults do; the reviewer shipped both as `return nil` and the entire Go
+// suite stayed green, which means "the floor is durable" was resting on a
+// comment rather than on a test.
+//
+// The probe is the one difference a no-op cannot fake, and it needs no new
+// seam: a real Sync reaches the descriptor, so on a CLOSED one it FAILS, and
+// the failure names its own operation — `&fs.PathError{Op: "sync",
+// Err: os.ErrClosed}`, produced by `os.File.Sync` on every platform because
+// the closed-descriptor path lives in `internal/poll`, not in a per-OS file.
+// A body that returns nil without touching the descriptor returns nil here
+// too.
+//
+// Both directions are asserted, and that pair is what makes it a pin rather
+// than half of one: nil against a LIVE descriptor, sync/ErrClosed against a
+// CLOSED one. A no-op fails the closed case; a stub that always errors fails
+// the open case. Only something that actually asks the descriptor passes
+// both.
+//
+// The honest limit, stated here because overclaiming it is what round 5
+// objected to: this proves each default is a descriptor-reaching operation
+// named sync. It does not prove the kernel flushed anything to stable
+// storage — no portable Go test can, and no comment in this package should
+// say otherwise.
+func TestDurabilityBarriersAreRealDescriptorSyncs(t *testing.T) {
+	// Not parallel, for the same reason the fault test above is not: it reads
+	// the package-level barriers that test swaps.
+	dir := t.TempDir()
+	for name, open := range map[string]struct {
+		barrier func(*os.File) error
+		open    func(*testing.T) *os.File
+	}{
+		"the file barrier": {barrier: syncFile, open: func(t *testing.T) *os.File {
+			file, err := os.Create(filepath.Join(dir, "barrier-probe"))
+			if err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			return file
+		}},
+		"the directory barrier": {barrier: syncDirectory, open: func(t *testing.T) *os.File {
+			directory, err := os.Open(dir)
+			if err != nil {
+				t.Fatalf("open directory: %v", err)
+			}
+			return directory
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			descriptor := open.open(t)
+			if err := open.barrier(descriptor); err != nil {
+				t.Fatalf("the barrier refused a live descriptor: %v", err)
+			}
+			if err := descriptor.Close(); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+			err := open.barrier(descriptor)
+			if err == nil {
+				t.Fatal("the barrier answered nil on a closed descriptor: the default is not a real sync")
+			}
+			if !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("the barrier failed on a closed descriptor with %v, want os.ErrClosed", err)
+			}
+			var pathErr *fs.PathError
+			if !errors.As(err, &pathErr) {
+				t.Fatalf("the barrier's failure is not a *fs.PathError: %v", err)
+			}
+			if pathErr.Op != "sync" {
+				t.Fatalf("the barrier's failure names operation %q, want \"sync\"", pathErr.Op)
+			}
+		})
 	}
 }
 

@@ -331,6 +331,40 @@ One further fail-open gate closed while composing this release:
   a `List` wrapper is counted by the checks instead of hidden from them, and a
   document that is not a mapping is refused by name.
 
+Findings of the 2026-08-26 adversarial review of this release's head
+(REQUEST-CHANGES). Five of the eight were CLAIMS that outran their evidence
+rather than defects in behaviour, and they are corrected as claims; the two
+that were behaviour are closed with tests that fail against the original code:
+
+- The two durability barriers guarding the replay-floor commit could be
+  shipped as `return nil` with the entire Go suite green. The fault test
+  injects a FAILING stub into each, so it pins the call sites and structurally
+  cannot tell a real `Sync()` from a no-op — while a comment claimed it was
+  red against exactly that mutation. The bodies are now pinned by calling each
+  default against a closed descriptor, where a real sync fails and a no-op
+  cannot, in both directions so neither a no-op nor a constant-error stub
+  passes; and the comment now states which test pins which half and admits the
+  limit no portable test can cross — that the kernel reached stable storage.
+- `PANELS_DATA_STATE` versus `PANELS_DATA_ROOT` separation compared SPELLINGS
+  only, so two different paths naming one directory — a host directory
+  bind-mounted at both, in a hand-run container the chart cannot constrain —
+  were admitted, and the origin would write its floor marker into the
+  projection it must only read. Separation is now decided by device and inode
+  (`os.SameFile`), a root that cannot be inspected fails closed instead of
+  being assumed separate, and the one shape still invisible from inside the
+  container — a state root bind-mounted from a directory inside the data
+  root — is named in the code rather than left implied.
+- Claim corrections, made because an untrue comment or figure is itself a
+  defect here: the storage pin's `List`-unwrapping narrowing was real but
+  unguarded (its removal left every test green and the shell pin exit 0
+  reporting "all caught"), and now has both a unit kill and a 45th shell
+  mutant; the frontend gallery-manifest loader described the manifest as
+  served `application/octet-stream` when the same range made `.json` a
+  reviewed media type; and the rendering-lane harness settled on document
+  HEIGHT, which the static shell satisfies before the app mounts — it now
+  additionally requires hydration to have finished, a stricter precondition
+  on the same budget rather than a longer tolerance.
+
 ## [0.1.47] - 2026-08-26
 
 ### Changed

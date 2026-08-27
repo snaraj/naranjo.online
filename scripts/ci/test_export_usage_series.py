@@ -47,6 +47,14 @@ import unittest
 
 _MODULE_PATH = pathlib.Path(__file__).resolve().parents[1] / "export_usage_series.py"
 _SPEC = importlib.util.spec_from_file_location("export_usage_series", _MODULE_PATH)
+if _SPEC is None or _SPEC.loader is None:
+    # Both are Optional, and both being None means the same thing: the module
+    # under test is not where this suite says it is. Saying so by name beats
+    # an AttributeError on None two lines later, which reads as a broken test
+    # rather than a missing subject. The same repair landed in
+    # test_capture_usage_series.py and was claimed for this file too; it had
+    # not (2026-08-26 round-5 review, finding 4).
+    raise ImportError("the export step is not loadable at %s" % _MODULE_PATH)
 export_usage_series = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(export_usage_series)
 

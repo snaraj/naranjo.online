@@ -180,7 +180,7 @@ echo "chart-storage-pin: (d) explicit disabled render: no claim, no volume, no w
 # the checker red. sed operates on the RENDER, so what is proven is that the
 # checker catches the outcome, whatever template edit might produce it.
 mutation_count=0
-minimum_mutations=44
+minimum_mutations=45
 
 mutate_must_fail() {
   local description="$1" mode="$2" expression="$3" source="$4"
@@ -247,6 +247,36 @@ mutate_must_fail "PV claimRef unpinned" with-pv \
 mutate_must_fail "capability objects surviving a disabled render" disabled \
   's/x-never-matches/x/' \
   "${enabled_render}"
+
+# A `List` wrapper is the one shape a raw top-level read cannot see. kubectl
+# installs a List's items exactly as if they had been written at the top
+# level, so a reader that walks only top-level documents finds one object of
+# kind `List` and no claim at all. chart_storage_pin.py narrows through the
+# census's unwrapping reader precisely for this, and the 2026-08-26 round-5
+# review found that narrowing real but UNGUARDED: reverting it left every
+# test OK and this script exit 0 while reporting "all caught". A mutant a
+# battery cannot see is a battery reporting on itself.
+#
+# Not expressible as a sed expression like the rest, because the mutation
+# adds a document rather than editing one, so it is spelled out here.
+list_wrapped_claim="$(printf '%s\n' \
+  '---' \
+  'apiVersion: v1' \
+  'kind: List' \
+  'items:' \
+  '  - apiVersion: v1' \
+  '    kind: PersistentVolumeClaim' \
+  '    metadata:' \
+  "      name: ${VOLUME_NAME}" \
+  '    spec:' \
+  '      accessModes:' \
+  '        - ReadOnlyMany' \
+  "      storageClassName: ${STORAGE_CLASS}")"
+mutation_count=$((mutation_count + 1))
+if printf '%s\n%s\n' "${disabled_render}" "${list_wrapped_claim}" |
+  pin disabled >/dev/null 2>&1; then
+  fail "surviving mutant: a PersistentVolumeClaim hidden inside a List wrapper"
+fi
 
 # The replay-floor STATE pair's own battery (2026-08-24 review finding H2):
 # the writable direction is pinned as hard as the read-only one.

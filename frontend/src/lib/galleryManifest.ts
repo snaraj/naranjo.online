@@ -482,10 +482,12 @@ export async function loadGalleryManifest(
     }
     /* Read as bytes and parsed here rather than through response.json(),
        because the cap has to be applied to the TRANSFER, not to a body
-       already in memory. It also makes this loader indifferent to the media
-       route's content type, which for an extension outside the origin's
-       reviewed media types is the deliberately inert
-       application/octet-stream — see docs/media-manifest.md. */
+       already in memory. That the loader is indifferent to the served
+       content type falls out of it: the origin types the manifest
+       application/json (`.json` is a reviewed media type — `mediaTypes`,
+       internal/server/types.go), and this path would parse it the same way
+       if it did not. Admission never depends on the header either way; see
+       docs/media-manifest.md. */
     const items = parseGalleryManifest(JSON.parse(await readCapped(response, maxGalleryManifestBytes)));
     return items.length > 0 ? items : null;
   } catch (error) {

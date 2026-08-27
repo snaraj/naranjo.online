@@ -303,9 +303,37 @@ func canonicalRoot(variable, value string) (string, error) {
 // exact: without it `/mnt/panels-data-two` reads as a child of
 // `/mnt/panels-data`, and the check would refuse a perfectly good sibling
 // while still missing real nesting elsewhere.
+//
+// The string comparisons settle SPELLING. They cannot settle IDENTITY, and
+// the first revision of this function was only the first half (2026-08-26
+// round-5 review, finding 6): two different paths can name one directory, and
+// the shape that reaches production is one host directory bind-mounted at
+// both — exactly the hand-run container this check exists for, since the
+// chart's storage pin renders manifests and cannot see a mount table.
+// os.SameFile compares device and inode, so it answers that question for the
+// two roots themselves.
+//
+// One gap is left open deliberately rather than papered over: if the state
+// root is a bind mount of a directory INSIDE the data root, the two roots are
+// genuinely different inodes, neither path contains the other, and nothing
+// visible from inside the container distinguishes it from a legitimate pair.
+// No amount of path inspection closes that; it is a mount-namespace fact the
+// process cannot see. The chart pin covers the deployed path, and this note
+// exists so the next reader does not mistake "identity checked" for
+// "overlap impossible".
 func separateRoots(dataRoot, stateRoot string) error {
 	if dataRoot == stateRoot {
 		return errors.New("PANELS_DATA_STATE and PANELS_DATA_ROOT resolve to the same directory; the writable state may never share the read-only projection")
+	}
+	dataInfo, dataErr := os.Stat(dataRoot)
+	stateInfo, stateErr := os.Stat(stateRoot)
+	if dataErr != nil || stateErr != nil {
+		// Fail closed: a root that cannot be inspected cannot be proven
+		// separate, and separation is the whole point of the call.
+		return errors.New("PANELS_DATA_ROOT and PANELS_DATA_STATE must both name a directory that can be inspected")
+	}
+	if os.SameFile(dataInfo, stateInfo) {
+		return errors.New("PANELS_DATA_STATE and PANELS_DATA_ROOT name the same directory under two paths; the writable state may never share the read-only projection")
 	}
 	if strings.HasPrefix(stateRoot, strings.TrimSuffix(dataRoot, "/")+"/") {
 		return errors.New("PANELS_DATA_STATE resolves inside PANELS_DATA_ROOT; the writable state may never live within the read-only projection")

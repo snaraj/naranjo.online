@@ -166,6 +166,38 @@ func TestPanelsDataRootsMustBeSeparateDirectories(t *testing.T) {
 		}
 	})
 
+	// Two DIFFERENT paths naming ONE directory (2026-08-26 round-5 review,
+	// finding 6). Every case above is a SPELLING a canonical path can express,
+	// and every check that catches them compares strings; identity is a
+	// different question and separateRoots used not to ask it.
+	//
+	// The shape that reaches production is one host directory bind-mounted at
+	// both paths, which an unprivileged test cannot create. A symlink is the
+	// other two-paths-one-inode construction, and it is used here against
+	// separateRoots DIRECTLY, on purpose: production canonicalizes this
+	// particular spelling away upstream, so routing it through
+	// panelsDataStateConfiguration would prove EvalSymlinks works and nothing
+	// about the identity check. What is pinned here is the function's own
+	// contract — it settles identity, not spelling.
+	t.Run("two paths naming one directory", func(t *testing.T) {
+		t.Parallel()
+		if err := separateRoots(data, link); err == nil {
+			t.Fatal("separateRoots admitted two paths that name one directory")
+		}
+		// Non-vacuity: the same call on two genuinely distinct directories is
+		// admitted, so the refusal above is identity and not the fixture.
+		if err := separateRoots(data, sibling); err != nil {
+			t.Fatalf("separateRoots refused two genuinely separate directories: %v", err)
+		}
+	})
+
+	t.Run("a root that cannot be inspected is refused", func(t *testing.T) {
+		t.Parallel()
+		if err := separateRoots(data, filepath.Join(base, "absent")); err == nil {
+			t.Fatal("separateRoots admitted a state root it could not stat")
+		}
+	})
+
 	t.Run("a genuine sibling is admitted", func(t *testing.T) {
 		t.Parallel()
 		got, err := panelsDataStateConfiguration(state, canonicalData)

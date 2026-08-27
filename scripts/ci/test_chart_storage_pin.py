@@ -215,6 +215,27 @@ spec:
 CLAIMS = CLAIM + STATE_CLAIM
 VOLUMES = VOLUME + STATE_VOLUME
 
+
+def list_wrapped(document: str) -> str:
+    """The same single object, smuggled inside a `List` wrapper.
+
+    A YAML stream may hold a `List` whose `items` are the real objects, and
+    `kubectl` installs those items exactly as if they had been written at the
+    top level. A pin that reads only top-level documents therefore sees one
+    object of kind `List` and no PersistentVolumeClaim at all — which is why
+    `_documents` narrows through `census.flatten`, the census's own unwrapping
+    reader, rather than through a plain `list()`.
+
+    2026-08-26 round-5 review, finding 2: that narrowing was real but
+    unguarded — reverting it left 59/59 tests OK and the shell pin exit 0
+    while reporting "44 mutants, all caught". The two tests below are the
+    kill, one per fail-open path the wrapper opens.
+    """
+    body = document.replace("---\n", "", 1).rstrip("\n").split("\n")
+    items = "\n".join(
+        ("  - " if index == 0 else "    ") + line for index, line in enumerate(body))
+    return "---\napiVersion: v1\nkind: List\nitems:\n" + items + "\n"
+
 # The exact bounded nodeAffinity block both volumes carry, so a test can
 # remove it wholesale without re-spelling it.
 AFFINITY = """\
@@ -270,6 +291,28 @@ class StoragePinRefusesHostileRenders(unittest.TestCase):
     def test_disabled_still_carrying_a_claim(self):
         self.reject("disabled", CLAIM + BARE_DEPLOYMENT, "disabled render still carries")
         self.reject("disabled", STATE_CLAIM + BARE_DEPLOYMENT, "disabled render still carries")
+
+    def test_disabled_still_carrying_a_claim_inside_a_list_wrapper(self):
+        """The wrapper must not hide the claim from the disabled check.
+
+        `census.flatten` unwraps `List` items, so the claim is COUNTED. Revert
+        `_documents` to a plain `list()` and this render is admitted: the only
+        top-level object is the wrapper, whose `kind` is `List`, so
+        `_of_kind(objects, "PersistentVolumeClaim")` is empty and a disabled
+        render ships a PVC unnoticed.
+        """
+        self.reject("disabled", list_wrapped(CLAIM) + BARE_DEPLOYMENT,
+                    "disabled render still carries")
+
+    def test_enabled_with_a_pv_smuggled_inside_a_list_wrapper(self):
+        """The second fail-open path the same wrapper opens.
+
+        `with-pv` is the admin-flag mode; without it a PersistentVolume in the
+        render is refused. Wrapped in a `List` and read by a plain `list()`,
+        that refusal never fires — so this pins the narrowing from the
+        enabled side too, not only the disabled one.
+        """
+        self.reject("enabled", CLAIMS + list_wrapped(VOLUME) + DEPLOYMENT, "admin flag")
 
     def test_disabled_still_wiring_the_env(self):
         self.reject("disabled", DEPLOYMENT, "still wires PANELS_DATA_ROOT")
