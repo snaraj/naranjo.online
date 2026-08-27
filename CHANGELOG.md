@@ -113,10 +113,19 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   block it creates for `<main>`'s 101 fixed descendants — to the gesture
   alone. That re-parenting is harmless for a measured reason rather than an
   assumed one: a pull engages only at the top of the document, and nothing
-  fixed inside `<main>` is visible there (the nearest detail host is 3055px
-  down it, against 1366px on the tallest touch viewport). The rendering lane
-  pins that property, so the day it stops holding is a red build rather than a
-  silent re-parenting.
+  fixed inside `<main>` is visible there. The nearest detail host is 4375px
+  down the page at 390×844, 3241px at 820×1180 and 3055px at 1024×1366 and
+  wider — so the worst case is the tallest touch viewport, 3055px against
+  1366px, a margin of 1689px. The rendering lane pins the RELATION rather than
+  any of those numbers, so the day it stops holding is a red build rather than
+  a silent re-parenting.
+- The detail primitive refuses a caller that resolves many subjects without
+  saying which one a focus landed on. That pairing was documented and nothing
+  enforced it, so the next region caller could reacquire the viewport-origin
+  guess this release removed — silently, since an omitted optional prop
+  type-checks and renders. `drivenBinding` in `src/lib/tooltip.ts` throws at
+  bind time instead, keyed on the binding's shape rather than on a list of
+  callers, and `null` is how a driving caller says "nothing selected".
 - The grid `listbox` owns its options: the layout div they sit in is
   `role="presentation"`, which is the only way ARIA admits them.
 - Half the grid's arrow keys were dead. With no cursor yet, `ArrowRight` and

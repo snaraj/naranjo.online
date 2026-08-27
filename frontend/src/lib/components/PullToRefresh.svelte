@@ -145,10 +145,16 @@
          as long as the gesture lasts.
          Nothing is affected, and that is MEASURED rather than assumed: a pull
          engages only with the document at its top, and the nearest detail host
-         on this page sits 3055px down it — against a viewport of 1366px on the
-         tallest touch device anyone brings to this site. No card can be open
-         when the attribute goes on. The page header, the only other chrome
-         pinned to the viewport, is outside <main> entirely.
+         sits far below the fold at every width. The distance is not one number,
+         because a narrower page is a taller one — measured 4375px at 390x844,
+         3241px at 820x1180, and 3055px at 1024x1366 and wider. 3055 is the
+         MINIMUM, and it happens at the tallest touch viewport this site is
+         measured on, so the worst case is 3055 against 1366: a margin of
+         1689px. No card can be open when the attribute goes on. The page
+         header, the only other chrome pinned to the viewport, is outside
+         <main> entirely. The lane below asserts the RELATION rather than any
+         of those numbers — nearest host greater than viewport height — so it
+         stays true at a width nobody has measured yet.
          An earlier revision of this repair closed any open detail here. It was
          cut because it could not fire: a guard no input can trip is decorative,
          and its own mutant survived the lane that was supposed to pin it. The
