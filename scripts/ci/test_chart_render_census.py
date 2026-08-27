@@ -341,8 +341,16 @@ class ReaderReadsRealYAML(unittest.TestCase):
     def test_a_document_marker_inside_a_block_scalar_does_not_split_the_stream(self):
         docs = parse("data: |\n  ---\n  kind: NetworkPolicy\nkind: ConfigMap\n")
         self.assertEqual(len(docs), 1)
-        self.assertEqual(docs[0]["kind"], "ConfigMap")
-        self.assertEqual(docs[0]["data"], "---\nkind: NetworkPolicy\n")
+        # `parse` returns list[object] because a YAML document legitimately IS
+        # any type -- that is the reader's honest return type, not a gap to
+        # paper over upstream. So the narrowing happens here, where the test
+        # already knows the shape it asked for, and it is a real check: a
+        # reader that started returning a scalar for this input fails on this
+        # line saying so, instead of raising TypeError on the next one.
+        document = docs[0]
+        assert isinstance(document, dict), f"expected one mapping document, got {type(document).__name__}"
+        self.assertEqual(document["kind"], "ConfigMap")
+        self.assertEqual(document["data"], "---\nkind: NetworkPolicy\n")
 
     def test_comments_are_ignored_wherever_they_appear(self):
         self.assertEqual(parse("# leading\nkind: NetworkPolicy  # trailing\n  # indented\n"),

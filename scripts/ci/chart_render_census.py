@@ -1173,6 +1173,15 @@ class Reader:
             j += 1
         self.fail("unterminated double-quoted scalar; a quoted scalar must open and close on "
                   "one line here", lineno)
+        # KEPT DELIBERATELY, and now provably unreachable: annotating `fail` as
+        # NoReturn is what lets a checker see that. It is a structural
+        # backstop, not dead code. `_scan_quoted` declares `tuple[str, int]`,
+        # and every exit above it either returns that or raises; if `fail`
+        # ever stopped raising, this line is the difference between a loud
+        # stop here and a silent `None` unpacked by the caller two frames
+        # away. A reader that mis-parses a quoted scalar is exactly how a
+        # second NetworkPolicy hides from this census, so the fail-closed
+        # ending stays.
         raise AssertionError("unreachable")  # pragma: no cover
 
     def _scan_value(self, s: str, i: int, lineno: int, flow: bool) -> tuple[object, int]:
