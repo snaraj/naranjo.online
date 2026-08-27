@@ -25,13 +25,27 @@ export interface GridCell {
    * a future day in the current week, or a lead-in day before the series
    * starts. Absent cells render as holes and carry no count. */
   absent?: boolean;
+  /* How many real days this cell's AGGREGATE reading covers, for a lens whose
+   * period can be covered only partly (issue 158's monthly lens: a window's
+   * first and last months are almost never whole, and a reader shown one
+   * number for "August" deserves to know it is twelve days of August rather
+   * than thirty-one). Set by the aggregating lens, read by cellPeriod, and
+   * absent everywhere else — the daily lens covers exactly one day by
+   * construction and the weekly lens' period is the column a reader can
+   * already see. */
+  days?: number;
 }
 
-/* The three ways the same daily series can be read. Daily is the raw day,
- * weekly re-reads every day as its week's total, and cumulative re-reads it
- * as the running total to that point — one series, three lenses, no extra
- * payload. */
-export const seriesViews = ['daily', 'weekly', 'cumulative'] as const;
+/* The four ways the same daily series can be read. Daily is the raw day,
+ * weekly re-reads every day as its week's total, monthly as its calendar
+ * month's total, and cumulative as the running total to that point — one
+ * series, four lenses, no extra payload.
+ *
+ * Monthly is the period the source CLIs cycle to and this grid could not
+ * reach (issue 158): a week is the column a contribution strip is built from,
+ * so weekly falls out of the geometry, but a month is a calendar fact that
+ * crosses columns and has to be summed from the dates themselves. */
+export const seriesViews = ['daily', 'weekly', 'monthly', 'cumulative'] as const;
 export type SeriesView = (typeof seriesViews)[number];
 
 export function isSeriesView(value: unknown): value is SeriesView {
@@ -63,6 +77,9 @@ export function viewColumns(columns: GridCell[][], view: SeriesView): GridCell[]
       return column.map((cell) => (cell.absent ? { ...cell } : { ...cell, value: sum }));
     });
   }
+  if (view === 'monthly') {
+    return monthlyColumns(columns);
+  }
   // Cumulative: a running total across real cells only, walked in window
   // order (oldest column first) so "through week of X" means what it says
   // regardless of which end of the strip the reader scrolled to.
@@ -74,6 +91,52 @@ export function viewColumns(columns: GridCell[][], view: SeriesView): GridCell[]
       }
       running += cell.value;
       return { ...cell, value: running };
+    })
+  );
+}
+
+/* monthlyColumns re-reads every real cell as its CALENDAR month's total over
+ * the days the drawn window covers, and records how many of that month's days
+ * the window actually carried.
+ *
+ * It sums by DATE rather than by column because a month is not a column: a
+ * calendar week straddling the first of the month belongs to two months, and
+ * a lens that painted a whole column with one figure would report September's
+ * total on two days that are still August. So the fold walks cells, keyed on
+ * the cell's own YYYY-MM, which is the same "read the real calendar, not the
+ * array position" rule calendarColumns already established for the columns
+ * themselves.
+ *
+ * `days` is the honest half. The window's first and last months are almost
+ * always partial, and a capture gap inside a month leaves real days
+ * uncovered; both are counted here as covered-days and rendered by cellPeriod
+ * as the fraction they are, so a partial month is never read as a whole one.
+ * Absent cells stay absent — they carry no count to fold in and none to
+ * receive, exactly as in every other lens. */
+function monthlyColumns(columns: GridCell[][]): GridCell[][] {
+  const totals = new Map<string, { total: number; days: number }>();
+  for (const column of columns) {
+    for (const cell of column) {
+      if (cell.absent || cell.date.length < 7) {
+        continue;
+      }
+      const month = cell.date.slice(0, 7);
+      const carried = totals.get(month) ?? { total: 0, days: 0 };
+      carried.total += cell.value;
+      carried.days += 1;
+      totals.set(month, carried);
+    }
+  }
+  return columns.map((column) =>
+    column.map((cell) => {
+      if (cell.absent || cell.date.length < 7) {
+        return { ...cell };
+      }
+      const carried = totals.get(cell.date.slice(0, 7));
+      if (carried === undefined) {
+        return { ...cell };
+      }
+      return { ...cell, value: carried.total, days: carried.days };
     })
   );
 }
@@ -379,7 +442,7 @@ export function monthTicks(columns: GridCell[][]): MonthTick[] {
  * value must reach the DOM verbatim, never silently rewritten into something
  * that swallows it) survives this formatting step exactly because a string
  * this cannot parse comes back unchanged, not blanked. */
-function formatCalendarDate(date: string, withYear: boolean): string | null {
+export function formatCalendarDate(date: string, withYear: boolean): string | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
   if (!match) {
     return null;
@@ -391,6 +454,51 @@ function formatCalendarDate(date: string, withYear: boolean): string | null {
   }
   const label = `${monthAbbreviations[ordinal - 1]} ${Number(day)}`;
   return withYear ? `${label}, ${year}` : label;
+}
+
+/* formatMonthLabel renders a calendar date's MONTH as 'Aug 2026' — the year
+ * is not decoration here the way it can be on a single day: a full-history
+ * strip contains more than one August, and a monthly figure labelled with a
+ * bare month name is ambiguous exactly where the history is long enough to
+ * matter. Null for anything that is not a well-formed calendar month, so a
+ * caller falls back to the raw string rather than mis-labelling one. */
+export function formatMonthLabel(date: string): string | null {
+  const match = /^(\d{4})-(\d{2})(?:-\d{2})?$/.exec(date);
+  if (!match) {
+    return null;
+  }
+  const ordinal = Number(match[2]);
+  if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 12) {
+    return null;
+  }
+  return `${monthAbbreviations[ordinal - 1]} ${match[1]}`;
+}
+
+const monthLengths = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/* daysInMonth is how long the calendar says a date's month really is — leap
+ * Februaries included, because the alternative is an average, and an average
+ * month length would make "12 of 30 days" a claim about no month that exists.
+ *
+ * Computed from the Gregorian rule rather than from a Date, deliberately:
+ * Date.UTC maps a two-digit year onto the twentieth century, so the obvious
+ * "day zero of the following month" trick answers for 1999 when asked about
+ * 0099. The rule below has no such corner and needs no time zone. */
+export function daysInMonth(date: string): number | null {
+  const match = /^(\d{4})-(\d{2})(?:-\d{2})?$/.exec(date);
+  if (!match) {
+    return null;
+  }
+  const ordinal = Number(match[2]);
+  if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 12) {
+    return null;
+  }
+  if (ordinal !== 2) {
+    return monthLengths[ordinal - 1];
+  }
+  const year = Number(match[1]);
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  return leap ? 29 : 28;
 }
 
 /* weekStartDate rounds a calendar date back to the Sunday that starts its
@@ -419,6 +527,21 @@ export function cellPeriod(cell: GridCell, view: SeriesView): string {
   }
   if (view === 'daily') {
     return `on ${formatCalendarDate(cell.date, false) ?? cell.date}`;
+  }
+  if (view === 'monthly') {
+    const label = formatMonthLabel(cell.date);
+    if (label === null) {
+      return `in ${cell.date}`;
+    }
+    const length = daysInMonth(cell.date);
+    if (cell.days === undefined || length === null || cell.days >= length) {
+      return `in ${label}`;
+    }
+    /* The partial-coverage reading, and the reason GridCell carries `days` at
+       all: a window's edge month, or a month with a capture gap in it, is a
+       smaller number than the month's name implies, and saying so is cheaper
+       than the reader assuming otherwise. */
+    return `in ${label} (${cell.days} of ${length} days)`;
   }
   const weekStart = weekStartDate(cell.date) || cell.date;
   const phrase = `week of ${formatCalendarDate(weekStart, true) ?? cell.date}`;

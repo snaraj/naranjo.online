@@ -49,13 +49,27 @@ export type BlockComponent = Component<BlockProps>;
  *   panel  — the props derive from a live panel envelope. The Block host
  *            keeps the envelope current through watchPanel and re-runs the
  *            adapter on every delivery; an adapter returning null renders
- *            nothing, which is how a block waits for its first envelope. */
+ *            nothing, which is how a block waits for its first envelope.
+ *   runtime — the build carries a complete set of props AND a one-shot read
+ *            of something that exists only at run time (issue 207: the media
+ *            volume's gallery manifest). The build's props render first and
+ *            immediately, so there is no loading state and nothing is
+ *            reserved for late content; if the read answers with props they
+ *            replace them, and if it answers null — absent, unreachable,
+ *            malformed — the build's own props simply stay. That null branch
+ *            is the honest-states floor made structural: the fallback is a
+ *            true thing to show, not a placeholder pretending to be one. */
 export type BlockBinding =
   | { readonly source: 'static'; readonly props: BlockProps }
   | {
       readonly source: 'panel';
       readonly panelId: string;
       readonly adapt: (envelope: PanelEnvelope | null) => BlockProps | null;
+    }
+  | {
+      readonly source: 'runtime';
+      readonly fallback: BlockProps;
+      readonly load: () => Promise<BlockProps | null>;
     };
 
 /* What a block may say about itself to the section around it. The heading
@@ -116,6 +130,25 @@ export function staticBlock<P extends BlockProps>(
        fit this component, and the erased slot is only ever spread with them. */
     component: component as unknown as BlockComponent,
     binding: { source: 'static', props },
+    ...presentation
+  };
+}
+
+/* A block whose props the build already carries AND which may be replaced
+ * once, by a read that can only happen at run time. Generic over the same P
+ * on both halves, so a fallback and a runtime result can never be different
+ * shapes — the swap is a change of CONTENT, never of contract. */
+export function runtimeBlock<P extends BlockProps>(
+  key: string,
+  component: Component<P>,
+  fallback: P,
+  load: () => Promise<P | null>,
+  presentation: BlockPresentation = {}
+): PageBlock {
+  return {
+    key,
+    component: component as unknown as BlockComponent,
+    binding: { source: 'runtime', fallback, load },
     ...presentation
   };
 }
@@ -292,14 +325,56 @@ export type UsageSeries = {
   readonly totals: readonly number[];
 };
 
+/* One accounting category of a source's series: the same days re-read
+ * through one class of usage. Key, label, palette slot, dailies, and the
+ * lens's own noun are all adapter-built data, so the component names no
+ * category and formats no figure. The slot is the fixed palette slot the
+ * ENTITY owns (--usage-cat-N), never its position in this payload, so a
+ * category keeps its hue whichever subset a source reports. */
+export type UsageCategory = {
+  readonly key: string;
+  readonly label: string;
+  readonly slot: number;
+  readonly totals: readonly number[];
+  /* The SINGULAR noun the reading under the strip uses while this lens is
+   * active — "input token", pluralized by the reading builder exactly as the
+   * region's own noun is.
+   *
+   * A noun rather than a finished SENTENCE, and that is the whole shape of
+   * the reconciliation between the category lens and the range control: an
+   * adapter cannot see which trailing window a reader chose, so a sentence
+   * built here would describe the entire capture while the graph above it
+   * drew ninety days of it. lib/periods.ts builds every reading from the
+   * cells actually drawn — one implementation, whichever lens is active —
+   * and this field is the only thing the category has to contribute to it. */
+  readonly noun: string;
+};
+
+/* One row of the composition strip: how the series' grand total divides
+ * across categories. Weight drives the bar segment's flex share (the
+ * category's own series total — the same integers the grid draws); figure
+ * and tooltip carry the written count and share, so identity is never color
+ * alone. */
+export type UsageCompositionRow = {
+  readonly key: string;
+  readonly label: string;
+  readonly slot: number;
+  readonly weight: number;
+  readonly figure: string;
+  readonly tooltip: string;
+};
+
 export type UsageActivity = {
   readonly heading: string;
   /* The strip's accessible name; the component appends the active lens. */
   readonly label: string;
   readonly noun: string;
   readonly series: UsageSeries;
-  /* The whole-series sentence under the strip, lens-independent. */
-  readonly summary: string;
+  /* Present exactly when the source's series carries an admitted per-day
+   * category breakdown: the category lens options, in served order. */
+  readonly categories?: readonly UsageCategory[];
+  /* The composition strip's rows, present exactly when categories are. */
+  readonly composition?: readonly UsageCompositionRow[];
 };
 
 export type UsageSection = {
@@ -336,10 +411,34 @@ export type MediaGalleryLink = {
   readonly label: string;
 };
 
+/* One playable rendition of a moving item. `type` is the browser's whole
+ * basis for choosing — a plain media type, or one carrying a codecs
+ * parameter when several rungs share it — and the ORDER of the list is the
+ * preference, because a browser takes the first source it can play. */
+export type MediaGallerySource = {
+  readonly src: string;
+  readonly type: string;
+};
+
+/* What makes an item MOVE (issue 207). Its presence is the discriminator:
+ * an item without it is a still, and every still renders exactly as it did
+ * before this field existed. Nothing here autoplays — `preload` is none and
+ * no autoplay attribute exists anywhere in the component — so a reader who
+ * has asked for reduced motion gets none until they press play themselves. */
+export type MediaGalleryVideo = {
+  /* The frame shown before play. Distinct from fullSrc so the operator can
+   * publish a dedicated poster, and defaulted to fullSrc by the adapter when
+   * they have not. */
+  readonly posterSrc: string;
+  /* One to three renditions, best first. */
+  readonly sources: readonly MediaGallerySource[];
+};
+
 export type MediaGalleryItem = {
   readonly key: string;
   /* The small derivative the feed frame shows; loaded eagerly-lazy like any
-   * other card. */
+   * other card. For a moving item this is the poster's small derivative —
+   * the strip shows a picture, never a video element. */
   readonly previewSrc: string;
   /* The full-resolution derivative, loaded for the first time only when a
    * reader enlarges the frame. */
@@ -349,12 +448,21 @@ export type MediaGalleryItem = {
    * Every one of the three is independently optional, and ABSENT MEANS
    * NOTHING RENDERS: no empty row, no placeholder dash, no reserved band.
    * The component decides only WHERE each renders, never whether an item
-   * "should" have one — that is the manifest's call (lib/gallery.ts), so a
-   * media-volume item and a vendored bootstrap item carry metadata the same
-   * way (issue 182). */
+   * "should" have one — that is the manifest's call (lib/gallery.ts for the
+   * vendored bootstrap set, lib/galleryManifest.ts for the media volume), so
+   * a volume item and a vendored item carry metadata the same way. */
   readonly title?: string;
   readonly description?: string;
   readonly link?: MediaGalleryLink;
+  /* Present exactly when the item moves; see MediaGalleryVideo. */
+  readonly video?: MediaGalleryVideo;
+  /* This item's own intrinsic box, when it differs from the gallery's
+   * declared one. It is the element's intrinsic-size HINT, not the reserved
+   * box: the frame's reservation is token-driven and identical for every
+   * item, which is why swapping the vendored set for a runtime one shifts
+   * nothing. */
+  readonly width?: number;
+  readonly height?: number;
 };
 
 export type MediaGalleryProps = {

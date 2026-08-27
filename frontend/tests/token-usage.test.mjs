@@ -3,6 +3,10 @@ import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 
 import {
+  categoryLabel,
+  categoryShares,
+  categorySlot,
+  countBound,
   formatDuration,
   formatStatValue,
   formatTokenCount,
@@ -554,11 +558,24 @@ describe('UsageTracker live surface', () => {
     assert.match(component, /role="radiogroup"/);
     assert.match(component, /\{#each seriesViews as candidate\}/);
     assert.match(component, /aria-checked=\{view === candidate\}/);
+    // THREE toggles, ONE delivered payload, one pipeline, in this order:
+    // the CATEGORY lens picks which dailies are read, the RANGE cuts the
+    // trailing window out of them, and the VIEW lens aggregates the cut. All
+    // of it is client-side with no extra bytes, and the order is what makes
+    // the readings under the graph describe the graph — they are taken from
+    // the windowed cells, which already carry the category's dailies.
     assert.match(
       component,
-      /viewColumns\(calendarColumns\(seriesCells\(activity\.series\.startDate, activity\.series\.totals\)\), view\)/
+      /rangeColumns\(seriesCells\(activity\.series\.startDate, totals\), range\)/
     );
-    // Touch target floor for the segmented control.
+    assert.match(component, /const totals = category \? category\.totals : activity\.series\.totals;/);
+    assert.match(component, /const columns = viewColumns\(windowed, view\)/);
+    // The range control is the second radiogroup, over the same closed
+    // vocabulary the engine admits (issue 158).
+    assert.match(component, /\{#each seriesRanges as candidate\}/);
+    assert.match(component, /aria-checked=\{range === candidate\}/);
+    // Touch target floor for BOTH segmented controls — one rule, both groups,
+    // because they are the same pill.
     assert.match(component, /min-block-size:\s*2\.75rem/);
   });
 
@@ -601,12 +618,458 @@ describe('UsageTracker live surface', () => {
     assert.equal(drawn.sections[0].activity.heading, 'Token activity');
     assert.equal(drawn.sections[0].activity.label, 's token activity');
     assert.equal(drawn.sections[0].activity.noun, 'token');
-    assert.equal(drawn.sections[0].activity.summary, '6 tokens over 3 days, peaking at 3');
+    /* The adapter carries the SERIES and no sentence about it (issue 158).
+       The sentence moved to lib/periods.ts, where the chosen window is known;
+       an adapter-built one would keep describing the whole capture while the
+       graph above it drew ninety days. What that sentence says for exactly
+       this payload, through exactly the default window this panel opens on,
+       is pinned in tests/periods.test.mjs — including that it is the same
+       string this assertion used to hold. */
+    assert.equal(drawn.sections[0].activity.summary, undefined);
+    assert.deepEqual(drawn.sections[0].activity.series, { startDate: '2026-08-01', totals: [1, 2, 3] });
     // A windowless, statless source states its honest empty line; a source
     // with figures does not.
     assert.equal(seriesless.sections[0].note, 'No usage recorded for this source yet.');
     const withWindows = tokenUsageProps(envelopeFor(shippedPayload));
     assert.equal(withWindows.sections[0].note, undefined);
     assert.equal(withWindows.emptyNote, 'No usage data available.');
+  });
+});
+
+/* The per-category breakdown (issue #142): admission holds the categories
+ * section to the origin's exact structural rules, the lens helpers read one
+ * data set two ways, and the component pins keep identity paired with text
+ * and every payload string inert. */
+describe('category breakdown admission', () => {
+  const withCategories = (categories) => ({
+    sources: [
+      {
+        label: 'alpha',
+        windows: [],
+        series: { startDate: '2026-08-10', totals: [10, 20, 30], categories }
+      }
+    ]
+  });
+
+  it('admits a well-formed partition and preserves the served order', () => {
+    const admitted = tokenUsageSources(
+      withCategories([
+        { key: 'input', totals: [1, 2, 3] },
+        { key: 'output', totals: [9, 18, 27] }
+      ])
+    );
+    assert.equal(admitted.length, 1);
+    assert.deepEqual(
+      admitted[0].series.categories.map((category) => category.key),
+      ['input', 'output']
+    );
+    assert.deepEqual(admitted[0].series.categories[1].totals, [9, 18, 27]);
+  });
+
+  it('admits a series without categories exactly as before', () => {
+    const admitted = tokenUsageSources(withCategories(undefined));
+    assert.equal(admitted.length, 1);
+    assert.equal(admitted[0].series.categories, undefined);
+  });
+
+  it('refuses the whole payload on any malformed corner', () => {
+    for (const [name, categories] of Object.entries({
+      'not an array': { input: [1, 2, 3] },
+      'markup in a key': [{ key: '<img src=x onerror=alert(1)>', totals: [1, 2, 3] }],
+      'uppercase key': [{ key: 'Input', totals: [1, 2, 3] }],
+      'path in a key': [{ key: 'a/b', totals: [1, 2, 3] }],
+      'empty key': [{ key: '', totals: [1, 2, 3] }],
+      'duplicate keys': [
+        { key: 'input', totals: [1, 2, 3] },
+        { key: 'input', totals: [1, 2, 3] }
+      ],
+      'length mismatch': [{ key: 'input', totals: [1, 2] }],
+      'negative count': [{ key: 'input', totals: [1, -2, 3] }],
+      'non-numeric count': [{ key: 'input', totals: [1, 'two', 3] }]
+    })) {
+      assert.deepEqual(tokenUsageSources(withCategories(categories)), [], name);
+    }
+  });
+
+  /* 2026-08-24 security review, finding 6. Admission here was SHAPE-only: it
+     accepted any label-shaped key, enforced no count bound, and never
+     rechecked that the categories partition the day. Shape admits far more
+     than the vocabulary does, and the renderer humanizes whatever key it is
+     given, so a label-shaped private identifier would have become public
+     copy. Each case below is refused ONLY by the rule it names. */
+  it('refuses a label-shaped key that is outside the closed vocabulary', () => {
+    for (const key of [
+      'private-feature',
+      'internal-project-name',
+      'audio',
+      'a-client-name',
+      'x'
+    ]) {
+      /* Deliberately a PERFECT partition — 10, 20, 30 against the series'
+         own totals — so nothing but closed membership can refuse it. */
+      assert.deepEqual(
+        tokenUsageSources(withCategories([{ key, totals: [10, 20, 30] }])),
+        [],
+        key
+      );
+    }
+  });
+
+  it('admits every member of the closed vocabulary', () => {
+    /* Non-vacuity for the membership rule: the check is a vocabulary, not a
+       refusal of everything. Five categories, partitioning exactly. */
+    const admitted = tokenUsageSources(
+      withCategories([
+        { key: 'input', totals: [2, 4, 6] },
+        { key: 'output', totals: [2, 4, 6] },
+        { key: 'cache-read', totals: [2, 4, 6] },
+        { key: 'cache-write', totals: [2, 4, 6] },
+        { key: 'reasoning', totals: [2, 4, 6] }
+      ])
+    );
+    assert.equal(admitted.length, 1);
+    assert.equal(admitted[0].series.categories.length, 5);
+  });
+
+  it('refuses a breakdown that does not partition the day', () => {
+    for (const [name, categories] of Object.entries({
+      'sums under the total': [
+        { key: 'input', totals: [1, 2, 3] },
+        { key: 'output', totals: [8, 17, 26] }
+      ],
+      'sums over the total': [
+        { key: 'input', totals: [10, 20, 30] },
+        { key: 'output', totals: [1, 1, 1] }
+      ],
+      'wrong on one day only': [
+        { key: 'input', totals: [1, 2, 3] },
+        { key: 'output', totals: [9, 18, 26] }
+      ],
+      'a lone category short of the total': [{ key: 'input', totals: [1, 2, 3] }]
+    })) {
+      assert.deepEqual(tokenUsageSources(withCategories(categories)), [], name);
+    }
+  });
+
+  it('refuses more categories than the boundary bound allows', () => {
+    const many = Array.from({ length: 9 }, () => ({ key: 'input', totals: [10, 20, 30] }));
+    assert.deepEqual(tokenUsageSources(withCategories(many)), []);
+  });
+
+  it('refuses the reviewer probe: a private key with a broken partition', () => {
+    /* Verbatim from the 2026-08-24 review: totals [10] against a
+       {key:'private-feature', totals:[9]} breakdown was ADMITTED, and the
+       renderer humanized that key into "private feature" on a public page. */
+    assert.deepEqual(
+      tokenUsageSources({
+        sources: [
+          {
+            label: 'alpha',
+            windows: [],
+            series: {
+              startDate: '2026-08-10',
+              totals: [10],
+              categories: [{ key: 'private-feature', totals: [9] }]
+            }
+          }
+        ]
+      }),
+      []
+    );
+  });
+});
+
+describe('category lens helpers', () => {
+  const series = {
+    startDate: '2026-08-10',
+    totals: [10, 20, 30],
+    categories: [
+      { key: 'input', totals: [1, 2, 3] },
+      { key: 'cache-read', totals: [9, 18, 27] }
+    ]
+  };
+
+  it('renders keys as display copy without inventing words', () => {
+    assert.equal(categoryLabel('cache-read'), 'cache read');
+    assert.equal(categoryLabel('input'), 'input');
+  });
+
+  /* Lens RESOLUTION used to be a helper here (`lensValues`), and its unit test
+     sat in this spot. Both are gone: main's block architecture moved lens
+     resolution into the component, which resolves an `UsageCategory` from the
+     adapter-built list and falls back to the plain series when the active lens
+     names nothing — so the helper had no production caller left, and a test
+     whose only subject is unshipped code measures nothing. The behaviour it
+     described is still pinned, in the two places that now decide it: the
+     component's own fallback expression, asserted ABOVE by `switches the
+     activity view client-side over one series`, and the real-engine lens
+     behaviour in `e2e/rendering-lanes.spec.mjs` :: `a source lens moves its
+     own graph and leaves its neighbour on daily`. */
+
+  /* The lens VOCABULARY is what the adapter delivers, and the lens LOOKUP is
+     the component's `activeLensCategory` over exactly this list. A resolver
+     helper in this module was deleted as dead code (coordinator ruling,
+     2026-08-26): nothing on main ever called it, and the component already
+     resolves its own lens, so keeping it would have been a second
+     lens-resolution path pinned by tests that only it satisfied.
+
+     The four behaviours those tests pinned still SHIP, so they are asserted
+     here against the surviving path instead: a named lens reads its own
+     dailies, an unreported lens has no entry to find, a series with no
+     breakdown offers no lens at all, and the total sentinel travels as data.
+     The component-side half of each — the guard and the fallback expression
+     that consume them — is pinned in panels-ui.test.mjs. */
+  it('delivers the lens vocabulary the component looks up, and nothing to resolve it with', () => {
+    const props = tokenUsageProps(
+      envelopeFor({ sources: [{ label: 'alpha', windows: [], series }] })
+    );
+    const categories = props.sections[0].activity.categories;
+    assert.deepEqual(
+      categories.map((category) => category.key),
+      ['input', 'cache-read']
+    );
+    /* A named lens reads its OWN dailies, delivered unchanged from the
+       served category — the value the retired helper's second assertion
+       measured. */
+    assert.deepEqual(
+      categories.find((category) => category.key === 'cache-read').totals,
+      [9, 18, 27]
+    );
+    assert.deepEqual(
+      categories.find((category) => category.key === 'input').totals,
+      [1, 2, 3]
+    );
+    /* A lens this source does not report has no entry to find, which is what
+       sends the component's lookup to the plain series — real data, never a
+       guess. */
+    assert.equal(
+      categories.find((category) => category.key === 'reasoning'),
+      undefined
+    );
+    /* And a series with no breakdown at all offers no lens row: the second
+       half of the same fallback. */
+    const plain = tokenUsageProps(
+      envelopeFor({
+        sources: [
+          { label: 'alpha', windows: [], series: { startDate: '2026-08-10', totals: [5] } }
+        ]
+      })
+    );
+    assert.equal(plain.sections[0].activity.categories, undefined);
+    assert.deepEqual(plain.sections[0].activity.series.totals, [5]);
+    /* Neither the resolver nor its sentinel came back here, and the adapter
+       reads the served category directly rather than through one. The
+       sentinel is stated once, in the component that decides with it. */
+    assert.doesNotMatch(helper, /lensValues/, 'the dead lens resolver is back');
+    assert.doesNotMatch(helper, /totalLens/, 'the adapter grew back a second copy of the sentinel');
+    assert.match(helper, /totals: category\.totals,/);
+    /* A category carries a NOUN, never a finished sentence: the reading is
+       built by lib/periods.ts from the cells actually drawn, so a lens and a
+       window cannot describe two different graphs. */
+    for (const category of categories) {
+      assert.equal(category.noun, `${category.label} token`);
+      assert.equal(category.summary, undefined);
+    }
+    assert.match(helper, /noun: `\$\{categoryLabel\(category\.key\)\} \$\{tokenActivityNoun\}`/);
+    assert.doesNotMatch(helper, /function usageActivitySummary/, 'the adapter grew back a window-blind sentence');
+  });
+
+  it('summarizes shares from the same integers the grid draws', () => {
+    const shares = categoryShares(series);
+    assert.deepEqual(
+      shares.map((share) => share.key),
+      ['input', 'cache-read']
+    );
+    assert.equal(shares[0].total, 6);
+    assert.equal(shares[1].total, 54);
+    assert.ok(Math.abs(shares[0].pct - 10) < 1e-9);
+    assert.ok(Math.abs(shares[1].pct - 90) < 1e-9);
+  });
+
+  it('reports a zero share for an empty window instead of dividing by zero', () => {
+    const empty = {
+      startDate: '2026-08-10',
+      totals: [0],
+      categories: [{ key: 'input', totals: [0] }]
+    };
+    assert.deepEqual(categoryShares(empty), [{ key: 'input', total: 0, pct: 0 }]);
+    assert.deepEqual(categoryShares({ startDate: '2026-08-10', totals: [1] }), []);
+  });
+
+  it('binds color slots to the entity, never the payload position', () => {
+    assert.equal(categorySlot('input'), 1);
+    assert.equal(categorySlot('output'), 2);
+    assert.equal(categorySlot('cache-read'), 3);
+    assert.equal(categorySlot('cache-write'), 4);
+    assert.equal(categorySlot('reasoning'), 5);
+  });
+
+  it('keeps the neutral slot as a total function, and unreachable', () => {
+    /* Two halves of one promise, asserted together because the 2026-08-24
+       review found them contradicting each other: the suite specified a
+       neutral slot for an unknown key while the component pins claimed a
+       hostile key could not reach rendering, and shape-only admission meant
+       it could (finding 6).
+
+       categorySlot stays TOTAL — it has a defined answer for any string, so
+       no render can throw or steal a known category's hue — and admission
+       now guarantees it is never asked, because a key outside the closed
+       vocabulary refuses the whole payload. The fallback is defense, not a
+       supported vocabulary slot. */
+    assert.equal(categorySlot('audio'), 0);
+    assert.deepEqual(
+      tokenUsageSources({
+        sources: [
+          {
+            label: 'alpha',
+            windows: [],
+            series: {
+              startDate: '2026-08-10',
+              totals: [10, 20, 30],
+              categories: [{ key: 'audio', totals: [10, 20, 30] }]
+            }
+          }
+        ]
+      }),
+      []
+    );
+  });
+});
+
+describe('category breakdown surface', () => {
+  it('gates the lens row and composition strip on categories existing', () => {
+    assert.match(component, /\{#if source\.activity\.categories && source\.activity\.categories\.length > 0\}/);
+    assert.match(component, /\{#if source\.activity\.composition && source\.activity\.composition\.length > 0\}/);
+    assert.match(component, /class="usage-views usage-category-views"/);
+    assert.match(component, /class="usage-composition-bar"/);
+    assert.match(component, /class="usage-composition-rows"/);
+  });
+
+  it('never encodes a category by color alone', () => {
+    /* Every segment carries its category's name and figures in the tooltip —
+       built as data by the adapter, rendered verbatim by the component — and
+       every legend chip sits BESIDE the written label and value. */
+    assert.match(helper, /tooltip: `\$\{categoryLabel\(share\.key\)\}: \$\{formatTokenCount\(share\.total\)\} tokens/);
+    assert.match(component, /title=\{share\.tooltip\}/);
+    assert.match(component, /class="usage-composition-label">\{share\.label\}</);
+    assert.match(component, /class="usage-composition-value"/);
+    /* Figures wear the text token, never a series color. */
+    assert.match(component, /\.usage-composition-value \{[^}]*var\(--panel-text/);
+  });
+
+  it('keeps 2px surface gaps between stacked segments (dataviz mark spec)', () => {
+    assert.match(component, /\.usage-composition-bar \{[^}]*gap: 2px/);
+  });
+
+  it('resolves every category color from a global token slot', () => {
+    for (let slot = 0; slot <= 5; slot += 1) {
+      assert.match(component, new RegExp(`var\\(--usage-cat-${slot},`));
+    }
+    /* The component draws whatever slot the adapter assigned; the adapter is
+       where the entity-owns-its-slot rule lives (categorySlot above). */
+    assert.match(component, /data-category-slot=\{share\.slot\}/);
+    assert.match(helper, /slot: categorySlot\(share\.key\)/);
+  });
+
+  it('renders every payload string as text, never markup', () => {
+    /* Svelte escapes text interpolation; what would break that promise is a
+       raw-HTML injection, so the component may never contain one. A hostile
+       label in a payload therefore renders as inert text, and a hostile
+       category KEY cannot even reach the renderer (admission refuses it —
+       proven above). */
+    assert.doesNotMatch(component, /\{@html/);
+  });
+});
+
+/* Finding 9 of the 2026-08-24 round-3 review: the frontend was the loose end
+ * of a numeric contract the other two stages enforce. Number.isFinite admits
+ * 1.5, admits 1e300, and admits 9007199254740993 — which is not even the
+ * number that was written, because it does not exist in JavaScript. These
+ * cases are the exact inputs that used to be admitted. */
+describe('count admission holds the shared numeric contract', () => {
+  const window = (patch) => ({
+    sources: [{ label: 'fixture', windows: [{ period: 'week', inputTokens: 1, outputTokens: 1, ...patch }] }]
+  });
+
+  it('admits the largest value every stage agrees about', () => {
+    const admitted = tokenUsageSources(window({ inputTokens: countBound }));
+    assert.equal(admitted.length, 1);
+    assert.equal(admitted[0].windows[0].inputTokens, countBound);
+  });
+
+  it('refuses a count one past the exact-representation boundary', () => {
+    /* countBound + 1 and countBound + 2 are the SAME double, so a payload
+     * carrying either arrives indistinguishable from the other. Serving a
+     * figure the origin did not produce is the doctrine violation the
+     * panels contract names by hand; refusing is the honest state. */
+    assert.equal(countBound + 1, countBound + 2);
+    assert.deepEqual(tokenUsageSources(window({ inputTokens: countBound + 1 })), []);
+    assert.deepEqual(tokenUsageSources(window({ outputTokens: 1e300 })), []);
+  });
+
+  it('refuses a fractional count', () => {
+    assert.deepEqual(tokenUsageSources(window({ inputTokens: 1.5 })), []);
+    assert.deepEqual(tokenUsageSources(window({ outputTokens: -0.5 })), []);
+  });
+
+  it('refuses NaN and both infinities', () => {
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      assert.deepEqual(tokenUsageSources(window({ inputTokens: value })), [], String(value));
+    }
+  });
+
+  it('still admits a fractional utilization, which is a rate and not a count', () => {
+    /* The tightening above must not swallow the two *float64 fields the
+     * origin genuinely serves. 36.4 is a correct utilizationPct and 58.7 is
+     * a correct insight pct; refusing them would blank a truthful panel. */
+    const admitted = tokenUsageSources(window({ utilizationPct: 36.4 }));
+    assert.equal(admitted.length, 1);
+    assert.equal(admitted[0].windows[0].utilizationPct, 36.4);
+    const insight = tokenUsageSources({
+      sources: [{ label: 'fixture', windows: [], insights: [{ label: 'cache read', pct: 58.7 }] }]
+    });
+    assert.equal(insight[0].insights[0].pct, 58.7);
+  });
+
+  it('refuses a rate that is not a number at all', () => {
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      assert.deepEqual(tokenUsageSources(window({ utilizationPct: value })), [], String(value));
+    }
+  });
+
+  it('refuses a series total outside the shared range', () => {
+    const series = (totals) => ({
+      sources: [{ label: 'fixture', windows: [], series: { startDate: '2026-08-10', totals } }]
+    });
+    assert.equal(tokenUsageSources(series([1, countBound])).length, 1);
+    assert.deepEqual(tokenUsageSources(series([1, countBound + 1])), []);
+    assert.deepEqual(tokenUsageSources(series([1, 2.5])), []);
+  });
+
+  it('refuses a category partition whose running sum leaves the exact range', () => {
+    /* Each part is admissible on its own and the declared total is
+     * admissible too; only the SUM leaves the range. Unchecked, the
+     * addition would land on an approximation and the equality below it
+     * would be comparing two numbers neither of which is the truth. */
+    const half = Math.floor(countBound / 2) + 1;
+    const payload = {
+      sources: [
+        {
+          label: 'fixture',
+          windows: [],
+          series: {
+            startDate: '2026-08-10',
+            totals: [countBound],
+            categories: [
+              { key: 'input', totals: [half] },
+              { key: 'output', totals: [half] }
+            ]
+          }
+        }
+      ]
+    };
+    assert.ok(Number.isSafeInteger(half) && Number.isSafeInteger(countBound));
+    assert.ok(!Number.isSafeInteger(half + half));
+    assert.deepEqual(tokenUsageSources(payload), []);
   });
 });

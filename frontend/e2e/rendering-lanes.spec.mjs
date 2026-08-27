@@ -48,17 +48,34 @@ const subPixel = 0.01;
  * a fixed time, and it is the first thing every test does. (Measured: the
  * Pixel 5 lane read 431px of panel stack immediately after load and 2173px
  * once the panels landed.) */
+/* Height alone is not enough, and the 2026-08-26 round-5 review is why
+ * (finding 8): the static shell in index.html is deliberately the same
+ * HEIGHT as the hydrated chrome, so that a zero-CLS hydration is possible at
+ * all. A height that has stopped changing is therefore satisfied by the shell
+ * BEFORE the app mounts, and every assertion that followed was racing
+ * hydration against its own 5-second default. Under a loaded machine
+ * hydration lost once, and `[webkit] each column edge carries a handle`
+ * reported 0 separators instead of 2.
+ *
+ * The fix is a STRICTER precondition, not a longer tolerance anywhere: the
+ * shell carries `data-static-fallback` and mounting replaces it, so its
+ * absence is the document's own statement that hydration finished. Nothing
+ * any test asserts changed — what changed is that the wait now covers the
+ * thing it always meant to cover, on the 15s budget it always had. */
 async function settled(page) {
   let previous = -1;
   await expect
     .poll(
       async () => {
-        const height = await page.evaluate(() => window.document.documentElement.scrollHeight);
-        const stable = height > 0 && height === previous;
-        previous = height;
+        const measured = await page.evaluate(() => ({
+          height: window.document.documentElement.scrollHeight,
+          hydrated: window.document.querySelector('[data-static-fallback]') === null
+        }));
+        const stable = measured.height > 0 && measured.height === previous && measured.hydrated;
+        previous = measured.height;
         return stable;
       },
-      { message: 'the page never stopped growing', timeout: 15_000 }
+      { message: 'the page never stopped growing, or never hydrated', timeout: 15_000 }
     )
     .toBe(true);
 }
@@ -1372,7 +1389,7 @@ test('a source with no series renders no graph, and one with a series still rend
     expect(shown.region, `"${source.label}" kept the graph region around an absent graph`).toBe(
       false
     );
-    expect(shown.toggles, `"${source.label}" kept a lens toggle with nothing to re-read`).toBe(0);
+    expect(shown.toggles, `"${source.label}" kept a toggle with nothing to re-read`).toBe(0);
     /* And it is still a complete block rather than something with a hole in
        it: the figures the source genuinely reports are all still there. */
     expect(shown.tiles, `"${source.label}" lost its figures along with its graph`).toBeGreaterThan(0);
@@ -1388,7 +1405,11 @@ test('a source with no series renders no graph, and one with a series still rend
     ).toBeGreaterThan(0);
     expect(shown.placeholders, `"${source.label}" pads its real series with placeholders`).toBe(0);
     expect(shown.notes, `"${source.label}" renders an empty-grid note over a real series`).toBe(0);
-    expect(shown.toggles, `"${source.label}" lost the lens toggle for its series`).toBe(1);
+    /* Two groups now (issue 158): the lens and the range. They answer
+       separate questions and are separate radiogroups, so a source that
+       reports a series carries exactly two and a source that reports none
+       carries none. */
+    expect(shown.toggles, `"${source.label}" lost a toggle for its series`).toBe(2);
     /* MEASURED, not asserted: the graph that stayed renders in exactly the
        box the shared component gives the other panel's calendar, so removing
        the region beside it moved nothing about it. */
@@ -4053,9 +4074,17 @@ test('the token-activity grid fills its card, not a tiny left-aligned block', as
  * toggle entirely would satisfy "the neighbour did not move". */
 test('a source lens moves its own graph and leaves its neighbour on daily', async ({ page }) => {
   await visit(page);
+  /* Scoped to the LENS groups (issue 158 added a second radiogroup per
+     source, for the trailing range). Every group on this card is a
+     .usage-views pill; the range one carries its own marker, so this reads
+     the lens groups alone rather than four groups answering two questions. */
   const readLenses = () =>
     page.evaluate(() =>
-      [...window.document.querySelectorAll('[data-panel-id="token-usage"] [role="radiogroup"]')].map(
+      [
+        ...window.document.querySelectorAll(
+          '[data-panel-id="token-usage"] .usage-views:not([data-usage-ranges])[role="radiogroup"]'
+        )
+      ].map(
         (group) => {
           const region = group.closest('.usage-activity');
           const chosen = [...group.querySelectorAll('[role="radio"]')].find(
@@ -4084,7 +4113,9 @@ test('a source lens moves its own graph and leaves its neighbour on daily', asyn
     expect(group.lens, `"${group.name}" does not open on the daily lens`).toBe('daily');
   }
 
-  const groups = page.locator('[data-panel-id="token-usage"] [role="radiogroup"]');
+  const groups = page.locator(
+    '[data-panel-id="token-usage"] .usage-views:not([data-usage-ranges])[role="radiogroup"]'
+  );
   await groups.first().getByRole('radio', { name: 'cumulative' }).click();
 
   const after = await readLenses();
@@ -4100,6 +4131,119 @@ test('a source lens moves its own graph and leaves its neighbour on daily', asyn
     expect(group.lens, `pressing one source's lens also moved "${group.name}"`).toBe('daily');
     expect(group.grid, `pressing one source's lens re-read the graph under "${group.name}"`).toContain(
       'daily'
+    );
+  }
+});
+
+/* One RANGE per source (issue 158), executed against the real page.
+ *
+ * The strip used to draw a constant fifty-three weeks, which is a ceiling the
+ * day the capture runs longer than a year. The range control makes that span
+ * a reader's choice; this lane proves the choice reaches the DOM — fewer
+ * drawn columns, a coverage line whose denominator moved with them, and the
+ * newest captured day still on screen, because a reader asking for less
+ * history must never be shown less of the present.
+ *
+ * The neighbour half rides along for the same reason the lens lane carries
+ * it: a page that ignored the control entirely would satisfy "the graph
+ * beside it did not move". */
+test('a source range redraws its own graph, keeps the newest day, and leaves its neighbour alone', async ({
+  page,
+}) => {
+  await visit(page);
+  const readRanges = () =>
+    page.evaluate(() =>
+      [
+        ...window.document.querySelectorAll(
+          '[data-panel-id="token-usage"] .usage-views[data-usage-ranges][role="radiogroup"]'
+        )
+      ].map((group) => {
+        const region = group.closest('.usage-activity');
+        const chosen = [...group.querySelectorAll('[role="radio"]')].find(
+          (radio) => radio.getAttribute('aria-checked') === 'true'
+        );
+        const cells = [...(region?.querySelectorAll('[data-grid-cell]') ?? [])];
+        const dated = cells
+          .map((cell) => cell.getAttribute('aria-label') ?? '')
+          .filter((label) => label !== 'no data for this day');
+        const box = cells[0]?.getBoundingClientRect();
+        return {
+          name: group.getAttribute('aria-label'),
+          range: chosen === undefined ? null : chosen.textContent.trim(),
+          columns: cells.length / 7,
+          captured: dated.length,
+          cellWidth: box?.width ?? 0,
+          cellHeight: box?.height ?? 0,
+          summary: region?.querySelector('.usage-activity-total')?.textContent.trim() ?? '',
+          coverage: region?.querySelector('.usage-activity-coverage')?.textContent.trim() ?? '',
+        };
+      })
+    );
+
+  const before = await readRanges();
+  expect(
+    before.length,
+    'the usage panel renders fewer than two range toggles; this lane cannot show decoupling'
+  ).toBeGreaterThan(1);
+  expect(new Set(before.map((group) => group.name)).size, 'two range groups share one name').toBe(
+    before.length
+  );
+  for (const group of before) {
+    /* The shipped default is the window this strip has always drawn, so a
+       reader who never touches this control sees what they saw before it
+       existed — 53 columns of it. */
+    expect(group.range, `"${group.name}" does not open on the shipped default range`).toBe('12mo');
+    expect(group.columns, `"${group.name}" opened on a width other than the reserve`).toBe(53);
+    expect(group.summary, `"${group.name}" renders no summary sentence`).toMatch(
+      /tokens over \d+ days, peaking at /
+    );
+    /* The coverage line states the denominator the sentence above it cannot:
+       captured days out of drawn days, both real numbers. */
+    expect(group.coverage, `"${group.name}" renders no coverage line`).toMatch(
+      /· \d+(,\d{3})* of \d+(,\d{3})* days captured$|· every day in range captured$/
+    );
+  }
+
+  const groups = page.locator(
+    '[data-panel-id="token-usage"] .usage-views[data-usage-ranges][role="radiogroup"]'
+  );
+  await groups.first().getByRole('radio', { name: '90d' }).click();
+
+  const after = await readRanges();
+  expect(after[0].range, 'the pressed range did not take').toBe('90d');
+  expect(after[0].columns, 'a 90-day window must draw 13 columns').toBe(13);
+  expect(
+    after[0].captured,
+    'the shorter window lost captured days it still covers'
+  ).toBe(before[0].captured);
+  /* The denominator moved with the window; the numerator did not, because
+     every captured day still fits inside it. */
+  expect(after[0].coverage, `the coverage line still reads "${after[0].coverage}"`).not.toBe(
+    before[0].coverage
+  );
+  expect(after[0].coverage).toContain('of 91 days captured');
+  expect(after[0].summary, 'the summary changed for a window that lost no data').toBe(
+    before[0].summary
+  );
+  /* MEASURED, not asserted in source: a full-width strip divides its card
+     between however many columns it drew, so a short range stretched its
+     cells to 88px in a 914px card — nine times their own height, which is a
+     bar chart wearing a heatmap's markup. The bound keeps a cell a cell at
+     every range, and this is the only place it can be checked, because it is
+     a question about a real box in a real engine. */
+  for (const group of after) {
+    expect(group.cellHeight, `"${group.name}" drew a cell with no height`).toBeGreaterThan(0);
+    expect(
+      group.cellWidth / group.cellHeight,
+      `"${group.name}" drew a ${group.cellWidth}x${group.cellHeight} cell at ${group.range}`
+    ).toBeLessThanOrEqual(2.5);
+  }
+
+  for (const group of after.slice(1)) {
+    expect(group.range, `pressing one source's range also moved "${group.name}"`).toBe('12mo');
+    expect(group.columns, `pressing one source's range redrew "${group.name}"`).toBe(53);
+    expect(group.coverage, `pressing one source's range re-read "${group.name}"`).toBe(
+      before[1].coverage
     );
   }
 });

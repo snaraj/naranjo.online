@@ -59,7 +59,31 @@
      counter; the deliberate trade (owner's own instruction: reserve space
      only when the specific item has something to show) is that content
      BELOW the gallery reflows when a captioned item comes round, which is
-     content arriving rather than a layout promise being broken. -->
+     content arriving rather than a layout promise being broken.
+
+  MOVING ITEMS (issue 207). An item carrying a `video` bag is a film; every
+  other item is exactly the still it was before that field existed. Three
+  rules make it safe as well as legible:
+
+  1. THE STRIP NEVER MOUNTS A VIDEO. The single visible frame shows the
+     poster's small derivative through the same <img> every photograph uses,
+     with a small drawn mark so a reader can tell a film from a photograph
+     before opening it. A gallery that mounted eight <video> elements to show
+     eight thumbnails is the weight problem the one-frame redesign removed,
+     reintroduced in a heavier form.
+  2. NOTHING EVER AUTOPLAYS. The element carries `controls`, `playsinline`
+     and `preload="none"`, and it carries no `autoplay` attribute anywhere in
+     this file — not conditionally, not muted, not "just for the poster".
+     That is also how prefers-reduced-motion is honoured STRUCTURALLY rather
+     than by a media query: there is no motion to suppress until a reader
+     presses play, and a reader pressing play has asked for it. `preload` of
+     none additionally means the enlarged frame costs a poster image, not a
+     multi-gigabyte transfer, until they do.
+  3. SOURCE ORDER IS THE MANIFEST'S. The <source> children render in the
+     order they arrive and this component neither sorts nor filters them,
+     because the browser takes the first it can decode — a typical ladder is
+     a high-efficiency rung ahead of a universal one, and reordering it would
+     silently hand a reader different bytes. -->
 <script lang="ts">
   import FeedCard from './FeedCard.svelte';
   import type { MediaGalleryProps } from '../blocks.ts';
@@ -78,6 +102,13 @@
      "no blank fields" failure this exists to prevent. */
   const hasCaption = $derived(Boolean(item.title) || Boolean(item.description));
   const hasMeta = $derived(hasCaption || item.link !== undefined);
+
+  /* An item's own intrinsic box when it declared one, the gallery's otherwise.
+     This is the element's size HINT; the reserved frame comes from the
+     --card-media-* tokens and is the same box for every item, which is why
+     swapping one set of items for another shifts no layout. */
+  const itemWidth = $derived(item.width ?? width);
+  const itemHeight = $derived(item.height ?? height);
 
   function next(): void {
     index = (index + 1) % total;
@@ -152,11 +183,23 @@
               class="gallery-image"
               src={item.previewSrc}
               alt={item.alt}
-              {width}
-              {height}
+              width={itemWidth}
+              height={itemHeight}
               loading="lazy"
               decoding="async"
             />
+            {#if item.video}
+              <!-- Signposting, not a control: the whole frame already opens the
+                lightbox, so this mark is aria-hidden and the item's alt text is
+                what a screen reader is told. It is drawn rather than an
+                overlaid glyph font, and it is absolutely positioned so adding
+                it moves nothing in the reserved box. -->
+              <span class="gallery-play-mark" aria-hidden="true">
+                <svg class="gallery-glyph" viewBox="0 0 24 24" width="16" height="16">
+                  <path d="M9 7.5l8 4.5-8 4.5z" fill="currentColor" />
+                </svg>
+              </span>
+            {/if}
           </button>
         </div>
         <button type="button" class="icon-button" onclick={next} aria-label="Next photograph">
@@ -205,7 +248,25 @@
     </button>
     {#if enlarged}
       <div class="gallery-lightbox-border">
-        <img class="gallery-lightbox-image" src={item.fullSrc} alt={item.alt} />
+        {#if item.video}
+          <!-- svelte-ignore a11y_media_has_caption -->
+          <video
+            class="gallery-lightbox-image"
+            controls
+            playsinline
+            preload="none"
+            poster={item.video.posterSrc}
+            aria-label={item.alt}
+            width={itemWidth}
+            height={itemHeight}
+          >
+            {#each item.video.sources as source (source.src)}
+              <source src={source.src} type={source.type} />
+            {/each}
+          </video>
+        {:else}
+          <img class="gallery-lightbox-image" src={item.fullSrc} alt={item.alt} />
+        {/if}
       </div>
       {#if hasMeta}
         <div class="gallery-lightbox-meta">
@@ -279,6 +340,15 @@
      stretched a grid item here to a square, MEASURED, so grid stretch was
      not enough). */
   .gallery-image-button {
+    /* Absolute, filling the stage. Issue 207 wanted a containing block here
+       for the moving-item mark below and added `position: relative`; composing
+       that with issue 202's centred stage left the property declared TWICE
+       with `relative` last, which took the button out of its absolute fill and
+       let a <button>'s fit-content sizing decide the frame's width again —
+       measured off centre by 569px in Firefox and WebKit at 1440px, the exact
+       dead gutter issue 202 removed. One declaration, and it is `absolute`:
+       an absolutely positioned box is already a containing block for
+       absolutely positioned descendants, so the mark needs nothing further. */
     position: absolute;
     inset: 0;
     display: grid;
@@ -293,6 +363,25 @@
     block-size: 100%;
     object-fit: var(--card-media-fit);
   }
+
+  /* The moving-item mark (issue 207). Absolutely positioned inside the
+     already-reserved frame, so a film's frame is exactly a photograph's
+     frame and adding the mark moves nothing. It is the only difference the
+     strip draws between the two kinds; everything else about a film's
+     thumbnail IS a photograph. */
+  .gallery-play-mark {
+    position: absolute;
+    inset-block-end: var(--gallery-play-inset, 0.5rem);
+    inset-inline-end: var(--gallery-play-inset, 0.5rem);
+    display: grid;
+    place-items: center;
+    inline-size: var(--gallery-play-size, 1.75rem);
+    block-size: var(--gallery-play-size, 1.75rem);
+    border-radius: 999px;
+    background: var(--gallery-play-surface, rgba(0, 0, 0, 0.55));
+    color: var(--gallery-play-ink, white);
+  }
+
 
   .gallery-count {
     margin: 0.375rem 0 0;
@@ -336,6 +425,15 @@
        whole photograph, and the dynamic unit is a pure upgrade on top of it. */
     max-block-size: var(--gallery-image-max-block, 40rem);
     border-radius: calc(var(--gallery-frame-radius) - var(--gallery-frame-width));
+  }
+
+  /* The enlarged element carries its intrinsic box as attributes so the
+     frame has a shape before a poster or a frame decodes. Auto sizing is what
+     lets the caps above take over from those attributes instead of fighting
+     them, and it keeps the aspect ratio intact on the way down. */
+  .gallery-lightbox-image {
+    inline-size: auto;
+    block-size: auto;
   }
 
   @supports (max-block-size: 1svh) {

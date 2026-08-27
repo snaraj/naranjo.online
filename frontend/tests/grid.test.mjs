@@ -10,7 +10,9 @@ import {
   calendarColumns,
   cellLabel,
   cellPeriod,
+  daysInMonth,
   formatMagnitude,
+  formatMonthLabel,
   formatWhole,
   gridLevel,
   gridLevels,
@@ -112,7 +114,7 @@ test('viewColumns reads one series three ways, on ALIGNED COLUMNS rather than ar
 });
 
 test('series views are a closed set', () => {
-  assert.deepEqual([...seriesViews], ['daily', 'weekly', 'cumulative']);
+  assert.deepEqual([...seriesViews], ['daily', 'weekly', 'monthly', 'cumulative']);
   for (const view of seriesViews) {
     assert.ok(isSeriesView(view));
   }
@@ -391,6 +393,127 @@ test('cellPeriod reads the view-scoped phrase the reference designs pair with a 
   // the raw string rather than throwing or blanking it (the same
   // never-corrupt-a-payload floor formatCalendarDate documents).
   assert.equal(cellPeriod({ value: 1, date: 'not-a-date' }, 'daily'), 'on not-a-date');
+});
+
+/* The monthly lens (issue 158) — the period the source CLIs cycle to and this
+ * grid could not reach, because a month is the one calendar period that is
+ * NOT the column a contribution strip is built from. */
+test('the monthly lens sums real calendar months across column boundaries', () => {
+  // Two columns straddling a month boundary: Aug 30-31 then Sep 1-5, with one
+  // absent day inside September and the week's tail absent.
+  const columns = [
+    [
+      { value: 0, date: '2026-08-29', absent: true },
+      { value: 5, date: '2026-08-30' },
+      { value: 7, date: '2026-08-31' },
+      { value: 1, date: '2026-09-01' },
+      { value: 2, date: '2026-09-02' },
+      { value: 0, date: '2026-09-03', absent: true },
+      { value: 4, date: '2026-09-04' }
+    ],
+    [
+      { value: 8, date: '2026-09-05' },
+      { value: 0, date: '2026-09-06', absent: true },
+      { value: 0, date: '2026-09-07', absent: true },
+      { value: 0, date: '2026-09-08', absent: true },
+      { value: 0, date: '2026-09-09', absent: true },
+      { value: 0, date: '2026-09-10', absent: true },
+      { value: 0, date: '2026-09-11', absent: true }
+    ]
+  ];
+  const monthly = viewColumns(columns, 'monthly');
+  // August's real days are 30 and 31: 12. September's are 1, 2, 4 and 5: 15 —
+  // summed ACROSS the column boundary, which is the whole point: a weekly
+  // lens would have reported one number for a column holding both months.
+  assert.deepEqual(
+    monthly[0].map((cell) => cell.value),
+    [0, 12, 12, 15, 15, 0, 15]
+  );
+  assert.deepEqual(
+    monthly[1].map((cell) => cell.value),
+    [15, 0, 0, 0, 0, 0, 0],
+    'the second column carries the same September total, not its own sum'
+  );
+  // Absent cells keep their absence and their zero in this lens exactly as in
+  // every other: a hole cannot be handed a total it never contributed to.
+  assert.equal(monthly[0][0].absent, true);
+  assert.equal(monthly[0][5].absent, true);
+  assert.equal(monthly[0][5].days, undefined, 'an absent cell must carry no coverage claim');
+  // And every real cell records how many of its month's days the window
+  // actually covered — the honest half, read back by cellPeriod below.
+  assert.equal(monthly[0][1].days, 2, 'August contributed two covered days here');
+  assert.equal(monthly[0][3].days, 4, 'September contributed four covered days here');
+  assert.equal(monthly[1][0].days, 4);
+  // The input is never mutated, in this lens like every other.
+  assert.equal(columns[0][1].value, 5);
+  assert.equal(columns[0][1].days, undefined);
+  assert.deepEqual(viewColumns([], 'monthly'), []);
+});
+
+test('a monthly cell says which month it is, and how much of that month it really covers', () => {
+  // A whole month reads plainly. February 2026 is 28 days; a cell claiming 28
+  // covered days is a complete month and needs no fraction.
+  assert.equal(
+    cellPeriod({ value: 9, date: '2026-02-14', days: 28 }, 'monthly'),
+    'in Feb 2026',
+    'a fully covered month must not be labelled with a fraction'
+  );
+  // A partial month says so — the window's edge months and a capture gap are
+  // both smaller than the month's name implies.
+  assert.equal(
+    cellPeriod({ value: 9, date: '2026-02-14', days: 12 }, 'monthly'),
+    'in Feb 2026 (12 of 28 days)'
+  );
+  // Leap February is 29, so the same 28 days is now a PARTIAL month. A month
+  // length taken from an average would get this wrong in both directions.
+  assert.equal(
+    cellPeriod({ value: 9, date: '2028-02-14', days: 28 }, 'monthly'),
+    'in Feb 2028 (28 of 29 days)'
+  );
+  assert.equal(cellPeriod({ value: 9, date: '2028-02-14', days: 29 }, 'monthly'), 'in Feb 2028');
+  // The year is part of the label, not decoration: a multi-year strip holds
+  // more than one August, and a bare month name is ambiguous exactly where
+  // the history is long enough for it to matter.
+  assert.equal(cellPeriod({ value: 9, date: '2025-08-03', days: 31 }, 'monthly'), 'in Aug 2025');
+  assert.notEqual(
+    cellPeriod({ value: 9, date: '2025-08-03', days: 31 }, 'monthly'),
+    cellPeriod({ value: 9, date: '2026-08-03', days: 31 }, 'monthly')
+  );
+  // No coverage claim at all reads as the plain month rather than as a
+  // fabricated fraction.
+  assert.equal(cellPeriod({ value: 9, date: '2026-02-14' }, 'monthly'), 'in Feb 2026');
+  // An undated cell has no calendar phrase, in this lens like the others; a
+  // hostile string degrades to itself rather than being blanked or thrown on.
+  assert.equal(cellPeriod({ value: 9, date: '' }, 'monthly'), '');
+  assert.equal(cellPeriod({ value: 9, date: '2026-13-01', days: 3 }, 'monthly'), 'in 2026-13-01');
+  assert.equal(cellPeriod({ value: 9, date: 'not-a-date' }, 'monthly'), 'in not-a-date');
+  // The accessible text folds the same phrase in, so a screen reader hears
+  // the coverage the sighted tooltip shows.
+  assert.equal(
+    cellLabel({ value: 12, date: '2026-02-14', days: 12 }, 'token', 'monthly'),
+    '12 tokens in Feb 2026 (12 of 28 days)'
+  );
+});
+
+test('month lengths come from the calendar, never from an average', () => {
+  assert.equal(daysInMonth('2026-01-31'), 31);
+  assert.equal(daysInMonth('2026-02-01'), 28);
+  assert.equal(daysInMonth('2028-02-01'), 29, '2028 is a leap year');
+  assert.equal(daysInMonth('2000-02-01'), 29, '2000 is divisible by 400 and IS a leap year');
+  assert.equal(daysInMonth('1900-02-01'), 28, '1900 is divisible by 100 and is NOT a leap year');
+  assert.equal(daysInMonth('2026-04-01'), 30);
+  assert.equal(daysInMonth('2026-12-01'), 31);
+  // A bare month is enough; a nonsense month or a non-date is refused rather
+  // than guessed at.
+  assert.equal(daysInMonth('2026-06'), 30);
+  assert.equal(daysInMonth('2026-13'), null);
+  assert.equal(daysInMonth('2026-00'), null);
+  assert.equal(daysInMonth('not-a-date'), null);
+  assert.equal(daysInMonth(''), null);
+  assert.equal(formatMonthLabel('2026-08-13'), 'Aug 2026');
+  assert.equal(formatMonthLabel('2026-08'), 'Aug 2026');
+  assert.equal(formatMonthLabel('2026-13-01'), null);
+  assert.equal(formatMonthLabel('nope'), null);
 });
 
 test('thousands grouping is locale-independent', () => {
