@@ -55,6 +55,21 @@ PUSH = SCRIPTS / "push-usage-series.sh"
 TEMPLATE = SCRIPTS / "com.naranjo-online.usage-export.plist.template"
 PROFILE = SCRIPTS / "producer.sb"
 
+
+def required_match(pattern, text, message, flags=0):
+    """One `re.search` that MUST match, or an AssertionError naming the miss.
+
+    The ceiling reads below pull a literal out of the push script, and a read
+    is evidence only if it found something. `re.search` returns None on a miss
+    and `.group` on None raises AttributeError — a crash naming neither the
+    pattern nor the file, which reads as a broken test rather than as the
+    missing constant it actually is.
+    """
+    found = re.search(pattern, text, flags)
+    if found is None:
+        raise AssertionError(message)
+    return found
+
 # The capability denials the producer sandbox exists for. Reviewed as a SET:
 # removing either is a red test naming it (2026-08-24 round-3 finding 1).
 REQUIRED_SANDBOX_DENIALS = ("(deny process-fork)", "(deny network*)")
@@ -574,9 +589,10 @@ class PushTransportHardeningTest(unittest.TestCase):
         # anything noticed. The transport stage now refuses first, and the
         # proof is that the ssh stub is never invoked at all.
         cap = int(
-            re.search(
+            required_match(
                 r"^MAX_SEALED_BYTES=(\d+)$",
                 PUSH.read_text(encoding="utf-8"),
+                "push-usage-series.sh carries no MAX_SEALED_BYTES",
                 re.MULTILINE,
             ).group(1)
         )
@@ -600,9 +616,10 @@ class PushTransportHardeningTest(unittest.TestCase):
         # Non-vacuity for the bound above: the boundary itself is admitted,
         # so the refusal is an edge rather than a blanket denial.
         cap = int(
-            re.search(
+            required_match(
                 r"^MAX_SEALED_BYTES=(\d+)$",
                 PUSH.read_text(encoding="utf-8"),
+                "push-usage-series.sh carries no MAX_SEALED_BYTES",
                 re.MULTILINE,
             ).group(1)
         )

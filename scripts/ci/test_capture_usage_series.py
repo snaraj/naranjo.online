@@ -20,6 +20,7 @@ import ast
 import importlib.util
 import json
 import os
+import re
 import shutil
 import pathlib
 import tempfile
@@ -27,8 +28,33 @@ import unittest
 
 _MODULE_PATH = pathlib.Path(__file__).resolve().parents[1] / "capture_usage_series.py"
 _SPEC = importlib.util.spec_from_file_location("capture_usage_series", _MODULE_PATH)
+if _SPEC is None or _SPEC.loader is None:
+    # Both are Optional, and both being None means the same thing: the module
+    # under test is not where this suite says it is. Saying so by name beats
+    # an AttributeError on None three lines later, which reads as a broken
+    # test rather than a missing subject.
+    raise ImportError("the capture step is not loadable at %s" % _MODULE_PATH)
 capture_usage_series = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(capture_usage_series)
+
+
+def required_match(pattern, text, message, flags=0):
+    """One `re.search` that MUST match, or an AssertionError naming the miss.
+
+    Every parity pin below reads a literal out of another file, and the read
+    is evidence only if it found something. `re.search` returns None on a
+    miss and `.group` on None raises AttributeError — a crash naming neither
+    the pattern nor the file, which reads as a broken test rather than as the
+    broken parity it actually is. Raising AssertionError makes the miss the
+    FAILURE the pin always meant, carrying the message the pin already wrote,
+    and it does so for every capture rather than only the ones that happened
+    to be guarded.
+    """
+    found = re.search(pattern, text, flags)
+    if found is None:
+        raise AssertionError(message)
+    return found
+
 
 CaptureError = capture_usage_series.CaptureError
 
@@ -617,8 +643,14 @@ class ImportSurfaceTest(unittest.TestCase):
         # is defeated by a computed getattr exactly as an attribute denylist
         # was. The docstring must say so, because a pin whose limits are
         # undocumented gets read as a guarantee.
-        self.assertIn("REVIEW BOUND", ImportSurfaceTest.__doc__)
-        self.assertIn("getattr", ImportSurfaceTest.__doc__)
+        # `__doc__` is Optional, and a class stripped of its docstring is the
+        # very regression this pin exists to catch — so it fails HERE, by
+        # name, rather than inside assertIn's container argument.
+        doc = ImportSurfaceTest.__doc__
+        if doc is None:
+            self.fail("ImportSurfaceTest lost the docstring that states its limits")
+        self.assertIn("REVIEW BOUND", doc)
+        self.assertIn("getattr", doc)
 
     def test_the_pin_is_reading_a_real_import_surface(self):
         # Non-vacuity: an assertion about a set that turned out to be empty
@@ -805,10 +837,12 @@ class CategoryVocabularyParityTest(unittest.TestCase):
 
     def test_matches_the_go_admission_vocabulary(self):
         source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
-        import re
 
-        match = re.search(r"categoryServeOrder = \[\]string\{([^}]*)\}", source)
-        self.assertIsNotNone(match, "internal/panels/types.go carries no categoryServeOrder")
+        match = required_match(
+            r"categoryServeOrder = \[\]string\{([^}]*)\}",
+            source,
+            "internal/panels/types.go carries no categoryServeOrder",
+        )
         go_keys = tuple(re.findall(r'"([^"]+)"', match.group(1)))
         self.assertEqual(
             go_keys,
@@ -819,10 +853,13 @@ class CategoryVocabularyParityTest(unittest.TestCase):
 
     def test_matches_the_frontend_palette_slots(self):
         source = (self.REPO_ROOT / "frontend/src/lib/token-usage.ts").read_text(encoding="utf-8")
-        import re
 
-        match = re.search(r"categorySlots[^(]*\(\[([^\]]*(?:\][^\]]*)*?)\]\);", source, re.DOTALL)
-        self.assertIsNotNone(match, "frontend/src/lib/token-usage.ts carries no categorySlots")
+        match = required_match(
+            r"categorySlots[^(]*\(\[([^\]]*(?:\][^\]]*)*?)\]\);",
+            source,
+            "frontend/src/lib/token-usage.ts carries no categorySlots",
+            re.DOTALL,
+        )
         ts_keys = tuple(re.findall(r"\['([^']+)',\s*\d+\]", match.group(1)))
         self.assertEqual(
             ts_keys,
@@ -852,11 +889,12 @@ class CapParityTest(unittest.TestCase):
     REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
     def go_cap(self):
-        import re
-
         source = (self.REPO_ROOT / "internal/seal/types.go").read_text(encoding="utf-8")
-        match = re.search(r"MaxSealedBytes = (\d+) << (\d+)", source)
-        self.assertIsNotNone(match, "internal/seal/types.go carries no MaxSealedBytes")
+        match = required_match(
+            r"MaxSealedBytes = (\d+) << (\d+)",
+            source,
+            "internal/seal/types.go carries no MaxSealedBytes",
+        )
         return int(match.group(1)) << int(match.group(2))
 
     def structural_maximum(self, digits):
@@ -929,11 +967,12 @@ class CapParityTest(unittest.TestCase):
         self.assertGreater(self.structural_maximum(14), cap)
 
     def test_matches_the_origin_admission_cap(self):
-        import re
-
         source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
-        match = re.search(r"maxSealedSeriesBytes = (\d+) << (\d+)", source)
-        self.assertIsNotNone(match, "internal/panels/types.go carries no maxSealedSeriesBytes")
+        match = required_match(
+            r"maxSealedSeriesBytes = (\d+) << (\d+)",
+            source,
+            "internal/panels/types.go carries no maxSealedSeriesBytes",
+        )
         self.assertEqual(
             int(match.group(1)) << int(match.group(2)),
             self.go_cap(),
@@ -942,13 +981,17 @@ class CapParityTest(unittest.TestCase):
         )
 
     def test_matches_the_exporter(self):
-        import re
-
         source = (self.REPO_ROOT / "scripts/export_usage_series.py").read_text(encoding="utf-8")
-        cap = re.search(r"MAX_SEALED_BYTES = (\d+) \* 1024", source)
-        overhead = re.search(r"SEAL_OVERHEAD = (\d+)", source)
-        self.assertIsNotNone(cap, "scripts/export_usage_series.py carries no MAX_SEALED_BYTES")
-        self.assertIsNotNone(overhead, "scripts/export_usage_series.py carries no SEAL_OVERHEAD")
+        cap = required_match(
+            r"MAX_SEALED_BYTES = (\d+) \* 1024",
+            source,
+            "scripts/export_usage_series.py carries no MAX_SEALED_BYTES",
+        )
+        overhead = required_match(
+            r"SEAL_OVERHEAD = (\d+)",
+            source,
+            "scripts/export_usage_series.py carries no SEAL_OVERHEAD",
+        )
         self.assertEqual(
             int(cap.group(1)) * 1024,
             self.go_cap(),
@@ -958,10 +1001,19 @@ class CapParityTest(unittest.TestCase):
         # The overhead is what turns the sealed ceiling into the producer's
         # plaintext bound, so it is pinned against the Go format too.
         seal_source = (self.REPO_ROOT / "internal/seal/types.go").read_text(encoding="utf-8")
-        magic = re.search(r'magic = "([^"]+)"', seal_source)
-        nonce = re.search(r"nonceBytes = (\d+)", seal_source)
-        tag = re.search(r"tagBytes = (\d+)", seal_source)
-        self.assertIsNotNone(magic, "internal/seal/types.go carries no magic")
+        # All three, not only the magic: the sum below reads every one of
+        # them, so a missing nonce or tag constant is exactly as much a
+        # parity failure as a missing magic, and used to be an AttributeError
+        # instead of one.
+        magic = required_match(
+            r'magic = "([^"]+)"', seal_source, "internal/seal/types.go carries no magic"
+        )
+        nonce = required_match(
+            r"nonceBytes = (\d+)", seal_source, "internal/seal/types.go carries no nonceBytes"
+        )
+        tag = required_match(
+            r"tagBytes = (\d+)", seal_source, "internal/seal/types.go carries no tagBytes"
+        )
         self.assertEqual(
             int(overhead.group(1)),
             len(magic.group(1)) + int(nonce.group(1)) + int(tag.group(1)),
@@ -970,14 +1022,14 @@ class CapParityTest(unittest.TestCase):
         )
 
     def test_matches_the_push_script(self):
-        import re
-
         source = (
             self.REPO_ROOT / "scripts/usage-export/push-usage-series.sh"
         ).read_text(encoding="utf-8")
-        match = re.search(r"^MAX_SEALED_BYTES=(\d+)$", source, re.MULTILINE)
-        self.assertIsNotNone(
-            match, "scripts/usage-export/push-usage-series.sh carries no MAX_SEALED_BYTES"
+        match = required_match(
+            r"^MAX_SEALED_BYTES=(\d+)$",
+            source,
+            "scripts/usage-export/push-usage-series.sh carries no MAX_SEALED_BYTES",
+            re.MULTILINE,
         )
         self.assertEqual(
             int(match.group(1)),
@@ -987,8 +1039,6 @@ class CapParityTest(unittest.TestCase):
         )
 
     def test_matches_the_documented_forced_command_and_manual(self):
-        import re
-
         cap = self.go_cap()
         source = (self.REPO_ROOT / "docs/usage-export.md").read_text(encoding="utf-8")
 
