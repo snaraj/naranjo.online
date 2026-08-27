@@ -7,6 +7,66 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.49] - 2026-08-26
+
+### Removed
+
+- Dead frontend code with no caller left, verified against every file under
+  `frontend/src` with a COMMENT-STRIPPED sweep so a mention inside a comment
+  could not be mistaken for a use: the orphaned panel-index READ path
+  (`PanelIndexEntry`, `PanelIndex`, `parsePanelIndex`, `loadPanelIndex`),
+  which nothing has called since panels became blocks mounted by hardcoded id;
+  the freshness clock (`watchClock`, `panelClockIntervalMs`), orphaned when the
+  badge left at issue 179; `isSeriesView`; the `.icon-button[disabled]` rule,
+  which styled a control that no longer exists; the unconsumed
+  `--palette-status-unavailable` / `--panel-status-unavailable` token chain;
+  and `ContributionGrid`'s `showMonths` prop, which neither call site passes.
+  `panelsIndexUrl`, `panelAge`, `seriesViews`, `--panel-status-ok`,
+  `data-panel-status`, `fullWidth` and `cardTitle` were each checked and KEPT:
+  every one is either live or defended in a comment as a structural backstop.
+- Duplicated and vacuous test coverage, keeping the stronger copy each time and
+  MIGRATING the values only the weaker copy carried. The flagship was a
+  `block-size: 7rem` assertion against `ContributionGrid.svelte` in which every
+  `7rem` in that component sits inside a comment — the one it matched being the
+  comment recording that `block-size: 7rem` was REMOVED at issue 130 — so it had
+  been green and meaningless ever since, while pinning the literal that issue
+  replaced.
+- Four re-implementations of one workflow-step extractor and three
+  near-identical synthetic-git-repo builders in `scripts/ci/test_release_contract.py`,
+  plus one strictly subsumed test. Zero assertions were lost that the file did
+  not already make elsewhere, and all 15 workflow-step extractions were proven
+  SHA-256 identical before and after.
+
+### Fixed
+
+- The CodeQL concurrency guard. The group falls back to `github.sha` off a pull
+  request, so the weekly SCHEDULE run shares a group with a main PUSH run still
+  analysing that commit and could cancel it. The publisher requires a
+  successful `event=push` CodeQL run at that exact SHA, and CodeQL fires on push
+  once per push, so that single cancellation made a version permanently
+  unreleasable. Adopts the sibling repository's
+  `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`, and the
+  release-contract pin is TIGHTENED to that stricter string rather than removed.
+- `TestNoSelectorEverSelectsOnTheVersionLabel` asserted only inside a regex
+  match loop, so a reader that stopped matching passed green while checking
+  nothing. Each chart template must now yield at least one selector block.
+- Ten pre-existing Pyright errors, at the root and with no `# type: ignore`, no
+  widening to `Any`, and no weakened assertion: `chart_render_census.py` (4, via
+  a `NoReturn` diagnostic signature, a `Callable` mutation-table type, and a
+  `PolicyFacts` protocol that finally CHECKS the duck-typed stand-in),
+  `dependabot_contract.py` (4, by naming the four-node union its refusal path
+  already depended on), and `test_chart_render_census.py` (2).
+- The remote-origin sweep in three frontend suites matched a bare `//`, so any
+  JavaScript line comment in the eight swept files turned CI red claiming a
+  remote origin. Now requires a dotted authority, keeping protocol-relative
+  origins flagged rather than dropping that half.
+- Comments that stated a wrong number, a wrong scope, or a wrong mechanism: the
+  census's round-six kill count (78, where the arithmetic closes at 69), a
+  header counting eight constructs where nine follow, two suites miscounting
+  their own tests, a claim that the census "replaces" a raw-line scan that is
+  still live and gating every pull request, a comment defending an echoed path
+  the code never echoes, and five in the dependabot contract.
+
 ## [0.1.48] - 2026-08-26
 
 ### Added
