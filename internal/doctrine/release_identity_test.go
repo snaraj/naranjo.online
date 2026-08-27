@@ -162,7 +162,25 @@ func TestNoSelectorEverSelectsOnTheVersionLabel(t *testing.T) {
 	selectorBlock := regexp.MustCompile(`(?s)(selector|podSelector):\n(?:\s+matchLabels:\n)?((?:\s{4,}\S[^\n]*\n)+)`)
 	for _, name := range []string{"deployment.yaml", "service.yaml", "network-policy.yaml"} {
 		text := readChartFile(t, "templates", name)
-		for _, match := range selectorBlock.FindAllStringSubmatch(text, -1) {
+		matches := selectorBlock.FindAllStringSubmatch(text, -1)
+		// The assertion below lives INSIDE this loop, so a regex that stops
+		// matching does not fail — it iterates zero times and the test passes
+		// green while checking nothing. Every one of these three templates
+		// declares at least one selector block by construction (deployment 1,
+		// service 1, network-policy 2), so zero means the reader broke, not
+		// that the chart got safer: a reindent, a `matchLabels:` restructure,
+		// or a move to a helper would all produce it. Fail closed on that,
+		// the same way internal/panels' doctrine pin refuses to run against
+		// an empty source set.
+		if len(matches) == 0 {
+			t.Errorf(
+				"chart/templates/%s: the selector-block reader matched nothing, so this pin "+
+					"protects nothing; the template's selector shape changed or the pattern "+
+					"stopped reading it",
+				name,
+			)
+		}
+		for _, match := range matches {
 			if strings.Contains(match[2], "app.kubernetes.io/version") {
 				t.Errorf(
 					"chart/templates/%s selects on app.kubernetes.io/version; "+

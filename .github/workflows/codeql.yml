@@ -9,9 +9,21 @@ on:
 
 permissions: {}
 
+# Cancellation is for superseded PR runs and nothing else. The group falls
+# back to `github.sha` off a pull request, so two main PUSHES never share a
+# group and cannot cancel each other — but the weekly SCHEDULE resolves to the
+# default branch's head SHA, which IS the group of a push run still analysing
+# that same commit, and would cancel it. `release-publisher.yml` authorizes
+# against a CodeQL run matching event=push, head_branch=main, that exact
+# head_sha, and conclusion=success (classify_codeql_run_record,
+# scripts/ci/release_contract.py). A cancelled push run has conclusion
+# `cancelled`, and no second push-event run for that SHA can ever exist, so
+# that one cancellation makes the version permanently unreleasable. Guarding
+# the flag matches the sibling repository (lidersea.com) under the
+# one-taxonomy rule.
 concurrency:
   group: codeql-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   analyze:
