@@ -82,10 +82,11 @@ export function formatTokenCount(count: number): string {
   return formatMagnitude(count);
 }
 
-/* resetsIn renders a window's resetsAt as the same coarse relative language
- * panelAge uses for freshness — a glance, not a clock. Absent, malformed, and
- * already-passed instants all render as nothing: the status badge already
- * carries staleness, and inventing "resets in 0m" would be a fake number. */
+/* resetsIn renders a window's resetsAt in the same coarse relative language
+ * panelAge writes a commit's age in — a glance, not a clock. Absent,
+ * malformed, and already-passed instants all render as nothing: the envelope's
+ * own status carries provenance for the payload, and inventing "resets in 0m"
+ * would be a fake number. */
 export function resetsIn(resetsAt: string | undefined, now: Date = new Date()): string {
   if (!resetsAt) {
     return '';
