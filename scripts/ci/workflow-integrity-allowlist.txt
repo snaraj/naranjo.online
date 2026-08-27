@@ -15,7 +15,10 @@
 # `<where>` locates the construct:
 #     continue-on-error   job name, or `job/step name`
 #     env-shadow          `job/step name/ENV_KEY`
-#     custom-shell        `job/step name`
+#     custom-shell        `job/step name`, or -- for a default shell, which no
+#                         step name can address -- `<defaults.run.shell>` for
+#                         the workflow-level one and
+#                         `job/<defaults.run.shell>` for a job's
 # Steps are located by NAME, never by index, so inserting a step above one
 # does not invalidate its entry -- an index would be exactly the brittle
 # inventory pin this gate refuses to become.
@@ -26,7 +29,18 @@
 #
 # EMPTY BY DESIGN. Every workflow in this repository passes all three rules at
 # the head that introduced this gate: no `continue-on-error` exists anywhere,
-# no step-level `env:` shadows a workflow- or job-level declaration, and no
-# step sets a custom `shell:`. That is the state worth keeping, and an empty
-# allowlist is the honest record of it -- the seeds are absent because nothing
-# needed seeding, not because anything was waived to reach green.
+# no step-level `env:` shadows a workflow- or job-level declaration, and
+# neither a step nor a `defaults.run` sets a custom `shell:`. That is the
+# state worth keeping, and an empty allowlist is the honest record of it --
+# the seeds are absent because nothing needed seeding, not because anything
+# was waived to reach green.
+#
+# ONE COST OF THE FAIL-CLOSED RESOLUTION BOUNDARY, stated plainly so nobody
+# meets it as a surprise: the reader refuses a scalar it does not recognise
+# rather than comparing it, so a legitimate but exotic value -- a `${{ }}`
+# expression on `continue-on-error`, or a custom `shell:` template with spaces
+# in it -- is refused too, and lifts through one line here like any other
+# refusal. That is the trade the 0.1.49 round-3 review asked for: three rounds
+# of "another valid form evades the reader" end only when the default is
+# refusal. The refusal message names the construct and prints the exact line
+# to paste.
