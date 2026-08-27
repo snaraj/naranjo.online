@@ -111,10 +111,20 @@ the mint step, and no `continue-on-error`. A tag bearing that message therefore
 cannot exist unless both frozen names resolve. `git cat-file tag v0.1.46`
 returns tagger `github-actions[bot]
 <41898282+github-actions[bot]@users.noreply.github.com>` and exactly that
-message. App-backed publication is live and has been exercised by every release
-tag the repository carries. Re-derive this rather than trusting the sentence:
+message. App-backed publication is live, and every release tag from `v0.1.15`
+onward carries that publisher's marks: tagger `github-actions[bot]` and the
+exact `Release vX.Y.Z from <SHA>` message form. That scope is deliberate and its
+exception is named rather than hidden — the six older tags, `v0.1.4` through
+`v0.1.9`, predate the `immutable_settings` job, were created under three other
+tagger identities, none of them `github-actions[bot]`, and none carries the
+publisher's message form, so they are evidence about the App path in neither
+direction. A single 2026-08-14 commit introduced that job together with both
+frozen-name reads, and every tag from `v0.1.15` onward descends from it.
+Re-derive all of this rather than trusting the sentence:
 `git for-each-ref --format='%(objecttype) %(refname:short)' refs/tags` lists the
-annotated tags, and `git cat-file tag <tag>` shows each one's tagger and message.
+annotated tags, `git cat-file tag <tag>` shows each one's tagger and message,
+`git log -S immutable_settings` over `release-publisher.yml` names that single
+commit, and `git merge-base --is-ancestor` settles the descent.
 This repository still contains no credential value and grants no authority to
 provision one.
 
@@ -123,8 +133,12 @@ rather than quietly: the closing clause of the `Protect-Main` paragraph two
 paragraphs down still calls those two names unprovisioned and treats that as an
 outstanding external blocker. Read it as the 2026-08-14 state it records, not as
 present tense — the evidence above supersedes it. It is retained verbatim
-because the governance parity suite digest-pins every paragraph of this file
-that speaks about merge authority, and those digests live in
+because the governance parity suite digest-pins each block of this file that the
+case-insensitive pattern `\bready\b` selects — a word filter, not a
+merge-authority filter, and the guard's own docstring states that honest limit.
+Prose about merge authority that avoids the word is not pinned at all: the
+settings-receipt sentence near the top of this file, the one saying the receipt
+grants no merge authority, carries no digest. Those digests live in
 `scripts/ci/test_release_contract.py`, which sits outside requirement 10's
 closed documentation allowlist. Editing the sentence therefore reclassifies the
 change as artifact and consumes a release slot, so it is tracked as its own
