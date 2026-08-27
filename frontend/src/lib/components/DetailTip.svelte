@@ -31,16 +31,35 @@
   adding a detail — a caller that had to remember a second step is a caller
   that eventually does not. -->
 <script lang="ts">
-  import { hoverDetail, type TipDetail } from '../tooltip.ts';
+  import { hoverDetail, type TipDetail, type TipPoint } from '../tooltip.ts';
 
   let {
-    detail
+    detail,
+    host,
+    resolve,
+    select,
+    anchor
   }: {
     /* The row this detail describes: its name, and its figures as labelled
        rows. Built by pure functions beside the data they read (bossDetail,
        skillDetail and summaryDetail in lib/bossLog.ts), so the grammar the
        two grids share is executed by tests rather than repeated in markup. */
     detail: TipDetail;
+    /* THE REGION FORM (issue 219). A tile caller passes none of the four
+       props below and gets exactly what this component has always done: the
+       tip describes its own parent. A caller whose subject is one of MANY
+       inside a single host — a heatmap strip, where one tip per 10px cell
+       would be 371 components and ~4400 extra elements per grid — passes the
+       host and says which element a point names. The BEHAVIOUR is identical
+       either way, because it is the same binding in lib/tooltip.ts doing the
+       same work; only the anchor lookup differs, exactly as the pointer and
+       cell anchors already differ inside it. Wiring stays here rather than at
+       the call site so there is still exactly one component in the tree that
+       knows this primitive exists. */
+    host?: HTMLElement;
+    resolve?: (target: EventTarget | null, point: TipPoint) => HTMLElement | null;
+    select?: (element: HTMLElement | null) => void;
+    anchor?: HTMLElement | null;
   } = $props();
 
   /* Whether the box is showing. It is the component's own state rather than
@@ -61,7 +80,7 @@
   role="tooltip"
   aria-hidden="true"
   data-tip-open={open}
-  use:hoverDetail={(next) => (open = next)}
+  use:hoverDetail={{ report: (next) => (open = next), host, resolve, select, anchor }}
 >
   <span class="cell-tip-name">{detail.name}</span>
   {#each detail.rows as row, index (index)}

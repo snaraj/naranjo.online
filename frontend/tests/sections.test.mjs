@@ -866,7 +866,21 @@ test('exactly one frame is ever visible — never eight stacked', () => {
   // against; the component renders exactly one <img> for the feed frame,
   // keyed to whichever index state currently holds, and none of the seven
   // others.
-  assert.doesNotMatch(mediaGallery, /\{#each items as/, 'the feed frame must not loop over every item at once');
+  // The guard is that no MEDIA element is ever mounted inside a loop over the
+  // items — that is the weight regression, and it is what "eight stacked"
+  // meant. It used to be spelled as "no {#each items as" at all, which was a
+  // proxy: issue 219's position dots iterate the items to draw one 6px mark
+  // each, mount no bytes, and are exactly the visible position affordance a
+  // swipeable surface owes. Pinning the media element instead says the real
+  // rule and is strictly harder to slip past, since an <img> smuggled into a
+  // loop now fails whatever the loop is called.
+  for (const [loop] of mediaGallery.matchAll(/\{#each items as[\s\S]*?\{\/each\}/g)) {
+    assert.doesNotMatch(
+      loop,
+      /<img|<video|<source/,
+      'the feed frame must not mount a media element for every item at once'
+    );
+  }
   assert.equal(
     [...mediaGallery.matchAll(/class="gallery-image"/g)].length,
     1,

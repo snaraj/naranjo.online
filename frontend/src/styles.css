@@ -716,6 +716,32 @@ body {
   overscroll-behavior-y: none;
 }
 
+/* THE PULL'S OWN TRAVEL (issue 219). The declaration above is what makes this
+   possible rather than what it fights: with the native boundary effect
+   suppressed there is no browser animation competing for the same drag, so
+   this transform is the only thing moving the surface and the settle is ours
+   to guarantee. A pull layered on top of a LIVE native bounce is the thing
+   that cannot be made to settle — which is exactly what the owner reported at
+   issue 187 and why that gesture had to be taken away.
+
+   A transform, never a margin or a top offset: a composited translate changes
+   no box, reserves no space and triggers no layout, so a pull costs nothing
+   against the zero-CLS floor and the document's own height never moves.
+
+   THE ATTRIBUTE GUARD IS LOAD-BEARING, NOT TIDINESS. A transform of any value
+   other than `none` makes the element a containing block for every
+   `position: fixed` DESCENDANT — and `translateY(0px)` is a transform, not
+   `none`. Left ungated, this rule would silently re-parent the reading-mode
+   header and every detail card from the viewport to this element, for the
+   entire life of the page, whether or not anyone ever pulled. That is the
+   exact guarantee lib/tooltip.ts rests on ("a fixed box is outside the
+   scrollable overflow region by construction"), so the property must not
+   exist at rest. PullToRefresh.svelte writes the attribute only while a pull
+   is actually displaced and removes it the moment the surface settles home. */
+[data-pulling='true'] main {
+  transform: translateY(var(--page-pull, 0px));
+}
+
 /* Dynamic viewport units only (rendering-lane floor, issue #26). The static
    unit measures the TALLEST the viewport ever gets, so on a phone showing its
    toolbars a full-height box is taller than the screen and the bottom of the
@@ -909,6 +935,42 @@ html[data-column-resizing] {
   z-index: var(--layer-menu);
   display: flex;
   align-items: center;
+  /* THE PLATE (issue 219). A fixed control is glued to the VIEWPORT while the
+     column scrolls underneath it, and at a phone width the column IS the
+     viewport — so page content passes through the corner this control owns.
+     MEASURED at 390x844 in WebKit: the reading-mode glyph occupies x 330-374,
+     y 16-60, and the token panel's "cumulative" segment scrolls to x 283-360,
+     y 27-71, a 30x33px overlap that renders the label underneath the icon.
+     At 1440px there is none — the glyph sits at x 1380-1424 and the column
+     ends at 1200 — which is exactly why this only ever showed on a phone.
+
+     The reserve at the top of the document was never the problem and is not
+     the fix: --page-top-space already clears this row at scroll zero. What was
+     missing is that the control painted nothing of its own, so whatever
+     scrolled beneath it showed THROUGH it. The plate is the page's own surface
+     token, so the glyph reads against a real background in every reading mode
+     rather than against whatever text happens to be passing.
+
+     The radius is the pill the 44px hit box already describes, and the plate
+     is sized by that box rather than by a number of its own, so it cannot
+     drift from the control it backs. */
+  background: var(--color-surface);
+  border-radius: 999px;
+  /* The colour is the one progressive step here, so it carries the fallback
+     directly above it: an engine without color-mix drops only the softened
+     edge and keeps a fully opaque plate, which is the safe direction. */
+  box-shadow: 0 0 0 var(--page-gutter) var(--color-surface);
+  box-shadow: 0 0 0 var(--page-gutter)
+    color-mix(in srgb, var(--color-surface) 92%, transparent);
+}
+
+/* The other half of the same collision, for a reader who never scrolls by
+   hand: browser-driven scrolling — a fragment link, and every focus move a
+   keyboard makes — must not park its target under the fixed control either.
+   The inset is the SAME sum the document's top reserve is built from, so the
+   two can never disagree about how much of the viewport that control owns. */
+html {
+  scroll-padding-block-start: var(--page-top-space);
 }
 
 /* The column, and — since the resize handles are drawn against its edges —
@@ -1184,6 +1246,13 @@ h1 {
   --gallery-meta-ink: white;
   --gallery-meta-link-padding: 0.5rem;
   --gallery-lightbox-max-inline: min(94vw, 90rem);
+  /* How long a released swipe takes to settle (issue 219). A token like every
+     other dimension of this card, so the FEEL of the gesture is tunable from
+     the token layer rather than from the component — the same rule
+     --tip-pointer-gap follows for the detail card. Short enough to read as a
+     snap rather than a slide; a reduced-motion reader gets no transition at
+     all, which MediaGallery.svelte decides with a media query. */
+  --gallery-settle-duration: 200ms;
   /* --gallery-image-max-block is the fixed cap only; the dynamic-unit upgrade
      stays a literal inside its own @supports guard in MediaGallery.svelte,
      unlike every token above. A custom property accepts any value syntax

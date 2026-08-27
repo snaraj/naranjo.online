@@ -759,11 +759,21 @@ test('payload strings reach the grid as text, never as markup', () => {
   assert.doesNotMatch(grid, /innerHTML|insertAdjacentHTML|outerHTML/, 'the grid writes markup by hand');
   // The cell text reaches the DOM through attribute bindings, which Svelte
   // escapes; pinning the spelling keeps a later edit from hand-rolling one.
-  // Anchored on the attribute boundary, not on the substring: `data-title=`
-  // ends in `title=` and would satisfy a loose match while the cell had lost
-  // its tooltip entirely (a surviving mutant, caught by the kill matrix).
-  assert.match(grid, /\saria-label=\{text\}/);
-  assert.match(grid, /\stitle=\{text\}/);
+  // Anchored on the attribute boundary, not on the substring, so a mutant
+  // that renames the attribute cannot satisfy a loose match.
+  assert.match(grid, /\saria-label=\{cellLabel\(cell, noun, view, formatValue\)\}/);
+  // The card is the OTHER place a payload string lands, and it takes the same
+  // route: DetailTip interpolates every field as text, and the grid hands it
+  // a built object rather than markup. Issue 219 moved the readout from the
+  // browser's `title=` (no touch trigger, so 96% of the token strip and the
+  // whole calendar said nothing on a phone) to that card, and this pins that
+  // the move did not open a raw-HTML route on the way.
+  assert.match(grid, /<DetailTip\b/);
+  assert.doesNotMatch(
+    grid,
+    /\stitle=\{cellLabel|\stitle=\{text\}/,
+    'the grid cell carries the browser tooltip again; it has no touch trigger and no reading on a phone'
+  );
 });
 
 // How the empty state LOOKS, which is a different question from what it
@@ -836,7 +846,13 @@ test('an absent day inside a real series paints as a faint filled field, not an 
 // calendar structure (weekdayAxis), never data: an empty panel still has
 // Mondays and Fridays, it just has no counts on them yet.
 test('the weekday gutter sits beside the strip in one flex row, and renders unconditionally rather than gated on a series arriving (issue 189)', () => {
-  const body = /<div class="grid-body">([\s\S]*?)\n {2}<\/div>\n {2}\{#if columns\.length === 0\}/.exec(grid);
+  // Anchored on the block's own closing tag and the comment that follows it.
+  // It used to anchor on `{#if columns.length === 0}` sitting immediately
+  // after, which coupled this pin to whatever happened to be the NEXT thing
+  // in the file — issue 219 rendered the shared detail card between the two
+  // and broke a test about the weekday gutter, which is a pin measuring the
+  // wrong distance rather than a regression.
+  const body = /<div class="grid-body">([\s\S]*?)\n {2}<\/div>\n {2}<!--/.exec(grid);
   assert.ok(body, 'the grid-body wrapper is missing, or no longer matches the shape the weekday gutter needs');
   assert.match(
     body[1],

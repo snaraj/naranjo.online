@@ -373,12 +373,47 @@ export function watchPanel<Data = unknown>(
   const watcher: PanelWatcher = Object.assign(
     () => {
       stopped = true;
+      live.delete(watcher);
       host.cancel(handle);
       unsubscribe();
     },
     { refresh: () => read(true) }
   );
+  live.add(watcher);
   return watcher;
+}
+
+/* THE LIVE REGISTRY, restored with a caller (issue 219).
+ *
+ * This existed once and was deleted at issue 179 — correctly, because the only
+ * thing that called it was the manual refresh button the owner had just had
+ * removed, and a fan-out nothing fans out to is dead code. The owner's ruling
+ * there was that the site must stay current ON ITS OWN rather than depending
+ * on a visitor noticing a control, and the per-panel loop above is what keeps
+ * that true; nothing below changes it.
+ *
+ * What is different now is that there IS a caller, and it is a gesture rather
+ * than a button: a pull-to-refresh asks for the panels the reader is looking
+ * at to be re-read NOW. That is not the site depending on a control — the
+ * minute loop still runs, and a reader who never pulls sees exactly what they
+ * saw before — it is a reader who has decided not to wait out the remaining
+ * interval, which is the same intent the visibility catch-up already honours.
+ *
+ * Every live watcher registers itself and deregisters on stop, so a panel that
+ * has unmounted can never be refreshed into a dead component: `stopped`
+ * already refuses delivery, and leaving the set is what keeps the set from
+ * growing across a long session. */
+const live = new Set<PanelWatcher>();
+
+/* refreshPanels forces one immediate read of every mounted panel and resolves
+ * when they have all settled — which is what lets a caller stay busy for
+ * exactly as long as the work is, rather than for a guessed animation. Each
+ * watcher's own single-flight rule still holds, so a reader pulling twice
+ * costs the origin no more requests than pulling once. It never rejects: a
+ * panel that fails degrades to its honest unavailable envelope inside
+ * loadPanel, and a gesture is not the place to surface a transport fault. */
+export async function refreshPanels(): Promise<void> {
+  await Promise.all([...live].map((watcher) => watcher.refresh()));
 }
 
 /* panelAge renders an ISO instant as a coarse human age. Its one live caller
