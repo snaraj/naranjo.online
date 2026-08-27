@@ -186,6 +186,50 @@ export function anchoredPlacement(
  * still on, and a second tap from being read as a first one. */
 type TipOrigin = 'pointer' | 'focus' | 'touch';
 
+/* TWO SHAPES OF CALLER, ONE MECHANISM (issue 219).
+ *
+ * A TILE owns its own detail: the tip's parent is the thing being described,
+ * one tip per tile, and the anchor is that parent. That is the stat tracker,
+ * and it is the default this module has always had.
+ *
+ * A GRID cannot work that way, and the reason is measured rather than
+ * aesthetic. The token-activity strip draws 371 cells at 10x10px each. One
+ * tip per cell is 371 components and ~4400 extra elements per grid — three
+ * grids on this page — which quadruples the document for a readout only one
+ * cell shows at a time, and every theme switch pays for it in style recalc
+ * against a zero-CLS floor. Worse, it would not even fix the defect: a 10px
+ * target is far under the 44px touch floor, so a finger that has to LAND on
+ * one cell still cannot open anything.
+ *
+ * So a region caller binds ONE tip to the whole strip and says which element
+ * a given point describes. `resolve` is that question, asked per event; the
+ * placement, the origin tracking, the single-open registry, the rAF throttle
+ * and every clamp below are shared verbatim, because the only thing that ever
+ * differed between the two shapes is WHICH BOX the tip anchors to — the same
+ * finding that collapsed the pointer and cell anchors into one primitive.
+ *
+ * `select` is how a region caller learns which element is current, so it can
+ * paint a selection ring. It is a report, never a request: this module writes
+ * no attribute and knows no class, exactly as `report` already works for
+ * visibility. */
+export interface DetailBinding {
+  /* What the tip describes. Absent means the tip's own parent — one tile,
+     one tip, the shape this module shipped with. */
+  host?: HTMLElement;
+  /* Which element a point describes, for a host that contains many. Null
+     means "nothing here", and the tip closes rather than anchoring to the
+     region itself. Absent means the host describes itself. */
+  resolve?: (target: EventTarget | null, point: TipPoint) => HTMLElement | null;
+  /* Reports the currently described element, or null when nothing is. */
+  select?: (element: HTMLElement | null) => void;
+  /* Reports whether the box is showing. */
+  report: (open: boolean) => void;
+  /* The caller-driven anchor, for a reader with neither pointer nor focus
+     CHANGE to signal with — see the action's update() below. Undefined means
+     "I do not drive this", which is every tile caller. */
+  anchor?: HTMLElement | null;
+}
+
 interface OpenTip {
   close(): void;
 }
@@ -214,20 +258,32 @@ let opened: OpenTip | null = null;
  * A tip with no parent element and no window has nothing to attach to; it
  * returns an inert handle rather than throwing, because a component rendered
  * outside a document is a test harness, not a defect. */
-export function hoverDetail(node: HTMLElement, report: (open: boolean) => void) {
-  const parent = node.parentElement;
+export function hoverDetail(node: HTMLElement, binding: DetailBinding) {
+  const host = binding.host ?? node.parentElement;
   const owner = node.ownerDocument.defaultView;
-  return parent === null || owner === null
+  return host === null || host === undefined || owner === null
     ? { destroy() {} }
-    : bindDetail(node, parent, owner, report);
+    : bindDetail(node, host, owner, binding);
 }
 
 function bindDetail(
   node: HTMLElement,
-  host: HTMLElement,
+  region: HTMLElement,
   view: Window & typeof globalThis,
-  report: (open: boolean) => void
+  binding: DetailBinding
 ) {
+  const { report } = binding;
+  /* A host that describes itself is the degenerate region: one element, and
+     every point in it resolves to that element. Written once here so nothing
+     below has to branch on which shape of caller it is serving. */
+  const resolve = binding.resolve ?? (() => region);
+  const select = binding.select ?? (() => {});
+  /* The element the tip is currently anchored to. For a tile caller this is
+     always the region itself; for a grid it is whichever cell the pointer,
+     finger or keyboard last named. Every measurement, every move test and
+     every containment check below reads THIS rather than the region, which is
+     what makes one strip behave like many tiles. */
+  let subject: HTMLElement = region;
   const fine = view.matchMedia(finePointerQuery);
 
   let shown = false;
@@ -262,7 +318,7 @@ function bindDetail(
      question asked. */
   function measure(): TipRect {
     const box = node.getBoundingClientRect();
-    const cell = host.getBoundingClientRect();
+    const cell = subject.getBoundingClientRect();
     const root = view.document.documentElement;
     const style = view.getComputedStyle(node);
     size = { width: box.width, height: box.height };
@@ -272,6 +328,31 @@ function bindDetail(
       margin: pixelLength(style.getPropertyValue('--tip-edge-margin')) ?? tipMetricsFallback.margin
     };
     return { left: cell.left, top: cell.top, right: cell.right, bottom: cell.bottom };
+  }
+
+  /* Point the tip at whatever a given event names, and report the change.
+     Returns false when the answer is "nothing here", which is a CLOSE rather
+     than an anchor: a region caller says so for the gaps between its cells
+     and for a cell it has no reading for, and anchoring to the strip itself
+     would put a readout on screen that describes nothing. */
+  function aim(target: EventTarget | null, point: TipPoint): boolean {
+    const next = resolve(target, point);
+    if (next === null) {
+      hide();
+      return false;
+    }
+    /* Reported UNCONDITIONALLY, not only when the subject changed. Guarding
+       on `next !== subject` looks like an obvious optimisation and is a real
+       defect: `subject` survives a hide(), so re-opening the SAME cell after
+       the readout closed reported nothing, and a caller that had reset its own
+       selection in the meantime was left with an open box describing nothing.
+       MEASURED in WebKit — switch the token panel's lens with the pointer off
+       the strip, then hover the same cell: the card opened with no rows and no
+       ring. Re-assigning an unchanged value costs nothing (the framework
+       compares before it re-renders), while the guard cost correctness. */
+    subject = next;
+    select(next);
+    return true;
   }
 
   function reveal(pointer: TipPoint | null, from: TipOrigin): void {
@@ -311,6 +392,10 @@ function bindDetail(
       opened = null;
     }
     report(false);
+    /* The selection goes with the box. A ring left painted on a cell whose
+       readout has closed is a page claiming something is selected when
+       nothing is — the same class of lie as a stale tip. */
+    select(null);
     if (frame !== 0) {
       view.cancelAnimationFrame(frame);
       frame = 0;
@@ -326,7 +411,7 @@ function bindDetail(
   const stillPx = 0.5;
 
   function onScrolled(): void {
-    const now = host.getBoundingClientRect();
+    const now = subject.getBoundingClientRect();
     if (Math.abs(now.top - anchor.top) < stillPx && Math.abs(now.left - anchor.left) < stillPx) {
       return;
     }
@@ -343,7 +428,7 @@ function bindDetail(
 
   function onElsewhere(event: Event): void {
     const target = event.target;
-    if (target instanceof Node && host.contains(target)) {
+    if (target instanceof Node && region.contains(target)) {
       return;
     }
     hide();
@@ -356,14 +441,45 @@ function bindDetail(
     if (event.pointerType === 'touch') {
       return;
     }
-    reveal(fine.matches ? { x: event.clientX, y: event.clientY } : null, 'pointer');
+    const at = { x: event.clientX, y: event.clientY };
+    if (!aim(event.target, at)) {
+      return;
+    }
+    reveal(fine.matches ? at : null, 'pointer');
   }
 
   function onMove(event: PointerEvent): void {
-    if (!shown || !follows || event.pointerType === 'touch') {
+    if (event.pointerType === 'touch') {
       return;
     }
-    pending = { x: event.clientX, y: event.clientY };
+    /* A region caller's pointer crosses cells WITHOUT ever leaving the host,
+       so a move is the only event that can re-aim it. A tile caller resolves
+       to itself, `aim` finds no change, and this costs one comparison —
+       which is why the region case needs no branch of its own here. */
+    const at = { x: event.clientX, y: event.clientY };
+    const changed = subject;
+    if (!aim(event.target, at)) {
+      return;
+    }
+    if (!shown) {
+      reveal(fine.matches ? at : null, 'pointer');
+      return;
+    }
+    if (subject !== changed) {
+      /* A new subject means a new anchor and, for a keyboard-or-finger
+         anchor, a new position. Re-measuring here reads the tip's box BEFORE
+         the caller's reactive content update has painted, so the size used is
+         the previous reading's — accurate for this grid, whose every readout
+         is one title over two rows, and the honest limit of measuring
+         synchronously rather than waiting a frame the pointer has already
+         moved past. */
+      reveal(follows ? at : null, origin);
+      return;
+    }
+    if (!follows) {
+      return;
+    }
+    pending = at;
     /* THE THROTTLE. A pointer can report far more moves than the display can
        draw, and every one of them would otherwise be a style write. The
        guard is what collapses a flood into exactly one placement per frame,
@@ -393,7 +509,16 @@ function bindDetail(
     if (event.pointerType !== 'touch') {
       return;
     }
-    if (shown && origin === 'touch') {
+    const at = { x: event.clientX, y: event.clientY };
+    /* A second tap on the SAME subject closes; a tap on a different one
+       moves the readout. Comparing subjects rather than merely asking
+       "is it open" is what stops a finger dragged across a strip of cells
+       from toggling the box off on every other cell it lands on. */
+    const previous = subject;
+    if (!aim(event.target, at)) {
+      return;
+    }
+    if (shown && origin === 'touch' && subject === previous) {
       hide();
       return;
     }
@@ -405,7 +530,10 @@ function bindDetail(
        already has the tip through hover — opening a second, cell-anchored
        one under their cursor would be the flicker this primitive exists to
        avoid. */
-    if (!host.matches(':focus-visible')) {
+    if (!region.matches(':focus-visible')) {
+      return;
+    }
+    if (!aim(null, { x: 0, y: 0 })) {
       return;
     }
     reveal(null, 'focus');
@@ -418,22 +546,45 @@ function bindDetail(
     hide();
   }
 
-  host.addEventListener('pointerenter', onEnter);
-  host.addEventListener('pointermove', onMove);
-  host.addEventListener('pointerleave', onLeave);
-  host.addEventListener('pointerdown', onDown);
-  host.addEventListener('focusin', onFocus);
-  host.addEventListener('focusout', onBlur);
+  region.addEventListener('pointerenter', onEnter);
+  region.addEventListener('pointermove', onMove);
+  region.addEventListener('pointerleave', onLeave);
+  region.addEventListener('pointerdown', onDown);
+  region.addEventListener('focusin', onFocus);
+  region.addEventListener('focusout', onBlur);
 
   return {
+    /* The KEYBOARD path, and the only one that is not an event. A reader
+       moving across a grid with the arrow keys produces no pointer and no
+       focus change — the region already holds focus — so there is nothing
+       for a listener to hear. The caller names the cell instead, and this
+       runs whenever that binding changes: an element opens the readout on
+       it, null closes it. A caller that never sets `anchor` (every tile
+       caller) passes undefined forever and this does nothing at all. */
+    update(next: DetailBinding) {
+      const wanted = next.anchor;
+      if (wanted === undefined) {
+        return;
+      }
+      if (wanted === null) {
+        hide();
+        return;
+      }
+      if (wanted === subject && shown) {
+        return;
+      }
+      subject = wanted;
+      select(wanted);
+      reveal(null, 'focus');
+    },
     destroy() {
       hide();
-      host.removeEventListener('pointerenter', onEnter);
-      host.removeEventListener('pointermove', onMove);
-      host.removeEventListener('pointerleave', onLeave);
-      host.removeEventListener('pointerdown', onDown);
-      host.removeEventListener('focusin', onFocus);
-      host.removeEventListener('focusout', onBlur);
+      region.removeEventListener('pointerenter', onEnter);
+      region.removeEventListener('pointermove', onMove);
+      region.removeEventListener('pointerleave', onLeave);
+      region.removeEventListener('pointerdown', onDown);
+      region.removeEventListener('focusin', onFocus);
+      region.removeEventListener('focusout', onBlur);
     }
   };
 }

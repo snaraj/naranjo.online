@@ -2,6 +2,7 @@
   import ColumnHandles from './lib/components/ColumnHandles.svelte';
   import PageHeader from './lib/components/PageHeader.svelte';
   import PageSection from './lib/components/PageSection.svelte';
+  import PullToRefresh from './lib/components/PullToRefresh.svelte';
   import SectionNav from './lib/components/SectionNav.svelte';
   import { page } from './page.ts';
 </script>
@@ -12,6 +13,11 @@
     content="naranjo.online, served from a Raspberry Pi Kubernetes cluster."
   />
 </svelte:head>
+
+<!-- First in the document on purpose (issue 219): the refresh control inside
+  it is invisible until focused, and being the first focusable thing is what
+  makes one Tab reach it — the skip-link arrangement. -->
+<PullToRefresh />
 
 <PageHeader />
 

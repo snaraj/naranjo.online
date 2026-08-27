@@ -322,7 +322,7 @@ test('no card announces its own age, and none keeps a control', () => {
 // reading mode in the header's corner (issue 127); the reading mode is now
 // the header's only control, and nothing it left behind survives as
 // reachable code.
-test('the refresh control is gone, and nothing it owned survives as dead code', () => {
+test('the refresh control is gone, and nothing it owned survives as dead code', async () => {
   assert.equal(
     existsSync(new URL('../src/lib/components/RefreshAll.svelte', import.meta.url)),
     false,
@@ -335,9 +335,39 @@ test('the refresh control is gone, and nothing it owned survives as dead code', 
     'the reading mode is the header’s only control now'
   );
   assert.doesNotMatch(app, /RefreshAll/, 'the refresh must not head the panel stack again either');
-  // The page-wide fan-out it drove is gone with it: no export, no set, no
-  // caller anywhere in the tree that was just swept above.
-  assert.doesNotMatch(panelsSource, /refreshPanels|liveWatchers/, 'the all-panels refresher survives in panels.ts');
+  // THE FAN-OUT IS BACK, WITH A CALLER — and that condition is now the pin
+  // (issue 219). It was deleted at issue 179 because the only thing invoking
+  // it was the button that had just been removed, and a fan-out nothing fans
+  // out to is dead code; that reasoning was right and is preserved exactly.
+  // What changed is that a pull-to-refresh gesture now asks for it. So the
+  // rule is no longer "this must not exist" — which would forbid the caller
+  // rather than the dead code — but "this must not exist WITHOUT a caller",
+  // which is the property issue 179 actually wanted and is strictly harder to
+  // satisfy by accident. A future removal of the gesture makes this red
+  // again, exactly as it should.
+  // Swept across the whole component tree rather than a named file, so the
+  // caller may move without anyone remembering to update this.
+  const tree = await readdir(new URL('../src', import.meta.url), { recursive: true });
+  const callers = (
+    await Promise.all(
+      tree
+        .filter((entry) => entry.endsWith('.svelte'))
+        .map(async (entry) => [entry, await read(`../src/${entry}`)])
+    )
+  ).filter(([, source]) => /refreshPanels\(\)/.test(source));
+  if (/export async function refreshPanels/.test(panelsSource)) {
+    assert.ok(
+      callers.length > 0,
+      'refreshPanels is exported with nothing calling it; that is the dead code issue 179 removed'
+    );
+  } else {
+    assert.equal(
+      callers.length,
+      0,
+      'a component calls refreshPanels but panels.ts no longer exports it'
+    );
+  }
+  assert.doesNotMatch(panelsSource, /liveWatchers/, 'the retired watcher set name is back');
   // Its own forced-read primitive is a different, independently useful thing
   // and stays (proven behaviorally in panel-refresh.test.mjs): watchPanel
   // still exposes refresh() on the watcher it returns, and still rides it
@@ -930,8 +960,22 @@ test('the contribution grid is one component both panels render', () => {
   // `var(--grid-cell-N, #hex)` — strictly stronger than the bare
   // `--grid-cell-N` sweep that stood here, and mutation-tested there.
   // Never color alone, and a day outside the window is a hole, not a zero.
-  assert.match(grid, /aria-label=\{text\}/);
-  assert.match(grid, /title=\{text\}/);
+  assert.match(grid, /aria-label=\{cellLabel\(cell, noun, view, formatValue\)\}/);
+  // THE BROWSER TOOLTIP IS GONE, AND ITS ABSENCE IS THE PIN (issue 219).
+  // `title=` used to carry every calendar cell's reading and 96% of the token
+  // strip's. It has NO touch trigger in any engine, so on a phone those cells
+  // said nothing at all — a heatmap encodes magnitude as colour alone, which
+  // is precisely what AGENTS.md's dataviz floor forbids. This assertion is
+  // strictly stronger than the `title={text}` it replaces: that one admitted
+  // any accompanying detail, this one makes the browser tooltip
+  // unrepresentable on a grid cell. (The month axis keeps its own `title=` —
+  // it is a label, not a datapoint — so the sweep is scoped to the cell.)
+  const cellMarkup = grid.slice(grid.indexOf('<div class="grid-cells"'));
+  assert.doesNotMatch(
+    cellMarkup.slice(0, cellMarkup.indexOf('</div>')),
+    /\stitle=/,
+    'a grid cell carries the browser tooltip again; it has no touch trigger and no reading on a phone'
+  );
   assert.match(grid, /data-grid-absent=\{cell\.absent \? 'true' : 'false'\}/);
 });
 
@@ -959,7 +1003,20 @@ test('both panels opt the shared grid into full width; only the token panel take
     /<ContributionGrid[\s\S]*?fullWidth[\s\S]*?\/>/,
     'the version-control calendar stopped filling its card'
   );
-  assert.doesNotMatch(activityTracker, /cardTitle/, 'the version-control calendar opted into the OSRS card too');
+  // THE CALENDAR TAKES THE CARD NOW, and the reversal is the fix of issue
+  // 219. It was left on the browser's native `title=` on the argument that
+  // the card was the token panel's own flourish. MEASURED on an iPhone at the
+  // build before this one: 0 of the calendar's 371 cells carried a readout a
+  // finger could open, because `title=` has no touch trigger — the calendar
+  // was not "less decorated", it was mute. What stays optional is the card's
+  // TITLE, not the card: a caller that names none falls back to its own noun
+  // (nounTitle), so the calendar reads "Contribution" without either panel
+  // spelling a word the adapter already owns.
+  // The calendar names no card title and does not need to: the fallback reads
+  // its own noun. What it must NOT do is go back to being the caller that
+  // opts out, so the pin is on the shared component's fallback rather than on
+  // this caller's silence — silence is now the default that WORKS.
+  assert.match(grid, /name: cardTitle \?\? nounTitle\(noun\)/);
 
   // The shared component: both remain props rather than becoming its only
   // behaviour, so how many columns there are (the caller's data) and whether
@@ -967,8 +1024,36 @@ test('both panels opt the shared grid into full width; only the token panel take
   assert.match(grid, /fullWidth\?: boolean/);
   assert.match(grid, /cardTitle\?: string/);
   assert.match(grid, /data-grid-fullwidth=\{fullWidth\}/);
-  assert.match(grid, /\{#if cardTitle && !cell\.absent\}/);
+  // THE GATE IS GONE — the one line this test used to pin as correct.
+  // `{#if cardTitle && !cell.absent}` was two independent holes, and both
+  // consumers of the shared grid fell through at least one: the calendar
+  // passed no cardTitle (0 of 371 cells readable), and the token strip's
+  // absent cells failed the second condition (15 of 371 readable). Pinning
+  // its ABSENCE is what stops the opt-in coming back as a convenience.
+  assert.doesNotMatch(
+    grid,
+    /\{#if cardTitle/,
+    'the detail is gated on a prop again; every cell of every grid carries it'
+  );
   assert.match(grid, /import DetailTip from '\.\/DetailTip\.svelte'/);
+  // One card per STRIP, not per cell, and the strip resolves which cell a
+  // point names. 371 cells at 10x10px cannot each own a tip — that is ~4400
+  // extra elements per grid for a readout one cell shows at a time, and a
+  // 10px target is far under the 44px touch floor either way, so per-cell
+  // tips would not even fix the defect.
+  assert.match(grid, /host=\{strip\}/);
+  assert.match(grid, /resolve=\{resolveCell\}/);
+  assert.match(grid, /select=\{noteSelection\}/);
+  assert.match(grid, /anchor=\{anchorElement\}/);
+  // Every cell is a selectable option with an honest accessible name, absent
+  // ones included: "no data for this day" is information a reader can reach,
+  // and a grid silent for 96% of its cells was the defect.
+  assert.match(grid, /role="option"/);
+  assert.match(grid, /aria-selected=\{selected === index\}/);
+  assert.match(
+    grid,
+    /aria-activedescendant=\{selected >= 0 \? `\$\{gridId\}-cell-\$\{selected\}` : undefined\}/
+  );
   // The card shows the value AND the view-scoped period phrase (issue 189,
   // amending the earlier value-only decision from #178 to match the owner's
   // reference designs — "2.8B tokens on Aug 13" is a value plus a period,
@@ -981,12 +1066,17 @@ test('both panels opt the shared grid into full width; only the token panel take
   // formats the card and the accessible text below, so a cell can never show
   // "627.7M" while its aria-label reads nine raw digits, and the calendar —
   // which passes none — keeps the exact counts a reader of commits wants.
+  // The value row now branches on absence rather than being unreachable for
+  // it: an absent cell reads "no data" beside the day it had none, which is
+  // the same sentence cellLabel has always produced for the accessible name.
+  // A fabricated zero there would be the doctrine violation the panels
+  // contract names; refusing to render the cell at all was the defect.
   assert.match(
     grid,
-    /rows: \[\s*\{ label: '', value: formatValue\(cell\.value\) \},\s*\{ label: '', value: cellPeriod\(cell, view\) \}\s*\]/
+    /value: selectedCell\.absent \? 'no data' : formatValue\(selectedCell\.value\)/
   );
+  assert.match(grid, /\{ label: '', value: cellPeriod\(selectedCell, view\) \}/);
   assert.match(grid, /formatValue = formatWhole/, 'the shared grid defaults to anything but exact digits');
-  assert.match(grid, /\{@const text = cellLabel\(cell, noun, view, formatValue\)\}/);
   assert.match(
     usageTracker,
     /<ContributionGrid[\s\S]*?formatValue=\{formatMagnitude\}[\s\S]*?\/>/,

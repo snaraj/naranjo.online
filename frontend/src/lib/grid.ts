@@ -551,6 +551,18 @@ export function cellPeriod(cell: GridCell, view: SeriesView): string {
  * neither of them. */
 export type ValueFormat = (value: number) => string;
 
+/* The detail card's default title, built from the caller's own noun (issue
+ * 219). Every grid carries a card now, so every grid needs a title, and a
+ * caller that has not chosen one should not be made to invent a string — its
+ * noun is already adapter data naming exactly this. Capitalised and left
+ * SINGULAR on purpose: the card's next row is the figure, so "Contribution /
+ * 3 / on Jun 3" reads correctly for every count including one, where a
+ * guessed plural would not. Callers with a better phrase pass `cardTitle`
+ * (the token strip says "Tokens used"). */
+export function nounTitle(noun: string): string {
+  return noun.length === 0 ? '' : `${noun[0].toUpperCase()}${noun.slice(1)}`;
+}
+
 /* cellLabel is the one accessible text a cell carries — tooltip and
  * aria-label alike — so a magnitude is never encoded by color alone. The
  * formatter defaults to exact digits, so a caller that says nothing gets the

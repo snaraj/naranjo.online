@@ -4,12 +4,21 @@
   grid and the version-control
   contribution calendar render through it, so the two never drift apart.
 
-  It is deliberately dumb: callers pass prepared cells (lib/grid.ts builds
-  them), and the component only lays them out. A magnitude is never encoded by
-  color alone — every cell carries its count and date as tooltip and
-  accessible label — and the grid has a fixed block size with its own
+  It is deliberately dumb about DATA: callers pass prepared cells (lib/grid.ts
+  builds them) and the component lays them out. It is not dumb about
+  INTERACTION, and issue 219 is why. A magnitude is never encoded by color
+  alone — every cell carries its count and date as an accessible label and as
+  the shared detail card — and the grid has a fixed block size with its own
   horizontal scroll, so a wide window scrolls inside the panel and never
   shifts the page.
+
+  READING A CELL IS THE DATAVIZ FLOOR, NOT A CONVENIENCE. AGENTS.md requires
+  that "a value is never encoded by color alone: pair color with position,
+  text, or shape". A heatmap cell is a colour shade; the readout IS the text
+  pairing. So the strip is an interaction surface in its own right: tap, hover
+  and keyboard all reach the same readout, one cell is current at a time, and
+  the current cell wears a ring. What it is NOT is 371 tooltips — see the
+  one-tip-per-strip note in the script below for the measurement behind that.
 
   Its INLINE size used to be its data, in columns (issue #141, residual risk
   2: a fifteen-day series was three columns pinned to the left edge of
@@ -94,7 +103,9 @@
     formatWhole,
     gridLevel,
     gridLevels,
+    gridRows,
     monthTicks,
+    nounTitle,
     peakValue,
     pendingColumns,
     stripColumns,
@@ -103,6 +114,7 @@
     type SeriesView,
     type ValueFormat
   } from '../grid';
+  import type { TipPoint } from '../tooltip.ts';
   import DetailTip from './DetailTip.svelte';
 
   let {
@@ -140,13 +152,223 @@
        content-sized strip is a prop away rather than a fork of this
        component. */
     fullWidth?: boolean;
-    /* When set, a cell's detail is the page's OSRS-style card (DetailTip)
-       instead of the browser's native title= tooltip, titled with this text
-       and showing the cell's value alone — no date, which the axes already
-       carry (issue 178). Opt-in for the same reason fullWidth is: the
-       calendar keeps its native tooltip. */
+    /* The detail card's title. It used to GATE whether a cell had a designed
+       detail at all, with the calendar deliberately left on the browser's
+       native title= tooltip — and that gate was the defect of issue 219.
+       MEASURED on an iPhone at the shipped build: of this page's three
+       grids, the token strip carried a real detail on 15 of its 371 cells
+       and the contribution calendar on 0 of 371, because `title=` HAS NO
+       TOUCH TRIGGER IN ANY ENGINE. A heatmap encodes magnitude as a colour
+       shade and nothing else, so a cell that cannot be interrogated fails
+       AGENTS.md's dataviz floor — "a value is never encoded by color alone"
+       — on every touch device. The detail is the text pairing that floor
+       requires, which makes it a conformance surface rather than a nicety,
+       and a conformance surface cannot be opt-in.
+       It is therefore a TITLE and nothing else now; every cell of every grid
+       carries the shared card. DetailTip's own header comment already
+       recorded this exact finding once, about the skill tiles: a bare
+       `title=` is "no styling, no tokens, a half-second delay, and a shape
+       that varies by operating system". The calendar was simply the caller
+       that never got the memo. */
     cardTitle?: string;
   } = $props();
+
+  /* ONE TIP FOR THE WHOLE STRIP, not one per cell — and the reason is
+     measured rather than tidy. This grid draws 371 cells at 10x10px. A tip
+     per cell is 371 components and roughly 4400 extra elements PER GRID,
+     three grids to a page, for a readout only one cell shows at a time; the
+     zero-CLS theme switch pays for every one of them in style recalc. And it
+     would not even fix the defect: 10px is far under the 44px touch floor,
+     so a finger that must LAND on one cell still opens nothing.
+     So the strip resolves which cell a point names, geometrically, and the
+     single tip moves. A finger that lands in a gap, or half a cell off, gets
+     the cell it was reaching for instead of nothing at all — which is what
+     makes a 10px target usable without pretending it is 44px wide. */
+  const cells = $derived(columns.flat());
+  let selected = $state(-1);
+  let cellsHost = $state<HTMLDivElement>();
+  /* Per-INSTANCE, because aria-activedescendant names an id and this page
+     mounts three of these grids. Svelte's own $props.id() is the framework's
+     answer to exactly this, so nothing here invents a counter. */
+  const gridId = $props.id();
+
+  /* The strip's cell geometry, cached. The move handler must read NO layout
+     — lib/tooltip.ts holds that line for the tip's own box and this is the
+     same discipline on the same path — so the pitch is measured once and
+     invalidated by the two things that can change it: the strip scrolling
+     under the pointer, and the box resizing. */
+  interface CellGeometry {
+    left: number;
+    top: number;
+    pitchX: number;
+    pitchY: number;
+    columns: number;
+  }
+  let geometry: CellGeometry | null = null;
+
+  function measureGeometry(): CellGeometry | null {
+    const host = cellsHost;
+    if (host === undefined || host.children.length === 0) {
+      return null;
+    }
+    const first = host.children[0].getBoundingClientRect();
+    /* The pitch is read from real siblings rather than from the tokens,
+       because a full-width strip stretches its columns to the container and
+       the token is only the floor. Cells are emitted column-major, so the
+       next child is one row down and the child gridRows along is one column
+       across; a grid too small to have either falls back to the cell's own
+       box, which is the correct pitch when there is no gap to add. */
+    const down = host.children[1]?.getBoundingClientRect();
+    const across = host.children[gridRows]?.getBoundingClientRect();
+    return {
+      left: first.left,
+      top: first.top,
+      pitchX: across ? across.left - first.left : first.width,
+      pitchY: down ? down.top - first.top : first.height,
+      columns: Math.ceil(host.children.length / gridRows)
+    };
+  }
+
+  function forgetGeometry(): void {
+    geometry = null;
+  }
+
+  /* Which cell a viewport point names. Floor rather than round on purpose:
+     a slot is one cell plus the gap that follows it, so a point in the gap
+     resolves to the cell BEFORE it — the nearest one — instead of falling
+     through to nothing. Out-of-range points clamp into the strip, because a
+     finger a little past the last column is still reaching for the last
+     column. */
+  function cellIndexAt(point: TipPoint): number {
+    geometry ??= measureGeometry();
+    const box = geometry;
+    if (box === null || box.pitchX <= 0 || box.pitchY <= 0) {
+      return -1;
+    }
+    const column = Math.min(
+      box.columns - 1,
+      Math.max(0, Math.floor((point.x - box.left) / box.pitchX))
+    );
+    const row = Math.min(gridRows - 1, Math.max(0, Math.floor((point.y - box.top) / box.pitchY)));
+    const index = column * gridRows + row;
+    return index < cells.length ? index : -1;
+  }
+
+  function elementAt(index: number): HTMLElement | null {
+    const child = cellsHost?.children[index];
+    return child instanceof HTMLElement ? child : null;
+  }
+
+  /* What a point describes, for the shared detail binding. A cell the
+     component has no reading for answers null, which CLOSES the readout
+     rather than anchoring it to the strip: a box that describes nothing is
+     worse than no box. An undated cell is exactly that case — the pending
+     chrome carries no count and no date and is hidden from assistive
+     technology, so there is nothing to say about it. */
+  function resolveCell(target: EventTarget | null, point: TipPoint): HTMLElement | null {
+    if (columns.length === 0) {
+      return null;
+    }
+    const direct =
+      target instanceof Element ? target.closest('[data-grid-cell]') : null;
+    const index =
+      direct instanceof HTMLElement && cellsHost?.contains(direct)
+        ? Number(direct.dataset.gridIndex)
+        : cellIndexAt(point);
+    if (!Number.isInteger(index) || index < 0 || index >= cells.length) {
+      return null;
+    }
+    return cells[index].date ? elementAt(index) : null;
+  }
+
+  function noteSelection(element: HTMLElement | null): void {
+    selected = element === null ? -1 : Number(element.dataset.gridIndex);
+  }
+
+  /* The keyboard's own cursor. The strip is a single focus stop (a scrollable
+     region has to be reachable), so arrows move a selection INSIDE it rather
+     than tabbing 371 times — the same shape a listbox or a calendar widget
+     uses, and the non-gesture equivalent every gesture on this page owes.
+     Left/right step a week, up/down step a day, Home/End jump to the ends. */
+  const keySteps: Record<string, number> = {
+    ArrowLeft: -gridRows,
+    ArrowRight: gridRows,
+    ArrowUp: -1,
+    ArrowDown: 1
+  };
+
+  function firstDatedIndex(from: number, direction: number): number {
+    for (let at = from; at >= 0 && at < cells.length; at += direction) {
+      if (cells[at].date) {
+        return at;
+      }
+    }
+    return -1;
+  }
+
+  function onStripKeydown(event: KeyboardEvent): void {
+    if (columns.length === 0) {
+      return;
+    }
+    if (event.key === 'Escape') {
+      if (selected >= 0) {
+        event.preventDefault();
+        selected = -1;
+      }
+      return;
+    }
+    const step = keySteps[event.key];
+    const jump = event.key === 'Home' ? 0 : event.key === 'End' ? cells.length - 1 : null;
+    if (step === undefined && jump === null) {
+      return;
+    }
+    /* The arrows belong to the grid once it has a selection, so the page
+       must not also scroll — but the FIRST arrow press on a strip nobody has
+       selected in still opens on the newest data rather than stealing a
+       scroll for nothing. */
+    event.preventDefault();
+    if (jump !== null) {
+      selected = firstDatedIndex(jump, jump === 0 ? 1 : -1);
+      return;
+    }
+    const from = selected >= 0 ? selected : cells.length - 1;
+    const next = from + step;
+    if (next < 0 || next >= cells.length) {
+      return;
+    }
+    const dated = firstDatedIndex(next, step > 0 ? 1 : -1);
+    if (dated >= 0) {
+      selected = dated;
+    }
+  }
+
+  /* The element the binding should anchor to, driven by the keyboard cursor
+     above. Reading `selected` here is what makes an arrow press move the
+     readout: the action's update() runs on every change of this binding. */
+  const anchorElement = $derived(selected >= 0 ? (elementAt(selected) ?? null) : null);
+
+  const selectedCell = $derived(selected >= 0 ? cells[selected] : undefined);
+
+  /* The readout itself. An ABSENT cell gets a real card saying so, rather
+     than no card at all: "no data" and the day it had none is a truthful
+     reading, and cellLabel has always produced exactly that sentence for the
+     accessible name — the card simply stopped disagreeing with it. A
+     fabricated zero would be the doctrine violation; an honest absence is
+     the state the panel is in. */
+  const selectedDetail = $derived(
+    selectedCell === undefined
+      ? { name: '', rows: [] }
+      : {
+          name: cardTitle ?? nounTitle(noun),
+          rows: [
+            {
+              label: '',
+              value: selectedCell.absent ? 'no data' : formatValue(selectedCell.value)
+            },
+            { label: '', value: cellPeriod(selectedCell, view) }
+          ]
+        }
+  );
 
   const legendLevels = Array.from({ length: gridLevels }, (_, level) => level);
   const peak = $derived(peakValue(columns.flat()));
@@ -208,6 +430,11 @@
       return;
     }
     const observer = new ResizeObserver(() => {
+      /* Any resize invalidates the cached pitch, including one that leaves
+         the inline axis alone: a full-width strip re-flows its columns
+         whenever its box changes at all. The anchor below still asks the
+         narrower question, because only the inline axis moves the end. */
+      forgetGeometry();
       if (node.clientWidth === anchoredWidth) {
         return;
       }
@@ -216,6 +443,30 @@
     });
     observer.observe(node);
     return () => observer.disconnect();
+  });
+
+  /* The other half of that invalidation: the strip scrolling under a pointer
+     moves every cell without resizing anything. Passive, because this listener
+     never cancels a scroll — the strip's horizontal pan is the browser's own
+     and stays that way (see the touch-action note in the styles below). */
+  $effect(() => {
+    const node = strip;
+    if (node === undefined) {
+      return;
+    }
+    node.addEventListener('scroll', forgetGeometry, { passive: true });
+    return () => node.removeEventListener('scroll', forgetGeometry);
+  });
+
+  /* A new window is a new set of days, so the cell at index N is no longer
+     the cell the reader selected. Dropping the selection is the honest
+     response: keeping the index would silently re-point the readout at a
+     different day, and keeping the ELEMENT would leave a ring on a cell whose
+     meaning changed underneath it. */
+  $effect(() => {
+    void columns;
+    selected = -1;
+    forgetGeometry();
   });
 </script>
 
@@ -246,55 +497,53 @@
     <!-- The strip clips wide windows behind its own horizontal scrollbar, and a
       scrollable region is keyboard-reachable only when focusable, so the
       tabindex is deliberate. -->
+    <!-- The strip is the interaction surface, not the cell: one focus stop, one
+      key handler, one detail card, and a geometric answer to "which cell is
+      that". aria-activedescendant is what makes the keyboard cursor audible
+      — assistive technology follows the named cell while focus itself stays
+      on the region that can actually be scrolled. -->
+    <!-- The role is what the strip actually IS in each state, not one label
+      stretched over both. With a series it is a composite widget: many days,
+      one of them current, an internal cursor the arrows move — which is a
+      listbox, and is the only role family that admits aria-activedescendant.
+      With no series there is nothing to select and nothing to point at, so it
+      falls back to the plain scrollable region it has always been. Stating
+      `listbox` over an empty chrome would be a control promising an
+      interaction it cannot perform. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-    <div class="grid-strip" role="region" aria-label={label} tabindex="0" bind:this={strip}>
+    <div
+      class="grid-strip"
+      role={columns.length > 0 ? 'listbox' : 'region'}
+      aria-label={label}
+      tabindex="0"
+      bind:this={strip}
+      onkeydown={onStripKeydown}
+      aria-activedescendant={selected >= 0 ? `${gridId}-cell-${selected}` : undefined}
+    >
       {#if columns.length > 0}
-        <div class="grid-cells">
-          {#each columns as column}
-            {#each column as cell}
-              {@const text = cellLabel(cell, noun, view, formatValue)}
-              {#if cardTitle && !cell.absent}
-                <!-- Mirrors BossLog's own cell: the visible tile doubles as the
-                  DetailTip host, so the card is the whole of adding a detail
-                  and there is no separate wrapper to keep in step (issue
-                  178). aria-label keeps the full value-and-date reading for
-                  assistive tech; the card shows the value AND the
-                  view-scoped period phrase (issue 189, amending #178's
-                  value-only decision to match the owner's reference
-                  designs) — both rows label-less, so cellPeriod supplies the
-                  ONLY date reading in the card, the same phrase cellLabel
-                  folds into the accessible text above. -->
-                <span
-                  class="grid-cell"
-                  data-grid-cell
-                  data-grid-absent="false"
-                  data-grid-level={gridLevel(cell.value, peak)}
-                  role="img"
-                  aria-label={text}
-                  tabindex="0"
-                >
-                  <DetailTip
-                    detail={{
-                      name: cardTitle,
-                      rows: [
-                        { label: '', value: formatValue(cell.value) },
-                        { label: '', value: cellPeriod(cell, view) }
-                      ]
-                    }}
-                  />
-                </span>
-              {:else}
-                <span
-                  class="grid-cell"
-                  data-grid-cell
-                  data-grid-absent={cell.absent ? 'true' : 'false'}
-                  data-grid-level={cell.absent ? '' : gridLevel(cell.value, peak)}
-                  role="img"
-                  aria-label={text}
-                  title={text}
-                ></span>
-              {/if}
-            {/each}
+        <div class="grid-cells" bind:this={cellsHost}>
+          {#each cells as cell, index (index)}
+            <!-- Every cell is a real, interrogable datapoint now — no
+              `title=` anywhere, which is the attribute that had no touch
+              trigger and therefore no reading on a phone. aria-label carries
+              the full value-and-date sentence for assistive tech, exactly as
+              it always did; the card carries the sighted reader's copy of the
+              same two facts. An ABSENT cell is labelled and selectable like
+              any other: "no data for this day" is information, and a grid
+              that answers nothing at all for 96% of its cells is the defect
+              this replaced. -->
+            <span
+              class="grid-cell"
+              id={`${gridId}-cell-${index}`}
+              data-grid-cell
+              data-grid-index={index}
+              data-grid-absent={cell.absent ? 'true' : 'false'}
+              data-grid-selected={selected === index ? 'true' : undefined}
+              data-grid-level={cell.absent ? '' : gridLevel(cell.value, peak)}
+              role="option"
+              aria-selected={selected === index}
+              aria-label={cellLabel(cell, noun, view, formatValue)}
+            ></span>
           {/each}
         </div>
         {#if ticks.length > 0}
@@ -322,6 +571,21 @@
       {/if}
     </div>
   </div>
+  <!-- OUTSIDE the strip on purpose. The tip is position: fixed, so no
+    ancestor's overflow can clip it wherever it sits — but the strip is a
+    scroll container, and keeping a box that is not part of the content out
+    of the box whose scrollWidth decides the pan range removes the question
+    entirely rather than answering it from the spec. It binds to the strip
+    through `host` regardless of where it is rendered. -->
+  {#if columns.length > 0}
+    <DetailTip
+      detail={selectedDetail}
+      host={strip}
+      resolve={resolveCell}
+      select={noteSelection}
+      anchor={anchorElement}
+    />
+  {/if}
   {#if columns.length === 0}
     <p class="grid-empty">{emptyNote}</p>
   {/if}
@@ -580,9 +844,28 @@
     box-shadow: none;
   }
 
-  .grid-strip .grid-cell:hover {
+  /* The SELECTION ring, and the reason it is not a hover rule (issue 219).
+     `:hover` answers a mouse and nothing else: a finger produces no hover at
+     all on a real touchscreen, and where an engine emulates one it is STICKY
+     — the ring stays painted on the last cell tapped long after its readout
+     closed, which is a page claiming a selection it does not have. The ring
+     now follows the same state the readout does, written by the shared
+     binding through `select`, so the mark and the box can never disagree
+     about which cell is current. It is deliberately the same weight and
+     token the hover ring was, so nothing about the LOOK changed — only what
+     decides it. Hover still paints it, because a hovering pointer IS the
+     selection under the same rule. */
+  .grid-strip .grid-cell[data-grid-selected='true'] {
     outline: 1px solid var(--grid-cell-ring, rgba(255, 255, 255, 0.6));
     outline-offset: 1px;
+  }
+
+  /* The keyboard cursor reads as a focus ring rather than a selection one:
+     focus is on the STRIP, so the accent has to say which cell inside it the
+     arrows are pointing at, exactly as .grid-strip:focus-visible says which
+     strip the tab stop reached. */
+  .grid-strip:focus-visible .grid-cell[data-grid-selected='true'] {
+    outline-color: var(--panel-accent, rgb(220, 138, 0));
   }
 
   /* Its margin and its height are tokens because .grid-strip's own box is
