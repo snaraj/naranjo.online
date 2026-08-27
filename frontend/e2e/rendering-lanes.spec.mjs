@@ -5275,19 +5275,33 @@ test('the reading-mode popover is unaffected by the column, even at its narrowes
   await page.setViewportSize({ width: railsBreakpointPx, height: 900 });
 
   await visit(page);
-  await openReadingModes(page);
+  await openedAndStill(page);
   const shipped = await page.evaluate(() => {
-    const box = window.document.querySelector('#reading-mode-menu').getBoundingClientRect();
-    // Raw floats on purpose. This used to round each edge and require the
-    // rounded values EQUAL, but two separate page loads settle a fraction of
-    // a pixel apart (font-metric timing, not a real position change), and
-    // round-then-compare flips 65↔66 whenever the true edge sits near a
-    // half-pixel boundary — issue #194, measured as a ±1 px flake on three
-    // engines across unrelated diffs. The invariant under test is "the same
-    // place", so the comparison below allows one CSS pixel of cross-load
-    // noise; a popover actually coupled to the column moves by hundreds.
-    return { left: box.left, right: box.right, top: box.top };
+    const menu = window.document.querySelector('#reading-mode-menu');
+    const box = menu.getBoundingClientRect();
+    // Raw floats on purpose, and taken AT REST. Issue #194 recorded this as a
+    // ±1 px cross-load flake on three engines and attributed it to
+    // font-metric timing; that diagnosis was wrong, and the tolerance it
+    // bought was a band-aid over a four-pixel noise source. The popover
+    // reveals with a 120ms `translateY(-0.25rem)` slide, and
+    // openReadingModes returns the instant the box is VISIBLE — so both
+    // readings were samples of a box still travelling, and the "shift"
+    // between them was nothing but two different points on that slide.
+    // MEASURED in WebKit: top reads 64 at animation time 8ms, 65.65 at 25ms,
+    // 67.56 at 87ms and 68 once it finishes (2026-08-27); the CI failure that
+    // sent this back read 64.59 against 66.04, both inside that same 4px
+    // travel. openedAndStill waits on the engine's own animation set, which
+    // is what the two lanes above this one already do, so the reading below
+    // is the settled position rather than a race — and `animating` proves it
+    // was, because a measurement taken mid-slide is the defect itself.
+    return {
+      left: box.left,
+      right: box.right,
+      top: box.top,
+      animating: menu.getAnimations().length
+    };
   });
+  expect(shipped.animating, 'the shipped popover was measured mid-reveal').toBe(0);
 
   // A fresh visit rather than closing and reopening the first one: the
   // column-width override below must apply before the popover ever opens,
@@ -5305,25 +5319,32 @@ test('the reading-mode popover is unaffected by the column, even at its narrowes
   const column = await columnBox(page);
   expect(column.width, 'the column did not reach its minimum').toBeLessThan(300);
 
-  await openReadingModes(page);
+  await openedAndStill(page);
   const observed = await page.evaluate(() => {
-    const box = window.document.querySelector('#reading-mode-menu').getBoundingClientRect();
+    const menu = window.document.querySelector('#reading-mode-menu');
+    const box = menu.getBoundingClientRect();
     const root = window.document.documentElement;
     return {
       popover: { left: box.left, right: box.right, top: box.top },
+      animating: menu.getAnimations().length,
       swatches: window.document.querySelectorAll('#reading-mode-menu button').length,
       scrollWidth: root.scrollWidth,
       clientWidth: root.clientWidth
     };
   });
 
+  expect(observed.animating, 'the narrowed popover was measured mid-reveal').toBe(0);
   expect(observed.swatches, 'the reading modes lost a swatch at the narrowest column').toBe(5);
   for (const edge of ['left', 'right', 'top']) {
+    // The allowance stays at one CSS pixel: it is now a genuine sub-pixel
+    // rounding margin over two settled readings rather than cover for a
+    // moving box, and it is not widened by a hair. A popover actually
+    // coupled to the column moves by hundreds.
     expect(
       Math.abs(observed.popover[edge] - shipped[edge]),
       `narrowing the column moved the popover ${edge} from ${shipped[edge]} to ` +
         `${observed.popover[edge]}; it is meant to be independent of the column ` +
-        'now (issue 168; one CSS pixel of cross-load noise allowed, issue #194)'
+        'now (issue 168; one CSS pixel of settled rounding allowed, issue #194)'
     ).toBeLessThanOrEqual(1);
   }
   expect(observed.scrollWidth).toBe(observed.clientWidth);
@@ -5732,6 +5753,108 @@ test('every grid answers a tap with a real readout, on every engine (issue 219)'
     .toBe(true);
 
   expect(isMobile === undefined || typeof isMobile === 'boolean').toBe(true);
+});
+
+/* DEFECT 1, WHAT CI FOUND IN THE FIX ITSELF. Two product defects the lane
+ * above reported only as a ten-second timeout — which names neither of them —
+ * pinned here directly. Both were measured in WebKit on 2026-08-27 and both
+ * are reachable by a reader who never opens a browser console.
+ *
+ * A: A PAGE SCROLL WIPED THE KEYBOARD CURSOR. The readout closed on any
+ * movement of the cell it was anchored to, and closing carried the caller's
+ * selection with it — so the ring and the aria-activedescendant a screen
+ * reader follows both disappeared because the reader scrolled. It bit the
+ * plainest path there is: focusing the strip opens the readout synchronously
+ * while the browser's own scroll-into-view for that same focus lands a frame
+ * later, so simply TABBING to the grid produced a readout that closed itself.
+ *
+ * B: HALF THE ARROW KEYS WERE DEAD. With no cursor, ArrowRight and ArrowDown
+ * stepped past the end of the cell list, hit the range guard and did nothing —
+ * for ever, since nothing they could do would give them the cursor they
+ * needed. ArrowLeft and ArrowUp worked, which is what made it invisible.
+ * Measured: five ArrowRight presses and two ArrowDown presses moving nothing
+ * while ArrowLeft moved normally.
+ *
+ * Deliberately scrolled into view BEFORE focusing, so A is measured as its own
+ * hand-made scroll rather than as the focus race — the race is what made the
+ * defect intermittent, and a pin that reproduces it only by racing is a pin
+ * that reports nothing on the runs it wins. */
+test('the keyboard cursor survives a scroll, and every arrow opens a cold strip (issue 219)', async ({
+  page,
+}) => {
+  await visit(page);
+  const strip = page.locator('.grid-strip[role="listbox"]').first();
+  await strip.scrollIntoViewIfNeeded();
+  await settled(page);
+  await strip.evaluate((node) => node.focus());
+  await page.keyboard.press('Home');
+  const opened = await readoutState(page);
+  expect(opened.open, 'the keyboard opened no readout at all').toBe(true);
+  expect(opened.selectedIndex, 'the keyboard marked no cell').not.toBeNull();
+
+  /* A: forty pixels by hand, then read. The wait is the engine's, not a
+     duration: a scroll event is delivered at a rendering opportunity, so a
+     reading taken in the same tick would pass against a page that had not
+     yet told anybody it moved. */
+  const before = await page.evaluate(() => window.scrollY);
+  await page.evaluate(() => window.scrollBy(0, 40));
+  await expect
+    .poll(async () => page.evaluate(() => window.scrollY), {
+      message: 'the page never scrolled, so this lane proves nothing about scrolling',
+      timeout: 5_000,
+    })
+    .toBeGreaterThan(before);
+  await page.waitForTimeout(120);
+  const scrolled = await readoutState(page);
+  expect(scrolled.selectedIndex, 'a page scroll wiped the keyboard cursor').toBe(
+    opened.selectedIndex,
+  );
+  expect(scrolled.open, 'a page scroll closed the keyboard readout').toBe(true);
+  expect(scrolled.text, 'the readout survived the scroll but says nothing').not.toBe('');
+  const stillNamed = await page.evaluate(() => {
+    const region = window.document.querySelector('.grid-strip[role="listbox"]');
+    const active = region.getAttribute('aria-activedescendant');
+    const marked = window.document.querySelector('.grid-cell[data-grid-selected="true"]');
+    return marked !== null && active === marked.id;
+  });
+  expect(stillNamed, 'the scroll left the cursor and the marked cell disagreeing').toBe(true);
+
+  /* Following a cell is not following it off the screen. A card clamped to a
+     viewport edge describing a cell nobody can see is the stale readout the
+     whole guard exists to prevent, so the readout still closes once its cell
+     has scrolled out of the viewport's block extent — and this measures that
+     boundary rather than assuming it, which is what keeps the guard from
+     being decorative. */
+  await page.evaluate(() => {
+    const cell = window.document.querySelector('.grid-cell[data-grid-selected="true"]');
+    window.scrollBy(0, cell.getBoundingClientRect().bottom + 20);
+  });
+  await expect
+    .poll(async () => (await readoutState(page)).open, {
+      message: 'the readout followed its cell right off the screen',
+      timeout: 5_000,
+    })
+    .toBe(false);
+  const gone = await readoutState(page);
+  expect(gone.selectedIndex, 'a ring stayed painted on a cell whose readout had closed').toBeNull();
+
+  await strip.scrollIntoViewIfNeeded();
+  await settled(page);
+  await strip.evaluate((node) => node.focus());
+
+  /* B: Escape puts the strip back to genuinely no cursor — the state the
+     dead keys could never leave — and then EVERY arrow must open it. Each
+     one is checked from that same cold state, so a fix that only reached the
+     axis CI happened to press would still fail here. */
+  for (const key of ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp']) {
+    await page.keyboard.press('Escape');
+    const cleared = await readoutState(page);
+    expect(cleared.selectedIndex, 'Escape left a cell marked').toBeNull();
+    await page.keyboard.press(key);
+    const woken = await readoutState(page);
+    expect(woken.selectedIndex, `${key} on a strip with no cursor moved nothing`).not.toBeNull();
+    expect(woken.open, `${key} marked a cell without opening its readout`).toBe(true);
+  }
 });
 
 /* DEFECT 1, second half: the strip's own horizontal pan is the BROWSER'S, and

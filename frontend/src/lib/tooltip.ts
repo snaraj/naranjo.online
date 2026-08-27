@@ -410,12 +410,59 @@ function bindDetail(
      fractional device ratio, not the page having moved. */
   const stillPx = 0.5;
 
+  /* A PAGE THAT MOVES IS NOT A READOUT THAT ENDS (issue 219). What to do when
+     the tile slides depends on what the tip is anchored TO, and answering it
+     the same way for both was a measured defect rather than a preference.
+     - A tip that FOLLOWS a pointer is anchored to the cursor. Content sliding
+       under a stationary cursor puts a different cell beneath it, with no
+       event to re-aim from, so the readout is stale and closing is honest.
+     - A CELL-anchored tip — every keyboard reader and every finger — is
+       anchored to the thing it describes. The same movement is an instruction
+       to FOLLOW, not to close, and closing took the caller's SELECTION with
+       it through hide()'s select(null): the ring and the aria-activedescendant
+       cursor a screen reader is tracking both vanished because the page
+       scrolled. A listbox cursor is not the tip's to discard.
+     That was reachable on the plainest keyboard path there is. Focusing the
+     strip opens the readout synchronously, while the browser's own
+     scroll-into-view for that same focus is delivered at the next rendering
+     opportunity — so a reader who simply TABBED to the grid got a readout
+     that closed itself one frame later. MEASURED in WebKit: focus at
+     scrollY 0 with the strip 3054px down the document, readout open at
+     t+1ms, the document's scroll to 2723 at t+16ms, cursor and card gone at
+     t+17ms (2026-08-27). Scrolling the page 40px by hand with a readout open
+     wiped it the same way.
+     Re-anchoring costs NO extra layout read: the rect this handler already
+     took is the new anchor, and size, viewport and metrics are all unchanged
+     by a scroll. A subject scrolled out of the viewport's block extent still
+     closes — see `offscreen` for why that axis and not both — because a card
+     clamped to an edge describing a cell nobody can see is the stale readout
+     this whole guard exists to prevent. */
   function onScrolled(): void {
     const now = subject.getBoundingClientRect();
     if (Math.abs(now.top - anchor.top) < stillPx && Math.abs(now.left - anchor.left) < stillPx) {
       return;
     }
-    hide();
+    if (follows || offscreen(now)) {
+      hide();
+      return;
+    }
+    anchor = { left: now.left, top: now.top, right: now.right, bottom: now.bottom };
+    place(anchoredPlacement(anchor, size, viewport, metrics));
+  }
+
+  /* Scrolled wholly past the top or the bottom of the frame the tip was
+     placed inside. Touching an edge is not gone: a half-visible cell is still
+     a cell the reader can see the readout belongs to.
+     THE INLINE AXIS IS DELIBERATELY NOT ASKED. A page scrolls in the block
+     direction, so that is the axis this guard is about; a cell's inline
+     position is decided by the STRIP's own overflow, where a cell can sit
+     outside the viewport from the moment it is selected — the calendar opens
+     scrolled to its newest column, so Home names a cell a phone has never
+     shown. Closing on that would be this guard answering a question about the
+     strip's cursor with a rule about the page, and it would close a readout
+     that was already open and correct before anybody scrolled anything. */
+  function offscreen(box: TipRect): boolean {
+    return box.bottom <= 0 || box.top >= viewport.height;
   }
 
   function onResized(): void {
