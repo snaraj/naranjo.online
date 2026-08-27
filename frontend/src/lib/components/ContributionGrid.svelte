@@ -101,6 +101,7 @@
     cellLabel,
     cellPeriod,
     formatWhole,
+    gridCursorTarget,
     gridLevel,
     gridLevels,
     gridRows,
@@ -289,57 +290,28 @@
      region has to be reachable), so arrows move a selection INSIDE it rather
      than tabbing 371 times — the same shape a listbox or a calendar widget
      uses, and the non-gesture equivalent every gesture on this page owes.
-     Left/right step a week, up/down step a day, Home/End jump to the ends. */
-  const keySteps: Record<string, number> = {
-    ArrowLeft: -gridRows,
-    ArrowRight: gridRows,
-    ArrowUp: -1,
-    ArrowDown: 1
-  };
-
-  function firstDatedIndex(from: number, direction: number): number {
-    for (let at = from; at >= 0 && at < cells.length; at += direction) {
-      if (cells[at].date) {
-        return at;
-      }
-    }
-    return -1;
-  }
+     Left/right step a week, up/down step a day, Home/End jump to the ends,
+     and the first arrow press on a strip nobody has selected in opens on the
+     newest data. All of that is arithmetic and lives in lib/grid.ts's
+     gridCursorTarget, where it is executed by the unit suite rather than read;
+     what stays here is the wiring, which is the only part that needs an
+     event. Which cells are DATED is the only thing that function needs to
+     know about them, so the component hands it exactly that. */
+  const datedCells = $derived(cells.map((cell) => Boolean(cell.date)));
 
   function onStripKeydown(event: KeyboardEvent): void {
     if (columns.length === 0) {
       return;
     }
-    if (event.key === 'Escape') {
-      if (selected >= 0) {
-        event.preventDefault();
-        selected = -1;
-      }
+    const target = gridCursorTarget(event.key, selected, datedCells, gridRows);
+    if (target === null) {
       return;
     }
-    const step = keySteps[event.key];
-    const jump = event.key === 'Home' ? 0 : event.key === 'End' ? cells.length - 1 : null;
-    if (step === undefined && jump === null) {
-      return;
-    }
-    /* The arrows belong to the grid once it has a selection, so the page
-       must not also scroll — but the FIRST arrow press on a strip nobody has
-       selected in still opens on the newest data rather than stealing a
-       scroll for nothing. */
+    /* The key belonged to the grid, so the page must not also act on it —
+       including when the move was refused at a boundary, where a cursor that
+       cannot go further must not become a page scroll instead. */
     event.preventDefault();
-    if (jump !== null) {
-      selected = firstDatedIndex(jump, jump === 0 ? 1 : -1);
-      return;
-    }
-    const from = selected >= 0 ? selected : cells.length - 1;
-    const next = from + step;
-    if (next < 0 || next >= cells.length) {
-      return;
-    }
-    const dated = firstDatedIndex(next, step > 0 ? 1 : -1);
-    if (dated >= 0) {
-      selected = dated;
-    }
+    selected = target;
   }
 
   /* The element the binding should anchor to, driven by the keyboard cursor
