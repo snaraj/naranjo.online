@@ -442,6 +442,20 @@ test('a caller that resolves many subjects must also say which one a focus lande
   assert.equal(drivenBinding({ report }), false);
   assert.equal(drivenBinding({ report, host: subject }), false);
 
+  // And the tile shape the PRODUCTION caller actually builds, which is neither
+  // of those two: `DetailTip` names all five props in one object literal, so
+  // every key is PRESENT and a tile's unsupplied ones hold `undefined`.
+  // Omitted and present-but-`undefined` are the same VALUE and a different
+  // SHAPE — `'resolve' in binding` is false for the first and true for the
+  // second — so a refusal keyed on the KEY rather than on the value satisfies
+  // every line in this test and still throws at bind time on every tile the
+  // page renders. The contract is about the value `undefined` carrying "I do
+  // not drive this", so the pin has to be taken on the shape a caller passes.
+  assert.equal(
+    drivenBinding({ host: undefined, resolve: undefined, select: undefined, report, anchor: undefined }),
+    false
+  );
+
   // The region shape, both halves of it. `null` is a driving caller saying
   // "nothing is selected" — it is a SELECTION state, not an absence of the
   // contract, so it drives exactly as an element does.
