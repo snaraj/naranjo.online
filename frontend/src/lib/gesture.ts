@@ -152,14 +152,41 @@ export function swipeHorizontal(node: HTMLElement, binding: SwipeBinding) {
   /* Whether the gesture that just ended actually moved anything. The frame is
      a button, and a drag across it ends in a click the reader never meant —
      so a real drag suppresses exactly one click, at capture, before it
-     reaches the control. */
+     reaches the control.
+     "Exactly one" is the part that needed a clock. A MOUSE drag ends in a
+     compatibility click dispatched in the same task as its pointerup, so the
+     suppression is consumed immediately; a TOUCH swipe past the platform's
+     own slop produces no click at all, and the flag simply sat there waiting
+     for the next activation of any kind. MEASURED in both engines at 390x844:
+     swipe the gallery (counter 1/8 -> 2/8), focus the frame, press Enter, and
+     the lightbox did not open — the reader's keypress was eaten by a gesture
+     that had already finished. So the flag is released at the end of the task
+     that ended the gesture: after the click that belongs to it, before
+     anything the reader does next. */
   let dragged = false;
+  let releasing = 0;
+
+  /* Hand the suppression back once the current task is over. A macrotask is
+     exactly the right length here and not a guess: the UA dispatches
+     pointerup, mouseup and click together within one task, so the click a
+     drag owes is always dispatched before this runs, and anything the reader
+     does afterwards is always dispatched after it. */
+  function releaseSuppression(): void {
+    if (releasing !== 0) {
+      clearTimeout(releasing);
+    }
+    releasing = setTimeout(() => {
+      releasing = 0;
+      dragged = false;
+    }, 0);
+  }
 
   function reset(): void {
     pointer = -1;
     claimed = false;
     binding.move(0);
     binding.settle();
+    releaseSuppression();
   }
 
   function onDown(event: PointerEvent): void {
@@ -240,6 +267,7 @@ export function swipeHorizontal(node: HTMLElement, binding: SwipeBinding) {
        go back to zero either way, and THAT is the snap-back the reader sees. */
     binding.move(0);
     binding.settle();
+    releaseSuppression();
   }
 
   /* The browser has taken the gesture — a scroll it decided was vertical, a
@@ -250,8 +278,15 @@ export function swipeHorizontal(node: HTMLElement, binding: SwipeBinding) {
     }
   }
 
+  /* A KEYBOARD ACTIVATION IS NEVER A STRAY DRAG CLICK, and `detail` is how
+     the platform says so: a click synthesised from Enter or Space on a
+     <button> reports a click count of 0, while every pointer-driven click
+     reports at least 1. Returning here rather than consuming the flag is
+     deliberate — the keypress was not this gesture's to spend, so it is
+     passed through untouched and the suppression, if one is still owed,
+     stays owed. */
   function onClickCapture(event: MouseEvent): void {
-    if (!dragged) {
+    if (!dragged || event.detail === 0) {
       return;
     }
     dragged = false;
@@ -267,6 +302,9 @@ export function swipeHorizontal(node: HTMLElement, binding: SwipeBinding) {
 
   return {
     destroy() {
+      if (releasing !== 0) {
+        clearTimeout(releasing);
+      }
       node.removeEventListener('pointerdown', onDown);
       node.removeEventListener('pointermove', onMove);
       node.removeEventListener('pointerup', onUp);

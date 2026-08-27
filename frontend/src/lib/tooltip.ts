@@ -226,7 +226,16 @@ export interface DetailBinding {
   report: (open: boolean) => void;
   /* The caller-driven anchor, for a reader with neither pointer nor focus
      CHANGE to signal with — see the action's update() below. Undefined means
-     "I do not drive this", which is every tile caller. */
+     "I do not drive this", which is every tile caller.
+     A caller that DOES drive it owns the focus reveal as well, and the two
+     halves cannot be split: this module answers a focus by asking `resolve`
+     for the element at the viewport ORIGIN, which is a sensible guess for a
+     tile (there is only one answer) and a wrong one for a region (the strip
+     is scrolled, so point 0,0 names whichever cell happens to sit off the
+     left edge — MEASURED as a cursor placed at x -11 against a strip starting
+     at 51). Whether this is undefined is therefore read once at bind time and
+     is a CONTRACT: a driving caller passes null for "nothing selected", never
+     undefined. */
   anchor?: HTMLElement | null;
 }
 
@@ -238,6 +247,27 @@ interface OpenTip {
  * once is the state a tip that never closes produces, and it is also how a
  * stale one survives a tap somewhere else. */
 let opened: OpenTip | null = null;
+
+/* Close whatever detail is open, from outside any binding. The registry above
+ * already exists to make "at most one" true; this is the same fact read from
+ * the other side, for a caller that is about to invalidate the assumption
+ * every open tip rests on.
+ *
+ * There is exactly one such caller and it is the page pull (issue 219 review
+ * round 2). A tip is `position: fixed` precisely so no ancestor's overflow can
+ * clip it — but a `transform` on <main> makes that element the containing
+ * block for every fixed DESCENDANT, and this page has 101 of them, all
+ * DetailTips (MEASURED at 390x844). The at-rest guard in styles.css keeps the
+ * property off the element while nothing is moving; DURING a pull it is
+ * genuinely applied, and a readout open across that moment is re-parented mid
+ * gesture. Closing it is honest and costs nothing: the reader has both hands
+ * on a gesture about the whole page.
+ *
+ * Idempotent and free when nothing is open, so a caller may say it on every
+ * frame of a drag without thinking about it. */
+export function closeOpenDetail(): void {
+  opened?.close();
+}
 
 /* hoverDetail is the whole behaviour, applied to the tip element itself: it
  * binds the CELL around it as the hover target and positions the tip inside
@@ -285,6 +315,10 @@ function bindDetail(
      what makes one strip behave like many tiles. */
   let subject: HTMLElement = region;
   const fine = view.matchMedia(finePointerQuery);
+  /* Whether the CALLER decides what a focus means — see DetailBinding.anchor.
+     Read once, because it is a property of the caller rather than of any
+     particular update. */
+  const driven = binding.anchor !== undefined;
 
   let shown = false;
   let origin: TipOrigin = 'pointer';
@@ -431,12 +465,13 @@ function bindDetail(
      t+1ms, the document's scroll to 2723 at t+16ms, cursor and card gone at
      t+17ms (2026-08-27). Scrolling the page 40px by hand with a readout open
      wiped it the same way.
-     Re-anchoring costs NO extra layout read: the rect this handler already
-     took is the new anchor, and size, viewport and metrics are all unchanged
-     by a scroll. A subject scrolled out of the viewport's block extent still
-     closes — see `offscreen` for why that axis and not both — because a card
-     clamped to an edge describing a cell nobody can see is the stale readout
-     this whole guard exists to prevent. */
+     Re-anchoring costs one extra layout read on this path and no more: the
+     subject rect this handler already took is the new anchor, and size,
+     viewport and metrics are all unchanged by a scroll — `offscreen` reads
+     the region's own box as well, which is the price of asking the right
+     question rather than a cheaper one. A subject scrolled out of view still
+     closes, because a card clamped to an edge describing a cell nobody can
+     see is the stale readout this whole guard exists to prevent. */
   function onScrolled(): void {
     const now = subject.getBoundingClientRect();
     if (Math.abs(now.top - anchor.top) < stillPx && Math.abs(now.left - anchor.left) < stillPx) {
@@ -450,19 +485,44 @@ function bindDetail(
     place(anchoredPlacement(anchor, size, viewport, metrics));
   }
 
-  /* Scrolled wholly past the top or the bottom of the frame the tip was
-     placed inside. Touching an edge is not gone: a half-visible cell is still
-     a cell the reader can see the readout belongs to.
-     THE INLINE AXIS IS DELIBERATELY NOT ASKED. A page scrolls in the block
-     direction, so that is the axis this guard is about; a cell's inline
-     position is decided by the STRIP's own overflow, where a cell can sit
-     outside the viewport from the moment it is selected — the calendar opens
+  /* Scrolled wholly out of sight — and there are TWO ways to be, because a
+     subject inside a scroll container has two frames it must be inside at
+     once. Touching an edge is not gone: a half-visible cell is still a cell
+     the reader can see the readout belongs to, so every test here is "wholly
+     past", never "not fully within".
+
+     THE PAGE'S FRAME is the viewport, and only its block extent: the document
+     scrolls down, and a page cannot take a box sideways out of a viewport it
+     never scrolls sideways (AGENTS.md's no-horizontal-body-scroll floor, and
+     the strip's own overflow is what keeps it true).
+
+     THE SUBJECT'S OWN FRAME is the region the binding was given — which for
+     a grid IS the scroll container the cells live in, and for a tile caller
+     is the tile itself, where subject and region are the same box and this
+     test can never fire. Both axes are asked of it, because THAT box scrolls
+     inline: the strip opens on its newest column and a reader panning it
+     back moves the named cell clean out of the port.
+
+     An earlier revision asked the viewport's block axis alone and defended
+     the omission with a case that was itself a defect — "the calendar opens
      scrolled to its newest column, so Home names a cell a phone has never
-     shown. Closing on that would be this guard answering a question about the
-     strip's cursor with a rule about the page, and it would close a readout
-     that was already open and correct before anybody scrolled anything. */
+     shown". A cursor outside its own scrollport is not a state to preserve;
+     it is the bug ContributionGrid's revealCursor now fixes, which is what
+     makes this test safe to ask. MEASURED at 390x844 in both engines before
+     the pair landed: cursor on cell 370 via `End`, pan the strip to
+     scrollLeft 0, and the card, the ring and aria-activedescendant all kept
+     naming a cell sitting 364px past the strip's right edge. */
   function offscreen(box: TipRect): boolean {
-    return box.bottom <= 0 || box.top >= viewport.height;
+    if (box.bottom <= 0 || box.top >= viewport.height) {
+      return true;
+    }
+    const port = region.getBoundingClientRect();
+    return (
+      box.right <= port.left ||
+      box.left >= port.right ||
+      box.bottom <= port.top ||
+      box.top >= port.bottom
+    );
   }
 
   function onResized(): void {
@@ -578,6 +638,15 @@ function bindDetail(
        one under their cursor would be the flicker this primitive exists to
        avoid. */
     if (!region.matches(':focus-visible')) {
+      return;
+    }
+    /* A driving caller answers this itself, through `anchor`. Guessing the
+       element at the viewport origin is right for a tile, which has exactly
+       one, and WRONG for a region, where it names whichever of many subjects
+       happens to sit at that point — the strip is scrolled, so it named a
+       cell 62px off the left edge of its own scrollport. The caller knows
+       which subject focus should land on; this module does not. */
+    if (driven) {
       return;
     }
     if (!aim(null, { x: 0, y: 0 })) {

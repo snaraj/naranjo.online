@@ -24,10 +24,17 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   from issue #187 — stays exactly as it was; suppressing the native bounce is
   what makes a settle guaranteeable instead of a race.
 - Swipe navigation on the media gallery, with a position readout and dot
-  controls that are reachable by pointer, keyboard and assistive technology.
+  controls that are reachable by pointer, keyboard and assistive technology:
+  a `radiogroup` with one tab stop, arrow/Home/End movement, and focus
+  following the choice.
 - Keyboard operation for the three token-usage segmented controls, which
   declared `role="radio"` and handled no keys at all: arrow/Home/End movement
   with a roving tabindex.
+- `src/lib/keys.ts`, the one keyboard grammar every composite widget on the
+  page shares — which presses are the browser's chords rather than a widget's,
+  and where a ring of options moves. The grid strip, the segmented pills, the
+  gallery dots and the reading-mode swatches all read it, so one page stopped
+  carrying three hand-written key tables free to disagree.
 
 ### Fixed
 
@@ -55,6 +62,57 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   focusing the strip opens the readout synchronously while the browser's own
   scroll-into-view for that same focus arrives a frame later, so tabbing to a
   grid produced a readout that closed itself.
+- The grid's keyboard cursor is scrolled into the strip it lives in, on every
+  move. The strip is far wider than its box and opens on its newest column, so
+  a cursor routinely landed outside the scrollport — measured at 390×844, a
+  tab into the grid marked a cell at x −11 against a strip starting at 51, and
+  `Home` marked one at −323 — while the new key handler swallowed the arrows
+  that used to pan the strip natively. Adding a cursor at the cost of the pan
+  moved the defect to a different reader rather than fixing it. The move is
+  instant in every reading mode: a cursor step is where the cursor IS, not a
+  journey, so there is no motion for a reduced-motion preference to switch off.
+- Tabbing into a grid names the newest dated cell rather than whichever one
+  sits at the viewport's origin. The shared detail primitive answered a focus
+  by resolving the element at point 0,0 — sound for a caller with one subject,
+  wrong for a strip with 371 of them — so a caller that drives its own anchor
+  now owns its focus reveal too.
+- A readout is closed by a pan of the strip that carries its cell out of view,
+  not only by a scroll of the page. The re-anchor repair asked the viewport's
+  block extent alone, so panning the strip left the card, the ring and
+  `aria-activedescendant` naming a cell 364px past the strip's right edge. The
+  guard now clips against the subject's own scrollport on both axes, which is
+  safe to ask precisely because the cursor is brought into that port first.
+- A refresh no longer discards the keyboard cursor. Every delivery rebuilds
+  the column arrays, and the grid dropped its selection on any change of their
+  identity — so the ring, the readout and the `aria-activedescendant` a screen
+  reader follows all vanished when the page did its minute's work, or when the
+  new pull gesture asked for it. The cursor names a day, and a window that
+  still contains that day keeps it.
+- The gallery's position dots are operable by keyboard. They shipped as a
+  `tablist` with a roving `tabindex` and no key handler at all — the same
+  shape ("declared a role, handled no keys") this release fixes in the token
+  panel's segmented pills — which left seven of eight dots unreachable and the
+  eighth's press a no-op. They are now a `radiogroup` moving on the shared
+  key ring, with focus following the choice; the movement arithmetic
+  (`src/lib/keys.ts`) is one module for all three composite widgets on the
+  page, and a source pin fails any composite role declared without a key
+  handler on the same element.
+- A swipe no longer swallows the reader's next activation. The one-click
+  suppression a drag owes is released at the end of the task that ended the
+  gesture, and a keyboard activation is never suppressed at all — measured
+  before: swipe the gallery, focus the frame, press Enter, and the lightbox
+  did not open.
+- Modifier chords reach the browser. Both new key handlers branched on the key
+  alone, so `Cmd`/`Alt+Arrow` (Back) and `Ctrl+Home` (top of document) were
+  swallowed by the grid strip and by every segmented control.
+- The page pull stands down on a mostly-horizontal drag, on the same predicate
+  the swipe already used; a diagonal of dx 160 / dy 20 moved the page 18.8px
+  before. An open detail closes when a pull claims, because the travel
+  transform makes `<main>` the containing block for its 101 fixed descendants
+  while it is applied — and the refresh CONTROL no longer displaces the page at
+  all, since a press drags nothing.
+- The grid `listbox` owns its options: the layout div they sit in is
+  `role="presentation"`, which is the only way ARIA admits them.
 - Half the grid's arrow keys were dead. With no cursor yet, `ArrowRight` and
   `ArrowDown` stepped past the end of the cell list, hit the range guard and
   did nothing at all — permanently, since nothing they could do would give
