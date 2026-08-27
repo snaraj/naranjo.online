@@ -11,13 +11,14 @@ gate means, rather than one that merely changes what a gate does:
      that fails but is told to continue still reports `success`, so this one
      key is the difference between "the gate passed" and "the gate ran".
 
-  2. A step-level `env:` key that SHADOWS a workflow- or job-level declaration
-     of the same key. Scope precedence means the innermost wins silently, so a
-     step can run against a different value than the one every reader sees
-     declared above it -- while the outer declaration still reads correct.
-     `GO_COVERAGE_FLOOR` and `SOURCE_SHA` are the sharp cases here: a shadowed
-     floor passes any coverage, and a shadowed source SHA lets a step act on a
-     commit other than the authorized one.
+  2. An `env:` key that SHADOWS an outer declaration of the same key, or that
+     redeclares a tool pin `install-tools.sh` owns -- at EVERY scope a step's
+     environment comes from, not only the innermost. Scope precedence means the
+     inner declaration wins silently, so a step can run against a different
+     value than the one every reader sees declared above it -- while the outer
+     declaration still reads correct. `GO_COVERAGE_FLOOR` and `SOURCE_SHA` are
+     the sharp cases: a shadowed floor passes any coverage, and a shadowed
+     source SHA lets a step act on a commit other than the authorized one.
 
   3. A custom `shell:` on a step in the required-checks set, or a
      `defaults.run.shell` at job or workflow level, which is the same construct
@@ -27,6 +28,36 @@ gate means, rather than one that merely changes what a gate does:
      `set -euo pipefail`. A custom shell changes failure semantics underneath
      that convention -- `shell: sh` drops `pipefail` support entirely, so a
      failing command mid-pipeline stops being a failing step.
+
+EVERY SCOPE, NOT THE FIRST ONE SOMEBODY THOUGHT OF. Three of the four review
+rounds on this file found the same defect in a different rule: the rule's own
+construct written at a SCOPE the rule does not read, passing at `actionlint`
+rc=0 on a real workflow. Round 3 found it for rule 3 (`defaults.run.shell` at
+job and workflow level, where no step carries it); round 4 found it for rule 2
+(a job- or workflow-level `env:`, where no step carries it). So the scope set
+of each rule is written down here, audited against GitHub's workflow syntax
+rather than against what this repository happens to write, and each rule reads
+ALL of its own:
+
+  rule 1  `jobs.<id>.continue-on-error` and `jobs.<id>.steps[*].continue-on-
+          error`. Those are the only two positions the key exists in; there is
+          no `defaults.continue-on-error` and no workflow-level one.
+  rule 2  four positions supply a step's environment, outermost first:
+          `jobs.<id>.container.env` (a job container's own environment, which
+          every `run:` step in the job inherits), the workflow-level `env:`,
+          `jobs.<id>.env`, and `jobs.<id>.steps[*].env`. NOT in the set, and
+          deliberately: `jobs.<id>.services.<id>.env` sets the environment of a
+          SERVICE container, which is a different container from the one steps
+          run in, so no step ever reads it.
+  rule 3  `jobs.<id>.steps[*].shell`, `jobs.<id>.defaults.run.shell`, and the
+          workflow-level `defaults.run.shell`.
+
+One boundary is worth stating because it is a scope this gate does NOT cover:
+a composite action (`action.yml`) has its own `runs.steps[*]` carrying `shell:`
+and `continue-on-error:`. This gate's subject is `.github/workflows/*.yml`, and
+this repository ships no composite action. A repository that adds one is adding
+a surface these three rules do not read -- extend the sweep then, rather than
+assuming it is covered.
 
 WHAT THIS DELIBERATELY DOES NOT DO -- READ THIS BEFORE "COMPLETING" IT.
 
@@ -55,12 +86,35 @@ in `release_contract.py`, which the release contract already keeps exact
 because the publisher authorizes against them. Reading them here adds no
 second copy to keep in sync.
 
-LIFTING IT. Every refusal lifts through
-`scripts/ci/workflow-integrity-allowlist.txt`: one line, one written reason,
-one PR. Steps are located by NAME, not index, so an entry survives a step
-being inserted above it. Rule 3 has two further subjects for the positions no
-step name can address: `<defaults.run.shell>` for the workflow-level default
-and `<job>/<defaults.run.shell>` for a job's.
+LIFTING IT, AND THE ONE CLASS THAT DOES NOT LIFT. There are two kinds of red
+here and they have different remedies. Saying otherwise -- as an earlier
+revision of this docstring and of the allowlist header both did -- sends
+whoever hits the second kind to a file that will not help them.
+
+A RULE refusal lifts through `scripts/ci/workflow-integrity-allowlist.txt`:
+one line, one written reason, one PR. Every rule prints the exact line to
+paste. Steps are located by NAME, not index, so an entry survives a step being
+inserted above it. Four subjects address the positions no step name can:
+`<defaults.run.shell>` and `<job>/<defaults.run.shell>` for rule 3's two
+default-shell positions, and `<workflow.env>/<KEY>`, `<job>/<job.env>/<KEY>`
+and `<job>/<container.env>/<KEY>` for rule 2's three non-step scopes.
+
+A READER refusal does NOT lift, by design, and prints no lift line. It is
+raised while resolving the file, before any rule consults the allowlist -- and
+that ordering is the correct behaviour rather than an accident of structure.
+An allowlist entry waives a RULE's verdict about a value this reader resolved;
+when nothing resolved there is no verdict to waive, and silencing a construct
+nobody can say the meaning of is exactly the silent pass this reader was
+inverted to remove. It would also have to name its subject by line or by raw
+text, since the resolved subject is precisely what is missing -- the brittle
+inventory pin this file refuses to become. The remedies are, in order: write
+the construct in block style, or the value in a spelling this reader resolves
+(quoting a scalar usually does it -- `shell: "bash -e {0}"` resolves and lifts,
+while the same value unquoted is refused); and, when a construct is genuinely
+needed and genuinely unresolvable, widen `resolve_scalar`'s recognised set in
+one reviewed edit HERE, which this suite then gates like any other change.
+`test_a_reader_refusal_is_not_liftable_by_the_allowlist` pins both directions,
+so this paragraph cannot drift away from the code again.
 
 PARSING. `python3 -I` runs isolated with no site-packages, so there is no
 `yaml` module; `dependabot_contract.py`'s parser is deliberately conservative
@@ -149,11 +203,20 @@ REFUSED, LOUDLY, with a message naming the construct (see
 `_refuse_unresolvable`): flow mappings and flow sequences in any position a
 rule depends on (`- {name: x}`, `steps: [...]`, `env: {...}`), YAML anchors,
 aliases and tags, merge keys (`<<:`), explicit keys (`? k` / `: v`), a row in
-an `env:` mapping this reader cannot name, a job that declares `steps:` and
-resolves none, and multi-document files. Each raises rather than returning a
-partial answer -- a partial answer is the silent pass. None of these appears
-in any workflow here, and GitHub Actions accepts block style everywhere, so
-the refusal costs nothing and closes the whole class at once.
+an `env:` or `container:` mapping this reader cannot name, a job that declares
+`steps:` and resolves none, and multi-document files. Each raises rather than
+returning a partial answer -- a partial answer is the silent pass. None of
+these appears in any workflow here, and GitHub Actions accepts block style
+everywhere, so the refusal costs nothing and closes the whole class at once.
+
+ONE SHORTHAND IS RECOGNISED RATHER THAN REFUSED, and the reason is the one
+above about lifting: `container:` takes a scalar image reference
+(`ubuntu:24.04`) or an expression naming one, neither of which can carry a
+mapping and therefore neither of which can hide an `env:`. Refusing them would
+be a false red with NO lift path, so they are matched positively
+(`IMAGE_REFERENCE`, `EXPRESSION`) and anything else on that line is refused.
+Where a reader refusal is un-liftable, the boundary has to be drawn with more
+care than "anything unfamiliar", not less.
 
 THE ONE VALUE DELIBERATELY OUTSIDE THAT BOUNDARY is a step's `name:`, which is
 free text (`Test hostile contract suites (release, dependabot)`) and is not
@@ -203,6 +266,16 @@ PLAIN_SCALAR = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./+-]*$")
 SINGLE_QUOTED = re.compile(r"^'[^'\\]*'$")
 DOUBLE_QUOTED = re.compile(r'^"[^"\\]*"$')
 
+# `container:` carries a scalar SHORTHAND whose value is an image reference
+# (`ubuntu:24.04`, `ghcr.io/owner/image@sha256:...`), or an expression naming
+# one. `PLAIN_SCALAR` deliberately admits neither -- it forbids `:`, `@` and
+# `$` -- so the shorthand needs its own positive recognition. It gets one
+# rather than being refused, because a reader refusal cannot be lifted through
+# the allowlist: a false red in this position would be a wall, not a line of
+# paperwork. Neither form can carry a mapping, so neither can hide an `env:`.
+IMAGE_REFERENCE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./+:@-]*$")
+EXPRESSION = re.compile(r"^\$\{\{[^{}]*\}\}$")
+
 # Rule 1's value is boolean-typed, so its recognised set is smaller still: the
 # two spellings `actionlint` itself accepts, case-insensitively, plus YAML null
 # for a bare key. `yes`, `on`, `1`, `!!str true` and a folded scalar all resolve
@@ -222,6 +295,17 @@ DOCUMENT_END = "..."
 # exempted by the same line either way -- the subject is the construct, and
 # both spellings of it are the thing being waived.
 DEFAULT_SHELL_SUBJECT = "<defaults.run.shell>"
+
+# Rule 2's three non-step scopes need the same treatment for the same reason:
+# a workflow-level, job-level or container-level `env:` key is not written
+# inside any step, so `<job>/<step>/<KEY>` cannot address it. The subjects are
+# `<workflow.env>/<KEY>`, `<job>/<job.env>/<KEY>` and
+# `<job>/<container.env>/<KEY>`. A step would have to be named literally
+# `<job.env>` to collide, and the same line then exempts either reading -- the
+# subject IS the construct, exactly as for the default-shell subject above.
+WORKFLOW_ENV_SUBJECT = "<workflow.env>"
+JOB_ENV_SUBJECT = "<job.env>"
+CONTAINER_ENV_SUBJECT = "<container.env>"
 
 
 # --------------------------------------------------------------------------
@@ -259,6 +343,12 @@ class Job:
     continue_on_error: KeyedBool | None = None
     default_shell: Keyed | None = None
     env: dict[str, int] = field(default_factory=dict)
+    # A job container's own environment. Every `run:` step in the job inherits
+    # it, so it is a rule-2 scope -- the OUTERMOST one, because the runner
+    # passes the workflow/job/step `env:` explicitly when it execs each step
+    # and those therefore win over it. Empty for the ordinary runner-hosted
+    # job, which is every job in this repository today.
+    container_env: dict[str, int] = field(default_factory=dict)
     steps: list[Step] = field(default_factory=list)
     # Whether the job declared a `steps:` key at all. A reusable-workflow job
     # (`uses:` at job level) legitimately has none, so "every job has steps" is
@@ -351,14 +441,28 @@ def _refuse_unresolvable(path: Path, lineno: int, construct: str, detail: str) -
     Declared `NoReturn` on purpose: every call site is a dead end, so a type
     checker proves no caller can fall through one and carry on with an
     unresolved value -- the exact bug this function exists to prevent.
+
+    The message states plainly that this refusal is NOT liftable through the
+    allowlist, because it is not: this raises while the file is being resolved,
+    before any rule consults `self.allowlist`, and that ordering is deliberate
+    (see the module docstring's LIFTING IT section). An earlier revision of
+    that docstring, of the allowlist header, and of this message all implied
+    otherwise, which sent a reader to a file that cannot help.
     """
     raise AssertionError(
         f"{path.relative_to(ROOT)}:{lineno}: the structural reader cannot resolve "
         f"{construct}. {detail} This reader is BLOCK-style only, and it refuses "
         f"what it cannot resolve rather than skipping it: a skipped construct is "
         f"invisible to every rule in this file, which is a silent pass on exactly "
-        f"what the rule refuses. Rewrite it in block style -- GitHub Actions "
-        f"accepts that form in every one of these positions."
+        f"what the rule refuses.\n\nThis refusal is NOT liftable through "
+        f"{ALLOWLIST.relative_to(ROOT).as_posix()}, and no lift line is printed "
+        f"for it: that file waives a RULE's verdict about a value this reader "
+        f"resolved, and there is no verdict to waive when nothing resolved. "
+        f"Rewrite the construct in block style -- GitHub Actions accepts that "
+        f"form in every one of these positions -- or the value in a spelling "
+        f"this reader resolves; quoting a scalar usually does it. If the "
+        f"construct is genuinely needed and genuinely unresolvable, widen "
+        f"`resolve_scalar`'s recognised set in one reviewed edit to this file."
     )
 
 
@@ -591,6 +695,70 @@ def _read_default_shell(
     return None
 
 
+def _read_container_env(
+    rows: list[tuple[int, int, str]],
+    container_at: int,
+    value: str,
+    path: Path,
+    lineno: int,
+    where: str,
+) -> dict[str, int]:
+    """Resolve `container: … env:`, rule 2's construct at its outermost scope.
+
+    A job container's environment is inherited by every `run:` step in the job,
+    so a name declared here reaches the same shell that reads a tool pin. It is
+    the OUTERMOST source rather than the innermost: the runner passes the
+    workflow-, job- and step-level `env:` explicitly when it execs each step,
+    so those win over the container's own. That is why rule 2 compares this
+    scope as an outer declaration and never as a shadow of one.
+
+    The scalar shorthand (`container: ubuntu:24.04`) carries no mapping and
+    therefore no `env:`, and it must NOT be refused -- a reader refusal cannot
+    be lifted, so a false red here would be a wall rather than a line of
+    paperwork. It is recognised positively, as an image reference or a
+    whole-value expression. Anything else on that line is a flow mapping, an
+    alias or an anchor, each of which CAN carry an `env:` this reader would
+    never see, and is refused.
+    """
+    if value:
+        if IMAGE_REFERENCE.match(value) or EXPRESSION.match(value):
+            return {}
+        _refuse_unresolvable(
+            path, lineno, f"the `container:` of {where}, written as `{value}`",
+            "A same-line `container:` value is an image reference or an expression "
+            "naming one, and neither carries a mapping. A flow mapping, an alias or "
+            "an anchor here can carry an `env:` whose keys rule 2 would never see.",
+        )
+    env_indent = _child_indent(rows, container_at)
+    for position, (row_line, indent, content) in enumerate(
+        rows[container_at + 1 :], start=container_at + 1
+    ):
+        if indent < env_indent:
+            break
+        if indent != env_indent:
+            continue
+        parsed = _key(content)
+        if not parsed:
+            _refuse_unresolvable(
+                path, row_line, f"the entry `{content}` in the `container:` of {where}",
+                "A `container:` block this reader cannot read as a mapping could "
+                "carry an `env:` whose keys rule 2 would never see.",
+            )
+        if parsed[0] != "env":
+            continue
+        if parsed[1]:
+            _refuse_unresolvable(
+                path, row_line, f"the inline `container.env:` of {where}",
+                "Rule 2 reads this mapping's KEYS; an unresolved one reads as no "
+                "declaration at all, so nothing it declares can be compared.",
+            )
+        return _mapping_keys(
+            rows, position + 1, _child_indent(rows, position), path,
+            f"the `container.env:` of {where}",
+        )
+    return {}
+
+
 def read_workflow(path: Path) -> Workflow:
     """Resolve a workflow file into its env, jobs, and steps."""
     return parse_workflow(path.read_text(encoding="utf-8"), path)
@@ -759,6 +927,10 @@ def _read_job_body(rows, job_at: int, job_indent: int, job: Job, path: Path) -> 
             job.env = _mapping_keys(
                 rows, position + 1, _child_indent(rows, position), path,
                 f"the `env:` of job {job.name!r}",
+            )
+        elif key == "container":
+            job.container_env = _read_container_env(
+                rows, position, value, path, lineno, f"job {job.name!r}"
             )
         elif key == "defaults":
             if value:
@@ -1005,9 +1177,13 @@ def stale_reason(
     that no longer needs exempting; this is the same contract for this file,
     which the 0.1.49 changelog claimed and only half delivered.
 
-    `where` is `<job>`, `<job>/<step>`, `<job>/<step>/<key>`, or -- for the two
-    `defaults.run.shell` positions rule 3 also covers -- the bare
-    `DEFAULT_SHELL_SUBJECT` (workflow level) or `<job>/DEFAULT_SHELL_SUBJECT`.
+    `where` is `<job>`, `<job>/<step>`, `<job>/<step>/<key>`, or one of the
+    sentinel subjects for the scopes no step name can address: the bare
+    `DEFAULT_SHELL_SUBJECT` and `<job>/DEFAULT_SHELL_SUBJECT` for rule 3's two
+    `defaults.run.shell` positions, and `WORKFLOW_ENV_SUBJECT/<key>`,
+    `<job>/JOB_ENV_SUBJECT/<key>` and `<job>/CONTAINER_ENV_SUBJECT/<key>` for
+    rule 2's three non-step scopes. Every one of them ratchets: the entry dies
+    when the declaration it exempts does.
     """
     workflow = next((w for w in workflows if w.name == workflow_name), None)
     if workflow is None:
@@ -1017,6 +1193,18 @@ def stale_reason(
             return (
                 f"exempts the workflow-level `defaults.run.shell`, which "
                 f"{workflow_name} does not set"
+            )
+        return None
+    if rule == "env-shadow" and where.split("/")[0] == WORKFLOW_ENV_SUBJECT:
+        # The workflow-level scope carries no job, so it is settled before the
+        # `<job>/...` partition below -- exactly like the default-shell subject.
+        _, separator, key = where.partition("/")
+        if not separator:
+            return f"is missing the `{WORKFLOW_ENV_SUBJECT}/<KEY>` subject it needs"
+        if key not in workflow.env:
+            return (
+                f"exempts workflow-level `env: {key}`, which {workflow_name} does "
+                f"not declare"
             )
         return None
     job_name, _, rest = where.partition("/")
@@ -1030,6 +1218,22 @@ def stale_reason(
                 f"set one"
             )
         return None
+    if rule == "env-shadow":
+        scope_subject, separator, scoped_key = rest.partition("/")
+        for subject, label, declared in (
+            (JOB_ENV_SUBJECT, "job-level", job.env),
+            (CONTAINER_ENV_SUBJECT, "container-level", job.container_env),
+        ):
+            if scope_subject != subject:
+                continue
+            if not separator:
+                return f"is missing the `<job>/{subject}/<KEY>` subject it needs"
+            if scoped_key not in declared:
+                return (
+                    f"exempts {label} `env: {scoped_key}` on job {job_name!r}, "
+                    f"which does not declare it"
+                )
+            return None
 
     if rule == "continue-on-error" and not rest:
         if job.continue_on_error is None:
@@ -1314,6 +1518,13 @@ class WorkflowIntegrityTests(unittest.TestCase):
         here is valid YAML that `actionlint` accepts at rc=0 and the runner
         executes.
         """
+        # A floor, never a count. Emptying the table makes this a zero-
+        # iteration loop, and the boundary the module docstring calls the most
+        # important part of this file stops being pinned by anything -- the
+        # exact surviving-mutant class the 0.1.49 reviews kept finding, and one
+        # the round-3 commit closed for two of the four tables and not these.
+        # Adding rows needs no edit here.
+        self.assertTrue(self.STEP_SHAPES, "the resolvable-shape table is empty")
         for label, (item, name, shell) in self.STEP_SHAPES.items():
             with self.subTest(shape=label):
                 job = _parse_synthetic("jobs:\n  gate:\n    steps:\n" + item).jobs["gate"]
@@ -1333,6 +1544,9 @@ class WorkflowIntegrityTests(unittest.TestCase):
         direction, costs nothing (no workflow here uses one), and leaves a
         message naming the construct.
         """
+        # A floor, never a count -- see the sibling assertion above. Without it
+        # the step-shape half of this test becomes a zero-iteration loop.
+        self.assertTrue(self.UNRESOLVABLE_SHAPES, "the unresolvable-shape table is empty")
         for label, item in self.UNRESOLVABLE_SHAPES.items():
             with self.subTest(shape=label):
                 with self.assertRaises(AssertionError) as caught:
@@ -1357,6 +1571,22 @@ class WorkflowIntegrityTests(unittest.TestCase):
              "defaults: *d\njobs:\n  gate:\n    steps:\n      - name: P\n"),
             ("aliased defaults.run",
              "jobs:\n  gate:\n    defaults:\n      run: *r\n    steps:\n      - name: P\n"),
+            ("inline job container",
+             "jobs:\n  gate:\n    container: {image: x, env: {A: 1}}\n"
+             "    steps:\n      - name: P\n"),
+            ("aliased job container",
+             "jobs:\n  gate:\n    container: *c\n    steps:\n      - name: P\n"),
+            ("anchored job container",
+             "jobs:\n  gate:\n    container: &c\n      image: x\n"
+             "    steps:\n      - name: P\n"),
+            ("inline container env",
+             "jobs:\n  gate:\n    container:\n      image: x\n      env: {A: 1}\n"
+             "    steps:\n      - name: P\n"),
+            ("merge key inside a container",
+             "jobs:\n  gate:\n    container:\n      <<: *c\n    steps:\n      - name: P\n"),
+            ("container env entry this reader cannot name",
+             "jobs:\n  gate:\n    container:\n      image: x\n      env:\n"
+             "        0BAD: 1\n    steps:\n      - name: P\n"),
             ("second document",
              "jobs:\n  gate:\n    steps:\n      - name: P\n---\njobs:\n  gate:\n"
              "    steps:\n      - name: Q\n"),
@@ -1365,6 +1595,106 @@ class WorkflowIntegrityTests(unittest.TestCase):
                 with self.assertRaises(AssertionError) as caught:
                     _parse_synthetic(text)
                 self.assertIn("cannot resolve", str(caught.exception))
+
+    def test_the_reader_reads_every_env_scope_rule_two_depends_on(self):
+        """All four scopes resolve, and the container shorthand is not refused.
+
+        Rule 2's scopes are `container.env`, the workflow-level `env:`, a job's
+        `env:`, and a step's own. Three of them went unread until the 0.1.49
+        round-4 audit, so this is the reader-level half of that repair: if the
+        reader drops a scope, the rule cannot refuse in it no matter what the
+        rule says.
+
+        The two shorthand controls are the other half. `container:` carries a
+        scalar form -- an image reference, or an expression naming one -- and
+        neither can hide an `env:`. Refusing them would be a false red with NO
+        lift path, because a reader refusal is not liftable, so the shorthand
+        is recognised positively rather than pattern-excluded.
+        """
+        workflow = _parse_synthetic(
+            "env:\n"
+            "  WORKFLOW_KEY: a\n"
+            "jobs:\n"
+            "  gate:\n"
+            "    container:\n"
+            "      image: ghcr.io/owner/image@sha256:abc\n"
+            "      env:\n"
+            "        CONTAINER_KEY: b\n"
+            "    env:\n"
+            "      JOB_KEY: c\n"
+            "    steps:\n"
+            "      - name: Probe\n"
+            "        env:\n"
+            "          STEP_KEY: d\n"
+        )
+        job = workflow.jobs["gate"]
+        self.assertEqual(sorted(workflow.env), ["WORKFLOW_KEY"])
+        self.assertEqual(sorted(job.container_env), ["CONTAINER_KEY"])
+        self.assertEqual(sorted(job.env), ["JOB_KEY"])
+        self.assertEqual(sorted(job.steps[0].env), ["STEP_KEY"])
+        for label, shorthand in (
+            ("an image reference", "container: ubuntu:24.04"),
+            ("a digest-pinned reference", "container: ghcr.io/o/i@sha256:abc"),
+            ("an expression", "container: ${{ needs.a.outputs.image }}"),
+        ):
+            with self.subTest(shorthand=label):
+                plain = _parse_synthetic(
+                    f"jobs:\n  gate:\n    {shorthand}\n"
+                    f"    steps:\n      - name: Probe\n        run: true\n"
+                )
+                self.assertEqual(plain.jobs["gate"].container_env, {})
+
+    def test_a_reader_refusal_is_not_liftable_by_the_allowlist(self):
+        """Pin the promise the three documents used to get wrong.
+
+        A READER refusal raises while the file is being resolved, before any
+        rule consults `self.allowlist`, so no allowlist line can lift it and no
+        lift line is printed with it. That is correct -- an entry waives a
+        rule's verdict about a RESOLVED value, and silencing a construct nobody
+        can state the meaning of is the silent pass this reader was inverted to
+        remove -- but the module docstring said "Every refusal lifts through",
+        the allowlist header said the same of its own two examples, and both
+        were wrong. Documentation drifts; this test does not.
+
+        Both of the header's former examples are driven here, WITH the exact
+        entry that would lift a rule refusal of the same subject, and the
+        quoted-template control proves the boundary is the RESOLUTION and not
+        the construct: `shell: "bash -e {0}"` resolves, so its refusal is a rule
+        refusal, prints a lift line, and lifts.
+        """
+        for label, method, text, entry in (
+            ("`${{ }}` on continue-on-error", "test_no_required_check_continues_on_error",
+             "jobs:\n  application:\n    continue-on-error: ${{ true }}\n"
+             "    steps:\n      - name: Probe\n        run: true\n",
+             ("pr-gate.yml", "continue-on-error", "application")),
+            ("an unquoted shell template", "test_no_gate_step_sets_a_custom_shell",
+             "jobs:\n  application:\n    steps:\n      - name: Probe\n"
+             "        shell: bash -e {0}\n",
+             ("pr-gate.yml", "custom-shell", "application/Probe")),
+        ):
+            for case, allowlist in (("no entry", None), ("with the exact entry",
+                                                         {entry: "a written reason"})):
+                with self.subTest(refusal=label, allowlist=case):
+                    with self.assertRaises(AssertionError) as caught:
+                        self._drive(method, text, allowlist)
+                    message = str(caught.exception)
+                    self.assertIn("cannot resolve", message)
+                    self.assertIn("NOT liftable", message)
+                    self.assertNotIn("To lift this refusal", message)
+        quoted = (
+            'jobs:\n  application:\n    steps:\n      - name: Probe\n'
+            '        shell: "bash -e {0}"\n'
+        )
+        refusal = self._drive("test_no_gate_step_sets_a_custom_shell", quoted)
+        self.assertIn("To lift this refusal", refusal)
+        self.assertEqual(
+            self._drive(
+                "test_no_gate_step_sets_a_custom_shell", quoted,
+                {("pr-gate.yml", "custom-shell", "application/Probe"): "a written reason"},
+            ),
+            "",
+            "a resolved value's refusal must still lift through one line",
+        )
 
     def test_a_job_that_declares_steps_must_resolve_some(self):
         """The silent zero-step job, closed at the reader rather than the test.
@@ -1415,24 +1745,40 @@ class WorkflowIntegrityTests(unittest.TestCase):
         hollow.jobs["call"] = Job(name="call", line=3)
         probe.test_every_workflow_resolves_into_jobs_and_steps()
 
-    def test_the_default_shell_subject_is_the_spelling_the_allowlist_documents(self):
-        """Code and lift file must agree on the one subject an operator types.
+    # The subjects that are NOT a step's name, because the construct they
+    # address is not written inside a step. Every one of them is a string an
+    # operator types by hand into the allowlist.
+    SENTINEL_SUBJECTS = {
+        "DEFAULT_SHELL_SUBJECT": (DEFAULT_SHELL_SUBJECT, "<defaults.run.shell>"),
+        "WORKFLOW_ENV_SUBJECT": (WORKFLOW_ENV_SUBJECT, "<workflow.env>"),
+        "JOB_ENV_SUBJECT": (JOB_ENV_SUBJECT, "<job.env>"),
+        "CONTAINER_ENV_SUBJECT": (CONTAINER_ENV_SUBJECT, "<container.env>"),
+    }
 
-        `DEFAULT_SHELL_SUBJECT` is the allowlist `<where>` for the two
-        `defaults.run.shell` positions, and it is the only rule-3 subject that
-        is not simply a step's name. Renaming the constant would move the rule
-        and its own fixtures together and leave the allowlist header -- the
-        thing a human reads before typing the line -- documenting a spelling
-        nothing accepts. This is a parity pin, not an inventory: it names ONE
-        string, and adding subjects needs no edit here.
+    def test_every_sentinel_subject_is_the_spelling_the_allowlist_documents(self):
+        """Code and lift file must agree on every subject an operator types.
+
+        These are the `<where>` spellings for the constructs no step name can
+        address -- rule 3's two `defaults.run.shell` positions and rule 2's
+        three non-step env scopes. Renaming a constant would move the rule and
+        its own fixtures together and leave the allowlist header -- the thing a
+        human reads before typing the line -- documenting a spelling nothing
+        accepts. This is a parity pin, not an inventory: it names the sentinel
+        subjects only, and adding a STEP-addressed subject needs no edit here.
         """
-        self.assertEqual(DEFAULT_SHELL_SUBJECT, "<defaults.run.shell>")
-        self.assertIn(
-            DEFAULT_SHELL_SUBJECT,
-            ALLOWLIST.read_text(encoding="utf-8"),
-            f"{ALLOWLIST.relative_to(ROOT)} does not document the "
-            f"`{DEFAULT_SHELL_SUBJECT}` subject its readers have to type.",
-        )
+        # A floor, never a count: emptying the table would make both loops
+        # vacuous and their deletion undetectable.
+        self.assertTrue(self.SENTINEL_SUBJECTS, "the sentinel-subject table is empty")
+        text = ALLOWLIST.read_text(encoding="utf-8")
+        for constant, (value, spelling) in self.SENTINEL_SUBJECTS.items():
+            with self.subTest(subject=constant):
+                self.assertEqual(value, spelling)
+                self.assertIn(
+                    value,
+                    text,
+                    f"{ALLOWLIST.relative_to(ROOT)} does not document the "
+                    f"`{value}` subject its readers have to type.",
+                )
 
     def test_an_unrecognised_way_of_writing_true_is_refused(self):
         """The inversion, stated as a test: refuse what you cannot resolve.
@@ -1561,6 +1907,44 @@ class WorkflowIntegrityTests(unittest.TestCase):
         "jobs:\n  application:\n    steps:\n"
         "      - name: Probe\n        env:\n          GITLEAKS_VERSION: 0.0.0\n"
     )
+    # Rule 2's construct written where no STEP carries it. All three were live
+    # on the real `release-publisher.yml` at `actionlint` rc=0 until this round;
+    # the container scope is the outermost one, reached by every `run:` step in
+    # the job.
+    WORKFLOW_ENV_PINNED_TOOL = (
+        "env:\n  TRIVY_SHA256: '0'\n"
+        "jobs:\n  application:\n    steps:\n      - name: Probe\n        run: true\n"
+    )
+    JOB_ENV_SHADOW = (
+        "env:\n  SOURCE_SHA: outer\n"
+        "jobs:\n  application:\n    env:\n      SOURCE_SHA: inner\n"
+        "    steps:\n      - name: Probe\n        run: true\n"
+    )
+    JOB_ENV_PINNED_TOOL = (
+        "jobs:\n  application:\n    env:\n      GITLEAKS_VERSION: '0'\n"
+        "    steps:\n      - name: Probe\n        run: true\n"
+    )
+    CONTAINER_ENV_PINNED_TOOL = (
+        "jobs:\n  application:\n    container:\n      image: ubuntu:24.04\n"
+        "      env:\n        HELM_VERSION: '0'\n"
+        "    steps:\n      - name: Probe\n        run: true\n"
+    )
+    JOB_ENV_SHADOWS_CONTAINER = (
+        "jobs:\n  application:\n    container:\n      image: ubuntu:24.04\n"
+        "      env:\n        SOURCE_SHA: from-the-container\n"
+        "    env:\n      SOURCE_SHA: from-the-job\n"
+        "    steps:\n      - name: Probe\n        run: true\n"
+    )
+    # The step-against-container pair, which the job-against-container pair
+    # above does NOT cover: the step loop compares against three outer scopes
+    # and dropping the container one from it survived the first sweep of this
+    # commit. Each scope PAIR needs its own row, not each scope.
+    STEP_ENV_SHADOWS_CONTAINER = (
+        "jobs:\n  application:\n    container:\n      image: ubuntu:24.04\n"
+        "      env:\n        SOURCE_SHA: from-the-container\n"
+        "    steps:\n      - name: Probe\n        env:\n"
+        "          SOURCE_SHA: from-the-step\n"
+    )
     CUSTOM_SHELL = (
         "jobs:\n  application:\n    steps:\n      - name: Probe\n        shell: sh\n"
     )
@@ -1599,6 +1983,23 @@ class WorkflowIntegrityTests(unittest.TestCase):
              self.ENV_SHADOW, "shadows the job-level declaration"),
             ("rule 2 / redeclares a tool pin", "test_no_step_env_shadows_an_outer_declaration",
              self.ENV_PINNED_TOOL, "redeclares a tool pin"),
+            ("rule 2 / workflow env tool pin",
+             "test_no_step_env_shadows_an_outer_declaration",
+             self.WORKFLOW_ENV_PINNED_TOOL, "workflow-level `env: TRIVY_SHA256`"),
+            ("rule 2 / job env shadows workflow env",
+             "test_no_step_env_shadows_an_outer_declaration",
+             self.JOB_ENV_SHADOW, "shadows the workflow-level declaration"),
+            ("rule 2 / job env tool pin", "test_no_step_env_shadows_an_outer_declaration",
+             self.JOB_ENV_PINNED_TOOL, "job-level `env: GITLEAKS_VERSION`"),
+            ("rule 2 / container env tool pin",
+             "test_no_step_env_shadows_an_outer_declaration",
+             self.CONTAINER_ENV_PINNED_TOOL, "container-level `env: HELM_VERSION`"),
+            ("rule 2 / job env shadows container env",
+             "test_no_step_env_shadows_an_outer_declaration",
+             self.JOB_ENV_SHADOWS_CONTAINER, "shadows the container-level declaration"),
+            ("rule 2 / step env shadows container env",
+             "test_no_step_env_shadows_an_outer_declaration",
+             self.STEP_ENV_SHADOWS_CONTAINER, "shadows the container-level declaration"),
             ("rule 3 / custom shell", "test_no_gate_step_sets_a_custom_shell",
              self.CUSTOM_SHELL, "shell: sh"),
             ("rule 3 / job defaults", "test_no_gate_step_sets_a_custom_shell",
@@ -1613,6 +2014,58 @@ class WorkflowIntegrityTests(unittest.TestCase):
                 # The lift path must be printed with the refusal, or the next
                 # agent's only route past a correct refusal is to weaken it.
                 self.assertIn("To lift this refusal", message)
+
+    def test_a_shadow_names_the_innermost_declaration_it_hides(self):
+        """The scope ORDER is load-bearing, so it is pinned rather than assumed.
+
+        A key declared at several outer scopes is shadowed by the INNERMOST of
+        them -- that is the declaration whose value the inner one actually
+        replaces, and the only line worth sending a reader to. The rule reports
+        the first match in an ordered list, so reordering that list silently
+        points at the wrong line while every other assertion in this file stays
+        green. It survived the first mutation sweep of this commit in both
+        directions, which is exactly why it is a test now: `scopes` carries an
+        ORDER, and an order nothing checks is a comment.
+        """
+        step = self._drive(
+            "test_no_step_env_shadows_an_outer_declaration",
+            "env:\n"                      # 1
+            "  SOURCE_SHA: from-workflow\n"   # 2
+            "jobs:\n"                     # 3
+            "  application:\n"            # 4
+            "    env:\n"                  # 5
+            "      SOURCE_SHA: from-job\n"    # 6
+            "    steps:\n"                # 7
+            "      - name: Probe\n"       # 8
+            "        env:\n"              # 9
+            "          SOURCE_SHA: from-step\n",  # 10
+            # The job-level declaration is itself a shadow of the workflow one
+            # and is refused first; exempting it is what lets the STEP-level
+            # verdict surface, and it exercises the interaction while it is
+            # here. Each scope keeps its own entry -- one does not lift another.
+            {("pr-gate.yml", "env-shadow", f"application/{JOB_ENV_SUBJECT}/SOURCE_SHA"):
+             "so the step-level verdict below is the one under test"},
+        )
+        self.assertIn("step-level `env: SOURCE_SHA`", step)
+        self.assertIn("shadows the job-level declaration at line 6", step)
+        job = self._drive(
+            "test_no_step_env_shadows_an_outer_declaration",
+            "env:\n"                              # 1
+            "  SOURCE_SHA: from-workflow\n"       # 2
+            "jobs:\n"                             # 3
+            "  application:\n"                    # 4
+            "    container:\n"                    # 5
+            "      image: ubuntu:24.04\n"         # 6
+            "      env:\n"                        # 7
+            "        SOURCE_SHA: from-container\n"    # 8
+            "    env:\n"                          # 9
+            "      SOURCE_SHA: from-job\n"        # 10
+            "    steps:\n"                        # 11
+            "      - name: Probe\n"               # 12
+            "        run: true\n",                # 13
+        )
+        self.assertIn("job-level `env: SOURCE_SHA`", job)
+        self.assertIn("shadows the workflow-level declaration at line 2", job)
 
     def test_no_rule_refuses_a_clean_workflow(self):
         """The positive control: these fixtures fail for their construct only.
@@ -1646,6 +2099,16 @@ class WorkflowIntegrityTests(unittest.TestCase):
             ("rule 2 / shadow", "test_no_step_env_shadows_an_outer_declaration",
              self.ENV_SHADOW,
              ("pr-gate.yml", "env-shadow", "application/Probe/GO_COVERAGE_FLOOR")),
+            ("rule 2 / workflow env", "test_no_step_env_shadows_an_outer_declaration",
+             self.WORKFLOW_ENV_PINNED_TOOL,
+             ("pr-gate.yml", "env-shadow", f"{WORKFLOW_ENV_SUBJECT}/TRIVY_SHA256")),
+            ("rule 2 / job env", "test_no_step_env_shadows_an_outer_declaration",
+             self.JOB_ENV_SHADOW,
+             ("pr-gate.yml", "env-shadow", f"application/{JOB_ENV_SUBJECT}/SOURCE_SHA")),
+            ("rule 2 / container env", "test_no_step_env_shadows_an_outer_declaration",
+             self.CONTAINER_ENV_PINNED_TOOL,
+             ("pr-gate.yml", "env-shadow",
+              f"application/{CONTAINER_ENV_SUBJECT}/HELM_VERSION")),
             ("rule 3 / shell", "test_no_gate_step_sets_a_custom_shell",
              self.CUSTOM_SHELL, ("pr-gate.yml", "custom-shell", "application/Probe")),
             ("rule 3 / job defaults", "test_no_gate_step_sets_a_custom_shell",
@@ -1707,43 +2170,94 @@ class WorkflowIntegrityTests(unittest.TestCase):
     # -- rule 2: env shadowing ----------------------------------------------
 
     def test_no_step_env_shadows_an_outer_declaration(self):
-        """Innermost scope wins silently, so a shadowed pin reads correct."""
+        """Innermost scope wins silently, so a shadowed pin reads correct.
+
+        FOUR scopes, not one. Until the 0.1.49 round-4 audit this rule read
+        `step.env` and nothing else, so its own construct written one and two
+        scopes OUT was invisible: on the real `release-publisher.yml` -- the
+        only workflow here with both an outer `env:` and a job `env:`
+        populated -- a job-level `env: IMAGE` shadowing the workflow-level
+        declaration, a job-level `env: GITLEAKS_VERSION`, and a workflow-level
+        `env: TRIVY_SHA256` were all GREEN at `actionlint` rc=0, while the
+        identical key one scope deeper went red. That is the same defect round
+        3 found in rule 3, in a different rule.
+
+        The scopes, outermost first, are `container.env`, the workflow-level
+        `env:`, a job's `env:`, and a step's own; the module docstring's scope
+        audit says why those four and why `services.<id>.env` is not one. Each
+        is compared against the scopes OUTSIDE it for shadowing, and all four
+        against the tool pins, since a pin redeclared at any scope reaches the
+        shell that reads it.
+        """
         pinned = pinned_tool_variables()
         self.assertTrue(pinned, "no pinned tool variables read from install-tools.sh")
         for workflow in self.workflows:
+            for key, line in sorted(workflow.env.items()):
+                # Nothing is outside the workflow scope, so this one is checked
+                # for the tool-pin half alone.
+                self._refuse_env(
+                    workflow, f"{WORKFLOW_ENV_SUBJECT}/{key}", key, line, (), pinned,
+                    "workflow", "every step of every job here",
+                )
             for job_name, job in workflow.jobs.items():
-                outer = {**workflow.env, **job.env}
+                for key, line in sorted(job.container_env.items()):
+                    # The outermost scope: a step's own environment overrides
+                    # it, so it shadows nothing and is checked the same way.
+                    self._refuse_env(
+                        workflow, f"{job_name}/{CONTAINER_ENV_SUBJECT}/{key}", key, line,
+                        (), pinned, "container",
+                        f"every `run:` step in job {job_name!r}",
+                    )
+                for key, line in sorted(job.env.items()):
+                    self._refuse_env(
+                        workflow, f"{job_name}/{JOB_ENV_SUBJECT}/{key}", key, line,
+                        (("workflow", workflow.env), ("container", job.container_env)),
+                        pinned, "job", f"every step in job {job_name!r}",
+                    )
                 for step in job.steps:
                     for key, line in sorted(step.env.items()):
-                        where = f"{job_name}/{step.name}/{key}"
-                        if (workflow.name, "env-shadow", where) in self.allowlist:
-                            continue
-                        if key in outer:
-                            # Name the scope `outer[key]`'s line actually came
-                            # from. `job.env` wins the merge above, so a key
-                            # declared at BOTH levels must report `job` -- the
-                            # innermost declaration being shadowed -- or the
-                            # message points a reader at the wrong line.
-                            scope = "job" if key in job.env else "workflow"
-                            self.fail(
-                                f"{workflow.path.relative_to(ROOT)}:{line}: step-level "
-                                f"`env: {key}` shadows the {scope}-level declaration at "
-                                f"line {outer[key]}. The inner value wins silently, so "
-                                f"this step can run against a value no reader of the "
-                                f"outer declaration would expect -- while the outer "
-                                f"declaration still reads correct."
-                                + lift_instruction(workflow.name, "env-shadow", where)
-                            )
-                        if key in pinned:
-                            self.fail(
-                                f"{workflow.path.relative_to(ROOT)}:{line}: step-level "
-                                f"`env: {key}` redeclares a tool pin that "
-                                f"`scripts/ci/install-tools.sh` owns. A workflow that "
-                                f"sets a pinned version or checksum name can run an "
-                                f"unpinned tool while the pin in install-tools.sh "
-                                f"still reads correct."
-                                + lift_instruction(workflow.name, "env-shadow", where)
-                            )
+                        # Ordered innermost-outer first, so a key declared at
+                        # several outer scopes reports the one actually being
+                        # shadowed -- or the message points at the wrong line.
+                        self._refuse_env(
+                            workflow, f"{job_name}/{step.name}/{key}", key, line,
+                            (("job", job.env), ("workflow", workflow.env),
+                             ("container", job.container_env)),
+                            pinned, "step", "this step",
+                        )
+
+    def _refuse_env(self, workflow, where, key, line, scopes, pinned, inner, blast):
+        """Refuse one `env:` key at one scope, or return.
+
+        `scopes` is the ordered list of scopes OUTSIDE this one, innermost
+        first; `inner` names this scope and `blast` its radius, so the message
+        reads the same at every scope while telling the truth about how far the
+        shadow reaches. One allowlist entry lifts both halves for that key at
+        that scope, which is the shape the step-level rule already had.
+        """
+        if (workflow.name, "env-shadow", where) in self.allowlist:
+            return
+        for scope, declared in scopes:
+            if key in declared:
+                self.fail(
+                    f"{workflow.path.relative_to(ROOT)}:{line}: {inner}-level "
+                    f"`env: {key}` shadows the {scope}-level declaration at "
+                    f"line {declared[key]}. The inner value wins silently, so "
+                    f"{blast} can run against a value no reader of the "
+                    f"outer declaration would expect -- while the outer "
+                    f"declaration still reads correct."
+                    + lift_instruction(workflow.name, "env-shadow", where)
+                )
+        if key in pinned:
+            self.fail(
+                f"{workflow.path.relative_to(ROOT)}:{line}: {inner}-level "
+                f"`env: {key}` redeclares a tool pin that "
+                f"`scripts/ci/install-tools.sh` owns. A workflow that "
+                f"sets a pinned version or checksum name can run an "
+                f"unpinned tool while the pin in install-tools.sh "
+                f"still reads correct."
+                + lift_instruction(workflow.name, "env-shadow", where)
+            )
 
     # -- rule 3: custom shell ------------------------------------------------
 
@@ -1870,9 +2384,15 @@ class WorkflowIntegrityTests(unittest.TestCase):
             "defaults:\n"
             "  run:\n"
             "    shell: sh\n"
+            "env:\n"
+            "  IMAGE: an-image\n"
             "jobs:\n"
             "  application:\n"
             "    continue-on-error: true\n"
+            "    container:\n"
+            "      image: ubuntu:24.04\n"
+            "      env:\n"
+            "        HELM_VERSION: '0'\n"
             "    defaults:\n"
             "      run:\n"
             "        shell: sh\n"
@@ -1899,6 +2419,9 @@ class WorkflowIntegrityTests(unittest.TestCase):
             ("custom-shell", DEFAULT_SHELL_SUBJECT),
             ("custom-shell", f"application/{DEFAULT_SHELL_SUBJECT}"),
             ("env-shadow", "application/Probe/GO_COVERAGE_FLOOR"),
+            ("env-shadow", f"{WORKFLOW_ENV_SUBJECT}/IMAGE"),
+            ("env-shadow", f"application/{JOB_ENV_SUBJECT}/GO_COVERAGE_FLOOR"),
+            ("env-shadow", f"application/{CONTAINER_ENV_SUBJECT}/HELM_VERSION"),
         )
         for rule, where in live:
             with self.subTest(live=f"{rule}|{where}"):
@@ -1911,6 +2434,14 @@ class WorkflowIntegrityTests(unittest.TestCase):
             ("continue-on-error", "application/Plain", "does not set it"),
             ("env-shadow", "application/Probe/NOT_DECLARED", "does not declare it"),
             ("env-shadow", "application/Probe", "is missing the"),
+            ("env-shadow", f"{WORKFLOW_ENV_SUBJECT}/NOT_DECLARED", "does not declare"),
+            ("env-shadow", WORKFLOW_ENV_SUBJECT, "is missing the"),
+            ("env-shadow", f"application/{JOB_ENV_SUBJECT}/NOT_DECLARED",
+             "does not declare it"),
+            ("env-shadow", f"application/{JOB_ENV_SUBJECT}", "is missing the"),
+            ("env-shadow", f"chart/{CONTAINER_ENV_SUBJECT}/HELM_VERSION",
+             "does not declare it"),
+            ("env-shadow", f"application/{CONTAINER_ENV_SUBJECT}", "is missing the"),
         )
         for rule, where, expected in stale:
             with self.subTest(stale=f"{rule}|{where}"):

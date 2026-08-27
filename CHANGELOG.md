@@ -27,14 +27,26 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   zero callers of any tier and, separately, on test-only reachability; one
   subcommand trips the second refusal today (`immutable-settings`) and is
   allowlisted with its reason.
-  `scripts/ci/test_workflow_integrity.py` (22 tests) refuses three constructs in
+  `scripts/ci/test_workflow_integrity.py` (25 tests) refuses three constructs in
   `.github/workflows/` that silently change what a gate MEANS rather than what
-  it does: `continue-on-error: true` on the required-checks set, a step-level
-  `env:` key that shadows an outer declaration or redeclares one of the six tool
-  pins `install-tools.sh` owns, and a custom shell on a required check — whether
-  written as a step's `shell:` or as a `defaults.run.shell` at job or workflow
-  level, which reshells every `run:` step beneath it and is the same construct
-  spelled where no step carries it.
+  it does: `continue-on-error: true` on the required-checks set, an `env:` key
+  that shadows an outer declaration or redeclares one of the six tool pins
+  `install-tools.sh` owns, and a custom shell on a required check.
+  Each rule reads EVERY scope its own construct can be written at, which is the
+  single defect three of the four review rounds on this entry found in a
+  different rule each time — the rule's own construct spelled where the rule was
+  not looking, at `actionlint` rc=0 on a real workflow. `continue-on-error` has
+  two such positions (a job and a step) and both are read. A custom shell has
+  three: a step's `shell:`, and a `defaults.run.shell` at job or workflow level,
+  which carries no step name and reshells every `run:` step beneath it. An
+  `env:` declaration has four, because four scopes supply a step's environment:
+  a job container's `env:` (outermost — every `run:` step in the job inherits
+  it), the workflow-level `env:`, a job's, and a step's own. A service
+  container's `env:` is deliberately NOT one: it sets the environment of a
+  different container from the one steps run in, so no step ever reads it. The
+  scope set of each rule is written down in the module docstring, audited
+  against GitHub's workflow syntax rather than against what this repository
+  happens to write.
   It resolves all 6 workflow files into 13 jobs and 90 steps through its own
   fail-closed structural reader — a workflow it cannot read fails the suite
   rather than passing quietly — and derives the 7-job required-checks set from
@@ -51,9 +63,21 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   fixtures rather than left vacuous. Both suites run under `pr-gate.yml`'s
   existing wildcard discovery (`-p 'test_*.py'`) with no workflow edit.
   Every rule, reader branch, allowlist refusal and lift path in the three
-  suites is mutation-killed; the final sweep of the workflow reader alone runs
-  28 hostile mutations with zero survivors, under a harness that reports a
-  selection matching zero tests as a fault rather than counting it as a kill.
+  suites is mutation-killed, under a harness that reports a selection matching
+  zero tests as a fault rather than counting it as a kill. An earlier revision
+  of this entry claimed zero survivors for the workflow reader's sweep; an
+  independent sweep found two, and three more turned up in the sweep of the
+  repair that closed them. All five are fixed here rather than reported: two
+  fixture tables (the resolvable and unresolvable step shapes) could be emptied
+  outright with the suite staying green, which would have left the reader's
+  boundary — the part of that file that matters most — pinned by nothing; and
+  the ordered scope list rule 2 reports a shadow from could be reordered, or
+  have the container scope dropped from the step comparison, with nothing going
+  red. Each now has the same floor the other tables carry. One honest limit on
+  that class of assertion: a floor whose only job is to make ANOTHER mutation
+  detectable cannot itself be killed while the table is populated, and the only
+  assertion that would kill it is a minimum count — an inventory pin this gate
+  refuses to become.
   Three classes of defect were found by successive adversarial reviews of this
   entry's own earlier heads and repaired here, all of the same shape — a check
   that looks strict, reads as strict, and refuses nothing.
@@ -76,14 +100,27 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   Third — and this is what the other two were symptoms of — the reader
   recognised the spellings somebody had thought of and treated everything else
   as "not a match", which leaks BY CONSTRUCTION. Ten further evasions were
-  measured against the real `pr-gate.yml`, every one valid YAML that
-  `actionlint` accepts at rc=0 and that GitHub Actions would honour: six ways
-  of writing a true `continue-on-error` the reader compared as not-true (the
-  scalar on the following line, an explicit `!!bool` tag, and a `${{ }}`
-  expression, each at job and at step level); the two `defaults.run.shell`
-  positions; and two step-level `env:` entries whose key the reader could not
-  name and therefore dropped — including an explicit key (`? GO_COVERAGE_FLOOR`
-  / `: '0'`) that shadows the coverage floor invisibly.
+  measured against the real `pr-gate.yml`, every one valid YAML that GitHub
+  Actions would honour: six ways of writing a true `continue-on-error` the
+  reader compared as not-true (the scalar on the following line, an explicit
+  `!!bool` tag, and a `${{ }}` expression, each at job and at step level); the
+  two `defaults.run.shell` positions; and two step-level `env:` entries whose
+  key the reader could not name and therefore dropped, one of them an explicit
+  key (`? GO_COVERAGE_FLOOR` / `: '0'`). Eight of the ten are `actionlint` rc=0
+  as spelled; an earlier revision said all ten were, and that is corrected here
+  rather than restated. The two `defaults.run.shell` rows were measured with
+  `shell: sh`, which `actionlint` rejects at rc=1 for an incidental reason — a
+  shellcheck warning that POSIX `sh` has no `pipefail`, raised by this
+  repository's own `set -euo pipefail` convention rather than by the construct.
+  The CLASS is genuinely rc=0-reachable and was re-measured both ways:
+  `defaults.run.shell: bash` and `: pwsh` are rc=0 at job and at workflow level,
+  green before the repair and red after it. The explicit-key row is corrected
+  the same way: it reddens because the READER refuses a key it cannot name, not
+  because rule 2 sees a shadowed floor. `pr-gate.yml` declares
+  `GO_COVERAGE_FLOOR` at STEP level only, so a plain step-level `env:
+  GO_COVERAGE_FLOOR` elsewhere in that file has no outer declaration to shadow
+  and stays green — the construct is the finding, the live floor is not
+  currently shadowable, and saying otherwise overstated it.
   The repair is not another list of forms. The reader now RESOLVES a small,
   explicit set of scalar spellings — a plain token, a quoted string without
   escapes, or nothing at all with nothing nested under it — and REFUSES
@@ -97,6 +134,37 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   fixture table of twelve exotic-but-valid ways of writing `true` — none of
   which has a branch anywhere in the module — proves the property that matters:
   a spelling nobody anticipated turns the gate RED with no code change.
+  Fourth, the same audit was owed to rule 2 and had not been given: it read a
+  step's `env:` and nothing else, so its own construct one and two scopes out
+  was invisible. Measured on the real `release-publisher.yml` — the one workflow
+  here with both an outer and a job `env:` populated — a job-level `env: IMAGE`
+  shadowing the workflow-level declaration, a job-level `env: GITLEAKS_VERSION`
+  and a workflow-level `env: TRIVY_SHA256` were all GREEN at `actionlint` rc=0,
+  while the identical key one scope deeper went red. So was a job container's
+  `env: GITLEAKS_VERSION`, the fourth scope, found by auditing GitHub's syntax
+  rather than by being shown it. All four are refused now, each with its own
+  allowlist subject (`<workflow.env>/KEY`, `<job>/<job.env>/KEY`,
+  `<job>/<container.env>/KEY`) that ratchets shut when the declaration it
+  exempts disappears. The honest scale of it: no live exploit existed at any
+  scope, because `release_contract.py` pins `EXPECTED_IMAGE` and
+  `install-tools.sh` assigns every pin unconditionally rather than
+  `${VAR:-…}` — this rule is preventative at every scope, so what was closed is
+  a coverage hole, not an open door.
+  And one PROMISE was wrong while the code was right. Both the module docstring
+  and the allowlist header said every refusal lifts through one allowlist line,
+  and offered two examples that do not: a reader refusal is raised while the
+  file is being resolved, before any rule consults the allowlist, so pasting the
+  exact entry changes nothing and no lift line is printed. That behaviour is
+  kept, because an allowlist entry waives a verdict about a value the reader
+  RESOLVED and there is no verdict to waive when nothing resolved — silencing an
+  unresolvable construct is the silent pass the whole inversion exists to
+  remove, and the entry would have to name its subject by line or raw text,
+  which is the brittle inventory pin this gate refuses to become. The
+  documentation is corrected instead, in all three places, with the real
+  remedies (block style; a resolvable spelling — `shell: "bash -e {0}"` quoted
+  resolves and lifts where the same value unquoted does not; or one reviewed
+  widening of `resolve_scalar`). A test now pins both directions, so the
+  paragraph cannot drift from the code again.
 - A third gate closing a structural hole in the enforced secret scans:
   `scripts/ci/commit_identity_contract.py`, wired into `pr-gate.yml`'s
   `security` job and covered by `scripts/ci/test_commit_identity_contract.py`
