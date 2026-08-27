@@ -256,7 +256,12 @@ def report(commits: list[Commit], allowlist: dict[tuple[str, str], str]) -> list
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    # `__doc__` is `str | None` to a type checker (`-OO` strips docstrings),
+    # so the unguarded `.splitlines()` was a reportOptionalMemberAccess this
+    # file introduced.
+    parser = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0] if __doc__ else None
+    )
     parser.add_argument("--repository", default=".", type=Path)
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", required=True)

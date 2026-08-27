@@ -14,11 +14,11 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - Two CI gates over string-typed interfaces nothing was checking. Both pin
   BEHAVIOUR rather than inventory, and each refusal prints the exact one-line
   allowlist entry that lifts it.
-  `scripts/ci/test_subcommand_callers.py` (10 tests) proves every subcommand
+  `scripts/ci/test_subcommand_callers.py` (11 tests) proves every subcommand
   `release_contract.py` registers is reachable from the repository that ships
   it. It reads the 27 names off the live `argparse` parser — never a
-  hand-maintained list — and sweeps 39 comment-stripped files (6 workflow, 15
-  script, 10 doc, 8 test at this head) for each as a BARE TOKEN, ignoring line
+  hand-maintained list — and sweeps 40 comment-stripped files (6 workflow, 16
+  script, 9 doc, 9 test at this head) for each as a BARE TOKEN, ignoring line
   structure entirely. That last part is the whole point: the near-miss this gate
   was built for was an audit reporting `release-record` dead because its
   invocation in `release-publisher.yml` is wrapped with a trailing backslash, so
@@ -27,12 +27,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   zero callers of any tier and, separately, on test-only reachability; one
   subcommand trips the second refusal today (`immutable-settings`) and is
   allowlisted with its reason.
-  `scripts/ci/test_workflow_integrity.py` (9 tests) refuses three constructs in
+  `scripts/ci/test_workflow_integrity.py` (17 tests) refuses three constructs in
   `.github/workflows/` that silently change what a gate MEANS rather than what
   it does: `continue-on-error: true` on the required-checks set, a step-level
   `env:` key that shadows an outer declaration or redeclares one of the six tool
   pins `install-tools.sh` owns, and a custom `shell:` on a required-check step.
-  It resolves all 6 workflow files into 13 jobs and 89 steps through its own
+  It resolves all 6 workflow files into 13 jobs and 90 steps through its own
   fail-closed structural reader — a workflow it cannot read fails the suite
   rather than passing quietly — and derives the 7-job required-checks set from
   `EXPECTED_MAIN_JOBS` and `EXPECTED_CODEQL_JOBS`, never re-listing it, so it
@@ -40,15 +40,39 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   Neither gate carries a closed inventory, deliberately: there is no "exactly
   these N subcommands", no step or job census, and no env-key list, so adding a
   step, a job, an env key or a subcommand needs no edit to either file. Both
-  allowlists ratchet shut — an entry naming a subject that does not exist, or
-  one whose subject has since grown a real caller, is a hard error — and both
-  ship with a reason column the parser refuses to accept blank.
-  `scripts/ci/workflow-integrity-allowlist.txt` ships empty because nothing
-  needed waiving to reach green. Both suites run under `pr-gate.yml`'s existing
-  wildcard discovery (`-p 'test_*.py'`) with no workflow edit. Together the two
-  suites were driven against 47 hostile mutations — every rule, every reader
-  branch, every allowlist refusal, plus four checks that pasting the printed
-  lift line really does turn the refusal green — with zero survivors.
+  allowlists ratchet shut in both directions — an entry naming a subject that
+  does not exist, or whose subject no longer carries the construct it exempts,
+  is a hard error — and both ship with a reason column the parser refuses to
+  accept blank. `scripts/ci/workflow-integrity-allowlist.txt` ships empty
+  because nothing needed waiving to reach green, so both ratchets are driven by
+  fixtures rather than left vacuous. Both suites run under `pr-gate.yml`'s
+  existing wildcard discovery (`-p 'test_*.py'`) with no workflow edit.
+  Together the three suites were driven against 54 hostile mutations with zero
+  survivors, under a harness that reports a selection matching zero tests as a
+  fault rather than counting it as a kill.
+  Two classes of defect were found by the adversarial review of this entry's
+  own first head and repaired here, both of the same shape — a check that looks
+  strict, reads as strict, and refuses nothing.
+  First, the structural reader accepted a step only when the item line was
+  `- <key>: …`, so seven other VALID shapes — a bare `-` with the keys below it,
+  a sequence indented level with its own `steps:` key, a wider gap after the
+  dash, a comment between the dash and the first key, quoted keys, and the
+  flow/anchor forms — were skipped whole. A skipped step is invisible to all
+  three rules, so `continue-on-error: true`, `shell: sh`, and a shadowed pin
+  each stayed GREEN while `actionlint` returned rc=0 and the runner would have
+  executed them. The reader now derives the sequence indent from its first item
+  and each step's property column from where its first key lands, and REFUSES
+  the constructs it cannot resolve (flow mappings and sequences, anchors,
+  aliases, merge keys, multi-document files) rather than skipping them. The
+  boundary is written down in the module docstring and pinned shape by shape by
+  a fixture, each shape differential-tested against a real YAML parser.
+  Second, six of the rules could be DELETED OUTRIGHT with the suite staying
+  green: every workflow and subcommand here is clean, so no shipped input ever
+  reached a refusal. The rules were correct — mutating the real files fires each
+  one — but their removal was undetectable, which makes a rule a comment.
+  Fixtures now drive all three workflow rules, both subcommand rules, and both
+  allowlist ratchets to a real refusal and back through their printed lift line,
+  with a positive control on each so none can pass by refusing everything.
 - A third gate closing a structural hole in the enforced secret scans:
   `scripts/ci/commit_identity_contract.py`, wired into `pr-gate.yml`'s
   `security` job and covered by `scripts/ci/test_commit_identity_contract.py`

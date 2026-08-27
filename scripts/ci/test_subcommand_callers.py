@@ -402,6 +402,139 @@ class SubcommandCallerTests(unittest.TestCase):
                     + lift_instruction(name, "<why test-only reachability is correct here>")
                 )
 
+    def _drive(self, method: str, names, files, allowlist=None) -> str:
+        """Run ONE shipped rule over synthetic inputs; return its message.
+
+        Returns the refusal message, or `""` when the rule passed -- a plain
+        `str` rather than `str | None` so callers can assert on the message
+        without an Optional narrowing dance a type checker does not follow.
+
+        Shadowing `names`/`files`/`allowlist` on a fresh instance drives the
+        SHIPPED rule rather than a copy of its logic -- a reimplementation here
+        would stay green while the real rule was deleted, which is the failure
+        this fixture exists to close. `subTest` is inert outside a runner, so a
+        refusal propagates instead of being swallowed.
+        """
+        probe = SubcommandCallerTests(method)
+        probe.names = names
+        probe.files = files
+        probe.allowlist = {} if allowlist is None else allowlist
+        try:
+            getattr(probe, method)()
+        except probe.failureException as failure:
+            return str(failure)
+        return ""
+
+    def test_the_zero_caller_rule_refuses_an_uncalled_subcommand(self):
+        """Reach the zero-caller refusal, which no real input reaches.
+
+        Every registered subcommand has a real caller today, so nothing drove
+        this rule's `self.fail` and it could be DELETED OUTRIGHT with the suite
+        staying green. Its test-only sibling was fine -- `immutable-settings`
+        trips that one for real -- and the gap was never extended upward. The
+        0.1.49 review caught it.
+
+        The paired live row is the positive control: without it, a rule mutated
+        into always-failing would satisfy the refusal assertion and look like
+        proof.
+        """
+        uncalled = "a-subcommand-nothing-calls-4b17ca"
+        called = "a-subcommand-something-calls-4b17ca"
+        files = {
+            ROOT / ".github" / "workflows" / "synthetic.yml": (
+                "workflow", f"run: release_contract.py {called}\n"
+            ),
+        }
+        message = self._drive(
+            "test_every_subcommand_has_at_least_one_caller", [uncalled], files
+        )
+        self.assertTrue(message, "an uncalled subcommand was not refused")
+        self.assertIn(uncalled, message)
+        self.assertIn("no workflow, script, doc, or test", message)
+        self.assertIn("To lift this refusal", message)
+        # Positive control: a subcommand a workflow really names passes.
+        self.assertEqual(
+            self._drive("test_every_subcommand_has_at_least_one_caller", [called], files), ""
+        )
+        # And the allowlist lifts the refusal, through one line naming it.
+        self.assertEqual(
+            self._drive(
+                "test_every_subcommand_has_at_least_one_caller",
+                [uncalled],
+                files,
+                {uncalled: "a written reason"},
+            ),
+            "",
+        )
+        # An entry naming a DIFFERENT subcommand must not lift it.
+        self.assertTrue(
+            self._drive(
+                "test_every_subcommand_has_at_least_one_caller",
+                [uncalled],
+                files,
+                {called: "a written reason"},
+            )
+        )
+
+    def test_the_test_only_rule_refuses_a_test_reachable_subcommand(self):
+        """Reach the test-only refusal, which the shipped tree also cannot reach.
+
+        This one looks reachable and is not. Exactly one subcommand is test-only
+        today -- `immutable-settings` -- and it is ALLOWLISTED, so the rule
+        short-circuits on `name in self.allowlist` before its `self.fail` and
+        the refusal could be deleted with the suite staying green. Dropping the
+        allowlist entry does turn the suite red, which proves the rule correct
+        but says nothing about whether the rule still exists.
+
+        That is the same surviving-mutant class as the zero-caller rule above,
+        one allowlist entry further along, and it was found while re-running the
+        matrix for the 0.1.49 review's finding 2 rather than by that review.
+        """
+        name = "a-subcommand-only-a-test-calls-4b17ca"
+        test_only = {
+            HERE / "test_synthetic.py": ("test", f'RC.main(["{name}"])\n'),
+        }
+        message = self._drive(
+            "test_no_subcommand_is_reachable_only_from_a_test", [name], test_only
+        )
+        self.assertTrue(message, "a test-only subcommand was not refused")
+        self.assertIn(name, message)
+        self.assertIn("named only by tests", message)
+        self.assertIn("To lift this refusal", message)
+        # Positive control: one real workflow caller and the rule passes, so
+        # this cannot be a rule that refuses everything.
+        also_called = dict(test_only)
+        also_called[ROOT / ".github" / "workflows" / "synthetic.yml"] = (
+            "workflow", f"run: release_contract.py {name}\n"
+        )
+        self.assertEqual(
+            self._drive(
+                "test_no_subcommand_is_reachable_only_from_a_test", [name], also_called
+            ),
+            "",
+        )
+        # A doc-tier caller is the documented legitimate fix, so it must pass too.
+        documented = dict(test_only)
+        documented[ROOT / "docs" / "synthetic.md"] = (
+            "doc", f"Run `release_contract.py {name}` by hand.\n"
+        )
+        self.assertEqual(
+            self._drive(
+                "test_no_subcommand_is_reachable_only_from_a_test", [name], documented
+            ),
+            "",
+        )
+        # And the allowlist lifts it, through one line naming it.
+        self.assertEqual(
+            self._drive(
+                "test_no_subcommand_is_reachable_only_from_a_test",
+                [name],
+                test_only,
+                {name: "a written reason"},
+            ),
+            "",
+        )
+
     def test_allowlist_entries_name_real_subcommands(self):
         """A stale name in the allowlist silences a gate for nothing."""
         for name in sorted(self.allowlist):

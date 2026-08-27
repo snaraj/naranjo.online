@@ -65,6 +65,43 @@ carries a small structural reader that understands exactly what these rules
 need: indentation, block scalars, and comments. It fails CLOSED -- a workflow
 it cannot resolve into jobs and steps fails the suite rather than passing
 quietly, which is the only safe direction for a reader a gate depends on.
+
+THE READER'S BOUNDARY -- the part that bites, so do not re-derive it by hand.
+A reader that SKIPS what it does not understand is worse than no reader: the
+skipped construct is invisible to every rule, so the gate reports green on
+precisely the thing it exists to refuse, while looking strict to a reviewer.
+The 0.1.49 review found exactly that, and the boundary below is the repair.
+Every shape here was differential-tested against a real YAML parser;
+`test_the_reader_resolves_every_step_shape_a_real_parser_accepts` and
+`test_the_reader_refuses_what_it_cannot_resolve` are the executable copy of
+this table, so extending one means extending the other.
+
+READ CORRECTLY (all block style, all confirmed equivalent to a real parser):
+
+  - `- name: x` -- the canonical item, and the only shape this repository
+    actually writes today.
+  - `-` alone with the step's keys on the following lines, at any deeper
+    indent. Valid YAML, `actionlint` rc=0, and the runner executes it.
+  - a sequence indented LEVEL with its own `steps:` key rather than deeper.
+    This is the more common style in the wild; that no workflow here uses it
+    is a habit, not a boundary.
+  - a wider gap after the dash (`-   name: x`): the step's property column is
+    derived from where its first key actually sits, never a fixed `+ 2`.
+  - a comment between the dash and the first key.
+  - quoted keys (`"name": x`).
+  - quoted scalar values (`continue-on-error: "true"`), which rule 1
+    normalises before comparing.
+  - block scalars in every spelling (`|`, `>`, `|-`, `|2`): their bodies are
+    skipped whole, so shell text that merely LOOKS like `shell:` or `env:` is
+    never mistaken for structure.
+
+REFUSED, LOUDLY, because the reader cannot resolve them (see
+`_refuse_unresolvable`): flow mappings and flow sequences in any position a
+rule depends on (`- {name: x}`, `steps: [...]`, `env: {...}`), YAML anchors
+and aliases, merge keys (`<<:`), and multi-document files. Each raises rather
+than returning a partial answer -- a partial answer is the silent pass. None
+of these appears in any workflow here, and GitHub Actions accepts block style
+everywhere, so the refusal costs nothing and closes the whole class at once.
 """
 
 from __future__ import annotations
@@ -91,6 +128,14 @@ SPEC.loader.exec_module(RC)
 
 RULES = ("continue-on-error", "env-shadow", "custom-shell")
 BLOCK_SCALAR = re.compile(r":\s*[|>][+-]?\d*\s*$")
+
+# A YAML node this reader does not resolve: a flow mapping or flow sequence,
+# an anchor, or an alias. Matched only in positions the three rules depend
+# on -- never blanket-scanned, because `permissions: {}` is a flow mapping on
+# every job in this repository and is none of this gate's business.
+UNRESOLVABLE_NODE = re.compile(r"^[\[{&*]")
+MERGE_KEY = re.compile(r"^<<\s*:")
+DOCUMENT_SEPARATOR = "---"
 
 
 # --------------------------------------------------------------------------
@@ -180,12 +225,69 @@ def structural_lines(text: str) -> list[tuple[int, int, str]]:
     return out
 
 
+KEY = re.compile(
+    r"""^(?:"([A-Za-z_][\w.-]*)"|'([A-Za-z_][\w.-]*)'|([A-Za-z_][\w.-]*))\s*:\s*(.*)$"""
+)
+
+
 def _key(content: str) -> tuple[str, str] | None:
-    """Split `key: value` into (key, value); None when the line is not a key."""
-    match = re.match(r"^([A-Za-z_][\w.-]*)\s*:\s*(.*)$", content)
+    """Split `key: value` into (key, value); None when the line is not a key.
+
+    Quoted key spellings (`"name":`, `'shell':`) resolve to the same name a
+    real parser gives them. An unquoted-only reader saw `"shell": sh` as a
+    non-key and dropped the step's shell silently.
+    """
+    match = KEY.match(content)
     if not match:
         return None
-    return match.group(1), match.group(2).strip()
+    return (match.group(1) or match.group(2) or match.group(3)), match.group(4).strip()
+
+
+def _refuse_unresolvable(path: Path, lineno: int, construct: str, detail: str) -> None:
+    """Fail the suite on a construct the reader cannot resolve.
+
+    The alternative -- skipping it -- is what the 0.1.49 review caught: an
+    unresolved step is invisible to all three rules, so the gate passes on the
+    exact construct it exists to refuse while still reading as strict. Refusing
+    is the only safe direction for a reader a gate depends on.
+    """
+    raise AssertionError(
+        f"{path.relative_to(ROOT)}:{lineno}: the structural reader cannot resolve "
+        f"{construct}. {detail} This reader is BLOCK-style only, and it refuses "
+        f"what it cannot resolve rather than skipping it: a skipped construct is "
+        f"invisible to every rule in this file, which is a silent pass on exactly "
+        f"what the rule refuses. Rewrite it in block style -- GitHub Actions "
+        f"accepts that form in every one of these positions."
+    )
+
+
+def _is_item(content: str) -> bool:
+    """A block-sequence item: `- value`, or a bare `-` carrying its body below."""
+    return content == "-" or content.startswith("- ")
+
+
+def _item_indent(rows: list[tuple[int, int, str]], at: int, parent_indent: int) -> int | None:
+    """Indent of the block sequence under `rows[at]`, or None when there is none.
+
+    YAML lets a sequence sit at the SAME indent as the key that owns it, and
+    that is the commoner style in the wild; every workflow here happens to use
+    the deeper one. Deriving the indent from the first item reads both, so
+    "the style we happen to write" stops being a boundary of what the gate sees.
+    """
+    for _, indent, content in rows[at + 1 :]:
+        if indent < parent_indent or not _is_item(content):
+            return None
+        return indent
+    return None
+
+
+def _first_deeper_indent(rows: list[tuple[int, int, str]], position: int, floor: int) -> int:
+    """The indent of the row nested under `rows[position]`, for a bare `-` item."""
+    for _, indent, _ in rows[position + 1 :]:
+        if indent > floor:
+            return indent
+        break
+    return floor + 2
 
 
 def _mapping_keys(rows: list[tuple[int, int, str]], start: int, indent: int) -> dict[str, int]:
@@ -221,16 +323,39 @@ def parse_workflow(text: str, path: Path) -> Workflow:
     rows = structural_lines(text)
     workflow = Workflow(path=path)
 
-    for position, (_, indent, content) in enumerate(rows):
+    seen_content = False
+    for position, (lineno, indent, content) in enumerate(rows):
+        if content == DOCUMENT_SEPARATOR:
+            # A second document would be merged into the first by this reader
+            # while a real parser -- and the runner -- read only the first. A
+            # benign later `jobs:` would then overwrite a dangerous earlier one.
+            if seen_content:
+                _refuse_unresolvable(
+                    path, lineno, "a second YAML document in this file",
+                    "The runner reads only the first; merging them here would let "
+                    "a later job definition mask an earlier one.",
+                )
+            continue
+        seen_content = True
         if indent != 0:
             continue
         parsed = _key(content)
         if not parsed:
             continue
         key, value = parsed
-        if key == "env" and not value:
+        if key == "env":
+            if value:
+                _refuse_unresolvable(
+                    path, lineno, "the workflow-level `env:` value",
+                    "An inline `env:` hides the outer declarations rule 2 compares "
+                    "step keys against, so a shadowed pin would read as no shadow.",
+                )
             workflow.env = _mapping_keys(rows, position + 1, _child_indent(rows, position))
-        elif key == "jobs" and not value:
+        elif key == "jobs":
+            if value:
+                _refuse_unresolvable(
+                    path, lineno, "the `jobs:` value", "It is not a block mapping."
+                )
             _read_jobs(rows, position, workflow)
 
     if not workflow.jobs:
@@ -259,41 +384,103 @@ def _read_jobs(rows: list[tuple[int, int, str]], jobs_at: int, workflow: Workflo
         if indent != job_indent:
             continue
         parsed = _key(content)
-        if not parsed or parsed[1]:
+        if not parsed:
+            continue
+        if parsed[1]:
+            if UNRESOLVABLE_NODE.match(parsed[1]):
+                _refuse_unresolvable(
+                    workflow.path, lineno, f"job {parsed[0]!r}",
+                    "It is an anchor, an alias, or a flow node, so its steps cannot "
+                    "be resolved and every rule below would see an empty job.",
+                )
             continue
         job = Job(name=parsed[0], line=lineno)
-        _read_job_body(rows, position, job_indent, job)
+        _read_job_body(rows, position, job_indent, job, workflow.path)
         workflow.jobs[job.name] = job
 
 
-def _read_job_body(rows, job_at: int, job_indent: int, job: Job) -> None:
+def _read_job_body(rows, job_at: int, job_indent: int, job: Job, path: Path) -> None:
     prop_indent = _child_indent(rows, job_at)
     for position, (lineno, indent, content) in enumerate(rows[job_at + 1 :], start=job_at + 1):
         if indent <= job_indent:
             break
         if indent != prop_indent:
             continue
+        if MERGE_KEY.match(content):
+            _refuse_unresolvable(
+                path, lineno, f"the merge key in job {job.name!r}",
+                "Merged keys are not expanded here, so a merged-in "
+                "`continue-on-error`, `env`, or `steps` would be invisible.",
+            )
         parsed = _key(content)
         if not parsed:
             continue
         key, value = parsed
         if key == "continue-on-error":
+            if UNRESOLVABLE_NODE.match(value):
+                _refuse_unresolvable(
+                    path, lineno, f"the `continue-on-error:` value in job {job.name!r}",
+                    "An alias or flow node is not resolved, so a value of `true` "
+                    "reached through one would not be compared against.",
+                )
             job.continue_on_error = (value, lineno)
-        elif key == "env" and not value:
+        elif key == "env":
+            if value:
+                _refuse_unresolvable(
+                    path, lineno, f"the inline `env:` in job {job.name!r}",
+                    "Rule 2 compares step keys against this declaration; an "
+                    "unresolved one reads as no declaration, so nothing shadows it.",
+                )
             job.env = _mapping_keys(rows, position + 1, _child_indent(rows, position))
-        elif key == "steps" and not value:
-            _read_steps(rows, position, prop_indent, job)
+        elif key == "steps":
+            if value:
+                _refuse_unresolvable(
+                    path, lineno, f"the inline `steps:` in job {job.name!r}",
+                    "A flow sequence or alias of steps resolves to no steps here, "
+                    "so every step in the job would evade all three rules.",
+                )
+            _read_steps(rows, position, prop_indent, job, path)
 
 
-def _read_steps(rows, steps_at: int, prop_indent: int, job: Job) -> None:
-    """Read the step list. Items start with `- `; properties align after it."""
+def _read_steps(rows, steps_at: int, prop_indent: int, job: Job, path: Path) -> None:
+    """Read the step list.
+
+    Items are located by the SEQUENCE's own indent, derived from its first
+    item, and each step's properties by the column its first key actually sits
+    in -- never by a fixed `+ 2` from the dash and never by assuming the
+    sequence is indented deeper than its key. Three valid shapes broke the
+    fixed-offset reader, each making the step, and therefore every rule below,
+    invisible: a bare `-` with the keys on the following lines, a sequence
+    level with its own `steps:` key, and a wider gap after the dash. All three
+    pass `actionlint` at rc=0 and all three run. See the module docstring's
+    boundary table for the full set, and the differential-parser fixture that
+    pins it.
+    """
+    item_indent = _item_indent(rows, steps_at, prop_indent)
+    if item_indent is None:
+        return
     for position, (lineno, indent, content) in enumerate(rows[steps_at + 1 :], start=steps_at + 1):
-        if indent <= prop_indent:
+        if indent < item_indent:
             break
-        if not content.startswith("- "):
-            continue
-        step_indent = indent + 2
-        first = _key(content[2:].strip())
+        if indent == item_indent and not _is_item(content):
+            break  # the sequence ended; this is the job's next property
+        if indent != item_indent:
+            continue  # a property line of the step already being read
+        inline = content[1:].lstrip(" ")
+        if UNRESOLVABLE_NODE.match(inline):
+            _refuse_unresolvable(
+                path, lineno, f"the step item `{content}` in job {job.name!r}",
+                "A flow-mapping, anchored, or aliased step is not resolved into "
+                "its keys, so it would evade all three rules.",
+            )
+        # The property column is where the first key LANDS, so `-   name: x`
+        # reads the same as `- name: x` instead of losing every later key.
+        step_indent = (
+            indent + 1 + (len(content) - 1 - len(inline))
+            if inline
+            else _first_deeper_indent(rows, position, item_indent)
+        )
+        first = _key(inline) if inline else None
         step = Step(name=(first[1].strip("\"'") if first and first[0] == "name" else ""), line=lineno)
         # A step written as `- shell: sh` carries the key on the item line
         # itself, so that line IS the key's line.
@@ -308,17 +495,35 @@ def _read_steps(rows, steps_at: int, prop_indent: int, job: Job) -> None:
                 break
             if inner_indent != step_indent:
                 continue
+            if MERGE_KEY.match(inner_content):
+                _refuse_unresolvable(
+                    path, inner_line, f"the merge key in step {step.name or lineno!r}",
+                    "Merged keys are not expanded, so a merged-in `shell`, "
+                    "`continue-on-error`, or `env` would never be seen.",
+                )
             parsed = _key(inner_content)
             if not parsed:
                 continue
             key, value = parsed
             if key == "name" and not step.name:
                 step.name = value.strip("\"'")
+            elif key in ("shell", "continue-on-error") and UNRESOLVABLE_NODE.match(value):
+                _refuse_unresolvable(
+                    path, inner_line, f"the `{key}:` value in step {step.name or lineno!r}",
+                    "An alias or flow node is not resolved, so the value this rule "
+                    "compares against would be the alias text, never its target.",
+                )
             elif key == "shell":
                 step.shell = (value, inner_line)
             elif key == "continue-on-error":
                 step.continue_on_error = (value, inner_line)
-            elif key == "env" and not value:
+            elif key == "env":
+                if value:
+                    _refuse_unresolvable(
+                        path, inner_line, f"the inline `env:` in step {step.name or lineno!r}",
+                        "Rule 2 reads this mapping's KEYS; an unresolved one reads "
+                        "as an empty step env, so nothing it declares can shadow.",
+                    )
                 step.env = _mapping_keys(rows, inner + 1, _child_indent(rows, inner))
         if not step.name:
             step.name = f"<unnamed step at line {lineno}>"
@@ -395,6 +600,57 @@ def read_allowlist(text: str | None = None) -> dict[tuple[str, str, str], str]:
             )
         entries[(workflow, rule, where)] = reason
     return entries
+
+
+def stale_reason(
+    workflows: list[Workflow], workflow_name: str, rule: str, where: str
+) -> str | None:
+    """Why this allowlist entry protects nothing any more, or None if it is live.
+
+    A lift mechanism must ratchet SHUT as well as open. Checking only that the
+    WORKFLOW field names a real file lets an entry outlive its subject: the
+    exempted step is renamed or deleted, the line stays, and it silently
+    pre-authorises whatever later takes that name. `subcommand-callers-
+    allowlist.txt` already refuses both a subject that does not exist and one
+    that no longer needs exempting; this is the same contract for this file,
+    which the 0.1.49 changelog claimed and only half delivered.
+
+    `where` is `<job>`, `<job>/<step>`, or `<job>/<step>/<key>` by rule.
+    """
+    workflow = next((w for w in workflows if w.name == workflow_name), None)
+    if workflow is None:
+        return None  # already refused by test_allowlist_entries_name_real_workflows
+    job_name, _, rest = where.partition("/")
+    job = workflow.jobs.get(job_name)
+    if job is None:
+        return f"names job {job_name!r}, which {workflow_name} does not declare"
+
+    if rule == "continue-on-error" and not rest:
+        if job.continue_on_error is None:
+            return f"exempts `continue-on-error` on job {job_name!r}, which does not set it"
+        return None
+
+    step_name, key = rest, ""
+    if rule == "env-shadow":
+        # The KEY is the last segment; a step name may itself contain a slash.
+        # Key off the SEPARATOR, not the key: `rpartition` on a `<job>/<step>`
+        # subject puts the step name in `key` and leaves the step name empty,
+        # which reads as a plausible parse of a malformed entry.
+        step_name, separator, key = rest.rpartition("/")
+        if not separator:
+            return "is missing the `<job>/<step>/<key>` subject the env-shadow rule needs"
+    if not step_name:
+        return f"names no step in job {job_name!r}"
+    step = next((s for s in job.steps if s.name == step_name), None)
+    if step is None:
+        return f"names step {step_name!r}, which job {job_name!r} does not have"
+    if rule == "continue-on-error" and step.continue_on_error is None:
+        return f"exempts `continue-on-error` on step {step_name!r}, which does not set it"
+    if rule == "custom-shell" and step.shell is None:
+        return f"exempts `shell:` on step {step_name!r}, which does not set one"
+    if rule == "env-shadow" and key not in step.env:
+        return f"exempts `env: {key}` on step {step_name!r}, which does not declare it"
+    return None
 
 
 def lift_instruction(workflow: str, rule: str, where: str) -> str:
@@ -508,6 +764,252 @@ class WorkflowIntegrityTests(unittest.TestCase):
         # here is written that way today, which is why the branch survived the
         # 0.1.49 mutation sweep until this fixture landed.
         self.assertEqual(job.steps[1].name, "Named On An Inner Line")
+
+    # -- the reader's boundary, pinned shape by shape -------------------------
+
+    # Every entry was differential-tested against a real YAML parser: the
+    # reader's resolution equals the parser's for each shape below. This table
+    # is the executable copy of the module docstring's boundary; extending one
+    # means extending the other. `python3 -I` has no `yaml` module, so the
+    # comparison cannot run here -- the EXPECTATIONS are what that comparison
+    # produced, and re-deriving them means re-running it, not guessing.
+    STEP_SHAPES = {
+        "canonical `- name:`":
+            ("      - name: Probe\n        shell: sh\n", "Probe", "sh"),
+        "bare dash, keys below":
+            ("      -\n        name: Probe\n        shell: sh\n", "Probe", "sh"),
+        "sequence level with its `steps:` key":
+            ("    - name: Probe\n      shell: sh\n", "Probe", "sh"),
+        "wider gap after the dash":
+            ("      -   name: Probe\n          shell: sh\n", "Probe", "sh"),
+        "comment between dash and first key":
+            ("      -\n        # a comment\n        name: Probe\n        shell: sh\n",
+             "Probe", "sh"),
+        "quoted keys":
+            ('      - "name": Probe\n        "shell": sh\n', "Probe", "sh"),
+        "single-quoted step name":
+            ("      - name: 'Probe'\n        shell: sh\n", "Probe", "sh"),
+        "shell on the item line itself":
+            ("      - shell: sh\n        name: Probe\n", "Probe", "sh"),
+        "block scalar body is not structure":
+            ("      - name: Probe\n        shell: sh\n        run: |\n"
+             "          shell: hidden\n          env:\n            NOT_A_KEY: 1\n",
+             "Probe", "sh"),
+        "folded block scalar body":
+            ("      - name: Probe\n        shell: sh\n        run: >\n"
+             "          echo shell: hidden\n", "Probe", "sh"),
+        "explicitly indented block scalar":
+            ("      - name: Probe\n        shell: sh\n        run: |2\n"
+             "          echo hi\n", "Probe", "sh"),
+        "quoted scalar value":
+            ("      - name: Probe\n        shell: 'sh'\n", "Probe", "'sh'"),
+    }
+
+    UNRESOLVABLE_SHAPES = {
+        "flow-mapping step item": "      - {name: Probe, shell: sh}\n",
+        "aliased step item": "      - *a_step\n",
+        "anchored step item": "      - &a_step\n        name: Probe\n",
+        "merge key inside a step": "      - name: Probe\n        <<: *defaults\n",
+        "inline step env": "      - name: Probe\n        env: {A: 1}\n",
+    }
+
+    def test_the_reader_resolves_every_step_shape_a_real_parser_accepts(self):
+        """Read each valid shape the way a real YAML parser reads it.
+
+        A reader that SKIPS a shape it does not understand is the worst kind of
+        gate: the skipped step is invisible to all three rules, so the suite is
+        green on exactly the construct being refused, while still reading as
+        strict to a reviewer. The 0.1.49 review found one such shape; a
+        differential sweep against a real parser found that the fixed `+ 2`
+        offset and the `- `-prefix test between them hid SIX more. Each shape
+        here is valid YAML that `actionlint` accepts at rc=0 and the runner
+        executes.
+        """
+        for label, (item, name, shell) in self.STEP_SHAPES.items():
+            with self.subTest(shape=label):
+                job = _parse_synthetic("jobs:\n  gate:\n    steps:\n" + item).jobs["gate"]
+                self.assertEqual(len(job.steps), 1, "the step was not resolved")
+                self.assertEqual(job.steps[0].name, name)
+                resolved = job.steps[0].shell
+                # The first assertion carries the check; the `else ""` exists
+                # only so a type checker can follow the narrowing.
+                self.assertIsNotNone(resolved, "the step's shell was dropped")
+                self.assertEqual(resolved[0] if resolved else "", shell)
+
+    def test_the_reader_refuses_what_it_cannot_resolve(self):
+        """Fail closed rather than skip, for every shape outside the boundary.
+
+        These are resolvable by a real parser and NOT by this reader. Returning
+        a partial answer for them is the silent pass; refusing is the only safe
+        direction, costs nothing (no workflow here uses one), and leaves a
+        message naming the construct.
+        """
+        for label, item in self.UNRESOLVABLE_SHAPES.items():
+            with self.subTest(shape=label):
+                with self.assertRaises(AssertionError) as caught:
+                    _parse_synthetic("jobs:\n  gate:\n    steps:\n" + item)
+                self.assertIn("cannot resolve", str(caught.exception))
+        # Whole-file and job-level shapes, same rule.
+        for label, text in (
+            ("inline steps:", "jobs:\n  gate:\n    steps: [{name: Probe}]\n"),
+            ("aliased job", "jobs:\n  gate: *template\n"),
+            ("inline job env", "jobs:\n  gate:\n    env: {A: 1}\n    steps:\n      - name: P\n"),
+            ("inline workflow env", "env: {A: 1}\njobs:\n  gate:\n    steps:\n      - name: P\n"),
+            ("merge key in a job", "jobs:\n  gate:\n    <<: *d\n    steps:\n      - name: P\n"),
+            ("second document",
+             "jobs:\n  gate:\n    steps:\n      - name: P\n---\njobs:\n  gate:\n"
+             "    steps:\n      - name: Q\n"),
+        ):
+            with self.subTest(shape=label):
+                with self.assertRaises(AssertionError) as caught:
+                    _parse_synthetic(text)
+                self.assertIn("cannot resolve", str(caught.exception))
+
+    def test_a_run_block_heredoc_is_not_a_merge_key(self):
+        """The positive control for the merge-key refusal.
+
+        `release-after-main.yml` is full of `jq … <<<"${x}"` inside `run:`
+        blocks. Block-scalar skipping must keep those out of the reader, or the
+        refusal above would red the suite on shell text. The real sweep in
+        `setUpClass` covers this, but only while those files keep that shape.
+        """
+        job = _parse_synthetic(
+            "jobs:\n  gate:\n    steps:\n      - name: Probe\n        run: |\n"
+            '          class="$(jq -er .class <<<"${verdict}")"\n'
+        ).jobs["gate"]
+        self.assertEqual([step.name for step in job.steps], ["Probe"])
+
+    # -- every rule must be REACHABLE, not merely correct --------------------
+
+    def _drive(self, method: str, text: str, allowlist=None) -> str:
+        """Run ONE shipped rule over a synthetic workflow; return its message.
+
+        Returns the refusal message, or `""` when the rule passed -- a plain
+        `str` rather than `str | None` so callers can assert on the message
+        without an Optional narrowing dance a type checker does not follow.
+
+        `parse_workflow(..., WORKFLOWS / "pr-gate.yml")` is the whole seam: the
+        path decides `required_jobs()`, so a synthetic job named like a real
+        required one lands inside the set the rules are scoped by. Shadowing
+        `workflows` and `allowlist` on a fresh instance drives the SHIPPED rule
+        methods rather than a copy of their logic -- a reimplementation here
+        would pass while the real rule was deleted, which is the very failure
+        these fixtures exist to close. No production code exists to make this
+        reachable.
+        """
+        probe = WorkflowIntegrityTests(method)
+        probe.workflows = [parse_workflow(text, WORKFLOWS / "pr-gate.yml")]
+        probe.allowlist = {} if allowlist is None else allowlist
+        try:
+            getattr(probe, method)()
+        except probe.failureException as failure:
+            return str(failure)
+        return ""
+
+    # `application` is a real `EXPECTED_MAIN_JOBS` entry, so these fixtures are
+    # inside the required-checks set exactly as a real offending job would be.
+    CONTINUE_ON_ERROR_JOB = (
+        "jobs:\n  application:\n    continue-on-error: true\n"
+        "    steps:\n      - name: Probe\n        run: exit 1\n"
+    )
+    CONTINUE_ON_ERROR_STEP = (
+        "jobs:\n  application:\n    steps:\n"
+        "      - name: Probe\n        continue-on-error: true\n        run: exit 1\n"
+    )
+    ENV_SHADOW = (
+        "jobs:\n  application:\n    env:\n      GO_COVERAGE_FLOOR: 93.2\n"
+        "    steps:\n      - name: Probe\n        env:\n          GO_COVERAGE_FLOOR: 0\n"
+    )
+    ENV_PINNED_TOOL = (
+        "jobs:\n  application:\n    steps:\n"
+        "      - name: Probe\n        env:\n          GITLEAKS_VERSION: 0.0.0\n"
+    )
+    CUSTOM_SHELL = (
+        "jobs:\n  application:\n    steps:\n      - name: Probe\n        shell: sh\n"
+    )
+    CLEAN = "jobs:\n  application:\n    steps:\n      - name: Probe\n        run: true\n"
+
+    def test_every_rule_refuses_its_own_construct(self):
+        """Drive all three rules to an actual refusal.
+
+        Every workflow in this repository is clean, so before this fixture NO
+        input reached any of the three `self.fail` calls -- each rule could be
+        DELETED OUTRIGHT with the suite staying green. The rules were correct
+        (mutating the real workflows proved each fires) but their removal was
+        undetectable, which is not a gate, it is a comment.
+
+        This is the same gap `test_the_reader_sees_a_real_step_key` closed one
+        layer down for the reader's inner-`name:` branch. It was found there
+        and not extended upward; the 0.1.49 review caught that, and these
+        fixtures are the extension.
+        """
+        for label, method, text, expected in (
+            ("rule 1 / job", "test_no_required_check_continues_on_error",
+             self.CONTINUE_ON_ERROR_JOB, "continue-on-error"),
+            ("rule 1 / step", "test_no_required_check_continues_on_error",
+             self.CONTINUE_ON_ERROR_STEP, "continue-on-error"),
+            ("rule 2 / shadows job env", "test_no_step_env_shadows_an_outer_declaration",
+             self.ENV_SHADOW, "shadows the job-level declaration"),
+            ("rule 2 / redeclares a tool pin", "test_no_step_env_shadows_an_outer_declaration",
+             self.ENV_PINNED_TOOL, "redeclares a tool pin"),
+            ("rule 3 / custom shell", "test_no_gate_step_sets_a_custom_shell",
+             self.CUSTOM_SHELL, "shell: sh"),
+        ):
+            with self.subTest(rule=label):
+                message = self._drive(method, text)
+                self.assertTrue(message, "the rule did not refuse its own construct")
+                self.assertIn(expected, message)
+                # The lift path must be printed with the refusal, or the next
+                # agent's only route past a correct refusal is to weaken it.
+                self.assertIn("To lift this refusal", message)
+
+    def test_no_rule_refuses_a_clean_workflow(self):
+        """The positive control: these fixtures fail for their construct only.
+
+        Without this, a rule mutated into always-failing would satisfy every
+        assertion above and look like proof.
+        """
+        for method in (
+            "test_no_required_check_continues_on_error",
+            "test_no_step_env_shadows_an_outer_declaration",
+            "test_no_gate_step_sets_a_custom_shell",
+        ):
+            with self.subTest(rule=method):
+                self.assertEqual(self._drive(method, self.CLEAN), "")
+
+    def test_the_allowlist_lifts_every_rule(self):
+        """Each refusal above must clear through one allowlist line, and only
+        through the line that names it.
+
+        A lift path nobody exercises is a lift path that turns out to be broken
+        on the day a real refusal needs it -- the sibling repository shipped
+        exactly that, an allowlist pinned so the documented lift reddened the
+        suite.
+        """
+        for label, method, text, entry in (
+            ("rule 1 / job", "test_no_required_check_continues_on_error",
+             self.CONTINUE_ON_ERROR_JOB, ("pr-gate.yml", "continue-on-error", "application")),
+            ("rule 1 / step", "test_no_required_check_continues_on_error",
+             self.CONTINUE_ON_ERROR_STEP,
+             ("pr-gate.yml", "continue-on-error", "application/Probe")),
+            ("rule 2 / shadow", "test_no_step_env_shadows_an_outer_declaration",
+             self.ENV_SHADOW,
+             ("pr-gate.yml", "env-shadow", "application/Probe/GO_COVERAGE_FLOOR")),
+            ("rule 3 / shell", "test_no_gate_step_sets_a_custom_shell",
+             self.CUSTOM_SHELL, ("pr-gate.yml", "custom-shell", "application/Probe")),
+        ):
+            with self.subTest(rule=label):
+                self.assertTrue(self._drive(method, text), "not refused without the entry")
+                self.assertEqual(
+                    self._drive(method, text, {entry: "a written reason"}),
+                    "",
+                    "the exempting entry did not lift the refusal",
+                )
+                wrong = (entry[0], entry[1], entry[2] + "-not-this-one")
+                self.assertTrue(
+                    self._drive(method, text, {wrong: "a written reason"}),
+                    "an entry naming a DIFFERENT subject lifted this refusal",
+                )
 
     # -- rule 1: continue-on-error ------------------------------------------
 
@@ -641,6 +1143,73 @@ class WorkflowIntegrityTests(unittest.TestCase):
                     f"which is not a workflow in {WORKFLOWS.relative_to(ROOT)}. Remove "
                     f"the line -- it protects nothing.",
                 )
+
+    def test_allowlist_entries_still_have_a_live_subject(self):
+        """The other half of the ratchet: the `<where>` subject must still exist
+        AND still carry the construct being exempted.
+
+        The test above reads the WORKFLOW field and nothing else, so an entry
+        naming a step that does not exist sat green -- while the changelog
+        claimed both allowlists ratchet shut. That was true of
+        `subcommand-callers-allowlist.txt` and only half true here.
+        """
+        for (workflow, rule, where) in sorted(self.allowlist):
+            with self.subTest(entry=f"{workflow}|{rule}|{where}"):
+                reason = stale_reason(self.workflows, workflow, rule, where)
+                self.assertIsNone(
+                    reason,
+                    f"{ALLOWLIST.relative_to(ROOT)} carries an entry that {reason}. "
+                    f"Remove the line -- it protects nothing now, and it will "
+                    f"silently pre-authorise whatever later takes that name.",
+                )
+
+    def test_the_subject_ratchet_refuses_a_stale_entry(self):
+        """Drive that ratchet, because the shipped allowlist is EMPTY.
+
+        An empty allowlist makes the loop above vacuous: the ratchet could be
+        deleted outright with the suite staying green, which is precisely the
+        surviving-mutant class the 0.1.49 review found for the three rules.
+        Each row below pairs a LIVE subject with a stale one, so the check
+        cannot pass by refusing everything either.
+        """
+        text = (
+            "jobs:\n"
+            "  application:\n"
+            "    continue-on-error: true\n"
+            "    env:\n"
+            "      GO_COVERAGE_FLOOR: 93.2\n"
+            "    steps:\n"
+            "      - name: Probe\n"
+            "        shell: sh\n"
+            "        continue-on-error: true\n"
+            "        env:\n"
+            "          GO_COVERAGE_FLOOR: 0\n"
+            "      - name: Plain\n"
+            "        run: true\n"
+        )
+        workflows = [parse_workflow(text, WORKFLOWS / "pr-gate.yml")]
+        live = (
+            ("continue-on-error", "application"),
+            ("continue-on-error", "application/Probe"),
+            ("custom-shell", "application/Probe"),
+            ("env-shadow", "application/Probe/GO_COVERAGE_FLOOR"),
+        )
+        for rule, where in live:
+            with self.subTest(live=f"{rule}|{where}"):
+                self.assertIsNone(stale_reason(workflows, "pr-gate.yml", rule, where))
+        stale = (
+            ("continue-on-error", "no-such-job", "does not declare"),
+            ("custom-shell", "application/No Such Step", "does not have"),
+            ("custom-shell", "application/Plain", "does not set one"),
+            ("continue-on-error", "application/Plain", "does not set it"),
+            ("env-shadow", "application/Probe/NOT_DECLARED", "does not declare it"),
+            ("env-shadow", "application/Probe", "is missing the"),
+        )
+        for rule, where, expected in stale:
+            with self.subTest(stale=f"{rule}|{where}"):
+                reason = stale_reason(workflows, "pr-gate.yml", rule, where)
+                self.assertIsNotNone(reason, "a stale entry was not refused")
+                self.assertIn(expected, str(reason))
 
 
 if __name__ == "__main__":
