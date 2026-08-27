@@ -30,7 +30,6 @@
   translate and nothing else, and the document's own height never moves. -->
 <script lang="ts">
   import { refreshPanels } from '../panels.ts';
-  import { closeOpenDetail } from '../tooltip.ts';
   import {
     pullMetrics,
     pullProgress,
@@ -137,19 +136,26 @@
     root.style.setProperty('--page-pull', `${distance}px`);
     if (displacing && distance > 0) {
       root.setAttribute('data-pulling', 'true');
-      /* AND THE OTHER HALF OF THAT SAME CONTAINING-BLOCK RULE. The attribute
-         above is what keeps the transform off <main> AT REST; while it is on,
-         the transform is genuinely applied and <main> genuinely becomes the
-         containing block for every `position: fixed` descendant inside it —
-         101 of them on this page, all detail cards (MEASURED at 390x844; the
-         page header is outside <main> and is unaffected, measured too). A
-         readout open across that moment is re-parented mid-gesture, and
-         lib/tooltip.ts's stated guarantee — "a fixed box is outside the
-         scrollable overflow region by construction" — is suspended for
-         exactly as long as the pull lasts. Closing it is honest rather than
-         lossy: the reader has both hands on a gesture about the whole page,
-         and the card is one tap or one arrow away afterwards. */
-      closeOpenDetail();
+      /* THE OTHER HALF OF THAT SAME CONTAINING-BLOCK RULE, and it is answered
+         by geometry rather than by code. While this attribute is on, <main>
+         genuinely IS the containing block for every `position: fixed`
+         descendant inside it — 101 of them here, every one a detail card — so
+         lib/tooltip.ts's stated guarantee ("a fixed box is outside the
+         scrollable overflow region by construction") is suspended for exactly
+         as long as the gesture lasts.
+         Nothing is affected, and that is MEASURED rather than assumed: a pull
+         engages only with the document at its top, and the nearest detail host
+         on this page sits 3055px down it — against a viewport of 1366px on the
+         tallest touch device anyone brings to this site. No card can be open
+         when the attribute goes on. The page header, the only other chrome
+         pinned to the viewport, is outside <main> entirely.
+         An earlier revision of this repair closed any open detail here. It was
+         cut because it could not fire: a guard no input can trip is decorative,
+         and its own mutant survived the lane that was supposed to pin it. The
+         property it relied on is pinned instead — the rendering lane asserts
+         that nothing fixed inside <main> is VISIBLE at the top of the
+         document, which is the day this code would be needed and the day that
+         lane goes red. */
     } else {
       root.removeAttribute('data-pulling');
     }

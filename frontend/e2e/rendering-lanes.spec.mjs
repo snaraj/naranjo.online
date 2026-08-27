@@ -6699,9 +6699,15 @@ test('an upward drag from the top is the page’s scroll, never a pull (issue 21
  *    mirror-image case. It now stands down on the SAME predicate.
  * 8. While a pull is live the transform on <main> is genuinely applied, and
  *    <main> then IS the containing block for every `position: fixed`
- *    descendant inside it — 101 of them here, every one a detail card. A
- *    readout open across that moment is re-parented mid-gesture, which is the
- *    one guarantee lib/tooltip.ts rests on. */
+ *    descendant inside it — 101 of them here, every one a detail card — so
+ *    lib/tooltip.ts's stated guarantee ("a fixed box is outside the scrollable
+ *    overflow region by construction") is suspended for the gesture. What
+ *    saves it is geometry, and geometry is what this pins: a pull engages only
+ *    at the top of the document, and NOTHING fixed inside <main> is visible
+ *    there. The day that stops being true — a fixed element added inside
+ *    <main> near the top, or the header moved into it — is the day the
+ *    gesture needs to close what it re-parents, and this lane is what says
+ *    so. */
 test('a pull claims only a downward drag, and takes no open readout with it (issue 219)', async ({
   page,
 }) => {
@@ -6709,14 +6715,53 @@ test('a pull claims only a downward drag, and takes no open readout with it (iss
   await page.setViewportSize({ width: 390, height: 844 });
   await settled(page);
 
-  // The census that makes finding 8 a measurement rather than a worry.
-  const census = await page.evaluate(() => ({
-    fixedInsideMain: [...window.document.querySelectorAll('main *')].filter(
+  /* The census that makes finding 8 a measurement rather than a worry, taken
+     at the ONLY scroll position a pull can begin from. `visible` is the whole
+     question: a hidden box being re-parented costs nothing, because its
+     position is written when it opens. */
+  const census = await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    const main = window.document.querySelector('main');
+    const fixed = [...main.querySelectorAll('*')].filter(
       (node) => window.getComputedStyle(node).position === 'fixed',
-    ).length,
-    headerInsideMain: window.document.querySelector('main .page-header') !== null,
-  }));
+    );
+    const onScreen = (node) => {
+      const style = window.getComputedStyle(node);
+      const box = node.getBoundingClientRect();
+      return (
+        style.visibility !== 'hidden' &&
+        style.display !== 'none' &&
+        box.width > 0 &&
+        box.height > 0 &&
+        box.bottom > 0 &&
+        box.top < window.innerHeight
+      );
+    };
+    const hostTops = [...window.document.querySelectorAll('.cell-tip')].map((tip) =>
+      Math.round(tip.parentElement.getBoundingClientRect().top + window.scrollY),
+    );
+    return {
+      fixedInsideMain: fixed.length,
+      visibleInsideMain: fixed.filter(onScreen).map((node) => node.className),
+      nearestDetailHost: hostTops.length === 0 ? null : Math.min(...hostTops),
+      viewportHeight: window.innerHeight,
+      headerInsideMain: main.querySelector('.page-header') !== null,
+    };
+  });
   expect(census.fixedInsideMain, 'nothing fixed lives inside main; this lane proves nothing').toBeGreaterThan(0);
+  /* NOTHING FIXED INSIDE MAIN IS ON SCREEN AT THE TOP. This is what makes the
+     re-parenting harmless, and it is the assertion that fails the day it stops
+     being true. */
+  expect(
+    census.visibleInsideMain,
+    'a fixed element inside main is visible where a pull begins; the gesture now re-parents something a reader can see',
+  ).toEqual([]);
+  // With margin, rather than by a pixel: the nearest detail host is far below
+  // any viewport a touch device brings here.
+  expect(
+    census.nearestDetailHost,
+    `the nearest detail host is ${census.nearestDetailHost}px down a ${census.viewportHeight}px viewport`,
+  ).toBeGreaterThan(census.viewportHeight);
   // The pinned header is outside main and therefore never re-parented — the
   // half of this that is already safe, stated so a later move would be loud.
   expect(census.headerInsideMain, 'the fixed header moved inside main, where a pull re-parents it').toBe(false);
@@ -6783,30 +6828,16 @@ test('a pull claims only a downward drag, and takes no open readout with it (iss
   expect(downward.pulling, 'a straight downward drag no longer pulls at all').toBe(true);
   expect(Number.parseFloat(downward.pull), 'a straight downward drag moved nothing').toBeGreaterThan(0);
 
-  // FINDING 8: an open readout does not survive into a pull.
+  /* And no detail is open while the transform is on — which follows from the
+     census above rather than from a guard, and is measured here as the
+     behaviour rather than assumed from the geometry. */
+  expect(downward.tipOpen, 'a detail card was open while main became its containing block').toBe(false);
   await expect
     .poll(async () => page.evaluate(() => window.document.documentElement.hasAttribute('data-pulling')), {
       message: 'the pull never settled',
       timeout: 10_000,
     })
     .toBe(false);
-  const strip = page.locator('.grid-strip[role="listbox"]').first();
-  await strip.scrollIntoViewIfNeeded();
-  await settled(page);
-  await strip.evaluate((node) => node.focus());
-  await page.keyboard.press('End');
-  expect(
-    await page.evaluate(() => window.document.querySelector('.cell-tip[data-tip-open="true"]') !== null),
-    'no readout was open, so this half proves nothing',
-  ).toBe(true);
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.waitForTimeout(200);
-  const withReadout = await drag(straightDown);
-  expect(withReadout.pulling, 'the pull did not claim; the re-parenting question never arose').toBe(true);
-  expect(
-    withReadout.tipOpen,
-    'a detail card stayed open while main became its containing block',
-  ).toBe(false);
 });
 
 test('the refresh gesture has a control a keyboard can reach (issue 219)', async ({ page }) => {
