@@ -235,8 +235,41 @@ export interface DetailBinding {
      left edge — MEASURED as a cursor placed at x -11 against a strip starting
      at 51). Whether this is undefined is therefore read once at bind time and
      is a CONTRACT: a driving caller passes null for "nothing selected", never
-     undefined. */
+     undefined. drivenBinding() below ENFORCES that rather than describing it. */
   anchor?: HTMLElement | null;
+}
+
+/* Whether the caller drives the anchor — and the refusal that keeps the
+ * paragraph above from being only a paragraph.
+ *
+ * The two halves cannot be split. A caller that supplies `resolve` is saying
+ * its host holds MANY subjects, which is exactly the case where this module's
+ * own focus guess — the element at the viewport origin — names the wrong one.
+ * Only `anchor` can say which subject a focus landed on. So a region caller
+ * that supplied `resolve` and omitted `anchor` would silently reacquire the
+ * defect the driven path exists to close, and silently is the operative word:
+ * `undefined` is an unremarkable value for an optional prop, every type checks,
+ * nothing goes red, and the symptom is a readout describing a cell the reader
+ * cannot see.
+ *
+ * It is therefore refused at bind time instead of documented. The refusal is
+ * keyed on the SHAPE of the binding and never on a list of call sites: a
+ * region caller written a year from now is covered with no edit here, and if
+ * some future shape genuinely needs the guess back, the lift is this one
+ * function rather than a census that has to be kept true.
+ *
+ * `null` is a driving caller's "nothing selected", and that is the whole
+ * reason `undefined` can carry "I do not drive this" at all — two absences
+ * would be one ambiguous value, and the one they would collapse into is the
+ * dangerous one to arrive at by accident. */
+export function drivenBinding(binding: DetailBinding): boolean {
+  if (binding.resolve !== undefined && binding.anchor === undefined) {
+    throw new TypeError(
+      'a detail caller that supplies resolve must also supply anchor: ' +
+        'pass null for "nothing selected", never undefined'
+    );
+  }
+  return binding.anchor !== undefined;
 }
 
 interface OpenTip {
@@ -247,7 +280,6 @@ interface OpenTip {
  * once is the state a tip that never closes produces, and it is also how a
  * stale one survives a tap somewhere else. */
 let opened: OpenTip | null = null;
-
 
 /* hoverDetail is the whole behaviour, applied to the tip element itself: it
  * binds the CELL around it as the hover target and positions the tip inside
@@ -297,8 +329,9 @@ function bindDetail(
   const fine = view.matchMedia(finePointerQuery);
   /* Whether the CALLER decides what a focus means — see DetailBinding.anchor.
      Read once, because it is a property of the caller rather than of any
-     particular update. */
-  const driven = binding.anchor !== undefined;
+     particular update, and read THROUGH the refusal so a caller that supplies
+     `resolve` without `anchor` never reaches the guess it would break. */
+  const driven = drivenBinding(binding);
 
   let shown = false;
   let origin: TipOrigin = 'pointer';
