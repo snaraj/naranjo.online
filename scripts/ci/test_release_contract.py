@@ -166,6 +166,124 @@ def _step_scalar(lines: list[str], key: str) -> str:
     return ""
 
 
+def workflow_run_block(workflow: str, step_name: str, *, fold: bool = False) -> str:
+    """Return one workflow step's run body VERBATIM, dedented, ready to execute.
+
+    Four classes had hand-rolled a copy of this, which the oldest of them said
+    out loud ("repeats its exact dedent logic against the orchestrator
+    workflow instead"); `ChartDigestEmbedShellPathTests.run_block` had already
+    shown the shape the fix takes, delegating instead of copying. Two of those
+    copies were byte-for-byte identical apart from the filename literal, so
+    the workflow becomes a parameter.
+
+    Deliberately NOT `job_steps`/`_step_scalar`, which are right next door:
+    those `.strip()` every line (`_step_scalar`, above), which is correct for
+    reading a scalar and fatal for running one -- bash needs the interior
+    indentation a heredoc and an `if` block are written with. This reader
+    removes exactly the block scalar's own ten-space indent and nothing else.
+
+    Two copies FAILED OPEN and now do not, which is the point of consolidating
+    onto this one rather than onto them:
+
+    * a renamed or deleted step raised a bare `ValueError` from `list.index`
+      in the pr-gate copies. It now raises `AssertionError` naming the
+      workflow and the step, so the failure says what broke.
+    * an empty body was returned as `"\\n"` by the pr-gate copies, handing bash
+      an empty script that every assertion then passed vacuously. It now
+      raises.
+
+    `fold=True` reads a `run: >-` folded scalar and joins with spaces, which is
+    YAML's own folding and the one genuinely distinct output contract of the
+    four; blank lines are skipped there exactly as the folded copy skipped
+    them. Block style preserves a blank line as a blank line.
+    """
+    lines = (ROOT / ".github" / "workflows" / workflow).read_text(
+        encoding="utf-8"
+    ).splitlines()
+    marker = f"      - name: {step_name}"
+    anchor = "        run: >-" if fold else "        run: |"
+    try:
+        start = lines.index(marker)
+        run = lines.index(anchor, start)
+    except ValueError as exc:
+        raise AssertionError(f"workflow step is missing: {workflow}: {step_name}") from exc
+    body: list[str] = []
+    for line in lines[run + 1 :]:
+        if line.startswith("      - name:"):
+            break
+        if line.startswith("          "):
+            body.append(line[10:])
+        elif not line:
+            if not fold:
+                body.append("")
+        else:
+            break
+    if not body:
+        raise AssertionError(
+            f"workflow step has no executable run block: {workflow}: {step_name}"
+        )
+    return (" " if fold else "\n").join(body) + "\n"
+
+
+class SyntheticRepo:
+    """Build a throwaway git repository the transition readers can walk.
+
+    Three test classes had carried their own copy of these four helpers, and
+    the third said so in a section header ("mirroring NoArtifactClassTests").
+    Two of those copies were functionally identical -- same argv, same file
+    set, same staging, same identity flags -- differing only in line wrapping,
+    and `repo()` was character-for-character the same in both.
+
+    Identity is injected per invocation and never written to config, and
+    nothing here creates a tag or a signature: these repositories exist to be
+    READ by the release-boundary walk, so the only facts that matter are the
+    commit graph and the four release locks in `snapshot()`.
+    """
+
+    def git(self, root: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(root), *args], check=True, text=True, stdout=subprocess.PIPE
+        ).stdout.strip()
+
+    def release_commit(self, root: Path, version: str) -> str:
+        """Commit all four release locks at one version."""
+        files = snapshot(version)
+        for name, contents in files.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(contents, encoding="utf-8")
+        self.git(root, "add", ".")
+        self.git(
+            root, "-c", "user.name=Release Test", "-c", "user.email=release@example.invalid",
+            "commit", "-m", version,
+        )
+        return self.git(root, "rev-parse", "HEAD")
+
+    def paths_commit(self, root: Path, files: dict[str, str | None], marker: str) -> str:
+        """Commit an exact path set; a None value deletes that path."""
+        for name, contents in files.items():
+            path = root / name
+            if contents is None:
+                path.unlink()
+                self.git(root, "rm", "-q", "--cached", name)
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(contents, encoding="utf-8")
+            self.git(root, "add", name)
+        self.git(
+            root, "-c", "user.name=Release Test", "-c", "user.email=release@example.invalid",
+            "commit", "-m", marker,
+        )
+        return self.git(root, "rev-parse", "HEAD")
+
+    def repo(self, temporary: str) -> tuple[Path, str]:
+        """A main-branch repository seeded with one 0.1.9 release commit."""
+        root = Path(temporary)
+        self.git(root, "init", "-q")
+        self.git(root, "branch", "-m", "main")
+        return root, self.release_commit(root, "0.1.9")
+
+
 def job_steps(workflow: str, job: str) -> list[dict]:
     """Split one job's `steps:` list into normalized execution-ordered records."""
     marker = f"\n  {job}:\n"
@@ -3057,12 +3175,16 @@ class AttestationStatementCLITests(unittest.TestCase):
                 self.invoke(temporary, include_predicate_output=False)
             self.assertEqual(failure.exception.code, 2)
 
-    def test_predicate_output_file_exists_and_is_non_empty_after_success(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            code, _, predicate_output_path = self.invoke(temporary)
-            self.assertEqual(code, 0)
-            self.assertTrue(predicate_output_path.exists())
-            self.assertGreater(predicate_output_path.stat().st_size, 0)
+    # test_predicate_output_file_exists_and_is_non_empty_after_success stood
+    # here and is subsumed, not merely similar. It ran the IDENTICAL invocation
+    # -- `self.invoke(temporary)` with no keyword arguments, so every default
+    # -- and asserted only exists() and st_size > 0. The sibling above runs
+    # that same invocation and then json.loads() the file, which cannot
+    # succeed unless it exists and is non-empty, before asserting byte
+    # equality with statement["predicate"]. One honest cost, recorded rather
+    # than glossed: a missing or empty file now surfaces as an ERROR
+    # (FileNotFoundError / JSONDecodeError) instead of a FAILURE. The coverage
+    # is identical; the message is less tidy.
 
     def test_missing_builder_run_id_flag_exits_two(self):
         # Issue #137: the run binding is required, never defaulted -- an
@@ -3091,19 +3213,16 @@ class AttestationStatementCLITests(unittest.TestCase):
             self.assertFalse(output_path.exists())
 
 
-class GitTransitionTests(unittest.TestCase):
-    def git(self, root: Path, *args: str) -> str:
-        return subprocess.run(["git", "-C", str(root), *args], check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
-
+class GitTransitionTests(SyntheticRepo, unittest.TestCase):
+    # This class builds its repositories a step at a time rather than through
+    # SyntheticRepo.repo(): its tests choose their own first commit, so the
+    # seeded-0.1.9 composite would be wrong for them. It keeps two helpers
+    # nothing else has -- metadata_commit, which stages README.md alone, and
+    # remove_version, the only DELETING helper, which uses `git add -u` where
+    # paths_commit's deletion branch uses `git rm --cached`. Those two stay.
     def commit(self, root: Path, version: str) -> str:
-        files = snapshot(version)
-        for name, contents in files.items():
-            path = root / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(contents, encoding="utf-8")
-        self.git(root, "add", ".")
-        self.git(root, "-c", "user.name=Release Test", "-c", "user.email=release@example.invalid", "commit", "-m", version)
-        return self.git(root, "rev-parse", "HEAD")
+        """This class's name for release_commit; its 19 call sites read `commit`."""
+        return self.release_commit(root, version)
 
     def metadata_commit(self, root: Path, marker: str) -> str:
         (root / "README.md").write_text(marker + "\n", encoding="utf-8")
@@ -3253,40 +3372,8 @@ class GitTransitionTests(unittest.TestCase):
                 RC.discover_transition_window(root, head)
 
 
-class NoArtifactClassTests(unittest.TestCase):
+class NoArtifactClassTests(SyntheticRepo, unittest.TestCase):
     """The documentation-only class must fail closed in every direction."""
-
-    def git(self, root: Path, *args: str) -> str:
-        return subprocess.run(["git", "-C", str(root), *args], check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
-
-    def release_commit(self, root: Path, version: str) -> str:
-        files = snapshot(version)
-        for name, contents in files.items():
-            path = root / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(contents, encoding="utf-8")
-        self.git(root, "add", ".")
-        self.git(root, "-c", "user.name=Release Test", "-c", "user.email=release@example.invalid", "commit", "-m", version)
-        return self.git(root, "rev-parse", "HEAD")
-
-    def paths_commit(self, root: Path, files: dict[str, str | None], marker: str) -> str:
-        for name, contents in files.items():
-            path = root / name
-            if contents is None:
-                path.unlink()
-                self.git(root, "rm", "-q", "--cached", name)
-                continue
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(contents, encoding="utf-8")
-            self.git(root, "add", name)
-        self.git(root, "-c", "user.name=Release Test", "-c", "user.email=release@example.invalid", "commit", "-m", marker)
-        return self.git(root, "rev-parse", "HEAD")
-
-    def repo(self, temporary: str) -> tuple[Path, str]:
-        root = Path(temporary)
-        self.git(root, "init", "-q")
-        self.git(root, "branch", "-m", "main")
-        return root, self.release_commit(root, "0.1.9")
 
     def test_documentation_path_table_is_closed_in_both_directions(self):
         for path, expected in (
@@ -3644,7 +3731,7 @@ class NoArtifactClassTests(unittest.TestCase):
             self.assertIn("chart version does not equal VERSION", str(denied.exception))
 
 
-class NoArtifactClassifyShellPathTests(unittest.TestCase):
+class NoArtifactClassifyShellPathTests(SyntheticRepo, unittest.TestCase):
     """Executed coverage for the release-after-main classify step's shell.
 
     ``NoArtifactWiringTests`` only pins substrings of this step's source; it
@@ -3673,47 +3760,12 @@ class NoArtifactClassifyShellPathTests(unittest.TestCase):
 
     STEP = "Classify the completed range from its authorized gate verdict"
 
-    # --- synthetic repository helpers, mirroring NoArtifactClassTests -----
-
-    def git(self, root: Path, *args: str) -> str:
-        return subprocess.run(
-            ["git", "-C", str(root), *args], check=True, text=True, stdout=subprocess.PIPE
-        ).stdout.strip()
-
-    def release_commit(self, root: Path, version: str) -> str:
-        files = snapshot(version)
-        for name, contents in files.items():
-            path = root / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(contents, encoding="utf-8")
-        self.git(root, "add", ".")
-        self.git(
-            root, "-c", "user.name=Release Test", "-c", "user.email=release@example.invalid",
-            "commit", "-m", version,
-        )
-        return self.git(root, "rev-parse", "HEAD")
-
-    def paths_commit(self, root: Path, files: dict[str, str | None], marker: str) -> str:
-        for name, contents in files.items():
-            path = root / name
-            if contents is None:
-                path.unlink()
-                self.git(root, "rm", "-q", "--cached", name)
-                continue
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(contents, encoding="utf-8")
-            self.git(root, "add", name)
-        self.git(
-            root, "-c", "user.name=Release Test", "-c", "user.email=release@example.invalid",
-            "commit", "-m", marker,
-        )
-        return self.git(root, "rev-parse", "HEAD")
-
-    def repo(self, temporary: str) -> tuple[Path, str]:
-        root = Path(temporary)
-        self.git(root, "init", "-q")
-        self.git(root, "branch", "-m", "main")
-        return root, self.release_commit(root, "0.1.9")
+    # --- synthetic repository helpers ------------------------------------
+    #
+    # git, release_commit, paths_commit and repo come from SyntheticRepo. This
+    # class's own copies were identical to NoArtifactClassTests' apart from
+    # line wrapping, which its section header used to say out loud ("mirroring
+    # NoArtifactClassTests"). Only the composites below are its own.
 
     def _seed_documentation_push(self, temporary: str) -> tuple[Path, str, str, str]:
         """Build base(0.1.9) -> release_head(0.1.10) -> docs_head.
@@ -3753,35 +3805,8 @@ class NoArtifactClassifyShellPathTests(unittest.TestCase):
 
     @staticmethod
     def workflow_run_block(step_name: str) -> str:
-        """Extract one step's ``run: |`` body from release-after-main.yml.
-
-        ``ExistingImageShellPathTests.workflow_run_block`` is hardcoded to
-        release-publisher.yml, so this repeats its exact dedent logic against
-        the orchestrator workflow instead. A renamed or removed step raises
-        AssertionError rather than testing an empty block.
-        """
-        lines = (ROOT / ".github" / "workflows" / "release-after-main.yml").read_text(
-            encoding="utf-8"
-        ).splitlines()
-        marker = f"      - name: {step_name}"
-        try:
-            start = lines.index(marker)
-            run = lines.index("        run: |", start)
-        except ValueError as exc:
-            raise AssertionError(f"workflow step is missing: {step_name}") from exc
-        body: list[str] = []
-        for line in lines[run + 1 :]:
-            if line.startswith("      - name:"):
-                break
-            if line.startswith("          "):
-                body.append(line[10:])
-            elif not line:
-                body.append("")
-            else:
-                break
-        if not body:
-            raise AssertionError(f"workflow step has no executable run block: {step_name}")
-        return "\n".join(body) + "\n"
+        """One orchestrator step's run block, verbatim from the workflow."""
+        return workflow_run_block("release-after-main.yml", step_name)
 
     # --- execution -----------------------------------------------------------
 
@@ -4424,28 +4449,8 @@ curl() {
 class ExistingImageShellPathTests(unittest.TestCase):
     @staticmethod
     def workflow_run_block(step_name: str) -> str:
-        lines = (ROOT / ".github" / "workflows" / "release-publisher.yml").read_text(
-            encoding="utf-8"
-        ).splitlines()
-        marker = f"      - name: {step_name}"
-        try:
-            start = lines.index(marker)
-            run = lines.index("        run: |", start)
-        except ValueError as exc:
-            raise AssertionError(f"workflow step is missing: {step_name}") from exc
-        body: list[str] = []
-        for line in lines[run + 1 :]:
-            if line.startswith("      - name:"):
-                break
-            if line.startswith("          "):
-                body.append(line[10:])
-            elif not line:
-                body.append("")
-            else:
-                break
-        if not body:
-            raise AssertionError(f"workflow step has no executable run block: {step_name}")
-        return "\n".join(body) + "\n"
+        """One publisher step's run block, verbatim from the workflow."""
+        return workflow_run_block("release-publisher.yml", step_name)
 
     @staticmethod
     def bash_executable() -> str:
@@ -6843,8 +6848,15 @@ class GovernanceParityTests(unittest.TestCase):
         ready_word = re.compile(r"\bready\b", re.IGNORECASE)
         ready_block_pins = {
             "AGENTS.md": (
+                # Re-pinned at 0.1.49: the block now states that successful main
+                # CI creates NO tag and that the PUBLISHER creates it from
+                # inside the privileged job, grounded in the `actions: write` /
+                # `contents: write` permission split. Its Ready sentences —
+                # "The receipt is a required Ready gate" and "A failed or
+                # unknown preflight leaves the PR Draft" — are unchanged; only
+                # the tag-creation mechanism above them was corrected.
                 ("Releases: every artifact-classified PR advances numeric",
-                 "51d731a4043ae6cd138faa11e771b4d019bc4ec4f123518ae4c42d645108c33b"),
+                 "19224d76b42c32987e399a04dcaba7752415e187c641b30d8992d6c155348ed5"),
                 ("**Verdict format** — posted as a normal PR comment",
                  "5b074e5bab48c010304cc700fc62e47d14e34769c7534255b0ed14451e09a1cd"),
                 ("A green check, a peer approval, or a ready state is evidence",
@@ -7574,21 +7586,10 @@ class TrivyDevelopmentDependencyShellPathTests(unittest.TestCase):
 
     @staticmethod
     def folded_run_block() -> str:
-        lines = (ROOT / ".github/workflows/pr-gate.yml").read_text(
-            encoding="utf-8"
-        ).splitlines()
-        marker = f"      - name: {TrivyDevelopmentDependencyShellPathTests.STEP}"
-        start = lines.index(marker)
-        run = lines.index("        run: >-", start)
-        body: list[str] = []
-        for line in lines[run + 1 :]:
-            if line.startswith("      - name:"):
-                break
-            if line.startswith("          "):
-                body.append(line[10:])
-            elif line:
-                break
-        return " ".join(body) + "\n"
+        """The scanner step's FOLDED run scalar, joined the way YAML folds it."""
+        return workflow_run_block(
+            "pr-gate.yml", TrivyDevelopmentDependencyShellPathTests.STEP, fold=True
+        )
 
     def execute(self, block: str) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory(dir=ROOT, prefix=".trivy-dev-shell-") as temporary:
@@ -7662,21 +7663,8 @@ trivy() {
 class CoverageBadgeShellPathTests(unittest.TestCase):
     @staticmethod
     def run_block(step_name: str) -> str:
-        lines = (ROOT / ".github/workflows/pr-gate.yml").read_text(
-            encoding="utf-8"
-        ).splitlines()
-        marker = f"      - name: {step_name}"
-        start = lines.index(marker)
-        run = lines.index("        run: |", start)
-        body: list[str] = []
-        for line in lines[run + 1 :]:
-            if line.startswith("      - name:"):
-                break
-            if line.startswith("          "):
-                body.append(line[10:])
-            elif line:
-                break
-        return "\n".join(body) + "\n"
+        """One pr-gate step's run block, verbatim from the workflow."""
+        return workflow_run_block("pr-gate.yml", step_name)
 
     @staticmethod
     def execute(block: str, prelude: str, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -8600,7 +8588,19 @@ class WorkflowStructureTests(unittest.TestCase):
             (gate, "group: pr-gate-${{ github.event.pull_request.number || github.run_id }}"),
             (gate, "cancel-in-progress: true"),
             (codeql, "group: codeql-${{ github.event.pull_request.number || github.sha }}"),
-            (codeql, "cancel-in-progress: true"),
+            # TIGHTENED, not relaxed. The SHA-keyed group already stops one
+            # main push cancelling another, which is what this test is named
+            # for. It cannot stop the weekly SCHEDULE run, which resolves
+            # `github.sha` to the same default-branch head and so lands in the
+            # same group as a push run still analysing that commit. The
+            # publisher requires a CodeQL run with event=push at that exact
+            # SHA and conclusion=success, and CodeQL fires on push once per
+            # push, so one cancellation makes the version permanently
+            # unreleasable. Pinning the guarded expression admits strictly
+            # fewer workflows than `cancel-in-progress: true` did: reverting
+            # to the bare `true` now fails this contract. Matches the sibling
+            # repository, which already pins this exact string.
+            (codeql, "cancel-in-progress: ${{ github.event_name == 'pull_request' }}"),
             (orchestrator, "group: release-after-main-${{ github.event.workflow_run.head_sha }}"),
             (orchestrator, "cancel-in-progress: false"),
             (publisher, "group: release-${{ inputs.source_sha }}"),

@@ -18,7 +18,6 @@ import {
   gridLevels,
   gridMinColumns,
   gridRows,
-  isSeriesView,
   magnitudeFloor,
   monthTicks,
   peakValue,
@@ -115,12 +114,6 @@ test('viewColumns reads one series three ways, on ALIGNED COLUMNS rather than ar
 
 test('series views are a closed set', () => {
   assert.deepEqual([...seriesViews], ['daily', 'weekly', 'monthly', 'cumulative']);
-  for (const view of seriesViews) {
-    assert.ok(isSeriesView(view));
-  }
-  for (const rogue of ['hourly', '', null, 7, undefined]) {
-    assert.equal(isSeriesView(rogue), false, `${String(rogue)} must not pass as a view`);
-  }
 });
 
 test('levels quantize against the peak, and nothing is level 0 by accident', () => {
@@ -532,14 +525,20 @@ test('a magnitude is written the way a person reads one', () => {
   // Below the floor the exact figure is both readable and more informative,
   // so nothing is rounded away that a reader could have used.
   assert.equal(formatMagnitude(0), '0');
+  assert.equal(formatMagnitude(999), '999');
   assert.equal(formatMagnitude(1284), '1,284');
   assert.equal(formatMagnitude(9999), '9,999');
   assert.equal(magnitudeFloor, 10_000);
-  // ...and above it, one decimal, with a trailing .0 trimmed.
+  // ...and above it, one decimal, with a trailing .0 trimmed. A whole figure
+  // drops the decimal entirely rather than reading "100.0K".
   assert.equal(formatMagnitude(10_000), '10K');
   assert.equal(formatMagnitude(12_900), '12.9K');
+  assert.equal(formatMagnitude(100_000), '100K');
+  assert.equal(formatMagnitude(182_340), '182.3K');
+  assert.equal(formatMagnitude(2_103_980), '2.1M');
   assert.equal(formatMagnitude(9_421_770), '9.4M');
   assert.equal(formatMagnitude(627_742_457), '627.7M');
+  assert.equal(formatMagnitude(1_250_000_000), '1.3B');
   assert.equal(formatMagnitude(7_700_000_000), '7.7B');
   // The T step, which is not decoration: this site's own cumulative lens
   // passes a trillion, and without it the reading would be "7700B".

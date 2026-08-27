@@ -1,6 +1,7 @@
 <!-- ContributionGrid is the site's ONE contribution heatmap: columns of seven
-  daily cells, a magnitude ramp of five levels, an optional month axis, and a
-  less/more legend. Both the token-activity grid and the version-control
+  daily cells, a magnitude ramp of five levels, a month axis for any series
+  whose columns carry dates, and a less/more legend. Both the token-activity
+  grid and the version-control
   contribution calendar render through it, so the two never drift apart.
 
   It is deliberately dumb: callers pass prepared cells (lib/grid.ts builds
@@ -109,7 +110,6 @@
     noun = 'contribution',
     view = 'daily' as SeriesView,
     label,
-    showMonths = true,
     emptyNote = 'no activity data',
     fullWidth = false,
     cardTitle,
@@ -119,7 +119,6 @@
     noun?: string;
     view?: SeriesView;
     label: string;
-    showMonths?: boolean;
     emptyNote?: string;
     /* How a cell's figure is written out, in the card AND in the accessible
        text, so the two can never disagree (owner directive, 2026-08-25). The
@@ -151,7 +150,7 @@
 
   const legendLevels = Array.from({ length: gridLevels }, (_, level) => level);
   const peak = $derived(peakValue(columns.flat()));
-  const ticks = $derived(showMonths ? monthTicks(columns) : []);
+  const ticks = $derived(monthTicks(columns));
   const chrome = pendingColumns();
 
   /* The block's width, in columns, handed to the stylesheet as a number so

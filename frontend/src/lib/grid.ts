@@ -48,10 +48,6 @@ export interface GridCell {
 export const seriesViews = ['daily', 'weekly', 'monthly', 'cumulative'] as const;
 export type SeriesView = (typeof seriesViews)[number];
 
-export function isSeriesView(value: unknown): value is SeriesView {
-  return typeof value === 'string' && (seriesViews as readonly string[]).includes(value);
-}
-
 /* viewColumns re-reads one series through one lens — on ALIGNED CALENDAR
  * COLUMNS (issue 189), never on the raw array position viewValues used to
  * bucket by. That distinction is the whole fix: once calendarColumns can pad

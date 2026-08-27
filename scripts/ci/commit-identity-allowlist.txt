@@ -1,0 +1,60 @@
+# Lift mechanism for scripts/ci/commit_identity_contract.py
+#
+# That gate walks the commit range a push or pull request actually contributes
+# and refuses two constructs: an author or committer email that is not the
+# sanctioned noreply identity (`identity`), and a `Co-authored-by:` trailer in
+# the message body (`co-author`). Both lift here, one line, with a written
+# reason.
+#
+# Format, one entry per line:
+#
+#     <40-lowercase-hex sha> | <rule> | <reason>
+#
+# `<rule>` is one of: identity, co-author.
+#
+# Entries are keyed by SHA and RULE, never by address. That is deliberate and it
+# is the same rule the failure messages follow: this gate exists to keep a
+# personal address out of the permanently public record, so it must not write
+# one into a tracked file in the course of exempting it. Requirement 12 sanctions
+# exactly one address in this repository; recording any other here -- even to
+# document a violation -- would be the very disclosure the gate prevents. The SHA
+# is sufficient to identify the commit, and `git log -1 <sha>` shows an
+# investigator the rest locally.
+#
+# Abbreviated SHAs are refused: an abbreviation can become ambiguous as history
+# grows, and an exemption that starts matching a second commit is an exemption
+# nobody wrote.
+#
+# WHY THESE ENTRIES EXIST, AND WHY THEY ARE NOT REMOVED. Every SHA below is an
+# ancestor of `main`. They are permanently public and they predate this gate.
+# They are NOT rewritten and must not be: requirement 2 forbids rewriting
+# published history, and a rewrite from the root would invalidate every signed
+# commit, every release tag, and every review receipt bound to a head -- a far
+# larger harm than the record it would erase, which is already mirrored in
+# forks, clones, and GitHub's own event log. What reaches history cannot be
+# unpublished; the honest response is to name it, stop the recurrence, and say
+# so plainly. That is what this file and the gate above it do.
+#
+# Note on scope: the gate is RANGE-scoped, so under normal operation none of
+# these commits is ever walked -- a pull request contributes only its own
+# commits, and a main push only the merge. They are recorded so that a
+# deliberate full-history audit (`--base <root>^ --head main`, or an equivalent
+# sweep) reports them as known and accepted rather than as a new discovery, and
+# so that the count below can be checked rather than taken on trust.
+#
+# Measured at the head that introduced this gate: 113 commits reachable from
+# `origin/main`, 9 refusals, all listed here. The other 104 pass. In particular
+# 72 of them carry GitHub's own `noreply@github.com` committer from an
+# owner-performed squash or rebase merge; that value is admitted by the rule
+# itself rather than allowlisted here, because it names no person and refusing
+# it would make every main push red forever.
+
+f49989eb9562b36c04d70c29b7e039fbfb5ab514 | identity | Pre-contract commit, permanently public and an ancestor of main. Predates the pinned-identity convention in AGENTS.md "Commit identity mechanics"; not rewritten, per requirement 2.
+172ff058b89338e7c0761b2820c0761901cc5375 | identity | Pre-contract commit, permanently public and an ancestor of main. Predates the pinned-identity convention in AGENTS.md "Commit identity mechanics"; not rewritten, per requirement 2.
+65383380cb0139425998d103571a1359daf6ba05 | identity | Pre-contract commit, permanently public and an ancestor of main. Predates the pinned-identity convention in AGENTS.md "Commit identity mechanics"; not rewritten, per requirement 2.
+18910bc362b3fe37754360675bb3e3f52488df29 | identity | Pre-contract commit, permanently public and an ancestor of main. Predates the pinned-identity convention in AGENTS.md "Commit identity mechanics"; not rewritten, per requirement 2.
+5ff145cb10eb34defdaaab7e0ee95528c7978e59 | identity | The repository's ROOT commit, permanently public and unreachable by any fix short of rewriting all of history from the first commit. Predates every contract in this repository; not rewritten, per requirement 2.
+246914dfc8a73eb3e14a20ef53681832fdf9aad3 | co-author | Trailer introduced by GitHub's squash-merge UI, which credits a pull request's additional authors automatically. Permanently public and an ancestor of main; predates the requirement-3 prohibition being enforced by any gate.
+32ef221057087aed2c9b78aafcdc8f56b5dc0cb5 | co-author | Trailer introduced by GitHub's squash-merge UI, which credits a pull request's additional authors automatically. Permanently public and an ancestor of main; predates the requirement-3 prohibition being enforced by any gate.
+84ee16af85e3aa1c5d1a62029281a9b68e24343e | co-author | Trailer introduced by GitHub's squash-merge UI, which credits a pull request's additional authors automatically. Permanently public and an ancestor of main; predates the requirement-3 prohibition being enforced by any gate.
+bd26f2f06e0e32660e125c73f99e7bd0b78372d8 | co-author | Trailer introduced by GitHub's squash-merge UI, which credits a pull request's additional authors automatically. Permanently public and an ancestor of main; predates the requirement-3 prohibition being enforced by any gate.

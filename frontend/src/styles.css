@@ -99,13 +99,15 @@
   --palette-brand-orange: #dc8a00;
   --palette-brand-orange-on-light: #8a5600;
 
-  /* Panel status. Shape already distinguishes these states (filled, hollow,
-     square), so color is the redundant channel — it still has to clear
-     1.4.11's 3:1 as a non-text indicator, which the green does not do on a
-     light surface until it is darkened. */
+  /* Panel status. Shape already distinguishes these states, so color is the
+     redundant channel — it still has to clear 1.4.11's 3:1 as a non-text
+     indicator, which the green does not do on a light surface until it is
+     darkened. Only the OK ink is a token: it is what the usage meter's own
+     fill reads (--usage-meter-ok, UsageTracker.svelte). The unavailable
+     state carries no ink of its own — it is rendered as an explicit
+     unavailable STATE, per the honest-states floor, not as a grey dot. */
   --palette-status-ok: #5eab5e;
   --palette-status-ok-on-light: #2f7d32;
-  --palette-status-unavailable: #6e6e6e;
 
   /* The contribution ramp: one hue, monotone lightness, five steps. The
      DIRECTION is per-palette and that is the whole point — "steps brighter"
@@ -450,7 +452,6 @@
   --panel-muted: var(--color-accent);
   --panel-accent: var(--color-brand);
   --panel-status-ok: var(--color-status-ok);
-  --panel-status-unavailable: var(--palette-status-unavailable);
   --grid-cell-0: var(--color-grid-0);
   --grid-cell-1: var(--color-grid-1);
   --grid-cell-2: var(--color-grid-2);
@@ -1091,9 +1092,12 @@ h1 {
 }
 
 /* The shared shape of every page-level icon control — the reading-mode
-   trigger and the refresh beside it. Defined once, here, because two controls
-   that sit side by side and are meant to read as siblings cannot be allowed
-   to drift apart in two component stylesheets.
+   trigger (ThemeMenu.svelte) and the gallery's previous/next/close controls
+   (MediaGallery.svelte). Defined once, here, because controls that are meant
+   to read as siblings cannot be allowed to drift apart across component
+   stylesheets. It outlived the pair it was written for: the refresh button
+   that sat beside the reading-mode trigger left at issue 179, and the rule
+   was already the site's icon-control shape rather than that pair's.
 
    They are ICONS, not buttons (owner directive, issue 127): no disc, no
    border, no fill. Each used to wear a bordered circle on a raised surface,
@@ -1126,10 +1130,6 @@ h1 {
 .icon-button:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
-}
-
-.icon-button[disabled] {
-  cursor: progress;
 }
 
 /* Gallery lightbox frame tokens (issue 176): the enlarged photograph's

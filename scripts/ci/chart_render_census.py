@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Whole-render NetworkPolicy census for the Helm chart (issue #86).
 
-WHY THIS EXISTS. `scripts/ci/chart-egress-pin.sh` used to recognise a YAML
-document only by a raw line whose prefix was exactly `kind` and a raw line
-exactly equal to `spec:`. YAML permits whitespace before a mapping key's
+WHY THIS EXISTS. `scripts/ci/chart-egress-pin.sh`'s text pin recognises a YAML
+document only by a raw line whose prefix is exactly `kind` and a raw line
+exactly equal to `spec:`. That pin is STILL LIVE and still gating every pull
+request -- this census SUPPLEMENTS it as assertions (c), (d) and (g) rather
+than replacing assertions (a), (b) and (f), and the shell script's own header
+says so. YAML permits whitespace before a mapping key's
 colon, permits the key to be quoted, and permits escapes inside a
 double-quoted key, so a SECOND `NetworkPolicy` in the very same rendered
 file could spell itself `kind :` / `spec :` and be invisible to that census
@@ -217,7 +220,7 @@ this file then closed:
   site, `_document_marker`, `_read_document`, and every clause inside
   `_bs_indentation`, `_bs_breaks`, `_bs_skip_indent`, `_bs_has_more`,
   `_block_scalar_body` and `_line_break_after`, mutated ONE AT A TIME, 84
-  mutants, each run against the whole unit suite AND the census gate. 78 die.
+  mutants, each run against the whole unit suite AND the census gate. 69 die.
   Nine more are killed by the tests round six adds, starting with the one the
   round-five review found itself: dropping `_line_break_after(k)` from
   `_bs_breaks`'s loop survived everything while diverging from the oracle on
@@ -269,6 +272,34 @@ import argparse
 import re
 import sys
 from pathlib import Path
+from typing import Callable, NoReturn, Protocol
+
+# A mutation rewrites one render into one hostile render. Named rather than
+# spelled `object`, because `object` erases the call and a table of them stops
+# being callable to a reader OR a checker.
+Rewriter = Callable[[str], str]
+
+
+class PolicyFacts(Protocol):
+    """The variable facts a MUTATION needs, and nothing more.
+
+    `mutations` never reads a chart: it only splices names into hostile
+    renders, so it needs these seven values and not `expected_policy()`. Two
+    classes supply them -- `ChartFacts`, which reads them out of Chart.yaml and
+    values.yaml, and `_StaticFacts`, the deliberate duck-typed stand-in that
+    lets `mutations` be LISTED without a chart on disk. Stating the shared
+    surface as a protocol is what makes that second one legitimate rather than
+    merely undetected: the stand-in is now checked against the same seven
+    attributes instead of passing because nothing looked.
+    """
+
+    chart_name: str
+    release: str
+    namespace: str
+    peer_namespace: str
+    peer_app_name: str
+    peer_instance: str
+    service_port: int
 
 # --- The pinned expectation -------------------------------------------------
 #
@@ -550,7 +581,7 @@ class Reader:
 
     # -- diagnostics --------------------------------------------------------
 
-    def fail(self, message: str, lineno: int | None = None) -> None:
+    def fail(self, message: str, lineno: int | None = None) -> NoReturn:
         if lineno is None:
             lineno = min(self.i + 1, len(self.lines))
         raise CensusError("%s line %d: %s" % (self.origin, lineno, message))
@@ -1142,6 +1173,15 @@ class Reader:
             j += 1
         self.fail("unterminated double-quoted scalar; a quoted scalar must open and close on "
                   "one line here", lineno)
+        # KEPT DELIBERATELY, and now provably unreachable: annotating `fail` as
+        # NoReturn is what lets a checker see that. It is a structural
+        # backstop, not dead code. `_scan_quoted` declares `tuple[str, int]`,
+        # and every exit above it either returns that or raises; if `fail`
+        # ever stopped raising, this line is the difference between a loud
+        # stop here and a silent `None` unpacked by the caller two frames
+        # away. A reader that mis-parses a quoted scalar is exactly how a
+        # second NetworkPolicy hides from this census, so the fail-closed
+        # ending stays.
         raise AssertionError("unreachable")  # pragma: no cover
 
     def _scan_value(self, s: str, i: int, lineno: int, flow: bool) -> tuple[object, int]:
@@ -2109,8 +2149,10 @@ spec:
 """ + _ALLOW_ALL_TAIL
 
 
-# The eight constructs PR #96's round-three review and the author's own hunt
-# measured, each written into a shadow policy the way a chart could really emit
+# The nine constructs PR #96's round-three review and the author's own hunt
+# measured -- eight of them, plus `_SHADOW_YAML_FORBIDDEN_CODE_POINT`, added
+# by the forbidden-code-point refusal at issue #99 -- each written into a
+# shadow policy the way a chart could really emit
 # it. Every one of them is a shape where this reader and the reader that
 # INSTALLS the render used to disagree -- about how many lines the document
 # has, about whether the stream is readable at all, or about what a scalar
@@ -2359,7 +2401,7 @@ def _end_a_document_with_a_marker(text: str) -> str:
     return "\n".join(lines)
 
 
-def mutations(facts: ChartFacts) -> list[tuple[str, object]]:
+def mutations(facts: PolicyFacts) -> list[tuple[str, Rewriter]]:
     """Every hostile render this census must refuse, as (name, rewriter)."""
     name = facts.chart_name
     selector_anchor = [
@@ -2482,7 +2524,7 @@ def mutations(facts: ChartFacts) -> list[tuple[str, object]]:
     ]
 
 
-def mutate(text: str, facts: ChartFacts, wanted: str) -> str:
+def mutate(text: str, facts: PolicyFacts, wanted: str) -> str:
     table = dict(mutations(facts))
     if wanted not in table:
         raise CensusError("unknown mutation %s" % wanted)
@@ -2547,7 +2589,14 @@ def main(argv: list[str]) -> int:
 
 
 class _StaticFacts:
-    """Names only. `mutations` is listed without reading the chart at all."""
+    """Names only. `mutations` is listed without reading the chart at all.
+
+    Duck-typed on purpose, and now checked for it: it satisfies `PolicyFacts`
+    structurally, which is what lets `main` list mutation names with no chart
+    on disk while a type checker still verifies the seven attributes agree
+    with `ChartFacts`. It deliberately has no `expected_policy()` -- only
+    `census` needs that, and `census` takes the real `ChartFacts`.
+    """
 
     chart_name = "chart"
     release = "release"

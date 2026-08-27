@@ -18,6 +18,15 @@ cannot unambiguously parse is rejected, never guessed at):
   anchors/aliases (`&`, `*`), and tags (`!`) are all refused outright --
   none of them appear in this repository's real config, and silently
   half-supporting any of them would trade a clear rejection for a guess.
+  The `#` rule is WIDER than YAML's comment rule, deliberately: any line
+  containing a `#` anywhere is refused, including one inside a quoted scalar
+  (`- "lib#1"` denies, though real YAML reads it as the string `lib#1`).
+  Deciding which `#` opens a comment needs the quote tracking this reader
+  does not do, so it refuses the whole class. The denial message names
+  comments because that is the realistic cause, not because the check can
+  tell the two apart -- it cannot, and an operator who wrote a `#`-bearing
+  pattern will be told something slightly wrong about a line that is
+  nonetheless genuinely refused.
 - The top-level key set is exactly `{version, updates}`; nothing here reads
   or validates `registries:` or `enable-beta-ecosystems:`. Adding either is
   a conscious, reviewed extension of this file, same as the "Sanctioned
@@ -150,15 +159,25 @@ class NullNode:
 
 @dataclass
 class SequenceNode:
-    items: list[object]
+    items: list[Node]
     line: int
 
 
 @dataclass
 class MappingNode:
-    entries: dict[str, object] = field(default_factory=dict)
+    entries: dict[str, Node] = field(default_factory=dict)
     key_lines: dict[str, int] = field(default_factory=dict)
     line: int = 0
+
+
+# Everything this reader builds is one of the four, and every one of them
+# carries its own source line. Saying so is what lets a refusal name the line:
+# `object` has no `.line`, so `_require_mapping` and its two siblings were
+# reaching for an attribute their declared parameter type does not have. The
+# containers really only ever hold these four -- `_consume_mapping_entries`
+# stores a ScalarNode, a NullNode, or whatever `_parse_block` returned, and
+# nothing else -- so this is the type the parser already had.
+Node = ScalarNode | NullNode | SequenceNode | MappingNode
 
 
 # --- Lexical helpers ----------------------------------------------------------
@@ -231,7 +250,7 @@ def _split_key_value(content: str) -> tuple[str, str | None] | None:
 # that does not fit it is refused rather than guessed at.
 
 
-def _parse_block(lines: list[tuple[int, str]], idx: int, indent: int) -> tuple[object, int]:
+def _parse_block(lines: list[tuple[int, str]], idx: int, indent: int) -> tuple[Node, int]:
     if idx >= len(lines):
         raise DependabotContractError("unexpected end of file; more content was expected")
     lineno, raw = lines[idx]
@@ -247,10 +266,10 @@ def _consume_mapping_entries(
     lines: list[tuple[int, str]],
     idx: int,
     indent: int,
-    entries: dict[str, object],
+    entries: dict[str, Node],
     key_lines: dict[str, int],
 ) -> int:
-    def add(key: str, node: object, lineno: int) -> None:
+    def add(key: str, node: Node, lineno: int) -> None:
         if key in entries:
             raise DependabotContractError(
                 f"line {lineno}: duplicate key '{key}' (first seen at line {key_lines[key]})"
@@ -286,7 +305,7 @@ def _consume_mapping_entries(
 
 def _parse_mapping(lines: list[tuple[int, str]], idx: int, indent: int) -> tuple[MappingNode, int]:
     node_line = lines[idx][0]
-    entries: dict[str, object] = {}
+    entries: dict[str, Node] = {}
     key_lines: dict[str, int] = {}
     idx = _consume_mapping_entries(lines, idx, indent, entries, key_lines)
     if not entries:
@@ -296,7 +315,7 @@ def _parse_mapping(lines: list[tuple[int, str]], idx: int, indent: int) -> tuple
 
 def _parse_sequence(lines: list[tuple[int, str]], idx: int, indent: int) -> tuple[SequenceNode, int]:
     node_line = lines[idx][0]
-    items: list[object] = []
+    items: list[Node] = []
     while idx < len(lines):
         lineno, raw = lines[idx]
         if _indent(raw) != indent:
@@ -310,7 +329,7 @@ def _parse_sequence(lines: list[tuple[int, str]], idx: int, indent: int) -> tupl
         parsed = _split_key_value(remainder)
         if parsed is not None:
             key, value = parsed
-            entries: dict[str, object] = {}
+            entries: dict[str, Node] = {}
             key_lines: dict[str, int] = {key: lineno}
             idx += 1
             if value is not None:
@@ -355,19 +374,19 @@ def parse_document(text: str) -> MappingNode:
 # --- Semantic contract --------------------------------------------------------
 
 
-def _require_mapping(node: object, where: str) -> MappingNode:
+def _require_mapping(node: Node, where: str) -> MappingNode:
     if not isinstance(node, MappingNode):
         raise DependabotContractError(f"line {node.line}: {where} must be a mapping")
     return node
 
 
-def _require_scalar(node: object, where: str) -> ScalarNode:
+def _require_scalar(node: Node, where: str) -> ScalarNode:
     if not isinstance(node, ScalarNode):
         raise DependabotContractError(f"line {node.line}: {where} must be a plain value, not a nested structure")
     return node
 
 
-def _require_nonempty_sequence(node: object, where: str) -> SequenceNode:
+def _require_nonempty_sequence(node: Node, where: str) -> SequenceNode:
     if not isinstance(node, SequenceNode) or not node.items:
         raise DependabotContractError(f"line {node.line}: {where} must be a non-empty list")
     return node
@@ -379,7 +398,7 @@ def _reject_unknown_keys(mapping: MappingNode, allowed: frozenset[str], where: s
             raise DependabotContractError(f"line {lineno}: unknown key '{key}' in {where}")
 
 
-def _validate_string_list(node: object, where: str, *, allowed: frozenset[str] | None = None) -> None:
+def _validate_string_list(node: Node, where: str, *, allowed: frozenset[str] | None = None) -> None:
     seq = _require_nonempty_sequence(node, where)
     for item in seq.items:
         scalar = _require_scalar(item, f"each {where} item")
@@ -387,7 +406,7 @@ def _validate_string_list(node: object, where: str, *, allowed: frozenset[str] |
             raise DependabotContractError(f"line {scalar.line}: {where} item must be one of {sorted(allowed)}")
 
 
-def _validate_schedule(node: object) -> None:
+def _validate_schedule(node: Node) -> None:
     schedule = _require_mapping(node, "'schedule'")
     _reject_unknown_keys(schedule, SCHEDULE_KEYS, "a 'schedule' mapping")
     if "interval" not in schedule.entries:
@@ -413,17 +432,25 @@ def _validate_schedule(node: object) -> None:
             )
 
 
-def _validate_groups(node: object) -> None:
+def _validate_groups(node: Node) -> None:
     groups = _require_mapping(node, "'groups'")
     for name, group_node in groups.entries.items():
         group = _require_mapping(group_node, f"groups.{name}")
         _reject_unknown_keys(group, GROUP_ENTRY_KEYS, f"groups.{name}")
-        # No "must declare at least one key" check here: `_parse_mapping`
-        # already refuses to construct a MappingNode with zero entries (it
-        # raises "empty mapping" first), so `group.entries` is non-empty by
-        # construction whenever `group` exists at all -- a redundant check
-        # here would be exactly the vacuous-assertion class AGENTS.md's
-        # adversarial review protocol flags: no input could ever turn it red.
+        # No "must declare at least one key" check here: `group.entries` is
+        # non-empty by construction whenever `group` exists at all, so a
+        # redundant check would be exactly the vacuous-assertion class
+        # AGENTS.md's adversarial review protocol flags -- no input could ever
+        # turn it red.
+        #
+        # The guarantor is `_consume_mapping_entries`, not the "empty mapping"
+        # raise this comment used to cite. `_parse_block` has already required
+        # `idx < len(lines)`, exact indentation, and a non-sequence line before
+        # it calls `_parse_mapping`, so the first pass of the consume loop can
+        # neither break nor bail: it either adds an entry or rejects the line
+        # as unparseable. That `empty mapping` guard is therefore itself
+        # unreachable -- a structural backstop, kept, but the wrong thing to
+        # send a maintainer to as the safety net.
         if "patterns" in group.entries:
             _validate_string_list(group.entries["patterns"], f"groups.{name}.patterns")
         if "exclude-patterns" in group.entries:
@@ -444,7 +471,7 @@ def _validate_groups(node: object) -> None:
                 )
 
 
-def _validate_update_entry(node: object) -> None:
+def _validate_update_entry(node: Node) -> None:
     entry = _require_mapping(node, "each updates[] entry")
     _reject_unknown_keys(entry, UPDATE_KEYS, "an updates[] entry")
     for key in sorted(REQUIRED_UPDATE_KEYS):

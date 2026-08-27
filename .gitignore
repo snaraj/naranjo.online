@@ -14,6 +14,17 @@ coverage.out
 # what a failed run can leave here is the per-test output directory.
 frontend/test-results/
 
+# CPython's bytecode cache for the scripts/ci contract suites. Every documented
+# invocation passes -B and writes nothing, but -B is a flag a person can forget
+# and importlib still caches on the run that omits it — so a plain
+# `python3 -m unittest ...` leaves .pyc files behind that a later lane has to
+# clean by hand. Ignoring the directory costs nothing and removes that trap.
+# Only __pycache__/ is listed: CPython 3 writes bytecode nowhere else, and this
+# repository has no pytest (the suites are stdlib unittest), so a .pytest_cache
+# rule would be a guess at a tool that is not here. The sibling repository
+# carries this identical rule; the two move together.
+__pycache__/
+
 # Agent worktrees (see AGENTS.md, "Parallel agents in one checkout"). The
 # tracked .claude/settings.json is deliberately not covered by this rule.
 .claude/worktrees/

@@ -1,10 +1,17 @@
 """Hostile tests for the whole-render NetworkPolicy census (issue #86).
 
-The census in `scripts/ci/chart_render_census.py` replaces a raw-line
-document scan that a second `NetworkPolicy` could walk straight past by
-spelling its keys `kind :` and `spec :` -- valid YAML, invisible to a
-prefix match, and an additive allow-all for every Pod once Kubernetes has
-it. The behavioural half of the proof lives in `chart-egress-pin.sh`, whose
+The census in `scripts/ci/chart_render_census.py` SUPPLEMENTS -- it does not
+replace -- the raw-line document scan a second `NetworkPolicy` could walk
+straight past by spelling its keys `kind :` and `spec :`: valid YAML,
+invisible to a prefix match, and an additive allow-all for every Pod once
+Kubernetes has it. That raw-line scan is still live and still gating every
+pull request as `chart-egress-pin.sh`'s assertions (a), (b) and (f), under
+its own `minimum_mutations=19` floor; the census is assertions (c), (d) and
+(g) layered over it, with its own `minimum_census_mutations=48`. The shell
+script's own header is the honest statement of the relationship ("AND WHY
+THAT IS NOT ENOUGH ON ITS OWN"), and reading `replaces` here would invite
+deleting a gate that is still doing work.
+The behavioural half of the proof lives in `chart-egress-pin.sh`, whose
 assertions (d) and (g) rewrite the REAL Helm render into 48 hostile ones and
 require the census to refuse every single one. This suite is the other half:
 it pins the reader itself, one rejection per test, without needing helm --
@@ -334,8 +341,16 @@ class ReaderReadsRealYAML(unittest.TestCase):
     def test_a_document_marker_inside_a_block_scalar_does_not_split_the_stream(self):
         docs = parse("data: |\n  ---\n  kind: NetworkPolicy\nkind: ConfigMap\n")
         self.assertEqual(len(docs), 1)
-        self.assertEqual(docs[0]["kind"], "ConfigMap")
-        self.assertEqual(docs[0]["data"], "---\nkind: NetworkPolicy\n")
+        # `parse` returns list[object] because a YAML document legitimately IS
+        # any type -- that is the reader's honest return type, not a gap to
+        # paper over upstream. So the narrowing happens here, where the test
+        # already knows the shape it asked for, and it is a real check: a
+        # reader that started returning a scalar for this input fails on this
+        # line saying so, instead of raising TypeError on the next one.
+        document = docs[0]
+        assert isinstance(document, dict), f"expected one mapping document, got {type(document).__name__}"
+        self.assertEqual(document["kind"], "ConfigMap")
+        self.assertEqual(document["data"], "---\nkind: NetworkPolicy\n")
 
     def test_comments_are_ignored_wherever_they_appear(self):
         self.assertEqual(parse("# leading\nkind: NetworkPolicy  # trailing\n  # indented\n"),
@@ -974,7 +989,7 @@ class ReaderFailsClosed(unittest.TestCase):
 
 
 class EveryGuardClauseTheKillBatteryReachedIsPinned(unittest.TestCase):
-    """One test per SURVIVING mutant of PR #96's round-six kill battery.
+    """One test per KILLABLE clause PR #96's round-six kill battery reached.
 
     Round five closed two divergence classes; round six asked the next
     question -- is every clause those repairs introduced actually load
@@ -983,10 +998,14 @@ class EveryGuardClauseTheKillBatteryReachedIsPinned(unittest.TestCase):
     `_read_document`, and every clause inside `_bs_indentation`, `_bs_breaks`,
     `_bs_skip_indent`, `_bs_has_more`, `_block_scalar_body` and
     `_line_break_after`) -- 84 mutants -- and runs the whole suite and the
-    census gate against each. Sixty-nine died. The nine tests below kill nine
-    of the fifteen that survived; the other six are PROVEN equivalent by
-    measurement and are named in the module's own comments rather than pinned
-    by a test that no input could fail.
+    census gate against each. Sixty-nine died. The SIX tests below kill the
+    nine of the fifteen survivors that a test can kill -- one test per clause,
+    not one per mutant, since several mutants of one clause die to the same
+    input; the other six survivors are PROVEN equivalent by measurement and
+    are named in the module's own comments rather than pinned by a test that
+    no input could fail. 69 + 15 = 84 and 9 + 6 = 15; the census module's own
+    docstring said "78 die", which closes against nothing, and is corrected in
+    this same commit.
 
     The first is the round-five review's own finding, and the only survivor
     that was WRONG rather than merely unpinned.

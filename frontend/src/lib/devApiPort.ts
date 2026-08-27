@@ -7,7 +7,7 @@
 // proxy target off 127.0.0.1 entirely — a value containing "@" is parsed by
 // `new URL` as userinfo, moving whatever follows it into hostname position
 // (`new URL('http://127.0.0.1:' + '80@evil.example')` resolves hostname to
-// "evil.example", not "127.0.0.1"; see devApiPort.test.mjs for the
+// "evil.example", not "127.0.0.1"; see tests/dev-api-port.test.mjs for the
 // reproduction). Validating strictly, BEFORE any URL is ever built, closes
 // that regardless of how the value is later used.
 export function validatedDevApiPort(raw: string): string {

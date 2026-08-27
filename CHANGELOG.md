@@ -7,6 +7,287 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.49] - 2026-08-26
+
+### Added
+
+- Two CI gates over string-typed interfaces nothing was checking. Both pin
+  BEHAVIOUR rather than inventory, and each refusal prints the exact one-line
+  allowlist entry that lifts it.
+  `scripts/ci/test_subcommand_callers.py` (12 tests) proves every subcommand
+  `release_contract.py` registers is reachable from the repository that ships
+  it. It reads the 27 names off the live `argparse` parser — never a
+  hand-maintained list — and sweeps 40 comment-stripped files (6 workflow, 16
+  script, 9 doc, 9 test at this head) for each as a BARE TOKEN, ignoring line
+  structure entirely. That last part is the whole point: the near-miss this gate
+  was built for was an audit reporting `release-record` dead because its
+  invocation in `release-publisher.yml` is wrapped with a trailing backslash, so
+  any pattern matching the name together with its first argument found nothing.
+  Removing it was proven to break the publisher at runtime. The gate fails on
+  zero callers of any tier and, separately, on test-only reachability; one
+  subcommand trips the second refusal today (`immutable-settings`) and is
+  allowlisted with its reason.
+  `scripts/ci/test_workflow_integrity.py` (25 tests) refuses three constructs in
+  `.github/workflows/` that silently change what a gate MEANS rather than what
+  it does: `continue-on-error: true` on the required-checks set, an `env:` key
+  that shadows an outer declaration or redeclares one of the six tool pins
+  `install-tools.sh` owns, and a custom shell on a required check.
+  Each rule reads EVERY scope its own construct can be written at, which is the
+  single defect three of the four review rounds on this entry found in a
+  different rule each time — the rule's own construct spelled where the rule was
+  not looking, at `actionlint` rc=0 on a real workflow. `continue-on-error` has
+  two such positions (a job and a step) and both are read. A custom shell has
+  three: a step's `shell:`, and a `defaults.run.shell` at job or workflow level,
+  which carries no step name and reshells every `run:` step beneath it. An
+  `env:` declaration has four, because four scopes supply a step's environment:
+  a job container's `env:` (outermost — every `run:` step in the job inherits
+  it), the workflow-level `env:`, a job's, and a step's own. A service
+  container's `env:` is deliberately NOT one: it sets the environment of a
+  different container from the one steps run in, so no step ever reads it. The
+  scope set of each rule is written down in the module docstring, audited
+  against GitHub's workflow syntax rather than against what this repository
+  happens to write.
+  It resolves all 6 workflow files into 13 jobs and 90 steps through its own
+  fail-closed structural reader — a workflow it cannot read fails the suite
+  rather than passing quietly — and derives the 7-job required-checks set from
+  `EXPECTED_MAIN_JOBS` and `EXPECTED_CODEQL_JOBS`, never re-listing it, so it
+  cannot drift from what the publisher authorizes against.
+  Neither gate carries a closed inventory, deliberately: there is no "exactly
+  these N subcommands", no step or job census, and no env-key list, so adding a
+  step, a job, an env key or a subcommand needs no edit to either file. Both
+  allowlists ratchet shut in both directions — an entry naming a subject that
+  does not exist, or whose subject no longer carries the construct it exempts,
+  is a hard error — and both ship with a reason column the parser refuses to
+  accept blank. `scripts/ci/workflow-integrity-allowlist.txt` ships empty
+  because nothing needed waiving to reach green, so both ratchets are driven by
+  fixtures rather than left vacuous. Both suites run under `pr-gate.yml`'s
+  existing wildcard discovery (`-p 'test_*.py'`) with no workflow edit.
+  Every rule, reader branch, allowlist refusal and lift path in the three
+  suites is mutation-killed, under a harness that reports a selection matching
+  zero tests as a fault rather than counting it as a kill. An earlier revision
+  of this entry claimed zero survivors for the workflow reader's sweep; an
+  independent sweep found two, and three more turned up in the sweep of the
+  repair that closed them. All five are fixed here rather than reported: two
+  fixture tables (the resolvable and unresolvable step shapes) could be emptied
+  outright with the suite staying green, which would have left the reader's
+  boundary — the part of that file that matters most — pinned by nothing; and
+  the ordered scope list rule 2 reports a shadow from could be reordered, or
+  have the container scope dropped from the step comparison, with nothing going
+  red. Each now has the same floor the other tables carry. One honest limit on
+  that class of assertion: a floor whose only job is to make ANOTHER mutation
+  detectable cannot itself be killed while the table is populated, and the only
+  assertion that would kill it is a minimum count — an inventory pin this gate
+  refuses to become.
+  Three classes of defect were found by successive adversarial reviews of this
+  entry's own earlier heads and repaired here, all of the same shape — a check
+  that looks strict, reads as strict, and refuses nothing.
+  First, the structural reader accepted a step only when the item line was
+  `- <key>: …`, so seven other VALID shapes — a bare `-` with the keys below it,
+  a sequence indented level with its own `steps:` key, a wider gap after the
+  dash, a comment between the dash and the first key, quoted keys, and the
+  flow/anchor forms — were skipped whole. A skipped step is invisible to all
+  three rules, so `continue-on-error: true`, `shell: sh`, and a shadowed pin
+  each stayed GREEN while `actionlint` returned rc=0 and the runner would have
+  executed them. The reader now derives the sequence indent from its first item
+  and each step's property column from where its first key lands.
+  Second, six of the rules could be DELETED OUTRIGHT with the suite staying
+  green: every workflow and subcommand here is clean, so no shipped input ever
+  reached a refusal. The rules were correct — mutating the real files fires each
+  one — but their removal was undetectable, which makes a rule a comment.
+  Fixtures now drive all three workflow rules, both subcommand rules, and both
+  allowlist ratchets to a real refusal and back through their printed lift line,
+  with a positive control on each so none can pass by refusing everything.
+  Third — and this is what the other two were symptoms of — the reader
+  recognised the spellings somebody had thought of and treated everything else
+  as "not a match", which leaks BY CONSTRUCTION. Ten further evasions were
+  measured against the real `pr-gate.yml`, every one valid YAML that GitHub
+  Actions would honour: six ways of writing a true `continue-on-error` the
+  reader compared as not-true (the scalar on the following line, an explicit
+  `!!bool` tag, and a `${{ }}` expression, each at job and at step level); the
+  two `defaults.run.shell` positions; and two step-level `env:` entries whose
+  key the reader could not name and therefore dropped, one of them an explicit
+  key (`? GO_COVERAGE_FLOOR` / `: '0'`). Eight of the ten are `actionlint` rc=0
+  as spelled; an earlier revision said all ten were, and that is corrected here
+  rather than restated. The two `defaults.run.shell` rows were measured with
+  `shell: sh`, which `actionlint` rejects at rc=1 for an incidental reason — a
+  shellcheck warning that POSIX `sh` has no `pipefail`, raised by this
+  repository's own `set -euo pipefail` convention rather than by the construct.
+  The CLASS is genuinely rc=0-reachable and was re-measured both ways:
+  `defaults.run.shell: bash` and `: pwsh` are rc=0 at job and at workflow level,
+  green before the repair and red after it. The explicit-key row is corrected
+  the same way: it reddens because the READER refuses a key it cannot name, not
+  because rule 2 sees a shadowed floor. `pr-gate.yml` declares
+  `GO_COVERAGE_FLOOR` at STEP level only, so a plain step-level `env:
+  GO_COVERAGE_FLOOR` elsewhere in that file has no outer declaration to shadow
+  and stays green — the construct is the finding, the live floor is not
+  currently shadowable, and saying otherwise overstated it.
+  The repair is not another list of forms. The reader now RESOLVES a small,
+  explicit set of scalar spellings — a plain token, a quoted string without
+  escapes, or nothing at all with nothing nested under it — and REFUSES
+  everything else in every position a rule reads, structure and value alike:
+  tags, aliases, anchors, flow nodes, expressions, merge keys, explicit keys,
+  an `env:` entry it cannot name, a job that declares `steps:` and resolves
+  none, and multi-document files. `continue-on-error` narrows further to `true`
+  or `false` in any casing, so that rule is TOTAL: every input either raises or
+  resolves to one of two booleans, and there is no third outcome for a spelling
+  to hide in. The boundary is written down in the module docstring, and a
+  fixture table of twelve exotic-but-valid ways of writing `true` — none of
+  which has a branch anywhere in the module — proves the property that matters:
+  a spelling nobody anticipated turns the gate RED with no code change.
+  Fourth, the same audit was owed to rule 2 and had not been given: it read a
+  step's `env:` and nothing else, so its own construct one and two scopes out
+  was invisible. Measured on the real `release-publisher.yml` — the one workflow
+  here with both an outer and a job `env:` populated — a job-level `env: IMAGE`
+  shadowing the workflow-level declaration, a job-level `env: GITLEAKS_VERSION`
+  and a workflow-level `env: TRIVY_SHA256` were all GREEN at `actionlint` rc=0,
+  while the identical key one scope deeper went red. So was a job container's
+  `env: GITLEAKS_VERSION`, the fourth scope, found by auditing GitHub's syntax
+  rather than by being shown it. All four are refused now, each with its own
+  allowlist subject (`<workflow.env>/KEY`, `<job>/<job.env>/KEY`,
+  `<job>/<container.env>/KEY`) that ratchets shut when the declaration it
+  exempts disappears. The honest scale of it: no live exploit existed at any
+  scope, because `release_contract.py` pins `EXPECTED_IMAGE` and
+  `install-tools.sh` assigns every pin unconditionally rather than
+  `${VAR:-…}` — this rule is preventative at every scope, so what was closed is
+  a coverage hole, not an open door.
+  And one PROMISE was wrong while the code was right. Both the module docstring
+  and the allowlist header said every refusal lifts through one allowlist line,
+  and offered two examples that do not: a reader refusal is raised while the
+  file is being resolved, before any rule consults the allowlist, so pasting the
+  exact entry changes nothing and no lift line is printed. That behaviour is
+  kept, because an allowlist entry waives a verdict about a value the reader
+  RESOLVED and there is no verdict to waive when nothing resolved — silencing an
+  unresolvable construct is the silent pass the whole inversion exists to
+  remove, and the entry would have to name its subject by line or raw text,
+  which is the brittle inventory pin this gate refuses to become. The
+  documentation is corrected instead, in all three places, with the real
+  remedies (block style; a resolvable spelling — `shell: "bash -e {0}"` quoted
+  resolves and lifts where the same value unquoted does not; or one reviewed
+  widening of `resolve_scalar`). A test now pins both directions, so the
+  paragraph cannot drift from the code again.
+- A third gate closing a structural hole in the enforced secret scans:
+  `scripts/ci/commit_identity_contract.py`, wired into `pr-gate.yml`'s
+  `security` job and covered by `scripts/ci/test_commit_identity_contract.py`
+  (19 tests). `gitleaks git` and `gitleaks dir` both read BLOB content, so a
+  commit's AUTHOR and COMMITTER identity and its message body have zero coverage
+  from either scan — yet those are exactly what requirement 3 constrains, and an
+  address that lands there is permanently public and unfixable without the
+  history rewrite requirement 2 forbids. The gate walks the range the event
+  actually contributes and refuses a non-sanctioned author or committer
+  (`identity`) and a `Co-authored-by:` trailer (`co-author`), matching the
+  trailer the way `git interpret-trailers` does so it is not evaded by case or
+  padding. Two design points are load-bearing. It is RANGE-scoped, never a
+  history census, so it never re-litigates the root commit and needs no edit as
+  commits accumulate. And a refusal names the SHA and the rule but never echoes
+  the offending address: CI logs on a public repository are public, so a gate
+  that exists to keep an address out of the permanent record must not publish it
+  while refusing it — a rule the suite pins, and which the allowlist follows by
+  keying entries on SHA and rule alone.
+  `scripts/ci/commit-identity-allowlist.txt` records the nine pre-existing
+  refusals measured across the 113 commits reachable from `main` — four commits
+  whose author or committer predates the pinned-identity convention, the root
+  commit, and four squash-merge trailers GitHub's UI added automatically. They
+  are named, not rewritten, and the file says why. The remaining 104 pass, and
+  72 of those carry GitHub's own `noreply@github.com` committer from an
+  owner-performed squash or rebase merge: the rule admits that value for the
+  committer field only, because it names no person and no owner-merge can avoid
+  it, while still refusing it as an author. Refusing it instead would have made
+  every main push red forever and turned the lift path into an ever-growing
+  census of merge commits — the brittle shape this wave's gates exist to avoid.
+  Every rule, allowlist refusal and lift path in it is mutation-killed, and
+  both CI event directions plus the unsupported-event refusal were simulated
+  locally. (An earlier revision of this entry put a count on that sweep. It is
+  removed rather than restated: the number was measured at an earlier head and
+  not re-derived at this one, and an unreproducible figure in a release
+  artifact is the same defect as a wrong one.)
+
+### Removed
+
+- Dead frontend code with no caller left, verified against every file under
+  `frontend/src` with a COMMENT-STRIPPED sweep so a mention inside a comment
+  could not be mistaken for a use: the orphaned panel-index READ path
+  (`PanelIndexEntry`, `PanelIndex`, `parsePanelIndex`, `loadPanelIndex`),
+  which nothing has called since panels became blocks mounted by hardcoded id;
+  the freshness clock (`watchClock`, `panelClockIntervalMs`), orphaned when the
+  badge left at issue 179; `isSeriesView`; the `.icon-button[disabled]` rule,
+  which styled a control that no longer exists; the unconsumed
+  `--palette-status-unavailable` / `--panel-status-unavailable` token chain;
+  and `ContributionGrid`'s `showMonths` prop, which neither call site passes.
+  `panelsIndexUrl`, `panelAge`, `seriesViews`, `--panel-status-ok`,
+  `data-panel-status`, `fullWidth` and `cardTitle` were each checked and KEPT:
+  every one is either live or defended in a comment as a structural backstop.
+- Duplicated and vacuous test coverage, keeping the stronger copy each time and
+  MIGRATING the values only the weaker copy carried. The flagship was a
+  `block-size: 7rem` assertion against `ContributionGrid.svelte` in which every
+  `7rem` in that component sits inside a comment — the one it matched being the
+  comment recording that `block-size: 7rem` was REMOVED at issue 130 — so it had
+  been green and meaningless ever since, while pinning the literal that issue
+  replaced.
+- Four re-implementations of one workflow-step extractor and three
+  near-identical synthetic-git-repo builders in `scripts/ci/test_release_contract.py`,
+  plus one strictly subsumed test. Zero assertions were lost that the file did
+  not already make elsewhere, and every workflow-step extraction was proven
+  SHA-256 identical before and after — the byte equality is the load-bearing
+  claim, and no count of extraction shapes is asserted, because none of the
+  three methods tried (call sites, distinct constants, an instrumented run)
+  agrees with the others on what a "shape" is.
+
+### Fixed
+
+- The CodeQL concurrency guard. The group falls back to `github.sha` off a pull
+  request, so the weekly SCHEDULE run shares a group with a main PUSH run still
+  analysing that commit and could cancel it. The publisher requires a
+  successful `event=push` CodeQL run at that exact SHA, and CodeQL fires on push
+  once per push, so that single cancellation made a version permanently
+  unreleasable. Adopts the sibling repository's
+  `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`, and the
+  release-contract pin is TIGHTENED to that stricter string rather than removed.
+- `TestNoSelectorEverSelectsOnTheVersionLabel` asserted only inside a regex
+  match loop, so a reader that stopped matching passed green while checking
+  nothing. Each chart template must now yield at least one selector block.
+- Ten pre-existing Pyright errors, at the root and with no `# type: ignore`, no
+  widening to `Any`, and no weakened assertion: `chart_render_census.py` (4, via
+  a `NoReturn` diagnostic signature, a `Callable` mutation-table type, and a
+  `PolicyFacts` protocol that finally CHECKS the duck-typed stand-in),
+  `dependabot_contract.py` (4, by naming the four-node union its refusal path
+  already depended on), and `test_chart_render_census.py` (2).
+- The remote-origin sweep in three frontend suites matched a bare `//`, so any
+  JavaScript line comment in the eight swept files turned CI red claiming a
+  remote origin. Now requires a dotted authority, keeping protocol-relative
+  origins flagged rather than dropping that half.
+- Comments that stated a wrong number, a wrong scope, or a wrong mechanism: the
+  census's round-six kill count (78, where the arithmetic closes at 69), a
+  header counting eight constructs where nine follow, two suites miscounting
+  their own tests, a claim that the census "replaces" a raw-line scan that is
+  still live and gating every pull request, a comment defending an echoed path
+  the code never echoes, and five in the dependabot contract.
+- `AGENTS.md` claimed successful main CI creates the plain git tag. It does not
+  and cannot: `release-after-main.yml`'s only job holds `actions: write` plus
+  `contents: read`, so it can create no ref at all, while
+  `release-publisher.yml`'s `publish` job holds `contents: write` and POSTs the
+  tag object and `refs/tags/` from inside the privileged job — so no tag exists
+  before authorization. The split is enforced by permissions, not convention,
+  and the contract now names the permission doing the enforcing.
+- `AGENTS.md`'s commit-signing one-liner was broken, and an earlier revision of
+  the contract taught the break:
+  `-c user.signingkey="key::$(ssh-add -L | grep ssh-ed25519)"` matches EVERY
+  loaded ed25519 line, so `key::` receives a multi-line value and signing fails
+  on a malformed key — which any agent that also loads a deploy or push key
+  hits. It is replaced by a `signing_key()` function that intersects the keys
+  GitHub has registered for SIGNING against the keys the agent actually holds
+  and requires exactly one match, naming no key comment, hostname, or ordering.
+  The section also documents the local-verification trap that selection exposes:
+  the allowed-signers principal must be the BARE email, because a principal
+  containing a space makes ssh read the space as a field break and report
+  `No principal matched.` — the identical verdict a genuine wrong-key negative
+  control gives, so a malformed file false-passes the negative control while
+  proving nothing at all. Both controls must be run and must DIFFER (`G` against
+  `U`).
+- `.gitignore` now carries the `__pycache__/` rule the sibling repository
+  already has. Every documented invocation of the `scripts/ci` suites passes
+  `-B`, but `-B` is a flag a person can forget and importlib still caches on the
+  run that omits it, leaving `.pyc` files for a later lane to clean by hand.
+
 ## [0.1.48] - 2026-08-26
 
 ### Added

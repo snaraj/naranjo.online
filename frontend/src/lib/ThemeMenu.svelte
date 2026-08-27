@@ -242,9 +242,11 @@
   }
 
   /* The trigger's chrome is the shared .icon-button rule in styles.css — one
-     definition for every page-level icon control, so the reading-mode button
-     and the refresh button beside it cannot drift apart. Only the popover and
-     its swatches are styled here. */
+     definition for every page-level icon control, so this trigger and the
+     gallery's own lightbox controls cannot drift apart. (The refresh button
+     that used to sit beside this one left at issue 179; the rule stayed
+     shared because it never described a pair.) Only the popover and its
+     swatches are styled here. */
   .popover {
     position: absolute;
     top: calc(100% + 0.5rem);
