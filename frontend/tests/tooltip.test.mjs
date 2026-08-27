@@ -29,6 +29,7 @@ import {
 import {
   anchoredPlacement,
   clampAxis,
+  drivenBinding,
   finePointerQuery,
   pixelLength,
   pointerPlacement,
@@ -417,6 +418,63 @@ test('the detail follows a fine pointer and is anchored for everyone else', () =
     mover[0],
     /getBoundingClientRect|getComputedStyle|clientWidth|clientHeight/,
     'the follow path reads layout every frame; the tip’s box and the viewport are measured once when it opens'
+  );
+});
+
+test('a caller that resolves many subjects must also say which one a focus landed on', () => {
+  /* The contract behind the driven path, executed rather than described.
+     Without a refusal this is a comment, and the failure it prevents is a
+     SILENT one: a region caller that supplies `resolve` and forgets `anchor`
+     type-checks, renders, and quietly falls back to the focus guess — the
+     element at the viewport origin, which for a scrolled strip is a cell off
+     the left edge of its own scrollport rather than the one the reader is on.
+     Nothing goes red; the readout simply describes the wrong cell.
+
+     The pin is on the binding's SHAPE, not on who happens to call it today.
+     There is no list of callers here to fall out of date, and a region
+     component written next year is covered by having been written. */
+  const subject = {};
+  const resolve = () => null;
+  const report = () => {};
+
+  // The tile shape: one subject, so the guess this module makes is the only
+  // answer there is. Not driven, and never refused.
+  assert.equal(drivenBinding({ report }), false);
+  assert.equal(drivenBinding({ report, host: subject }), false);
+
+  // And the tile shape the PRODUCTION caller actually builds, which is neither
+  // of those two: `DetailTip` names all five props in one object literal, so
+  // every key is PRESENT and a tile's unsupplied ones hold `undefined`.
+  // Omitted and present-but-`undefined` are the same VALUE and a different
+  // SHAPE — `'resolve' in binding` is false for the first and true for the
+  // second — so a refusal keyed on the KEY rather than on the value satisfies
+  // every line in this test and still throws at bind time on every tile the
+  // page renders. The contract is about the value `undefined` carrying "I do
+  // not drive this", so the pin has to be taken on the shape a caller passes.
+  assert.equal(
+    drivenBinding({ host: undefined, resolve: undefined, select: undefined, report, anchor: undefined }),
+    false
+  );
+
+  // The region shape, both halves of it. `null` is a driving caller saying
+  // "nothing is selected" — it is a SELECTION state, not an absence of the
+  // contract, so it drives exactly as an element does.
+  assert.equal(drivenBinding({ report, resolve, anchor: null }), true);
+  assert.equal(drivenBinding({ report, resolve, anchor: subject }), true);
+
+  // And the shape that must not be representable. Omitted and explicitly
+  // `undefined` are the same value and are refused identically, which is what
+  // makes "pass null, never undefined" enforceable rather than advisory.
+  assert.throws(() => drivenBinding({ report, resolve }), TypeError);
+  assert.throws(() => drivenBinding({ report, resolve, anchor: undefined }), TypeError);
+
+  // The refusal has to sit ON the production path, not beside it: a binder
+  // that kept its own inline comparison would leave every assertion above
+  // true and the defect intact.
+  assert.match(
+    tooltipSource,
+    /const driven = drivenBinding\(binding\)/,
+    'the binder decides `driven` without going through the refusal'
   );
 });
 

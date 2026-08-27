@@ -24,6 +24,8 @@
 // left, dismissal-by-focus can no longer be the only closer: an outside
 // pointerdown always dismisses, focus or no focus.
 
+import { ringTarget } from './keys.ts';
+
 // Disclosure is the toggle's complete interaction state.
 export interface Disclosure {
   // open mirrors whether the popover is rendered visible.
@@ -120,21 +122,13 @@ export function dismiss(state: Disclosure): boolean {
 // swatchKeyTarget maps a key pressed on swatch index (of count) to the next
 // index to focus, 'dismiss' for Escape, or null for keys this widget leaves
 // alone (Tab keeps its native order). Arrows wrap in both directions.
+//
+// The ring itself is lib/keys.ts's, shared with the token panel's segmented
+// pills and the gallery's position dots (issue 219 review round 2). This
+// widget's ONE difference from those is Escape, which closes a popover and
+// means nothing to a control that is always on screen — so that is the one
+// case stated here, and the movement arithmetic exists once for all three
+// rather than in three hand-written key tables free to disagree.
 export function swatchKeyTarget(key: string, index: number, count: number): number | 'dismiss' | null {
-  switch (key) {
-    case 'Escape':
-      return 'dismiss';
-    case 'ArrowRight':
-    case 'ArrowDown':
-      return (index + 1) % count;
-    case 'ArrowLeft':
-    case 'ArrowUp':
-      return (index - 1 + count) % count;
-    case 'Home':
-      return 0;
-    case 'End':
-      return count - 1;
-    default:
-      return null;
-  }
+  return key === 'Escape' ? 'dismiss' : ringTarget(key, index, count);
 }

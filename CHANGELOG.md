@@ -7,6 +7,154 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.50] - 2026-08-27
+
+### Added
+
+- A hand-rolled gesture layer (`src/lib/gesture.ts`, `src/lib/pullToRefresh.ts`)
+  built on Pointer Events with no third-party dependency: a shared exponential
+  rubber-band curve, a distance-or-velocity swipe decision, a horizontal claim
+  test that never takes a gesture the page's vertical scroll wanted, and a
+  settle that always returns the surface to rest.
+- Pull-to-refresh, reinstated as a custom gesture rather than the browser's.
+  It engages only at the top of the document, resists past its limit, arms at a
+  threshold the indicator announces with rotation and fill as well as colour,
+  refreshes the panels' own data in place, and settles home on every exit
+  including a failed request. `overscroll-behavior-y: none` — the defended fix
+  from issue #187 — stays exactly as it was; suppressing the native bounce is
+  what makes a settle guaranteeable instead of a race.
+- Swipe navigation on the media gallery, with a position readout and dot
+  controls that are reachable by pointer, keyboard and assistive technology:
+  a `radiogroup` with one tab stop, arrow/Home/End movement, and focus
+  following the choice.
+- Keyboard operation for the three token-usage segmented controls, which
+  declared `role="radio"` and handled no keys at all: arrow/Home/End movement
+  with a roving tabindex.
+- `src/lib/keys.ts`, the one keyboard grammar every composite widget on the
+  page shares — which presses are the browser's chords rather than a widget's,
+  and where a ring of options moves. The grid strip, the segmented pills, the
+  gallery dots and the reading-mode swatches all read it, so one page stopped
+  carrying three hand-written key tables free to disagree.
+
+### Fixed
+
+- Every contribution grid now answers a tap, a hover and a keyboard focus with
+  a real readout. The shared primitive rendered its detail card behind
+  `{#if cardTitle && !cell.absent}`, so the calendar grid carried one on none
+  of its cells and the token grid on 15 of 371; everything else fell back to a
+  native `title=`, which no engine triggers on touch. The gate is gone, cells
+  are `role="option"` in a `listbox` strip with arrow-key movement, and absent
+  cells report "no data" rather than being unreachable. Under the dataviz floor
+  a heatmap cell whose magnitude is legible only as a colour shade needs that
+  colour paired with text — so a grid that could not be interrogated on touch
+  was in breach of the floor on that device, not merely unpolished.
+- The fixed reading-mode control no longer renders over page content at phone
+  widths. It had a transparent background and reserved no flow space, so
+  right-aligned panel content passed underneath it; measured 30×33px of overlap
+  at 390×844.
+- A page scroll no longer destroys a grid's keyboard cursor. The detail closed
+  whenever the cell it was anchored to moved, and closing reported the
+  selection away with it, so the ring and the `aria-activedescendant` a screen
+  reader follows both disappeared because the reader scrolled. A cell-anchored
+  readout now follows its cell and closes only once that cell has left the
+  viewport; a pointer-following one still closes, because its anchor is the
+  cursor rather than the cell. This bit the plainest keyboard path there is:
+  focusing the strip opens the readout synchronously while the browser's own
+  scroll-into-view for that same focus arrives a frame later, so tabbing to a
+  grid produced a readout that closed itself.
+- The grid's keyboard cursor is scrolled into the strip it lives in, on every
+  move. The strip is far wider than its box and opens on its newest column, so
+  a cursor routinely landed outside the scrollport — measured at 390×844, a
+  tab into the grid marked a cell at x −11 against a strip starting at 51, and
+  `Home` marked one at −323 — while the new key handler swallowed the arrows
+  that used to pan the strip natively. Adding a cursor at the cost of the pan
+  moved the defect to a different reader rather than fixing it. The move is
+  instant in every reading mode: a cursor step is where the cursor IS, not a
+  journey, so there is no motion for a reduced-motion preference to switch off.
+- Tabbing into a grid names the newest dated cell rather than whichever one
+  sits at the viewport's origin. The shared detail primitive answered a focus
+  by resolving the element at point 0,0 — sound for a caller with one subject,
+  wrong for a strip with 371 of them — so a caller that drives its own anchor
+  now owns its focus reveal too.
+- A readout is closed by a pan of the strip that carries its cell out of view,
+  not only by a scroll of the page. The re-anchor repair asked the viewport's
+  block extent alone, so panning the strip left the card, the ring and
+  `aria-activedescendant` naming a cell 364px past the strip's right edge. The
+  guard now clips against the subject's own scrollport on both axes, which is
+  safe to ask precisely because the cursor is brought into that port first.
+- A refresh no longer discards the keyboard cursor. Every delivery rebuilds
+  the column arrays, and the grid dropped its selection on any change of their
+  identity — so the ring, the readout and the `aria-activedescendant` a screen
+  reader follows all vanished when the page did its minute's work, or when the
+  new pull gesture asked for it. The cursor names a day, and a window that
+  still contains that day keeps it.
+- The gallery's position dots are operable by keyboard. They shipped as a
+  `tablist` with a roving `tabindex` and no key handler at all — the same
+  shape ("declared a role, handled no keys") this release fixes in the token
+  panel's segmented pills — which left seven of eight dots unreachable and the
+  eighth's press a no-op. They are now a `radiogroup` moving on the shared
+  key ring, with focus following the choice; the movement arithmetic
+  (`src/lib/keys.ts`) is one module for all three composite widgets on the
+  page, and a source pin fails any composite role declared without a key
+  handler on the same element.
+- A swipe no longer swallows the reader's next activation. A drag suppresses
+  the one click it produces, but a touch swipe produces none, so the
+  suppression sat armed — and a keyboard reader, who raises no pointerdown to
+  disarm it, walked straight into it. Measured before: swipe the gallery,
+  focus the frame, press Enter, and the lightbox did not open. A click
+  reporting a count of zero is a keyboard activation and is never suppressed.
+- Modifier chords reach the browser. Both new key handlers branched on the key
+  alone, so `Cmd`/`Alt+Arrow` (Back) and `Ctrl+Home` (top of document) were
+  swallowed by the grid strip and by every segmented control.
+- The page pull stands down on a mostly-horizontal drag, on the same predicate
+  the swipe already used; a diagonal of dx 160 / dy 20 moved the page 18.8px
+  before. The refresh CONTROL no longer displaces the page at all, since a
+  press drags nothing, which keeps the travel transform — and the containing
+  block it creates for `<main>`'s 101 fixed descendants — to the gesture
+  alone. That re-parenting is harmless for a measured reason rather than an
+  assumed one: a pull engages only at the top of the document, and nothing
+  fixed inside `<main>` is visible there. The nearest detail host is 4375px
+  down the page at 390×844, 3241px at 820×1180 and 3055px at 1024×1366 and
+  wider — so the worst case is the tallest touch viewport, 3055px against
+  1366px, a margin of 1689px. The rendering lane pins the RELATION rather than
+  any of those numbers, so the day it stops holding is a red build rather than
+  a silent re-parenting.
+- The detail primitive refuses a caller that resolves many subjects without
+  saying which one a focus landed on. That pairing was documented and nothing
+  enforced it, so the next region caller could reacquire the viewport-origin
+  guess this release removed — silently, since an omitted optional prop
+  type-checks and renders. `drivenBinding` in `src/lib/tooltip.ts` throws at
+  bind time instead, keyed on the binding's shape rather than on a list of
+  callers, and `null` is how a driving caller says "nothing selected".
+- The grid `listbox` owns its options: the layout div they sit in is
+  `role="presentation"`, which is the only way ARIA admits them.
+- Half the grid's arrow keys were dead. With no cursor yet, `ArrowRight` and
+  `ArrowDown` stepped past the end of the cell list, hit the range guard and
+  did nothing at all — permanently, since nothing they could do would give
+  them the cursor they needed — while `ArrowLeft` and `ArrowUp` worked and hid
+  it. Every arrow now opens a cold strip on its newest dated cell, which is
+  what the handler always claimed to do. The arithmetic moved to
+  `lib/grid.ts`'s `gridCursorTarget`, where the unit suite executes it.
+
+### Changed
+
+- The 44px touch-floor sweep now measures `min-inline-size`, `min-width`,
+  `min-block-size` and `min-height` as well as definite sizes. A control whose
+  only lower bound is a minimum previously sized no axis by the walk's
+  reckoning and passed a floor it could plainly break; the walk went from 4
+  measured dimensions to 18.
+- The reading-mode popover's position lane measures the box AT REST. Issue
+  #194 recorded a ±1 px cross-load flake on three engines and attributed it to
+  font-metric timing; that was wrong. The popover reveals with a 120ms
+  `translateY(-0.25rem)` slide and the lane read the box the instant it became
+  visible, so both of its readings were samples of a box still travelling and
+  the "shift" between them was two points on that slide (measured in WebKit:
+  top 64 at 8ms, 65.65 at 25ms, 67.56 at 87ms, 68 settled). It now waits on
+  the engine's own animation set, as the two lanes beside it already did, and
+  asserts that nothing was animating when it measured. The one-pixel
+  allowance is unchanged — not widened by a hair — and is now a genuine
+  rounding margin over two settled readings.
+
 ## [0.1.49] - 2026-08-26
 
 ### Added

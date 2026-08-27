@@ -86,6 +86,8 @@
      silently hand a reader different bytes. -->
 <script lang="ts">
   import FeedCard from './FeedCard.svelte';
+  import { swipeHorizontal } from '../gesture.ts';
+  import { isChord, ringTarget } from '../keys.ts';
   import type { MediaGalleryProps } from '../blocks.ts';
 
   let { items, width, height }: MediaGalleryProps = $props();
@@ -116,6 +118,103 @@
 
   function previous(): void {
     index = (index - 1 + total) % total;
+  }
+
+  /* THE SWIPE (issue 219). The owner's report was "I can't swipe/motion
+     through the image", and it was exactly right: this gallery shows one
+     photograph and offered only two arrow buttons to move between them, which
+     on a phone is the least reachable control on the card.
+
+     Three constraints shape what is below, and all three are contract rather
+     than taste. Requirement 1 forbids a gesture library, so the arithmetic is
+     lib/gesture.ts and hand-rolled on Pointer Events. Vertical scrolling is
+     never stolen: the stage declares `touch-action: pan-y`, the binding claims
+     nothing until a drag has proven itself horizontal, and a `pointercancel`
+     from the browser ends the gesture rather than contesting it. And every
+     gesture owes a non-gesture equivalent, so the arrows stay, the dots below
+     are real buttons, and arrow keys drive the frame — the swipe is an
+     ADDITION to the ways through this gallery, never the only one. */
+  let dragX = $state(0);
+  let settling = $state(false);
+  let stageEl: HTMLDivElement | undefined = $state();
+
+  const swipe = {
+    span: () => stageEl?.getBoundingClientRect().width ?? 0,
+    move: (offset: number) => (dragX = offset),
+    commit: (direction: -1 | 1) => (direction === 1 ? next() : previous()),
+    /* The transition is switched ON only for the settle, so the DRAG itself
+       tracks the finger with no easing between it and the pixels — a
+       transition during a drag is the lag that makes a carousel feel broken.
+       It is switched off again after the settle so the next drag is direct.
+       A reduced-motion reader gets no transition at all (the stylesheet
+       decides that, not this file), and because the offset still lands on
+       zero either way the surface is never left displaced. */
+    settle: () => {
+      settling = true;
+      /* Long enough to cover the token duration below, and harmless if it
+         fires late: it only clears a flag that the next pointerdown would
+         otherwise leave set. */
+      setTimeout(() => (settling = false), 240);
+    },
+    /* The gallery WRAPS — the counter reads "1 / 8" and pressing previous at
+       the first photograph goes to the last — so there is no end to resist
+       at, and pretending otherwise would make the wrap feel like a fault. */
+    atStart: () => false,
+    atEnd: () => false
+  };
+
+  /* Arrow keys on the frame itself, so the gesture's keyboard equivalent is
+     on the same control rather than only inside the lightbox. */
+  function onFrameKeydown(event: KeyboardEvent): void {
+    if (isChord(event)) {
+      return;
+    }
+    if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      next();
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      previous();
+    }
+  }
+
+  /* THE POSITION DOTS' KEYBOARD, and why it is a radiogroup (issue 219 review
+     round 2). What shipped was a `tablist` of `tab`s with a roving tabindex
+     and no keydown handler at all — the exact shape this same PR fixed in the
+     token panel's segmented pills, reintroduced eight files away. MEASURED:
+     tabindex ["0","-1","-1","-1","-1","-1","-1","-1"], and ArrowRight,
+     ArrowDown, End and Home on the one tabbable dot all left the counter at
+     `1 / 8`, whose own click handler is `index = at` where `at === index` — a
+     no-op. Seven of eight dots were unreachable by keyboard and the eighth
+     did nothing. A roving tabindex is HALF a composite widget; the arrows are
+     the other half, and shipping one without the other is worse than shipping
+     neither, because it removes seven tab stops in exchange for nothing.
+
+     The role changed with it. `tablist`/`tab` promises tab panels, and these
+     dots control none — there is no `aria-controls`, no `tabpanel`, and no
+     second region to swap. What they actually are is a single choice from a
+     set, announced as such: a `radiogroup`, exactly the pattern the token
+     panel's pills already use, so the two composite widgets on this page are
+     one pattern rather than two. The movement itself is lib/keys.ts's ring,
+     shared with those pills and with the reading-mode swatches. */
+  let dotsEl: HTMLDivElement | undefined = $state();
+
+  function onDotsKeydown(event: KeyboardEvent): void {
+    if (isChord(event)) {
+      return;
+    }
+    const target = ringTarget(event.key, index, total);
+    if (target === null) {
+      return;
+    }
+    /* The arrows belong to the group once focus is inside it, so the page
+       must not scroll underneath the reader as well. */
+    event.preventDefault();
+    index = target;
+    /* Focus follows selection: in a radio group the checked control IS the
+       tab stop, so leaving focus behind would strand it on a dot that just
+       became untabbable. */
+    dotsEl?.querySelectorAll<HTMLElement>('[role="radio"]')[target]?.focus();
   }
 
   let dialogEl: HTMLDialogElement | undefined = $state();
@@ -172,11 +271,25 @@
             />
           </svg>
         </button>
-        <div class="gallery-stage">
+        <!-- The gesture surface is the STAGE, not the button inside it: the
+          drag has to be available across the whole photograph, and the button
+          is the thing the drag must not accidentally press (lib/gesture.ts
+          suppresses exactly one click after a real drag). aria-hidden is
+          wrong here and deliberately absent — the stage carries no semantics
+          of its own, and everything a reader needs is already on the button,
+          the arrows and the dots. -->
+        <div
+          class="gallery-stage"
+          bind:this={stageEl}
+          use:swipeHorizontal={swipe}
+          data-gallery-settling={settling ? 'true' : undefined}
+          style:--gallery-drag={`${dragX}px`}
+        >
           <button
             type="button"
             class="gallery-image-button"
             bind:this={frameButtonEl}
+            onkeydown={onFrameKeydown}
             onclick={() => (enlarged = true)}
           >
             <img
@@ -217,7 +330,45 @@
       </div>
     {/snippet}
   </FeedCard>
-  <p class="gallery-count" aria-live="polite">{index + 1} / {total}</p>
+  <!-- The position affordance the swipe owes (issue 219). A counter alone
+    tells a reader WHERE they are; it does not tell them the surface can be
+    moved, and it cannot be pressed. The dots say both — how many, which one,
+    and that the set is navigable — and each is a real button, so the gesture's
+    keyboard-and-tap equivalent is the same control that shows the position
+    rather than a second one somewhere else. The counter stays beside them
+    because a dot row stops being countable past a handful, and it keeps the
+    live region: a number is what assistive technology can usefully announce
+    on a change, and eight identical dots are not.
+    "Reachable by keyboard" is a claim with a shape: one tab stop for the
+    group, the arrows moving inside it, Home and End at the ends, and focus
+    following the choice — see onDotsKeydown. A roving tabindex without that
+    is not a keyboard affordance, it is seven controls taken away. -->
+  <div class="gallery-position">
+    <p class="gallery-count" aria-live="polite">{index + 1} / {total}</p>
+    {#if total > 1}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div
+        class="gallery-dots"
+        role="radiogroup"
+        tabindex="-1"
+        aria-label="Choose a photograph"
+        bind:this={dotsEl}
+        onkeydown={onDotsKeydown}
+      >
+        {#each items as dot, at (dot.previewSrc)}
+          <button
+            type="button"
+            class="gallery-dot"
+            role="radio"
+            aria-checked={at === index}
+            tabindex={at === index ? 0 : -1}
+            aria-label={`Photograph ${at + 1} of ${total}`}
+            onclick={() => (index = at)}
+          ><span class="gallery-dot-mark" aria-hidden="true"></span></button>
+        {/each}
+      </div>
+    {/if}
+  </div>
 
   {#if hasCaption}
     <div class="gallery-caption">
@@ -383,12 +534,106 @@
   }
 
 
+  .gallery-position {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.125rem;
+  }
+
   .gallery-count {
     margin: 0.375rem 0 0;
     text-align: center;
     font-size: var(--card-meta-size);
     font-variant-numeric: tabular-nums;
     color: var(--card-meta-ink);
+  }
+
+  .gallery-dots {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  /* A 44px hit box around a small painted mark, exactly as the lightbox's
+     close control is built (issue 202): the touch floor is about what a
+     finger can hit, never about how big the ink is, and a row of 44px discs
+     would be a bigger object than the photograph's own caption. The mark is
+     drawn by the child span so the button can be transparent chrome. */
+  .gallery-dot {
+    display: grid;
+    place-items: center;
+    /* 44px on BOTH axes, not just the block one. The inline floor is not
+       belt-and-braces here and the token panel learned it the hard way
+       (UsageTracker.svelte): a floor that depends on how wide the content
+       happens to be is not a floor, and a dot's content is 6px. The row
+       wraps, so eight of them still fit a 320px viewport without taking the
+       page's scrollbar sideways. */
+    min-inline-size: 2.75rem;
+    min-block-size: 2.75rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .gallery-dot-mark {
+    inline-size: 0.375rem;
+    block-size: 0.375rem;
+    border-radius: 999px;
+    background: var(--card-meta-ink);
+    opacity: 0.35;
+  }
+
+  /* Position is never carried by the fill alone: the current dot is both
+     brighter AND larger, so the state survives a reading mode that flattens
+     contrast and a reader who cannot separate the two tones. */
+  .gallery-dot[aria-checked='true'] .gallery-dot-mark {
+    opacity: 1;
+    transform: scale(1.5);
+  }
+
+  .gallery-dot:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -6px;
+    border-radius: 999px;
+  }
+
+  /* THE DRAG SURFACE. `pan-y` is the load-bearing declaration on this whole
+     feature: it hands the vertical axis to the compositor unconditionally, so
+     a reader scrolling the page through the photograph scrolls the page — the
+     gesture layer never even sees that gesture. Only the horizontal axis is
+     ours to claim, and lib/gesture.ts still refuses to claim it until a drag
+     has proven itself horizontal. */
+  .gallery-stage {
+    touch-action: pan-y;
+  }
+
+  /* The drag itself: a plain translate, so it is composited rather than
+     re-laid-out, and it changes no box — the reserved frame is exactly where
+     it was, which is what keeps a drag from costing layout stability. The
+     fallback is the un-transformed frame, which is the correct degradation:
+     no movement rather than a broken one. */
+  .gallery-stage :global(.gallery-image-button) {
+    transform: translateX(var(--gallery-drag, 0px));
+  }
+
+  /* THE SNAP-BACK, and it is only ever on for the settle. A transition during
+     the drag would put easing between the finger and the pixels; a settle
+     with no transition would teleport. The attribute is written by the
+     component for the length of the settle alone.
+
+     Stated inside `no-preference` rather than cancelled inside `reduce`, per
+     this page's rule: a cancelling block is reachable only by a browser that
+     HAS the media feature, so it leaves the animation running everywhere the
+     feature is unknown, while stating it here never starts it there. Nothing
+     is lost for a reader who gets no transition — the offset lands on zero
+     either way, so the surface is never left displaced; only the journey to
+     zero is skipped. */
+  @media (prefers-reduced-motion: no-preference) {
+    .gallery-stage[data-gallery-settling='true'] :global(.gallery-image-button) {
+      transition: transform var(--gallery-settle-duration, 200ms) cubic-bezier(0.22, 1, 0.36, 1);
+    }
   }
 
   .gallery-lightbox {

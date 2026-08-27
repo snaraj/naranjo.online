@@ -551,6 +551,105 @@ export function cellPeriod(cell: GridCell, view: SeriesView): string {
  * neither of them. */
 export type ValueFormat = (value: number) => string;
 
+/* The detail card's default title, built from the caller's own noun (issue
+ * 219). Every grid carries a card now, so every grid needs a title, and a
+ * caller that has not chosen one should not be made to invent a string — its
+ * noun is already adapter data naming exactly this. Capitalised and left
+ * SINGULAR on purpose: the card's next row is the figure, so "Contribution /
+ * 3 / on Jun 3" reads correctly for every count including one, where a
+ * guessed plural would not. Callers with a better phrase pass `cardTitle`
+ * (the token strip says "Tokens used"). */
+export function nounTitle(noun: string): string {
+  return noun.length === 0 ? '' : `${noun[0].toUpperCase()}${noun.slice(1)}`;
+}
+
+/* WHERE A KEY PRESS PUTS THE GRID'S CURSOR (issue 219).
+ *
+ * The strip is one focus stop holding many cells, so the arrows move a cursor
+ * INSIDE it — the listbox shape. This is that decision as arithmetic, out of
+ * the component so it is executable rather than pattern-matched, the same
+ * arrangement columnKeyIntent and swatchKeyTarget already use for the two
+ * other keyboard surfaces on this page.
+ *
+ * `null` means "not this grid's key": the caller does nothing and, crucially,
+ * does not preventDefault, so Tab still leaves and PageDown still scrolls.
+ * `-1` is "no cell is current", which only Escape produces. Anything else is
+ * the index the cursor lands on, and a refused move answers the CURRENT
+ * cursor rather than null, so the key is still swallowed — the arrows belong
+ * to the grid even at its boundary, or a reader stepping off the end gets a
+ * surprise page scroll.
+ *
+ * THE EMPTY CURSOR IS THE CASE THAT WAS WRONG. The first arrow press on a
+ * strip nobody has selected in must open on the newest data, whichever arrow
+ * it is. The component used to reach that by stepping from `cells.length - 1`,
+ * which works only for a NEGATIVE step: ArrowRight and ArrowDown stepped
+ * PAST the end, hit the range guard and returned, so they were dead keys —
+ * measured in WebKit as five ArrowRight presses and two ArrowDown presses
+ * moving nothing at all while ArrowLeft moved normally (2026-08-27). A
+ * reader whose cursor had been dropped — which a page scroll used to do, see
+ * lib/tooltip.ts — could never get it back with the arrow that reads as
+ * "forwards". Opening on the newest cell for EVERY arrow is what the
+ * handler's own comment always claimed, and it is direction-symmetric, so
+ * the defect cannot come back through the other axis. */
+export function gridCursorTarget(
+  key: string,
+  cursor: number,
+  dated: readonly boolean[],
+  rows: number = gridRows
+): number | null {
+  if (key === 'Escape') {
+    return cursor >= 0 ? -1 : null;
+  }
+  if (dated.length === 0 || rows <= 0) {
+    return null;
+  }
+  /* The first dated cell at or after `from`, walking in `direction`. An
+     undated cell is pending chrome: it carries no count, no date and no
+     reading, so a cursor must never land on one. */
+  const dating = (from: number, direction: number): number => {
+    for (let at = from; at >= 0 && at < dated.length; at += direction) {
+      if (dated[at]) {
+        return at;
+      }
+    }
+    return -1;
+  };
+  const newest = (): number => dating(dated.length - 1, -1);
+  if (key === 'Home') {
+    const first = dating(0, 1);
+    return first >= 0 ? first : cursor;
+  }
+  if (key === 'End') {
+    const last = newest();
+    return last >= 0 ? last : cursor;
+  }
+  /* Left/right step a WEEK, up/down step a DAY: cells are emitted
+     column-major, so one column along is `rows` cells along. */
+  const step =
+    key === 'ArrowLeft'
+      ? -rows
+      : key === 'ArrowRight'
+        ? rows
+        : key === 'ArrowUp'
+          ? -1
+          : key === 'ArrowDown'
+            ? 1
+            : null;
+  if (step === null) {
+    return null;
+  }
+  if (cursor < 0) {
+    const opening = newest();
+    return opening >= 0 ? opening : cursor;
+  }
+  const next = cursor + step;
+  if (next < 0 || next >= dated.length) {
+    return cursor;
+  }
+  const landed = dating(next, step > 0 ? 1 : -1);
+  return landed >= 0 ? landed : cursor;
+}
+
 /* cellLabel is the one accessible text a cell carries — tooltip and
  * aria-label alike — so a magnitude is never encoded by color alone. The
  * formatter defaults to exact digits, so a caller that says nothing gets the

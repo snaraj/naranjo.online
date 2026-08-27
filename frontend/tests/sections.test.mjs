@@ -866,7 +866,33 @@ test('exactly one frame is ever visible — never eight stacked', () => {
   // against; the component renders exactly one <img> for the feed frame,
   // keyed to whichever index state currently holds, and none of the seven
   // others.
-  assert.doesNotMatch(mediaGallery, /\{#each items as/, 'the feed frame must not loop over every item at once');
+  // The guard is that no MEDIA element is ever mounted inside a loop over the
+  // items — that is the weight regression, and it is what "eight stacked"
+  // meant. It used to be spelled as "no {#each items as" at all, which was a
+  // proxy: issue 219's position dots iterate the items to draw one 6px mark
+  // each, mount no bytes, and are exactly the visible position affordance a
+  // swipeable surface owes.
+  //
+  // THE TRADE, STATED HONESTLY rather than sold as a strengthening (issue 219
+  // review round 2, finding 10). This is BROADER for content — any loop over
+  // the items may now carry non-media markup, and an <img>, <video> or
+  // <source> inside one is caught where the old spelling only knew that a
+  // loop existed — and NARROWER for naming, because it still matches on the
+  // literal `{#each items as`. A loop written over a differently-named
+  // binding is not checked by either version, and calling that "harder to
+  // slip past whatever the loop is called" was simply untrue. The lightbox's
+  // own `{#each item.video.sources}` is why the sweep cannot be widened to
+  // every loop: that one legitimately contains <source> elements, one item at
+  // a time, which is the opposite of the regression. The load-bearing pin for
+  // the real rule is the count assertion below — exactly one `.gallery-image`
+  // in the file — and it is name-blind.
+  for (const [loop] of mediaGallery.matchAll(/\{#each items as[\s\S]*?\{\/each\}/g)) {
+    assert.doesNotMatch(
+      loop,
+      /<img|<video|<source/,
+      'the feed frame must not mount a media element for every item at once'
+    );
+  }
   assert.equal(
     [...mediaGallery.matchAll(/class="gallery-image"/g)].length,
     1,
