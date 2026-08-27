@@ -97,11 +97,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   (`src/lib/keys.ts`) is one module for all three composite widgets on the
   page, and a source pin fails any composite role declared without a key
   handler on the same element.
-- A swipe no longer swallows the reader's next activation. The one-click
-  suppression a drag owes is released at the end of the task that ended the
-  gesture, and a keyboard activation is never suppressed at all — measured
-  before: swipe the gallery, focus the frame, press Enter, and the lightbox
-  did not open.
+- A swipe no longer swallows the reader's next activation. A drag suppresses
+  the one click it produces, but a touch swipe produces none, so the
+  suppression sat armed — and a keyboard reader, who raises no pointerdown to
+  disarm it, walked straight into it. Measured before: swipe the gallery,
+  focus the frame, press Enter, and the lightbox did not open. A click
+  reporting a count of zero is a keyboard activation and is never suppressed.
 - Modifier chords reach the browser. Both new key handlers branched on the key
   alone, so `Cmd`/`Alt+Arrow` (Back) and `Ctrl+Home` (top of document) were
   swallowed by the grid strip and by every segmented control.
