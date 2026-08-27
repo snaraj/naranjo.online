@@ -52,6 +52,7 @@
 <script lang="ts">
   import type { UsageActivity, UsageCategory, UsageTrackerProps } from '../blocks.ts';
   import { formatMagnitude, seriesCells, seriesViews, viewColumns, type SeriesView } from '../grid';
+  import { isChord, ringTarget } from '../keys.ts';
   import {
     activityReading,
     coverageReading,
@@ -155,28 +156,30 @@
      is a defect). Home and End jump to the ends; the wrap is deliberate,
      because a segmented control is a ring in every platform toolkit.
      One helper drives all three groups, so a fourth group inherits the
-     behaviour by rendering the same markup rather than by remembering to. */
+     behaviour by rendering the same markup rather than by remembering to.
+     The RING itself is lib/keys.ts's, shared with the gallery's position dots
+     and the reading-mode swatches: this file writing its own key table is how
+     one page ended up with three of them and had to be told about the same
+     defect three times. */
   function onRadioKeydown(
     event: KeyboardEvent,
     options: readonly string[],
     current: string,
     choose: (next: string) => void
   ): void {
-    const step =
-      event.key === 'ArrowRight' || event.key === 'ArrowDown'
-        ? 1
-        : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
-          ? -1
-          : 0;
-    const jump = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : null;
-    if (step === 0 && jump === null) {
+    /* A chord is the browser's or the platform's — Cmd/Alt+Arrow is Back,
+       Ctrl+Home is top-of-document — so it is neither acted on nor swallowed
+       (lib/keys.ts). Branching on `event.key` alone swallowed all of them. */
+    if (isChord(event)) {
+      return;
+    }
+    const next = ringTarget(event.key, options.indexOf(current), options.length);
+    if (next === null) {
       return;
     }
     /* The arrows belong to the group once focus is inside it, so the page
        must not scroll underneath the reader as well. */
     event.preventDefault();
-    const at = options.indexOf(current);
-    const next = jump ?? (at + step + options.length) % options.length;
     choose(options[next]);
     /* Focus follows selection: in a radio group the checked control IS the
        tab stop, so leaving focus behind would strand it on a segment that

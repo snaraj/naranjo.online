@@ -30,6 +30,7 @@
   translate and nothing else, and the document's own height never moves. -->
 <script lang="ts">
   import { refreshPanels } from '../panels.ts';
+  import { closeOpenDetail } from '../tooltip.ts';
   import {
     pullMetrics,
     pullProgress,
@@ -39,6 +40,17 @@
 
   let distance = $state(0);
   let phase = $state<PullPhase>('idle');
+  /* Whether the PAGE itself is displaced, which is only ever true for the
+     GESTURE. The indicator's travel and the page's travel used to be one
+     number, and that conflated two different things: a finger dragging the
+     document down IS moving the page, while a keyboard reader pressing the
+     control below has dragged nothing — sliding the whole column out from
+     under them was a side effect of sharing a variable, not a decision.
+     Splitting them is what makes the transform rule in styles.css apply to
+     the narrowest possible moment (it re-parents every fixed descendant while
+     it is on), and it is why the refresh control no longer has to close an
+     open readout to be safe. */
+  let displacing = $state(false);
 
   const progress = $derived(pullProgress(distance));
 
@@ -64,6 +76,8 @@
     render: (next: number, nextPhase: PullPhase) => {
       distance = next;
       phase = nextPhase;
+      /* Only this path — the gesture's — moves the page. */
+      displacing = next > 0;
     },
     refresh: () => refreshPanels()
   };
@@ -71,7 +85,14 @@
   /* The keyboard path runs the identical work and shows the identical
      indicator — it is the same refresh, not a second one — so a reader who
      presses it sees the control settle when real data lands, exactly as a
-     reader who pulled does. */
+     reader who pulled does.
+     It does NOT move the page, and that is the difference between the two
+     paths rather than an inconsistency: a gesture displaces the document
+     because a finger is holding it displaced, while a press displaces
+     nothing. `displacing` is deliberately untouched here, so the transform
+     rule never engages, no fixed descendant is re-parented, and an open
+     readout — with the cursor and the aria-activedescendant a screen reader
+     is following — survives the refresh it asked for. */
   async function refreshFromControl(): Promise<void> {
     if (phase === 'refreshing') {
       return;
@@ -114,8 +135,21 @@
     }
     const root = document.documentElement;
     root.style.setProperty('--page-pull', `${distance}px`);
-    if (distance > 0) {
+    if (displacing && distance > 0) {
       root.setAttribute('data-pulling', 'true');
+      /* AND THE OTHER HALF OF THAT SAME CONTAINING-BLOCK RULE. The attribute
+         above is what keeps the transform off <main> AT REST; while it is on,
+         the transform is genuinely applied and <main> genuinely becomes the
+         containing block for every `position: fixed` descendant inside it —
+         101 of them on this page, all detail cards (MEASURED at 390x844; the
+         page header is outside <main> and is unaffected, measured too). A
+         readout open across that moment is re-parented mid-gesture, and
+         lib/tooltip.ts's stated guarantee — "a fixed box is outside the
+         scrollable overflow region by construction" — is suspended for
+         exactly as long as the pull lasts. Closing it is honest rather than
+         lossy: the reader has both hands on a gesture about the whole page,
+         and the card is one tap or one arrow away afterwards. */
+      closeOpenDetail();
     } else {
       root.removeAttribute('data-pulling');
     }

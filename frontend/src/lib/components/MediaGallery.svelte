@@ -87,6 +87,7 @@
 <script lang="ts">
   import FeedCard from './FeedCard.svelte';
   import { swipeHorizontal } from '../gesture.ts';
+  import { isChord, ringTarget } from '../keys.ts';
   import type { MediaGalleryProps } from '../blocks.ts';
 
   let { items, width, height }: MediaGalleryProps = $props();
@@ -165,6 +166,9 @@
   /* Arrow keys on the frame itself, so the gesture's keyboard equivalent is
      on the same control rather than only inside the lightbox. */
   function onFrameKeydown(event: KeyboardEvent): void {
+    if (isChord(event)) {
+      return;
+    }
     if (event.key === 'ArrowRight') {
       event.preventDefault();
       next();
@@ -172,6 +176,45 @@
       event.preventDefault();
       previous();
     }
+  }
+
+  /* THE POSITION DOTS' KEYBOARD, and why it is a radiogroup (issue 219 review
+     round 2). What shipped was a `tablist` of `tab`s with a roving tabindex
+     and no keydown handler at all — the exact shape this same PR fixed in the
+     token panel's segmented pills, reintroduced eight files away. MEASURED:
+     tabindex ["0","-1","-1","-1","-1","-1","-1","-1"], and ArrowRight,
+     ArrowDown, End and Home on the one tabbable dot all left the counter at
+     `1 / 8`, whose own click handler is `index = at` where `at === index` — a
+     no-op. Seven of eight dots were unreachable by keyboard and the eighth
+     did nothing. A roving tabindex is HALF a composite widget; the arrows are
+     the other half, and shipping one without the other is worse than shipping
+     neither, because it removes seven tab stops in exchange for nothing.
+
+     The role changed with it. `tablist`/`tab` promises tab panels, and these
+     dots control none — there is no `aria-controls`, no `tabpanel`, and no
+     second region to swap. What they actually are is a single choice from a
+     set, announced as such: a `radiogroup`, exactly the pattern the token
+     panel's pills already use, so the two composite widgets on this page are
+     one pattern rather than two. The movement itself is lib/keys.ts's ring,
+     shared with those pills and with the reading-mode swatches. */
+  let dotsEl: HTMLDivElement | undefined = $state();
+
+  function onDotsKeydown(event: KeyboardEvent): void {
+    if (isChord(event)) {
+      return;
+    }
+    const target = ringTarget(event.key, index, total);
+    if (target === null) {
+      return;
+    }
+    /* The arrows belong to the group once focus is inside it, so the page
+       must not scroll underneath the reader as well. */
+    event.preventDefault();
+    index = target;
+    /* Focus follows selection: in a radio group the checked control IS the
+       tab stop, so leaving focus behind would strand it on a dot that just
+       became untabbable. */
+    dotsEl?.querySelectorAll<HTMLElement>('[role="radio"]')[target]?.focus();
   }
 
   let dialogEl: HTMLDialogElement | undefined = $state();
@@ -295,17 +338,29 @@
     rather than a second one somewhere else. The counter stays beside them
     because a dot row stops being countable past a handful, and it keeps the
     live region: a number is what assistive technology can usefully announce
-    on a change, and eight identical dots are not. -->
+    on a change, and eight identical dots are not.
+    "Reachable by keyboard" is a claim with a shape: one tab stop for the
+    group, the arrows moving inside it, Home and End at the ends, and focus
+    following the choice — see onDotsKeydown. A roving tabindex without that
+    is not a keyboard affordance, it is seven controls taken away. -->
   <div class="gallery-position">
     <p class="gallery-count" aria-live="polite">{index + 1} / {total}</p>
     {#if total > 1}
-      <div class="gallery-dots" role="tablist" aria-label="Choose a photograph">
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div
+        class="gallery-dots"
+        role="radiogroup"
+        tabindex="-1"
+        aria-label="Choose a photograph"
+        bind:this={dotsEl}
+        onkeydown={onDotsKeydown}
+      >
         {#each items as dot, at (dot.previewSrc)}
           <button
             type="button"
             class="gallery-dot"
-            role="tab"
-            aria-selected={at === index}
+            role="radio"
+            aria-checked={at === index}
             tabindex={at === index ? 0 : -1}
             aria-label={`Photograph ${at + 1} of ${total}`}
             onclick={() => (index = at)}
@@ -533,7 +588,7 @@
   /* Position is never carried by the fill alone: the current dot is both
      brighter AND larger, so the state survives a reading mode that flattens
      contrast and a reader who cannot separate the two tones. */
-  .gallery-dot[aria-selected='true'] .gallery-dot-mark {
+  .gallery-dot[aria-checked='true'] .gallery-dot-mark {
     opacity: 1;
     transform: scale(1.5);
   }
