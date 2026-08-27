@@ -914,8 +914,42 @@ test('clicking the photograph enlarges it; only the full derivative loads on dem
 /* The component's own markup, with every HTML comment removed. Prose about
  * an attribute is not that attribute, and the gallery's header comment
  * describes the very things the two tests below forbid — so they read the
- * markup rather than the file, which is what makes "nowhere" mean nowhere. */
-const galleryMarkup = mediaGallery.replace(/<!--[\s\S]*?-->/g, '');
+ * markup rather than the file, which is what makes "nowhere" mean nowhere.
+ *
+ * The strip repeats until it converges rather than running once. Removing a
+ * comment can SPLICE a new opener into existence out of the text either
+ * side of it — `<!` before, `--` after — so one pass cannot promise its
+ * result is comment-free. That is the incomplete multi-character
+ * sanitization CodeQL flags (js/incomplete-multi-character-sanitization),
+ * and it is not decorative here: a surviving comment is prose these pins
+ * would read as markup, which is how a pin demanding an element be PRESENT
+ * gets satisfied by a commented-out one. Looping to a fixed point is what
+ * makes "removed" total, and it is what makes the pins below sound. */
+function withoutComments(markup) {
+  let stripped = markup;
+  let previous;
+  do {
+    previous = stripped;
+    stripped = previous.replace(/<!--[\s\S]*?-->/g, '');
+  } while (stripped !== previous);
+  return stripped;
+}
+
+const galleryMarkup = withoutComments(mediaGallery);
+
+test('the comment strip these pins depend on removes spliced comments too (issue 207)', () => {
+  // Non-vacuity for the loop above, stated as the regression it prevents:
+  // one pass over this input leaves a whole live comment behind, so the
+  // "must be present" pins could be satisfied by commented-out markup.
+  const spliced = '<div><!<!-- x -->-- <video --></div>';
+  assert.equal(
+    spliced.replace(/<!--[\s\S]*?-->/g, ''),
+    '<div><!-- <video --></div>',
+    'a single pass is expected to leave a comment behind — if it stops doing so, this pin measures nothing'
+  );
+  assert.equal(withoutComments(spliced), '<div></div>');
+  assert.doesNotMatch(withoutComments(spliced), /<video/);
+});
 
 test('a moving item shows a poster in the strip — never a <video> element there (issue 207)', () => {
   // The single visible frame is an <img> for every kind of item. A gallery

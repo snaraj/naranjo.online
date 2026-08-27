@@ -1329,10 +1329,27 @@ class FinalOpenIsDescriptorRootedTest(unittest.TestCase):
         # O_NOFOLLOW alone cannot see this one: the leaf is a perfectly
         # ordinary regular file, just not the file that was admitted. The
         # identity check is what catches it.
+        #
+        # The substitute is allocated BESIDE the record and renamed over it,
+        # rather than the record being unlinked and rewritten in place, and
+        # the ordering is the point. The identity is a (device, inode) PAIR,
+        # and a filesystem is free to hand a file created after an unlink the
+        # very inode number the unlinked file just released — ext4 does that
+        # routinely, APFS does not. Under an in-place rewrite the outcome
+        # therefore depends on the allocator rather than on the guard: this
+        # test passed on macOS and failed on Linux CI for exactly that
+        # reason. Allocating the substitute while the original is still alive
+        # makes the two numbers necessarily distinct, so the property under
+        # test is proven on every filesystem instead of on the ones whose
+        # allocator happens to agree, and an atomic replace is the stronger
+        # attack anyway — there is no window in which the path is missing.
+        # The limit this leaves is real, is inherent to a (device, inode)
+        # identity, and is stated at `_identity` in the producer.
         record, counters = self.admit()
-        os.unlink(self.record)
-        with open(self.record, "w", encoding="utf-8") as handle:
+        substitute = os.path.join(self.inside, "substitute")
+        with open(substitute, "w", encoding="utf-8") as handle:
             handle.write("substituted content\n")
+        os.replace(substitute, self.record)
         self.assertIsNone(capture_usage_series.open_record_file(record, counters))
         self.assertEqual(counters["symlinks"], 1)
 

@@ -538,10 +538,27 @@ class PushTransportHardeningTest(unittest.TestCase):
         lying_stub_dir.mkdir()
         write_executable(lying_stub_dir / "ssh", ssh_stub(LYING_RESPONSE))
         env = dict(self.env)
-        env["PATH"] = "%s:%s" % (lying_stub_dir, os.environ.get("PATH", "/usr/bin:/bin"))
+        # The lying ssh goes IN FRONT of the fixture PATH, never instead of
+        # it: this case swaps one stub, and every other stub the pipeline
+        # needs must stay reachable. Rebuilding the value from os.environ
+        # dropped the sandbox-exec stub, so the run refused at the sandbox
+        # stage — invisible on a host that ships a real sandbox-exec, a
+        # guaranteed failure on one that does not, and in both cases the
+        # checksum stage under test was never reached.
+        env["PATH"] = "%s:%s" % (lying_stub_dir, self.env["PATH"])
         result = run_script(PUSH, env=env)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("checksum mismatch", result.stderr)
+        # Non-vacuity for the PATH above, and the pin that keeps it honest: a
+        # refusal is only evidence about the checksum stage if the run
+        # actually REACHED it. The fixture's sandbox stub records its
+        # invocation, so this file existing proves the substitution swapped
+        # exactly one stub and left the rest of the pipeline intact.
+        self.assertTrue(
+            self.sandbox_args_file.exists(),
+            "the producer never ran through the fixture's sandbox stub, so this "
+            "refusal came from an earlier stage than the one under test",
+        )
 
     def test_a_lax_configuration_mode_is_refused(self):
         self.config.chmod(0o644)

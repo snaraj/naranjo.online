@@ -314,6 +314,19 @@ def _identity(info):
     capability chain (2026-08-25 round-5 review, finding 1): an identity taken
     through an attacker-controlled path names whatever the attacker pointed
     at, so it matches itself and proves nothing.
+
+    STATED LIMIT, so nothing downstream reads more into a match than is
+    there. This refuses a SUBSTITUTED file — a symlink, a hard link to an
+    outside file, a directory or fifo put in the leaf's place, or a different
+    regular file. It does not, and cannot, refuse rewritten CONTENT: the same
+    inode with different bytes is by construction the same file. Nor is an
+    inode NUMBER unique across time — a filesystem that recycles numbers may
+    give a file created after an unlink the number the unlinked file just
+    released, and this comparison would then admit it. Neither gap widens the
+    producer's exposure, because both require write access to the transcript
+    tree, and an attacker holding that never needed a swap in the first
+    place; what bounds the damage is the emission guard, which lets only
+    dates and integers leave.
     """
     return (info.st_dev, info.st_ino)
 
