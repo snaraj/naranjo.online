@@ -570,9 +570,12 @@ test('the stats tracker renders the dense fixed-cell table with tooltips and -- 
     /role="tooltip"|boss-tip|nth-child\(3n/,
     'the stat tracker grew a second tooltip implementation; there is one primitive and it is DetailTip'
   );
-  assert.match(statTracker, /<DetailTip detail=\{cell\.detail\} \/>/);
-  assert.match(statTracker, /tabindex="0"/, 'cells must be focusable for the tooltip');
-  assert.match(statTracker, /aria-label=\{cell\.label\}/);
+  // That the shared detail, the focusability it needs, and the accessible
+  // name are on EVERY tile is pinned in tests/tooltip.test.mjs, which walks
+  // the component's tile templates and asserts there are exactly two before
+  // checking each one. Three whole-file `assert.match(statTracker, …)` copies
+  // stood here and were strictly weaker: a single tile template carrying all
+  // three satisfied them while the other carried none.
   // Data flows only through the shared layer and shell; the component knows
   // no panel, no slug and no name — the binding layer holds all three.
   assert.match(statTracker, /import PanelShell from '\.\/PanelShell\.svelte'/);
@@ -913,13 +916,19 @@ test('every mounted panel stays current instead of painting once', () => {
 
 test('the contribution grid is one component both panels render', () => {
   assert.match(usageTracker, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
-  // Fixed geometry: data arriving must never move the page.
-  assert.match(grid, /block-size:\s*7rem/);
+  // A wide window scrolls inside the strip, so it never takes the page's own
+  // scrollbar sideways. The strip's BOX — the term-by-term calc() that keeps
+  // an arriving series from moving the page — is pinned in
+  // tests/activity.test.mjs, which parses the declaration and checks each
+  // term. A `block-size: 7rem` pin lived here until this commit and had been
+  // vacuous since issue 130 replaced that literal with the calc(): every
+  // `7rem` left in the component is inside a comment, and the one this
+  // matched is the comment recording that `block-size: 7rem` was REMOVED.
   assert.match(grid, /overflow-x:\s*auto/);
-  // The full ramp is themable, one custom property per level.
-  for (const level of [0, 1, 2, 3, 4]) {
-    assert.match(grid, new RegExp(`--grid-cell-${level}`), `the ramp lost level ${level}`);
-  }
+  // The ramp's five themable levels AND their validated dark defaults are
+  // pinned together in tests/activity.test.mjs, which matches
+  // `var(--grid-cell-N, #hex)` — strictly stronger than the bare
+  // `--grid-cell-N` sweep that stood here, and mutation-tested there.
   // Never color alone, and a day outside the window is a hole, not a zero.
   assert.match(grid, /aria-label=\{text\}/);
   assert.match(grid, /title=\{text\}/);

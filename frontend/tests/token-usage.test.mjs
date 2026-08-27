@@ -66,30 +66,15 @@ const shippedPayload = {
   ]
 };
 
+/* formatTokenCount is `return formatMagnitude(count)` and nothing else, so a
+ * literal value table here is a second copy of the one in tests/grid.test.mjs
+ * — which is the larger table, and the one that also pins the boundary cases
+ * (the promotion at every step, the unpromotable top, NaN). Three such tables
+ * stood here and every value in them is now checked there, the five this
+ * suite alone carried (999, 100K, 182.3K, 2.1M, 1.3B) having been migrated
+ * across rather than dropped. What stays is the pin that cannot live in the
+ * other suite: that the two names really are one function. */
 describe('formatTokenCount', () => {
-  it('keeps small counts exact with deterministic comma grouping', () => {
-    assert.equal(formatTokenCount(0), '0');
-    assert.equal(formatTokenCount(999), '999');
-    assert.equal(formatTokenCount(1284), '1,284');
-    assert.equal(formatTokenCount(9999), '9,999');
-  });
-
-  it('compacts large counts to one-decimal K, M, B and T figures', () => {
-    assert.equal(formatTokenCount(12900), '12.9K');
-    assert.equal(formatTokenCount(100000), '100K');
-    assert.equal(formatTokenCount(182340), '182.3K');
-    assert.equal(formatTokenCount(9421770), '9.4M');
-    assert.equal(formatTokenCount(2103980), '2.1M');
-    assert.equal(formatTokenCount(1250000000), '1.3B');
-    // The T step (owner directive, 2026-08-25): this panel's own cumulative
-    // lens passes a trillion, which used to read "7700B".
-    assert.equal(formatTokenCount(7700000000000), '7.7T');
-  });
-
-  it('promotes a figure that would round to 1000 of its own unit', () => {
-    assert.equal(formatTokenCount(999950), '1M');
-  });
-
   it('is a NAME for the shared magnitude formatter, never a second copy of it', () => {
     // The panel's summary line and the heatmap cell above it are formatted by
     // two different modules, and until 2026-08-25 they were two different
@@ -291,7 +276,10 @@ describe('UsageTracker source contract', () => {
 
   it('stays local-origin like every shipped source file', () => {
     for (const [name, source] of Object.entries({ component, helper })) {
-      assert.doesNotMatch(source, /(?:https?:)?\/\//, `${name} introduces a remote origin`);
+      // Protocol-relative origins still fail this; a line comment no longer
+      // does. The lookahead and the reasoning behind it are documented once,
+      // on the same sweep in tests/experience.test.mjs.
+      assert.doesNotMatch(source, /(?:https?:)?\/\/(?=[\w-]+\.)/, `${name} introduces a remote origin`);
     }
   });
 });
