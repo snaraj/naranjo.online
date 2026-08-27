@@ -92,17 +92,61 @@ never reused or heuristically rewritten as a registry package name. A missing,
 dotted, foreign, or otherwise changed package input fails before annotated-tag
 or registry publication begins.
 
-Owner-observed state on 2026-08-14 proves that `platform-release` exists with
+Owner-observed state on 2026-08-14 proved that `platform-release` exists with
 `protected_branches: false`, `custom_branch_policies: true`, and exactly one
-branch policy `{name: main, type: branch}`. It currently has zero variables and
-zero secrets, so App-backed publication remains technically blocked until the
-owner provisions those two frozen names. This repository contains no
-credential value and grants no authority to provision one.
+branch policy `{name: main, type: branch}`. At that date it held zero variables
+and zero secrets, so App-backed publication was blocked until the owner
+provisioned those two frozen names. That was a snapshot of 2026-08-14 and is
+recorded here as history; it is no longer the live state.
+
+The owner has since provisioned both, and the repository proves it from git and
+these workflow definitions alone — no live API call and no owner relay. The
+`publish` job creates the annotated tag with
+`message="Release ${TAG} from ${SOURCE_SHA}"`, and it runs only
+`if needs.authorize.result == 'success' && needs.immutable_settings.result ==
+'success'`. `immutable_settings` enters the `platform-release` environment and
+mints its Administration-read token from `vars.PLATFORM_RELEASE_APP_ID` and
+`secrets.PLATFORM_RELEASE_APP_PRIVATE_KEY`, with no fallback, no condition on
+the mint step, and no `continue-on-error`. A tag bearing that message therefore
+cannot exist unless both frozen names resolve. `git cat-file tag v0.1.46`
+returns tagger `github-actions[bot]
+<41898282+github-actions[bot]@users.noreply.github.com>` and exactly that
+message. App-backed publication is live, and every release tag from `v0.1.15`
+onward carries that publisher's marks: tagger `github-actions[bot]` and the
+exact `Release vX.Y.Z from <SHA>` message form. That scope is deliberate and its
+exception is named rather than hidden — the six older tags, `v0.1.4` through
+`v0.1.9`, predate the `immutable_settings` job, were created under three other
+tagger identities, none of them `github-actions[bot]`, and none carries the
+publisher's message form, so they are evidence about the App path in neither
+direction. A single 2026-08-14 commit introduced that job together with both
+frozen-name reads, and every tag from `v0.1.15` onward descends from it.
+Re-derive all of this rather than trusting the sentence:
+`git for-each-ref --format='%(objecttype) %(refname:short)' refs/tags` lists the
+annotated tags, `git cat-file tag <tag>` shows each one's tagger and message,
+`git log -S immutable_settings` over `release-publisher.yml` names that single
+commit, and `git merge-base --is-ancestor` settles the descent.
+This repository still contains no credential value and grants no authority to
+provision one.
+
+One known stale sentence survives below, and it is left standing deliberately
+rather than quietly: the closing clause of the `Protect-Main` paragraph two
+paragraphs down still calls those two names unprovisioned and treats that as an
+outstanding external blocker. Read it as the 2026-08-14 state it records, not as
+present tense — the evidence above supersedes it. It is retained verbatim
+because the governance parity suite digest-pins each block of this file that the
+case-insensitive pattern `\bready\b` selects — a word filter, not a
+merge-authority filter, and the guard's own docstring states that honest limit.
+Prose about merge authority that avoids the word is not pinned at all: the
+settings-receipt sentence near the top of this file, the one saying the receipt
+grants no merge authority, carries no digest. Those digests live in
+`scripts/ci/test_release_contract.py`, which sits outside requirement 10's
+closed documentation allowlist. Editing the sentence therefore reclassifies the
+change as artifact and consumes a release slot, so it is tracked as its own
+artifact-class change instead of being smuggled into a documentation-only fix.
 
 The same owner-observed transaction proves immutable releases enabled, Actions
 full-SHA pinning enabled, Actions otherwise enabled/allowed-all unchanged, and
-Private Vulnerability Reporting enabled. Those closed controls do not override
-the missing App names; the PR remains Draft.
+Private Vulnerability Reporting enabled.
 
 That same 2026-08-14 transaction recorded the `Protect-Main` ruleset as
 inexact on five counts: a bypass actor, an update restriction, merge commits in
@@ -167,8 +211,15 @@ bindings; resolves image `vX.Y.Z` and chart `X.Y.Z` aliases and requires the
 manifest digests; verifies both Cosign identities, the exact two-platform SLSA
 and strict raw SBOM set, the chart archive against the release source tree with
 that Release's own image digest substituted exactly as the publisher does, and
-the final image vulnerability policy including development dependencies. That
-substitution is why the comparison still binds: the published chart carries the
+the final image vulnerability policy. That policy is the publisher's own —
+`trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1
+--ignore-unfixed=false` — and it carries no development-dependency scope:
+`--include-dev-deps` is a source/lockfile concept that `trivy fs` understands
+and that the installed Trivy rejects as an unknown flag on `trivy image`
+(issue #73). Development dependencies are covered where they can be, by the
+PR/main CI source scan named above, and the audit does not restate that
+coverage as its own. The image-digest substitution named at the head of this
+paragraph is why the chart comparison still binds: the published chart carries the
 released digest while the committed source keeps the fail-closed sentinel, so
 the audit proves the published chart deploys the exact image the Release,
 signature, and provenance are about. This
