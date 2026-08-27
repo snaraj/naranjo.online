@@ -108,10 +108,15 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   swallowed by the grid strip and by every segmented control.
 - The page pull stands down on a mostly-horizontal drag, on the same predicate
   the swipe already used; a diagonal of dx 160 / dy 20 moved the page 18.8px
-  before. An open detail closes when a pull claims, because the travel
-  transform makes `<main>` the containing block for its 101 fixed descendants
-  while it is applied — and the refresh CONTROL no longer displaces the page at
-  all, since a press drags nothing.
+  before. The refresh CONTROL no longer displaces the page at all, since a
+  press drags nothing, which keeps the travel transform — and the containing
+  block it creates for `<main>`'s 101 fixed descendants — to the gesture
+  alone. That re-parenting is harmless for a measured reason rather than an
+  assumed one: a pull engages only at the top of the document, and nothing
+  fixed inside `<main>` is visible there (the nearest detail host is 3055px
+  down it, against 1366px on the tallest touch viewport). The rendering lane
+  pins that property, so the day it stops holding is a red build rather than a
+  silent re-parenting.
 - The grid `listbox` owns its options: the layout div they sit in is
   `role="presentation"`, which is the only way ARIA admits them.
 - Half the grid's arrow keys were dead. With no cursor yet, `ArrowRight` and
