@@ -6848,8 +6848,15 @@ class GovernanceParityTests(unittest.TestCase):
         ready_word = re.compile(r"\bready\b", re.IGNORECASE)
         ready_block_pins = {
             "AGENTS.md": (
+                # Re-pinned at 0.1.49: the block now states that successful main
+                # CI creates NO tag and that the PUBLISHER creates it from
+                # inside the privileged job, grounded in the `actions: write` /
+                # `contents: write` permission split. Its Ready sentences —
+                # "The receipt is a required Ready gate" and "A failed or
+                # unknown preflight leaves the PR Draft" — are unchanged; only
+                # the tag-creation mechanism above them was corrected.
                 ("Releases: every artifact-classified PR advances numeric",
-                 "51d731a4043ae6cd138faa11e771b4d019bc4ec4f123518ae4c42d645108c33b"),
+                 "19224d76b42c32987e399a04dcaba7752415e187c641b30d8992d6c155348ed5"),
                 ("**Verdict format** — posted as a normal PR comment",
                  "5b074e5bab48c010304cc700fc62e47d14e34769c7534255b0ed14451e09a1cd"),
                 ("A green check, a peer approval, or a ready state is evidence",

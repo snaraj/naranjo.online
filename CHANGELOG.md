@@ -9,6 +9,78 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [0.1.49] - 2026-08-26
 
+### Added
+
+- Two CI gates over string-typed interfaces nothing was checking. Both pin
+  BEHAVIOUR rather than inventory, and each refusal prints the exact one-line
+  allowlist entry that lifts it.
+  `scripts/ci/test_subcommand_callers.py` (10 tests) proves every subcommand
+  `release_contract.py` registers is reachable from the repository that ships
+  it. It reads the 27 names off the live `argparse` parser — never a
+  hand-maintained list — and sweeps 39 comment-stripped files (6 workflow, 15
+  script, 10 doc, 8 test at this head) for each as a BARE TOKEN, ignoring line
+  structure entirely. That last part is the whole point: the near-miss this gate
+  was built for was an audit reporting `release-record` dead because its
+  invocation in `release-publisher.yml` is wrapped with a trailing backslash, so
+  any pattern matching the name together with its first argument found nothing.
+  Removing it was proven to break the publisher at runtime. The gate fails on
+  zero callers of any tier and, separately, on test-only reachability; one
+  subcommand trips the second refusal today (`immutable-settings`) and is
+  allowlisted with its reason.
+  `scripts/ci/test_workflow_integrity.py` (9 tests) refuses three constructs in
+  `.github/workflows/` that silently change what a gate MEANS rather than what
+  it does: `continue-on-error: true` on the required-checks set, a step-level
+  `env:` key that shadows an outer declaration or redeclares one of the six tool
+  pins `install-tools.sh` owns, and a custom `shell:` on a required-check step.
+  It resolves all 6 workflow files into 13 jobs and 89 steps through its own
+  fail-closed structural reader — a workflow it cannot read fails the suite
+  rather than passing quietly — and derives the 7-job required-checks set from
+  `EXPECTED_MAIN_JOBS` and `EXPECTED_CODEQL_JOBS`, never re-listing it, so it
+  cannot drift from what the publisher authorizes against.
+  Neither gate carries a closed inventory, deliberately: there is no "exactly
+  these N subcommands", no step or job census, and no env-key list, so adding a
+  step, a job, an env key or a subcommand needs no edit to either file. Both
+  allowlists ratchet shut — an entry naming a subject that does not exist, or
+  one whose subject has since grown a real caller, is a hard error — and both
+  ship with a reason column the parser refuses to accept blank.
+  `scripts/ci/workflow-integrity-allowlist.txt` ships empty because nothing
+  needed waiving to reach green. Both suites run under `pr-gate.yml`'s existing
+  wildcard discovery (`-p 'test_*.py'`) with no workflow edit. Together the two
+  suites were driven against 47 hostile mutations — every rule, every reader
+  branch, every allowlist refusal, plus four checks that pasting the printed
+  lift line really does turn the refusal green — with zero survivors.
+- A third gate closing a structural hole in the enforced secret scans:
+  `scripts/ci/commit_identity_contract.py`, wired into `pr-gate.yml`'s
+  `security` job and covered by `scripts/ci/test_commit_identity_contract.py`
+  (19 tests). `gitleaks git` and `gitleaks dir` both read BLOB content, so a
+  commit's AUTHOR and COMMITTER identity and its message body have zero coverage
+  from either scan — yet those are exactly what requirement 3 constrains, and an
+  address that lands there is permanently public and unfixable without the
+  history rewrite requirement 2 forbids. The gate walks the range the event
+  actually contributes and refuses a non-sanctioned author or committer
+  (`identity`) and a `Co-authored-by:` trailer (`co-author`), matching the
+  trailer the way `git interpret-trailers` does so it is not evaded by case or
+  padding. Two design points are load-bearing. It is RANGE-scoped, never a
+  history census, so it never re-litigates the root commit and needs no edit as
+  commits accumulate. And a refusal names the SHA and the rule but never echoes
+  the offending address: CI logs on a public repository are public, so a gate
+  that exists to keep an address out of the permanent record must not publish it
+  while refusing it — a rule the suite pins, and which the allowlist follows by
+  keying entries on SHA and rule alone.
+  `scripts/ci/commit-identity-allowlist.txt` records the nine pre-existing
+  refusals measured across the 113 commits reachable from `main` — four commits
+  whose author or committer predates the pinned-identity convention, the root
+  commit, and four squash-merge trailers GitHub's UI added automatically. They
+  are named, not rewritten, and the file says why. The remaining 104 pass, and
+  72 of those carry GitHub's own `noreply@github.com` committer from an
+  owner-performed squash or rebase merge: the rule admits that value for the
+  committer field only, because it names no person and no owner-merge can avoid
+  it, while still refusing it as an author. Refusing it instead would have made
+  every main push red forever and turned the lift path into an ever-growing
+  census of merge commits — the brittle shape this wave's gates exist to avoid.
+  Driven against 25 hostile mutations with zero survivors, and both CI event
+  directions plus the unsupported-event refusal were simulated locally.
+
 ### Removed
 
 - Dead frontend code with no caller left, verified against every file under
@@ -66,6 +138,32 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   their own tests, a claim that the census "replaces" a raw-line scan that is
   still live and gating every pull request, a comment defending an echoed path
   the code never echoes, and five in the dependabot contract.
+- `AGENTS.md` claimed successful main CI creates the plain git tag. It does not
+  and cannot: `release-after-main.yml`'s only job holds `actions: write` plus
+  `contents: read`, so it can create no ref at all, while
+  `release-publisher.yml`'s `publish` job holds `contents: write` and POSTs the
+  tag object and `refs/tags/` from inside the privileged job — so no tag exists
+  before authorization. The split is enforced by permissions, not convention,
+  and the contract now names the permission doing the enforcing.
+- `AGENTS.md`'s commit-signing one-liner was broken, and an earlier revision of
+  the contract taught the break:
+  `-c user.signingkey="key::$(ssh-add -L | grep ssh-ed25519)"` matches EVERY
+  loaded ed25519 line, so `key::` receives a multi-line value and signing fails
+  on a malformed key — which any agent that also loads a deploy or push key
+  hits. It is replaced by a `signing_key()` function that intersects the keys
+  GitHub has registered for SIGNING against the keys the agent actually holds
+  and requires exactly one match, naming no key comment, hostname, or ordering.
+  The section also documents the local-verification trap that selection exposes:
+  the allowed-signers principal must be the BARE email, because a principal
+  containing a space makes ssh read the space as a field break and report
+  `No principal matched.` — the identical verdict a genuine wrong-key negative
+  control gives, so a malformed file false-passes the negative control while
+  proving nothing at all. Both controls must be run and must DIFFER (`G` against
+  `U`).
+- `.gitignore` now carries the `__pycache__/` rule the sibling repository
+  already has. Every documented invocation of the `scripts/ci` suites passes
+  `-B`, but `-B` is a flag a person can forget and importlib still caches on the
+  run that omits it, leaving `.pyc` files for a later lane to clean by hand.
 
 ## [0.1.48] - 2026-08-26
 

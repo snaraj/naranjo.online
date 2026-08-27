@@ -267,10 +267,17 @@ Releases: every artifact-classified PR advances numeric `VERSION`, chart
 `version`, `appVersion`, and changelog `X.Y.Z`, plus plain `vX.Y.Z`
 `image.tag`, by exactly one patch from its current protected base; a
 documentation-only range (requirement 10's closed allowlist) advances nothing
-and skips release orchestration entirely. Successful main CI creates the plain git tag at the
-exact merged SHA and explicitly dispatches the protected-main publisher with
-that successful run's ID; a token-created tag is never assumed to trigger
-another push workflow. The publisher's read-only authorization job verifies
+and skips release orchestration entirely. Successful main CI creates NO tag: it
+explicitly dispatches the protected-main publisher with that successful run's
+ID, and the PUBLISHER creates the annotated plain `vX.Y.Z` tag at the exact
+merged SHA from inside its privileged job, so no tag exists before
+authorization. The split is enforced by permissions, not convention —
+`release-after-main.yml`'s only job holds `actions: write` plus `contents:
+read` and therefore cannot create a ref at all, while `release-publisher.yml`'s
+`publish` job holds `contents: write` and POSTs the tag object and
+`refs/tags/`. A token-created tag is never assumed to trigger another push
+workflow, which is exactly why the dispatch is explicit rather than
+tag-triggered. The publisher's read-only authorization job verifies
 the exact run, repository, workflow path, push event, successful conclusion,
 main branch, source SHA, exact PR-gate job inventory, and the separate exact-SHA
 CodeQL main run and job inventory before its write/packages/OIDC job can start.
@@ -653,18 +660,63 @@ committer, on every outgoing commit — is exactly:
       GIT_COMMITTER_EMAIL='39077795+snaraj@users.noreply.github.com' \
       git commit ...
 
-- Agent commits are SSH-signed per command with the owner-registered Mac
-  key, never via `git config`:
+- Agent commits are SSH-signed per command with the owner-registered
+  signing key, never via `git config`. **Select that key explicitly.** The
+  obvious form is broken and an earlier revision of this contract taught
+  it:
+
+      # BROKEN whenever more than one ed25519 key is loaded
+      -c user.signingkey="key::$(ssh-add -L | grep ssh-ed25519)"
+
+  `grep` matches EVERY ed25519 line, so `key::` receives a multi-line
+  value and signing fails on a malformed key. This is not an exotic
+  setup — any agent that also loads a deploy or push key hits it, and
+  four sessions hit it in a single day. Ask GitHub which key is
+  registered for SIGNING, intersect that with what the agent actually
+  holds, and require exactly one match. That selection names no key
+  comment, no hostname, and no ordering, so it works unchanged from any
+  machine the owner signs on:
+
+      signing_key() {
+        local matched
+        matched="$(comm -12 \
+          <(gh api /users/snaraj/ssh_signing_keys --jq '.[].key' | sort) \
+          <(ssh-add -L | awk '{print $1, $2}' | sort))"
+        test "$(printf '%s' "${matched}" | grep -c '')" -eq 1 || {
+          printf 'expected exactly one registered signing key in the agent\n' >&2
+          return 1
+        }
+        printf '%s' "${matched}"
+      }
 
       git -c gpg.format=ssh \
-          -c user.signingkey="key::$(ssh-add -L | grep ssh-ed25519)" \
+          -c user.signingkey="key::$(signing_key)" \
           commit -S ...
 
-  The owner registered this key as a GitHub signing key on 2026-08-18;
-  every agent commit must show as Verified. Signature enforcement on
+  Every agent commit must show as Verified. Signature enforcement on
   `main` is a protected-branch setting, not repository-wide, so it never
   blocks the owner's own merges from a phone or another machine that
   lacks this key.
+- **Verifying a signature locally needs a SPACE-FREE principal — and the
+  negative control lies when it is wrong.** Local verification reads an
+  allowed-signers file whose first field is a principal:
+
+      printf '%s %s\n' '39077795+snaraj@users.noreply.github.com' \
+        "$(signing_key)" > "${allowed}"
+      git -c gpg.ssh.allowedSignersFile="${allowed}" \
+          log --format='%H %G? %GS' -1 <sha>
+
+  Use the BARE email. Writing `Samuel Naranjo <39077795+snaraj@…>` makes
+  ssh read the space as a field break, report `line 1: invalid key`, and
+  match nothing. That is the trap: a genuine WRONG-KEY negative control
+  also reports `No principal matched.`, so the two failures are
+  indistinguishable at the verdict line and a malformed file silently
+  false-passes the negative control while proving nothing at all. Run
+  BOTH controls and require them to DIFFER — the positive control must
+  print `G` (`Good "git" signature for <principal>`), and the negative
+  control, with only some OTHER key in the file, must print `U`. If the
+  positive control is not `G`, the file is broken; repair it before
+  believing anything the negative one says.
 - EVERY authorized commit runs under the same pinned environment. Agents do
   not amend, rebase, cherry-pick onto a published branch, or rewrite history;
   use additive commits or a fresh branch from current main.

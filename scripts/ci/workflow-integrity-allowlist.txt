@@ -1,0 +1,32 @@
+# Lift mechanism for scripts/ci/test_workflow_integrity.py
+#
+# That gate refuses three specific dangerous constructs in
+# `.github/workflows/`. Each refusal lifts here, one line, with a written
+# reason. Widening this file is a normal, expected part of active development
+# -- a one-line change in one PR, not a security event and not a release
+# train. The gate refuses a stale entry, so the file ratchets shut rather than
+# accumulating excuses.
+#
+# Format, one entry per line:
+#
+#     <workflow file> | <rule> | <where> | <reason>
+#
+# `<rule>` is one of: continue-on-error, env-shadow, custom-shell.
+# `<where>` locates the construct:
+#     continue-on-error   job name, or `job/step name`
+#     env-shadow          `job/step name/ENV_KEY`
+#     custom-shell        `job/step name`
+# Steps are located by NAME, never by index, so inserting a step above one
+# does not invalidate its entry -- an index would be exactly the brittle
+# inventory pin this gate refuses to become.
+#
+# Every field is required. A blank reason is a hard error: an allowlist
+# without reasons is a mute button, and the next agent deserves to read WHY.
+# `#` starts a comment; blank lines are ignored.
+#
+# EMPTY BY DESIGN. Every workflow in this repository passes all three rules at
+# the head that introduced this gate: no `continue-on-error` exists anywhere,
+# no step-level `env:` shadows a workflow- or job-level declaration, and no
+# step sets a custom `shell:`. That is the state worth keeping, and an empty
+# allowlist is the honest record of it -- the seeds are absent because nothing
+# needed seeding, not because anything was waived to reach green.
