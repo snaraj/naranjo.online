@@ -3,14 +3,12 @@ import { describe, it } from 'node:test';
 
 import {
   loadPanel,
-  loadPanelIndex,
   panelAge,
   panelEnvelopeSchema,
   panelKinds,
   panelUrl,
   panelsIndexUrl,
   parsePanelEnvelope,
-  parsePanelIndex,
   unavailablePanel
 } from '../src/lib/panels.ts';
 
@@ -30,7 +28,7 @@ const jsonResponse = (body, status = 200) =>
   Promise.resolve(new Response(JSON.stringify(body), { status }));
 
 describe('panel URLs', () => {
-  it('builds only the two same-origin API shapes', () => {
+  it('builds every panel URL from the one same-origin base', () => {
     assert.equal(panelsIndexUrl, '/api/panels');
     assert.equal(panelUrl('boss-log'), '/api/panels/boss-log');
   });
@@ -89,19 +87,6 @@ describe('parsePanelEnvelope', () => {
     ];
     for (const document of broken) {
       assert.throws(() => parsePanelEnvelope(document));
-    }
-  });
-});
-
-describe('parsePanelIndex', () => {
-  it('admits the registry listing and refuses drift', () => {
-    const index = parsePanelIndex({
-      panels: [{ id: 'boss-log', kind: 'boss-log/v1', title: 'Boss Log', status: 'ok' }]
-    });
-    assert.equal(index.panels.length, 1);
-    assert.equal(index.panels[0].id, 'boss-log');
-    for (const document of [null, {}, { panels: [{}] }, { panels: [{ id: 'x' }] }]) {
-      assert.throws(() => parsePanelIndex(document));
     }
   });
 });
@@ -172,22 +157,10 @@ describe('loadPanel', () => {
   });
 });
 
-describe('loadPanelIndex', () => {
-  it('returns the listing on success and an empty listing on any fault', async () => {
-    const index = await loadPanelIndex(() =>
-      jsonResponse({ panels: [{ id: 'boss-log', kind: 'boss-log/v1', title: 'Boss Log', status: 'ok' }] })
-    );
-    assert.equal(index.panels.length, 1);
-    for (const fetcher of [() => Promise.reject(new Error('offline')), () => jsonResponse({}, 503)]) {
-      assert.deepEqual(await loadPanelIndex(fetcher), { panels: [] });
-    }
-  });
-});
-
 describe('panelAge', () => {
   const now = new Date('2026-08-11T12:00:00Z');
 
-  it('renders coarse honest ages for the badge', () => {
+  it('renders coarse honest ages for a commit row', () => {
     assert.equal(panelAge('2026-08-11T11:59:30Z', now), 'just now');
     assert.equal(panelAge('2026-08-11T11:15:00Z', now), '45m ago');
     assert.equal(panelAge('2026-08-10T21:15:00Z', now), '14h ago');

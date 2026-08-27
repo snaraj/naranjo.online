@@ -1,15 +1,13 @@
 /* Executes the live-refresh loop. Every timer, every fetch, and the page's
  * visibility state are injected through the PanelWatchHost seam, so these are
- * real behavioral tests of watchPanel and watchClock — no browser, no wall
- * clock, no sleeping, and no nondeterminism. */
+ * real behavioral tests of watchPanel — no browser, no wall clock, no
+ * sleeping, and no nondeterminism. */
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  panelClockIntervalMs,
   panelEnvelopeSchema,
   panelRefreshIntervalMs,
-  watchClock,
   watchPanel
 } from '../src/lib/panels.ts';
 
@@ -232,28 +230,12 @@ test('watchPanel refuses an unrenderable id without wedging the loop', async () 
   stop();
 });
 
-test('watchClock ticks a fresh instant on the exported cadence and stops cleanly', () => {
-  const host = fakeHost();
-  const ticks = [];
-  const stop = watchClock((now) => ticks.push(now), { host });
-  assert.equal(host.scheduled[0].ms, panelClockIntervalMs);
-
-  host.scheduled[0].callback();
-  host.scheduled[0].callback();
-  assert.equal(ticks.length, 2);
-  for (const tick of ticks) {
-    assert.ok(tick instanceof Date && !Number.isNaN(tick.getTime()), 'each tick must carry a usable instant');
-  }
-
-  stop();
-  host.scheduled[0].callback();
-  assert.equal(ticks.length, 2, 'a stopped clock must deliver nothing further');
-  assert.deepEqual(host.canceled, [0]);
-});
-
-// The force-refresh control's half of the contract (issue #78). The button in
-// PanelShell is only as good as what watchPanel gives it, so every property it
-// relies on is executed here rather than asserted about in source.
+// watchPanel's forced-read contract (issue #78). No control calls refresh()
+// today — the per-card and page-header refresh buttons both left at issue 179
+// — but the watcher itself rides the same forced path on a visibility
+// catch-up, and refresh() stays exported so a future caller joins the
+// single-flight request instead of opening a second one. Every property that
+// contract rests on is executed here rather than asserted about in source.
 test('refresh() forces a read a hidden page would otherwise skip', async () => {
   const host = fakeHost();
   const seen = [];
@@ -339,16 +321,12 @@ test('the watcher is still the stop function every caller had before', async () 
   assert.equal(host.unsubscribes, 1);
 });
 
-test('the exported cadences stay inside their documented bands', () => {
+test('the exported cadence stays inside its documented band', () => {
   // Fast enough that a visitor sees new data promptly, slow enough that a
   // long-open tab is not a load source. A change here is a conscious edit.
   assert.ok(
     panelRefreshIntervalMs >= 30_000 && panelRefreshIntervalMs <= 300_000,
     'the panel poll must stay between 30s and 5m'
-  );
-  assert.ok(
-    panelClockIntervalMs >= 10_000 && panelClockIntervalMs <= panelRefreshIntervalMs,
-    'the freshness clock must tick at least as often as the panel poll'
   );
 });
 
