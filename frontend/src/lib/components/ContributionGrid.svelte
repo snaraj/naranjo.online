@@ -97,6 +97,7 @@
   identical honest "nothing was measured here" this component has always
   meant by absent. -->
 <script lang="ts">
+  import { untrack } from 'svelte';
   import {
     cellLabel,
     cellPeriod,
@@ -115,6 +116,7 @@
     type SeriesView,
     type ValueFormat
   } from '../grid';
+  import { isChord } from '../keys.ts';
   import type { TipPoint } from '../tooltip.ts';
   import DetailTip from './DetailTip.svelte';
 
@@ -187,6 +189,13 @@
      makes a 10px target usable without pretending it is 44px wide. */
   const cells = $derived(columns.flat());
   let selected = $state(-1);
+  /* WHICH DAY the cursor names, deliberately NOT reactive. It is bookkeeping
+     for the payload-swap effect at the bottom of this script, and reading
+     `selected` there would make that effect re-run on every cursor move —
+     which is precisely the reset it exists to prevent. Written through
+     setCursor below, the ONE place the cursor is ever assigned, so the index
+     and the date it means can never drift apart. */
+  let cursorDate: string | undefined;
   let cellsHost = $state<HTMLDivElement>();
   /* Per-INSTANCE, because aria-activedescendant names an id and this page
      mounts three of these grids. Svelte's own $props.id() is the framework's
@@ -282,8 +291,20 @@
     return cells[index].date ? elementAt(index) : null;
   }
 
+  /* The ONE place `selected` is written. Every caller goes through it so the
+     remembered date is always the date of the cell the index names — the
+     invariant the payload-swap effect below depends on.
+     The cells are read under untrack because this runs from the detail
+     binding's own update as well as from an event handler, and a bookkeeping
+     read must not quietly become a dependency of whatever effect happens to
+     be flushing. */
+  function setCursor(index: number): void {
+    selected = index;
+    cursorDate = index >= 0 ? untrack(() => cells[index]?.date) : undefined;
+  }
+
   function noteSelection(element: HTMLElement | null): void {
-    selected = element === null ? -1 : Number(element.dataset.gridIndex);
+    setCursor(element === null ? -1 : Number(element.dataset.gridIndex));
   }
 
   /* The keyboard's own cursor. The strip is a single focus stop (a scrollable
@@ -299,8 +320,77 @@
      know about them, so the component hands it exactly that. */
   const datedCells = $derived(cells.map((cell) => Boolean(cell.date)));
 
+  /* A CURSOR NOBODY CAN SEE IS NOT A CURSOR. The strip opens scrolled to its
+     newest column and is far wider than its box — MEASURED at 390x844:
+     scrollWidth 686 against clientWidth 312 — so the cell an arrow lands on is
+     routinely outside the scrollport it lives in. Focusing the strip named a
+     cell at x -11 against a strip starting at 51; `Home` named one at -323;
+     and because the handler swallows the arrows (below, correctly), no key
+     could bring the strip to them. That is WCAG 2.1.1 and the ARIA listbox
+     pattern both, which put scrolling the active descendant into view on the
+     author, and it is what this repairs: the pan the keyboard lost is given
+     back as the cursor's own, rather than by handing the arrows to the
+     browser — which was measured to break the block-axis guard instead
+     (an unswallowed `Home` scrolls the DOCUMENT, and the readout closes).
+
+     `nearest` on both axes is the whole behaviour: a cell already in view
+     moves nothing at all, so a pointer selection and an arrow step onto a
+     visible neighbour cost no scroll, and only a cursor that has actually
+     left the scrollport brings it back.
+
+     INSTANT, and stated rather than defaulted. The default resolves to
+     whatever scrolling MODE the stylesheet has given the element, so a smooth
+     one declared anywhere above this cell would silently turn every arrow
+     press into an animation a reduced-motion reader never asked for — the
+     same class of trap as the transform containing block in styles.css.
+     Naming it here means that preference cannot be violated by a stylesheet
+     edit somewhere else, which is stronger than asking a media query in this
+     file and is the structural form this repository prefers. It is also the
+     only correct choice for the readout: an animated scroll delivers its
+     scroll events over the following frames, with the cell still outside the
+     scrollport for the first of them, and the guard in lib/tooltip.ts would
+     close the card the press just opened. It is the same reasoning that
+     already sets the strip's opening position outright — this is where the
+     cursor IS, not a journey the reader takes. */
+  function revealCursor(index: number): void {
+    if (index < 0) {
+      return;
+    }
+    elementAt(index)?.scrollIntoView({ behavior: 'instant', block: 'nearest', inline: 'nearest' });
+  }
+
+  /* WHAT A TAB INTO THE STRIP MEANS. A listbox that gains focus must have a
+     current option, and WHICH one is the caller's decision rather than the
+     detail primitive's: this strip opens scrolled to its newest column, so
+     the newest dated cell is both the one on screen and the one the reader
+     came for — the same cell a cold arrow press opens on, through the same
+     arithmetic, so the two entrances can never disagree.
+     lib/tooltip.ts used to answer this by asking which element sat at the
+     viewport ORIGIN, which is a sound guess for a caller with one subject and
+     a wrong one for a strip with 371: MEASURED at 390x844, tabbing to the
+     grid marked cell 168 at x -11 against a strip starting at 51 — a cursor
+     outside its own scrollport, with the card clamped to x 4 describing a
+     day nobody could see.
+     :focus-visible for the reason the primitive uses it: a click or a tap
+     focuses this region too, and those readers have already selected the cell
+     they pointed at. */
+  function onStripFocus(): void {
+    if (columns.length === 0 || selected >= 0 || strip?.matches(':focus-visible') !== true) {
+      return;
+    }
+    const opening = gridCursorTarget('End', -1, datedCells, gridRows);
+    if (opening === null || opening < 0) {
+      return;
+    }
+    setCursor(opening);
+    revealCursor(opening);
+  }
+
   function onStripKeydown(event: KeyboardEvent): void {
-    if (columns.length === 0) {
+    /* A chord is addressed elsewhere — Cmd/Alt+Arrow is the browser's Back,
+       Ctrl+Home is top-of-document — so it is neither acted on nor swallowed.
+       See lib/keys.ts for why answering `event.key` alone was the defect. */
+    if (columns.length === 0 || isChord(event)) {
       return;
     }
     const target = gridCursorTarget(event.key, selected, datedCells, gridRows);
@@ -311,7 +401,12 @@
        including when the move was refused at a boundary, where a cursor that
        cannot go further must not become a page scroll instead. */
     event.preventDefault();
-    selected = target;
+    setCursor(target);
+    /* BEFORE the reactive flush, on purpose: the scroll is synchronous, so
+       DetailTip's own update() measures the cell where it has just been
+       brought rather than where it was, and the scroll event that follows
+       finds nothing moved. */
+    revealCursor(target);
   }
 
   /* The element the binding should anchor to, driven by the keyboard cursor
@@ -430,15 +525,38 @@
     return () => node.removeEventListener('scroll', forgetGeometry);
   });
 
-  /* A new window is a new set of days, so the cell at index N is no longer
-     the cell the reader selected. Dropping the selection is the honest
-     response: keeping the index would silently re-point the readout at a
-     different day, and keeping the ELEMENT would leave a ring on a cell whose
-     meaning changed underneath it. */
+  /* A NEW WINDOW IS A NEW SET OF DAYS — but it is usually the SAME days.
+     This used to drop the cursor outright on any change of the `columns`
+     identity, and the argument for that was half right: keeping the INDEX
+     would silently re-point the readout at a different day, and keeping the
+     ELEMENT would leave a ring on a cell whose meaning changed underneath it.
+     What it missed is that the cursor names a DAY, and a day survives a
+     payload that still contains it.
+
+     Dropping it was the same class of defect the tip's own scroll handler was
+     repaired for — "a listbox cursor is not the tip's to discard" — one layer
+     up, and this PR handed it a new trigger: the pull gesture and its
+     keyboard control both call refreshPanels(), which rebuilds every section
+     and therefore every `columns` array. MEASURED at 390x844 before this
+     repair: cursor on cell 370 with the readout open, press the refresh
+     control, and `aria-activedescendant`, the ring and the card were all
+     gone — a screen-reader reader lost their place because the page did its
+     minute's work.
+
+     So the cursor is re-pointed at the same DATE, and dropped only when that
+     day is genuinely no longer in the window (a range change, a lens that
+     redraws fewer days). untrack is what keeps this an effect about
+     `columns` alone: reading the reactive cursor here would re-run it on
+     every arrow press, which is the reset it exists to avoid. */
   $effect(() => {
     void columns;
-    selected = -1;
     forgetGeometry();
+    untrack(() => {
+      const date = cursorDate;
+      const at = date === undefined ? -1 : cells.findIndex((cell) => cell.date === date);
+      selected = at;
+      cursorDate = at >= 0 ? date : undefined;
+    });
   });
 </script>
 
@@ -489,11 +607,18 @@
       aria-label={label}
       tabindex="0"
       bind:this={strip}
+      onfocusin={onStripFocus}
       onkeydown={onStripKeydown}
       aria-activedescendant={selected >= 0 ? `${gridId}-cell-${selected}` : undefined}
     >
       {#if columns.length > 0}
-        <div class="grid-cells" bind:this={cellsHost}>
+        <!-- role="presentation" because a listbox may own only options and
+          groups, and this div is neither — it is the layout grid the cells are
+          placed on. Without it every `role="option"` is the child of a generic
+          element and the listbox owns nothing, which is the exact shape ARIA
+          forbids. It removes only the div's own implicit semantics: the cells
+          inside keep theirs, and `display: grid` is untouched. -->
+        <div class="grid-cells" role="presentation" bind:this={cellsHost}>
           {#each cells as cell, index (index)}
             <!-- Every cell is a real, interrogable datapoint now — no
               `title=` anywhere, which is the attribute that had no touch

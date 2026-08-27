@@ -37,7 +37,7 @@
  *     surface left displaced is the original defect.
  */
 
-import { rubberBand } from './gesture.ts';
+import { claimsHorizontal, rubberBand } from './gesture.ts';
 
 /* How far the surface may ever travel, and how far it must travel to arm.
  * Both are absolute pixels rather than ratios: a pull is a thumb's reach, and
@@ -168,6 +168,7 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
   const reduced = () => binding.reduced?.() ?? false;
 
   let pointer = -1;
+  let startX = 0;
   let startY = 0;
   let claimed = false;
   let distance = 0;
@@ -196,6 +197,7 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
     cancelSettle?.();
     cancelSettle = null;
     pointer = event.pointerId;
+    startX = event.clientX;
     startY = event.clientY;
     claimed = false;
   }
@@ -204,12 +206,33 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
     if (event.pointerId !== pointer || phase === 'refreshing') {
       return;
     }
+    const dx = event.clientX - startX;
     const dy = event.clientY - startY;
     if (!claimed) {
       /* Upward, or no longer at the top: the page's gesture, and standing
          down explicitly stops a later downward wobble in the same gesture
          from grabbing a scroll already in progress. */
       if (dy <= 0 || !binding.atTop()) {
+        pointer = -1;
+        return;
+      }
+      /* AND A GESTURE MUST PROVE ITSELF, which this one did not. The header
+         of lib/gesture.ts states the rule the whole layer rests on — "a
+         gesture must PROVE it is horizontal before it claims anything" — and
+         its swipe binding stands down explicitly when a drag turns out to be
+         the other axis. The pull asked only for downward travel, so a
+         mostly-HORIZONTAL drag with any downward drift claimed it too:
+         MEASURED at the top of the document, a drag of dx 160 / dy 20 set
+         `data-pulling="true"` and moved the page 18.8px, and a sloppier
+         diagonal reaches the arming threshold and fires a real refresh.
+         claimsHorizontal is the SAME predicate the swipe stands down on —
+         one definition of "this drag is across, not down", so the two
+         gestures on this page can never disagree about which of them a
+         diagonal belongs to. Standing down rather than merely waiting is
+         deliberate for the reason gesture.ts gives: a later downward wobble
+         inside a gesture the reader is using to swipe something must not
+         suddenly grab the page. */
+      if (claimsHorizontal(dx, dy)) {
         pointer = -1;
         return;
       }

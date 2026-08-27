@@ -1271,6 +1271,28 @@ test('the grid opens on its newest column and lets history scroll back', () => {
   // Instantly. A smooth scroll here would be motion nobody asked for, on a
   // page whose animations are all inside a no-preference query.
   assert.doesNotMatch(grid, /scroll-behavior|scrollTo\(/, 'the opening position is not a journey');
+  /* And the SAME rule for the second scroll this component performs (issue
+     219 review round 2): the keyboard cursor is brought into its scrollport
+     on every move, which is a scroll on a reader's own key press and is
+     therefore exactly the place an unasked-for animation would appear. The
+     option is REQUIRED rather than left to the default, because the default
+     resolves to whatever scrolling mode the stylesheet gives the element —
+     so an omitted option is a reduced-motion promise held by a file that
+     cannot see the one that would break it. Every call is checked, not the
+     first, so a second one added later inherits the rule. */
+  const reveals = [...grid.matchAll(/scrollIntoView\(([^)]*)\)/g)];
+  assert.ok(reveals.length > 0, 'nothing scrolls the keyboard cursor into view any more');
+  for (const [call, options] of reveals) {
+    assert.match(
+      options,
+      /behavior:\s*'instant'/,
+      `${call} leaves its scrolling mode to the stylesheet; a cursor step is never animated`
+    );
+    // `nearest` on both axes, or a cursor step drags the page and the strip
+    // to centre a cell that was already perfectly visible.
+    assert.match(options, /block:\s*'nearest'/, `${call} does not leave a visible cell alone`);
+    assert.match(options, /inline:\s*'nearest'/, `${call} does not leave a visible cell alone`);
+  }
 });
 
 // INVERTED by the owner's ruling of 2026-08-24. This pin used to REQUIRE the
