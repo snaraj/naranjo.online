@@ -30,17 +30,6 @@ export interface PanelEnvelope<Data = unknown> {
   data: Data | null;
 }
 
-export interface PanelIndexEntry {
-  id: string;
-  kind: string;
-  title: string;
-  status: PanelStatus;
-}
-
-export interface PanelIndex {
-  panels: PanelIndexEntry[];
-}
-
 /* token-usage/v1 — token consumption windows grouped per labeled source.
  * Source labels are data supplied by the origin, never frontend constants. */
 export interface TokenUsageWindow {
@@ -152,9 +141,16 @@ export interface BossLogData {
   bosses: BossLogEntry[];
 }
 
-/* panelsIndexUrl and panelUrl are the only URL shapes the panel API accepts,
- * kept behind helpers exactly like mediaUrl in media.ts so components never
- * assemble API paths by hand. */
+/* The panel API's base path, and the ONE place it is written down: panelUrl
+ * builds every per-panel URL from it, kept behind a helper exactly like
+ * mediaUrl in media.ts so components never assemble API paths by hand.
+ *
+ * The origin also SERVES this path as a registry listing, but no client reads
+ * it: every panel is mounted by hardcoded id from its binding module under
+ * lib/blocks/, so the page never needs to ask which panels exist. The reading
+ * half of that endpoint was removed rather than left as an unused import
+ * surface; adding a discovery caller back means writing a parser again, which
+ * is the honest cost of a listing nothing consumes today. */
 export const panelsIndexUrl = '/api/panels';
 
 /* Panel ids are lowercase hyphenated registry identifiers; anything else can
@@ -219,31 +215,6 @@ export function parsePanelEnvelope(document: unknown): PanelEnvelope {
   return envelope;
 }
 
-export function parsePanelIndex(document: unknown): PanelIndex {
-  if (!isRecord(document) || !Array.isArray(document.panels)) {
-    throw new Error('panel index must carry a panels array');
-  }
-  const panels = document.panels.map((entry): PanelIndexEntry => {
-    if (
-      !isRecord(entry) ||
-      typeof entry.id !== 'string' ||
-      typeof entry.kind !== 'string' ||
-      typeof entry.title !== 'string' ||
-      typeof entry.status !== 'string' ||
-      !panelStatuses.has(entry.status)
-    ) {
-      throw new Error('panel index entry must carry id, kind, title, and a known status');
-    }
-    return {
-      id: entry.id,
-      kind: entry.kind,
-      title: entry.title,
-      status: entry.status as PanelStatus
-    };
-  });
-  return { panels };
-}
-
 /* unavailablePanel is the fail-soft envelope a component receives when the
  * request itself failed: same shape, honest status, null data. */
 export function unavailablePanel(id: string, title = ''): PanelEnvelope<never> {
@@ -288,18 +259,6 @@ export async function loadPanel<Data = unknown>(
   }
 }
 
-export async function loadPanelIndex(fetcher: PanelFetcher = defaultFetcher): Promise<PanelIndex> {
-  try {
-    const response = await fetcher(panelsIndexUrl);
-    if (!response.ok) {
-      return { panels: [] };
-    }
-    return parsePanelIndex(await response.json());
-  } catch {
-    return { panels: [] };
-  }
-}
-
 /* panelRefreshIntervalMs is how often a mounted panel re-reads its envelope.
  * One minute is the deliberate compromise: the origin refreshes fetch-backed
  * panels on a five-minute TTL (ttlMinutes in internal/panels/config/fetch.json,
@@ -309,11 +268,6 @@ export async function loadPanelIndex(fetcher: PanelFetcher = defaultFetcher): Pr
  * body while the data is unchanged, because the panel API serves digest
  * ETags. */
 export const panelRefreshIntervalMs = 60_000;
-
-/* panelClockIntervalMs is how often the freshness badge re-reads the clock.
- * The age it prints is coarse (minutes, then hours), so half a minute keeps
- * "just now" from lingering without waking anything meaningful. */
-export const panelClockIntervalMs = 30_000;
 
 /* PanelWatchHost is the seam between the polling loop and the browser: the
  * transport, the timer, and the page's visibility state. Production binds it
@@ -427,27 +381,16 @@ export function watchPanel<Data = unknown>(
   return watcher;
 }
 
-/* watchClock ticks a shared wall clock so a rendered age keeps telling the
- * truth. Without it a badge computed once at mount reads "just now" forever,
- * which is worse than no badge: it is a freshness claim that quietly becomes
- * false. Same host seam, same stop contract. */
-export function watchClock(onTick: (now: Date) => void, options: PanelWatchOptions = {}): () => void {
-  const host = { ...defaultWatchHost, ...options.host };
-  let stopped = false;
-  const handle = host.schedule(() => {
-    if (!stopped) {
-      onTick(new Date());
-    }
-  }, options.intervalMs ?? panelClockIntervalMs);
-  return () => {
-    stopped = true;
-    host.cancel(handle);
-  };
-}
-
-/* panelAge renders generatedAt as the coarse human age the status badge
- * shows. Coarse on purpose: freshness is a glance, not a clock — the ticking
- * happens in watchClock, which re-invokes this with a fresh instant. */
+/* panelAge renders an ISO instant as a coarse human age. Its one live caller
+ * is lib/activity.ts, which stamps each recent-commit row with how long ago
+ * that commit landed.
+ *
+ * Coarse on purpose, and NOT ticked: an age is recomputed when the row it
+ * sits in is rebuilt — which watchPanel already does once a minute, at the
+ * same cadence a "3m ago" would need — so there is no second timer here and
+ * no rendered age can outlive its own panel's data. The panel freshness badge
+ * this once fed, and the shared wall clock that ticked it, went with the
+ * manual refresh control at issue 179. */
 export function panelAge(generatedAt: string | undefined, now: Date = new Date()): string {
   if (!generatedAt) {
     return '';
