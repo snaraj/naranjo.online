@@ -153,40 +153,19 @@ export function swipeHorizontal(node: HTMLElement, binding: SwipeBinding) {
      a button, and a drag across it ends in a click the reader never meant —
      so a real drag suppresses exactly one click, at capture, before it
      reaches the control.
-     "Exactly one" is the part that needed a clock. A MOUSE drag ends in a
-     compatibility click dispatched in the same task as its pointerup, so the
-     suppression is consumed immediately; a TOUCH swipe past the platform's
-     own slop produces no click at all, and the flag simply sat there waiting
-     for the next activation of any kind. MEASURED in both engines at 390x844:
-     swipe the gallery (counter 1/8 -> 2/8), focus the frame, press Enter, and
-     the lightbox did not open — the reader's keypress was eaten by a gesture
-     that had already finished. So the flag is released at the end of the task
-     that ended the gesture: after the click that belongs to it, before
-     anything the reader does next. */
+     WHAT DISARMS IT IS A POINTERDOWN, and that is enough for every POINTER
+     reader: a mouse drag's own compatibility click arrives in the same task
+     as its pointerup and consumes the flag, and any later click necessarily
+     begins with a pointerdown on this node, which resets it in onDown. The
+     reader the flag could still reach is the one who produces no pointer
+     event at all — see onClickCapture. */
   let dragged = false;
-  let releasing = 0;
-
-  /* Hand the suppression back once the current task is over. A macrotask is
-     exactly the right length here and not a guess: the UA dispatches
-     pointerup, mouseup and click together within one task, so the click a
-     drag owes is always dispatched before this runs, and anything the reader
-     does afterwards is always dispatched after it. */
-  function releaseSuppression(): void {
-    if (releasing !== 0) {
-      clearTimeout(releasing);
-    }
-    releasing = setTimeout(() => {
-      releasing = 0;
-      dragged = false;
-    }, 0);
-  }
 
   function reset(): void {
     pointer = -1;
     claimed = false;
     binding.move(0);
     binding.settle();
-    releaseSuppression();
   }
 
   function onDown(event: PointerEvent): void {
@@ -267,7 +246,6 @@ export function swipeHorizontal(node: HTMLElement, binding: SwipeBinding) {
        go back to zero either way, and THAT is the snap-back the reader sees. */
     binding.move(0);
     binding.settle();
-    releaseSuppression();
   }
 
   /* The browser has taken the gesture — a scroll it decided was vertical, a
@@ -281,10 +259,17 @@ export function swipeHorizontal(node: HTMLElement, binding: SwipeBinding) {
   /* A KEYBOARD ACTIVATION IS NEVER A STRAY DRAG CLICK, and `detail` is how
      the platform says so: a click synthesised from Enter or Space on a
      <button> reports a click count of 0, while every pointer-driven click
-     reports at least 1. Returning here rather than consuming the flag is
-     deliberate — the keypress was not this gesture's to spend, so it is
-     passed through untouched and the suppression, if one is still owed,
-     stays owed. */
+     reports at least 1.
+     This is the whole of the repair for a real, measured defect. A touch
+     swipe past the platform's own slop produces NO click, so the suppression
+     the drag armed was never consumed — and unlike a pointer reader, whose
+     next activation begins with a pointerdown that disarms it, a keyboard
+     reader produces no pointer event at all and walked straight into it.
+     MEASURED in both engines at 390x844: swipe the gallery (counter
+     1/8 -> 2/8), focus the frame, press Enter, and `dialog.open` was false.
+     Returning rather than consuming the flag is deliberate — the keypress was
+     not this gesture's to spend, so it passes through untouched and a
+     suppression still owed to a pointer stays owed. */
   function onClickCapture(event: MouseEvent): void {
     if (!dragged || event.detail === 0) {
       return;
@@ -302,9 +287,6 @@ export function swipeHorizontal(node: HTMLElement, binding: SwipeBinding) {
 
   return {
     destroy() {
-      if (releasing !== 0) {
-        clearTimeout(releasing);
-      }
       node.removeEventListener('pointerdown', onDown);
       node.removeEventListener('pointermove', onMove);
       node.removeEventListener('pointerup', onUp);
