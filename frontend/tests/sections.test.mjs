@@ -1171,6 +1171,25 @@ test('the visible frame is centred in its track, so no gutter is dead space (iss
     /(^|[\s;])(inline-size|block-size|width|height|aspect-ratio):/,
     'the frame button sizes itself, so the reserved box is whatever fits inside the button instead'
   );
+  /* `inset: 0` only fills anything while the button is absolutely positioned,
+     and this pin exists because composing issue 207 with this rule declared
+     `position` TWICE — `absolute` from the reservation, then `relative` for
+     the moving-item mark's containing block, which wins by order. The button
+     fell back into flow at fit-content and the frame measured 569px off
+     centre in Firefox and WebKit at 1440px: the exact dead gutter this test
+     was written to prevent, reintroduced through a property nobody re-read.
+     Absolutely positioned boxes are already containing blocks for absolutely
+     positioned descendants, so one declaration serves both purposes. */
+  assert.match(
+    frameButton,
+    /(^|[\s;])position:\s*absolute/,
+    'the frame button is not absolutely positioned, so `inset: 0` fills nothing and the reserved box collapses to the button’s content'
+  );
+  assert.equal(
+    (frameButton.match(/(^|[\s;])position:/g) ?? []).length,
+    1,
+    'the frame button declares `position` more than once; the last one wins and the reservation is decided by declaration order'
+  );
   // The track arrangement the centring depends on: a middle column that can
   // be wider than the frame is exactly what makes the alignment matter.
   const frame = /\.gallery-frame\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';

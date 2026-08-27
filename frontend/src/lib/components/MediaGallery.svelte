@@ -340,12 +340,18 @@
      stretched a grid item here to a square, MEASURED, so grid stretch was
      not enough). */
   .gallery-image-button {
+    /* Absolute, filling the stage. Issue 207 wanted a containing block here
+       for the moving-item mark below and added `position: relative`; composing
+       that with issue 202's centred stage left the property declared TWICE
+       with `relative` last, which took the button out of its absolute fill and
+       let a <button>'s fit-content sizing decide the frame's width again —
+       measured off centre by 569px in Firefox and WebKit at 1440px, the exact
+       dead gutter issue 202 removed. One declaration, and it is `absolute`:
+       an absolutely positioned box is already a containing block for
+       absolutely positioned descendants, so the mark needs nothing further. */
     position: absolute;
     inset: 0;
     display: grid;
-    /* The containing block for the moving-item mark below. With no offsets
-       of its own it paints exactly as `static` did. */
-    position: relative;
     padding: 0;
     border: 0;
     background: none;
