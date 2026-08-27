@@ -6067,6 +6067,28 @@ test('a refresh keeps the keyboard cursor on the day it named (issue 219)', asyn
   expect(before.marked, 'the keyboard marked no cell to begin with').not.toBeNull();
   expect(before.open, 'the keyboard opened no readout to begin with').toBe(true);
 
+  /* Watched rather than sampled afterwards. The page's travel attribute is
+     written and removed inside the refresh, so reading it once at the end
+     measures a state that has already gone — an assertion that cannot fail is
+     no assertion. A mutation record for that attribute exists ONLY if it was
+     added at some point (removing an absent attribute records nothing), which
+     makes "the press never displaced the page" a fact about the whole
+     interval rather than about one instant in it. */
+  await page.evaluate(() => {
+    window.__displaced = false;
+    window.__watch = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.attributeName === 'data-pulling') {
+          window.__displaced = true;
+        }
+      }
+    });
+    window.__watch.observe(window.document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-pulling'],
+    });
+  });
+
   /* The refresh is triggered WITHOUT moving focus, and that is the honest
      shape of the defect rather than a convenience. A payload delivery has
      nothing to do with where focus is: the per-panel minute loop, the
@@ -6092,12 +6114,18 @@ test('a refresh keeps the keyboard cursor on the day it named (issue 219)', asyn
   expect(after.active, 'the refresh wiped aria-activedescendant').toBe(before.active);
   expect(after.open, 'the refresh closed the readout').toBe(true);
   expect(after.text, 'the refresh left the readout describing something else').toBe(before.text);
-  // And the page was never displaced by a press: a keyboard reader dragged
-  // nothing, so <main> must not become a containing block for its 101 fixed
-  // descendants on their behalf.
+  /* And the page was never displaced by a press: a keyboard reader dragged
+     nothing, so <main> must not become a containing block for its 101 fixed
+     descendants on their behalf — not at the end of the refresh, and not for
+     a single frame in the middle of it. */
+  const displaced = await page.evaluate(() => {
+    window.__watch.disconnect();
+    return window.__displaced;
+  });
+  expect(displaced, 'pressing the refresh control displaced the page column').toBe(false);
   expect(
     await page.evaluate(() => window.getComputedStyle(window.document.querySelector('main')).transform),
-    'pressing the refresh control transformed the page column',
+    'the page column was left transformed after a refresh',
   ).toBe('none');
 
   /* And the cursor is still the READOUT'S to close when focus genuinely
