@@ -881,8 +881,15 @@ def assert_only_dates_and_integers(value, where="emission", extra_keys=frozenset
     * an integer must be non-negative AND within MAX_COUNT — every emitted
       figure is a count, and one the Go boundary and the browser can both
       represent exactly (2026-08-24 round-3 review, finding 9);
-    * a boolean is admitted only under the one field that declares one, the
-      series' `recorded` flag.
+    * a boolean is admitted only under a key spelled exactly `recorded` — the
+      series' provenance flag is the only field that declares one. The guard
+      keys off the NAME, not the position: it threads `allow_bool` down as
+      `key == "recorded"` from every mapping, so a `recorded` key nested
+      anywhere inside an admitted document would also be admitted. That is
+      wider than the sentence above reads, and is written down rather than
+      trusted, because the two refusals under it are what actually bound the
+      hole: a bare top-level boolean is refused, and a list re-seeds
+      `allow_bool` false, so even `recorded: [true]` is refused.
 
     Any refusal names only the FIELD, never the value.
     """
@@ -1021,8 +1028,13 @@ def main(argv=None):
     arguments = parse_arguments(sys.argv[1:] if argv is None else argv)
     root = pathlib.Path(arguments.transcripts).expanduser()
     if not root.is_dir():
-        # The path is the operator's own argument, so echoing it back leaks
-        # nothing they did not just type; it still is not written anywhere.
+        # The refusal names no path — not even the operator's own argument.
+        # This branch prints a CONSTANT, so it already follows the same
+        # no-path rule every CaptureError message follows ("a file that cannot
+        # be read is tallied, never named, because an error string carrying a
+        # path is a leak with a friendly face"). The comment here used to
+        # defend echoing the path back, which this code has never done;
+        # reading it as licence would have made the leak it excused.
         print("no such transcript directory", file=sys.stderr)
         return 2
     try:

@@ -8600,7 +8600,19 @@ class WorkflowStructureTests(unittest.TestCase):
             (gate, "group: pr-gate-${{ github.event.pull_request.number || github.run_id }}"),
             (gate, "cancel-in-progress: true"),
             (codeql, "group: codeql-${{ github.event.pull_request.number || github.sha }}"),
-            (codeql, "cancel-in-progress: true"),
+            # TIGHTENED, not relaxed. The SHA-keyed group already stops one
+            # main push cancelling another, which is what this test is named
+            # for. It cannot stop the weekly SCHEDULE run, which resolves
+            # `github.sha` to the same default-branch head and so lands in the
+            # same group as a push run still analysing that commit. The
+            # publisher requires a CodeQL run with event=push at that exact
+            # SHA and conclusion=success, and CodeQL fires on push once per
+            # push, so one cancellation makes the version permanently
+            # unreleasable. Pinning the guarded expression admits strictly
+            # fewer workflows than `cancel-in-progress: true` did: reverting
+            # to the bare `true` now fails this contract. Matches the sibling
+            # repository, which already pins this exact string.
+            (codeql, "cancel-in-progress: ${{ github.event_name == 'pull_request' }}"),
             (orchestrator, "group: release-after-main-${{ github.event.workflow_run.head_sha }}"),
             (orchestrator, "cancel-in-progress: false"),
             (publisher, "group: release-${{ inputs.source_sha }}"),

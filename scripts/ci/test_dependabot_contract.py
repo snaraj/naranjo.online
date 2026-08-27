@@ -6,9 +6,18 @@ review of PR #58 proved it -- a `patterns:` -> `patternz:` typo under
 four-way lock, and both secret scans (PR #58 review, mutants f/f2/g). This
 suite mirrors `test_release_contract.py`'s style: the module is loaded
 directly by file path so `python3 -I -B` (no site-packages, isolated) can
-run it standalone, every hostile input is a `unittest.TestCase` proving one
-specific rejection, and the exact PR #58 mutation is replayed against a
-temp copy of the real, on-disk file, not just a synthetic fixture.
+run it standalone, every case is a `unittest.TestCase` proving one specific
+OUTCOME, and the exact PR #58 mutation is replayed against a temp copy of the
+real, on-disk file, not just a synthetic fixture.
+
+The suite is deliberately two-sided, and saying "every hostile input proves a
+rejection" erased the half that matters most: of its 34 tests, 5 prove
+ACCEPTANCE — the real on-disk config, the CLI's exit-0 path, both synthetic
+fixtures, and the two official-ecosystem spot checks — and one more proves
+both, re-validating the untouched real file after corrupting a temp copy of
+it. Without those, a gate that rejected EVERYTHING would pass every rejection
+test in here. That is precisely the vacuity AGENTS.md's review protocol asks
+to be visible, so it is stated rather than implied.
 """
 
 from __future__ import annotations
@@ -34,7 +43,16 @@ REAL_CONFIG_PATH = ROOT / ".github" / "dependabot.yml"
 
 
 def minimal_document() -> str:
-    """The real file's exact shape: two ecosystems, each grouped."""
+    """A two-entry SUBSET of the real file: github-actions and npm, both grouped.
+
+    Not the real file's exact shape, and the difference matters when reading a
+    mutation aimed at "the real config". `.github/dependabot.yml` declares
+    THREE ecosystems — github-actions, gomod, npm — and the gomod entry
+    carries no `groups:` stanza at all, so "each grouped" is false of the real
+    file too. This fixture therefore never exercises an `updates[]` entry that
+    legitimately lacks `groups`; `_validate_update_entry`'s `if "groups" in
+    entry.entries:` branch is covered only through the real on-disk file.
+    """
     return textwrap.dedent(
         """\
         version: 2
@@ -367,7 +385,12 @@ class GroupsTests(unittest.TestCase):
             DC.validate_text(text)
         self.assertIn("unknown key 'ignore-me'", str(caught.exception))
 
-    def test_patterns_must_be_a_non_empty_list(self):
+    # Named for what it actually empties. The line removed is the sole item
+    # under `exclude-patterns:`, not under `patterns:`, and the assertion
+    # below names `groups.backend.exclude-patterns`. The sibling property —
+    # that `groups.*.patterns` must itself be a non-empty list — has no test
+    # in this suite; that gap is real and was hidden by this test's old name.
+    def test_exclude_patterns_must_be_a_non_empty_list(self):
         text = replace_once(rich_document(), '          - "legacy-*"\n', "")
         with self.assertRaises(DC.DependabotContractError) as caught:
             DC.validate_text(text)
