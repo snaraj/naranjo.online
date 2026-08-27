@@ -59,7 +59,18 @@ test('static and hydrated shells preserve the same accessible identity', () => {
 
 test('initial source remains local and viewport-responsive', () => {
   for (const [name, source] of Object.entries({ fallback, component, styles })) {
-    assert.doesNotMatch(source, /(?:https?:)?\/\//, `${name} introduces a remote origin`);
+    // The protocol-relative half is real coverage and stays: `//example.com`
+    // is a remote origin exactly like `https://example.com`, and dropping it
+    // would be a weakening. What the host lookahead adds is PRECISION. `//`
+    // with nothing required after it also matched every JavaScript line
+    // comment, so the sweep was a tripwire: the swept files happen to carry
+    // no `//` today, and the first `// note` anyone wrote in one turned CI
+    // red claiming a remote origin. Requiring a dotted authority separates
+    // the two — `//cdn.example.net` still fails the file, `// a note` does
+    // not. Honest residual, in the fail-closed direction only: a
+    // single-label authority (`//cdn/x`) is not matched, and a comment
+    // opening straight onto a dotted word (`//foo.bar`) still is.
+    assert.doesNotMatch(source, /(?:https?:)?\/\/(?=[\w-]+\.)/, `${name} introduces a remote origin`);
   }
   assert.match(styles, /font-size:\s*clamp\(/);
   // Rendering-lane floor (issue #26, delivered by #78): dynamic viewport

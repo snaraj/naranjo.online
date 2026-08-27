@@ -774,7 +774,10 @@ test('every entry-row href is built by the validated helpers, and the component 
 
 test('activity sources stay local-origin and provider-neutral', () => {
   for (const [name, source] of Object.entries({ component, helpers, grid })) {
-    assert.doesNotMatch(source, /(?:https?:)?\/\//, `${name} introduces a remote origin`);
+    // Protocol-relative origins still fail this; a line comment no longer
+    // does. The lookahead and the reasoning behind it are documented once, on
+    // the same sweep in tests/experience.test.mjs.
+    assert.doesNotMatch(source, /(?:https?:)?\/\/(?=[\w-]+\.)/, `${name} introduces a remote origin`);
     // The panel is provider-neutral: the data's origin never names itself in
     // frontend source (mirrors the vcs-activity naming in internal/panels).
     assert.doesNotMatch(source, /git\s?hub/i, `${name} names the data's origin`);
