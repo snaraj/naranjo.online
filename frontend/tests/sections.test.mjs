@@ -924,31 +924,42 @@ test('clicking the photograph enlarges it; only the full derivative loads on dem
  * and it is not decorative here: a surviving comment is prose these pins
  * would read as markup, which is how a pin demanding an element be PRESENT
  * gets satisfied by a commented-out one. Looping to a fixed point is what
- * makes "removed" total, and it is what makes the pins below sound. */
-function withoutComments(markup) {
+ * makes "removed" total, and it is what makes the pins below sound.
+ *
+ * It returns its pass COUNT alongside the markup so the test below can prove
+ * the loop is load-bearing without performing a lone unguarded pass of its
+ * own — a demonstration written that way is a second incomplete sanitizer,
+ * correctly flagged as one, and counting is the better evidence anyway: it
+ * measures the real implementation rather than a hand-rolled imitation. */
+function stripComments(markup) {
   let stripped = markup;
   let previous;
+  let passes = 0;
   do {
     previous = stripped;
     stripped = previous.replace(/<!--[\s\S]*?-->/g, '');
+    passes += 1;
   } while (stripped !== previous);
-  return stripped;
+  return { markup: stripped, passes };
 }
 
-const galleryMarkup = withoutComments(mediaGallery);
+const galleryMarkup = stripComments(mediaGallery).markup;
 
-test('the comment strip these pins depend on removes spliced comments too (issue 207)', () => {
-  // Non-vacuity for the loop above, stated as the regression it prevents:
-  // one pass over this input leaves a whole live comment behind, so the
-  // "must be present" pins could be satisfied by commented-out markup.
-  const spliced = '<div><!<!-- x -->-- <video --></div>';
-  assert.equal(
-    spliced.replace(/<!--[\s\S]*?-->/g, ''),
-    '<div><!-- <video --></div>',
-    'a single pass is expected to leave a comment behind — if it stops doing so, this pin measures nothing'
-  );
-  assert.equal(withoutComments(spliced), '<div></div>');
-  assert.doesNotMatch(withoutComments(spliced), /<video/);
+test('the comment strip these pins depend on runs to a fixed point (issue 207)', () => {
+  // Non-vacuity for the loop above, stated as the regression it prevents.
+  // This input needs TWO effective passes: the first removes the inner
+  // comment and splices `<!--` out of the `<!` before it and the `--` after
+  // it, leaving a whole live comment that hides a `<video`; the second
+  // removes that. A single-pass strip would hand the "must be present" pins
+  // commented-out markup and they would be satisfied by prose.
+  const spliced = stripComments('<div><!<!-- x -->-- <video --></div>');
+  // Three, because the count includes the terminating pass that changes
+  // nothing — which is the pass that proves convergence was reached.
+  assert.equal(spliced.passes, 3, 'the strip must iterate, not run once');
+  assert.equal(spliced.markup, '<div></div>');
+  assert.doesNotMatch(spliced.markup, /<video/);
+  // And the subject the pins actually read: no comment survives in it.
+  assert.doesNotMatch(galleryMarkup, /<!--/, 'the gallery markup these pins read must be comment-free');
 });
 
 test('a moving item shows a poster in the strip — never a <video> element there (issue 207)', () => {
