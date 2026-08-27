@@ -14,7 +14,7 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - Two CI gates over string-typed interfaces nothing was checking. Both pin
   BEHAVIOUR rather than inventory, and each refusal prints the exact one-line
   allowlist entry that lifts it.
-  `scripts/ci/test_subcommand_callers.py` (11 tests) proves every subcommand
+  `scripts/ci/test_subcommand_callers.py` (12 tests) proves every subcommand
   `release_contract.py` registers is reachable from the repository that ships
   it. It reads the 27 names off the live `argparse` parser — never a
   hand-maintained list — and sweeps 40 comment-stripped files (6 workflow, 16
@@ -27,11 +27,14 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   zero callers of any tier and, separately, on test-only reachability; one
   subcommand trips the second refusal today (`immutable-settings`) and is
   allowlisted with its reason.
-  `scripts/ci/test_workflow_integrity.py` (17 tests) refuses three constructs in
+  `scripts/ci/test_workflow_integrity.py` (22 tests) refuses three constructs in
   `.github/workflows/` that silently change what a gate MEANS rather than what
   it does: `continue-on-error: true` on the required-checks set, a step-level
   `env:` key that shadows an outer declaration or redeclares one of the six tool
-  pins `install-tools.sh` owns, and a custom `shell:` on a required-check step.
+  pins `install-tools.sh` owns, and a custom shell on a required check — whether
+  written as a step's `shell:` or as a `defaults.run.shell` at job or workflow
+  level, which reshells every `run:` step beneath it and is the same construct
+  spelled where no step carries it.
   It resolves all 6 workflow files into 13 jobs and 90 steps through its own
   fail-closed structural reader — a workflow it cannot read fails the suite
   rather than passing quietly — and derives the 7-job required-checks set from
@@ -47,12 +50,13 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   because nothing needed waiving to reach green, so both ratchets are driven by
   fixtures rather than left vacuous. Both suites run under `pr-gate.yml`'s
   existing wildcard discovery (`-p 'test_*.py'`) with no workflow edit.
-  Together the three suites were driven against 54 hostile mutations with zero
-  survivors, under a harness that reports a selection matching zero tests as a
-  fault rather than counting it as a kill.
-  Two classes of defect were found by the adversarial review of this entry's
-  own first head and repaired here, both of the same shape — a check that looks
-  strict, reads as strict, and refuses nothing.
+  Every rule, reader branch, allowlist refusal and lift path in the three
+  suites is mutation-killed; the final sweep of the workflow reader alone runs
+  28 hostile mutations with zero survivors, under a harness that reports a
+  selection matching zero tests as a fault rather than counting it as a kill.
+  Three classes of defect were found by successive adversarial reviews of this
+  entry's own earlier heads and repaired here, all of the same shape — a check
+  that looks strict, reads as strict, and refuses nothing.
   First, the structural reader accepted a step only when the item line was
   `- <key>: …`, so seven other VALID shapes — a bare `-` with the keys below it,
   a sequence indented level with its own `steps:` key, a wider gap after the
@@ -61,11 +65,7 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   three rules, so `continue-on-error: true`, `shell: sh`, and a shadowed pin
   each stayed GREEN while `actionlint` returned rc=0 and the runner would have
   executed them. The reader now derives the sequence indent from its first item
-  and each step's property column from where its first key lands, and REFUSES
-  the constructs it cannot resolve (flow mappings and sequences, anchors,
-  aliases, merge keys, multi-document files) rather than skipping them. The
-  boundary is written down in the module docstring and pinned shape by shape by
-  a fixture, each shape differential-tested against a real YAML parser.
+  and each step's property column from where its first key lands.
   Second, six of the rules could be DELETED OUTRIGHT with the suite staying
   green: every workflow and subcommand here is clean, so no shipped input ever
   reached a refusal. The rules were correct — mutating the real files fires each
@@ -73,6 +73,30 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   Fixtures now drive all three workflow rules, both subcommand rules, and both
   allowlist ratchets to a real refusal and back through their printed lift line,
   with a positive control on each so none can pass by refusing everything.
+  Third — and this is what the other two were symptoms of — the reader
+  recognised the spellings somebody had thought of and treated everything else
+  as "not a match", which leaks BY CONSTRUCTION. Ten further evasions were
+  measured against the real `pr-gate.yml`, every one valid YAML that
+  `actionlint` accepts at rc=0 and that GitHub Actions would honour: six ways
+  of writing a true `continue-on-error` the reader compared as not-true (the
+  scalar on the following line, an explicit `!!bool` tag, and a `${{ }}`
+  expression, each at job and at step level); the two `defaults.run.shell`
+  positions; and two step-level `env:` entries whose key the reader could not
+  name and therefore dropped — including an explicit key (`? GO_COVERAGE_FLOOR`
+  / `: '0'`) that shadows the coverage floor invisibly.
+  The repair is not another list of forms. The reader now RESOLVES a small,
+  explicit set of scalar spellings — a plain token, a quoted string without
+  escapes, or nothing at all with nothing nested under it — and REFUSES
+  everything else in every position a rule reads, structure and value alike:
+  tags, aliases, anchors, flow nodes, expressions, merge keys, explicit keys,
+  an `env:` entry it cannot name, a job that declares `steps:` and resolves
+  none, and multi-document files. `continue-on-error` narrows further to `true`
+  or `false` in any casing, so that rule is TOTAL: every input either raises or
+  resolves to one of two booleans, and there is no third outcome for a spelling
+  to hide in. The boundary is written down in the module docstring, and a
+  fixture table of twelve exotic-but-valid ways of writing `true` — none of
+  which has a branch anywhere in the module — proves the property that matters:
+  a spelling nobody anticipated turns the gate RED with no code change.
 - A third gate closing a structural hole in the enforced secret scans:
   `scripts/ci/commit_identity_contract.py`, wired into `pr-gate.yml`'s
   `security` job and covered by `scripts/ci/test_commit_identity_contract.py`
@@ -102,8 +126,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   it, while still refusing it as an author. Refusing it instead would have made
   every main push red forever and turned the lift path into an ever-growing
   census of merge commits — the brittle shape this wave's gates exist to avoid.
-  Driven against 25 hostile mutations with zero survivors, and both CI event
-  directions plus the unsupported-event refusal were simulated locally.
+  Every rule, allowlist refusal and lift path in it is mutation-killed, and
+  both CI event directions plus the unsupported-event refusal were simulated
+  locally. (An earlier revision of this entry put a count on that sweep. It is
+  removed rather than restated: the number was measured at an earlier head and
+  not re-derived at this one, and an unreproducible figure in a release
+  artifact is the same defect as a wrong one.)
 
 ### Removed
 
@@ -130,8 +158,11 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - Four re-implementations of one workflow-step extractor and three
   near-identical synthetic-git-repo builders in `scripts/ci/test_release_contract.py`,
   plus one strictly subsumed test. Zero assertions were lost that the file did
-  not already make elsewhere, and all 15 workflow-step extractions were proven
-  SHA-256 identical before and after.
+  not already make elsewhere, and every workflow-step extraction was proven
+  SHA-256 identical before and after — the byte equality is the load-bearing
+  claim, and no count of extraction shapes is asserted, because none of the
+  three methods tried (call sites, distinct constants, an instrumented run)
+  agrees with the others on what a "shape" is.
 
 ### Fixed
 
