@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Whole-render NetworkPolicy census for the Helm chart (issue #86).
 
-WHY THIS EXISTS. `scripts/ci/chart-egress-pin.sh` used to recognise a YAML
-document only by a raw line whose prefix was exactly `kind` and a raw line
-exactly equal to `spec:`. YAML permits whitespace before a mapping key's
+WHY THIS EXISTS. `scripts/ci/chart-egress-pin.sh`'s text pin recognises a YAML
+document only by a raw line whose prefix is exactly `kind` and a raw line
+exactly equal to `spec:`. That pin is STILL LIVE and still gating every pull
+request -- this census SUPPLEMENTS it as assertions (c), (d) and (g) rather
+than replacing assertions (a), (b) and (f), and the shell script's own header
+says so. YAML permits whitespace before a mapping key's
 colon, permits the key to be quoted, and permits escapes inside a
 double-quoted key, so a SECOND `NetworkPolicy` in the very same rendered
 file could spell itself `kind :` / `spec :` and be invisible to that census
@@ -217,7 +220,7 @@ this file then closed:
   site, `_document_marker`, `_read_document`, and every clause inside
   `_bs_indentation`, `_bs_breaks`, `_bs_skip_indent`, `_bs_has_more`,
   `_block_scalar_body` and `_line_break_after`, mutated ONE AT A TIME, 84
-  mutants, each run against the whole unit suite AND the census gate. 78 die.
+  mutants, each run against the whole unit suite AND the census gate. 69 die.
   Nine more are killed by the tests round six adds, starting with the one the
   round-five review found itself: dropping `_line_break_after(k)` from
   `_bs_breaks`'s loop survived everything while diverging from the oracle on
@@ -2109,8 +2112,10 @@ spec:
 """ + _ALLOW_ALL_TAIL
 
 
-# The eight constructs PR #96's round-three review and the author's own hunt
-# measured, each written into a shadow policy the way a chart could really emit
+# The nine constructs PR #96's round-three review and the author's own hunt
+# measured -- eight of them, plus `_SHADOW_YAML_FORBIDDEN_CODE_POINT`, added
+# by the forbidden-code-point refusal at issue #99 -- each written into a
+# shadow policy the way a chart could really emit
 # it. Every one of them is a shape where this reader and the reader that
 # INSTALLS the render used to disagree -- about how many lines the document
 # has, about whether the stream is readable at all, or about what a scalar
