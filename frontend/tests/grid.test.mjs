@@ -14,6 +14,7 @@ import {
   formatMagnitude,
   formatMonthLabel,
   formatWhole,
+  gridCursorTarget,
   gridLevel,
   gridLevels,
   gridMinColumns,
@@ -880,5 +881,110 @@ test('the weekday gutter sits beside the strip in one flex row, and renders unco
   assert.ok(
     weekdayIndex < conditionalIndex,
     'the weekday gutter must render outside (before) the series/empty conditional, not inside it'
+  );
+});
+
+/* THE GRID'S KEYBOARD CURSOR (issue 219).
+ *
+ * The arithmetic behind the listbox strip, executed rather than pattern
+ * matched. The behavioural half is e2e/rendering-lanes.spec.mjs, which
+ * measures what five real engines do with the same decisions; neither half
+ * replaces the other.
+ *
+ * A fourteen-cell fixture: two full columns of gridRows, with the last two
+ * cells undated. That is the shape calendarColumns really produces — the
+ * current week is padded out with pending chrome that carries no date, no
+ * count and no reading — and it is the shape every "must not land on a
+ * pending cell" claim below needs to be about something. */
+const datedFixture = () => Array.from({ length: 2 * gridRows }, (_, at) => at < 2 * gridRows - 2);
+
+test('the grid cursor answers only the keys it owns', () => {
+  const dated = datedFixture();
+  for (const key of ['Tab', 'Enter', ' ', 'PageDown', 'a', 'Shift']) {
+    assert.equal(
+      gridCursorTarget(key, 3, dated, gridRows),
+      null,
+      `${key} is not the grid's key and must be left to the page`
+    );
+  }
+  // Escape with nothing selected is likewise not the grid's: swallowing it
+  // would take a key away from whatever else on the page wants it.
+  assert.equal(gridCursorTarget('Escape', -1, dated, gridRows), null);
+  assert.equal(gridCursorTarget('Escape', 3, dated, gridRows), -1);
+  // A grid with no cells has no cursor to move, whatever the key.
+  assert.equal(gridCursorTarget('ArrowRight', -1, [], gridRows), null);
+  assert.equal(gridCursorTarget('Home', -1, [], gridRows), null);
+});
+
+test('every arrow opens a strip with no cursor, on the newest dated cell', () => {
+  const dated = datedFixture();
+  const newest = dated.lastIndexOf(true);
+  /* THE DEFECT THIS PINS: ArrowRight and ArrowDown used to step from the last
+     INDEX rather than open, so `cursor + step` ran past the end, hit the
+     range guard and returned unchanged — dead keys a reader could never
+     recover from, while ArrowLeft and ArrowUp worked and hid it. All four
+     are checked, because a one-axis fix is the same defect with a different
+     victim. */
+  for (const key of ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp']) {
+    assert.equal(
+      gridCursorTarget(key, -1, dated, gridRows),
+      newest,
+      `${key} on a strip with no cursor must open on the newest dated cell`
+    );
+  }
+  // ...and never on the pending chrome past it, which has nothing to read.
+  assert.ok(newest < dated.length - 1, 'the fixture has no trailing pending cells to skip');
+});
+
+test('the grid cursor steps a week sideways and a day vertically', () => {
+  const dated = datedFixture();
+  assert.equal(gridCursorTarget('ArrowRight', 0, dated, gridRows), gridRows);
+  assert.equal(gridCursorTarget('ArrowLeft', gridRows, dated, gridRows), 0);
+  assert.equal(gridCursorTarget('ArrowDown', 0, dated, gridRows), 1);
+  assert.equal(gridCursorTarget('ArrowUp', 1, dated, gridRows), 0);
+});
+
+test('the grid cursor refuses to leave the strip, and says so by not moving', () => {
+  const dated = datedFixture();
+  // Past the start and past the end both answer the CURRENT cursor rather
+  // than null: the key still belongs to the grid, so the component still
+  // swallows it and a reader at the edge gets no surprise page scroll.
+  assert.equal(gridCursorTarget('ArrowLeft', 0, dated, gridRows), 0);
+  assert.equal(gridCursorTarget('ArrowUp', 0, dated, gridRows), 0);
+  const last = dated.length - 1;
+  assert.equal(gridCursorTarget('ArrowRight', last, dated, gridRows), last);
+  assert.equal(gridCursorTarget('ArrowDown', last, dated, gridRows), last);
+});
+
+test('the grid cursor never lands on a cell with no reading', () => {
+  const dated = datedFixture();
+  const newest = dated.lastIndexOf(true);
+  // Stepping forward INTO the pending tail walks on looking for a dated cell,
+  // finds none, and leaves the cursor where it was rather than marking a
+  // cell whose card would say nothing.
+  assert.equal(gridCursorTarget('ArrowDown', newest, dated, gridRows), newest);
+  // Home and End are the two ends of the DATED range, not of the array.
+  assert.equal(gridCursorTarget('Home', 5, dated, gridRows), 0);
+  assert.equal(gridCursorTarget('End', 0, dated, gridRows), newest);
+  // A strip of nothing but pending chrome has no cell to put a cursor on, so
+  // every one of these answers the cursor it was given.
+  const pending = Array.from({ length: gridRows }, () => false);
+  assert.equal(gridCursorTarget('Home', -1, pending, gridRows), -1);
+  assert.equal(gridCursorTarget('End', -1, pending, gridRows), -1);
+  assert.equal(gridCursorTarget('ArrowRight', -1, pending, gridRows), -1);
+});
+
+test('the grid strip wires its keyboard to that one function and nothing else', () => {
+  // A second copy of this arithmetic inside the component is how the two
+  // drift, and it is exactly what this extraction removed.
+  assert.match(
+    grid,
+    /gridCursorTarget\(event\.key, selected, datedCells, gridRows\)/,
+    'the strip must ask lib/grid.ts where its cursor goes'
+  );
+  assert.doesNotMatch(
+    grid,
+    /ArrowLeft:\s*-gridRows/,
+    'the component must not carry its own copy of the step table'
   );
 });

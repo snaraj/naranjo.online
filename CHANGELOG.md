@@ -45,6 +45,23 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   widths. It had a transparent background and reserved no flow space, so
   right-aligned panel content passed underneath it; measured 30×33px of overlap
   at 390×844.
+- A page scroll no longer destroys a grid's keyboard cursor. The detail closed
+  whenever the cell it was anchored to moved, and closing reported the
+  selection away with it, so the ring and the `aria-activedescendant` a screen
+  reader follows both disappeared because the reader scrolled. A cell-anchored
+  readout now follows its cell and closes only once that cell has left the
+  viewport; a pointer-following one still closes, because its anchor is the
+  cursor rather than the cell. This bit the plainest keyboard path there is:
+  focusing the strip opens the readout synchronously while the browser's own
+  scroll-into-view for that same focus arrives a frame later, so tabbing to a
+  grid produced a readout that closed itself.
+- Half the grid's arrow keys were dead. With no cursor yet, `ArrowRight` and
+  `ArrowDown` stepped past the end of the cell list, hit the range guard and
+  did nothing at all — permanently, since nothing they could do would give
+  them the cursor they needed — while `ArrowLeft` and `ArrowUp` worked and hid
+  it. Every arrow now opens a cold strip on its newest dated cell, which is
+  what the handler always claimed to do. The arithmetic moved to
+  `lib/grid.ts`'s `gridCursorTarget`, where the unit suite executes it.
 
 ### Changed
 
@@ -53,6 +70,17 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   only lower bound is a minimum previously sized no axis by the walk's
   reckoning and passed a floor it could plainly break; the walk went from 4
   measured dimensions to 18.
+- The reading-mode popover's position lane measures the box AT REST. Issue
+  #194 recorded a ±1 px cross-load flake on three engines and attributed it to
+  font-metric timing; that was wrong. The popover reveals with a 120ms
+  `translateY(-0.25rem)` slide and the lane read the box the instant it became
+  visible, so both of its readings were samples of a box still travelling and
+  the "shift" between them was two points on that slide (measured in WebKit:
+  top 64 at 8ms, 65.65 at 25ms, 67.56 at 87ms, 68 settled). It now waits on
+  the engine's own animation set, as the two lanes beside it already did, and
+  asserts that nothing was animating when it measured. The one-pixel
+  allowance is unchanged — not widened by a hair — and is now a genuine
+  rounding margin over two settled readings.
 
 ## [0.1.49] - 2026-08-26
 
