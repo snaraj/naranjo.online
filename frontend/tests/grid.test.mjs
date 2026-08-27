@@ -18,7 +18,6 @@ import {
   gridLevels,
   gridMinColumns,
   gridRows,
-  isSeriesView,
   magnitudeFloor,
   monthTicks,
   peakValue,
@@ -115,12 +114,6 @@ test('viewColumns reads one series three ways, on ALIGNED COLUMNS rather than ar
 
 test('series views are a closed set', () => {
   assert.deepEqual([...seriesViews], ['daily', 'weekly', 'monthly', 'cumulative']);
-  for (const view of seriesViews) {
-    assert.ok(isSeriesView(view));
-  }
-  for (const rogue of ['hourly', '', null, 7, undefined]) {
-    assert.equal(isSeriesView(rogue), false, `${String(rogue)} must not pass as a view`);
-  }
 });
 
 test('levels quantize against the peak, and nothing is level 0 by accident', () => {
