@@ -257,9 +257,10 @@ Build and test, in this order (the same gate CI enforces):
    `CGO_ENABLED=0 go test ./...`; `go test -race ./...`. CI additionally
    enforces the coverage floor on the scaffolding-filtered profile.
 3. `helm lint chart && helm template smoke chart --kube-version v1.36.0`
-   then `./scripts/ci/chart-ingress-pin.sh` for chart changes (the chart
-   requires the platform's Kubernetes target; plain `helm template`
-   defaults to older capabilities).
+   then the chart pin scripts — `./scripts/ci/chart-ingress-pin.sh`,
+   `./scripts/ci/chart-egress-pin.sh`, `./scripts/ci/chart-media-pin.sh` —
+   for chart changes (the chart requires the platform's Kubernetes target;
+   plain `helm template` defaults to older capabilities).
 4. `docker build .` when the Dockerfile or build inputs change.
 
 Releases: every artifact-classified PR advances numeric `VERSION`, chart
@@ -314,7 +315,15 @@ conscious edits, never fights:
   plumbing (reserved namespaces, root validation, concurrency budget) IS
   the future music/video path and stays fail-closed until the reviewed
   root and measured concurrency budget exist. Enabling media is chart
-  configuration plus discovery evidence — never code weakening.
+  configuration plus discovery evidence — never code weakening. The chart
+  now DESCRIBES that enabled deployment (issue #207) without being one: the
+  values schema admits `media.enabled: true` only together with a reviewed
+  profile, a named claim, a mount path, and a measured transfer budget, the
+  defaults remain the refusal, and `scripts/ci/chart-media-pin.sh` pins all
+  three directions. The gallery reads its items from a runtime `gallery/v1`
+  manifest on that volume when one is served and falls back to the vendored
+  bootstrap set when it is not, so publishing media becomes an operator file
+  copy with no git, CI, or release consequence (`docs/media-manifest.md`).
 - Ingress provider changes: a values override of the `ingress` block per
   the deployment-provider contract.
 
@@ -702,6 +711,8 @@ included; it is the same battery CI enforces:
     helm lint chart && helm template smoke chart \
       --kube-version v1.36.0                    # chart changes
     ./scripts/ci/chart-ingress-pin.sh           # chart changes
+    ./scripts/ci/chart-egress-pin.sh            # chart changes
+    ./scripts/ci/chart-media-pin.sh             # chart changes
     docker build .                              # Dockerfile/build-input changes
     gitleaks git --no-banner --redact --max-target-megabytes=2 .
     gitleaks dir --no-banner --redact .
@@ -727,7 +738,21 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
 - **Perf budgets are tests.** Payload caps ship as pinned suite
   assertions, so a budget regression is a red build, never a
   discussion: the panels API pins `MaxIndexResponseBytes` = 4096 and
-  `MaxPanelResponseBytes` = 32768
+  `MaxPanelResponseBytes` = 131072 — raised from 32768 by the owner on
+  2026-08-24, because full-depth token-usage history structurally reaches
+  98,853 bytes served (115,981 with the v2 models section) and the old gate,
+  chosen before any real content existed, would have refused exactly the
+  documents the sealed-data pipeline exists to deliver. It is now the same
+  NUMBER as `seal.MaxSealedBytes`, which means the serve step no longer hides
+  a smaller ceiling than the transport steps — it does NOT mean one ceiling
+  governs both, and reading it that way was a finding of the 2026-08-25
+  round-4 review. The two bound different bytes: the sealed FILE versus the
+  finished ENVELOPE, which also carries the embedded snapshot, measured at
+  +517 bytes for the maximal admissible document. A file at exactly the
+  transport ceiling is refused at serve time, and the refusal — never a
+  truncation — is what the guarantee actually rests on. A budget the owner
+  revises is still a budget: the bound
+  stays refuse-not-truncate and stays pinned
   (`TestResponsesStayWithinTheOwnerBudgets`,
   `internal/panels/handler_test.go`), and construction/refresh refuse
   over-budget payloads instead of serving them. Every new surface lands
@@ -762,7 +787,11 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   (toolchain pinned AND verified — Node 24.19.0, npm 11.17.0,
   Go 1.26.6; frontend check/test/build; gofmt/vet/tests/race; the
   coverage floor), `chart` (the ingress peer-identity pin,
-  `scripts/ci/chart-ingress-pin.sh`; helm lint + render at
+  `scripts/ci/chart-ingress-pin.sh`; the whole-render outbound-deny census,
+  `scripts/ci/chart-egress-pin.sh`; the media enablement pin,
+  `scripts/ci/chart-media-pin.sh` — media off by default, an incompletely
+  specified enablement unrepresentable, and a read-only mount when enabled;
+  helm lint + render at
   `--kube-version v1.36.0`; the numeric VERSION ↔ numeric chart `version` ↔
   numeric `appVersion` ↔ plain-v chart `image.tag` four-way lock, plus a render
   assertion that the emitted reference still carries a full digest),

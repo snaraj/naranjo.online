@@ -47,7 +47,47 @@ const (
 	// envelope. Construction refuses larger bodies by degrading the panel to
 	// unavailable, and the refresh path refuses oversized live payloads by
 	// keeping the last good response, so the budget is structural.
-	MaxPanelResponseBytes = 32 << 10
+	//
+	// RAISED from 32 KiB to 128 KiB by the owner on 2026-08-24: "expand the
+	// response gate if thats the case, we can't be blocked over a gate we
+	// added before we even started developing the real websites."
+	//
+	// The measurement behind it: full-depth token-usage history structurally
+	// maxes at 98,853 bytes served, and 115,981 with the v2 models section
+	// (issue #158's reproducible arithmetic). The 32 KiB gate would therefore
+	// have refused exactly the full-history documents the sealed-data
+	// pipeline exists to deliver — a serve-time outage waiting for real depth
+	// to arrive, produced by a budget chosen before any real content existed.
+	//
+	// 128 KiB is not an arbitrary bigger number: it is the SAME value the
+	// sealed-payload pipeline already enforces at five stages
+	// (seal.MaxSealedBytes), so the last step no longer hides a SMALLER
+	// ceiling than the four before it.
+	//
+	// Read that claim exactly as written, because the 2026-08-25 round-4
+	// review found the stronger version of it — "a document that can be
+	// transported can now also be served" — stated here and it is FALSE. The
+	// two ceilings are equal in value and different in SUBJECT: this one
+	// bounds the finished envelope the handler writes, seal.MaxSealedBytes
+	// bounds the sealed FILE. The envelope is the payload merged onto the
+	// embedded snapshot plus the envelope scaffolding, so it is strictly
+	// larger than the file it came from — measured at +517 bytes for the
+	// maximal admissible document (87,791 sealed, 88,308 served;
+	// TestTheMaximalDocumentFitsTheRaisedBudget logs both), and larger still
+	// by however much the snapshot contributes. A file sealed at exactly
+	// 131,072 bytes therefore serves OVER this budget and is refused.
+	//
+	// What is true, and is what the equality buys: both ceilings are real,
+	// both refuse rather than truncate, and neither is now the surprising
+	// one. What guarantees safety is not the arithmetic — it is the refusal
+	// path, which keeps the last good response serving whenever the envelope
+	// does not fit (TestDataRootRefusesAnOverBudgetEnvelope).
+	//
+	// This is a budget revision by the budget's owner, not a weakening of a
+	// gate. The bound stays REFUSE-not-truncate at construction and refresh,
+	// stays pinned by TestResponsesStayWithinTheOwnerBudgets, and
+	// MaxIndexResponseBytes is untouched at 4 KiB.
+	MaxPanelResponseBytes = 128 << 10
 )
 
 // Panel kinds are versioned independently of the envelope. A breaking payload
@@ -152,6 +192,20 @@ type TokenUsageSource struct {
 	Series *TokenUsageSeries `json:"series,omitempty"`
 	// Insights holds the labeled proportions rendered under the grid.
 	Insights []TokenUsageInsight `json:"insights,omitempty"`
+	// CapturedAt is the RFC 3339 instant THIS source's figures were captured,
+	// present only on a source refreshed from the sealed runtime document
+	// (2026-08-24 round-3 review, finding 5). One envelope carries one
+	// `generatedAt` for the whole payload, and the whole payload is only as
+	// fresh as its oldest constituent — so the envelope reports that oldest
+	// instant and every source says, here, when it was actually measured. A
+	// reader can then see which half of a two-source panel is the older one
+	// instead of inferring a freshness neither field ever promised.
+	//
+	// Additive, exactly like Account, Stats, Series, Insights and the
+	// series' Recorded flag before it: a payload written before this field
+	// existed still decodes and still renders, so the kind stays
+	// token-usage/v1.
+	CapturedAt string `json:"capturedAt,omitempty"`
 }
 
 // TokenUsageStat is one headline tile: a stable key, a display label, a
@@ -213,6 +267,28 @@ type TokenUsageSeries struct {
 	// renders, so the kind stays token-usage/v1. Minting a new kind version is
 	// for a BREAKING reshape, and an optional flag is not one.
 	Recorded bool `json:"recorded,omitempty"`
+	// Categories optionally breaks every day of Totals down by accounting
+	// category (input, output, cache reads, ...), in a canonical served
+	// order. Additive exactly like Recorded above: absent for every series
+	// produced before it existed, and an absent section renders the plain
+	// single-series grid it always did.
+	Categories []TokenUsageCategory `json:"categories,omitempty"`
+}
+
+// TokenUsageCategory is one per-day breakdown component of a daily series:
+// the same day indexing as the series' Totals, restricted to one accounting
+// category. Categories PARTITION the series — for every day the category
+// values sum exactly to that day's total, enforced at admission — so a
+// stacked reading of the categories and the plain reading of the series are
+// the same measurement, never two claims that can disagree.
+type TokenUsageCategory struct {
+	// Key is the stable category identifier, e.g. "input" or "cache-read".
+	// It is data with a machine-checked shape (lowercase letters, digits,
+	// hyphens), never free text, so it can double as a rendering key.
+	Key string `json:"key"`
+	// Totals holds this category's per-day counts, indexed exactly like the
+	// owning series' Totals.
+	Totals []int64 `json:"totals"`
 }
 
 // TokenUsageInsight is one labeled proportion under the activity grid.
@@ -1008,6 +1084,12 @@ type panelDefinition struct {
 type Registry struct {
 	// mu serializes index rebuilds when refreshers report concurrently.
 	mu sync.Mutex
+	// snapshots is the filesystem the registry's snapshot sources were
+	// loaded from at construction — the embedded files in production. The
+	// data-root loop re-reads its merge base from here, so a merge always
+	// starts from the shipped floor rather than compounding on earlier
+	// merges.
+	snapshots fs.FS
 	// index is the prepared /api/panels response, swapped atomically.
 	index atomic.Pointer[preparedResponse]
 	// states holds every panel in index order.
@@ -1023,7 +1105,26 @@ type Registry struct {
 	// construction defaults it to discardLogger, and it never logs a URL, a
 	// credential, or a payload byte.
 	logger *slog.Logger
+	// dataRootStarted guards StartDataRoot against double starts, exactly as
+	// refreshStarted guards the fetch loops.
+	dataRootStarted atomic.Bool
+	// dataRootOwnsPanel records that the sealed data-root loop OWNS the
+	// token-usage panel, so the credentialed live-refresh path must never
+	// write it (2026-08-24 review finding 8: both producers wrote the same
+	// state.current with no precedence, so a live fetch could overwrite the
+	// sealed series and the next data-root tick could overwrite it back).
+	//
+	// Claimed synchronously by startDataRoot before its goroutine exists and
+	// read by BOTH startRefresh and every refresh loop wake, so the rule
+	// holds whichever capability starts first: a loop already running exits
+	// at its next wake rather than racing the claim.
+	dataRootOwnsPanel atomic.Bool
 }
+
+// dataRootPanelID is the one panel the sealed data-root path serves. It is a
+// constant rather than a parameter because the file name, the document
+// schema, and the merge rules are all specific to this panel.
+const dataRootPanelID = "token-usage"
 
 // panelState is one panel's identity plus its atomically swapped current
 // response. fetch is non-nil only for fetch-backed panels.
@@ -1056,4 +1157,220 @@ type preparedResponse struct {
 	// etag is the quoted SHA-256 digest of body — the same strong-validator
 	// scheme the embedded frontend uses, identical across replicas.
 	etag string
+}
+
+// The panels data root (issue #142): a mounted read-only directory the
+// composition root MAY hand this package, carrying one sealed usage-series
+// file pushed out-of-band from the workstation that records the usage. The
+// constants below bound that path end to end; the loop, validation, and the
+// injected-capability seams (fs.FS and Unsealer — this package holds no
+// filesystem, key, or environment capability of its own) live in
+// dataroot.go.
+const (
+	// dataRootSeriesName is the one file name the data-root loop ever opens,
+	// relative to the mounted root. There is no discovery and no walk: a
+	// hostile root can present exactly one candidate, this one.
+	dataRootSeriesName = "token-usage.series.enc"
+
+	// dataRootTTL is the re-read cadence. The workstation pushes on the
+	// order of hourly and the volume projection updates within about a
+	// minute of the cluster object, so five minutes keeps the panel at most
+	// minutes behind a push at negligible read cost.
+	dataRootTTL = 5 * time.Minute
+
+	// maxSealedSeriesBytes caps one sealed series file read, and it is THE
+	// pipeline's single payload ceiling rather than this stage's private
+	// one. Before the 2026-08-24 review five stages disagreed — the exporter
+	// pretty-printed with no cap at all, the sealer accepted 1 MiB, the push
+	// script checked only "not empty", the documented forced command
+	// TRUNCATED to 128 KiB with `head -c`, and this read refused past
+	// 64 KiB — so a valid 732-day export could be sealed, pushed, and never
+	// admitted, while an oversized one was truncated, atomically installed
+	// over the last good file, and only then reported as a checksum mismatch
+	// (finding 4).
+	//
+	// The value is stated once in internal/seal.MaxSealedBytes, where the
+	// producer half reads it, together with the measurement behind it. This
+	// package cannot import that one — its zero-egress doctrine pin holds
+	// every production file to a stdlib-only import surface — so the number
+	// is restated here and TestSealedSeriesCapParity fails naming both
+	// files if they ever diverge.
+	//
+	// Raising this from 64 KiB is a unification, not a relaxation: the
+	// merged payload is still separately held to MaxPanelResponseBytes by
+	// the shared preparation path, and every stage refuses the same byte
+	// count before doing anything destructive.
+	//
+	// That second gate is no longer the FAR TIGHTER one, and saying so would
+	// now be false: the owner raised MaxPanelResponseBytes to this same
+	// 128 KiB on 2026-08-24, precisely so a document the pipeline can carry
+	// is a document the origin can serve. The two checks measure different
+	// bytes, though, and the difference runs the safe way: this one bounds
+	// the SEALED file, while the serve gate bounds the finished panel/v1
+	// ENVELOPE — payload plus framing, minus the AEAD overhead. At the very
+	// top of the range a file at exactly this ceiling can therefore still be
+	// refused at serve time by the envelope's own bytes. That is refusal,
+	// not truncation, and the measured maxima sit far below it: the
+	// structural document seals to 98,958 bytes and serves at 98,853.
+	maxSealedSeriesBytes = 128 << 10
+
+	// dataRootFutureSkew is how far ahead of the local clock a series
+	// file's generatedAt may sit before it is refused as nonsense. Clock
+	// skew between the workstation and this host is real; more than this is
+	// a file trying to pin itself artificially fresh. The same bound guards
+	// the persisted floor marker at load: a marker from the future is
+	// ignored as corrupt rather than allowed to refuse every honest push.
+	dataRootFutureSkew = 10 * time.Minute
+
+	// usageSeriesSchema is the exact schema marker the sealed document must
+	// declare. A breaking document reshape mints a new marker; it never
+	// bends this one.
+	usageSeriesSchema = "usage-series/v1"
+
+	// maxSeriesCategories bounds how many categories one source may break
+	// its series into. The realistic vocabularies hold four or five; the
+	// bound stops a hostile file from inflating the payload with hundreds.
+	maxSeriesCategories = 8
+
+	// maxCountValue is THE upper bound on every count a pushed document
+	// carries, and it is one number three languages agree on (2026-08-24
+	// round-3 review, finding 9). 2^53-1 is the largest integer JavaScript
+	// represents exactly, so a figure this boundary admits is a figure the
+	// browser renders without silently rounding — Number.isSafeInteger on
+	// the frontend and the same bound in the producer's emission guard are
+	// the other two statements of it.
+	//
+	// It is a security bound as well as a rendering one. Category values were
+	// individually authenticated, individually non-negative, and summed with
+	// a plain int64 addition: MaxInt64 + MaxInt64 + 2 wrapped to zero and
+	// passed the partition check against a zero total. Bounding the values
+	// makes maxSeriesCategories of them unable to overflow at all (8 * 2^53
+	// is far below 2^63), and addCounts refuses an overflow independently, so
+	// neither bound is load-bearing alone.
+	maxCountValue = 1<<53 - 1
+)
+
+// windowServeOrder is the canonical order windows are SERVED in, and the
+// complete set a pushed section must carry. Same reasoning as
+// categoryServeOrder: a fixed order keeps every replica's bytes — and so its
+// digest ETag — identical.
+var windowServeOrder = []string{"today", "week"}
+
+// FloorState is what the durable replay floor records: the capture instant of
+// the last PUBLISHED series document, and the SHA-256 of the exact ciphertext
+// that carried it. Both halves are load-bearing (2026-08-24 round-3 review,
+// finding 2).
+//
+// The INSTANT is the monotonic bound: nothing older than it is ever admitted
+// again. It is kept at full precision — an earlier revision serialized it
+// through a second-resolution format, so a floor written from 12:00:00.900
+// came back as 12:00:00 and an authentic document at 12:00:00.100 walked back
+// under it after a restart.
+//
+// The DIGEST is what makes restart recovery a recovery rather than a window.
+// A restarted process must re-admit the one document its predecessor
+// published, which means admitting equality with the floor exactly once; bound
+// to the instant alone, that admitted any other authentic document sharing
+// the instant. Bound to the digest, "the same instant" has to also be "the
+// same bytes".
+//
+// The concrete persistence lives with the composition root, exactly like the
+// Unsealer: this package gains no write capability of its own. See
+// FloorMarker in dataroot.go.
+type FloorState struct {
+	// Instant is the accepted capture instant, at full precision.
+	Instant time.Time
+	// Digest is the lowercase hex SHA-256 of the sealed bytes that set this
+	// floor. Empty on a floor that came from the embedded snapshot, which is
+	// an instant with no ciphertext behind it.
+	Digest string
+}
+
+// usageSeriesWindowKeys is the CLOSED set of window keys a series document
+// may carry, mapped to the periods the panel serves. A closed set because a
+// window name is rendered copy: free text here would let a pushed file put
+// arbitrary words on the panel. Widening it is a conscious reviewed edit.
+var usageSeriesWindowKeys = map[string]string{
+	"today": "today",
+	"week":  "week",
+}
+
+// usageSeriesDerivedKeys is the CLOSED set of stat keys a series document may
+// update, and the unit each must already carry — exactly the three figures a
+// daily series defines on its own. The document can never add a tile, only
+// refresh one of these where the shipped snapshot already shows it; every
+// other recorded figure (a lifetime total, a session count) is out of its
+// reach by construction.
+var usageSeriesDerivedKeys = map[string]string{
+	statPeakDay:       UnitTokens,
+	statCurrentStreak: UnitDays,
+	statLongestStreak: UnitDays,
+}
+
+// categoryServeOrder is the CLOSED category vocabulary AND the canonical
+// order categories are SERVED in. Closed first (2026-08-24 review finding
+// H1): validCategoryKey admits exactly these keys, so a pushed file can
+// never mint a category label — a new accounting class is a deliberate edit
+// here, in the capture tool's CATEGORY_KEYS, and in the frontend's fixed
+// palette slots together. Ordered second: every replica emits identical
+// bytes (the digest ETag depends on it) and the frontend's fixed categorical
+// hue assignment is stable.
+var categoryServeOrder = []string{"input", "output", "cache-read", "cache-write", "reasoning"}
+
+// usageSeriesDocument is the strict on-disk shape of the sealed series file
+// (schema usage-series/v1). Sources are keyed by the SAME label the embedded
+// snapshot uses for that source — a key with no matching snapshot label
+// refuses the whole document, so a pushed file can never invent a source the
+// owner did not ship.
+type usageSeriesDocument struct {
+	// Schema must equal usageSeriesSchema.
+	Schema string `json:"schema"`
+	// GeneratedAt is the RFC 3339 capture instant. It must be newer than the
+	// embedded snapshot's and newer than the last accepted file's, and not
+	// meaningfully in the future — the replay and rollback guards.
+	GeneratedAt string `json:"generatedAt"`
+	// Sources maps snapshot source labels to their captured sections.
+	Sources map[string]usageSeriesSource `json:"sources"`
+}
+
+// usageSeriesSource is one source's captured section.
+type usageSeriesSource struct {
+	// CapturedAt is THIS source's own RFC 3339 capture instant, and it is
+	// required (2026-08-24 round-3 review, finding 5). A merged source is
+	// produced by a separate capture run and can be arbitrarily older than
+	// the export carrying it, so without a per-source instant the combined
+	// document relabelled stale data as current under one `generatedAt`. It
+	// may not be later than the document that carries it, and the envelope's
+	// served instant is the OLDEST of them.
+	CapturedAt string `json:"capturedAt"`
+	// Series is the daily total series; Recorded must be true — this file IS
+	// an out-of-band capture, and a file claiming live provenance is refused.
+	Series usageSeriesSection `json:"series"`
+	// Categories optionally partitions the series per day, keyed by category
+	// key. Every category must have exactly the series' length and the
+	// per-day category sum must equal the series total.
+	Categories map[string][]int64 `json:"categories,omitempty"`
+	// Windows carries the COMPLETE aggregate window set, keyed by the closed
+	// usageSeriesWindowKeys vocabulary. Required and complete: an omitted
+	// window used to leave the release-time one rendered beside a runtime
+	// series under one instant (2026-08-24 round-3 review, finding 5).
+	Windows map[string]usageSeriesWindow `json:"windows"`
+	// Derived carries the COMPLETE series-derived stat set, keyed by the
+	// closed usageSeriesDerivedKeys vocabulary. Required and complete, for
+	// the same reason Windows is.
+	Derived map[string]int64 `json:"derived"`
+}
+
+// usageSeriesSection mirrors TokenUsageSeries' on-disk form.
+type usageSeriesSection struct {
+	StartDate string  `json:"startDate"`
+	Totals    []int64 `json:"totals"`
+	Recorded  bool    `json:"recorded"`
+}
+
+// usageSeriesWindow is one aggregate window: the same input/output split the
+// panel's window rows render.
+type usageSeriesWindow struct {
+	Input  int64 `json:"input"`
+	Output int64 `json:"output"`
 }

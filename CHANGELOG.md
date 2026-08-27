@@ -7,6 +7,364 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.48] - 2026-08-26
+
+### Added
+
+- The token-usage panel now consumes SEALED RUNTIME DATA (issue #142): the
+  workstation exports both tools' local usage records as one
+  `usage-series/v1` document — per-day totals plus a per-day CATEGORY
+  breakdown (input, output, cache reads, cache writes) that must partition
+  each day's total — seals it with AES-256-GCM (`cmd/usageseal`, versioned
+  `NJSEAL/1` format bound as AEAD associated data, fresh random nonce per
+  seal, 64-hex-char key refused unless its file is private), and pushes the
+  ciphertext over ssh stdin to a forced-command, `restrict`-ed dedicated key
+  that can write exactly one file. The origin re-reads that file every five
+  minutes through a rooted read-only mount (`PANELS_DATA_ROOT`), unseals
+  with `PANELS_DATA_KEY` read at decrypt time only, strict-decodes under the
+  pipeline's single 128 KiB sealed-payload cap with closed window/derived
+  vocabularies and a monotonic `generatedAt` replay floor, and merges into
+  the served panel — so the
+  panel refreshes without a release, and every failure (tamper, replay,
+  wrong key, over-cap, malformed, non-partitioning categories) keeps the
+  last good payload and says so in the envelope status instead of crashing
+  or fabricating. The export step cannot fork and cannot open a network
+  endpoint because the kernel refuses: the scheduled push runs it inside
+  `scripts/usage-export/producer.sb`, a seatbelt profile denying
+  `process-fork` and `network*`, and a workstation without the sandbox
+  refuses to walk raw records at all. Those two denials are the whole
+  enforced capability — the profile is otherwise `(allow default)`, so
+  exec-in-place and filesystem access remain, and the claim is stated that
+  narrowly rather than as a general confinement. Its import surface is additionally
+  pinned by an AST test against a closed allowlist — a REVIEW BOUND, not a
+  capability proof — and every emission passes through the capture tool's
+  own dates-and-integers guard with counts-only diagnostics.
+- The chart carries the storage as first-class templates under GitOps
+  (owner amendment on #142): TWO statically bound `local` PersistentVolume/
+  PersistentVolumeClaim pairs on the platform's enumerated `local-pie-ssd`
+  StorageClass, each with `Retain`, bounded required nodeAffinity, and
+  volumeName/claimRef double-pinning — the DATA pair read-only at BOTH the
+  claim reference and the mount, and the replay-floor STATE pair (the
+  security review's H2 remedy below) explicitly writable at both and
+  `ReadWriteOnce`, on a sibling node directory the push pipeline never
+  touches. `ReadWriteOnce` is the honest mode for this target rather than
+  the stronger-looking `ReadWriteOncePod`, which Kubernetes supports for CSI
+  volumes only while the target runs none: single writing is enforced by the
+  origin's locked monotonic compare-and-swap and by the single-replica
+  render, and the chart says so instead of naming a mode nothing performs.
+  The capability
+  defaults OFF (`panels.data.enabled=false`, the review's M6 remedy
+  below): its claims bind statically to admin-provisioned volumes, so a
+  default render carries none of it and a fresh install schedules; the
+  cluster-scoped PV documents default off within the enabled direction and
+  are applied by an operator from the chart's own render, because the
+  namespaced app reconciler holds no PV rights and granting them would
+  bypass the namespace's restricted Pod Security posture. A storage pin
+  script (`scripts/ci/chart-storage-pin.sh`, wired into the chart CI job)
+  renders all four directions (enabled, with-pv, untouched default,
+  explicit disabled) and kills 44 hostile mutations — writable data
+  mounts, read-only state mounts, dropped or emptied storageClassName pins,
+  smuggled PVs, moved node paths, a reverted hostPath source, reclaim
+  weakenings, dropped or widened nodeAffinity, a second replica, a state
+  access mode widened to `ReadWriteMany` OR re-claiming the CSI-only
+  `ReadWriteOncePod`, and every
+  overlap of the two roots and the two mount paths in both directions
+  including dot-dot, duplicated-separator and trailing-separator aliases.
+- The panel's per-source category lens: a second radiogroup slices the
+  heatmap by category, and a composition figure renders each source's
+  share bar with fixed per-category color slots, 2px segment gaps, and
+  written labels beside every chip so identity never rides on color alone.
+  Category palettes are defined per reading mode and hold the dataviz
+  floors (lightness band, chroma floor, CVD and normal-vision separation,
+  ≥3:1 contrast) in light, slate, and sepia; dark stays deliberately
+  achromatic as documented lightness steps. Hostile category labels render
+  inert — the component interpolates text and never markup.
+- Operator tooling and doctrine: `scripts/usage-export/` carries the push
+  pipeline (private scratch, checksum verification of the landed file, a
+  0600-only local configuration OUTSIDE the repository so no host fact
+  enters git), a launchd template plus installer for the hourly schedule,
+  and `docs/usage-export.md` documents the end-to-end design, setup,
+  verification, and deliberate failure modes.
+- The gallery reads its items from a runtime `gallery/v1` manifest on the
+  operator's media volume (issues #182, #207). Publishing a photograph or a
+  film becomes an operator file copy: no commit, no CI run, no release. The
+  document is fetched once from the mutable media class; every file it names
+  is addressed through the immutable class by its own SHA-256, built solely
+  by `lib/media.ts`, so one URL can only ever mean one set of bytes. Admission
+  is by membership rather than shape-guessing — closed object shapes, a closed
+  set of kinds, a closed set of media types, a 65536-byte cap whose transfer
+  is cancelled the moment it is exceeded — and an unknown `kind` refuses that
+  ITEM, never the document. `docs/media-manifest.md` is the contract.
+- Film in the gallery (issue #207). A `video` item shows its poster in the
+  strip through the same `<img>` every photograph uses, marked so a reader
+  can tell the two apart, and plays in the lightbox behind
+  `controls playsinline preload="none"` with the manifest's own source ladder
+  in the manifest's own order. There is no `autoplay` attribute anywhere in
+  the component, which is how `prefers-reduced-motion` is honoured
+  structurally: nothing moves until a reader presses play.
+- A third block binding, `runtime` (`lib/blocks.ts`, `Block.svelte`): the
+  build's own props render first and immediately, and a one-shot read may
+  replace them. A read that answers null changes nothing, so media disabled,
+  no manifest, a 404, a malformed document and an empty one all leave the
+  vendored bootstrap set on screen — issue #182's sanctioned explicit offline
+  fallback, with no error state, no spinner and no invented row.
+- `scripts/ci/chart-media-pin.sh`, a new required step of the `chart` gate
+  job: the default render carries no media volume, no mount and no media
+  environment beyond `MEDIA_ENABLED="false"`; an unnamed claim, the
+  unresolved-storage sentinel profile, an unmeasured transfer budget and a
+  non-absolute mount path are each refused by name; and the enabled render
+  adds exactly one volume, read-only on both the claim and the mount, with
+  `MEDIA_ROOT` at the same declared path.
+- CLI-grade period and range controls over an unbounded token history
+  (issue #158). The activity strip's three toggles now read ONE delivered
+  payload three ways, in one pipeline: a CATEGORY lens picks which dailies are
+  read, a trailing RANGE (30d/90d/12mo/all) cuts the window drawn, and a VIEW
+  lens (daily/weekly/monthly/cumulative) aggregates the cut. `monthlyColumns`
+  folds real cells by their own YYYY-MM rather than by column, because a
+  calendar week straddling the first belongs to two months and a column-wide
+  figure would report September's total on days that are still August; a
+  partial edge month says so ("in Feb 2026 (12 of 28 days)") rather than
+  reading as a whole one. The range vocabulary is closed and admitted by
+  membership, a fixed range rounds up to whole weeks, and `all` is MEASURED
+  from the data with no ceiling and one floor — the width below which the
+  graph's own less/more key stops fitting. Every day a window covers and the
+  capture does not comes back as a dated absent HOLE, never a zero, because a
+  zero is a measured quiet day.
+- Two honest sentences under the strip, both measured from the cells actually
+  drawn (issue #158). The reading was built in the adapter over the whole
+  series, which was true only while the strip drew the whole series; an adapter
+  cannot see which window a reader chose, so it now lives in `lib/periods.ts`
+  and is computed under checked safe-integer summation that refuses whole
+  rather than reporting a rounded figure. The second line carries the
+  denominator the first structurally cannot: "15 days" is the same phrase
+  whether the reader asked for thirty days or a year. The category lens
+  contributes only its NOUN to that sentence — those cells already carry its
+  dailies — so there is one reading implementation rather than one per lens.
+- `TestWindowServeOrderCoversTheClosedVocabulary` (`internal/panels`): the
+  sealed-series admission reads one window list and serves from another, and
+  nothing held the two equal. Adding a window to the vocabulary and forgetting
+  the serve order would have left admission REQUIRING it while the serve loop
+  silently dropped it — a payload short a window it had just insisted on, with
+  no error and no red test. Both directions and duplicates are now pinned.
+
+### Changed
+
+- `chart/values.schema.json` describes an enabled media deployment instead of
+  forbidding one from being written down. `media.enabled` and `media.profile`
+  lose their `const` pins, and `claimName`, `mountPath` and `maxConcurrent`
+  join them; a conditional makes `enabled: true` representable ONLY together
+  with a reviewed profile, a non-empty claim, an absolute mount path and a
+  measured budget. The shipped defaults are unchanged and remain the refusal:
+  media is off, the profile is the sentinel, no claim is named, and no budget
+  has been measured. Enabling media still needs ADR 0012's storage evidence
+  and the platform lane's provisioning receipt; nothing here asserts either
+  exists.
+- `chart/templates/deployment.yaml` renders the media volume, a read-only
+  mount at the declared path, and `MEDIA_ROOT`/`MEDIA_MAX_CONCURRENT` only
+  when media is enabled — the origin refuses to boot when they are set while
+  it is disabled, so an unconditional render would fail closed at start-up.
+  `readOnly` is declared on the volume as well as the mount, so a container
+  added to this Pod later cannot quietly be given a writable one.
+- `.json` joins the origin's reviewed media types (`mediaTypes`,
+  `internal/server/types.go`) with its own row in `TestMediaMIMETypes`. The
+  runtime gallery manifest is a JSON DOCUMENT and was served as
+  `application/octet-stream` with an attachment disposition — the deliberate
+  fail-closed treatment for an extension nobody has reviewed, and the wrong
+  answer for one that has been. It widens no capability: `application/json` is
+  not active browser content, every media response still carries
+  `X-Content-Type-Options: nosniff` (now asserted beside the type in the same
+  test), every unreviewed extension is still refused inline, and the frontend
+  loader still reads bytes and parses the text itself. What changes is that a
+  human opening the manifest URL reads it instead of being offered a download.
+- An upper bound on how far a FEW columns may stretch under a full-width
+  contribution grid, read from a caller-set token whose default can never bind.
+  Measured before it existed: five columns of a thirty-day window drew 88px
+  cells in a 914px card, nine times their own height.
+- Dead code and stale pointers cut rather than carried: a private thousands
+  grouper that was a second copy of the shared one, missing its negative-sign
+  guard (it rendered -123 as "-,123"); an interface with no remaining referent;
+  and a category-lens resolver with no production caller, whose four
+  still-shipping behaviours were migrated onto the component and adapter
+  assertions that now decide them. Comments naming parity tests in directories
+  they do not live in, and a sealed-ceiling note that said four places when it
+  is five, were corrected in place.
+
+### Security
+
+Findings of the 2026-08-24 adversarial security review of this release's
+head (REQUEST-CHANGES), each fixed with tests that fail against the
+original code:
+
+- H1 — the capture-side sanitizer checked SHAPE where the privacy argument
+  requires MEMBERSHIP: label-shaped private identifiers passed as category
+  keys (and would have rendered publicly), the impossible date 2026-99-99
+  and newline-suffixed dates passed the digit pattern, and negative
+  integers passed the type check. The emission guard now enforces a closed
+  field-name vocabulary, a closed five-key category vocabulary held
+  identical across the capture tool, Go admission
+  (`internal/panels`' `categoryServeOrder` membership), and the frontend's
+  palette slots by a three-way parity pin, real calendar-date parsing with
+  no tolerance for a trailing byte, and non-negative integers, with
+  booleans confined to the `recorded` flag.
+- H2 — the replay floor lived in process memory only, so any restart
+  re-admitted replayed ciphertext newer than the embedded snapshot but
+  older than what had already been accepted. The accepted high-water mark
+  now persists as a sealed marker (same Secret-fed key as the series;
+  storage cannot forge it) in the writable state pair above, loaded
+  fail-safe (absent/corrupt/future markers degrade to the embedded floor,
+  never below; a failed write degrades durability, never serving), with
+  restart simulations at the loop, composition-root, and full-site levels.
+- M4 — the launchd installer anchored the scheduled job to its own
+  directory, so an install from a disposable worktree broke silently at
+  that worktree's cleanup. It now anchors the primary checkout
+  (`NARANJO_USAGE_EXPORT_REPO_DIR` to override), refuses worktree paths
+  outright, and gained a `--render-only` preview.
+- M5 — the push transport trusted resolved ssh client configuration; a
+  multiplexed admin connection could have been joined without
+  re-authenticating the restricted key. The invocation now forces
+  `ControlPath=none`, `ClearAllForwardings=yes`, `ForwardAgent=no`, and
+  `RequestTTY=no` alongside the existing
+  `BatchMode`/`IdentitiesOnly`/`IdentityAgent=none`, proven by a hermetic
+  stub-ssh test asserting per-option membership of the received argv.
+- M6 — `panels.data.enabled=false` silently fell back to the embedded
+  snapshot while the PVC-on/PV-off default left a fresh cluster's pod
+  Pending on an unbindable claim. The lifecycle is now explicit and the
+  defaults schedule everywhere: the capability defaults off, disabling it
+  is a documented as-of-release-snapshot decision stated where the value
+  is set, and enabling it is a deliberate last step after the documented
+  storage ceremony.
+
+Findings of the ROUND-3 adversarial security review of the same work
+(2026-08-24, REQUEST-CHANGES at `b5cf836`), each fixed with tests that fail
+against the reviewed code and one claim downgraded because the mechanism
+could not carry it:
+
+- 1 — the producer's "structurally incapable of spawning" claim rested on an
+  AST lint over IMPORT NAMES, and `pathlib.os.system(":")` restored the
+  launch callable with the import set unchanged. The boundary moved to the
+  invocation layer: the scheduled push starts the producer inside
+  `scripts/usage-export/producer.sb`, a seatbelt profile denying
+  `process-fork` and `network*`, with no flag or configuration key that runs
+  it unconfined and an outright refusal on a host without the sandbox. The
+  lint stays as a review bound and now SAYS so; the claim is stated as what
+  the kernel enforces, and the profile states its own residual
+  (exec-in-place, which buys nothing because the sandbox is inherited).
+- 2 — the replay-floor marker serialized to whole seconds, so a fractional
+  instant round-tripped LOWER than it was and re-admitted the document it
+  had just accepted. The marker is RFC3339Nano both ways, and restart
+  recovery binds the accepted CIPHERTEXT DIGEST rather than the instant
+  alone, so a different document at the same instant is refused.
+- 3 — the floor was not single-writer. `replicaCount` defaults to 1 while
+  the capability is on, the render refuses more than one replica, and the
+  marker is written through a unique temp file under an exclusive `flock`
+  with a monotonic compare-and-swap — rejecting an equal instant unless the
+  ciphertext digest is identical — and an fsync of both the file and its
+  parent directory before success is reported. The availability tradeoff is
+  stated where the value is set. This first shipped with a state claim of
+  `ReadWriteOncePod`; the mode is CSI-only and the target has no CSI driver,
+  so the claim named an enforcement that did not exist and the state pair is
+  `ReadWriteOnce` with the mechanism stated plainly instead.
+- 4 — deleting the marker silently reset the floor, and the runbook told
+  operators to do exactly that. An initialization tombstone makes
+  absent-after-initialized distinguishable from a first boot: the origin
+  refuses the tick and reports `stale`. Declaring a cold start is now an
+  explicit ceremony that removes both files and states, in the manual, that
+  it lowers replay protection.
+- 5 — a merge source could carry arbitrarily stale data under one current
+  `generatedAt` and `status: ok`. `--merge-source` requires and validates a
+  per-source capture instant, the combined document exposes per-source
+  freshness, its envelope instant is the OLDEST source's, and sections a
+  source-set-complete document omits are recomputed rather than mixed.
+- 6 — a present accepted marker with an absent source served fresh on the
+  first tick after a restart, because the acceptance fact lived only in
+  process memory. It is persisted, so provenance loss is `stale` from the
+  first tick.
+- 7 — the storage shape was a hostPath pair the platform storage acceptance
+  DENIES (originating issue website-infrastructure #211, now carried by
+  website-infrastructure PR #212), and the sibling check compared raw
+  strings in one direction. The chart adopts the platform design — `local`
+  volumes under the enumerated root, the enumerated StorageClass on both
+  objects, bounded required nodeAffinity, node name supplied at ceremony
+  time and never stored here — and both root pairs must be disjoint in BOTH
+  directions over normalized paths. The platform dependency is unlanded and
+  this work stays Draft until website-infrastructure #212 merges and
+  releases AND the #141/#189 live convergence receipt posts on this PR.
+- 8 — the push inherited whatever `~/.ssh/config` resolved for a host alias
+  and hardened only the options someone had named. It now runs with
+  `-F /dev/null` (which also excludes the system-wide file), states every
+  option explicitly, requires `user@host` and a pinned known-hosts file, and
+  asks `ssh -G` what actually resolved — refusing before connecting unless
+  the answer carries exactly the one dedicated identity and no
+  `proxycommand`, `proxyjump`, `localcommand` or `controlpath`. That
+  identity check catches a measured hazard: `ssh` silently ignores an `-i`
+  path that does not exist and falls back to the default keys.
+- 9 — one numeric contract now spans all three stages at 2^53-1: checked
+  int64 addition in Go, `MAX_COUNT` in the producer, and
+  `Number.isSafeInteger` in frontend admission, with a running-sum check on
+  the category partition and a three-way parity pin comparing the constants
+  by value.
+- 10 — the producer walked without bounds. Reads are rooted and no-follow
+  with containment re-checked after resolution, and file, entry, line,
+  depth and aggregate-byte ceilings are enforced BEFORE work; failure
+  messages stay path-free.
+- 11 — rotating the key left an unopenable marker. The marker carries a
+  versioned key identifier and refuses rather than migrating, because the
+  header is outside the AEAD and honouring it would let anyone who can write
+  the state directory lower the floor. Rotation is a documented ceremony
+  whose rollback consequence is stated truthfully.
+- Evidence correction: the sealed-payload ceiling figures in
+  `internal/seal/types.go` and `docs/usage-export.md` had gone stale against
+  the document the producer now emits. Re-measured at 98,958 sealed bytes
+  for the structural maximum, 32,114 bytes of headroom, 125,340 at thirteen
+  digits and 134,134 at fourteen; the suite now BUILDS and measures that
+  document instead of asserting a transcribed number.
+
+One further fail-open gate closed while composing this release:
+
+- `--node` was the only one of thirteen facts `scripts/ci/chart-storage-pin.sh`
+  states to its checker that was not required, and the node-binding assertion
+  sat behind `if facts.node and ...`. Omitting the fact did not relax the check
+  loudly — it SKIPPED it silently, so a PersistentVolume bound to the wrong
+  node passed the pin clean. The fact is now required and the comparison
+  unconditional. The same checker also reads its render through the census's
+  own `flatten` rather than the raw document list, so an object smuggled inside
+  a `List` wrapper is counted by the checks instead of hidden from them, and a
+  document that is not a mapping is refused by name.
+
+Findings of the 2026-08-26 adversarial review of this release's head
+(REQUEST-CHANGES). Five of the eight were CLAIMS that outran their evidence
+rather than defects in behaviour, and they are corrected as claims; the two
+that were behaviour are closed with tests that fail against the original code:
+
+- The two durability barriers guarding the replay-floor commit could be
+  shipped as `return nil` with the entire Go suite green. The fault test
+  injects a FAILING stub into each, so it pins the call sites and structurally
+  cannot tell a real `Sync()` from a no-op — while a comment claimed it was
+  red against exactly that mutation. The bodies are now pinned by calling each
+  default against a closed descriptor, where a real sync fails and a no-op
+  cannot, in both directions so neither a no-op nor a constant-error stub
+  passes; and the comment now states which test pins which half and admits the
+  limit no portable test can cross — that the kernel reached stable storage.
+- `PANELS_DATA_STATE` versus `PANELS_DATA_ROOT` separation compared SPELLINGS
+  only, so two different paths naming one directory — a host directory
+  bind-mounted at both, in a hand-run container the chart cannot constrain —
+  were admitted, and the origin would write its floor marker into the
+  projection it must only read. Separation is now decided by device and inode
+  (`os.SameFile`), a root that cannot be inspected fails closed instead of
+  being assumed separate, and the one shape still invisible from inside the
+  container — a state root bind-mounted from a directory inside the data
+  root — is named in the code rather than left implied.
+- Claim corrections, made because an untrue comment or figure is itself a
+  defect here: the storage pin's `List`-unwrapping narrowing was real but
+  unguarded (its removal left every test green and the shell pin exit 0
+  reporting "all caught"), and now has both a unit kill and a 45th shell
+  mutant; the frontend gallery-manifest loader described the manifest as
+  served `application/octet-stream` when the same range made `.json` a
+  reviewed media type; and the rendering-lane harness settled on document
+  HEIGHT, which the static shell satisfies before the app mounts — it now
+  additionally requires hydration to have finished, a stricter precondition
+  on the same budget rather than a longer tolerance.
+
 ## [0.1.47] - 2026-08-26
 
 ### Changed

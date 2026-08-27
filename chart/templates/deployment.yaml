@@ -16,9 +16,11 @@ spec:
     type: RollingUpdate
     rollingUpdate:
       # The namespace quota is pods:2 / limits.memory 256Mi. At
-      # replicaCount's default and schema maximum of 2 (values.schema.json
-      # allows 1..2 so the workload can scale down for dev use — owner
-      # directive 2026-08-19), steady state already consumes the whole
+      # replicaCount's schema maximum of 2 (values.schema.json allows 1..2;
+      # the DEFAULT moved to 1 in the 2026-08-24 round-3 review so the
+      # replay-floor state is single-writer by construction — see
+      # chart/values.yaml, which states the availability tradeoff in full),
+      # steady state already consumes the whole
       # quota, so any surge pod is quota-rejected and wedges the rollout
       # permanently (cluster-proven during the lidersea.com v0.1.16
       # deploy — the controller scaled the OLD ReplicaSet to 2 first to
@@ -56,8 +58,10 @@ spec:
           env:
             - name: PORT
               value: {{ .Values.service.port | quote }}
-            # The chart schema currently permits only false, and no volume is
-            # rendered. Enabling media requires the reviewed ADR 0012 follow-up.
+            {{- /* Rendered ALWAYS, for the same reason PANELS_REFRESH is: the
+            deployed decision must be readable off the manifest. The default is
+            false and enabling media needs ADR 0012's storage evidence plus the
+            platform lane's provisioning receipt for the claim. */}}
             - name: MEDIA_ENABLED
               value: {{ .Values.media.enabled | quote }}
             {{- /* The panel API's background refresh loops. Rendered ALWAYS and
@@ -73,6 +77,60 @@ spec:
             which is the fail-soft outcome, not an outage. */}}
             - name: PANELS_REFRESH
               value: {{ .Values.panels.refresh.enabled | quote }}
+            {{- /* The panels data root (issue #142): rendered only when the
+            capability is enabled, so a disabled render is byte-identical to
+            the chart before the capability existed. Both this value and the
+            volumeMount below come from the SAME values key, so they cannot
+            drift by editing one of two literals (round-3 finding 7); the
+            geometry itself — normalized, disjoint in both directions — is
+            validated by naranjo-online.panelsDataPaths, and
+            scripts/ci/chart-storage-pin.sh holds the rendered result. The key reference is
+            optional on purpose: a missing Secret degrades the panel to its
+            embedded snapshot (the app fails closed on every unreadable
+            input) and must never keep the site from scheduling. */}}
+            {{- if .Values.panels.data.enabled }}
+            {{- include "naranjo-online.panelsDataPaths" . }}
+            - name: PANELS_DATA_ROOT
+              value: {{ .Values.panels.data.mountPath | quote }}
+            {{- /* The replay-floor state root (2026-08-24 review finding
+            H2): where the app persists the sealed floor marker so a restart
+            cannot re-admit replayed ciphertext. Must equal the writable
+            state volumeMount path below; the storage pin fails the render
+            if the two drift. */}}
+            - name: PANELS_DATA_STATE
+              value: {{ .Values.panels.data.stateMountPath | quote }}
+            - name: PANELS_DATA_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.panels.data.keySecret }}
+                  key: PANELS_DATA_KEY
+                  optional: true
+            {{- end }}
+            {{- /* The media root and transfer budget come LAST in this list,
+            after every unconditional entry, and that placement is load-bearing
+            rather than cosmetic: internal/doctrine's refresh pin asserts that
+            nothing between `env:` and the PANELS_REFRESH entry is wrapped in a
+            template conditional, so that an operator can always read the
+            deployed refresh state straight off the manifest. Putting this
+            block above that entry would satisfy no purpose and break that
+            guarantee's proof.
+
+            These two ARE conditional, unlike MEDIA_ENABLED above, and that is
+            also not a style choice: cmd/server's mediaConfiguration REFUSES TO
+            BOOT when MEDIA_ENABLED is false and a root or a concurrency budget
+            is set anyway, so a disabled deployment emitting them would fail
+            closed at start-up instead of quietly serving without media. The
+            root is the very mountPath the volumeMount below uses, read from
+            one value, so the process and the mount cannot disagree about where
+            the tree is; and the transfer budget is the operator's measured
+            figure, which values.schema.json requires here and this chart has
+            no default for. */}}
+            {{- if .Values.media.enabled }}
+            - name: MEDIA_ROOT
+              value: {{ .Values.media.mountPath | quote }}
+            - name: MEDIA_MAX_CONCURRENT
+              value: {{ .Values.media.maxConcurrent | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -109,8 +167,55 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.panels.data.enabled }}
+            - name: panels-data
+              mountPath: {{ .Values.panels.data.mountPath }}
+              readOnly: true
+            {{- /* The state mount is the pod's ONE writable projection
+            (2026-08-24 review finding H2): explicitly readOnly: false at
+            both levels, on a separate volume, so the floor marker persists
+            while the data mount above stays read-only exactly as reviewed.
+            scripts/ci/chart-storage-pin.sh fails the render if the state
+            mount flips read-only (a silently unwritable state root would
+            quietly lose the durable floor) or the data mount flips
+            writable. */}}
+            - name: panels-state
+              mountPath: {{ .Values.panels.data.stateMountPath }}
+              readOnly: false
+            {{- end }}
+            {{- if .Values.media.enabled }}
+            {{- /* readOnly is declared on BOTH the mount and the volume below.
+            Neither is redundant: the mount-level flag is what this container
+            gets, and the volume-level flag is what ANY future container in
+            this Pod gets, so a second mount added later cannot quietly be
+            writable. The workload writes media host-side only, never through
+            the origin. */}}
+            - name: media
+              mountPath: {{ .Values.media.mountPath | quote }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
             medium: Memory
             sizeLimit: 16Mi
+        {{- if .Values.panels.data.enabled }}
+        {{- /* readOnly at BOTH levels on purpose: the claim reference makes
+        the whole volume read-only toward the pod, and the mount repeats it
+        so neither level can be silently relaxed alone.
+        scripts/ci/chart-storage-pin.sh fails if either flag moves. */}}
+        - name: panels-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.panels.data.volumeName }}
+            readOnly: true
+        - name: panels-state
+          persistentVolumeClaim:
+            claimName: {{ .Values.panels.data.stateVolumeName }}
+            readOnly: false
+        {{- end }}
+        {{- if .Values.media.enabled }}
+        - name: media
+          persistentVolumeClaim:
+            claimName: {{ .Values.media.claimName | quote }}
+            readOnly: true
+        {{- end }}

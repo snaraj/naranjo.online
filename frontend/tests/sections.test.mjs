@@ -911,6 +911,146 @@ test('clicking the photograph enlarges it; only the full derivative loads on dem
   assert.match(mediaGallery, /src=\{item\.previewSrc\}/, 'the feed frame must show the small preview');
 });
 
+/* The component's own markup, with every HTML comment removed. Prose about
+ * an attribute is not that attribute, and the gallery's header comment
+ * describes the very things the two tests below forbid — so they read the
+ * markup rather than the file, which is what makes "nowhere" mean nowhere.
+ *
+ * The strip repeats until it converges rather than running once. Removing a
+ * comment can SPLICE a new opener into existence out of the text either
+ * side of it — `<!` before, `--` after — so one pass cannot promise its
+ * result is comment-free. That is the incomplete multi-character
+ * sanitization CodeQL flags (js/incomplete-multi-character-sanitization),
+ * and it is not decorative here: a surviving comment is prose these pins
+ * would read as markup, which is how a pin demanding an element be PRESENT
+ * gets satisfied by a commented-out one. Looping to a fixed point is what
+ * makes "removed" total, and it is what makes the pins below sound.
+ *
+ * It returns its pass COUNT alongside the markup so the test below can prove
+ * the loop is load-bearing without performing a lone unguarded pass of its
+ * own — a demonstration written that way is a second incomplete sanitizer,
+ * correctly flagged as one, and counting is the better evidence anyway: it
+ * measures the real implementation rather than a hand-rolled imitation. */
+function stripComments(markup) {
+  let stripped = markup;
+  let previous;
+  let passes = 0;
+  do {
+    previous = stripped;
+    stripped = previous.replace(/<!--[\s\S]*?-->/g, '');
+    passes += 1;
+  } while (stripped !== previous);
+  return { markup: stripped, passes };
+}
+
+const galleryMarkup = stripComments(mediaGallery).markup;
+
+test('the comment strip these pins depend on runs to a fixed point (issue 207)', () => {
+  // Non-vacuity for the loop above, stated as the regression it prevents.
+  // This input needs TWO effective passes: the first removes the inner
+  // comment and splices `<!--` out of the `<!` before it and the `--` after
+  // it, leaving a whole live comment that hides a `<video`; the second
+  // removes that. A single-pass strip would hand the "must be present" pins
+  // commented-out markup and they would be satisfied by prose.
+  const spliced = stripComments('<div><!<!-- x -->-- <video --></div>');
+  // Three, because the count includes the terminating pass that changes
+  // nothing — which is the pass that proves convergence was reached.
+  assert.equal(spliced.passes, 3, 'the strip must iterate, not run once');
+  assert.equal(spliced.markup, '<div></div>');
+  assert.doesNotMatch(spliced.markup, /<video/);
+  // And the subject the pins actually read: no comment survives in it.
+  assert.doesNotMatch(galleryMarkup, /<!--/, 'the gallery markup these pins read must be comment-free');
+});
+
+test('a moving item shows a poster in the strip — never a <video> element there (issue 207)', () => {
+  // The single visible frame is an <img> for every kind of item. A gallery
+  // that mounted a <video> to show a thumbnail would reintroduce, in a
+  // heavier form, exactly the weight the one-frame redesign removed.
+  const enlargedBlock = /\{#if enlarged\}([\s\S]*?)\{\/if\}/.exec(galleryMarkup)?.[1] ?? '';
+  assert.match(enlargedBlock, /<video/, 'the video element must mount inside the enlarged branch');
+  assert.doesNotMatch(
+    galleryMarkup.replace(enlargedBlock, ''),
+    /<video|<source/,
+    'no video or source element may exist outside the enlarged branch'
+  );
+  // The strip's one difference between a film and a photograph: a drawn,
+  // aria-hidden mark. It is signposting, not a second control — the frame
+  // itself already opens the lightbox.
+  assert.match(mediaGallery, /class="gallery-play-mark" aria-hidden="true"/);
+});
+
+test('nothing in the gallery ever autoplays, and reduced motion is structural (issue 207)', () => {
+  // The strongest form this assertion has: the ATTRIBUTE cannot appear
+  // anywhere in the file, so there is no conditional, muted, or
+  // "just-for-the-poster" branch that could reintroduce it. Reduced motion is
+  // then honoured by construction rather than by a media query — there is no
+  // motion until a reader presses play, and a reader pressing play asked.
+  assert.doesNotMatch(galleryMarkup, /autoplay/i, 'no autoplay attribute may exist anywhere in the gallery markup');
+  assert.match(galleryMarkup, /<video[\s\S]*?\n\s+controls\n/, 'the video must carry native controls');
+  assert.match(
+    galleryMarkup,
+    /<video[\s\S]*?\n\s+playsinline\n/,
+    'the video must play inline (rendering lanes stage 1)'
+  );
+  assert.match(
+    galleryMarkup,
+    /<video[\s\S]*?preload="none"/,
+    'the video must not preload: an enlarged frame costs a poster, not a film'
+  );
+  assert.match(galleryMarkup, /poster=\{item\.video\.posterSrc\}/);
+});
+
+test('the source ladder renders in the manifest’s own order, never re-ranked (issue 207)', () => {
+  // The browser takes the first source it can decode, so ORDER is the
+  // preference. A sort, filter or reverse here would silently hand a reader
+  // different bytes than the operator published.
+  assert.match(mediaGallery, /\{#each item\.video\.sources as source \(source\.src\)\}/);
+  assert.match(mediaGallery, /<source src=\{source\.src\} type=\{source\.type\} \/>/);
+  for (const forbidden of [/item\.video\.sources\.sort/, /item\.video\.sources\.filter/, /item\.video\.sources\.reverse/]) {
+    assert.doesNotMatch(mediaGallery, forbidden, 'the component must not re-rank the manifest’s source ladder');
+  }
+});
+
+test('the Art block renders the vendored set first and lets a runtime manifest replace it (issue 182/207)', () => {
+  // The cutover's whole shape, pinned where it is decided: the build's own
+  // props are the block's FALLBACK — they render before any request exists —
+  // and the volume's manifest is a one-shot read that may replace them. A
+  // read that answers null changes nothing, which is why an absent media
+  // volume looks like a gallery instead of a fault.
+  assert.match(artBinding, /runtimeBlock\(/);
+  assert.match(artBinding, /loadGalleryManifest\(\)/);
+  assert.match(artBinding, /if \(items === null\) \{\n\s+return null;/);
+  // The adapter still resolves the vendored file names through the bundler,
+  // and still never assembles a media URL of its own: the manifest reader
+  // built those through lib/media.ts before this module saw them.
+  assert.match(artBinding, /import\.meta\.glob\('\.\.\/\.\.\/assets\/images\/gallery\/\*\.webp'/);
+  assert.doesNotMatch(artBinding, /\/media\/|mediaUrl\(/, 'the adapter must never build a media URL itself');
+  // Manifest order is the operator's order here too, and this is the assertion
+  // that has to survive somebody being clever: the adapter may not reorder the
+  // items OR a film's source ladder, by any means — a spread and a reverse, a
+  // sort, a toSorted. The mapping expression is pinned exactly, so a rewrite
+  // that inserts anything between `item.sources` and `.map` is a diff.
+  assert.match(
+    artBinding,
+    /sources: item\.sources\.map\(\(source\) => \(\{ src: source\.url, type: source\.type \}\)\)/,
+    'the ladder must be mapped straight through, with nothing between the manifest order and the props'
+  );
+  for (const forbidden of [/\.reverse\(/, /\.sort\(/, /\.toSorted\(/, /\.toReversed\(/]) {
+    assert.doesNotMatch(artBinding, forbidden, 'the adapter must not reorder items or renditions');
+  }
+});
+
+test('the runtime binding renders its fallback until a non-null replacement arrives', () => {
+  // Block.svelte is the only place the three binding kinds meet, and the two
+  // lines below are the whole honest-states contract for the runtime one: a
+  // null result is never rendered, and the fallback is what shows until a
+  // complete replacement exists. There is no loading state because nothing
+  // is ever waiting — the first paint is already true.
+  assert.match(blockHost, /runtime \?\? block\.binding\.fallback/);
+  assert.match(blockHost, /if \(mounted && loaded !== null\)/);
+  assert.match(blockHost, /mounted = false/, 'a block torn down mid-flight must not write into a gone component');
+});
+
 test('the lightbox is a native <dialog>: Escape/backdrop/close all close it, arrow keys navigate', () => {
   assert.match(mediaGallery, /<dialog[\s\S]*?bind:this=\{dialogEl\}/);
   assert.match(mediaGallery, /dialogEl\.showModal\(\)/);
@@ -1076,6 +1216,25 @@ test('the visible frame is centred in its track, so no gutter is dead space (iss
     /(^|[\s;])(inline-size|block-size|width|height|aspect-ratio):/,
     'the frame button sizes itself, so the reserved box is whatever fits inside the button instead'
   );
+  /* `inset: 0` only fills anything while the button is absolutely positioned,
+     and this pin exists because composing issue 207 with this rule declared
+     `position` TWICE — `absolute` from the reservation, then `relative` for
+     the moving-item mark's containing block, which wins by order. The button
+     fell back into flow at fit-content and the frame measured 569px off
+     centre in Firefox and WebKit at 1440px: the exact dead gutter this test
+     was written to prevent, reintroduced through a property nobody re-read.
+     Absolutely positioned boxes are already containing blocks for absolutely
+     positioned descendants, so one declaration serves both purposes. */
+  assert.match(
+    frameButton,
+    /(^|[\s;])position:\s*absolute/,
+    'the frame button is not absolutely positioned, so `inset: 0` fills nothing and the reserved box collapses to the button’s content'
+  );
+  assert.equal(
+    (frameButton.match(/(^|[\s;])position:/g) ?? []).length,
+    1,
+    'the frame button declares `position` more than once; the last one wins and the reservation is decided by declaration order'
+  );
   // The track arrangement the centring depends on: a middle column that can
   // be wider than the frame is exactly what makes the alignment matter.
   const frame = /\.gallery-frame\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
@@ -1226,8 +1385,15 @@ test('the visible frame reserves its box before any byte arrives, and lazy-loads
   // reservation, not a second timing: it still resolves before any byte
   // arrives, through the one global token every frame shares.
   assert.match(style, /max-block-size:\s*var\(--card-media-max-block-size\)/);
-  assert.match(mediaGallery, /\{width\}/);
-  assert.match(mediaGallery, /\{height\}/);
+  // The intrinsic box the markup DECLARES moved to a per-item value with
+  // issue 207, because a runtime manifest's items each carry their own
+  // dimensions. It is a size hint, not the reservation: the reservation is
+  // the token pair above, identical for every item, which is why swapping the
+  // vendored set for a volume-served one shifts nothing.
+  assert.match(mediaGallery, /const itemWidth = \$derived\(item\.width \?\? width\)/);
+  assert.match(mediaGallery, /const itemHeight = \$derived\(item\.height \?\? height\)/);
+  assert.match(mediaGallery, /width=\{itemWidth\}/);
+  assert.match(mediaGallery, /height=\{itemHeight\}/);
   assert.match(mediaGallery, /loading="lazy"/);
   assert.match(mediaGallery, /decoding="async"/);
 });

@@ -78,6 +78,24 @@ type Site struct {
 	// panels is the prepared panel registry; its background refresh starts
 	// only through StartPanelRefresh, never as a construction side effect.
 	panels *panels.Registry
+	// panelsData owns the optional rooted data-root capability (issue #142),
+	// opened only through StartPanelData and closed with the site.
+	panelsData *os.Root
+	// panelsState owns the optional rooted writable state capability the
+	// replay-floor marker persists through (2026-08-24 review finding H2),
+	// opened only through StartPanelData and closed with the site. It is a
+	// SEPARATE root on a separate mount: the data root above stays read-only
+	// in every layer, and this one holds nothing but the floor marker.
+	panelsState *os.Root
+	// panelsFloorNotice is the one-line operator classification of the
+	// persisted replay floor, observed once at StartPanelData and read back
+	// by the composition root for its startup log (2026-08-24 round-3
+	// review, findings 4 and 11: "the panel went stale" and "you rotated the
+	// key, run the reset ceremony" are different situations and must be
+	// legible as different situations). Empty means nothing worth saying.
+	// Nothing depends on it for correctness — the loop re-loads and re-
+	// decides on every tick.
+	panelsFloorNotice string
 }
 
 const (
@@ -140,12 +158,25 @@ var (
 	immutableDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	// mediaTypes avoids host registry differences and never lets content sniffing
 	// turn an unknown operator file into active browser content.
+	//
+	// ".json" is here for the runtime gallery manifest (issue #207): the volume
+	// serves a JSON DOCUMENT, and typing it as application/octet-stream with an
+	// attachment disposition was simply the wrong answer for one. It widens no
+	// capability -- application/json is not active browser content, every media
+	// response still carries X-Content-Type-Options: nosniff, and the frontend
+	// loader reads bytes and parses the text itself rather than trusting the
+	// served type, so nothing about admission or the byte cap depends on this
+	// row. What changes is that a human opening the manifest URL reads it
+	// instead of being offered a download. Adding a media MIME type together
+	// with its row in TestMediaMIMETypes is sanctioned evolution in AGENTS.md,
+	// and this is that conscious edit.
 	mediaTypes = map[string]string{
 		".avif": "image/avif",
 		".flac": "audio/flac",
 		".gif":  "image/gif",
 		".jpeg": "image/jpeg",
 		".jpg":  "image/jpeg",
+		".json": "application/json",
 		".mp4":  "video/mp4",
 		".png":  "image/png",
 		".webm": "video/webm",

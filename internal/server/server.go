@@ -86,8 +86,18 @@ func newSite(assets fs.FS, media *mediaHandler, logger *slog.Logger) (*Site, err
 // StartPanelRefresh starts the panel API's background live refresh. It is an
 // explicit capability enablement — construction and tests stay egress-free —
 // and the loops stop when ctx cancels, before any in-flight attempt begins.
+//
+// A panel the sealed data root owns starts no loop (2026-08-24 review
+// finding 8); every other fetch-backed panel is unaffected.
 func (s *Site) StartPanelRefresh(ctx context.Context) {
 	s.panels.StartRefresh(ctx)
+}
+
+// TokenUsageOwnedByDataRoot reports whether the sealed data-root path owns
+// the token-usage panel, so the composition root can log that decision once
+// at startup. It is a report, never the enforcement.
+func (s *Site) TokenUsageOwnedByDataRoot() bool {
+	return s.panels.DataRootOwnsTokenUsage()
 }
 
 // newHandler reads and prepares every embedded file exactly once. Any
@@ -198,13 +208,27 @@ func (s *Site) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handler.ServeHTTP(w, r)
 }
 
-// Close releases the optional media root. It is safe for media-disabled sites
-// and is called only after the HTTP server has stopped accepting requests.
+// Close releases the optional media and panels-data roots. It is safe for
+// sites with neither capability and is called only after the HTTP server has
+// stopped accepting requests.
 func (s *Site) Close() error {
-	if s.media == nil {
-		return nil
+	var mediaErr, dataErr, stateErr error
+	if s.media != nil {
+		mediaErr = s.media.Close()
 	}
-	return s.media.Close()
+	if s.panelsData != nil {
+		dataErr = s.panelsData.Close()
+	}
+	if s.panelsState != nil {
+		stateErr = s.panelsState.Close()
+	}
+	if mediaErr != nil {
+		return mediaErr
+	}
+	if dataErr != nil {
+		return dataErr
+	}
+	return stateErr
 }
 
 // health provides the shared liveness and readiness response. The service has

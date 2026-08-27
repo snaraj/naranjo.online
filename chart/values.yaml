@@ -1,8 +1,45 @@
-# Default 2 for availability; 1..2 accepted so the workload can scale down/up
-# freely as a dev environment (owner directive 2026-08-19). The maximum is the
-# namespace quota's real budget (pods: 2, limits.memory 256Mi = 2x128Mi), not
-# rigidity — raising it starts with the quota, not this schema.
-replicaCount: 2
+# Default 1; 1..2 accepted so the workload can scale up/down freely as a dev
+# environment (owner directive 2026-08-19). The maximum is the namespace
+# quota's real budget (pods: 2, limits.memory 256Mi = 2x128Mi), not rigidity —
+# raising it starts with the quota, not this schema.
+#
+# The default MOVED from 2 to 1 in the 2026-08-24 round-3 review (finding 3),
+# and the tradeoff is stated here rather than buried, because it is the
+# owner's call and not the chart's:
+#
+#   WHAT IS GIVEN UP. At 1 replica a pod restart is a brief outage instead of
+#   a hidden one. In practice the difference is small and was already small:
+#   this is one personal site on a ONE-NODE cluster, so both replicas always
+#   landed on the same machine and shared its fate — 2 replicas survived a pod
+#   eviction, never a node reboot, a disk fault, or a power cut. The rollout
+#   strategy below is maxSurge 0 / maxUnavailable 1, which drops to one
+#   serving pod during every upgrade anyway.
+#
+#   WHAT IS GAINED. One writer for the replay-floor state (issue #142). The
+#   floor marker is one file guarding against replayed sealed payloads; two
+#   pods writing it concurrently is a race whose loser silently lowers the
+#   floor. The panels-data render REFUSES replicaCount > 1 outright whenever
+#   the capability is on, so the unsafe configuration cannot be expressed
+#   rather than merely being avoided.
+#
+#   Round 3 also set the state claim to ReadWriteOncePod and called the
+#   result single-writer "by construction". That phrase is retired
+#   (2026-08-25 round-4 review, finding 1): ReadWriteOncePod is supported for
+#   CSI volumes only and the target has no CSI driver, so on a native `local`
+#   volume it names a guarantee nothing enforces. The claim below and the
+#   template comments now say what actually holds this property here — the
+#   locked monotonic compare-and-swap in the origin, plus this replica policy
+#   — and name ReadWriteOncePod as the upgrade for the day the platform gains
+#   a CSI driver.
+#
+#   WHAT UNDOES IT. Nothing here: raising the default back to 2 requires the
+#   floor to become a genuinely multi-writer structure (a lease, or state that
+#   is not per-pod), not a values edit. The compare-and-swap makes a second
+#   writer SAFE — it refuses to lower the floor — but safe is not the same as
+#   supported, and the render still refuses it. Setting replicaCount: 2 with
+#   panels.data.enabled: false remains fully supported and unchanged — the
+#   refusal is scoped to the capability that needs the invariant.
+replicaCount: 1
 deploymentReady: false
 
 image:
@@ -23,7 +60,7 @@ image:
   # It is locked to this chart's appVersion by the release gate's four-way
   # lock (numeric VERSION/chart version/appVersion <-> plain-v image tag), so a chart
   # claiming one release can never ship the tag of another.
-  tag: v0.1.47
+  tag: v0.1.48
   digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
   pullPolicy: IfNotPresent
 
@@ -47,11 +84,48 @@ ingress:
   peerAppName: cloudflare-public
   peerInstance: naranjo-online-tunnel
 
-# Persistent media is deliberately impossible to enable before Pi storage,
-# backup, reclaim, and saturation evidence satisfies ADR 0012.
+# Persistent media stays OFF in every deployment this repository describes,
+# and turning it on is an operator decision that needs ADR 0012's Pi storage,
+# backup, reclaim, and saturation evidence AND the platform lane's own
+# provisioning receipt for the claim named below. Nothing here asserts that
+# either exists; the defaults are the refusal.
+#
+# What issue 207 changed is the SHAPE of the decision, never the answer. The
+# schema used to pin `enabled: false` and the sentinel profile as the only
+# representable values, which made the chart unable to DESCRIBE an enabled
+# deployment even after the evidence lands. It now describes one — and
+# describes it strictly: enabling requires a real profile, a named claim, a
+# mount path, and a measured transfer budget, all four together, or the render
+# fails validation. `scripts/ci/chart-media-pin.sh` proves the default render
+# still carries no volume, no mount, and no media environment at all.
 media:
   enabled: false
+  # The reviewed storage arrangement an enabled deployment runs under.
+  # UNRESOLVED_PI_MEDIA_STORAGE is not a profile: it is the NAME OF THE
+  # UNANSWERED QUESTION, and the schema refuses it the moment `enabled` is
+  # true. So the sentinel keeps doing exactly what it did before — an enabled
+  # deployment cannot inherit it by forgetting to choose.
   profile: UNRESOLVED_PI_MEDIA_STORAGE
+  # The operator-provisioned PersistentVolumeClaim the read-only media tree
+  # lives on. Empty is the honest value while media is off; the schema
+  # requires it non-empty when enabled is true, so no render can mount a claim
+  # nobody named. This chart never creates the claim: provisioning the volume
+  # is the platform lane's step, and this value only points at its result.
+  claimName: ""
+  # Where that tree appears inside the container. Declared HERE rather than in
+  # the template because it is two facts that must agree — the volumeMount's
+  # path and the MEDIA_ROOT the process reads — and one value cannot disagree
+  # with itself.
+  mountPath: /data/media
+  # The measured transfer budget (MEDIA_MAX_CONCURRENT). 0 is the same kind of
+  # sentinel the profile above uses — "no budget has been measured" — and the
+  # schema refuses it whenever enabled is true, so an enabled deployment must
+  # state a real figure. This chart deliberately offers no default: the number
+  # comes from saturation measurement against the actual storage, and inventing
+  # one here would be a guess wearing an operator's authority. (It is a
+  # sentinel rather than `null` because Helm strips null values out of
+  # values.yaml entirely, which would delete the key a reader came to read.)
+  maxConcurrent: 0
 
 # The panel API's background refresh loops, off in every deployment this
 # repository describes. Off means NO loop is started at all, so egress is
@@ -70,6 +144,127 @@ media:
 panels:
   refresh:
     enabled: false
+  # The panels data root (issue #142): a read-only mounted directory carrying
+  # ONE sealed (AES-256-GCM) usage-series file, pushed out-of-band from the
+  # workstation that records the usage, decrypted in-process with a key fed
+  # from a Secret, and re-read on a TTL.
+  #
+  # OFF by default, like `refresh` above, and the lifecycle is EXPLICIT
+  # (2026-08-24 security review, finding M6, both halves):
+  #
+  #   * enabled=false — the DEFAULT and the fresh-install state — serves the
+  #     token-usage panel from its embedded release-time snapshot: honest
+  #     recorded data, as of the release that shipped it, with the
+  #     envelope's own generatedAt saying exactly how old it is. That is a
+  #     DOCUMENTED DECISION an operator reads here before making, not a
+  #     silent fallback discovered after flipping a value off; disabling a
+  #     running deployment means choosing as-of-release data again, and the
+  #     live sealed feed stops being read.
+  #   * enabled=true requires the storage ceremony FIRST (docs/
+  #     usage-export.md: both host directories, both admin-applied PVs, the
+  #     key Secret) because the claims it renders bind statically to
+  #     pre-provisioned volumes. The earlier default — claims on, PVs off —
+  #     left a FRESH cluster's pod Pending on an unbindable claim; defaults
+  #     must never wedge an install, so the capability defaults off and is
+  #     enabled deliberately, last.
+  #
+  # Once enabled, every runtime absence still fails closed -- no volume, no
+  # file, no key, or a tampered file each leave the panel serving its
+  # embedded snapshot -- the capability is a read-only projection of one
+  # file with no network, no host reach beyond the volume, and no
+  # credential beyond a key that decrypts data the site already publishes.
+  #
+  # Storage shape: a statically bound `local` PersistentVolume/Claim pair on
+  # the platform's own StorageClass. This REPLACED a static hostPath pair
+  # with an empty storageClassName in the 2026-08-24 round-3 review (finding
+  # 7), because that shape is not merely dated — it is one the platform's
+  # storage policy REJECTS. The platform acceptance — originating issue
+  # website-infrastructure #211, now carried by website-infrastructure PR
+  # #212 — denies hostPath volumes outright (a hostPath PV is the loophole
+  # through restricted pod security, which is exactly why the old shape had
+  # to ship its PV behind a manual admin ceremony), and admits a persistent
+  # volume only when it is `local` or `csi`, under the enumerated local
+  # volume root, carrying the enumerated StorageClass on BOTH the volume and
+  # the claim, with bounded required nodeAffinity. Shipping the old shape
+  # would have meant shipping something the platform would refuse on arrival.
+  #
+  # THIS ALIGNMENT IS NOT YET CONFIRMED BY THE PLATFORM. The dependency is
+  # unlanded: this work stays Draft until website-infrastructure #212 merges
+  # and releases AND the #141/#189 live convergence receipt posts on the
+  # naranjo PR. What changed is the direction of the gap — the chart now
+  # renders what the platform design says it will admit, so the receipt
+  # confirms rather than contradicts it.
+  #
+  # The PV template stays CLUSTER-scoped and default-off: the release
+  # identity (the least-privilege helm reconciler) deliberately holds no
+  # PersistentVolume authority. PV creation remains an admin ceremony —
+  # render this chart's own template with `persistentVolume.enabled=true` and
+  # apply it once with admin credentials — so the object in the cluster stays
+  # the object in git. The claim pins `volumeName` and the PV pins
+  # `claimRef`, so neither side can be captured by a stranger.
+  data:
+    enabled: false
+    # The platform StorageClass, named on BOTH the volume and the claim. It
+    # provisions nothing (kubernetes.io/no-provisioner); naming it is what
+    # binds this pair to the enumerated class instead of leaving an empty
+    # class that only excludes a DEFAULT provisioner.
+    storageClass: local-pie-ssd
+    # The enumerated local-volume root. Every path below must live strictly
+    # under it; _helpers.tpl fails the render otherwise, so a path the
+    # platform would deny never reaches the platform.
+    localVolumeRoot: /mnt/local-pie-ssd
+    # The node this local volume is bound to, as a REQUIRED nodeAffinity
+    # value. Empty is a fail-closed sentinel and is the shipped default: a
+    # node name is a private host fact (requirement 12) and never enters this
+    # repository, so the admin ceremony supplies it with --set. Rendering the
+    # PersistentVolume without it fails the render rather than emitting an
+    # unbound-anywhere volume.
+    node: ""
+    # Directory backing the PersistentVolume, under localVolumeRoot. It must
+    # already exist on the node; creating it (owner, mode) is part of the
+    # same admin ceremony as the PV itself.
+    path: /mnt/local-pie-ssd/naranjo-online/panels-data
+    # Where the pod sees it. Kept in values rather than hardcoded in the
+    # template so the storage pin reads the expectation from this file — the
+    # single designated binding point — instead of from the template it is
+    # testing.
+    mountPath: /var/lib/panels-data
+    # One name shared by the PV and the PVC, making the statically bound
+    # pair legible as a pair.
+    volumeName: naranjo-online-panels-data
+    # Secret feeding PANELS_DATA_KEY (64 hex characters). Referenced
+    # optional: a missing Secret degrades the panel to its embedded
+    # snapshot; it must never keep the site from scheduling.
+    keySecret: naranjo-online-panels-data
+    capacity: 16Mi
+    # The replay-floor STATE pair (2026-08-24 security review, finding H2):
+    # a second statically bound local PV/PVC (ReadWriteOnce — see the
+    # panels-data template header for why the CSI-only ReadWriteOncePod is
+    # not available on this target and what carries the single-writer
+    # property instead), WRITABLE by the pod, holding
+    # exactly one sealed marker file — the capture instant of the last
+    # ACCEPTED series file — so the replay floor survives a restart instead
+    # of resetting to the embedded snapshot's. It is deliberately a SEPARATE
+    # sibling directory and volume rather than a writable mount of the data
+    # volume above: the pushed-data projection stays read-only in every
+    # layer (both the claim reference and the mount, as reviewed), and the
+    # only thing the origin can ever write anywhere is this one sealed
+    # marker, in a directory the push pipeline never touches. The marker is
+    # sealed under the same key as the series, so storage that can write the
+    # state directory still cannot forge a floor; an absent or corrupt
+    # marker no longer degrades silently — see the tombstone in
+    # internal/server/panelsdata.go (round-3 finding 4).
+    #
+    # SIBLING, NEVER NESTED, in either direction: _helpers.tpl refuses a
+    # render where these two roots (or the two mount paths) are equal or
+    # where either contains the other, comparing NORMALIZED paths so an
+    # alias cannot slip past a string prefix test (round-3 finding 7).
+    statePath: /mnt/local-pie-ssd/naranjo-online/panels-state
+    stateMountPath: /var/lib/panels-state
+    stateVolumeName: naranjo-online-panels-state
+    stateCapacity: 1Mi
+    persistentVolume:
+      enabled: false
 
 resources:
   requests:

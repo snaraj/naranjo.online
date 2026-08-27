@@ -7,9 +7,12 @@
   Each source block is, top to bottom: a tile grid of headline figures (a
   final odd tile spans the full width); the usage windows with their
   utilization meters, the numeric reading always rendered beside the fill so
-  severity is never color alone; an activity section whose
-  Daily/Weekly/Cumulative toggle re-reads ONE daily series through three
-  lenses with no extra payload; and an insights list.
+  severity is never color alone; an activity section whose toggles read ONE
+  delivered payload three ways — a view lens (daily/weekly/monthly/cumulative),
+  a trailing range (30d/90d/12mo/all), and, for a source that reports one, a
+  category lens (total plus its own accounting classes) — with no extra bytes
+  and no ceiling on how much history the series may grow to hold; and an
+  insights list.
 
   Every section is optional and every absence is honest. A figure the origin
   does not report arrives as an explicit dash, and a payload that fails
@@ -47,15 +50,16 @@
   Every color and metric reads a custom property with a dark-native default,
   so themes restyle by overriding variables. -->
 <script lang="ts">
-  import type { UsageActivity, UsageTrackerProps } from '../blocks.ts';
+  import type { UsageActivity, UsageCategory, UsageTrackerProps } from '../blocks.ts';
+  import { formatMagnitude, seriesCells, seriesViews, viewColumns, type SeriesView } from '../grid';
   import {
-    calendarColumns,
-    formatMagnitude,
-    seriesCells,
-    seriesViews,
-    viewColumns,
-    type SeriesView
-  } from '../grid';
+    activityReading,
+    coverageReading,
+    defaultSeriesRange,
+    rangeColumns,
+    seriesRanges,
+    type SeriesRange
+  } from '../periods.ts';
   import ContributionGrid from './ContributionGrid.svelte';
   import PanelShell from './PanelShell.svelte';
 
@@ -87,15 +91,83 @@
     return views[key] ?? 'daily';
   }
 
-  /* activityColumns realigns a region's daily series onto true calendar
-     weeks (issue 189: calendarColumns, so the shared weekday axis is
-     truthful for every column) and only THEN re-reads the aligned columns
-     through that source's active lens (viewColumns) — the order matters,
-     because a weekly or cumulative reading has to sum real calendar weeks,
-     and only calendarColumns knows where those actually fall once the series
-     has been padded to the fixed trailing window. */
-  function activityColumns(activity: UsageActivity, view: SeriesView) {
-    return viewColumns(calendarColumns(seriesCells(activity.series.startDate, activity.series.totals)), view);
+  /* The CATEGORY lens is a second piece of per-source presentation state,
+     held here for exactly the reasons `views` is: the adapter rebuilds its
+     sections every delivery, and a lens parked anywhere else would reset
+     every sixty seconds. Per source because category vocabularies genuinely
+     differ between sources — one tool reports reasoning tokens, another does
+     not — and forcing one choice across sources would render a lens a source
+     cannot answer. A source without categories simply has no lens row and
+     always reads as total. The component knows no category by name: every
+     key, label, palette slot, and per-lens noun arrives as data built by the
+     adapter.
+
+     `totalLens` is the key meaning "no category", and it is stated HERE, once
+     in the whole tree. The adapter used to export a copy of it beside a lens
+     RESOLVER that nothing called; both were deleted rather than wired in, so
+     the sentinel now lives in the one file that decides anything with it —
+     this component, which resolves the lens and falls back to the plain
+     series. */
+  let lenses = $state<Record<string, string>>({});
+
+  const totalLens = 'total';
+
+  function lensOf(key: string): string {
+    return lenses[key] ?? totalLens;
+  }
+
+  /* activeLensCategory resolves a source's lens to the adapter-built
+     category it names, or undefined for the total reading — including an
+     unknown or stale lens, which falls back to the plain totals because
+     those are always real data, never a guess. */
+  function activeLensCategory(activity: UsageActivity, lens: string): UsageCategory | undefined {
+    if (lens === totalLens || !activity.categories) {
+      return undefined;
+    }
+    return activity.categories.find((category) => category.key === lens);
+  }
+
+  /* And one RANGE choice per source, held the same way and for the same
+     reason (issue 158). The lens says how a day is read; the range says how
+     much history is drawn — two genuinely separate questions, which is why
+     they are two controls rather than one list of six things.
+
+     The default is the range the strip has always drawn (defaultSeriesRange
+     is 12mo, which resolves to the grid's own reserve width), so a reader who
+     never touches this control sees exactly what this panel rendered before
+     it existed, and history accrues into the same box until they ask for
+     more. */
+  let ranges = $state<Record<string, SeriesRange>>({});
+
+  function rangeOf(key: string): SeriesRange {
+    return ranges[key] ?? defaultSeriesRange;
+  }
+
+  /* windowedColumns is the region's daily series laid onto true calendar
+     weeks across the chosen trailing window (issue 189's calendarColumns,
+     reached through issue 158's rangeColumns): every day the window covers
+     and the capture does not comes back as a dated absent cell — a hole with
+     a real date on it, never a zero.
+
+     The dailies are the CATEGORY lens's when one is active, which is what
+     makes the two lenses one engine rather than two: the category lens picks
+     which series is read, the range picks how much of it is drawn, and the
+     view lens picks how a drawn day is aggregated. All three re-read ONE
+     delivered payload with no extra bytes, and every reading below is taken
+     from the same cells the graph draws.
+
+     Deliberately kept SEPARATE from the view step below, because the two
+     readings under the graph have to be taken from these cells rather than
+     from the lens' output: a weekly or monthly lens repeats one aggregate
+     across every day it covers, and a total summed from that would count each
+     period once per day in it. */
+  function windowedColumns(
+    activity: UsageActivity,
+    range: SeriesRange,
+    category: UsageCategory | undefined
+  ) {
+    const totals = category ? category.totals : activity.series.totals;
+    return rangeColumns(seriesCells(activity.series.startDate, totals), range);
   }
 </script>
 
@@ -173,48 +245,169 @@
             this file's opening comment. -->
           {#if source.activity}
             {@const view = viewOf(source.key)}
-            {@const columns = activityColumns(source.activity, view)}
+            {@const range = rangeOf(source.key)}
+            {@const lensCategory = activeLensCategory(source.activity, lensOf(source.key))}
+            {@const windowed = windowedColumns(source.activity, range, lensCategory)}
+            {@const columns = viewColumns(windowed, view)}
             {#if columns.length > 0}
               <section class="usage-activity">
                 <header class="usage-activity-head">
                   <h4 class="usage-section-title">{source.activity.heading}</h4>
-                  <!-- One radio group, styled as a segmented pill: the choice
-                    is exclusive, so radios carry the right semantics for
-                    free. -->
-                  <!-- Named for its own source, so a screen reader hears
-                    which graph the group belongs to rather than three
-                    identically named groups on one panel — the audible half
-                    of the same decoupling. -->
+                  <!-- Two radio groups, each styled as a segmented pill: the
+                    choice inside each is exclusive, so radios carry the right
+                    semantics for free, and the two questions stay separate —
+                    how a day is READ (the lens) and how much history is DRAWN
+                    (the range). One combined list would make "monthly" and
+                    "90d" alternatives, which they are not. -->
+                  <!-- Each group is named for its own source AND its own
+                    question, so a screen reader hears which graph it belongs
+                    to and what it changes, rather than four identically named
+                    groups on one panel — the audible half of the same
+                    decoupling. -->
+                  <div class="usage-controls">
+                    <div
+                      class="usage-views"
+                      role="radiogroup"
+                      aria-label={`${source.label} ${source.activity.heading} view`}
+                    >
+                      {#each seriesViews as candidate}
+                        <button
+                          type="button"
+                          class="usage-view"
+                          role="radio"
+                          aria-checked={view === candidate}
+                          onclick={() => (views[source.key] = candidate)}
+                        >
+                          {candidate}
+                        </button>
+                      {/each}
+                    </div>
+                    <div
+                      class="usage-views"
+                      data-usage-ranges
+                      role="radiogroup"
+                      aria-label={`${source.label} ${source.activity.heading} range`}
+                    >
+                      {#each seriesRanges as candidate}
+                        <button
+                          type="button"
+                          class="usage-view"
+                          role="radio"
+                          aria-checked={range === candidate}
+                          onclick={() => (ranges[source.key] = candidate)}
+                        >
+                          {candidate}
+                        </button>
+                      {/each}
+                    </div>
+                  </div>
+                </header>
+                {#if source.activity.categories && source.activity.categories.length > 0}
+                  <!-- The category lens: the same grid re-read through one
+                    accounting category. A second, per-source radio group —
+                    vocabularies differ per source, so a panel-global choice
+                    would name a lens some source cannot answer. Every key,
+                    label, and slot arrives as adapter data; only the
+                    always-available total reading is the component's own. -->
                   <div
-                    class="usage-views"
+                    class="usage-views usage-category-views"
                     role="radiogroup"
-                    aria-label={`${source.label} ${source.activity.heading} view`}
+                    aria-label={`${source.label} ${source.activity.noun} category`}
                   >
-                    {#each seriesViews as candidate}
+                    <button
+                      type="button"
+                      class="usage-view"
+                      role="radio"
+                      aria-checked={lensOf(source.key) === totalLens}
+                      onclick={() => (lenses[source.key] = totalLens)}
+                    >
+                      total
+                    </button>
+                    {#each source.activity.categories as category (category.key)}
                       <button
                         type="button"
                         class="usage-view"
                         role="radio"
-                        aria-checked={view === candidate}
-                        onclick={() => (views[source.key] = candidate)}
+                        aria-checked={lensOf(source.key) === category.key}
+                        onclick={() => (lenses[source.key] = category.key)}
                       >
-                        {candidate}
+                        {category.label}
                       </button>
                     {/each}
                   </div>
-                </header>
+                {/if}
                 <ContributionGrid
                   {columns}
                   noun={source.activity.noun}
                   {view}
-                  label={`${source.activity.label}, ${view} view`}
+                  label={`${source.activity.label}, ${view} view, ${range} range${
+                    lensCategory ? `, ${lensCategory.label} only` : ''
+                  }`}
                   fullWidth
                   cardTitle="Tokens used"
                   formatValue={formatMagnitude}
                 />
+                <!-- Both readings are taken from the WINDOWED cells, never
+                  from the lens' output and never from the payload behind it,
+                  so the sentence and the graph are the same statement twice.
+                  That is also why the category lens needs no sentence of its
+                  own: those cells ALREADY carry the category's dailies when
+                  one is pressed, so the only thing the lens contributes here
+                  is its noun — adapter-built, like every other word this
+                  component renders. A category summary built in the adapter
+                  would describe the whole capture while the graph drew ninety
+                  days of it, which is the exact defect issue 158 moved this
+                  sentence out of the adapter to fix.
+                  The second line carries the denominator the first
+                  structurally cannot: "15 days" is the same phrase whether
+                  the reader asked for thirty days or a year, and the two are
+                  very different graphs. -->
                 <p class="usage-activity-total">
-                  {source.activity.summary}
+                  {activityReading(
+                    windowed,
+                    lensCategory ? lensCategory.noun : source.activity.noun,
+                    formatMagnitude
+                  )}
                 </p>
+                <p class="usage-activity-coverage">
+                  {coverageReading(windowed)}
+                </p>
+                {#if source.activity.composition && source.activity.composition.length > 0}
+                  <!-- The composition strip: how the window's total divides
+                    across categories. Identity is never color alone — every
+                    segment's category is named in its tooltip, and the rows
+                    beneath repeat hue as a chip BESIDE the written label,
+                    count, and share. The same integers feed the bar, the
+                    rows, and the grid above, so no two readings of this
+                    panel can disagree. -->
+                  <figure class="usage-composition">
+                    <div class="usage-composition-bar" aria-hidden="true">
+                      {#each source.activity.composition as share (share.key)}
+                        {#if share.weight > 0}
+                          <span
+                            class="usage-composition-segment"
+                            data-category-slot={share.slot}
+                            style:flex-grow={share.weight}
+                            title={share.tooltip}
+                          ></span>
+                        {/if}
+                      {/each}
+                    </div>
+                    <figcaption class="usage-composition-rows">
+                      {#each source.activity.composition as share (share.key)}
+                        <span class="usage-composition-row">
+                          <span
+                            class="usage-composition-chip"
+                            data-category-slot={share.slot}
+                            aria-hidden="true"
+                          ></span>
+                          <span class="usage-composition-label">{share.label}</span>
+                          <span class="usage-composition-value">{share.figure}</span>
+                        </span>
+                      {/each}
+                    </figcaption>
+                  </figure>
+                {/if}
               </section>
             {/if}
           {/if}
@@ -441,6 +634,19 @@
     gap: var(--usage-row-gap, 0.375rem);
   }
 
+  /* How wide one day may be drawn once a reader picks a short range (issue
+     158). The strip stretches to the card, which is right for a year and
+     wrong for a month — five columns divided a 914px card into 88px cells,
+     and a day nine times wider than it is tall reads as a bar chart nobody
+     asked for. Twice the cell's own height is the bound: wide enough that a
+     thirty-day window still fills a legible block rather than a stamp in the
+     corner, narrow enough that a cell stays a cell. The token is read by
+     ContributionGrid's full-width rule, whose own default never binds, so
+     this is the token panel's decision and no other grid's. */
+  .usage-activity {
+    --grid-day-max: 1.25rem;
+  }
+
   .usage-activity-head {
     display: flex;
     align-items: center;
@@ -456,6 +662,18 @@
     color: var(--panel-text, rgb(230, 230, 230));
   }
 
+  /* The two segmented pills share one wrapping row (issue 158). They wrap as
+     a pair rather than as eight loose buttons, so a narrow card breaks
+     BETWEEN the lens and the range instead of splitting either group across
+     two lines — a segmented control with three segments on one row and one on
+     the next stops reading as one control. */
+  .usage-controls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--usage-row-gap, 0.375rem);
+  }
+
   .usage-views {
     display: inline-flex;
     padding: 2px;
@@ -464,10 +682,20 @@
     border: 1px solid var(--panel-border, rgb(23, 23, 23));
   }
 
-  /* Segments are 44px tall so the pill clears the repository's touch-target
-     floor; the visual pill stays compact through the transparent padding. */
+  /* Segments are 44px on BOTH axes so the pill clears the repository's
+     touch-target floor; the visual pill stays compact through the
+     transparent padding.
+
+     The inline floor is not belt-and-braces, and it is not what shipped:
+     the lens words ("daily", "cumulative") carried their own width, so a
+     block-size floor alone read as sufficient until the range pills arrived
+     beside them. MEASURED in all five rendering lanes: "30d" drew 40.78px
+     wide — three characters plus 0.625rem of padding either side — which is
+     the touch floor failing on the axis nobody had a short enough label to
+     test. A floor that depends on the length of a word is not a floor. */
   .usage-view {
     min-block-size: 2.75rem;
+    min-inline-size: 2.75rem;
     padding-inline: 0.625rem;
     border: 0;
     border-radius: 999px;
@@ -493,6 +721,111 @@
     margin: 0;
     font-size: var(--panel-badge-size, 0.6875rem);
     color: var(--panel-muted, rgb(158, 158, 158));
+  }
+
+  /* The category lens row reuses the segmented-pill pattern above and may
+     carry more segments than fit one line on a narrow viewport, so it wraps
+     instead of forcing horizontal body scroll. */
+  .usage-category-views {
+    align-self: flex-start;
+    flex-wrap: wrap;
+  }
+
+  /* The composition strip. Category hues resolve from the global tokens
+     (--usage-cat-1..5, one fixed slot per category key; slot 0 is the
+     neutral for keys outside the canonical vocabulary), with dark-native
+     fallbacks like every other color in this file. Values are never encoded
+     by color alone: each segment is named in its tooltip and each row pairs
+     the chip with the written label, count, and share. */
+  .usage-composition {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--usage-row-gap, 0.375rem);
+  }
+
+  .usage-composition-bar {
+    display: flex;
+    gap: 2px;
+    block-size: var(--usage-composition-thickness, 0.5rem);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+
+  .usage-composition-segment {
+    flex-basis: 0;
+    min-inline-size: 2px;
+    border-radius: 2px;
+  }
+
+  .usage-composition-chip {
+    inline-size: 0.625rem;
+    block-size: 0.625rem;
+    border-radius: 2px;
+    flex: none;
+  }
+
+  .usage-composition-segment[data-category-slot='0'],
+  .usage-composition-chip[data-category-slot='0'] {
+    background: var(--usage-cat-0, rgb(110, 110, 110));
+  }
+
+  .usage-composition-segment[data-category-slot='1'],
+  .usage-composition-chip[data-category-slot='1'] {
+    background: var(--usage-cat-1, rgb(63, 129, 217));
+  }
+
+  .usage-composition-segment[data-category-slot='2'],
+  .usage-composition-chip[data-category-slot='2'] {
+    background: var(--usage-cat-2, rgb(184, 126, 31));
+  }
+
+  .usage-composition-segment[data-category-slot='3'],
+  .usage-composition-chip[data-category-slot='3'] {
+    background: var(--usage-cat-3, rgb(31, 158, 125));
+  }
+
+  .usage-composition-segment[data-category-slot='4'],
+  .usage-composition-chip[data-category-slot='4'] {
+    background: var(--usage-cat-4, rgb(138, 104, 216));
+  }
+
+  .usage-composition-segment[data-category-slot='5'],
+  .usage-composition-chip[data-category-slot='5'] {
+    background: var(--usage-cat-5, rgb(207, 85, 133));
+  }
+
+  .usage-composition-rows {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    font-size: var(--panel-badge-size, 0.6875rem);
+    color: var(--panel-muted, rgb(158, 158, 158));
+  }
+
+  .usage-composition-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+
+  /* Figures wear the text token, never the series color (dataviz floor). */
+  .usage-composition-value {
+    font-variant-numeric: tabular-nums;
+    color: var(--panel-text, rgb(230, 230, 230));
+  }
+
+  /* The coverage line sits one step quieter than the summary above it: it
+     answers a question the reader has only after reading that sentence, and
+     giving the two identical ink would make the pair read as one paragraph
+     of equal claims. Same tabular figures as every other count on this card,
+     so the ratio's digits do not dance as the window changes. */
+  .usage-activity-coverage {
+    margin: 0;
+    font-size: var(--panel-badge-size, 0.6875rem);
+    font-variant-numeric: tabular-nums;
+    color: var(--usage-coverage-ink, var(--panel-muted, rgb(158, 158, 158)));
+    opacity: var(--usage-coverage-strength, 0.8);
   }
 
   .usage-insight-rows {

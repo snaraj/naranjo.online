@@ -70,6 +70,19 @@ export interface TokenUsageStat {
 export interface TokenUsageSeries {
   startDate: string;
   totals: number[];
+  /* Optional per-day breakdown of the same series by accounting category
+   * (input, output, cache reads, ...). The origin guarantees the categories
+   * PARTITION the totals — per day they sum exactly to the total — and
+   * serves them in one canonical order; the panel admission re-checks the
+   * structure and the machine-shaped keys. */
+  categories?: TokenUsageCategory[];
+}
+
+export interface TokenUsageCategory {
+  /* Stable machine-shaped identifier (lowercase letters, digits, hyphens). */
+  key: string;
+  /* Per-day counts, indexed exactly like the owning series' totals. */
+  totals: number[];
 }
 
 export interface TokenUsageInsight {
@@ -85,10 +98,6 @@ export interface TokenUsageSource {
   stats?: TokenUsageStat[];
   series?: TokenUsageSeries;
   insights?: TokenUsageInsight[];
-}
-
-export interface TokenUsageData {
-  sources: TokenUsageSource[];
 }
 
 /* vcs-activity/v1 — contribution weeks, totals, streak, recent commits. */

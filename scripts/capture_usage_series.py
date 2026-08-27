@@ -93,17 +93,31 @@ doctrine forbids. Keeping the derived three in step with the shipped series is
 the other half of the same rule — a tile that contradicts the graph printed
 under it is the panel disagreeing with itself.
 
-WHAT IT CANNOT DO, structurally. This module's import surface is a CLOSED
-allowlist pinned by its test suite: a file reader, a date library, a JSON
-codec, an argument parser, a pattern matcher, and the interpreter's own
-streams. Nothing here can spawn a process, open a socket, or resolve a name,
-and `os` is deliberately NOT among the imports even though `os.walk` would be
-the obvious way to write the walk — `os` carries `system`, `popen`, `fork`,
-`spawn*` and `exec*`, so admitting it would leave the pin unable to keep its
-own promise. Reading these journals launches nothing: they are inert files,
-and this program never executes the tools that wrote them. A future edit that
-adds an execution or network capability has to defeat an explicit test before
-it can reach a commit.
+WHAT IT CANNOT DO, and what enforces that. When this module runs as the
+scheduled runtime producer it runs inside a kernel sandbox
+(`scripts/usage-export/producer.sb`, applied by the push script) that denies
+`process-fork` and `network*`: no process can be created and no socket can be
+opened for the whole walk, whatever this file's source says. That is the
+capability boundary.
+
+This module's import surface is separately held to a CLOSED allowlist by its
+test suite — a file reader, a date library, a JSON codec, an argument parser,
+a pattern matcher, the interpreter's own streams, an errno table, and `os`.
+That last one was refused until the 2026-08-25 round-4 review, and this
+paragraph said so for a while after it stopped being true; it is admitted now
+because the transcript walk is DESCRIPTOR-ROOTED (round-5 finding 1) and
+Python exposes `dir_fd`, `O_NOFOLLOW` and `O_DIRECTORY` nowhere else. Refusing
+the import would have meant keeping a real filesystem escape in order to
+preserve a smaller surface that — since round 3 — carries no capability claim
+anyway. The narrower pin that replaced it is an enumerated `os.` ATTRIBUTE
+allowlist in the same suite. That pin bounds the REVIEWED SURFACE and makes a
+widening a conscious, named edit.
+It is not a proof of capability absence, and the 2026-08-24 round-3 review is
+why this paragraph now says so: `pathlib` is admitted and re-exports `os`, so
+`pathlib.os.system(...)` reaches a launch callable with the import set
+unchanged. Reading these journals launches nothing — they are inert files and
+this program never executes the tools that wrote them — and the sandbox is
+what makes that a guarantee rather than a description.
 
 Dependency-free: Python 3 standard library only, no network, no writes outside
 the snapshot path it is given.
@@ -120,13 +134,17 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import errno
 import json
+import os
 import pathlib
 import re
 import sys
 
 # The calendar-date form the series indexes by, mirroring dayLayout in
-# internal/panels/types.go.
+# internal/panels/types.go. The regex is the SHAPE only; valid_calendar_day
+# below is the truth — a string can match this pattern and still name a day
+# no calendar has (2026-99-99), so shape alone must never admit anything.
 DAY_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # The shape a field NAME in the emission may take. Keys are this file's own
@@ -134,7 +152,45 @@ DAY_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # tripwire and not a proof: what it catches cheaply is the realistic accident,
 # a path, a file name, or a session identifier used as a key — each of which
 # carries a separator, a dot, or more characters than a field name needs.
+# Shape is necessary but NOT sufficient: EMISSION_KEYS below is the closed
+# membership check, because `private-feature` is perfectly label-shaped and
+# must still never leave this machine (2026-08-24 review finding H1).
 KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9-]{0,31}$")
+
+# The CLOSED category vocabulary — the accounting classes a day's total may
+# be partitioned into, and nothing else. It mirrors, and must stay equal to,
+# categoryServeOrder in internal/panels/types.go and the frontend's fixed
+# palette slots: the first four are the transcript usage fields this tool
+# derives itself, the fifth is the reasoning class the second tool's capture
+# reports. These are accounting terms, not vendor names, so spelling them
+# here keeps the vendor-neutrality pin intact.
+CATEGORY_KEYS = ("input", "output", "cache-read", "cache-write", "reasoning")
+
+# Every field name the emission may legitimately contain, CLOSED. The guard
+# refuses any dictionary key outside this set (plus the caller's explicitly
+# declared extra keys — the operator-typed source labels, which the origin
+# separately admits only against its embedded snapshot). Membership, not
+# shape: a label-shaped private identifier used as a key must refuse.
+EMISSION_KEYS = frozenset(
+    {
+        # Section names of one exported source.
+        "series",
+        "categories",
+        "windows",
+        "derived",
+        # The series shape.
+        "startDate",
+        "totals",
+        "recorded",
+        # The window vocabulary and its two figures.
+        "today",
+        "week",
+        # The derived-tile vocabulary (also declared below as STAT_*).
+        "peak-day",
+        "current-streak",
+        "longest-streak",
+    }
+).union(CATEGORY_KEYS)
 
 # The usage fields that make up one message's contribution to its day. The
 # names are the transcript's; the SUM is what internal/panels/mapping.go
@@ -172,6 +228,38 @@ RECORD_SUFFIX = ".jsonl"
 # origin will not serve is worse than no snapshot at all.
 MAX_SERIES_DAYS = 732
 
+# THE upper bound on every count this pipeline emits, and it is ONE number
+# three languages agree on (2026-08-24 round-3 review, finding 9). It mirrors
+# maxCountValue in internal/panels/types.go and Number.isSafeInteger in
+# frontend/src/lib/token-usage.ts (countBound). All three are pinned BY VALUE
+# — each language's own spelling evaluated, not matched as text — by
+# "the count bound is the same number in Go, Python and TypeScript" in
+# frontend/tests/panels-ui.test.mjs.
+#
+# Python integers are arbitrary precision, so nothing here overflows — which
+# is precisely the problem the bound solves. An unbounded figure emitted here
+# is a figure the Go boundary has to reason about in int64 (where three
+# authenticated, non-negative category values summed to zero by wrapping) and
+# the browser has to render in a float64 (where it silently rounds). Refusing
+# it at the producer means the three stages cannot disagree about what a
+# count is.
+MAX_COUNT = 2**53 - 1
+
+# RESOURCE BOUNDS ON THE RAW WALK (2026-08-24 round-3 review, finding 10).
+# Everything below is checked BEFORE the work it bounds, because the failure
+# this prevents is the scheduled producer exhausting the workstation on a tree
+# it was pointed at — a single unterminated line, a pathological directory
+# depth, or an unbounded de-duplication set will kill the run long before the
+# privacy guard at the far end ever gets to look at the emission. The numbers
+# are generous against a real transcript tree and finite against a hostile
+# one; every refusal names the BOUND and never the path that hit it.
+MAX_RECORD_FILES = 20_000
+MAX_TREE_DEPTH = 16
+MAX_RECORD_LINE_BYTES = 4 << 20
+MAX_RECORD_LINES = 5_000_000
+MAX_RECORD_BYTES = 2 << 30
+MAX_DEDUP_IDENTITIES = 2_000_000
+
 # The stat keys a daily series defines on its own — the same four
 # internal/panels/types.go lists, minus the window total, which is a property
 # of a fetch window rather than of a recorded series.
@@ -198,30 +286,316 @@ def new_counters():
         "counted": 0,
         "duplicates": 0,
         "restarts": 0,
+        # Bytes actually read, against MAX_RECORD_BYTES, and entries skipped
+        # for being symbolic links. Both are diagnostics AND bounds: the walk
+        # refuses past the byte ceiling, and a skipped link is something an
+        # operator should be able to see happened without being told where
+        # (2026-08-24 round-3 review, finding 10).
+        "bytes": 0,
+        "symlinks": 0,
     }
 
 
-def record_paths(root):
-    """Every journal file under root, in one deterministic order.
+# The POSIX file-type bits, spelled here rather than imported from `stat`,
+# because a handful of constants are not worth another module on a surface
+# this narrow. The walk tests st_mode itself rather than asking pathlib,
+# because `Path.is_dir()` and `Path.is_file()` answer about the TARGET of a
+# link and this walk must answer about the entry.
+FILE_TYPE_MASK = 0o170000
+REGULAR_FILE = 0o100000
+DIRECTORY = 0o040000
+SYMBOLIC_LINK = 0o120000
+
+
+def _identity(info):
+    """The (device, inode) pair that names one file to the kernel.
+
+    Compared only between stat results obtained through the SAME rooted
+    capability chain (2026-08-25 round-5 review, finding 1): an identity taken
+    through an attacker-controlled path names whatever the attacker pointed
+    at, so it matches itself and proves nothing.
+
+    STATED LIMIT, so nothing downstream reads more into a match than is
+    there. This refuses a SUBSTITUTED file — a symlink, a hard link to an
+    outside file, a directory or fifo put in the leaf's place, or a different
+    regular file. It does not, and cannot, refuse rewritten CONTENT: the same
+    inode with different bytes is by construction the same file. Nor is an
+    inode NUMBER unique across time — a filesystem that recycles numbers may
+    give a file created after an unlink the number the unlinked file just
+    released, and this comparison would then admit it. Neither gap widens the
+    producer's exposure, because both require write access to the transcript
+    tree, and an attacker holding that never needed a swap in the first
+    place; what bounds the damage is the emission guard, which lets only
+    dates and integers leave.
+    """
+    return (info.st_dev, info.st_ino)
+
+
+def _descend(parent, name, counters):
+    """Open one child directory THROUGH parent, never by path. None on refusal.
+
+    `dir_fd` is what makes this a capability rather than a lookup: the kernel
+    resolves `name` relative to the open descriptor, and `name` is a single
+    component from `os.listdir`, which POSIX guarantees contains no separator
+    and is never `.` or `..`. With `O_NOFOLLOW` there is therefore nothing
+    left for a symbolic link to redirect — the whole remaining lookup is one
+    component that must not be a link.
+
+    ELOOP and ENOTDIR are the two errno values a swap produces, so they are
+    tallied as symlinks; anything else is an ordinary unreadable directory.
+    """
+    try:
+        return os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY | os.O_CLOEXEC,
+            dir_fd=parent,
+        )
+    except OSError as failure:
+        if failure.errno in (errno.ELOOP, errno.ENOTDIR):
+            counters["symlinks"] += 1
+        else:
+            counters["unreadable"] += 1
+        return None
+
+
+def admitted_records(root, counters=None):
+    """Every journal file under root, in one deterministic order, each paired
+    with the IDENTITY it had when it was admitted and the ROOTED path by which
+    it may be re-opened.
+
+    DESCRIPTOR-ROOTED TRAVERSAL (2026-08-25 round-5 review, finding 1). The
+    previous walk was path-based: it proved containment with `resolve()`, took
+    an identity with a LATER path-based `lstat`, and opened with a path-based
+    `os.open`. Every one of those three re-resolves the name from the
+    filesystem root, and `O_NOFOLLOW` protects only the FINAL component — so
+    an INTERMEDIATE directory could be replaced with a symbolic link after
+    containment and before the lstat. The reviewer did exactly that: renamed
+    the parent, put a link to an outside tree in its place, and the walk
+    recorded the OUTSIDE file's identity, opened through the link, matched
+    that tainted identity against itself, and read private content. Carrying
+    an identity forward proves nothing when the identity itself was taken
+    through the attacker's path.
+
+    So no path is ever re-resolved below the root. The root is opened once and
+    every component beneath it is reached with `dir_fd` from the component
+    before it, `O_NOFOLLOW` on each, so a link anywhere along the chain is
+    refused at the kernel rather than followed. Containment stops being a
+    check and becomes a property: a descent that only ever opens single
+    non-symlink components of an already-opened directory cannot leave the
+    tree, which is why the old `resolve().is_relative_to()` test is gone
+    rather than kept as reassurance — it was the weaker statement of a thing
+    now guaranteed by construction.
+
+    The root itself is opened by path, and that is the honest boundary: it is
+    the configured trust anchor, not attacker-controlled tree content. Its
+    identity is recorded and re-checked when a record is opened, so even a
+    root swapped between the walk and the read is refused.
 
     Sorted because two runs over the same tree must produce the same series,
     and because the running-totals shape reads each file as a SEQUENCE — an
-    order that varied by filesystem would make the walk's arithmetic vary
-    with it.
+    order that varied by filesystem would make the walk's arithmetic vary with
+    it. The key is the joined relative path, which reproduces the ordering the
+    previous `pathlib.Path` sort produced.
+
+    NO-FOLLOW AND BOUNDED (2026-08-24 round-3 review, finding 10), unchanged:
+
+      * a symbolic link is SKIPPED, leaf or directory alike, and tallied;
+      * depth and file count are bounded before descending or admitting;
+      * an unreadable directory is tallied and skipped, never named.
     """
-    return sorted(
-        path
-        for path in pathlib.Path(root).rglob("*" + RECORD_SUFFIX)
-        if path.is_file()
-    )
-
-
-def open_record_file(path, counters):
-    """Open one journal file, or tally it as unreadable and return None."""
+    counters = new_counters() if counters is None else counters
     try:
-        return path.open("r", encoding="utf-8", errors="replace")
+        anchor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     except OSError:
-        # Counted, never named: see the module docstring.
+        raise CaptureError("the transcript root cannot be opened")
+    admitted = []
+    try:
+        root_identity = _identity(os.fstat(anchor))
+        # Annotated because the seed's empty tuple would otherwise narrow the
+        # element type to the EMPTY tuple, and every descent below pushes a
+        # populated path onto it. The stack holds (open directory descriptor,
+        # path components below the root, depth).
+        pending: list[tuple[int, tuple[str, ...], int]] = [(anchor, (), 0)]
+        try:
+            while pending:
+                directory, components, depth = pending.pop()
+                try:
+                    if depth > MAX_TREE_DEPTH:
+                        raise CaptureError(
+                            "the transcript tree is deeper than the %d level bound"
+                            % MAX_TREE_DEPTH
+                        )
+                    try:
+                        names = os.listdir(directory)
+                    except OSError:
+                        # Counted, never named: see the module docstring.
+                        counters["unreadable"] += 1
+                        continue
+                    for name in names:
+                        try:
+                            info = os.lstat(name, dir_fd=directory)
+                        except OSError:
+                            counters["unreadable"] += 1
+                            continue
+                        kind = info.st_mode & FILE_TYPE_MASK
+                        if kind == SYMBOLIC_LINK:
+                            counters["symlinks"] += 1
+                            continue
+                        if kind == DIRECTORY:
+                            child = _descend(directory, name, counters)
+                            if child is not None:
+                                pending.append((child, components + (name,), depth + 1))
+                            continue
+                        if kind != REGULAR_FILE:
+                            continue
+                        if name[-len(RECORD_SUFFIX):] != RECORD_SUFFIX:
+                            continue
+                        admitted.append(
+                            (root, root_identity, components + (name,), _identity(info))
+                        )
+                        if len(admitted) > MAX_RECORD_FILES:
+                            raise CaptureError(
+                                "the transcript tree holds more than the %d file bound"
+                                % MAX_RECORD_FILES
+                            )
+                finally:
+                    if directory != anchor:
+                        os.close(directory)
+        finally:
+            for directory, _, _ in pending:
+                if directory != anchor:
+                    os.close(directory)
+    finally:
+        os.close(anchor)
+    return sorted(admitted, key=lambda record: "/".join(record[2]))
+
+
+def bounded_lines(handle, counters):
+    """Yield one journal file's lines under the line, count, and byte bounds.
+
+    `readline` is given an explicit limit so an unterminated multi-gigabyte
+    line is refused BEFORE it is read into memory — iterating the handle
+    would have read it first and refused afterwards, which is the failure
+    mode, not the fix (2026-08-24 round-3 review, finding 10).
+    """
+    while True:
+        line = handle.readline(MAX_RECORD_LINE_BYTES + 1)
+        if not line:
+            return
+        if len(line) > MAX_RECORD_LINE_BYTES:
+            raise CaptureError(
+                "a transcript line is longer than the %d byte bound" % MAX_RECORD_LINE_BYTES
+            )
+        counters["lines"] += 1
+        if counters["lines"] > MAX_RECORD_LINES:
+            raise CaptureError(
+                "the transcript tree holds more than the %d line bound" % MAX_RECORD_LINES
+            )
+        counters["bytes"] += len(line)
+        if counters["bytes"] > MAX_RECORD_BYTES:
+            raise CaptureError(
+                "the transcript tree is larger than the %d byte bound" % MAX_RECORD_BYTES
+            )
+        yield line
+
+
+def remember_identity(identity, seen):
+    """Add one de-duplication identity under the set's own size bound."""
+    if len(seen) >= MAX_DEDUP_IDENTITIES:
+        raise CaptureError(
+            "the walk holds more than the %d record identity bound" % MAX_DEDUP_IDENTITIES
+        )
+    seen.add(identity)
+
+
+def open_record_file(record, counters):
+    """Open one admitted journal file, or tally the refusal and return None.
+
+    DESCRIPTOR-ROOTED, NO-FOLLOW AT EVERY COMPONENT (2026-08-25 round-5
+    review, finding 1). Round 4 put `O_NOFOLLOW` on this open and called the
+    read no-follow. It was not: `O_NOFOLLOW` constrains the FINAL component
+    only, and the path handed to it was rebased from the filesystem root, so
+    every directory above the leaf was re-resolved here and a link swapped in
+    at any of them was followed. The reviewer proved it by replacing the
+    leaf's PARENT.
+
+    This re-walks the same chain the admitting walk walked, the same way:
+    the root by path, then every component beneath it through `dir_fd` from
+    the component before it, `O_NOFOLLOW` on each, single components only. No
+    absolute or rebased path is ever handed to the kernel below the root.
+
+    Four things must hold, and each answers a different substitution:
+
+      * the ROOT still has the identity the walk anchored on, so a root
+        swapped between the walk and this read is refused rather than
+        silently becoming the new anchor;
+      * every intermediate component opens as a real directory that is not a
+        link — the escape the round-5 review found;
+      * `fstat` on the resulting DESCRIPTOR — not on a path — confirms a
+        regular file, so a fifo or device swapped in is refused rather than
+        read. `O_NONBLOCK` rides along for that case specifically and is not
+        decoration: opening a fifo read-only BLOCKS until a writer appears,
+        so without it a swapped-in fifo would hang this hourly unattended job
+        forever instead of being refused. It has no effect on the regular
+        files this tool actually reads, and the descriptor is closed before
+        any read whenever fstat says the leaf is not one;
+      * the (device, inode) identity — now obtained through the rooted chain
+        on BOTH sides — is compared against what the walk admitted, which
+        catches an ordinary regular file swapped for a DIFFERENT ordinary
+        regular file, including through a hard link.
+
+    Failures are tallied and never named, exactly as before.
+    """
+    root, root_identity, components, identity = record
+    try:
+        parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    except OSError:
+        counters["unreadable"] += 1
+        return None
+    leaf = None
+    try:
+        if _identity(os.fstat(parent)) != root_identity:
+            counters["symlinks"] += 1
+            return None
+        for name in components[:-1]:
+            child = _descend(parent, name, counters)
+            if child is None:
+                return None
+            os.close(parent)
+            parent = child
+        try:
+            leaf = os.open(
+                components[-1],
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                dir_fd=parent,
+            )
+        except OSError as failure:
+            # An O_NOFOLLOW refusal and an ordinary unreadable file are told
+            # apart by errno only. Neither is ever named: this tool's contract
+            # is that a file it cannot read is a number.
+            if failure.errno in (errno.ELOOP, errno.ENOTDIR):
+                counters["symlinks"] += 1
+            else:
+                counters["unreadable"] += 1
+            return None
+    except OSError:
+        counters["unreadable"] += 1
+        return None
+    finally:
+        os.close(parent)
+    try:
+        info = os.fstat(leaf)
+        if (info.st_mode & FILE_TYPE_MASK) != REGULAR_FILE:
+            os.close(leaf)
+            counters["symlinks"] += 1
+            return None
+        if _identity(info) != identity:
+            os.close(leaf)
+            counters["symlinks"] += 1
+            return None
+        return os.fdopen(leaf, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        os.close(leaf)
         counters["unreadable"] += 1
         return None
 
@@ -235,14 +609,13 @@ def read_records(root, counters):
     `counters`, never named.
     """
     seen = set()
-    for path in record_paths(root):
+    for record in admitted_records(root, counters):
         counters["files"] += 1
-        handle = open_record_file(path, counters)
+        handle = open_record_file(record, counters)
         if handle is None:
             continue
         with handle:
-            for line in handle:
-                counters["lines"] += 1
+            for line in bounded_lines(handle, counters):
                 reduced = reduce_line(line, seen, counters)
                 if reduced is not None:
                     counters["counted"] += 1
@@ -264,15 +637,14 @@ def read_running_totals(root, counters):
     diagnostics say how much of the walk was replay and how much was a
     restart, without naming a single file.
     """
-    for path in record_paths(root):
+    for record in admitted_records(root, counters):
         counters["files"] += 1
-        handle = open_record_file(path, counters)
+        handle = open_record_file(record, counters)
         if handle is None:
             continue
         previous = 0
         with handle:
-            for line in handle:
-                counters["lines"] += 1
+            for line in bounded_lines(handle, counters):
                 reduced = reduce_running_line(line)
                 if reduced is None:
                     continue
@@ -326,7 +698,7 @@ def reduce_line(line, seen, counters):
         if identity in seen:
             counters["duplicates"] += 1
             return None
-        seen.add(identity)
+        remember_identity(identity, seen)
     day = utc_day(stamp)
     if day is None:
         return None
@@ -473,32 +845,78 @@ def derived_figures(series):
     }
 
 
-def assert_only_dates_and_integers(value, where="emission"):
+def valid_calendar_day(value):
+    """True only for a real YYYY-MM-DD calendar date with no extra bytes.
+
+    Two checks, both load-bearing. `fullmatch` pins the exact shape including
+    the string's END — `re.match` with `$` quietly tolerates one trailing
+    newline, which is how `"2026-08-10\\n"` once passed review. Then the real
+    calendar parse refuses impossible dates like 2026-99-99 that satisfy the
+    digit shape but name no day (2026-08-24 review finding H1).
+    """
+    if not isinstance(value, str) or not DAY_PATTERN.fullmatch(value):
+        return False
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def assert_only_dates_and_integers(value, where="emission", extra_keys=frozenset()):
     """Refuse anything that is not a calendar date, an integer, or a container.
 
     The last line of defence for requirement 12, deliberately placed between
-    computation and output so it covers printing AND splicing. Booleans are
-    admitted only where the shape declares one — the series' `recorded` flag —
-    and everything else must be a date string, an int, or a list/dict of them.
-    Any other type is a refusal naming only the FIELD, never the value.
+    computation and output so it covers printing AND splicing. The checks are
+    MEMBERSHIP checks, not shape checks (2026-08-24 review finding H1: a
+    shape-only guard admitted label-shaped private identifiers, impossible
+    calendar dates, newline-suffixed dates, and negative integers):
+
+    * a dictionary key must be field-name shaped AND a member of the closed
+      EMISSION_KEYS vocabulary — or of `extra_keys`, the caller's explicitly
+      declared additions (the operator-typed source labels, which the origin
+      additionally admits only against its embedded snapshot);
+    * a string must be a REAL calendar date (exact shape, real calendar, not
+      one byte more);
+    * an integer must be non-negative AND within MAX_COUNT — every emitted
+      figure is a count, and one the Go boundary and the browser can both
+      represent exactly (2026-08-24 round-3 review, finding 9);
+    * a boolean is admitted only under the one field that declares one, the
+      series' `recorded` flag.
+
+    Any refusal names only the FIELD, never the value.
     """
+    _assert_emission(value, where, frozenset(extra_keys), False)
+
+
+def _assert_emission(value, where, extra_keys, allow_bool):
     if isinstance(value, bool):
-        return
+        if allow_bool:
+            return
+        raise CaptureError("%s carries a boolean outside the recorded flag" % where)
     if isinstance(value, int):
+        if value < 0:
+            raise CaptureError("%s carries a negative integer" % where)
+        if value > MAX_COUNT:
+            raise CaptureError("%s carries an integer above the shared count bound" % where)
         return
     if isinstance(value, str):
-        if DAY_PATTERN.match(value):
+        if valid_calendar_day(value):
             return
         raise CaptureError("%s carries a string that is not a calendar date" % where)
     if isinstance(value, list):
         for index, item in enumerate(value):
-            assert_only_dates_and_integers(item, "%s[%d]" % (where, index))
+            _assert_emission(item, "%s[%d]" % (where, index), extra_keys, False)
         return
     if isinstance(value, dict):
         for key, item in value.items():
-            if not isinstance(key, str) or not KEY_PATTERN.match(key):
+            if not isinstance(key, str) or not KEY_PATTERN.fullmatch(key):
                 raise CaptureError("%s carries a key that is not a field name" % where)
-            assert_only_dates_and_integers(item, "%s.%s" % (where, key))
+            if key not in EMISSION_KEYS and key not in extra_keys:
+                raise CaptureError(
+                    "%s carries a key outside the closed emission vocabulary" % where
+                )
+            _assert_emission(item, "%s.%s" % (where, key), extra_keys, key == "recorded")
         return
     raise CaptureError("%s carries a value that is neither a date nor an integer" % where)
 
@@ -613,10 +1031,12 @@ def main(argv=None):
         print(str(error), file=sys.stderr)
         return 1
     print(
-        "files=%d unreadable=%d lines=%d counted=%d duplicates=%d restarts=%d days=%d"
+        "files=%d unreadable=%d symlinks=%d lines=%d counted=%d duplicates=%d "
+        "restarts=%d days=%d"
         % (
             counters.get("files", 0),
             counters.get("unreadable", 0),
+            counters.get("symlinks", 0),
             counters.get("lines", 0),
             counters.get("counted", 0),
             counters.get("duplicates", 0),
@@ -625,17 +1045,28 @@ def main(argv=None):
         ),
         file=sys.stderr,
     )
-    if arguments.snapshot is None:
-        json.dump({"series": series, "derived": derived}, sys.stdout, indent=2)
-        sys.stdout.write("\n")
-        return 0
-    with open(arguments.snapshot, "r", encoding="utf-8") as handle:
-        document = json.load(handle)
     generated_at = (
         datetime.datetime.now(datetime.timezone.utc)
         .replace(microsecond=0)
         .strftime("%Y-%m-%dT%H:%M:%SZ")
     )
+    if arguments.snapshot is None:
+        # generatedAt is attached AFTER the guard, exactly as the snapshot
+        # path attaches it below: the guard admits calendar dates and
+        # integers, and this is an INSTANT. It is required rather than
+        # decorative — export_usage_series.py reads this document as a merge
+        # source and refuses one that cannot say when it was captured, because
+        # a second tool's series can be arbitrarily older than the export
+        # carrying it (2026-08-24 round-3 review, finding 5).
+        json.dump(
+            {"generatedAt": generated_at, "series": series, "derived": derived},
+            sys.stdout,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+        return 0
+    with open(arguments.snapshot, "r", encoding="utf-8") as handle:
+        document = json.load(handle)
     try:
         spliced = splice(document, arguments.source, series, derived, generated_at)
     except CaptureError as error:
