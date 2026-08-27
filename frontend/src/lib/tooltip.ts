@@ -248,26 +248,6 @@ interface OpenTip {
  * stale one survives a tap somewhere else. */
 let opened: OpenTip | null = null;
 
-/* Close whatever detail is open, from outside any binding. The registry above
- * already exists to make "at most one" true; this is the same fact read from
- * the other side, for a caller that is about to invalidate the assumption
- * every open tip rests on.
- *
- * There is exactly one such caller and it is the page pull (issue 219 review
- * round 2). A tip is `position: fixed` precisely so no ancestor's overflow can
- * clip it — but a `transform` on <main> makes that element the containing
- * block for every fixed DESCENDANT, and this page has 101 of them, all
- * DetailTips (MEASURED at 390x844). The at-rest guard in styles.css keeps the
- * property off the element while nothing is moving; DURING a pull it is
- * genuinely applied, and a readout open across that moment is re-parented mid
- * gesture. Closing it is honest and costs nothing: the reader has both hands
- * on a gesture about the whole page.
- *
- * Idempotent and free when nothing is open, so a caller may say it on every
- * frame of a drag without thinking about it. */
-export function closeOpenDetail(): void {
-  opened?.close();
-}
 
 /* hoverDetail is the whole behaviour, applied to the tip element itself: it
  * binds the CELL around it as the hover target and positions the tip inside
