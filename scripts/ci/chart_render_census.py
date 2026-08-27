@@ -272,6 +272,34 @@ import argparse
 import re
 import sys
 from pathlib import Path
+from typing import Callable, NoReturn, Protocol
+
+# A mutation rewrites one render into one hostile render. Named rather than
+# spelled `object`, because `object` erases the call and a table of them stops
+# being callable to a reader OR a checker.
+Rewriter = Callable[[str], str]
+
+
+class PolicyFacts(Protocol):
+    """The variable facts a MUTATION needs, and nothing more.
+
+    `mutations` never reads a chart: it only splices names into hostile
+    renders, so it needs these seven values and not `expected_policy()`. Two
+    classes supply them -- `ChartFacts`, which reads them out of Chart.yaml and
+    values.yaml, and `_StaticFacts`, the deliberate duck-typed stand-in that
+    lets `mutations` be LISTED without a chart on disk. Stating the shared
+    surface as a protocol is what makes that second one legitimate rather than
+    merely undetected: the stand-in is now checked against the same seven
+    attributes instead of passing because nothing looked.
+    """
+
+    chart_name: str
+    release: str
+    namespace: str
+    peer_namespace: str
+    peer_app_name: str
+    peer_instance: str
+    service_port: int
 
 # --- The pinned expectation -------------------------------------------------
 #
@@ -553,7 +581,7 @@ class Reader:
 
     # -- diagnostics --------------------------------------------------------
 
-    def fail(self, message: str, lineno: int | None = None) -> None:
+    def fail(self, message: str, lineno: int | None = None) -> NoReturn:
         if lineno is None:
             lineno = min(self.i + 1, len(self.lines))
         raise CensusError("%s line %d: %s" % (self.origin, lineno, message))
@@ -2364,7 +2392,7 @@ def _end_a_document_with_a_marker(text: str) -> str:
     return "\n".join(lines)
 
 
-def mutations(facts: ChartFacts) -> list[tuple[str, object]]:
+def mutations(facts: PolicyFacts) -> list[tuple[str, Rewriter]]:
     """Every hostile render this census must refuse, as (name, rewriter)."""
     name = facts.chart_name
     selector_anchor = [
@@ -2487,7 +2515,7 @@ def mutations(facts: ChartFacts) -> list[tuple[str, object]]:
     ]
 
 
-def mutate(text: str, facts: ChartFacts, wanted: str) -> str:
+def mutate(text: str, facts: PolicyFacts, wanted: str) -> str:
     table = dict(mutations(facts))
     if wanted not in table:
         raise CensusError("unknown mutation %s" % wanted)
@@ -2552,7 +2580,14 @@ def main(argv: list[str]) -> int:
 
 
 class _StaticFacts:
-    """Names only. `mutations` is listed without reading the chart at all."""
+    """Names only. `mutations` is listed without reading the chart at all.
+
+    Duck-typed on purpose, and now checked for it: it satisfies `PolicyFacts`
+    structurally, which is what lets `main` list mutation names with no chart
+    on disk while a type checker still verifies the seven attributes agree
+    with `ChartFacts`. It deliberately has no `expected_policy()` -- only
+    `census` needs that, and `census` takes the real `ChartFacts`.
+    """
 
     chart_name = "chart"
     release = "release"
