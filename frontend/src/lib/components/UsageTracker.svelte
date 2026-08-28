@@ -253,11 +253,17 @@
                           title="recorded out of band, not fetched live">· recorded</span
                         >{/if}
                     </span>
+                    <!-- An unknown proportion draws its empty track and NO
+                      fill. A zero-width fill would be pixel-identical to a
+                      measured 0%, so the row would look like a measurement
+                      while the reading beside it says otherwise. -->
                     <span class="usage-insight-track" aria-hidden="true">
-                      <span
-                        class="usage-insight-fill"
-                        style:inline-size={`${insight.fillPct}%`}
-                      ></span>
+                      {#if insight.fillPct !== null}
+                        <span
+                          class="usage-insight-fill"
+                          style:inline-size={`${insight.fillPct}%`}
+                        ></span>
+                      {/if}
                     </span>
                     <span class="usage-insight-value">
                       {insight.reading}

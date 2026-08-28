@@ -664,7 +664,10 @@ test('an entry draws only the body regions it has, and every shipped entry has o
   // And nothing this site ships is an entry with neither: an empty body is a
   // call site with nothing to say, and the type cannot refuse it, so this
   // does — over every adapter that feeds the log.
-  for (const [name, props] of Object.entries({ workHistoryProps, codingProjectsProps })) {
+  for (const [name, props] of Object.entries({
+    workHistoryProps,
+    codingProjectsProps: codingProjectsProps(null),
+  })) {
     assert.ok(props.entries.length > 0, `${name} feeds the log no entries at all`);
     for (const entry of props.entries) {
       assert.ok(
@@ -707,12 +710,13 @@ test('the six repositories are the owner’s, at the addresses the owner gave', 
     projectLinkLabel(projects[0]),
     'naranjo.online on GitHub, opens in a new tab'
   );
+  const captured = codingProjectsProps(null);
   assert.deepEqual(
-    codingProjectsProps.entries.map((entry) => [entry.title, entry.href, entry.linkLabel, entry.summary]),
+    captured.entries.map((entry) => [entry.title, entry.href, entry.linkLabel, entry.summary]),
     projects.map((project) => [project.name, projectUrl(project), projectLinkLabel(project), project.description])
   );
-  assert.equal(codingProjectsProps.variant, 'compact');
-  assert.equal(codingProjectsProps.titleLevel, 4, 'project entries sit under the subsection h3');
+  assert.equal(captured.variant, 'compact');
+  assert.equal(captured.titleLevel, 4, 'project entries sit under the subsection h3');
   assert.match(entryLog, /target="_blank"/);
   assert.match(entryLog, /rel="noopener noreferrer"/);
   assert.match(entryLog, /aria-label=\{entry\.linkLabel\}/);
@@ -733,17 +737,17 @@ test('a count of one is a count of one thing', () => {
   const noon = Date.parse('2026-08-27T12:00:00Z');
   const row = { name: 'x', description: 'x', pushedAt: '2026-08-24T12:00:00Z' };
   assert.deepEqual(
-    projectCounts({ ...row, commits: 1, stars: 1 }, noon).map((count) => count.label),
+    projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon).map((count) => count.label),
     ['1 commit', '1 star', 'updated 3 days ago']
   );
   assert.deepEqual(
-    projectCounts({ ...row, commits: 0, stars: 20 }, noon).map((count) => count.label),
+    projectCounts({ ...row, commits: 0, stars: 20 }, undefined, noon).map((count) => count.label),
     ['0 commits', '20 stars', 'updated 3 days ago']
   );
   // Grouped through the same whole-number renderer every other figure on the
   // page uses, so a four-figure count does not suddenly read differently.
   assert.deepEqual(
-    projectCounts({ ...row, commits: 1234, stars: 5678 }, noon).map((count) => count.label),
+    projectCounts({ ...row, commits: 1234, stars: 5678 }, undefined, noon).map((count) => count.label),
     ['1,234 commits', '5,678 stars', 'updated 3 days ago']
   );
   // Every band of the since-sentence, against the same fixed clock — and the
@@ -758,11 +762,11 @@ test('a count of one is a count of one thing', () => {
   // The adapter carries the same labels into the log, with the glyph beside
   // the words rather than instead of them.
   assert.deepEqual(
-    codingProjectsProps.entries[0].counts.map((count) => count.label),
-    projectCounts(projects[0]).map((count) => count.label)
+    codingProjectsProps(null, noon).entries[0].counts.map((count) => count.label),
+    projectCounts(projects[0], undefined, noon).map((count) => count.label)
   );
   assert.deepEqual(
-    codingProjectsProps.entries[0].counts.map((count) => count.glyph),
+    codingProjectsProps(null).entries[0].counts.map((count) => count.glyph),
     ['node', 'star', 'clock'],
     'each count names its generic glyph; the drawing is the component’s'
   );
@@ -846,7 +850,7 @@ test('the Coding Projects feed renders no capture-date or no-fetch caption (issu
   // binding's presentation, which must declare no note line at all. The
   // rendered-DOM guard lives in e2e/rendering-lanes.spec.mjs, against what a
   // visitor's browser actually painted.
-  const renderedData = JSON.stringify(codingProjectsProps);
+  const renderedData = JSON.stringify(codingProjectsProps(null));
   assert.doesNotMatch(
     renderedData,
     /Counts captured from/,
@@ -871,10 +875,15 @@ test('the Coding Projects feed renders no capture-date or no-fetch caption (issu
 });
 
 test('nothing in the work, projects, art, or trackers surfaces reaches the network', async () => {
-  // The no-fetch INVARIANT the removed caption used to state in prose stays
-  // real and stays ENFORCED here regardless of whether any caption says so
-  // (issue 167): the origin is local-origin-only and live refresh is off by
-  // default, so a live count would be a promise the deployment cannot keep.
+  // What this pins is the LOCAL-ORIGIN-ONLY invariant of requirement 1, and
+  // it is worth restating precisely because half of the sentence that used to
+  // stand here expired (issue 242). The Coding Projects rows are no longer a
+  // frozen capture: the origin reads the repository metadata itself and serves
+  // it as a panel, and the page reads that panel from THIS origin exactly as
+  // it reads every other one. What has never changed, and is what these scans
+  // enforce, is that none of these modules constructs a request of its own and
+  // none of them spells a remote origin — the addresses live in the data
+  // module and reach the DOM only as href values a human may click.
   for (const [name, source] of Object.entries(introduced)) {
     assert.doesNotMatch(
       source,

@@ -986,7 +986,7 @@ func TestRuntimeRefusesOffAllowlistHosts(t *testing.T) {
 // not, and every fetch-backed panel still has its embedded fallback.
 func TestBuiltinFetchPanelsComeFromTheConstructor(t *testing.T) {
 	t.Parallel()
-	fetchBacked := map[string]bool{"boss-log": true, "token-usage": true, "vcs-activity": true}
+	fetchBacked := map[string]bool{"boss-log": true, "token-usage": true, "vcs-activity": true, "coding-projects": true}
 	for _, definition := range builtinPanels {
 		switch source := definition.source.(type) {
 		case *FetchSource:

@@ -126,6 +126,14 @@ const (
 	KindVCSActivity = "vcs-activity/v1"
 	// KindBossLog reports one game account's boss tallies.
 	KindBossLog = "boss-log/v1"
+	// KindCodingProjects reports the owner's public repositories as their
+	// hosting service currently describes them: the description each one
+	// carries right now, its star tally, and when it was last pushed to.
+	//
+	// The kind is named for what it REPORTS, never for where it comes from,
+	// exactly as the version-control kind beside it is — the host is a config
+	// endpoint, and swapping it stays a data edit.
+	KindCodingProjects = "coding-projects/v1"
 )
 
 // Status is the envelope serving state. It reflects data provenance, never
@@ -432,6 +440,72 @@ type VCSActivityData struct {
 	// The envelope's status still carries the whole payload's provenance;
 	// this says which half of it is the older one.
 	CommitsAt string `json:"commitsAt,omitempty"`
+	// Coverage names WHICH calendar producer answered, and it exists because
+	// the two producers count different things while both being live and both
+	// being true.
+	//
+	// The anonymous public document reports only what an anonymous reader may
+	// see; the credentialed API reports the account holder's own complete
+	// record, private repositories included. Serving either under one
+	// unlabelled "totalContributions" would make the panel quietly change its
+	// meaning the day a credential is added or expires — a figure that moved
+	// by four hundred with nothing on the page to say why. So the payload says
+	// which one it is, and the frontend words the figure accordingly.
+	//
+	// Additive and optional, exactly like EndDate and CommitsAt before it: a
+	// payload written before this field existed still decodes and still
+	// renders, so this field did not move the kind. Empty means the producer
+	// declared no coverage, which is what the embedded snapshot says.
+	Coverage string `json:"coverage,omitempty"`
+}
+
+// The coverage vocabulary, closed and admitted by MEMBERSHIP. Only this
+// package's own mappers ever set one — a value never arrives from an upstream
+// document — so the frontend can key rendered copy off it.
+const (
+	// CoveragePublic marks a calendar assembled from the anonymous public
+	// document: real, live, and narrower than the account holder's own view.
+	CoveragePublic = "public"
+	// CoverageComplete marks a calendar assembled from the credentialed API,
+	// which reports the account holder's whole record.
+	CoverageComplete = "complete"
+)
+
+// CodingProjectsData is the coding-projects/v1 payload: one row per
+// repository the owner publishes, carrying what its host currently says about
+// it. Rows arrive in CONFIGURATION order, never in an order an upstream
+// chooses, so the section's layout is the owner's decision.
+type CodingProjectsData struct {
+	// Repos holds one row per configured repository.
+	Repos []CodingProject `json:"repos"`
+}
+
+// CodingProject is one repository row. Every figure is nullable and every
+// row carries its own provenance, for the same reason the token panel's tiles
+// do: a row whose live read failed serves the shipped snapshot's values and
+// says so, rather than borrowing the freshness of the rows beside it.
+type CodingProject struct {
+	// Name is the repository's public name. It comes from CONFIGURATION, not
+	// from the upstream document — the same rule VCSCommit.Repo follows, and
+	// for the same reason: a name an upstream can choose is a name a
+	// compromised upstream can forge.
+	Name string `json:"name"`
+	// Description is the repository's own description, truncated with a
+	// visible marker past maxProjectDescriptionRunes. Empty is a real state:
+	// a repository with no description has none, and inventing one would be
+	// exactly the fabrication the honest-states floor forbids.
+	Description string `json:"description"`
+	// Stars is the star tally; null means the upstream reported none, which
+	// the frontend renders as a dash rather than as a confident zero.
+	Stars *int64 `json:"stars"`
+	// PushedAt is the RFC 3339 instant of the repository's last push,
+	// normalized to UTC. Empty when unreported.
+	PushedAt string `json:"pushedAt,omitempty"`
+	// Recorded marks a row served from the shipped snapshot rather than read
+	// live — the same provenance meaning it carries on a token-usage stat
+	// tile. A mixed payload is the normal degraded state: five rows read and
+	// one refused is five live rows beside one that says it is not.
+	Recorded bool `json:"recorded,omitempty"`
 }
 
 // VCSCommit is one recent commit reference.
@@ -650,6 +724,9 @@ const (
 	roleVCSCalendar = "vcs-calendar"
 	// roleVCSCommits is the whole group of per-repository commit documents.
 	roleVCSCommits = "vcs-commits"
+	// roleCodingProjects is the whole group of per-repository metadata
+	// documents, one budget for the round rather than one per repository.
+	roleCodingProjects = "coding-projects"
 )
 
 // panelFetchSpecs carries the per-kind fetch descriptions. EXACTLY ONE field
@@ -663,6 +740,8 @@ type panelFetchSpecs struct {
 	usage *tokenUsageFetchSpec
 	// vcs is set when this source feeds a vcs-activity/v1 panel.
 	vcs *vcsActivityFetchSpec
+	// projects is set when this source feeds a coding-projects/v1 panel.
+	projects *codingProjectsFetchSpec
 }
 
 // fetchConfigDocument is the on-disk shape of config/fetch.json: shared
@@ -696,6 +775,8 @@ type fetchConfigDocument struct {
 	TokenUsage *tokenUsageFetchSpec `json:"tokenUsage"`
 	// VCSActivity configures the version-control panel's live fetch, if any.
 	VCSActivity *vcsActivityFetchSpec `json:"vcsActivity"`
+	// CodingProjects configures the repository-metadata panel's live fetch.
+	CodingProjects *codingProjectsFetchSpec `json:"codingProjects"`
 }
 
 // bossLogFetchSpec configures the boss-log live fetch: one public endpoint
@@ -763,7 +844,157 @@ type vcsActivityFetchSpec struct {
 	// panel configured without it serves the calendar and an empty commit
 	// list, which is what it did before this half existed.
 	Commits *vcsCommitsFetchSpec `json:"commits"`
+	// Calendar configures the CREDENTIALED calendar producer, preferred over
+	// the public Endpoint above whenever its credential is present. Optional:
+	// a panel configured without it reads the public document exactly as it
+	// always has.
+	Calendar *vcsCalendarFetchSpec `json:"calendar"`
 }
+
+// vcsCalendarHeaderAllowlist is the COMPLETE set of STATIC request headers the
+// credentialed calendar producer may send, and it is a second list rather than
+// a widening of the public one on purpose. The public producers must stay
+// unable to carry any header but Accept; this producer additionally needs to
+// declare the media type of the request BODY it posts. Neither list may name a
+// credential header — the credential never travels through a static header map
+// at all, it is read from the environment at fetch time and set through the
+// spec's own dedicated key fields — so config data still cannot attach a
+// secret to a request by editing a map.
+var vcsCalendarHeaderAllowlist = []string{"Accept", "Content-Type"}
+
+// vcsCalendarFetchSpec configures the CREDENTIALED contribution-calendar
+// producer: a query API that reports the calendar of the account the
+// credential belongs to, private repositories included, which is the whole
+// reason it exists — the public document beside it can only ever report what
+// an anonymous reader may see, and the two differ by every private commit the
+// owner has made.
+//
+// It is the first producer in this package that both carries a credential AND
+// posts a body, so two things are stated here rather than assumed:
+//
+//   - The credential follows the identical rule the usage sources follow. The
+//     variable NAME is config data; the value is read from the environment at
+//     fetch time, flows straight into one request header, and is never stored,
+//     logged, or served. An unset variable does not fail and does not fabricate
+//     — the public producer answers instead, and the payload says so through
+//     its coverage field.
+//   - The request BODY is built from Query below plus a window this package
+//     computes from its own clock. No byte of it ever comes from an upstream
+//     answer, so no upstream can influence what is asked of the next one.
+type vcsCalendarFetchSpec struct {
+	// Endpoint is the full request URL.
+	Endpoint string `json:"endpoint"`
+	// Query is the literal query document posted to it. It declares the two
+	// window variables this package supplies and nothing else; a query that
+	// does not is refused at construction rather than sent.
+	Query string `json:"query"`
+	// KeyEnvName is the environment variable holding the credential. Unset at
+	// fetch time means this producer is skipped, never an error surface.
+	KeyEnvName string `json:"keyEnvName"`
+	// KeyHeader is the request header that carries the credential.
+	KeyHeader string `json:"keyHeader"`
+	// KeyPrefix is prepended to the credential in the header.
+	KeyPrefix string `json:"keyPrefix"`
+	// Headers holds the static request headers, held to
+	// vcsCalendarHeaderAllowlist.
+	Headers map[string]string `json:"headers"`
+	// MaxBytes optionally tightens the shared body cap for this endpoint.
+	MaxBytes int64 `json:"maxBytes"`
+	// ContentType is the exact media type the answer must declare.
+	ContentType string `json:"contentType"`
+}
+
+// The window variable names the calendar query document must declare. They are
+// checked at construction against the configured Query, so a query edited to
+// drop a variable is refused before a request is ever built — which is the
+// difference between a calendar over the window this package computed and a
+// calendar over whatever the upstream's own default happens to be.
+const (
+	// calendarFromVariable names the window's first instant.
+	calendarFromVariable = "$from"
+	// calendarToVariable names its last.
+	calendarToVariable = "$to"
+)
+
+// calendarWindowDays is how far back the credentialed calendar window reaches
+// before it is rolled back to the preceding Sunday. The upstream refuses a
+// span over one year, and the rollback adds up to six days, so 357 is the
+// largest value that can never cross it — while still covering fifty-two whole
+// weeks, which is what the grid draws.
+//
+// The Sunday alignment is not cosmetic. The served payload's week columns are
+// sliced seven days at a time from the first covered day and the frontend
+// derives the trailing padding from the end date's weekday, so a window
+// starting on any other weekday would shift every cell's date by up to six
+// days. The public producer gets this for free because the document it scrapes
+// is already a Sunday-aligned grid; this producer asks for a window and
+// therefore has to ask for the right one.
+const calendarWindowDays = 357
+
+// codingProjectsFetchSpec configures the repository-metadata producer: one
+// document per repository, each named by a complete literal URL in
+// configuration for exactly the reason the commit sources are — a set of
+// reachable URLs fixed before the first request is a set no upstream answer can
+// extend.
+//
+// The credential here is OPTIONAL in a way the calendar's is not, and the
+// difference is worth stating because it is the reason this producer ships
+// working rather than waiting. The repository documents are public: an
+// anonymous read returns the same description, tally and push instant a
+// credentialed one does. What the credential buys is rate headroom — an
+// anonymous caller shares a per-address budget with everything else on the
+// node, a credentialed one gets its own far larger budget — so the key is used
+// when it is there and its absence changes nothing about what is served.
+type codingProjectsFetchSpec struct {
+	// Sources lists one labeled repository document per row, in serve order.
+	Sources []codingProjectSourceSpec `json:"sources"`
+	// Headers holds static request headers, held to the same public-producer
+	// allowlist the commit sources' are.
+	Headers map[string]string `json:"headers"`
+	// KeyEnvName optionally names the environment variable holding a
+	// credential used only for rate headroom; empty means this producer names
+	// none and reads anonymously.
+	KeyEnvName string `json:"keyEnvName"`
+	// KeyHeader is the request header that carries it.
+	KeyHeader string `json:"keyHeader"`
+	// KeyPrefix is prepended to it in the header.
+	KeyPrefix string `json:"keyPrefix"`
+	// MaxBytes optionally tightens the shared body cap for these endpoints.
+	MaxBytes int64 `json:"maxBytes"`
+	// ContentType is the exact media type each answer must declare.
+	ContentType string `json:"contentType"`
+	// MinIntervalMinutes is the rate budget applied to the whole group.
+	MinIntervalMinutes int `json:"minIntervalMinutes"`
+}
+
+// codingProjectSourceSpec is one repository's document: the public name the
+// panel SERVES and the literal URL it is read from. The name is configuration
+// precisely so a hostile or drifting upstream cannot relabel a row.
+type codingProjectSourceSpec struct {
+	// Name is the public repository name served on this row.
+	Name string `json:"name"`
+	// Endpoint is the full request URL.
+	Endpoint string `json:"endpoint"`
+}
+
+// Bounds on the repository-metadata producer. Every one of them refuses rather
+// than clamps, except the description truncation, which is called out below.
+const (
+	// maxCodingProjectSources bounds how many repositories configuration may
+	// list. Each one is a request per round, so the list is also the round's
+	// cost against the upstream's rate budget.
+	maxCodingProjectSources = 12
+	// maxProjectDescriptionRunes bounds one served description. Longer text is
+	// TRUNCATED with a visible marker rather than refused, for the same reason
+	// a long commit subject is: length alone is not hostility, and refusing
+	// would lose a real repository over a verbose sentence.
+	maxProjectDescriptionRunes = 320
+	// maxProjectAge is how far back a repository's last push may sit before the
+	// instant is nonsense rather than history. Repositories are legitimately
+	// old, so this is deliberately generous — it exists to catch a zero-valued
+	// or wildly misparsed instant, not to judge a quiet project.
+	maxProjectAge = 40 * 365 * 24 * time.Hour
+)
 
 // vcsCommitsFetchSpec configures the recent-commit producer: one PUBLIC,
 // UNAUTHENTICATED commit-list document per repository, each named by a
@@ -981,6 +1212,92 @@ type datedCommit struct {
 	at time.Time
 	// row is the served commit row.
 	row VCSCommit
+}
+
+// calendarDocument is the strict upstream grammar of the credentialed
+// calendar answer. Unlike the commit and repository documents below it is
+// closed with decodeStrict rather than read through a projection, and it can
+// be: the query asks for exactly these fields, so the answer carries exactly
+// these fields, and there is no personal-data field to have to decline.
+//
+// Errors is held as raw messages on purpose. The upstream reports a refusal —
+// a bad credential, a revoked scope, a malformed query — as a 200 answer
+// carrying an errors array, so a decoder that did not know the field would
+// refuse the document for the RIGHT outcome with the wrong reason. Declaring
+// it makes the refusal explicit; keeping its contents raw means this package
+// never decodes upstream-authored prose into typed fields it would then have
+// to reason about.
+type calendarDocument struct {
+	Data   calendarData      `json:"data"`
+	Errors []json.RawMessage `json:"errors"`
+}
+
+// calendarData is the query's result root.
+type calendarData struct {
+	Viewer calendarViewer `json:"viewer"`
+}
+
+// calendarViewer is the account the credential belongs to. The query asks
+// about the CREDENTIAL'S OWN account rather than a named one, which is what
+// makes the answer include private contributions at all — and also means no
+// account name travels in the request.
+type calendarViewer struct {
+	Contributions calendarContributions `json:"contributionsCollection"`
+}
+
+// calendarContributions is the collection the calendar hangs off.
+type calendarContributions struct {
+	Calendar calendarSection `json:"contributionCalendar"`
+}
+
+// calendarSection is the calendar itself: the account's own total for the
+// window, and the window's days grouped into the upstream's week columns.
+type calendarSection struct {
+	Total int            `json:"totalContributions"`
+	Weeks []calendarWeek `json:"weeks"`
+}
+
+// calendarWeek is one week column.
+type calendarWeek struct {
+	Days []calendarDay `json:"contributionDays"`
+}
+
+// calendarDay is one dated cell.
+type calendarDay struct {
+	Date  string `json:"date"`
+	Count int    `json:"contributionCount"`
+}
+
+// repositoryEntry is the PROJECTION this package reads a repository metadata
+// document through, and the second place its admission gate is a projection
+// rather than decodeStrict — for the identical reason commitListEntry is one,
+// which is worth restating rather than cross-referencing:
+//
+//   - Closing the document is not possible without holding the repository
+//     OWNER object in this process. The upstream carries a complete account
+//     profile on every repository document; DisallowUnknownFields would force
+//     this package to declare fields for personal identifiers it must never
+//     hold, log, or serve (requirement 12). Reading only the three values the
+//     panel renders is the stronger privacy posture, not the looser one.
+//   - A projection decodes silently, so every field below is then value-checked
+//     — a parseable push instant inside a plausible window, a bounded
+//     non-negative tally, a printable description — and any failure discards
+//     the whole document for that repository. The gate moved from the decoder
+//     to the values; it did not go away.
+//
+// Description is a POINTER because the upstream writes JSON null for a
+// repository that has none, and that is a real state the row serves as an
+// empty description rather than as invented copy.
+type repositoryEntry struct {
+	// Description is the repository's own description, or null when it has
+	// none.
+	Description *string `json:"description"`
+	// Stars is the star tally.
+	Stars int64 `json:"stargazers_count"`
+	// PushedAt is the RFC 3339 instant of the last push. It is also the proof
+	// the document was really parsed: an unrelated JSON object projects to an
+	// empty string here, and an empty string does not parse.
+	PushedAt string `json:"pushed_at"`
 }
 
 // maxSeriesDays bounds a mapped activity series. The configured endpoints
@@ -1507,7 +1824,16 @@ type usageSeriesSource struct {
 	// Derived carries the COMPLETE series-derived stat set, keyed by the
 	// closed usageSeriesDerivedKeys vocabulary. Required and complete, for
 	// the same reason Windows is.
-	Derived map[string]int64 `json:"derived"`
+	//
+	// The values are POINTERS so that "the key is present carrying nothing"
+	// is a state this package can SEE. It could not before: decodeStrict
+	// refuses unknown fields but never requires known ones, so `"peak-day":
+	// null` — or a producer that emitted the key and forgot the number —
+	// decoded to a plain 0, satisfied the completeness rule, and overwrote a
+	// truthfully null tile with a figure nobody measured. A null is now
+	// refused by name rather than published as a zero (owner directive,
+	// 2026-08-28: "if its either 0 or unknown I rather it be Unknown").
+	Derived map[string]*int64 `json:"derived"`
 }
 
 // usageSeriesSection mirrors TokenUsageSeries' on-disk form.
@@ -1519,7 +1845,14 @@ type usageSeriesSection struct {
 
 // usageSeriesWindow is one aggregate window: the same input/output split the
 // panel's window rows render.
+//
+// Both halves are POINTERS for the reason usageSeriesSource.Derived's values
+// are: an object that simply omits them — `"today": {}` — decoded to 0/0,
+// passed every count bound, and was served as a measured zero on the page. The
+// completeness rule above proves the KEYS are all there and said nothing about
+// the VALUES, which is exactly the gap a defaulted zero walks through. Absent
+// is now refused by name.
 type usageSeriesWindow struct {
-	Input  int64 `json:"input"`
-	Output int64 `json:"output"`
+	Input  *int64 `json:"input"`
+	Output *int64 `json:"output"`
 }

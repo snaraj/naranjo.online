@@ -24,6 +24,7 @@ func buildBuiltinPanels() []panelDefinition {
 	tokenUsageSnapshot := SnapshotSource{Name: "snapshots/token-usage.json"}
 	vcsActivitySnapshot := SnapshotSource{Name: "snapshots/vcs-activity.json"}
 	bossLogSnapshot := SnapshotSource{Name: "snapshots/boss-log.json"}
+	codingProjectsSnapshot := SnapshotSource{Name: "snapshots/coding-projects.json"}
 	definitions := []panelDefinition{
 		{id: "token-usage", kind: KindTokenUsageV2, title: "Token usage", source: tokenUsageSnapshot},
 		{id: "vcs-activity", kind: KindVCSActivity, title: "Version-control activity", source: vcsActivitySnapshot},
@@ -33,6 +34,7 @@ func buildBuiltinPanels() []panelDefinition {
 		// alone. Renaming identity to follow copy would break every stored
 		// URL and mint a kind version for a heading change.
 		{id: "boss-log", kind: KindBossLog, title: "Old School RuneScape Stats", source: bossLogSnapshot},
+		{id: "coding-projects", kind: KindCodingProjects, title: "Coding projects", source: codingProjectsSnapshot},
 	}
 	document, bounds, err := loadFetchConfig(fetchConfigBytes)
 	if err != nil {
@@ -46,8 +48,10 @@ func buildBuiltinPanels() []panelDefinition {
 		{tokenUsageSnapshot, panelFetchSpecs{usage: document.TokenUsage}},
 		{vcsActivitySnapshot, panelFetchSpecs{vcs: document.VCSActivity}},
 		{bossLogSnapshot, panelFetchSpecs{bossLog: document.BossLog}},
+		{codingProjectsSnapshot, panelFetchSpecs{projects: document.CodingProjects}},
 	} {
-		if upgrade.specs.usage == nil && upgrade.specs.vcs == nil && upgrade.specs.bossLog == nil {
+		if upgrade.specs.usage == nil && upgrade.specs.vcs == nil &&
+			upgrade.specs.bossLog == nil && upgrade.specs.projects == nil {
 			continue
 		}
 		if source, err := NewFetchSource(upgrade.fallback, bounds, upgrade.specs); err == nil {
@@ -148,7 +152,80 @@ func validateVCSActivitySpec(spec *vcsActivityFetchSpec) error {
 	if err := validateRefreshInterval("vcs-activity fetch spec", spec.MinIntervalMinutes); err != nil {
 		return err
 	}
-	return validateVCSCommitsSpec(spec.Commits)
+	if err := validateVCSCommitsSpec(spec.Commits); err != nil {
+		return err
+	}
+	return validateVCSCalendarSpec(spec.Calendar)
+}
+
+// validateVCSCalendarSpec rejects a credentialed calendar spec that is not
+// fully described. An absent spec is valid — the panel then reads only the
+// public document, which is what it did before this producer existed.
+//
+// Two of these checks exist for reasons the field names do not carry:
+//
+//   - The QUERY must declare both window variables. This package computes the
+//     window and posts it; a query that ignores the variables would be sent
+//     happily and answered with the upstream's own default range, which is not
+//     Sunday-aligned and would shift every cell's date. A missing variable is
+//     a silently wrong calendar, so it is refused at construction instead.
+//   - The header map is held to the CREDENTIALED producer's own allowlist, not
+//     the public one, and neither list may name a credential header. The
+//     credential travels through KeyHeader, which is filled from the
+//     environment at fetch time; a static map that could name it would be the
+//     escape hatch validateVCSHeaders exists to close.
+func validateVCSCalendarSpec(spec *vcsCalendarFetchSpec) error {
+	if spec == nil {
+		return nil
+	}
+	if spec.Endpoint == "" || spec.Query == "" || spec.KeyEnvName == "" || spec.KeyHeader == "" {
+		return errors.New("vcs-calendar fetch spec: endpoint, query, keyEnvName, and keyHeader are all required")
+	}
+	for _, variable := range []string{calendarFromVariable, calendarToVariable} {
+		if !strings.Contains(spec.Query, variable) {
+			return fmt.Errorf("vcs-calendar fetch spec: the query does not declare %s, so it would be answered over the upstream's own window", variable)
+		}
+	}
+	if spec.ContentType == "" {
+		return errors.New("vcs-calendar fetch spec: contentType is required")
+	}
+	return validateHeaderAllowlist("vcs-calendar fetch spec", spec.Headers, vcsCalendarHeaderAllowlist)
+}
+
+// validateCodingProjectsSpec rejects a repository-metadata spec that is not
+// fully described: a bounded, non-empty, fully labeled source list, a cadence
+// inside the reviewed band, and a header map held to the public-producer
+// allowlist. The credential fields are optional together — a spec naming an
+// environment variable must also name the header it rides in, because a
+// credential with nowhere to go is a configuration accident rather than a
+// choice to read anonymously.
+func validateCodingProjectsSpec(spec *codingProjectsFetchSpec) error {
+	if len(spec.Sources) == 0 {
+		return errors.New("coding-projects fetch spec: no sources")
+	}
+	if len(spec.Sources) > maxCodingProjectSources {
+		return fmt.Errorf("coding-projects fetch spec: %d sources is over the %d bound", len(spec.Sources), maxCodingProjectSources)
+	}
+	seen := make(map[string]bool, len(spec.Sources))
+	for _, source := range spec.Sources {
+		if source.Name == "" || source.Endpoint == "" {
+			return errors.New("coding-projects fetch spec: every source needs a name and an endpoint")
+		}
+		if seen[source.Name] {
+			return fmt.Errorf("coding-projects fetch spec: %q is listed twice", source.Name)
+		}
+		seen[source.Name] = true
+	}
+	if (spec.KeyEnvName == "") != (spec.KeyHeader == "") {
+		return errors.New("coding-projects fetch spec: keyEnvName and keyHeader are declared together or not at all")
+	}
+	if spec.ContentType == "" {
+		return errors.New("coding-projects fetch spec: contentType is required")
+	}
+	if err := validateHeaderAllowlist("coding-projects fetch spec", spec.Headers, vcsActivityHeaderAllowlist); err != nil {
+		return err
+	}
+	return validateRefreshInterval("coding-projects fetch spec", spec.MinIntervalMinutes)
 }
 
 // validateVCSCommitsSpec applies the SAME public-producer rules to the commit
@@ -185,18 +262,28 @@ func validateVCSCommitsSpec(spec *vcsCommitsFetchSpec) error {
 // actually need makes that unrepresentable instead of merely undocumented;
 // widening the list is a conscious edit and a different security review.
 func validateVCSHeaders(what string, headers map[string]string) error {
+	return validateHeaderAllowlist(what, headers, vcsActivityHeaderAllowlist)
+}
+
+// validateHeaderAllowlist is the shared rule: a configured static header name
+// must be on the allowlist its own producer was reviewed against. Producers do
+// not share one list — the credentialed calendar needs to declare the media
+// type of the body it posts and the public ones must never be able to — so the
+// list is a parameter, and widening any of them stays a conscious edit beside
+// the list itself.
+func validateHeaderAllowlist(what string, headers map[string]string, allowlist []string) error {
 	for name := range headers {
-		if !vcsActivityHeaderAllowed(name) {
-			return fmt.Errorf("%s: header %q is not permitted; this producer is public and sends no credential", what, name)
+		if !headerAllowed(name, allowlist) {
+			return fmt.Errorf("%s: header %q is not permitted; this producer's static headers are held to a reviewed list and a credential never travels in one", what, name)
 		}
 	}
 	return nil
 }
 
-// vcsActivityHeaderAllowed reports whether a configured header name is on the
-// producer's allowlist, matched case-insensitively because header names are.
-func vcsActivityHeaderAllowed(name string) bool {
-	for _, allowed := range vcsActivityHeaderAllowlist {
+// headerAllowed reports whether a configured header name is on the given
+// allowlist, matched case-insensitively because header names are.
+func headerAllowed(name string, allowlist []string) bool {
+	for _, allowed := range allowlist {
 		if strings.EqualFold(name, allowed) {
 			return true
 		}

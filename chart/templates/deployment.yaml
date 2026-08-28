@@ -77,6 +77,28 @@ spec:
             which is the fail-soft outcome, not an outage. */}}
             - name: PANELS_REFRESH
               value: {{ .Values.panels.refresh.enabled | quote }}
+            {{- /* The version-control credential (issue #242). Rendered
+            UNCONDITIONALLY, exactly like the switch above it and for the same
+            reason: an operator must be able to read off the manifest which
+            Secret this deployment expects to read it from, rather than
+            discovering that the block was omitted. `optional: true` is what
+            makes that safe — a Secret that does not exist yet leaves the
+            variable unset, the pod schedules, and the panels degrade honestly
+            (the contribution calendar serves its public coverage and the
+            repository rows read anonymously). That is the shipped state until
+            the owner creates the token; nothing here grants that step.
+
+            The variable NAME is not spelled twice: it is the key of the
+            Secret AND the key of the environment entry, and the producer side
+            names it once in internal/panels/config/fetch.json's keyEnvName.
+            No key, and no reference to a key's VALUE, belongs in this
+            repository (requirement 12). */}}
+            - name: GITHUB_PANELS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.panels.refresh.tokenSecret }}
+                  key: GITHUB_PANELS_TOKEN
+                  optional: true
             {{- /* The panels data root (issue #142): rendered only when the
             capability is enabled, so a disabled render is byte-identical to
             the chart before the capability existed. Both this value and the

@@ -7,6 +7,174 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.57] - 2026-08-28
+
+The owner's standing directive for this site is that it must not be static
+any more — live refresh, live sync, live data wherever the data exists. Three
+places were still failing it, in three different ways, and all three were
+failing it quietly.
+
+### The contribution heatmap counted the wrong contributions
+
+The panel scraped the PUBLIC contribution page anonymously, and an anonymous
+reader sees public-repository contributions only. The site reported 499
+contributions and a one-day streak against the 916 and the quite different
+recent pattern the owner sees signed in. Both numbers were real; only one of
+them was the owner's.
+
+The panel now reads the account's own record through the credentialed query
+API, which includes private-repository contributions for the token's own
+owner. It is the first producer here that both carries a credential and posts
+a body, so both capabilities are bounded where they are created rather than
+where they are used:
+
+- The credential follows the identical rule the token-usage sources follow.
+  The variable NAME is config data; the value is read from the environment at
+  fetch time, flows straight into one request header, and is never stored,
+  logged, or served.
+- The request BODY is assembled from the configured query plus a window this
+  package computes from its own clock. No byte of it comes from an upstream
+  answer, so no upstream can influence what is asked of the next one. The
+  method is DERIVED from the presence of that body rather than configured — a
+  method field in a JSON file would be a way to turn a read into a write by
+  editing data.
+- The window is Sunday-aligned, and that is load-bearing rather than tidy.
+  Week columns are sliced seven days at a time from the first covered day and
+  the frontend derives its trailing padding from the end date's weekday, so a
+  window starting on any other weekday would shift every cell's date by up to
+  six days. The public document is already a Sunday-aligned grid and got this
+  for free; a producer that ASKS for a window has to ask for the right one,
+  and the query is refused at construction if it does not declare the window
+  variables at all.
+
+Admission gained a cross-field rule the public path has no way to make: the
+document's own reported total and the sum of its days must agree. Those are
+the same measurement — the figure the owner sees and the figure the grid
+draws — so a document where they differ is one this package has
+half-understood, and refusing keeps the last good payload rather than picking
+which of two disagreeing claims to publish.
+
+Degradation is honest in both directions. With no credential the public
+producer answers, and the payload SAYS SO: the served coverage is carried in
+the payload and the page words the figure against it — "916 contributions"
+against "499 public contributions", never one number silently standing in for
+the other. A credentialed read that FAILS does not fall through to the public
+one; the round fails, the retained payload keeps serving as stale, and the
+next round tries again. Falling through would have answered a transient fault
+by quietly switching the panel to a figure four hundred smaller with nothing
+on the page to say why, and would have doubled the round's request count
+exactly when the upstream was already unhappy.
+
+### Coding Projects went live
+
+`frontend/src/lib/projects.ts` was a deliberate static capture, and the
+deliberation was sound when it was made: `PANELS_REFRESH` was default-off, so
+a live count would have been a promise the deployment could not keep. That
+premise expired on 2026-08-27, when the owner enabled refresh together with
+its egress allowance. The gap showed up immediately — the owner changed a
+repository description on the host and the site did not follow.
+
+A new panel kind `coding-projects/v1` serves the six repositories' metadata on
+the panels refresh cadence. The `panel/v1` envelope is untouched, as it is
+forever by design; evolution happens inside kind-versioned payloads.
+
+- The upstream document is read through a PROJECTION rather than the strict
+  decoder, and it is the second place in this package that exception is taken,
+  for the same reason as the first: closing the document would mean declaring
+  fields for the repository owner's account profile, and holding personal
+  identifiers this process must never hold is the weaker privacy posture, not
+  the stronger one. The gate moved to the values — a parseable push instant
+  inside a plausible window, a bounded non-negative tally, a printable
+  description — and any failure refuses the row.
+- The row's NAME comes from configuration, never from the document, exactly as
+  a commit row's repository label does: a name an upstream can choose is a
+  name a compromised upstream can forge.
+- Degradation is per row. A repository that could not be read serves the
+  shipped snapshot's values and says so, so five live rows sit beside one that
+  marks itself recorded rather than blanking six repositories over one bad
+  minute. A round that reads nothing at all is an error, so the caller keeps
+  what it already has.
+- Commit totals stay captured, and say so on the page. No repository API
+  reports one, and deriving it would mean paginating a whole default branch on
+  every refresh; the honest answer is the provenance mark, not a number nobody
+  measured.
+
+The page still makes no outbound request of its own: the panel is read from
+this origin's own `/api/panels` path like every other panel, and the
+repository URLs remain link targets a human may click.
+
+### A zero the data cannot vouch for now renders as unknown
+
+Owner: *"I still see 0 tokens vs Unknown, which if its either 0 or unknown I
+rather it be Unknown."* Three aggregates were answering "I could not measure
+this" with the digit zero, which is a different claim and a confident one.
+
+- A category or model share taken over a window that recorded NOTHING was
+  0%. The denominator never existed. An empty model window rendered five
+  insight rows all reading "0%", each carrying a provenance mark, implying
+  five measured proportions. Those shares are now null and reach the same dash
+  an unreported tile has always rendered.
+- An unknown share drew a zero-width bar, which is pixel-identical to a
+  measured 0%. It now draws no bar at all.
+- A pushed series document could present every key the closed vocabularies
+  define and still carry nothing behind one of them — `"today": {}`, or a
+  `derived` figure explicitly null. The completeness rule proved the KEYS were
+  all present and said nothing about the VALUES, so a defaulted zero decoded
+  cleanly, passed every count bound, and was published as a measurement. The
+  on-disk types are now nullable so that state is visible, and it is REFUSED
+  by name.
+
+A RECORDED zero stays zero throughout — a vendor reporting an empty bucket, a
+category that genuinely contributed nothing to a real window. That
+distinction is the whole purpose of the `recorded` field, and both directions
+are pinned.
+
+### Operator-owed
+
+The chart wires `GITHUB_PANELS_TOKEN` from the Secret named by
+`panels.refresh.tokenSecret`, unconditionally and OPTIONALLY. Unconditionally
+so the expected Secret is readable off the manifest; optionally so a Secret
+that does not exist yet leaves the variable unset and the pod schedules
+normally. Creating the token — fine-grained, read-only, minimal — and the
+Secret is an owner step at the owner's own timing, and until it is taken the
+panels behave exactly as described above: a real, live, narrower calendar that
+says it is narrower, and repository rows read anonymously.
+
+### Added
+
+- `coding-projects/v1`, a fourth panel kind: repository description, star
+  tally and last-push instant, read on the refresh cadence, with per-row
+  provenance and a shipped snapshot fallback.
+- A credentialed contribution-calendar producer, preferred over the public
+  document whenever its credential is present, with a Sunday-aligned window
+  and a document-total integrity check.
+- `coverage` on the `vcs-activity/v1` payload, admitted by membership of a
+  closed vocabulary, so the headline figure can be worded against the
+  producer that answered.
+- `GITHUB_PANELS_TOKEN` wiring in the chart, `panels.refresh.tokenSecret` in
+  values, and a required non-empty schema rule for it, pinned by
+  `TestChartWiresTheRefreshCredentialOptionally`.
+
+### Changed
+
+- The Coding Projects block is bound to a panel rather than to a frozen props
+  object; the captured rows became its fallback and carry the provenance mark.
+- `CategoryShare.pct` and `UsageInsight.fillPct` became nullable, and a null
+  renders as the shared dash with no bar.
+- `usageSeriesWindow` halves and `derived` values became pointers on the wire
+  so an absent figure is refusable rather than silently zero.
+
+### Security
+
+- POST is reachable from exactly one producer, through a body this package
+  built; `fetchRequest.method()` derives it and no configuration field can.
+- The credentialed producer's static header map is held to its own reviewed
+  allowlist, separate from the public producers', and neither may name a
+  credential header — the credential travels only through the spec's
+  dedicated key fields, filled from the environment at fetch time.
+- `internal/panels/fetch.go` remains the only egress-capable production file;
+  the package's zero-egress import surface is unchanged.
+
 ## [0.1.56] - 2026-08-28
 
 Six owner rulings from a live review of 0.1.55, and two of them reverse designs

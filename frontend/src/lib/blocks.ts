@@ -314,7 +314,12 @@ export type UsageInsight = {
   readonly key: string;
   readonly label: string;
   readonly marked: boolean;
-  readonly fillPct: number;
+  /* The drawn fill, or NULL when the proportion is unknown. Null is not zero:
+   * a zero-width bar is pixel-identical to a measured 0%, so a row whose
+   * denominator never existed would have drawn the same picture as one that
+   * genuinely contributed nothing. A null draws no bar at all, and the
+   * reading beside it carries the dash. */
+  readonly fillPct: number | null;
   readonly reading: string;
 };
 
@@ -506,6 +511,11 @@ export type EntryCount = {
   readonly key: string;
   readonly glyph: 'node' | 'star' | 'clock';
   readonly label: string;
+  /* Marked figures carry the provenance-by-exception suffix, the same one the
+   * usage tiles carry and worded identically, so a reader learns one mark for
+   * "this was recorded out of band" across the whole page rather than one per
+   * panel. */
+  readonly marked?: boolean;
 };
 
 export type EntryLogEntry = {
