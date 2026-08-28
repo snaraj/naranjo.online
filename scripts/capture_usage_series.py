@@ -399,6 +399,24 @@ ACTIVITY_CACHE_DATE_KEY = "date"
 ACTIVITY_CACHE_MODELS_KEY = "tokensByModel"
 MAX_ACTIVITY_CACHE_BYTES = 1 << 20
 
+# The durable per-source history store (issue #234). Every source this
+# pipeline reads is VOLATILE: the transcript trees are retention-pruned on
+# their tools' own schedules, and the first tool's roll-up cache has been
+# measured discarding a month of days in one recompute. A pipeline that
+# re-derives the whole series from those sources every hour therefore serves
+# a history that silently gets SHORTER — days that WERE captured, sealed and
+# served become zeros the moment their last local evidence is deleted, which
+# is exactly the defect the owner reported on 2026-08-28. The store is the
+# pipeline's own memory: a machine-local file (never in any repository)
+# holding, per calendar day, the best figure a real capture has measured, so
+# a day survives its sources. It preserves measurements only — a day no
+# capture ever measured is absent from it forever, never zero-filled.
+HISTORY_SCHEMA = "usage-history/v1"
+HISTORY_SCHEMA_KEY = "schema"
+HISTORY_DAYS_KEY = "days"
+HISTORY_TOTAL_KEY = "total"
+MAX_HISTORY_STORE_BYTES = 1 << 20
+
 # The stat keys a daily series defines on its own — the same four
 # internal/panels/types.go lists, minus the window total, which is a property
 # of a fetch window rather than of a recorded series.
@@ -655,6 +673,16 @@ def bounded_lines(handle, counters):
         if len(line) > MAX_RECORD_LINE_BYTES:
             counters["oversized"] += 1
             counters["bytes"] += len(line)
+            # The tree-wide byte ceiling holds on THIS accumulation path too
+            # (2026-08-27 review of PR #230, INFO-6): the branch above adds
+            # the oversized line's bytes, so skipping the check here would
+            # make a tree of newline-terminated oversized records the one
+            # shape of input the walk-work bound never bounds.
+            if counters["bytes"] > MAX_RECORD_BYTES:
+                raise CaptureError(
+                    "the transcript tree is larger than the %d byte bound"
+                    % MAX_RECORD_BYTES
+                )
             # Drain ONLY when the oversized line came back truncated. A line
             # whose content is exactly the bound arrives here already
             # newline-terminated, and draining past it would swallow the NEXT
@@ -1417,6 +1445,196 @@ def extend_with_cache(series, categories, models, partitioned, cached):
     return extended, merged_categories, ordered_models, partitioned
 
 
+def read_history_store(path):
+    """Read the durable per-source history store: {day: best measured entry}.
+
+    A MISSING file is an empty store, because the first run of a newly
+    configured store has nothing to remember yet and must bootstrap rather
+    than refuse. Every other failure refuses the run: the store is this
+    pipeline's own artifact, so a malformed or unreadable one is evidence of
+    corruption or tampering, and serving a series while silently ignoring
+    the pipeline's own memory would shorten the published history with
+    nothing to say so — the exact defect the store exists to end.
+
+    Validation is MEMBERSHIP, exactly as the emission guard's: real calendar
+    days, positive integers under the shared count bound, breakdown keys
+    inside their closed vocabularies, and each breakdown summing exactly to
+    its day's total. Refusals name the store, never a path.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            text = handle.read(MAX_HISTORY_STORE_BYTES + 1)
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        raise CaptureError("the history store could not be read")
+    if len(text) > MAX_HISTORY_STORE_BYTES:
+        raise CaptureError(
+            "the history store is larger than the %d byte bound" % MAX_HISTORY_STORE_BYTES
+        )
+    try:
+        document = json.loads(text)
+    except (ValueError, RecursionError):
+        raise CaptureError("the history store is not a parsable JSON document")
+    if not isinstance(document, dict):
+        raise CaptureError("the history store must be a JSON object")
+    if document.get(HISTORY_SCHEMA_KEY) != HISTORY_SCHEMA:
+        raise CaptureError("the history store does not declare the expected schema")
+    if set(document) != {HISTORY_SCHEMA_KEY, HISTORY_DAYS_KEY}:
+        raise CaptureError("the history store carries an unknown section")
+    rows = document[HISTORY_DAYS_KEY]
+    if not isinstance(rows, dict):
+        raise CaptureError("the history store carries no day index")
+    vocabularies = {"categories": CATEGORY_KEYS, "models": MODEL_KEYS}
+    stored = {}
+    for day, entry in rows.items():
+        if not valid_calendar_day(day):
+            raise CaptureError("the history store carries a key that is not a calendar day")
+        if not isinstance(entry, dict) or HISTORY_TOTAL_KEY not in entry:
+            raise CaptureError("the history store carries a malformed day entry")
+        if set(entry) - ({HISTORY_TOTAL_KEY} | set(vocabularies)):
+            raise CaptureError("the history store carries an unknown day field")
+        total = entry[HISTORY_TOTAL_KEY]
+        if not isinstance(total, int) or isinstance(total, bool) or total <= 0:
+            # A zero or negative day is never stored: the store preserves
+            # positive evidence only, so a zero entry is corruption.
+            raise CaptureError("the history store carries a day without a positive total")
+        if total > MAX_COUNT:
+            raise CaptureError("the history store carries a total above the shared count bound")
+        admitted = {HISTORY_TOTAL_KEY: total, "categories": None, "models": None}
+        for name, vocabulary in vocabularies.items():
+            values = entry.get(name)
+            if values is None:
+                continue
+            if not isinstance(values, dict) or not values:
+                raise CaptureError("the history store carries a malformed breakdown")
+            for key, value in values.items():
+                if key not in vocabulary:
+                    raise CaptureError(
+                        "the history store carries a breakdown key outside its vocabulary"
+                    )
+                if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                    raise CaptureError("the history store carries a malformed breakdown count")
+            if sum(values.values()) != total:
+                raise CaptureError(
+                    "a history store breakdown sums to a different figure than its day"
+                )
+            admitted[name] = dict(values)
+        stored[day] = admitted
+    return stored
+
+
+def merge_history(series, categories, models, partitioned, stored):
+    """Union the derived series with the store; evidence, once seen, survives.
+
+    THE RULE, one sentence per direction. A day the fresh capture measures at
+    least as large as the store keeps the fresh figure (the fresh walk is the
+    de-duplicated, current measurement — including the in-progress day, which
+    only grows); a day the fresh capture measures SMALLER than the store —
+    including not at all — keeps the stored figure, because the only way a
+    genuinely measured day shrinks is its sources being deleted underneath
+    it, and pruning is precisely what the store exists to survive.
+
+    No fabrication: the store holds only what a real capture measured, so a
+    day absent from both sides stays absent, rendered as the zero-inside-the-
+    window the series contract already defines. Nothing here invents a day.
+
+    Returns (series, categories, models, partitioned, remembered) where
+    `remembered` is the merged per-day index for the caller to write back —
+    the same union the emission serves, so the store and the served series
+    cannot disagree.
+    """
+    start = datetime.date.fromisoformat(series["startDate"])
+    window = [
+        (start + datetime.timedelta(days=offset)).isoformat()
+        for offset in range(len(series["totals"]))
+    ]
+    partitioned_in = set(partitioned)
+    merged = {}
+    for offset, day in enumerate(window):
+        total = series["totals"][offset]
+        if total <= 0:
+            continue
+        parts = {key: categories[key][offset] for key in categories if categories[key][offset] > 0}
+        amounts = {key: models[key][offset] for key in models if models[key][offset] > 0}
+        merged[day] = {
+            HISTORY_TOTAL_KEY: total,
+            # A breakdown is remembered only when it is a PARTITION of the
+            # day: a day the walk could not fully categorise carries partial
+            # figures that must never resurface later claiming to be whole.
+            "categories": parts if day in partitioned_in and sum(parts.values()) == total else None,
+            "models": amounts if amounts and sum(amounts.values()) == total else None,
+        }
+    for day, entry in stored.items():
+        current = merged.get(day)
+        if current is None or current[HISTORY_TOTAL_KEY] < entry[HISTORY_TOTAL_KEY]:
+            merged[day] = entry
+    if not merged:
+        return series, categories, models, partitioned, merged
+    days = sorted(merged)
+    first = min(datetime.date.fromisoformat(days[0]), start)
+    last = max(
+        datetime.date.fromisoformat(days[-1]),
+        start + datetime.timedelta(days=len(series["totals"]) - 1),
+    )
+    span = (last - first).days + 1
+    if span > MAX_SERIES_DAYS:
+        raise CaptureError(
+            "the record spans %d days, over the %d day bound the origin enforces"
+            % (span, MAX_SERIES_DAYS)
+        )
+    union = [(first + datetime.timedelta(days=offset)).isoformat() for offset in range(span)]
+    totals = [merged.get(day, {HISTORY_TOTAL_KEY: 0})[HISTORY_TOTAL_KEY] for day in union]
+    parts_by_day = {
+        day: entry["categories"] for day, entry in merged.items() if entry["categories"]
+    }
+    models_by_day = {day: entry["models"] for day, entry in merged.items() if entry["models"]}
+    # A day stays partitioned when its merged entry still carries a category
+    # partition, or when it is a zero day the incoming walk already treated
+    # as trivially partitioned. A day the store overrode WITHOUT a stored
+    # partition leaves the partitioned set — its old partial figures are
+    # gone, and claiming a partition it cannot show would be the lie the
+    # trailing window exists to prevent.
+    kept = set(parts_by_day)
+    for day in partitioned_in:
+        if day not in merged:
+            kept.add(day)
+    extended = {"startDate": union[0], "totals": totals, "recorded": True}
+    return (
+        extended,
+        day_indexed(parts_by_day, union, CATEGORY_KEYS),
+        day_indexed(models_by_day, union, MODEL_KEYS),
+        [day for day in union if day in kept],
+        merged,
+    )
+
+
+def write_history_store(path, remembered):
+    """Persist the merged day index atomically, dates and integers only.
+
+    Written to a sibling temporary file and renamed over the store, so a run
+    killed mid-write leaves the previous store intact rather than a truncated
+    document the next run would refuse. The emission is deterministic (sorted
+    days, sorted keys) so two identical merges write identical bytes.
+    """
+    document = {HISTORY_SCHEMA_KEY: HISTORY_SCHEMA, HISTORY_DAYS_KEY: {}}
+    for day in sorted(remembered):
+        entry = remembered[day]
+        row = {HISTORY_TOTAL_KEY: entry[HISTORY_TOTAL_KEY]}
+        for name in ("categories", "models"):
+            if entry.get(name):
+                row[name] = entry[name]
+        document[HISTORY_DAYS_KEY][day] = row
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(document, handle, sort_keys=True)
+            handle.write("\n")
+        temporary.replace(path)
+    except OSError:
+        raise CaptureError("the history store could not be written")
+
+
 def valid_calendar_day(value):
     """True only for a real YYYY-MM-DD calendar date with no extra bytes.
 
@@ -1500,7 +1718,7 @@ def _assert_emission(value, where, extra_keys, allow_bool):
     raise CaptureError("%s carries a value that is neither a date nor an integer" % where)
 
 
-def capture(root, record_format=FORMAT_MESSAGES, activity_cache=None, today=None):
+def capture(root, record_format=FORMAT_MESSAGES, activity_cache=None, today=None, history_store=None):
     """Walk the transcripts and return (section, counters).
 
     The shape decides only HOW a record becomes a (day, integer, parts,
@@ -1528,6 +1746,16 @@ def capture(root, record_format=FORMAT_MESSAGES, activity_cache=None, today=None
         series, categories, models, partitioned = extend_with_cache(
             series, categories, models, partitioned, read_activity_cache(activity_cache, counters)
         )
+    if history_store is not None:
+        # AFTER the cache union, so the store remembers the deepest series
+        # this run could derive; the walk must still find records (the
+        # refusal in daily_series stands), because a source that suddenly
+        # reads completely empty is a misconfiguration to surface, never a
+        # gap for remembered history to paper over.
+        series, categories, models, partitioned, remembered = merge_history(
+            series, categories, models, partitioned, read_history_store(history_store)
+        )
+        write_history_store(history_store, remembered)
     section = {"series": series}
     totals = series["totals"]
     start = datetime.date.fromisoformat(series["startDate"])
@@ -1554,8 +1782,21 @@ def capture(root, record_format=FORMAT_MESSAGES, activity_cache=None, today=None
     # the honest emission for them is no section — which the origin, the
     # merge loader and the browser all already read as "this source cannot
     # break its series down that way".
-    if models and set(models) != {MODEL_OTHER}:
-        model_offset = max(0, len(totals) - MAX_MODEL_DAYS)
+    #
+    # The model window retreats behind any day its rows cannot partition,
+    # exactly as the categories window does (issue #234): a history-store
+    # entry can carry a total whose attribution was never stored, and a
+    # window claiming that day would fail the partition it declares. Every
+    # walked and cache-supplied day attributes fully, so on those the byte
+    # BUDGET below remains the only cut, exactly as before.
+    model_covered = {
+        day
+        for index, day in enumerate(window)
+        if sum(values[index] for values in models.values()) == totals[index]
+    }
+    model_start = trailing_offset(window, model_covered)
+    if models and set(models) != {MODEL_OTHER} and model_start is not None:
+        model_offset = max(model_start, len(totals) - MAX_MODEL_DAYS, 0)
         windowed = window_section(models, model_offset)
         assert_partition(totals, windowed, model_offset)
         section["models"] = windowed
@@ -1648,6 +1889,10 @@ def parse_arguments(argv):
         help="the tool's own per-day model roll-up, read for the days retention has pruned",
     )
     parser.add_argument(
+        "--history-store",
+        help="durable per-source day store, read and rewritten so pruned days survive",
+    )
+    parser.add_argument(
         "--snapshot",
         help="snapshot file to splice the series into; prints to stdout when omitted",
     )
@@ -1673,8 +1918,17 @@ def main(argv=None):
         if not cache.is_file():
             print("no such activity cache", file=sys.stderr)
             return 2
+    history = None
+    if arguments.history_store is not None:
+        history = pathlib.Path(arguments.history_store).expanduser()
+        if not history.parent.is_dir():
+            # The FILE may not exist yet — the first run bootstraps it — but
+            # its directory must, because a mistyped location would otherwise
+            # silently remember nothing, run after run.
+            print("no such history store directory", file=sys.stderr)
+            return 2
     try:
-        section, counters = capture(root, arguments.record_format, cache)
+        section, counters = capture(root, arguments.record_format, cache, history_store=history)
     except CaptureError as error:
         print(str(error), file=sys.stderr)
         return 1

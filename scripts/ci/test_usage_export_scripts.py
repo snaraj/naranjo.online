@@ -384,6 +384,41 @@ class PushTransportHardeningTest(unittest.TestCase):
         self.assertIn("--activity-cache", argv)
         self.assertEqual(argv[argv.index("--activity-cache") + 1], str(cache))
 
+    def test_a_configured_history_directory_reaches_every_producer(self):
+        # Issue #234: the stores are what keep pruned days in the published
+        # series, so what is pinned is the RESULT on both producer paths — a
+        # store file per source, named for its key — plus the export's own
+        # argument, exactly as the activity cache is pinned above.
+        second = self.scratch / "second-transcripts"
+        transcript_fixture(second)
+        history = self.scratch / "history"
+        self.write_config(
+            MERGE_CAPTURES="beta=messages=%s" % second,
+            HISTORY_DIR=str(history),
+        )
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = self.sandbox_args_file.read_text(encoding="utf-8").splitlines()
+        self.assertIn("--history-store", argv)
+        self.assertEqual(
+            argv[argv.index("--history-store") + 1], str(history / "alpha.json")
+        )
+        # Both producers really ran with their stores: each wrote one back,
+        # and the walked day is remembered in each.
+        for key in ("alpha", "beta"):
+            store = history / ("%s.json" % key)
+            self.assertTrue(store.is_file(), "no store written for %s" % key)
+            days = json.loads(store.read_text(encoding="utf-8"))["days"]
+            self.assertIn(TRANSCRIPT_FIXTURE_DAY, days)
+
+    def test_no_configured_history_directory_passes_no_store_argument(self):
+        # The negative control: without the key, the producers run exactly
+        # as they did before the option existed, and nothing is written.
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = self.sandbox_args_file.read_text(encoding="utf-8").splitlines()
+        self.assertNotIn("--history-store", argv)
+
     def test_no_configured_cache_passes_no_cache_argument(self):
         # The negative control, and the reason the test above is not vacuous:
         # the cache is optional, and a run without one must invoke the

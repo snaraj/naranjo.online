@@ -547,6 +547,40 @@ class OversizedLineTest(unittest.TestCase):
         self.assertEqual(counters["oversized"], 1)
         self.assertEqual([total for _d, total, _p, _m in rows], [100])
 
+    def test_terminated_oversized_lines_still_count_against_the_tree_byte_bound(self):
+        # 2026-08-27 review of PR #230, INFO-6: the terminated-oversized
+        # branch adds the line's bytes to the tally and then skipped the
+        # tree-wide ceiling check every other accumulation path enforces —
+        # so a tree made of newline-terminated oversized records was the one
+        # input shape MAX_RECORD_BYTES never bounded. The bounds are patched
+        # small here because the shipped ceiling is deliberately sized in
+        # gibibytes; what is under test is the CHECK, not the number.
+        module = capture_usage_series
+        original_line = module.MAX_RECORD_LINE_BYTES
+        original_bytes = module.MAX_RECORD_BYTES
+        module.MAX_RECORD_LINE_BYTES = 4096
+        module.MAX_RECORD_BYTES = 2 * 4096
+        try:
+            def with_content(content):
+                return transcript_line(
+                    requestId="req_exact",
+                    message={
+                        "id": "msg_exact",
+                        "content": content,
+                        "usage": {"input_tokens": 1},
+                    },
+                )
+
+            padding = module.MAX_RECORD_LINE_BYTES - len(with_content(""))
+            exact = with_content("x" * padding)
+            self.assertEqual(len(exact), module.MAX_RECORD_LINE_BYTES)
+            with self.assertRaises(CaptureError) as refusal:
+                self.walk((exact + "\n") * 3)
+            self.assertIn("byte bound", str(refusal.exception))
+        finally:
+            module.MAX_RECORD_LINE_BYTES = original_line
+            module.MAX_RECORD_BYTES = original_bytes
+
 
 class RunningPartsTest(unittest.TestCase):
     """The three named tiers of the running-totals partition."""
@@ -810,6 +844,254 @@ class ActivityCacheTest(unittest.TestCase):
         )
         self.assertEqual(section["series"]["startDate"], "2026-08-09")
         self.assertEqual(section["series"]["totals"], [2, 135])
+
+
+class HistoryStoreTest(unittest.TestCase):
+    """Evidence, once captured, survives its sources (issue #234).
+
+    Every source the pipeline reads is volatile: transcript trees are
+    retention-pruned, and the roll-up cache has been measured discarding a
+    month of days in one recompute. Re-deriving the series from those sources
+    every hour therefore serves a history that silently gets SHORTER — days
+    that were captured, sealed and served become zeros the moment their last
+    local evidence is deleted, which is the defect the owner reported on
+    2026-08-28. The store is the pipeline's own durable memory, and this
+    suite pins the rule that makes it honest: it preserves measurements only,
+    never inventing a day and never resurrecting a partial breakdown as a
+    whole one.
+    """
+
+    def setUp(self):
+        self.scratch = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.tree = self.scratch / "tree"
+        self.tree.mkdir()
+        self.store = self.scratch / "store.json"
+
+    def day_line(self, day, ident, tokens):
+        return transcript_line(
+            timestamp=day + "T12:00:00Z",
+            requestId="req_%s" % ident,
+            message={
+                "id": "msg_%s" % ident,
+                "model": "avendor-%s" % capture_usage_series.MODEL_KEYS[1],
+                "usage": {"input_tokens": tokens, "output_tokens": tokens},
+            },
+        )
+
+    def write_tree(self, *lines):
+        (self.tree / "session.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def run_capture(self):
+        return capture_usage_series.capture(
+            self.tree,
+            capture_usage_series.FORMAT_MESSAGES,
+            today=datetime.date(2026, 8, 12),
+            history_store=self.store,
+        )
+
+    def stored_days(self):
+        document = json.loads(self.store.read_text(encoding="utf-8"))
+        self.assertEqual(document["schema"], capture_usage_series.HISTORY_SCHEMA)
+        return document["days"]
+
+    def test_a_pruned_day_survives_from_the_store_with_its_breakdowns(self):
+        # Run 1 measures two days; run 2's tree has lost the older one, which
+        # is exactly what retention pruning does. The day, its category
+        # partition, and its model attribution must all survive.
+        self.write_tree(self.day_line("2026-08-10", "a", 10), self.day_line("2026-08-11", "b", 20))
+        first, _ = self.run_capture()
+        self.assertEqual(first["series"]["totals"], [20, 40])
+        self.write_tree(self.day_line("2026-08-11", "b", 20), self.day_line("2026-08-12", "c", 30))
+        section, _ = self.run_capture()
+        self.assertEqual(section["series"]["startDate"], "2026-08-10")
+        self.assertEqual(section["series"]["totals"], [20, 40, 60])
+        self.assertNotIn("categoriesStartDate", section)
+        self.assertEqual(section["categories"]["input"], [10, 20, 30])
+        self.assertEqual(
+            section["models"][capture_usage_series.MODEL_KEYS[1]], [20, 40, 60]
+        )
+        self.assertEqual(section["derived"][capture_usage_series.STAT_LONGEST_STREAK], 3)
+
+    def test_the_fresh_capture_wins_while_it_measures_at_least_the_stored_figure(self):
+        # The in-progress day only grows, and the walk is the de-duplicated
+        # current measurement — so a stored figure never overrides a fresh
+        # one that is at least as large.
+        self.write_tree(self.day_line("2026-08-11", "a", 10))
+        self.run_capture()
+        self.write_tree(
+            self.day_line("2026-08-11", "a", 10), self.day_line("2026-08-11", "b", 25)
+        )
+        section, _ = self.run_capture()
+        self.assertEqual(section["series"]["totals"], [70])
+        self.assertEqual(self.stored_days()["2026-08-11"]["total"], 70)
+
+    def test_a_shrunken_day_keeps_the_stored_figure(self):
+        # A genuinely measured day only shrinks when its records are deleted
+        # underneath it — partial pruning inside one day — and pruning is
+        # what the store exists to survive.
+        self.write_tree(
+            self.day_line("2026-08-11", "a", 10), self.day_line("2026-08-11", "b", 25)
+        )
+        self.run_capture()
+        self.write_tree(self.day_line("2026-08-11", "a", 10))
+        section, _ = self.run_capture()
+        self.assertEqual(section["series"]["totals"], [70])
+        self.assertEqual(self.stored_days()["2026-08-11"]["total"], 70)
+
+    def test_no_day_is_invented_and_gaps_are_never_written_back(self):
+        # Two real days with a gap between them: the gap renders as the
+        # zero-inside-the-window the series contract already defines, and the
+        # store never grows an entry for it — absence of evidence is stored
+        # as absence.
+        self.write_tree(self.day_line("2026-08-09", "a", 10), self.day_line("2026-08-12", "b", 20))
+        section, _ = self.run_capture()
+        self.assertEqual(section["series"]["totals"], [20, 0, 0, 40])
+        self.assertEqual(sorted(self.stored_days()), ["2026-08-09", "2026-08-12"])
+
+    def test_a_stored_day_without_a_partition_never_resurfaces_claiming_one(self):
+        # A store entry can carry a total with no category split (the walk
+        # could not partition that day before it was pruned). When it
+        # overrides a day, the categories window must retreat behind it
+        # rather than serve a partition nobody measured.
+        self.write_tree(self.day_line("2026-08-11", "a", 10), self.day_line("2026-08-12", "b", 20))
+        self.run_capture()
+        document = json.loads(self.store.read_text(encoding="utf-8"))
+        document["days"]["2026-08-11"] = {"total": 999}
+        self.store.write_text(json.dumps(document), encoding="utf-8")
+        self.write_tree(self.day_line("2026-08-11", "a", 10), self.day_line("2026-08-12", "b", 20))
+        section, _ = self.run_capture()
+        self.assertEqual(section["series"]["totals"], [999, 40])
+        self.assertEqual(section["categoriesStartDate"], "2026-08-12")
+        self.assertEqual(section["categories"]["input"], [20])
+        # The model window retreats the same way: the overriding entry kept
+        # no attribution, so the section declares it starts after that day.
+        self.assertEqual(section["modelsStartDate"], "2026-08-12")
+        self.assertEqual(section["models"][capture_usage_series.MODEL_KEYS[1]], [40])
+
+    def test_a_tie_keeps_the_fresh_entry_and_its_richer_breakdowns(self):
+        # Equal totals are NOT interchangeable entries: an old store row can
+        # carry a bare total where the fresh walk measures the same figure
+        # WITH its partition and attribution. Preferring the store on a tie
+        # would discard measured breakdowns for remembered ignorance.
+        self.write_tree(self.day_line("2026-08-11", "a", 10), self.day_line("2026-08-12", "b", 20))
+        self.run_capture()
+        document = json.loads(self.store.read_text(encoding="utf-8"))
+        document["days"]["2026-08-11"] = {"total": 20}
+        self.store.write_text(json.dumps(document), encoding="utf-8")
+        section, _ = self.run_capture()
+        self.assertEqual(section["series"]["totals"], [20, 40])
+        self.assertNotIn("categoriesStartDate", section)
+        self.assertEqual(section["categories"]["input"], [10, 20])
+        self.assertEqual(self.stored_days()["2026-08-11"]["categories"]["input"], 10)
+
+    def test_the_first_run_bootstraps_a_missing_store_file(self):
+        self.write_tree(self.day_line("2026-08-11", "a", 10))
+        self.assertFalse(self.store.exists())
+        self.run_capture()
+        self.assertEqual(sorted(self.stored_days()), ["2026-08-11"])
+        # And the write is atomic: no temporary residue beside the store.
+        self.assertEqual(
+            [entry.name for entry in self.scratch.iterdir() if entry.name.startswith("store")],
+            ["store.json"],
+        )
+
+    def test_two_identical_merges_write_identical_bytes(self):
+        self.write_tree(self.day_line("2026-08-11", "a", 10))
+        self.run_capture()
+        first = self.store.read_bytes()
+        second_section, _ = self.run_capture()
+        self.assertEqual(self.store.read_bytes(), first)
+        capture_usage_series.assert_only_dates_and_integers(second_section, "section")
+
+    def test_a_malformed_store_refuses_rather_than_forgetting(self):
+        # Ignoring a corrupt store would silently shorten the published
+        # history with nothing anywhere saying so — the exact defect the
+        # store exists to end. Every malformation refuses the run.
+        self.write_tree(self.day_line("2026-08-11", "a", 10))
+        schema = capture_usage_series.HISTORY_SCHEMA
+        for document in (
+            "not json",
+            json.dumps([]),
+            json.dumps({"days": {}}),
+            json.dumps({"schema": "usage-history/v2", "days": {}}),
+            json.dumps({"schema": schema, "days": {}, "extra": 1}),
+            json.dumps({"schema": schema, "days": []}),
+            json.dumps({"schema": schema, "days": {"not-a-day": {"total": 1}}}),
+            json.dumps({"schema": schema, "days": {"2026-99-99": {"total": 1}}}),
+            json.dumps({"schema": schema, "days": {"2026-08-01": {}}}),
+            json.dumps({"schema": schema, "days": {"2026-08-01": {"total": 0}}}),
+            json.dumps({"schema": schema, "days": {"2026-08-01": {"total": -5}}}),
+            json.dumps({"schema": schema, "days": {"2026-08-01": {"total": True}}}),
+            json.dumps({"schema": schema, "days": {"2026-08-01": {"total": 2**53}}}),
+            json.dumps({"schema": schema, "days": {"2026-08-01": {"total": 1, "extra": 1}}}),
+            json.dumps(
+                {"schema": schema, "days": {"2026-08-01": {"total": 5, "categories": {"input": 3}}}}
+            ),
+            json.dumps(
+                {
+                    "schema": schema,
+                    "days": {"2026-08-01": {"total": 5, "categories": {"private-key": 5}}},
+                }
+            ),
+            json.dumps(
+                {"schema": schema, "days": {"2026-08-01": {"total": 5, "models": {"gpt": 5}}}}
+            ),
+        ):
+            with self.subTest(document=document[:60]):
+                self.store.write_text(document, encoding="utf-8")
+                with self.assertRaises(CaptureError):
+                    self.run_capture()
+
+    def test_an_oversized_store_refuses(self):
+        self.write_tree(self.day_line("2026-08-11", "a", 10))
+        self.store.write_text(
+            "[" + " " * capture_usage_series.MAX_HISTORY_STORE_BYTES + "]", encoding="utf-8"
+        )
+        with self.assertRaises(CaptureError) as refusal:
+            self.run_capture()
+        self.assertIn("byte bound", str(refusal.exception))
+
+    def test_a_store_reaching_past_the_series_day_bound_refuses(self):
+        self.write_tree(self.day_line("2026-08-11", "a", 10))
+        self.store.write_text(
+            json.dumps(
+                {
+                    "schema": capture_usage_series.HISTORY_SCHEMA,
+                    "days": {"2020-01-01": {"total": 1}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaises(CaptureError) as refusal:
+            self.run_capture()
+        self.assertIn("day bound", str(refusal.exception))
+
+    def test_the_running_totals_shape_remembers_the_same_way(self):
+        # The store is shape-agnostic: the second tool's journal is pruned on
+        # its own schedule too, and its pruned days must survive identically.
+        (self.tree / "one.jsonl").write_text(
+            running_line(100, stamp="2026-08-10T12:00:00Z") + "\n", encoding="utf-8"
+        )
+        section, _ = capture_usage_series.capture(
+            self.tree,
+            capture_usage_series.FORMAT_RUNNING_TOTALS,
+            today=datetime.date(2026, 8, 12),
+            history_store=self.store,
+        )
+        self.assertEqual(section["series"]["totals"], [100])
+        (self.tree / "one.jsonl").unlink()
+        (self.tree / "two.jsonl").write_text(
+            running_line(40, stamp="2026-08-12T12:00:00Z") + "\n", encoding="utf-8"
+        )
+        section, _ = capture_usage_series.capture(
+            self.tree,
+            capture_usage_series.FORMAT_RUNNING_TOTALS,
+            today=datetime.date(2026, 8, 12),
+            history_store=self.store,
+        )
+        self.assertEqual(section["series"]["startDate"], "2026-08-10")
+        self.assertEqual(section["series"]["totals"], [100, 0, 40])
 
 
 class ModelWindowTest(unittest.TestCase):

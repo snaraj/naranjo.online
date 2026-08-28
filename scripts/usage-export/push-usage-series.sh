@@ -71,6 +71,17 @@
 #                   the window and derived sections the loader requires, so
 #                   every scheduled export refused for as long as it took a
 #                   human to look (2026-08-27).
+#   HISTORY_DIR     directory for the durable per-source history stores
+#                   (issue #234). Every source this pipeline reads is
+#                   volatile — transcript trees are retention-pruned and the
+#                   roll-up cache has been measured discarding a month in one
+#                   recompute — so without a store the served series silently
+#                   gets SHORTER as evidence is deleted. When set, the walked
+#                   source and every MERGE_CAPTURES source each read and
+#                   rewrite "$HISTORY_DIR/<key>.json", so a day a capture has
+#                   measured survives its sources forever after. Optional so
+#                   an unconfigured workstation still exports; configuring it
+#                   is what the depth guarantee rests on.
 #
 # Exit status is nonzero on any failure; diagnostics never include payload
 # content. Stage names and byte counts only.
@@ -109,6 +120,7 @@ esac
 MERGE_SOURCES="${MERGE_SOURCES:-}"
 MERGE_CAPTURES="${MERGE_CAPTURES:-}"
 ACTIVITY_CACHE="${ACTIVITY_CACHE:-}"
+HISTORY_DIR="${HISTORY_DIR:-}"
 PUSH_PORT="${PUSH_PORT:-22}"
 
 # The destination must carry its own user, because -F /dev/null means no
@@ -154,6 +166,15 @@ umask 077
 SCRATCH=$(mktemp -d) || fail "cannot create scratch directory"
 trap 'rm -rf "$SCRATCH"' EXIT INT TERM
 
+# The history stores must have somewhere to live BEFORE any producer runs —
+# a store whose directory is missing would make every capture refuse — and
+# creating the directory here, under the umask above, keeps the stores as
+# private as the configuration that names them. Unlike the scratch, it is
+# never wiped: surviving runs is its entire purpose.
+if [ -n "$HISTORY_DIR" ]; then
+    mkdir -p "$HISTORY_DIR" || fail "the history directory cannot be created"
+fi
+
 PLAIN="$SCRATCH/usage.json"
 SEALED="$SCRATCH/usage.enc"
 
@@ -187,9 +208,12 @@ for triple in $MERGE_CAPTURES; do
     # build a path, not after.
     printf '%s' "$key" | grep -q '^[a-z][a-z0-9-]*$' \
         || fail "a MERGE_CAPTURES key must be label-shaped"
+    set -- --transcripts "$tree" --source "$key" --format "$format"
+    if [ -n "$HISTORY_DIR" ]; then
+        set -- "$@" --history-store "$HISTORY_DIR/$key.json"
+    fi
     sandbox-exec -f "$PRODUCER_PROFILE" \
-        /usr/bin/env python3 -I -B "$CAPTURE_SCRIPT" \
-        --transcripts "$tree" --source "$key" --format "$format" \
+        /usr/bin/env python3 -I -B "$CAPTURE_SCRIPT" "$@" \
         > "$SCRATCH/$key.json" \
         || fail "a merge source could not be recaptured; nothing was pushed"
     MERGE_SOURCES="$MERGE_SOURCES $key=$SCRATCH/$key.json"
@@ -213,6 +237,9 @@ if [ -n "$ACTIVITY_CACHE" ]; then
     [ -f "$ACTIVITY_CACHE" ] \
         || fail "ACTIVITY_CACHE does not name a file; a configured cache that cannot be read would silently shorten the series"
     set -- "$@" --activity-cache "$ACTIVITY_CACHE"
+fi
+if [ -n "$HISTORY_DIR" ]; then
+    set -- "$@" --history-store "$HISTORY_DIR/$SOURCE_LABEL.json"
 fi
 for pair in $MERGE_SOURCES; do
     set -- "$@" --merge-source "$pair"
