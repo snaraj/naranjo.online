@@ -165,6 +165,34 @@ export function rangeColumns(cells: GridCell[], range: SeriesRange): GridCell[][
   return calendarColumns(cells, rangeWeeks(cells, range));
 }
 
+/* fullDepthColumns is the ONE window the token panel draws since its display
+ * menu was removed (issue 233, owner directive 2026-08-28): every captured
+ * day, and never narrower than the grid's own reserve.
+ *
+ * It is the WIDER of two windows rather than either alone, because either
+ * alone is a defect this repository has already measured.
+ *
+ * The reserve alone is a CEILING the day a capture runs past a year — the
+ * exact defect the range control was added for (issue 158) — and deleting
+ * that control while keeping its default would have walked straight back into
+ * it. The capture alone is a hole at the other end: a fifty-eight-day capture
+ * measures ten columns (rangeWeeks' own floor), which a full-width strip
+ * draws as a couple of hundred pixels of graph against most of a card, and
+ * content stopping short of its container's edge is a defect by the owner's
+ * own standing rule.
+ *
+ * So: it fills the card at every capture shorter than the reserve, drawing
+ * the reserve's extra weeks as the dated holes they are — calendarColumns'
+ * own contract, and the coverage line under the strip counts them, so the
+ * width is never mistaken for data. And it grows without limit once the
+ * capture is genuinely wider than the reserve, which is the ceiling removal.
+ *
+ * An undated series measures pendingWeeks either way, so the max changes
+ * nothing there and calendarColumns still chunks positionally. */
+export function fullDepthColumns(cells: GridCell[]): GridCell[][] {
+  return calendarColumns(cells, Math.max(pendingWeeks, rangeWeeks(cells, 'all')));
+}
+
 /* isSafeCount is this module's numeric admission: a non-negative integer
  * JavaScript represents exactly. Stricter than a finiteness test on purpose —
  * a magnitude outside the safe range cannot be summed without lying, so it is

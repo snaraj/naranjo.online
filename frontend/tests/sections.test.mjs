@@ -1002,21 +1002,172 @@ test('the comment strip these pins depend on runs to a fixed point (issue 207)',
   assert.doesNotMatch(galleryMarkup, /<!--/, 'the gallery markup these pins read must be comment-free');
 });
 
-test('a moving item shows a poster in the strip — never a <video> element there (issue 207)', () => {
-  // The single visible frame is an <img> for every kind of item. A gallery
-  // that mounted a <video> to show a thumbnail would reintroduce, in a
-  // heavier form, exactly the weight the one-frame redesign removed.
-  const enlargedBlock = /\{#if enlarged\}([\s\S]*?)\{\/if\}/.exec(galleryMarkup)?.[1] ?? '';
-  assert.match(enlargedBlock, /<video/, 'the video element must mount inside the enlarged branch');
-  assert.doesNotMatch(
-    galleryMarkup.replace(enlargedBlock, ''),
-    /<video|<source/,
-    'no video or source element may exist outside the enlarged branch'
+test('a moving item PLAYS in the strip — exactly one video, the current item’s, never in the dialog (issue 233)', () => {
+  /* RE-AIMED, not relaxed (issue 233, owner directive 2026-08-28). The pin
+     this replaces required a film to be a poster in the strip and a <video>
+     only inside the enlarged branch. The owner asked for the opposite — play
+     it where it sits — so the rule this file enforces moved with it, and what
+     the old rule was actually protecting is what the new one still says: the
+     strip may never carry a video PER ITEM. Both halves are here, because
+     either alone is the other's regression.
+
+     Half one: exactly ONE <video> exists in the whole markup, and it is
+     inside the current item's own stage. `item` is the single item `index`
+     names, so one element in that branch is one element on the page however
+     many items the manifest publishes — and navigating unmounts it. */
+  assert.equal(
+    [...galleryMarkup.matchAll(/<video\b/g)].length,
+    1,
+    'the gallery mounts a number of <video> elements other than exactly one'
   );
-  // The strip's one difference between a film and a photograph: a drawn,
-  // aria-hidden mark. It is signposting, not a second control — the frame
-  // itself already opens the lightbox.
-  assert.match(mediaGallery, /class="gallery-play-mark" aria-hidden="true"/);
+  assert.match(
+    galleryMarkup,
+    /\{#if item\.video\}[\s\S]*?<div class="gallery-stage" data-gallery-kind="video">[\s\S]*?<video/,
+    'the player is not inside the current item’s own video stage'
+  );
+  // Name-blind about the LOOP for the same reason the .gallery-image count
+  // is: no media element may be mounted once per item.
+  for (const [loop] of galleryMarkup.matchAll(/\{#each items as[\s\S]*?\{\/each\}/g)) {
+    assert.doesNotMatch(loop, /<img|<video|<source/, 'a media element is mounted for every item at once');
+  }
+
+  /* Half two: the DIALOG is stills only. The branch that used to mount a
+     <video> there is gone rather than left unreachable, so the enlarged
+     surface can carry neither element. */
+  const enlargedBlock = enlargedBranch(galleryMarkup);
+  assert.ok(enlargedBlock.length > 0, 'the enlarged branch is not where this pin expects it');
+  assert.doesNotMatch(
+    enlargedBlock,
+    /<video|<source/,
+    'the lightbox mounts a player again; a film plays in the strip'
+  );
+
+  /* The element is KEYED on the item, which is what makes "navigating away
+     unmounts it" true between two FILMS as well: swapping <source> children
+     under a live <video> does not re-run resource selection, so an unkeyed
+     branch would keep the previous film's bytes under the new poster. */
+  assert.match(galleryMarkup, /\{#key item\.key\}/, 'the player is reused across items');
+
+  /* THE PLAY MARK IS GONE (owner: "remove the play icon from all videos, its
+     just there doing nothing"). An ABSENCE pin at the strength the presence
+     pin had: neither the class, nor the drawn triangle, nor a token only it
+     ever read may come back. */
+  assert.doesNotMatch(mediaGallery, /gallery-play-mark/, 'the decorative play mark is back');
+  assert.doesNotMatch(mediaGallery, /M9 7\.5l8 4\.5-8 4\.5z/, 'the play triangle is drawn again');
+  for (const token of ['--gallery-play-size', '--gallery-play-inset', '--gallery-play-surface', '--gallery-play-ink']) {
+    assert.ok(!mediaGallery.includes(token), `${token} outlived the mark it sized`);
+    assert.ok(!styles.includes(token), `styles.css still declares ${token}`);
+  }
+});
+
+test('a film’s stage takes the video token pair; a still keeps the square (issue 233)', () => {
+  const style = styleBlock(mediaGallery);
+  /* The stage's arithmetic is stated ONCE and reads two custom properties;
+     the kind rule redeclares those same two rather than restating the
+     arithmetic, so a film and a still cannot end up sized by two different
+     pieces of code. */
+  assert.match(
+    style,
+    /inline-size: min\(100%, calc\(var\(--gallery-stage-size, 28rem\) \* \(var\(--gallery-stage-aspect, 1\)\)\)\)/
+  );
+  assert.match(style, /aspect-ratio: var\(--gallery-stage-aspect, 1\)/);
+  assert.match(style, /max-block-size: var\(--gallery-stage-size, 28rem\)/);
+  const kindRule = /\.gallery-stage\[data-gallery-kind='video'\]\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(kindRule.length > 0, 'a film’s stage is not switched by its kind at all');
+  assert.match(kindRule, /--gallery-stage-size: var\(--gallery-stage-size-video, 27rem\);/);
+  assert.match(kindRule, /--gallery-stage-aspect: var\(--gallery-stage-aspect-video, 1\.7778\);/);
+  /* Both halves of the pair are GLOBAL tokens, declared in styles.css beside
+     the square's own pair rather than left as component fallbacks — the
+     frontend floor every other dimension of this card already holds to. A
+     component-only default would make the widescreen stage the one dimension
+     of this gallery the token layer could not tune. */
+  for (const token of ['--gallery-stage-size-video: 27rem;', '--gallery-stage-aspect-video: 1.7778;']) {
+    assert.ok(styles.includes(token), `styles.css does not declare ${token}`);
+  }
+  // The still's own pair is untouched; a film changing the square would be
+  // this change escaping its own scope.
+  assert.ok(styles.includes('--gallery-stage-size: 28rem;'));
+  assert.ok(styles.includes('--gallery-stage-aspect: 1;'));
+  // And a film's stage is genuinely the LARGER of the two: 27rem x 1.7778 is
+  // 768x432 against the square's 448x448 — wider, and more area.
+  const videoInline = 27 * 1.7778;
+  assert.ok(videoInline > 28, `a film’s stage is ${videoInline}rem wide against the square’s 28rem`);
+  assert.ok(videoInline * 27 > 28 * 28, 'a film’s stage covers no more area than the square it replaces');
+});
+
+test('the player owns its own surface: no swipe binding, no button, no gallery arrow keys (issue 233)', () => {
+  /* The delicate half of playing in place. lib/gesture.ts claims a horizontal
+     drag and CAPTURES the pointer the moment it does, which is exactly the
+     gesture a reader makes scrubbing a seek bar — so the film's stage carries
+     no binding at all, and the still's carries the one it always had. */
+  const videoStage = /<div class="gallery-stage" data-gallery-kind="video">([\s\S]*?)\n          <\/div>/.exec(
+    galleryMarkup
+  )?.[1] ?? '';
+  assert.ok(videoStage.length > 0, 'the film’s stage is not where this pin expects it');
+  assert.doesNotMatch(videoStage, /use:swipeHorizontal/, 'the swipe binding sits over the player’s own controls');
+  assert.doesNotMatch(videoStage, /<button/, 'a film’s stage carries a control that would eat the player’s presses');
+  assert.match(
+    galleryMarkup,
+    /<div\s+class="gallery-stage"\s+data-gallery-kind="image"[\s\S]*?use:swipeHorizontal=\{swipe\}/,
+    'the still’s stage lost the swipe it has always had'
+  );
+  // Exactly one binding on the page, so this is a MOVE rather than an
+  // addition that left a second gesture surface behind.
+  assert.equal([...galleryMarkup.matchAll(/use:swipeHorizontal/g)].length, 1);
+  /* The keyboard half is structural rather than a guard: the gallery's arrow
+     handler lives on the enlarge button, and a film has none — so there is no
+     ancestor between the player and the document that would answer a left or
+     right press the player wants for itself. */
+  assert.match(galleryMarkup, /class="gallery-image-button"[\s\S]*?onkeydown=\{onFrameKeydown\}/);
+  assert.equal([...galleryMarkup.matchAll(/onkeydown=\{onFrameKeydown\}/g)].length, 1);
+  assert.doesNotMatch(videoStage, /onkeydown/, 'the film’s stage answers keys the player should get');
+  /* And the invariant that keeps the retired lightbox branch unreachable
+     rather than merely unused: the dialog cannot be left open on a film. */
+  assert.match(
+    mediaGallery,
+    /if \(enlarged \&\& item\.video !== undefined\) \{\s*enlarged = false;/,
+    'the lightbox can still be left open on a film it cannot show'
+  );
+});
+
+test('the gallery’s painted controls shrank while every target kept its 44px (issue 233)', () => {
+  const style = styleBlock(mediaGallery);
+  /* Owner directive, 2026-08-28: the arrows and the position marks should be
+     smaller. This repository's established answer is a small mark inside a
+     44px hit box, so the pin holds BOTH ends — a shrink that took the target
+     with it would be the touch floor broken. */
+  const arrowRule = /\.gallery-frame > \.icon-button \.gallery-glyph\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(arrowRule.length > 0, 'the frame’s arrow glyph is not sized by a rule of its own');
+  assert.match(arrowRule, /inline-size: var\(--gallery-arrow-size, 0\.75rem\);/);
+  assert.match(arrowRule, /block-size: var\(--gallery-arrow-size, 0\.75rem\);/);
+  assert.ok(styles.includes('--gallery-arrow-size: 0.75rem;'), 'styles.css does not declare --gallery-arrow-size');
+  // The SVG's own attributes agree with the token, so an engine that never
+  // resolved the custom property still paints the smaller glyph rather than
+  // the retired 18px one.
+  assert.equal(
+    [...mediaGallery.matchAll(/width="12" height="12"/g)].length,
+    2,
+    'the two arrows do not both declare the shrunk box'
+  );
+  assert.doesNotMatch(mediaGallery, /width="18" height="18"/, 'an arrow still declares the old 18px glyph');
+  // The dots, the same way, plus the scale that keeps the current one
+  // distinguishable after the shrink — a value is never carried by opacity
+  // alone.
+  const dotRule = /\.gallery-dot-mark\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.match(dotRule, /inline-size: var\(--gallery-dot-size, 0\.25rem\);/);
+  assert.match(dotRule, /block-size: var\(--gallery-dot-size, 0\.25rem\);/);
+  assert.match(style, /transform: scale\(var\(--gallery-dot-active-scale, 1\.5\)\);/);
+  for (const token of ['--gallery-dot-size: 0.25rem;', '--gallery-dot-active-scale: 1.5;']) {
+    assert.ok(styles.includes(token), `styles.css does not declare ${token}`);
+  }
+  // Both painted marks are genuinely smaller than what they replace.
+  assert.ok(0.75 * 16 < 18, 'the arrow glyph did not shrink');
+  assert.ok(0.25 < 0.375, 'the position mark did not shrink');
+  // The targets did NOT move: the marks sit inside their old 44px boxes.
+  const dotButton = /\.gallery-dot\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.match(dotButton, /min-inline-size: 2\.75rem;/);
+  assert.match(dotButton, /min-block-size: 2\.75rem;/);
+  assert.match(styles, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
 });
 
 test('nothing in the gallery ever autoplays, and reduced motion is structural (issue 207)', () => {
@@ -1099,7 +1250,7 @@ test('the lightbox is a native <dialog>: Escape/backdrop/close all close it, arr
   // an explicit close() — is the single place `enlarged` resets, so no
   // closing path can desync it from the dialog's real open state.
   assert.match(mediaGallery, /onclose=\{onDialogClose\}/);
-  assert.match(mediaGallery, /function onDialogClose\(\): void \{\s*enlarged = false;/);
+  assert.match(mediaGallery, /async function onDialogClose\(\): Promise<void> \{\s*enlarged = false;/);
   assert.match(mediaGallery, /event\.key === 'ArrowRight'/);
   assert.match(mediaGallery, /event\.key === 'ArrowLeft'/);
   assert.match(mediaGallery, /event\.target === dialogEl/, 'a genuine backdrop click must close the dialog');
@@ -1330,11 +1481,20 @@ test('Escape closes the lightbox and hands focus back to the frame it came from 
      dialog's own close event — the one path Escape, the close control and a
      backdrop click all pass through. */
   assert.match(mediaGallery, /bind:this=\{frameButtonEl\}/, 'the invoking frame button is not captured');
+  /* The restore waits a tick and falls through to the player, and both halves
+     are load-bearing since issue 233. A lightbox can now close BECAUSE the
+     stage is about to stop being a still — arrowing the open dialog onto a
+     film closes it — so the element focus is owed to may not exist yet at the
+     moment the close event fires, and the element that will exist is the
+     player rather than the button. Focusing the outgoing button would land
+     the reader on the body, which is the exact defect this pin was written
+     for, arriving by a new route. */
   assert.match(
     mediaGallery,
-    /function onDialogClose\(\): void \{\s*enlarged = false;\s*frameButtonEl\?\.focus\(\);/,
-    'closing the lightbox does not return focus to the frame'
+    /async function onDialogClose\(\): Promise<void> \{\s*enlarged = false;\s*await tick\(\);\s*\(frameButtonEl \?\? playerEl\)\?\.focus\(\);/,
+    'closing the lightbox does not return focus to the surface it came from'
   );
+  assert.match(mediaGallery, /import \{ tick \} from 'svelte';/, 'the restore cannot wait for the DOM it restores into');
 });
 
 test('gallery metadata is optional in the data, and every row states only what SOURCES.md verifies', () => {

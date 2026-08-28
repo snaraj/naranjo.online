@@ -32,6 +32,7 @@ import {
   isSeriesRange,
   periodTotals,
   rangeColumns,
+  fullDepthColumns,
   rangeDays,
   rangeWeeks,
   seriesRanges,
@@ -543,4 +544,78 @@ test('the shipped fifteen-day snapshot renders identically under the default ran
     assert.equal(coverageReading(columns), 'Aug 10–24, 2026 · 15 of 371 days captured');
   }
   assert.equal(checked, 2, 'the snapshot no longer carries the two sources this pin names');
+});
+
+/* THE ONE WINDOW the token panel draws since its display menu was deleted
+ * (issue 233, owner directive 2026-08-28). Executed, not pattern-matched:
+ * this is arithmetic, and the two failures it exists to prevent are both
+ * failures somebody has already shipped once.
+ *
+ * Neither half is decoration. Take the reserve alone and a capture past a
+ * year is silently truncated — issue 158's ceiling, which the deleted control
+ * was added to remove. Take the capture alone and a two-month history draws
+ * ten columns into a full-width card, which is the owner's standing
+ * no-dead-space rule broken by the graph that replaced the controls. */
+test('fullDepthColumns draws every captured day and never less than the reserve (issue 233)', () => {
+  // Shorter than the reserve: the reserve wins, so the strip still fills the
+  // card it is drawn into, and the extra weeks are the dated holes
+  // calendarColumns already draws.
+  for (const days of [1, 15, 58, 100, 300]) {
+    const cells = seriesCells('2026-01-01', new Array(days).fill(1));
+    const columns = fullDepthColumns(cells);
+    assert.equal(
+      columns.length,
+      pendingWeeks,
+      `a ${days}-day capture drew ${columns.length} columns instead of the reserve`
+    );
+    // Every column is a whole calendar week, exactly as every other window.
+    for (const column of columns) {
+      assert.equal(column.length, gridRows);
+    }
+  }
+
+  /* Wider than the reserve: the CAPTURE wins, without limit. This is the
+     ceiling removal, and it is checked at two very different depths so a
+     re-introduced clamp cannot hide at one of them. */
+  for (const days of [400, 800, 2000]) {
+    const cells = seriesCells('2024-01-01', new Array(days).fill(2));
+    const columns = fullDepthColumns(cells);
+    assert.ok(
+      columns.length > pendingWeeks,
+      `a ${days}-day capture was clamped to ${columns.length} columns`
+    );
+    assert.equal(columns.length, rangeWeeks(cells, 'all'), `a ${days}-day capture drew a width it did not measure`);
+    assert.ok(
+      columns.length * gridRows >= days,
+      `a ${days}-day capture drew a window too narrow to hold it`
+    );
+  }
+
+  /* NOT A CEILING, stated as the comparison that would have caught the
+     regression: the same long capture through the retired default loses days
+     off its old end, and through this window keeps them. */
+  const long = seriesCells('2024-01-01', new Array(800).fill(2));
+  const dated = (columns) => columns.flat().filter((cell) => !cell.absent).length;
+  assert.ok(
+    dated(fullDepthColumns(long)) > dated(rangeColumns(long, defaultSeriesRange)),
+    'the fixed window keeps no more captured days than the twelve-month default it replaced'
+  );
+  assert.equal(dated(fullDepthColumns(long)), 800, 'the fixed window dropped a captured day');
+
+  // Growth is monotone, so no capture length draws a narrower graph than a
+  // shorter one — the property a reader watching history accrue depends on.
+  let previous = 0;
+  for (const days of [1, 100, 371, 372, 500, 1500]) {
+    const measured = fullDepthColumns(seriesCells('2026-01-01', new Array(days).fill(1))).length;
+    assert.ok(measured >= previous, `${days} days drew fewer columns than the capture before it`);
+    previous = measured;
+  }
+
+  // An undated series has no calendar to measure; the max changes nothing
+  // there, and calendarColumns still chunks positionally.
+  const undated = [
+    { value: 1, date: '' },
+    { value: 2, date: '' },
+  ];
+  assert.deepEqual(fullDepthColumns(undated), calendarColumns(undated, pendingWeeks));
 });

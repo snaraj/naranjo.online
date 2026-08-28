@@ -41,6 +41,66 @@ const touchFloorPx = 44;
  * derive from the one (mutated) token. */
 const galleryStageCapPx = 448;
 
+/* The film's stage, which is a different shape and a bigger one (issue 233,
+ * owner directive 2026-08-28: a film "should be enlarged"). 27rem block edge
+ * at this page's unmodified 16px root, times the 16:9 the item's kind selects
+ * — 432px tall inside 768px wide, against the still's 448 square. Literals
+ * here for exactly the reason the constant above is one: an expectation read
+ * back off the page moves with the token it is supposed to be checking. */
+const galleryVideoStageBlockPx = 432;
+const galleryVideoStageInlinePx = 768;
+const galleryVideoAspect = 1.7778;
+
+/* One gallery/v1 manifest carrying a still and a film, served from the media
+ * volume's own mutable path so the page takes the route it takes in
+ * production: lib/galleryManifest.ts reads it once, admits it, and the Art
+ * block replaces its vendored bootstrap items wholesale.
+ *
+ * The FILES it names are never served — the e2e origin runs with no media
+ * volume — and that is deliberate rather than a gap. Every assertion in the
+ * film lane below is about the element, its attributes, its reserved box and
+ * the controls beside it, all of which are byte-independent by this page's
+ * own zero-CLS floor; a lane that needed real frames to decode would be
+ * asserting the operator's pipeline rather than this build. Publishing a
+ * fixture film into the repository to change that would also be exactly the
+ * heavy media requirement 11 keeps out of git. */
+const galleryManifestFixture = {
+  schema: 'gallery/v1',
+  items: [
+    {
+      kind: 'image',
+      key: 'lane-still',
+      alt: 'A still, served by the lane',
+      full: { path: 'gallery/still.webp', sha256: 'a'.repeat(64), width: 3840, height: 2160 },
+      preview: { path: 'gallery/still-preview.webp', sha256: 'b'.repeat(64), width: 960, height: 540 },
+    },
+    {
+      kind: 'video',
+      key: 'lane-film',
+      alt: 'A film, served by the lane',
+      full: { path: 'gallery/film.webp', sha256: 'c'.repeat(64), width: 3840, height: 2160 },
+      preview: { path: 'gallery/film-preview.webp', sha256: 'd'.repeat(64), width: 960, height: 540 },
+      poster: { path: 'gallery/film-poster.webp', sha256: 'e'.repeat(64), width: 1920, height: 1080 },
+      /* Two rungs, high-efficiency first: the ORDER is the preference, and
+         the lane reads it back off the DOM to prove nothing re-ranked it. */
+      sources: [
+        { path: 'gallery/film-2160.mp4', sha256: 'f'.repeat(64), type: 'video/mp4; codecs="hvc1"', height: 2160 },
+        { path: 'gallery/film-1080.mp4', sha256: '0'.repeat(64), type: 'video/mp4', height: 1080 },
+      ],
+    },
+  ],
+};
+
+async function serveGalleryManifest(page) {
+  await page.route('**/media/mutable/gallery/manifest.json', (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      body: JSON.stringify(galleryManifestFixture),
+    })
+  );
+}
+
 /* Sub-pixel tolerance for a MEASURED box. Layout arithmetic lands on
  * fractional pixels in every engine (a hairline border, a scaled viewport),
  * so a box that should be exactly 44 can be reported as 43.999998. The
@@ -143,43 +203,14 @@ const openReadingModes = async (page) => {
   await expect(page.locator('#reading-mode-menu')).toBeVisible();
 };
 
-/* The token panel's per-source display menu (owner directive, 2026-08-28),
- * and the one interaction every lane that presses a lens now has to perform.
- *
- * The view lens, the trailing range and the category lens used to be three
- * exposed pill rows in each source's activity header. They read as a screenful
- * of settings, so every source now carries ONE compact trigger — a sliders
- * glyph and the word "display" — with the same radio groups inside its
- * popover. The groups kept their labels, their roles, their pill class and
- * their keyboard (UsageFilterMenu.svelte), so the questions below are exactly
- * the questions these lanes always asked; what changed is that the drawer has
- * to be opened first, and that a closed drawer's pills are display:none and
- * therefore unclickable and unscrollable-to.
- *
- * Closing it again is not tidiness. The popover is layered over the strip
- * beneath it (z-index 4), so a lane that measured a cell, a coverage line or a
- * scroll landing with the drawer still open would be measuring around a panel
- * the reader would already have dismissed. It is closed through the TRIGGER
- * rather than with Escape because a mouse press does not focus a <button> on
- * WebKit, so after a pill click Escape may have nowhere inside the widget to
- * land — the trigger's own press latch (lib/disclosure.ts) is engine-proof.
+/* The token panel's display controls are GONE (owner directive, 2026-08-28,
+ * reversing the 0.1.52 decision after seeing it live: "remove this entire
+ * menu. it doesnt look good and it doesn't provide any value"). The helper
+ * that opened the per-source popover, pressed a radio and closed it again
+ * went with them; every lane below now measures the ONE graph each source
+ * draws, and the lane at the end of this file's token-panel group is the one
+ * that proves no control is left to press.
  */
-const chooseDisplay = async (page, sourceIndex, question, option) => {
-  const region = page.locator('[data-panel-id="token-usage"] .usage-activity').nth(sourceIndex);
-  const trigger = region.locator('.filter-trigger');
-  await trigger.scrollIntoViewIfNeeded();
-  await trigger.click();
-  await expect(trigger, 'the display menu did not open').toHaveAttribute('aria-expanded', 'true');
-  await region
-    .getByRole('radiogroup', { name: new RegExp(`\\s${question}$`) })
-    .getByRole('radio', { name: option, exact: true })
-    .click();
-  await trigger.click();
-  await expect(trigger, 'the display menu stayed open over the strip').toHaveAttribute(
-    'aria-expanded',
-    'false'
-  );
-};
 
 test('the page fits every phone width instead of scrolling sideways', async ({ page }) => {
   await visit(page);
@@ -902,7 +933,7 @@ function syntheticSeries(days) {
  * this file and still be wrong. So the four shapes are rendered on the real
  * page and compared to each other. */
 test('the full-width strip draws the identical fixed window at every series length (issue 189)', async ({ page }) => {
-  const shapes = [1, 15, 31, 371];
+  const shapes = [1, 15, 31];
   const measured = [];
   for (const days of shapes) {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
@@ -980,12 +1011,50 @@ test('the full-width strip draws the identical fixed window at every series leng
     ).toBe(first.legendOffset);
     expect(shape.legendTop, `the key changed row at ${shape.days} days`).toBe(first.legendTop);
   }
-  /* And the long one is genuinely the fixed window's own width — a one-day
-     series and a year-long series both claim the identical pendingWeeks
-     columns, which is the direction a stray data-driven code path would
-     break: it would only show up at one end of this range, never both. */
-  const year = measured.at(-1);
-  expect(year.claimed, 'a year-long series no longer claims the fixed trailing window').toBe(53);
+  /* The reserve is genuinely the width all three claim, rather than a number
+     they happen to agree on: a one-day series and a month-long one both draw
+     the same fifty-three columns, which is the direction a stray data-driven
+     code path would break at one end of the range and not the other. */
+  for (const shape of measured) {
+    expect(shape.claimed, `a ${shape.days}-day series no longer claims the reserve`).toBe(53);
+  }
+
+  /* AND THE OTHER SIDE OF THE WINDOW (issue 233). The reserve stopped being a
+     CEILING when the display menu was deleted: keeping the retired 12mo
+     default would have silently dropped every day past a year, which is the
+     defect the deleted range control existed to remove, so the fixed window
+     is the wider of the reserve and the capture (fullDepthColumns,
+     lib/periods.ts). Measured here rather than only in that module's own
+     tests, because "the strip grew" is a claim about a rendered box: a
+     four-hundred-day capture must draw MORE than the reserve, must draw the
+     width it claims, and must still be seven days tall in a box the card
+     still decides. */
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await stageUsagePayload(page, (envelope) => {
+    const sources = envelope?.data?.sources ?? [];
+    expect(sources.length, 'the origin serves no usage source to restage').toBeGreaterThan(0);
+    sources[0].series = syntheticSeries(400);
+  });
+  await visit(page);
+  const deep = await page.evaluate(() => {
+    const block = window.document.querySelector('.usage-source .grid-block');
+    const cells = block.querySelector('.grid-cells');
+    const round = (value) => Math.round(value * 100) / 100;
+    return {
+      claimed: Number(block.getAttribute('data-grid-columns')),
+      drawn: Math.ceil(cells.querySelectorAll('.grid-cell').length / 7),
+      rows: getComputedStyle(cells).gridTemplateRows.split(' ').length,
+      block: round(block.getBoundingClientRect().width),
+    };
+  });
+  expect(
+    deep.claimed,
+    `a 400-day capture drew ${deep.claimed} columns; the reserve is a ceiling again`
+  ).toBeGreaterThan(53);
+  expect(deep.claimed * 7, 'the window is too narrow to hold the capture it drew').toBeGreaterThanOrEqual(400);
+  expect(deep.drawn, 'the deep window drew a width it did not claim').toBe(deep.claimed);
+  expect(deep.rows, 'the deep window stopped being seven days tall').toBe(7);
+  expect(deep.block, 'the card stopped deciding the box once the capture outgrew the reserve').toBe(first.block);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
@@ -1387,6 +1456,13 @@ test('a source with no series renders no graph, and one with a series still rend
       rendered[source.querySelector('.usage-source-label').textContent.trim()] = {
         region: source.querySelector('.usage-activity') !== null,
         blocks: source.querySelectorAll('.grid-block').length,
+        /* What tells a source WITH a graph from one without, now that the
+           display menu is gone (issue 233): the activity heading. It used to
+           be the count of that source's lens toggles, and both halves of this
+           lane would now read zero — a discriminator that cannot
+           discriminate. The heading is scoped to the activity region because
+           the insights section carries the same class. */
+        activityHeadings: source.querySelectorAll('.usage-activity .usage-section-title').length,
         toggles: source.querySelectorAll('[role="radiogroup"]').length,
         datapoints: source.querySelectorAll('[data-grid-cell]').length,
         placeholders: source.querySelectorAll('[data-grid-pending]').length,
@@ -1439,12 +1515,15 @@ test('a source with no series renders no graph, and one with a series still rend
     expect(shown.datapoints, `"${source.label}" rendered datapoints it was never given`).toBe(0);
     expect(shown.placeholders, `"${source.label}" renders placeholder cells again`).toBe(0);
     expect(shown.notes, `"${source.label}" renders an empty-grid note again`).toBe(0);
-    /* Nor the heading and lens toggle the graph came with: a three-way toggle
-       over no series is the same hole in different markup. */
+    /* Nor the heading the graph came with: a heading over no series is the
+       same hole in different markup. */
     expect(shown.region, `"${source.label}" kept the graph region around an absent graph`).toBe(
       false
     );
-    expect(shown.toggles, `"${source.label}" kept a toggle with nothing to re-read`).toBe(0);
+    expect(
+      shown.activityHeadings,
+      `"${source.label}" kept an activity heading with nothing under it`
+    ).toBe(0);
     /* And it is still a complete block rather than something with a hole in
        it: the figures the source genuinely reports are all still there. */
     expect(shown.tiles, `"${source.label}" lost its figures along with its graph`).toBeGreaterThan(0);
@@ -1460,11 +1539,15 @@ test('a source with no series renders no graph, and one with a series still rend
     ).toBeGreaterThan(0);
     expect(shown.placeholders, `"${source.label}" pads its real series with placeholders`).toBe(0);
     expect(shown.notes, `"${source.label}" renders an empty-grid note over a real series`).toBe(0);
-    /* Two groups now (issue 158): the lens and the range. They answer
-       separate questions and are separate radiogroups, so a source that
-       reports a series carries exactly two and a source that reports none
-       carries none. */
-    expect(shown.toggles, `"${source.label}" lost a toggle for its series`).toBe(2);
+    /* The heading is the other half of the discriminator: a source that
+       reports a series carries exactly one activity heading, and a source
+       that reports none carries none. */
+    expect(shown.activityHeadings, `"${source.label}" lost the heading over its graph`).toBe(1);
+    /* And it carries no display control, in either case — the panel offers
+       nothing to press since 2026-08-28. Asserted on the SOURCE rather than
+       only panel-wide so a control growing back beside one graph fails here
+       too. */
+    expect(shown.toggles, `"${source.label}" grew a display control back`).toBe(0);
     /* MEASURED, not asserted: the graph that stayed renders in exactly the
        box the shared component gives the other panel's calendar, so removing
        the region beside it moved nothing about it. */
@@ -2648,6 +2731,185 @@ test('clicking the photograph opens a real modal dialog with a larger, unframed 
   expect(focused, 'Escape left focus somewhere other than the frame that opened the lightbox').toBe(true);
 });
 
+/* THE FILM PLAYS WHERE IT SITS (issue 233, owner directive 2026-08-28:
+ * "remove the play icon from all videos, its just there doing nothing.
+ * Instead develop the ability to treat them like youtube videos where I can
+ * just play it in this small minimal version, which should be enlarged").
+ *
+ * Every half of that sentence is a measurement here, in a real engine, on a
+ * real gallery whose items came down a manifest exactly as the operator's own
+ * would: the mark is gone, the player is real and inline, it has not started
+ * itself, its stage is the wider and larger of the two shapes, and the still
+ * beside it is untouched.
+ *
+ * Both items ride one navigation so the two stages are compared as two states
+ * of ONE page rather than against numbers this file states — the same
+ * discipline the reservation lane below uses. */
+test('a film plays inline on an enlarged widescreen stage, and the play mark is gone (issue 233)', async ({
+  page,
+}) => {
+  await serveGalleryManifest(page);
+  await visit(page);
+
+  const stage = page.locator('.gallery-stage');
+  await stage.scrollIntoViewIfNeeded();
+
+  // The manifest replaced the vendored set wholesale, so the strip opens on
+  // its first item — the still — and the counter says how many there are.
+  await expect(page.locator('.gallery-count')).toHaveText('1 / 2');
+  const still = await page.evaluate(() => {
+    const node = window.document.querySelector('.gallery-stage');
+    const box = node.getBoundingClientRect();
+    return {
+      kind: node.getAttribute('data-gallery-kind'),
+      width: box.width,
+      height: box.height,
+      buttons: window.document.querySelectorAll('.gallery-image-button').length,
+      videos: window.document.querySelectorAll('video').length,
+      marks: window.document.querySelectorAll('.gallery-play-mark').length,
+    };
+  });
+  expect(still.kind, 'a still’s stage does not declare its own kind').toBe('image');
+  expect(still.buttons, 'a still lost the enlarge button it has always had').toBe(1);
+  expect(still.videos, 'a still’s stage mounts a player').toBe(0);
+  expect(
+    still.height,
+    `the still’s stage is ${still.width.toFixed(1)}x${still.height.toFixed(1)}, not the square it keeps`
+  ).toBeCloseTo(still.width, 0);
+
+  await page.getByRole('button', { name: 'Next photograph' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('2 / 2');
+
+  const film = await page.evaluate(() => {
+    const node = window.document.querySelector('.gallery-stage');
+    const box = node.getBoundingClientRect();
+    const video = window.document.querySelector('video');
+    const player = video === null ? null : video.getBoundingClientRect();
+    const arrow = window.document.querySelector('.gallery-frame > .icon-button');
+    const arrowGlyph = arrow.querySelector('svg').getBoundingClientRect();
+    const arrowBox = arrow.getBoundingClientRect();
+    const dot = window.document.querySelector('.gallery-dot[aria-checked="true"]');
+    const dotMark = dot.querySelector('.gallery-dot-mark').getBoundingClientRect();
+    const dotBox = dot.getBoundingClientRect();
+    return {
+      kind: node.getAttribute('data-gallery-kind'),
+      width: box.width,
+      height: box.height,
+      videos: window.document.querySelectorAll('video').length,
+      marks: window.document.querySelectorAll('.gallery-play-mark').length,
+      buttons: window.document.querySelectorAll('.gallery-image-button').length,
+      dialogVideos: window.document.querySelectorAll('dialog video').length,
+      player:
+        video === null
+          ? null
+          : {
+              tag: video.tagName,
+              controls: video.controls,
+              autoplay: video.autoplay,
+              /* The ATTRIBUTE, not the IDL mirror. Gecko implements the
+                 attribute's behaviour but exposes no `playsInline` property,
+                 so reading the property here reported `undefined` on Firefox
+                 (MEASURED) — and the stage-1 floor is about the declaration
+                 anyway, which is what every engine agrees on. */
+              playsinline: video.hasAttribute('playsinline'),
+              preload: video.preload,
+              paused: video.paused,
+              currentTime: video.currentTime,
+              poster: video.getAttribute('poster'),
+              inStage: node.contains(video),
+              sources: [...video.querySelectorAll('source')].map((source) => ({
+                src: source.getAttribute('src'),
+                type: source.getAttribute('type'),
+              })),
+              width: player.width,
+              height: player.height,
+            },
+      arrow: { glyph: arrowGlyph.width, hit: { width: arrowBox.width, height: arrowBox.height } },
+      dot: { mark: dotMark.width, hit: { width: dotBox.width, height: dotBox.height } },
+    };
+  });
+
+  /* THE MARK IS GONE, on the item it used to be drawn on. */
+  expect(film.marks, 'the decorative play mark is painted on a film again').toBe(0);
+
+  /* THE PLAYER IS REAL, INLINE, AND IN THE STRIP — not in a dialog, and not
+     one of eight: exactly one <video> exists on the whole page, and it is
+     inside the current item's own stage. */
+  expect(film.kind, 'a film’s stage does not declare its own kind').toBe('video');
+  expect(film.videos, 'the strip mounts a number of players other than exactly one').toBe(1);
+  expect(film.dialogVideos, 'the lightbox mounts a player again').toBe(0);
+  expect(film.buttons, 'a film’s stage still carries the enlarge button that would eat its presses').toBe(0);
+  expect(film.player.tag).toBe('VIDEO');
+  expect(film.player.inStage, 'the player is not inside the stage it is supposed to fill').toBe(true);
+  expect(film.player.controls, 'the player offers the reader no controls').toBe(true);
+  expect(film.player.playsinline, 'the player would go fullscreen on a phone instead of playing in place').toBe(true);
+  expect(film.player.preload).toBe('metadata');
+
+  /* NOTHING EVER AUTOPLAYS, measured rather than read off the source: the
+     element declares no autoplay AND has not started itself. */
+  expect(film.player.autoplay, 'the player declares autoplay').toBe(false);
+  expect(film.player.paused, 'the player started without the reader pressing anything').toBe(true);
+  expect(film.player.currentTime, 'the player advanced without being asked').toBe(0);
+
+  /* THE LADDER IS THE MANIFEST'S OWN, in its own order, with the poster the
+     manifest published rather than the item's large still. */
+  expect(film.player.sources.map((source) => source.type)).toEqual([
+    'video/mp4; codecs="hvc1"',
+    'video/mp4',
+  ]);
+  expect(film.player.sources[0].src).toContain(`/media/immutable/${'f'.repeat(64)}/gallery/film-2160.mp4`);
+  expect(film.player.sources[1].src).toContain(`/media/immutable/${'0'.repeat(64)}/gallery/film-1080.mp4`);
+  expect(film.player.poster).toContain(`/media/immutable/${'e'.repeat(64)}/gallery/film-poster.webp`);
+
+  /* THE STAGE IS WIDESCREEN AND ENLARGED. The ratio holds at every viewport
+     this lane runs, because it is the item's own aspect; the SIZE comparison
+     is gated on a track wide enough to show it, exactly as the still's own
+     cap assertion is — on a 320px phone both stages are the track's width and
+     the film is correctly the shorter of the two. */
+  expect(
+    film.width / film.height,
+    `the film’s stage is ${film.width.toFixed(1)}x${film.height.toFixed(1)}, not the widescreen shape it asks for`
+  ).toBeCloseTo(galleryVideoAspect, 1);
+  expect(
+    film.width,
+    'the film’s stage is narrower than the square it replaces'
+  ).toBeGreaterThanOrEqual(still.width - subPixel);
+  if (still.width >= galleryStageCapPx - subPixel) {
+    expect(
+      film.width,
+      `the film’s stage is ${film.width.toFixed(1)}px against the still’s ${still.width.toFixed(1)}px; it was not enlarged`
+    ).toBeGreaterThan(still.width);
+    expect(
+      film.width * film.height,
+      'the film’s stage covers no more area than the square it replaces'
+    ).toBeGreaterThan(still.width * still.height);
+    // And it is the token's own box rather than whatever the track allowed.
+    expect(film.width).toBeCloseTo(galleryVideoStageInlinePx, 0);
+    expect(film.height).toBeCloseTo(galleryVideoStageBlockPx, 0);
+  }
+  // The player fills the stage it was given, so the reserved box is the box.
+  expect(film.player.width).toBeCloseTo(film.width, 0);
+  expect(film.player.height).toBeCloseTo(film.height, 0);
+
+  /* THE CONTROLS SHRANK AND THE TARGETS DID NOT (owner: reduce "left, right,
+     current media"). Both halves, because a shrink that took the touch target
+     with it is the stage-1 floor broken. */
+  expect(film.arrow.glyph, `the arrow glyph paints ${film.arrow.glyph}px; it did not shrink`).toBeLessThanOrEqual(
+    12 + subPixel
+  );
+  expect(film.arrow.hit.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+  expect(film.arrow.hit.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+  /* The current dot is the LARGEST of them (it is the scaled one), so bounding
+     it bounds every dot on the row. Four CSS pixels, scaled by 1.5. */
+  expect(film.dot.mark, `the position mark paints ${film.dot.mark}px; it did not shrink`).toBeLessThanOrEqual(
+    6 + subPixel
+  );
+  expect(film.dot.hit.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+  expect(film.dot.hit.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
 test('the gallery frame is centred in its track, with no dead gutter (issue 202)', async ({ page }) => {
   /* The owner's complaint, measured: the frame's inline size is TRANSFERRED
      from its block cap through aspect-ratio, so on a column wider than
@@ -3129,9 +3391,17 @@ test('the weekday gutter stays visually stationary while the strip scrolls under
  * regex cannot see (the card's actual painted text, after a real lens
  * switch), so this lane drives the panel's own view toggle and reads the
  * live card three times. */
-test('the token panel detail card shows the value and the view-scoped period, and both change with the lens (issue 189)', async ({
+test('the token panel detail card reads a human period phrase for the one lens that is left (issue 189, 233)', async ({
   page,
 }) => {
+  /* RE-AIMED for the owner's 2026-08-28 deletion of the display menu. This
+     lane used to press view after view and prove the card and the sentence
+     both followed. There is nothing left to press, so what it proves now is
+     the half that survived and still matters: the card and the sentence agree
+     with the DAILY graph the panel actually draws, in a real engine, on a
+     real cell. The four-way lens arithmetic itself is executed — not
+     pattern-matched — in tests/grid.test.mjs and tests/periods.test.mjs,
+     which is where it belongs now that no reader can reach it. */
   await stageUsagePayload(page, (envelope) => {
     const sources = envelope?.data?.sources ?? [];
     expect(sources.length, 'the origin serves no usage sources; this lane cannot stage one').toBeGreaterThan(0);
@@ -3163,59 +3433,19 @@ test('the token panel detail card shows the value and the view-scoped period, an
   expect(dailyRows[0], 'the first row must be the raw count').toMatch(/^\d[\d,]*$/);
   expect(dailyRows[1], 'the daily card must read "on <month> <day>"').toMatch(/^on [A-Z][a-z]{2} \d{1,2}$/);
 
-  await chooseDisplay(page, 0, 'view', 'weekly');
-  const weeklyRows = await readDetail();
-  expect(
-    weeklyRows[1],
-    'the weekly card must name its own calendar week, not a single day'
-  ).toMatch(/^week of [A-Z][a-z]{2} \d{1,2}, \d{4}$/);
-
-  await chooseDisplay(page, 0, 'view', 'cumulative');
-  const cumulativeRows = await readDetail();
-  expect(
-    cumulativeRows[1],
-    'the cumulative card must say which week the running total runs through'
-  ).toMatch(/^through week of [A-Z][a-z]{2} \d{1,2}, \d{4}$/);
-
-  // Switching lens must not merely relabel the same figure: the running
-  // total is monotone, so it can only be greater than or equal to the one
-  // real day's own value.
-  expect(Number(cumulativeRows[0].replace(/,/g, ''))).toBeGreaterThanOrEqual(
-    Number(dailyRows[0].replace(/,/g, ''))
+  /* The SENTENCE under the strip describes the same graph in the same period,
+     read from the live DOM rather than from the source, because that is the
+     only place the two can be seen to agree. */
+  const summary = (await panel.locator('.usage-activity-total').first().textContent()).trim();
+  expect(summary, 'the sentence must count days and name a day peak').toMatch(
+    /tokens over \d+ days, peaking at /
   );
-
-  /* The SENTENCE under the strip answers in the same period the card does
-     (issue #170). A reader looking at weekly columns is asking a question
-     about weeks, and the sentence used to answer with a day's peak whatever
-     lens was pressed — describing a graph nobody was looking at. Read from
-     the live DOM after a real lens switch, because that is the only place
-     the two can be seen to agree. */
-  const summaryOf = () =>
-    panel.locator('.usage-activity-total').first().textContent();
-
-  await chooseDisplay(page, 0, 'view', 'daily');
-  expect(
-    (await summaryOf()).trim(),
-    'the daily sentence must count days and name a day peak'
-  ).toMatch(/tokens over \d+ days, peaking at /);
-
-  await chooseDisplay(page, 0, 'view', 'weekly');
-  expect(
-    (await summaryOf()).trim(),
-    'the weekly sentence must count weeks, average per week, and peak a week'
-  ).toMatch(/tokens over \d+ weeks, averaging .+ per week, peaking at .+ in one week$/);
-
-  await chooseDisplay(page, 0, 'view', 'monthly');
-  expect(
-    (await summaryOf()).trim(),
-    'the monthly sentence must count months'
-  ).toMatch(/tokens over \d+ months?, averaging .+ per month, peaking at .+ in one month$/);
-
-  await chooseDisplay(page, 0, 'view', 'cumulative');
-  expect(
-    (await summaryOf()).trim(),
-    'the cumulative sentence states a rate, never a peak that would repeat its own total'
-  ).toMatch(/tokens accumulated over \d+ days, averaging .+ per day$/);
+  /* And it is the DAILY sentence in particular: the three phrasings the other
+     lenses produce are what a stray default would put here instead. */
+  for (const retired of [/per week/, /per month/, /accumulated over/]) {
+    expect(summary, `the sentence reads a lens no reader can choose: "${summary}"`).not.toMatch(retired);
+  }
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
 /* ===========================================================================
@@ -4350,196 +4580,106 @@ test('the token-activity grid fills its card, not a tiny left-aligned block', as
   ).toBeGreaterThan(measured.bodyWidth * 0.9);
 });
 
-/* One lens per source (owner directive, 2026-08-25), executed against the
- * real page — the half a source pin cannot reach.
+/* NO DISPLAY CONTROLS, AND ONE GRAPH PER SOURCE (owner directive, 2026-08-28,
+ * reversing the 0.1.52 decision after seeing it live: "remove this entire
+ * menu. it doesnt look good and it doesn't provide any value").
  *
- * The panel held ONE lens for every source in it, so pressing the toggle over
- * one graph re-read the graph beside it. A control next to one graph that
- * changes a different graph is a bug whatever the rationale was, and the
- * rationale — that side-by-side series should not be compared through
- * different lenses — is the owner's to overrule, which they did.
+ * The two lanes this replaces pressed a per-source view lens and a per-source
+ * trailing range and proved each moved its own graph and left its neighbour
+ * alone. Neither control exists, so this lane asks the questions that took
+ * their place, and it asks them in both directions like they did: the panel
+ * offers NOTHING to press, and the graph every source draws is the fixed one —
+ * daily, full depth, the source's own totals — rather than nothing at all.
  *
- * Both directions ride here for the usual reason: a page that ignored the
- * toggle entirely would satisfy "the neighbour did not move". */
-test('a source lens moves its own graph and leaves its neighbour on daily', async ({ page }) => {
-  await visit(page);
-  /* Scoped to the LENS groups (issue 158 added a second radiogroup per
-     source, for the trailing range, and a source that reports categories adds
-     a third). Every group is a .usage-views pill row inside one
-     .filter-group of that source's display menu, and the group is identified
-     by the QUESTION the reader sees over it — the .filter-group-label — so
-     this reads the lens groups alone rather than every group on the card.
-     (It used to read a `data-usage-ranges` marker attribute on the range
-     group; the rows moved into UsageFilterMenu on 2026-08-28 and the marker
-     went with them. The visible label is the better anchor anyway: it is the
-     thing that would have to be wrong for a reader to press the wrong
-     control.) */
-  const readGroups = (question) =>
-    page.evaluate((asked) =>
-      [...window.document.querySelectorAll('[data-panel-id="token-usage"] .filter-group')]
-        .filter(
-          (block) => block.querySelector('.filter-group-label')?.textContent.trim() === asked
-        )
-        .map((block) => {
-          const group = block.querySelector('.usage-views[role="radiogroup"]');
-          const region = block.closest('.usage-activity');
-          const chosen = [...group.querySelectorAll('[role="radio"]')].find(
-            (radio) => radio.getAttribute('aria-checked') === 'true'
-          );
-          return {
-            name: group.getAttribute('aria-label'),
-            lens: chosen === undefined ? null : chosen.textContent.trim(),
-            grid: region?.querySelector('.grid-strip')?.getAttribute('aria-label') ?? '',
-          };
-        }),
-      question
-    );
-
-  const readLenses = () => readGroups('view');
-
-  const before = await readLenses();
-  expect(
-    before.length,
-    'the usage panel renders fewer than two lens toggles; this lane cannot show decoupling'
-  ).toBeGreaterThan(1);
-  /* Each group names its own source, or a screen reader hears several
-     identically named groups on one card. */
-  expect(new Set(before.map((group) => group.name)).size, 'two lens groups share one name').toBe(
-    before.length
-  );
-  for (const group of before) {
-    expect(group.lens, `"${group.name}" does not open on the daily lens`).toBe('daily');
-  }
-
-  await chooseDisplay(page, 0, 'view', 'cumulative');
-
-  const after = await readLenses();
-  /* The pressed one moved, in its toggle AND in the graph under it — the
-     grid's own accessible name carries the active lens, so this is the graph
-     re-reading rather than a button changing color. */
-  expect(after[0].lens, 'the pressed lens did not take').toBe('cumulative');
-  expect(after[0].grid, `the pressed source's graph still reads "${after[0].grid}"`).toContain(
-    'cumulative'
-  );
-  /* And nothing else did. */
-  for (const group of after.slice(1)) {
-    expect(group.lens, `pressing one source's lens also moved "${group.name}"`).toBe('daily');
-    expect(group.grid, `pressing one source's lens re-read the graph under "${group.name}"`).toContain(
-      'daily'
-    );
-  }
-});
-
-/* One RANGE per source (issue 158), executed against the real page.
- *
- * The strip used to draw a constant fifty-three weeks, which is a ceiling the
- * day the capture runs longer than a year. The range control makes that span
- * a reader's choice; this lane proves the choice reaches the DOM — fewer
- * drawn columns, a coverage line whose denominator moved with them, and the
- * newest captured day still on screen, because a reader asking for less
- * history must never be shown less of the present.
- *
- * The neighbour half rides along for the same reason the lens lane carries
- * it: a page that ignored the control entirely would satisfy "the graph
- * beside it did not move". */
-test('a source range redraws its own graph, keeps the newest day, and leaves its neighbour alone', async ({
+ * A page that had simply lost its graphs would satisfy the first half
+ * perfectly, which is why the second half is here. */
+test('the token panel offers no display control, and every source still draws its fixed graph', async ({
   page,
 }) => {
   await visit(page);
-  /* The range groups, found by the question the reader sees over them — see
-     the note on the lens lane above for why the old `data-usage-ranges`
-     marker is gone. */
-  const readRanges = () =>
-    page.evaluate(() =>
-      [...window.document.querySelectorAll('[data-panel-id="token-usage"] .filter-group')]
-        .filter((block) => block.querySelector('.filter-group-label')?.textContent.trim() === 'range')
-        .map((block) => {
-          const group = block.querySelector('.usage-views[role="radiogroup"]');
-          const region = block.closest('.usage-activity');
-          const chosen = [...group.querySelectorAll('[role="radio"]')].find(
-            (radio) => radio.getAttribute('aria-checked') === 'true'
-          );
-          const cells = [...(region?.querySelectorAll('[data-grid-cell]') ?? [])];
-          const dated = cells
-            .map((cell) => cell.getAttribute('aria-label') ?? '')
-            .filter((label) => label !== 'no data for this day');
-          const box = cells[0]?.getBoundingClientRect();
-          return {
-            name: group.getAttribute('aria-label'),
-            range: chosen === undefined ? null : chosen.textContent.trim(),
-            columns: cells.length / 7,
-            captured: dated.length,
-            cellWidth: box?.width ?? 0,
-            cellHeight: box?.height ?? 0,
-            summary: region?.querySelector('.usage-activity-total')?.textContent.trim() ?? '',
-            coverage: region?.querySelector('.usage-activity-coverage')?.textContent.trim() ?? '',
-          };
-        })
-    );
+  const panel = page.locator('[data-panel-id="token-usage"]');
+  await expect(panel).toBeVisible();
 
-  const before = await readRanges();
-  expect(
-    before.length,
-    'the usage panel renders fewer than two range toggles; this lane cannot show decoupling'
-  ).toBeGreaterThan(1);
-  expect(new Set(before.map((group) => group.name)).size, 'two range groups share one name').toBe(
-    before.length
+  /* Half one: nothing to press. Measured as the DOM the reader gets, not as
+     the source — a control rendered hidden would still be a control, and this
+     is the assertion that would fail if one grew back inside the panel. */
+  const controls = await panel.evaluate((node) => ({
+    triggers: node.querySelectorAll('.filter-trigger').length,
+    popovers: node.querySelectorAll('.filter-popover').length,
+    groups: node.querySelectorAll('.filter-group').length,
+    radiogroups: node.querySelectorAll('[role="radiogroup"]').length,
+    radios: node.querySelectorAll('[role="radio"]').length,
+    pills: node.querySelectorAll('.usage-view').length,
+    /* Every remaining button in the panel, so a control wearing a new class
+       cannot slip past the four above. The panel legitimately holds none:
+       its cells are listbox options, not buttons. */
+    buttons: [...node.querySelectorAll('button')].map((button) =>
+      (button.getAttribute('aria-label') ?? button.textContent ?? '').trim()
+    ),
+  }));
+  expect(controls.triggers, 'the display trigger is back').toBe(0);
+  expect(controls.popovers, 'the display popover is back').toBe(0);
+  expect(controls.groups, 'a display question is back').toBe(0);
+  expect(controls.radiogroups, 'a radio group is back in the token panel').toBe(0);
+  expect(controls.radios, 'a radio is back in the token panel').toBe(0);
+  expect(controls.pills, 'a display pill is back').toBe(0);
+  expect(controls.buttons, `the token panel grew a control: ${controls.buttons.join(', ')}`).toEqual([]);
+
+  /* Half two: every source still draws the fixed graph, and every one draws
+     the SAME window, which is what "fixed" means once the choice is gone.
+     Both sources are read so a panel that dropped one source's graph fails
+     here rather than passing on the survivor. */
+  const graphs = await panel.evaluate((node) =>
+    [...node.querySelectorAll('.usage-source')]
+      .map((source) => {
+        const region = source.querySelector('.usage-activity');
+        if (region === null) return null;
+        const block = region.querySelector('.grid-block');
+        const cells = [...region.querySelectorAll('[data-grid-cell]')];
+        return {
+          label: source.querySelector('.usage-source-label').textContent.trim(),
+          claimed: Number(block.getAttribute('data-grid-columns')),
+          columns: cells.length / 7,
+          strip: region.querySelector('.grid-strip').getAttribute('aria-label'),
+          summary: region.querySelector('.usage-activity-total').textContent.trim(),
+          coverage: region.querySelector('.usage-activity-coverage').textContent.trim(),
+        };
+      })
+      .filter((graph) => graph !== null)
   );
-  for (const group of before) {
-    /* The shipped default is the window this strip has always drawn, so a
-       reader who never touches this control sees what they saw before it
-       existed — 53 columns of it. */
-    expect(group.range, `"${group.name}" does not open on the shipped default range`).toBe('12mo');
-    expect(group.columns, `"${group.name}" opened on a width other than the reserve`).toBe(53);
-    expect(group.summary, `"${group.name}" renders no summary sentence`).toMatch(
+  expect(graphs.length, 'the token panel renders fewer than two graphs; this lane cannot compare them').toBeGreaterThan(1);
+  for (const graph of graphs) {
+    expect(graph.columns, `"${graph.label}" drew a width it did not claim`).toBe(graph.claimed);
+    /* The graph's accessible name is the region's own label and NOTHING else
+       (issue 233): it used to carry the pressed lens and window, which were
+       facts about a choice. A name still naming one would mean a choice
+       survived somewhere. */
+    expect(graph.strip, `"${graph.label}" still announces a lens or a window`).not.toMatch(
+      /view|range|only/
+    );
+    // The daily sentence, and the coverage line that states its denominator.
+    expect(graph.summary, `"${graph.label}" renders no daily summary sentence`).toMatch(
       /tokens over \d+ days, peaking at /
     );
-    /* The coverage line states the denominator the sentence above it cannot:
-       captured days out of drawn days, both real numbers. */
-    expect(group.coverage, `"${group.name}" renders no coverage line`).toMatch(
+    expect(graph.coverage, `"${graph.label}" renders no coverage line`).toMatch(
       /· \d+(,\d{3})* of \d+(,\d{3})* days captured$|· every day in range captured$/
     );
   }
-
-  await chooseDisplay(page, 0, 'range', '90d');
-
-  const after = await readRanges();
-  expect(after[0].range, 'the pressed range did not take').toBe('90d');
-  expect(after[0].columns, 'a 90-day window must draw 13 columns').toBe(13);
-  expect(
-    after[0].captured,
-    'the shorter window lost captured days it still covers'
-  ).toBe(before[0].captured);
-  /* The denominator moved with the window; the numerator did not, because
-     every captured day still fits inside it. */
-  expect(after[0].coverage, `the coverage line still reads "${after[0].coverage}"`).not.toBe(
-    before[0].coverage
-  );
-  expect(after[0].coverage).toContain('of 91 days captured');
-  expect(after[0].summary, 'the summary changed for a window that lost no data').toBe(
-    before[0].summary
-  );
-  /* MEASURED, not asserted in source: a full-width strip divides its card
-     between however many columns it drew, so a short range stretched its
-     cells to 88px in a 914px card — nine times their own height, which is a
-     bar chart wearing a heatmap's markup. The bound keeps a cell a cell at
-     every range, and this is the only place it can be checked, because it is
-     a question about a real box in a real engine. */
-  for (const group of after) {
-    expect(group.cellHeight, `"${group.name}" drew a cell with no height`).toBeGreaterThan(0);
+  const [first, ...rest] = graphs;
+  for (const graph of rest) {
     expect(
-      group.cellWidth / group.cellHeight,
-      `"${group.name}" drew a ${group.cellWidth}x${group.cellHeight} cell at ${group.range}`
-    ).toBeLessThanOrEqual(2.5);
+      graph.claimed,
+      `"${first.label}" draws ${first.claimed} columns and "${graph.label}" draws ${graph.claimed}; the window is not fixed`
+    ).toBe(first.claimed);
   }
-
-  for (const group of after.slice(1)) {
-    expect(group.range, `pressing one source's range also moved "${group.name}"`).toBe('12mo');
-    expect(group.columns, `pressing one source's range redrew "${group.name}"`).toBe(53);
-    expect(group.coverage, `pressing one source's range re-read "${group.name}"`).toBe(
-      before[1].coverage
-    );
-  }
+  /* The window is at least the reserve, which is what keeps a short capture
+     from drawing a tenth of the card the owner's no-dead-space rule says must
+     be filled. It may be wider — the capture decides above the reserve — so
+     this is a floor, exactly as fullDepthColumns is. */
+  expect(
+    first.claimed,
+    `the fixed window drew ${first.claimed} columns, under the reserve the card is sized for`
+  ).toBeGreaterThanOrEqual(53);
 });
 
 test('a token-activity cell card is titled "Tokens used" and reads a human period phrase, never a raw ISO date', async ({
@@ -6790,9 +6930,13 @@ test('a widget’s arrows do not swallow the browser’s own chords (issue 219)'
       target.dispatchEvent(event);
       return event.defaultPrevented;
     };
+    /* Every composite widget on this page that owns arrow keys. The token
+       panel's display pills were the third until the owner deleted the menu
+       on 2026-08-28; the two that remain are the ones a reader can still
+       reach, and the sweep asserts below that each is genuinely present, so
+       losing another one fails loudly rather than shrinking in silence. */
     const surfaces = {
       strip: window.document.querySelector('.grid-strip[role="listbox"]'),
-      pills: window.document.querySelector('.usage-views[role="radiogroup"]'),
       dots: window.document.querySelector('.gallery-dots[role="radiogroup"]'),
     };
     const readings = {};
@@ -7234,15 +7378,15 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
      same machinery) now honours the scroll padding, so the segment the owner
      could not read lands BELOW the control instead of beneath it. */
   const landing = await page.evaluate(() => {
-    /* The right-aligned panel control the owner's report was actually about.
-       It used to be the last "cumulative" segment of an exposed pill row;
-       those rows moved into a per-source display menu on 2026-08-28 and are
-       display:none until a reader opens it, so a closed drawer's pill can
-       neither be scrolled to nor rendered under anything. The TRIGGER that
-       replaced them sits in the same place — the end of the activity header,
-       hard against the column's own end edge — which is what makes it the
-       same collision. */
-    const segments = [...window.document.querySelectorAll('.filter-trigger')];
+    /* The right-aligned panel content the owner's report was actually about.
+       It used to be the last "cumulative" segment of an exposed pill row, then
+       the display trigger that replaced it; the owner deleted both on
+       2026-08-28, so this lane names the insight figures that still sit where
+       they sat — the end column of the insights grid, hard against the
+       column's own end edge — which is what makes it the same collision. A
+       target that no longer exists would make this half of the test silently
+       vacuous, which is why it is asserted non-null below. */
+    const segments = [...window.document.querySelectorAll('.usage-insight-value')];
     if (segments.length === 0) return null;
     const segment = segments.at(-1);
     segment.scrollIntoView({ block: 'start' });
@@ -7253,7 +7397,7 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
       headerBottom: header.getBoundingClientRect().bottom,
     };
   });
-  expect(landing, 'the token panel rendered no display control to measure').not.toBeNull();
+  expect(landing, 'the token panel rendered no end-aligned content to measure').not.toBeNull();
   /* A whole pixel of tolerance here rather than the sub-pixel one used for
      box SIZES, and the difference is deliberate. A scroll offset is rounded
      to the device's own pixel grid, so a target the engine placed exactly at
@@ -7275,7 +7419,7 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
      element at the centre of the overlap is measured — it must be the
      control, not the text. */
   const occlusion = await page.evaluate(() => {
-    const segments = [...window.document.querySelectorAll('.filter-trigger')];
+    const segments = [...window.document.querySelectorAll('.usage-insight-value')];
     const segment = segments.at(-1);
     const header = window.document.querySelector('.page-header');
     const hb = header.getBoundingClientRect();
