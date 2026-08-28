@@ -172,17 +172,16 @@
         onkeydown={onSwatchKeydown}
       >
         {#if mode.id === 'auto'}
-          <!-- Half sun, half moon: the device's own choice previewed as the
-            one glyph that is genuinely neither light's sun nor dark's
-            crescent — a filled left half (the dark side) inside an open ring
-            wearing three rays on its right edge (the light side). -->
+          <!-- A display with its stand: "the device decides". The half-disc
+            it replaces read as a bitten fruit at 18px (owner, 2026-08-28);
+            a monitor is the one silhouette every platform already uses for
+            "system", and it is unmistakably none of the suns and moons
+            beside it. -->
           <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">
-            <path class="chip" d="M12 3a9 9 0 0 0 0 18Z" />
-            <circle class="chip-edge" cx="12" cy="12" r="9" />
+            <rect class="chip-edge" x="3.2" y="4.6" width="17.6" height="12.2" rx="1.8" />
             <g class="ray">
-              <line x1="19.8" y1="12" x2="22.1" y2="12" />
-              <line x1="17.51" y1="17.51" x2="19.14" y2="19.14" />
-              <line x1="17.51" y1="6.49" x2="19.14" y2="4.86" />
+              <line x1="12" y1="16.8" x2="12" y2="19.6" />
+              <line x1="8.6" y1="19.9" x2="15.4" y2="19.9" />
             </g>
           </svg>
         {:else if mode.id === 'light'}
@@ -318,13 +317,16 @@
     opacity: var(--swatch-active-opacity);
   }
 
-  /* ...and the chrome's own answer to a pointer, on the chrome's own token:
-     the ink becomes the brand mark, which is a defined color in every reading
-     mode rather than a translucency that depends on what is behind it. It
-     moves the OUTLINE and the chosen-mode bar; the palette enclosed by the
-     glyph is data and never recolors. */
+  /* The chosen mode is COLORED IN and the rest stay greyed (owner directive,
+     2026-08-28, replacing the bar under the glyph): the chosen swatch wears
+     the brand ink at full presence, the unchosen ones keep the muted rest
+     opacity above. Hover and focus answer with the same brand ink, which is
+     a defined color in every reading mode rather than a translucency that
+     depends on what is behind it. aria-pressed still names the state for
+     assistive technology, so the choice never rides on color alone. */
   .swatch:hover,
-  .swatch:focus-visible {
+  .swatch:focus-visible,
+  .swatch[aria-pressed='true'] {
     color: var(--color-brand);
   }
 
@@ -372,19 +374,6 @@
 
   .ray {
     stroke-linecap: round;
-  }
-
-  /* The chosen mode, marked by SHAPE rather than by color alone (the dataviz
-     floor): a bar under its glyph. It is a pseudo-element, so it occupies no
-     space in the row and choosing a mode cannot move the one beside it. */
-  .swatch[aria-pressed='true']::after {
-    content: '';
-    position: absolute;
-    inset-block-end: var(--swatch-mark-inset);
-    inline-size: var(--swatch-mark-size);
-    block-size: var(--swatch-mark-thickness);
-    border-radius: var(--swatch-mark-thickness);
-    background: currentColor;
   }
 
   .swatch:focus-visible {

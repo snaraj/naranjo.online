@@ -27,6 +27,7 @@ import { workByline, workBylineSeparator, workEntries, workHistoryProps } from '
 import {
   codingProjectsProps,
   projectCounts,
+  updatedLabel,
   projectHost,
   projectLinkLabel,
   projects,
@@ -638,21 +639,34 @@ test('the six repositories are the owner’s, at the addresses the owner gave', 
 test('a count of one is a count of one thing', () => {
   // Two of the six repositories genuinely carry a single commit, and several a
   // single star. "1 commits" is the small lie a page tells when nobody
-  // executes its labels.
+  // executes its labels. The clock is FIXED here so the third count — how
+  // long since the last push (0.1.52) — is executed as arithmetic rather
+  // than asserted around a moving now.
+  const noon = Date.parse('2026-08-27T12:00:00Z');
+  const row = { name: 'x', description: 'x', pushedAt: '2026-08-24T12:00:00Z' };
   assert.deepEqual(
-    projectCounts({ name: 'x', description: 'x', commits: 1, stars: 1 }).map((count) => count.label),
-    ['1 commit', '1 star']
+    projectCounts({ ...row, commits: 1, stars: 1 }, noon).map((count) => count.label),
+    ['1 commit', '1 star', 'updated 3 days ago']
   );
   assert.deepEqual(
-    projectCounts({ name: 'x', description: 'x', commits: 0, stars: 20 }).map((count) => count.label),
-    ['0 commits', '20 stars']
+    projectCounts({ ...row, commits: 0, stars: 20 }, noon).map((count) => count.label),
+    ['0 commits', '20 stars', 'updated 3 days ago']
   );
   // Grouped through the same whole-number renderer every other figure on the
   // page uses, so a four-figure count does not suddenly read differently.
   assert.deepEqual(
-    projectCounts({ name: 'x', description: 'x', commits: 1234, stars: 5678 }).map((count) => count.label),
-    ['1,234 commits', '5,678 stars']
+    projectCounts({ ...row, commits: 1234, stars: 5678 }, noon).map((count) => count.label),
+    ['1,234 commits', '5,678 stars', 'updated 3 days ago']
   );
+  // Every band of the since-sentence, against the same fixed clock — and the
+  // singular derived exactly as the other counts derive theirs.
+  assert.equal(updatedLabel('2026-08-27T02:00:00Z', noon), 'updated today');
+  assert.equal(updatedLabel('2026-08-26T02:00:00Z', noon), 'updated 1 day ago');
+  assert.equal(updatedLabel('2026-07-30T12:00:00Z', noon), 'updated 28 days ago');
+  assert.equal(updatedLabel('2026-07-27T12:00:00Z', noon), 'updated 1 month ago');
+  assert.equal(updatedLabel('2026-02-27T12:00:00Z', noon), 'updated 6 months ago');
+  assert.equal(updatedLabel('2025-08-20T12:00:00Z', noon), 'updated 1 year ago');
+  assert.equal(updatedLabel('2023-08-27T12:00:00Z', noon), 'updated 3 years ago');
   // The adapter carries the same labels into the log, with the glyph beside
   // the words rather than instead of them.
   assert.deepEqual(
@@ -661,7 +675,7 @@ test('a count of one is a count of one thing', () => {
   );
   assert.deepEqual(
     codingProjectsProps.entries[0].counts.map((count) => count.glyph),
-    ['node', 'star'],
+    ['node', 'star', 'clock'],
     'each count names its generic glyph; the drawing is the component’s'
   );
   // The figure is TEXT beside the glyph, never carried by the glyph alone.
@@ -1020,8 +1034,8 @@ test('nothing in the gallery ever autoplays, and reduced motion is structural (i
   );
   assert.match(
     galleryMarkup,
-    /<video[\s\S]*?preload="none"/,
-    'the video must not preload: an enlarged frame costs a poster, not a film'
+    /<video[\s\S]*?preload="metadata"/,
+    'the video preloads only metadata: the enlarge click asked for a working player, not yet the film'
   );
   assert.match(galleryMarkup, /poster=\{item\.video\.posterSrc\}/);
 });
@@ -1223,12 +1237,16 @@ test('the visible frame is centred in its track, so no gutter is dead space (iss
      The stage's width is definite instead, and it is derived from the same
      two tokens the reserved box is, so the width and the ratio cannot drift
      apart. */
+  /* The gallery's box is its OWN token pair since 2026-08-28 (owner: the art
+     stage is near-square, not the feed's 16:9) — same construction, so the
+     width and the ratio still cannot drift apart, and the reservation stays
+     byte-independent. */
   assert.match(
     stage,
-    /inline-size:\s*min\(100%, calc\(var\(--card-media-max-block-size\) \* \(var\(--card-media-aspect\)\)\)\)/,
+    /inline-size:\s*min\(100%, calc\(var\(--gallery-stage-size, 28rem\) \* \(var\(--gallery-stage-aspect, 1\)\)\)\)/,
     'the stage states no definite width, so the frame reserves nothing until the photograph loads'
   );
-  for (const property of ['aspect-ratio: var(--card-media-aspect)', 'max-block-size: var(--card-media-max-block-size)']) {
+  for (const property of ['aspect-ratio: var(--gallery-stage-aspect, 1)', 'max-block-size: var(--gallery-stage-size, 28rem)']) {
     assert.ok(stage.includes(property), `the reserved box lost "${property}" when it moved onto the stage`);
   }
   /* And the control inside states no size of ITS own — a <button> is a form
@@ -1406,11 +1424,12 @@ test('the visible frame reserves its box before any byte arrives, and lazy-loads
   // shape that cannot disagree because both read the same token every media
   // card on the page shares.
   const style = styleBlock(mediaGallery);
-  assert.match(style, /aspect-ratio:\s*var\(--card-media-aspect\)/);
+  assert.match(style, /aspect-ratio:\s*var\(--gallery-stage-aspect, 1\)/);
   // The cap (issue 157) is a SECOND, independent ceiling on the same
   // reservation, not a second timing: it still resolves before any byte
-  // arrives, through the one global token every frame shares.
-  assert.match(style, /max-block-size:\s*var\(--card-media-max-block-size\)/);
+  // arrives, through the gallery's own stage token (near-square since
+  // 2026-08-28; the 16:9 feed tokens stay with the feed cards).
+  assert.match(style, /max-block-size:\s*var\(--gallery-stage-size, 28rem\)/);
   // The intrinsic box the markup DECLARES moved to a per-item value with
   // issue 207, because a runtime manifest's items each carry their own
   // dimensions. It is a size hint, not the reservation: the reservation is

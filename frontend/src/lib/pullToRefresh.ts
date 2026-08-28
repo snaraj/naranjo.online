@@ -200,6 +200,7 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
     startX = event.clientX;
     startY = event.clientY;
     claimed = false;
+    node.addEventListener('touchmove', onTouchMove, { passive: false });
   }
 
   function onMove(event: PointerEvent): void {
@@ -241,17 +242,57 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
       }
       claimed = true;
     }
-    /* preventDefault is deliberately NOT called: the surface never fights the
-       browser for the gesture, it simply renders on top of one the browser has
-       already been told (by overscroll-behavior-y) has nowhere to go. */
     const next = pullDistance(dy, metrics);
     show(next, pullArmed(next, metrics) ? 'armed' : 'pulling');
+  }
+
+  /* THE NATIVE-TOUCH HALF, and the reason the pull works on a physical phone
+     and not only under synthetic pointers (owner report, 2026-08-28: "pull to
+     refresh is broken, it doesn't work"). An earlier revision deliberately
+     never called preventDefault, on the argument that overscroll-behavior-y
+     already told the browser the gesture had nowhere to go. That argument
+     holds for the RUBBER BAND and not for the CLAIM: real iOS Safari still
+     claims a downward touch at the top as a scroll gesture, fires
+     pointercancel (exactly the behaviour lib/gesture.ts's header documents),
+     and the pull dies before it renders a pixel — while dispatched pointer
+     events, which no browser arbitrates, sailed through and made every
+     emulated lane green.
+
+     So the pull now contests the claim, as narrowly as it can be contested:
+     a NON-PASSIVE touchmove listener is attached only inside an eligible
+     touch (finger down at the document's top) and removed when that touch
+     ends, and it prevents default only once the drag has PROVEN itself a
+     pull (claimed, downward). An unclaimed touch — upward scroll, a
+     horizontal swipe, any drag once the page has left the top — falls
+     through untouched to the browser. The permanent listener alternative
+     would disable scroll optimisation for every touch on the page; this one
+     costs only the touches that begin at the very top. */
+  function onTouchMove(event: TouchEvent): void {
+    if (!event.cancelable) {
+      return;
+    }
+    if (claimed) {
+      event.preventDefault();
+      return;
+    }
+    /* The proving window needs the same defence: Safari can claim the
+       gesture during the first 12 downward pixels, before `claimed` flips,
+       and a pull that only defends itself after proof still dies on a real
+       phone. An eligible, still-tracked touch moving DOWNWARD at the top is
+       defended; everything else — upward, horizontal stand-down (pointer is
+       already -1), a page no longer at its top — falls through to the
+       browser untouched. */
+    const touch = event.touches[0];
+    if (pointer !== -1 && touch !== undefined && touch.clientY - startY > 0 && binding.atTop()) {
+      event.preventDefault();
+    }
   }
 
   function onUp(event: PointerEvent): void {
     if (event.pointerId !== pointer) {
       return;
     }
+    node.removeEventListener('touchmove', onTouchMove);
     pointer = -1;
     if (!claimed || phase === 'refreshing') {
       return;
@@ -277,6 +318,7 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
     if (event.pointerId !== pointer) {
       return;
     }
+    node.removeEventListener('touchmove', onTouchMove);
     pointer = -1;
     claimed = false;
     if (phase !== 'refreshing') {
@@ -296,6 +338,7 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
       node.removeEventListener('pointermove', onMove);
       node.removeEventListener('pointerup', onUp);
       node.removeEventListener('pointercancel', onCancel);
+      node.removeEventListener('touchmove', onTouchMove);
     }
   };
 }

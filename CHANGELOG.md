@@ -7,6 +7,62 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.52] - 2026-08-27
+
+An owner UX dispatch across the whole frontend: the gallery decluttered to a
+flat square stage, the usage filters folded into a disclosure menu, four
+mobile defects fixed, and the site given a real link preview.
+
+### Added
+
+- `UsageFilterMenu.svelte`: a disclosure popover (sliders icon + "display")
+  holding the view/range/category pill groups, so the usage tracker header
+  carries one control instead of three rows of pills; `.usage-windows`
+  collapses to one flex row.
+- Link preview: Open Graph and Twitter card meta in the static
+  `index.html` (the description moved there from `App.svelte`) and a new
+  `frontend/public/og.png` (1200×630, black "SN." on white). The
+  remote-origin test sweep admits the site's own canonical origin — and
+  only it.
+- Projects cards: a third count, "updated X ago", with a clock glyph
+  (`EntryLog` + `blocks.ts` `EntryCount` `'clock'`); a fresh out-of-band
+  capture dated 2026-08-27 in `src/lib/projects.ts` (commits
+  118/95/89/1/20/1, `pushedAt` instants from the public API); an
+  `updatedLabel()` helper with an injectable clock, every band tested
+  against a fixed date.
+
+### Changed
+
+- Gallery declutter: `FeedCard` renders `variant="flat"` (the container box
+  removed), the stage is square via new `:root` tokens
+  `--gallery-stage-size: 28rem` / `--gallery-stage-aspect: 1` with
+  `object-fit: contain` so art is never cropped, navigation is dots-only
+  (the counter is visually clipped but keeps its `aria-live` announcement),
+  and the frame tokens zero out including `--gallery-frame-radius: 0px`.
+- Theme switcher: the selected swatch is marked by ink
+  (`color: var(--color-brand)`) instead of an underline, a monitor glyph
+  replaces the old auto glyph, and the `--swatch-mark-*` tokens are gone.
+- Mobile theme plate: the opaque disc with a 16px shadow spread becomes a
+  translucent `color-mix` veil under `backdrop-filter: blur(8px)` with
+  `box-shadow: none`, in `.page-header` (`src/styles.css`).
+- Lightbox: the enlarged `<img>` paints `item.previewSrc` as its background
+  while the full file decodes, and video `preload` moves from `"none"` to
+  `"metadata"`.
+- `e2e/rendering-lanes.spec.mjs`: nine tests re-aimed at the new design
+  (two retitled: "framed"→"unframed", "marks it by shape"→"marks it by
+  ink"), a shared `chooseDisplay` helper, and the plate test pinning the
+  veil (0 < alpha < 1, blur, `box-shadow: none`).
+
+### Fixed
+
+- Pull-to-refresh on iOS: a dynamic non-passive `touchmove` defence in
+  `src/lib/pullToRefresh.ts`, with a new unit harness in
+  `tests/gesture.test.mjs`.
+- Heatmap on mobile: `ContributionGrid` claims exactly its drawn columns
+  for a dated full-width series (the phantom-track fix, guarded by
+  `datedSeries`), and `UsageTracker` unbinds `--grid-day-max` below 30rem
+  so every range fills the strip; pins updated in `tests/grid.test.mjs`.
+
 ## [0.1.51] - 2026-08-27
 
 The production-enablement release: real media and live panel data, on by

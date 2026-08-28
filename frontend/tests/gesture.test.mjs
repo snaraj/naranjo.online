@@ -23,6 +23,7 @@ import {
   pullDistance,
   pullMetrics,
   pullProgress,
+  pullToRefresh,
   settleTo
 } from '../src/lib/pullToRefresh.ts';
 
@@ -295,6 +296,82 @@ test('no third-party gesture dependency entered the frontend (requirement 1)', a
     [],
     'the frontend gained a runtime dependency'
   );
+});
+
+/* The native-touch defence (0.1.52): real iOS Safari claims a downward touch
+ * at the top as a scroll and fires pointercancel before the pull renders a
+ * pixel — synthetic pointers, which no browser arbitrates, sailed through and
+ * kept every emulated lane green while the physical phone was broken. The
+ * repair is a non-passive touchmove listener that exists only inside an
+ * eligible touch and contests exactly the moves that could still become a
+ * pull. This harness executes that contract event by event: what gets
+ * prevented, what falls through, and that the listener's whole lifetime is
+ * the touch it was attached for. */
+test('the pull contests the browser claim only while the touch could still be a pull', () => {
+  const listeners = new Map();
+  const node = {
+    addEventListener: (type, handler, options) => listeners.set(type, { handler, options }),
+    removeEventListener: (type) => listeners.delete(type)
+  };
+  let atTop = true;
+  const cleanup = pullToRefresh(node, {
+    atTop: () => atTop,
+    render: () => {},
+    refresh: () => Promise.resolve(),
+    /* Immediate settles: this test is about event arbitration, not motion. */
+    reduced: () => true
+  });
+
+  const down = (y, type = 'touch') =>
+    listeners.get('pointerdown').handler({ pointerType: type, pointerId: 7, clientX: 50, clientY: y });
+  const move = (x, y) =>
+    listeners.get('pointermove').handler({ pointerId: 7, clientX: x, clientY: y });
+  const touchMove = (y, cancelable = true) => {
+    let prevented = false;
+    listeners.get('touchmove')?.handler({
+      cancelable,
+      touches: [{ clientY: y }],
+      preventDefault: () => (prevented = true)
+    });
+    return prevented;
+  };
+
+  // A mouse never attaches the touch listener at all: the defence costs
+  // nothing except inside a finger's own gesture.
+  down(100, 'mouse');
+  assert.ok(!listeners.has('touchmove'), 'a mouse drag must not attach a touchmove listener');
+
+  // An eligible finger attaches it NON-passive — a passive listener's
+  // preventDefault is a no-op, which was the entire failure mode.
+  down(100);
+  assert.ok(listeners.has('touchmove'), 'an eligible touch must attach the defence');
+  assert.deepEqual(listeners.get('touchmove').options, { passive: false });
+
+  // The proving window: a downward move is contested before `claimed` flips,
+  // because Safari takes the gesture inside the first twelve pixels.
+  assert.equal(touchMove(106), true, 'a downward move in the proving window must be defended');
+  // An upward move falls through: that is the page's scroll, not a pull.
+  assert.equal(touchMove(94), false, 'an upward move belongs to the browser');
+  // A move the browser already made uncancelable is never fought.
+  assert.equal(touchMove(106, false), false, 'an uncancelable move cannot be contested');
+
+  // Once the drag proves itself a pull, every move is the pull's.
+  move(50, 120);
+  assert.equal(touchMove(130), true, 'a claimed pull owns its touchmoves');
+
+  // The release removes the listener with the touch it was attached for.
+  listeners.get('pointerup').handler({ pointerId: 7 });
+  assert.ok(!listeners.has('touchmove'), 'the defence must not outlive its touch');
+
+  // A horizontal stand-down (the swipe's drag, not the pull's) leaves the
+  // remaining moves to the browser even though the listener is still wired:
+  // pointer is -1, so nothing is contested.
+  down(100);
+  move(120, 104);
+  assert.equal(touchMove(108), false, 'a stood-down gesture contests nothing');
+
+  cleanup.destroy();
+  assert.ok(!listeners.has('touchmove'), 'destroy must remove the defence');
 });
 
 test('every horizontal gesture surface declares a touch-action that spares the page its scroll', () => {

@@ -7,12 +7,11 @@
   import { page } from './page.ts';
 </script>
 
-<svelte:head>
-  <meta
-    name="description"
-    content="naranjo.online, served from a Raspberry Pi Kubernetes cluster."
-  />
-</svelte:head>
+<!-- The description meta moved to index.html's static head with the
+  link-preview tags (0.1.52): a scraper reads the document as served, so a
+  head contribution made at hydration was invisible to exactly the readers a
+  description exists for — and two copies, one static and one hydrated,
+  would be the same fact written twice. -->
 
 <!-- First in the document on purpose (issue 219): the refresh control inside
   it is invisible until focused, and being the first focusable thing is what

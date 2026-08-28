@@ -23,16 +23,23 @@ const textEntryFloorPx = 16;
 // The comfortable minimum for a finger, in CSS pixels.
 const touchFloorPx = 44;
 
-/* The gallery frame's height ceiling (issue 157): 20rem at this page's
- * unmodified 16px root, the literal value tests/sections.test.mjs pins
- * against the stylesheet's own text. A gallery-cap assertion below compares
- * a MEASURED box against this fixed number, never against
- * getComputedStyle(frame).maxHeight read back from the same page — Daybreak
- * Blue's review of PR #161 proved that self-referential shape lets a
- * 20rem -> 200rem mutation survive undetected, because the expectation and
- * the rendered behavior move together when both derive from the one
- * (mutated) token. */
-const galleryFrameCapPx = 320;
+/* The gallery stage's ceiling: 28rem at this page's unmodified 16px root,
+ * --gallery-stage-size's value in MediaGallery.svelte.
+ *
+ * It replaces the 20rem --card-media-max-block-size cap this constant used to
+ * carry (issue 157). The gallery stopped borrowing the feed card's 16:9 media
+ * box on 2026-08-28 — the owner's drawings are portrait scans, and a wide
+ * frame either cropped them or drowned them in dead side space, so the stage
+ * is now a SQUARE sized by its own token and the picture is `contain` inside
+ * it. The cap moved with the box; the reason this is a literal did not.
+ *
+ * A gallery-cap assertion below compares a MEASURED box against this fixed
+ * number, never against getComputedStyle(stage).maxBlockSize read back from
+ * the same page — Daybreak Blue's review of PR #161 proved that
+ * self-referential shape lets a 28rem -> 280rem mutation survive undetected,
+ * because the expectation and the rendered behavior move together when both
+ * derive from the one (mutated) token. */
+const galleryStageCapPx = 448;
 
 /* Sub-pixel tolerance for a MEASURED box. Layout arithmetic lands on
  * fractional pixels in every engine (a hairline border, a scaled viewport),
@@ -121,9 +128,57 @@ function contrastRatio(foreground, background) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+/* The alpha channel of whatever spelling of a color the engine computed —
+ * `rgba(r, g, b, a)`, `color(srgb r g b / a)`, or an opaque form that carries
+ * no alpha component at all and therefore means 1. It reads the LAST
+ * component only when the notation actually carries four, so an opaque
+ * `rgb(r, g, b)` can never be mistaken for a 62%-transparent one. */
+function alphaOf(color) {
+  const parsed = (color.match(/[\d.]+/g) ?? []).map(Number);
+  return parsed.length > 3 ? parsed[3] : 1;
+}
+
 const openReadingModes = async (page) => {
   await page.getByRole('button', { name: 'Reading mode' }).click();
   await expect(page.locator('#reading-mode-menu')).toBeVisible();
+};
+
+/* The token panel's per-source display menu (owner directive, 2026-08-28),
+ * and the one interaction every lane that presses a lens now has to perform.
+ *
+ * The view lens, the trailing range and the category lens used to be three
+ * exposed pill rows in each source's activity header. They read as a screenful
+ * of settings, so every source now carries ONE compact trigger — a sliders
+ * glyph and the word "display" — with the same radio groups inside its
+ * popover. The groups kept their labels, their roles, their pill class and
+ * their keyboard (UsageFilterMenu.svelte), so the questions below are exactly
+ * the questions these lanes always asked; what changed is that the drawer has
+ * to be opened first, and that a closed drawer's pills are display:none and
+ * therefore unclickable and unscrollable-to.
+ *
+ * Closing it again is not tidiness. The popover is layered over the strip
+ * beneath it (z-index 4), so a lane that measured a cell, a coverage line or a
+ * scroll landing with the drawer still open would be measuring around a panel
+ * the reader would already have dismissed. It is closed through the TRIGGER
+ * rather than with Escape because a mouse press does not focus a <button> on
+ * WebKit, so after a pill click Escape may have nowhere inside the widget to
+ * land — the trigger's own press latch (lib/disclosure.ts) is engine-proof.
+ */
+const chooseDisplay = async (page, sourceIndex, question, option) => {
+  const region = page.locator('[data-panel-id="token-usage"] .usage-activity').nth(sourceIndex);
+  const trigger = region.locator('.filter-trigger');
+  await trigger.scrollIntoViewIfNeeded();
+  await trigger.click();
+  await expect(trigger, 'the display menu did not open').toHaveAttribute('aria-expanded', 'true');
+  await region
+    .getByRole('radiogroup', { name: new RegExp(`\\s${question}$`) })
+    .getByRole('radio', { name: option, exact: true })
+    .click();
+  await trigger.click();
+  await expect(trigger, 'the display menu stayed open over the strip').toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
 };
 
 test('the page fits every phone width instead of scrolling sideways', async ({ page }) => {
@@ -2400,46 +2455,100 @@ test('the gallery shows exactly one loaded photograph, never eight stacked (issu
   const observed = await page.evaluate(() => {
     const frames = [...window.document.querySelectorAll('.gallery-image-button')];
     const images = [...window.document.querySelectorAll('img.gallery-image')];
+    const counter = window.document.querySelector('.gallery-count');
+    const counterStyle = counter === null ? null : getComputedStyle(counter);
+    const counterBox = counter === null ? null : counter.getBoundingClientRect();
+    /* The 1fr track the stage centres itself in, derived from the boxes the
+       engine actually painted: the frame row is `auto 1fr auto`, so the track
+       is what the two arrows and the two gaps leave behind. Measured rather
+       than read off a token, because it is the thing the stage's own cap has
+       to be compared AGAINST. */
+    const row = window.document.querySelector('.gallery-frame');
+    const rowStyle = getComputedStyle(row);
+    const arrows = [...row.querySelectorAll(':scope > .icon-button')];
+    const track =
+      row.getBoundingClientRect().width -
+      arrows.reduce((total, arrow) => total + arrow.getBoundingClientRect().width, 0) -
+      (Number.parseFloat(rowStyle.columnGap) || 0) * arrows.length;
     return {
       frameCount: frames.length,
       imageCount: images.length,
-      count: window.document.querySelector('.gallery-count')?.textContent?.trim(),
+      track,
+      count: counter?.textContent?.trim(),
+      /* The counter is still in the tree and still says where the reader is —
+         it is the dots' aria-live voice — but it is CLIPPED out of view
+         (owner directive, 2026-08-28: "I only like the dots"). */
+      counterWidth: counterBox === null ? null : counterBox.width,
+      counterClip: counterStyle === null ? null : counterStyle.clipPath,
+      /* The visible position mark, which is now the dots alone. */
+      dots: [...window.document.querySelectorAll('.gallery-dot')].map((dot) => {
+        const box = dot.getBoundingClientRect();
+        return {
+          checked: dot.getAttribute('aria-checked') === 'true',
+          painted: box.width > 0 && box.height > 0,
+        };
+      }),
+      fit: images.map((image) => getComputedStyle(image).objectFit),
       sizes: frames.map((frame) => {
         const box = frame.getBoundingClientRect();
-        return { width: Math.round(box.width), height: Math.round(box.height) };
+        return { width: box.width, height: box.height };
       }),
     };
   });
   expect(observed.frameCount, 'the gallery must render exactly one visible frame, never eight').toBe(1);
   expect(observed.imageCount, 'exactly one <img> may be mounted in the feed frame').toBe(1);
+  /* The number survives as the live region — an assistive reader can be told
+     "2 / 8", and cannot usefully be told that the second of eight identical
+     dots lit up — but it is clipped rather than painted, so the visible
+     position mark is the dots and nothing else. */
   expect(observed.count).toBe('1 / 8');
-  /* The box is reserved before the byte arrives: the SMALLER of the photo's
-     16:9 ratio and the tokenized height cap (issue 157), which is why a
-     single 4K photograph still costs the page no layout shift. */
+  expect(
+    observed.counterWidth,
+    `the counter paints ${observed.counterWidth}px of visible text beside the dots`
+  ).toBeLessThanOrEqual(1 + subPixel);
+  expect(observed.counterClip, 'the counter is not clipped, only shrunk').toContain('inset');
+  expect(observed.dots.length, 'the dots must offer one position per photograph').toBe(8);
+  expect(observed.dots.filter((dot) => dot.checked).length, 'no single dot is marked current').toBe(1);
+  for (const dot of observed.dots) {
+    expect(dot.painted, 'a position dot paints no box at all').toBe(true);
+  }
+  /* The box is reserved before the byte arrives, and since 2026-08-28 it is a
+     SQUARE stage rather than the feed's 16:9 media box: the owner's drawings
+     are portrait scans, so a wide frame cropped them ("the art is cut off
+     significantly") or surrounded them with dead space. The stage takes the
+     SMALLER of its 1fr track and its own 28rem token, and the picture is
+     `contain` inside it — whole, never cropped — which is why a single 4K
+     photograph still costs the page no layout shift. */
   const [box] = observed.sizes;
   expect(box.height, 'the gallery frame reserves no height').toBeGreaterThan(0);
-  const uncapped169Height = box.width * (9 / 16);
-  const expectedHeight = Math.min(uncapped169Height, galleryFrameCapPx);
+  expect(observed.fit, 'the photograph is cropped to fill its stage instead of shown whole').toEqual([
+    'contain',
+  ]);
   expect(
     box.height,
-    `the gallery frame is ${box.height}px, not the capped ${expectedHeight.toFixed(1)}px`
-  ).toBeCloseTo(expectedHeight, 0);
+    `the gallery stage is ${box.width.toFixed(1)}x${box.height.toFixed(1)}, not the square the owner asked for`
+  ).toBeCloseTo(box.width, 0);
+  const expectedWidth = Math.min(observed.track, galleryStageCapPx);
+  expect(
+    box.width,
+    `the gallery stage is ${box.width.toFixed(1)}px inside a ${observed.track.toFixed(1)}px track, not the expected ${expectedWidth.toFixed(1)}px`
+  ).toBeCloseTo(expectedWidth, 0);
   /* The cap must be doing real work somewhere, not coincidentally matching
-     the uncapped ratio — but this test runs across every project, including
-     the phone emulations, whose own viewport genuinely renders a frame
-     under 360px wide (MEASURED: 356-359px), where 16:9 alone never reaches
-     320px and the cap is correctly inert. Gating on the frame's own
-     MEASURED width — a layout fact independent of whatever the height-cap
-     token currently says — rather than on the project name (this file's own
-     capability-over-project-name doctrine) restricts the strict-inequality
-     proof to viewports wide enough to exercise it, without ever weakening
-     what it proves there: on a desktop-width frame this still fails exactly
-     as hard against the 20rem -> 200rem mutant. */
-  if (box.width * (9 / 16) > galleryFrameCapPx) {
+     the track — but this test runs across every project, including the phone
+     emulations, whose own viewport genuinely renders a track under 300px wide
+     (MEASURED: 242px on an iPhone 13), where the cap is correctly inert.
+     Gating on the track's own MEASURED width — a layout fact independent of
+     whatever the size token currently says — rather than on the project name
+     (this file's own capability-over-project-name doctrine) restricts the
+     strict-inequality proof to viewports wide enough to exercise it, without
+     ever weakening what it proves there: on a desktop-width track this still
+     fails exactly as hard against the 28rem -> 280rem mutant, which would let
+     the stage grow to the full track. */
+  if (observed.track > galleryStageCapPx) {
     expect(
-      uncapped169Height,
-      `the frame is ${box.width}px wide, too narrow at this viewport to prove the cap engages`
-    ).toBeGreaterThan(galleryFrameCapPx);
+      box.width,
+      `the stage filled its whole ${observed.track.toFixed(1)}px track; the size cap did not engage`
+    ).toBeLessThan(observed.track);
   }
 });
 
@@ -2457,7 +2566,7 @@ test('prev/next cycle the visible photograph without leaving the page', async ({
   expect(backToStart).toBe(before);
 });
 
-test('clicking the photograph opens a real modal dialog with a framed, larger image; Escape closes it', async ({
+test('clicking the photograph opens a real modal dialog with a larger, unframed image; Escape closes it', async ({
   page,
 }) => {
   await visit(page);
@@ -2471,12 +2580,25 @@ test('clicking the photograph opens a real modal dialog with a framed, larger im
   expect(modal, 'the dialog did not open as a real top-layer modal').toBe(true);
   const enlarged = page.locator('img.gallery-lightbox-image');
   await expect(enlarged).toBeVisible();
-  const [previewBox, enlargedBox, border] = await Promise.all([
+  const [previewBox, enlargedBox, frame] = await Promise.all([
     page.locator('.gallery-image-button').boundingBox(),
     enlarged.boundingBox(),
     page.evaluate(() => {
-      const style = getComputedStyle(window.document.querySelector('.gallery-lightbox-border'));
-      return { width: style.borderTopWidth, style: style.borderTopStyle };
+      const wrapper = window.document.querySelector('.gallery-lightbox-border');
+      const style = getComputedStyle(wrapper);
+      const wrapperBox = wrapper.getBoundingClientRect();
+      const imageBox = wrapper.querySelector('.gallery-lightbox-image').getBoundingClientRect();
+      return {
+        borderWidth: Number.parseFloat(style.borderTopWidth),
+        background: style.backgroundColor,
+        padding: [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft].map(
+          Number.parseFloat
+        ),
+        band: {
+          width: wrapperBox.width - imageBox.width,
+          height: wrapperBox.height - imageBox.height,
+        },
+      };
     }),
   ]);
   // "Larger" is measured, not assumed: the enlarged image's rendered area
@@ -2485,10 +2607,32 @@ test('clicking the photograph opens a real modal dialog with a framed, larger im
     enlargedBox.width * enlargedBox.height,
     'the enlarged photograph is not measurably larger than the feed frame'
   ).toBeGreaterThan(previewBox.width * previewBox.height);
-  // The frame border is real and painted — issue 176's "static, simple,
-  // almost non-existent" v1, still an actual border rather than nothing.
-  expect(parseFloat(border.width), 'the frame border has no measurable width').toBeGreaterThan(0);
-  expect(border.style).not.toBe('none');
+  /* And it is UNFRAMED (owner directive, 2026-08-28: "get rid of those ugly
+     outlines"). Issue 176's v1 painted a "static, simple, almost
+     non-existent" border here and this lane pinned that it was real; the
+     three --gallery-frame-* tokens that decide it are now width 0, colour
+     transparent and padding 0, so what the enlarged work wears against the
+     scrim is nothing at all.
+     The wrapper survives — it is still the one place a future patterned
+     border would be a token edit — so the pin is that it ADDS nothing: no
+     line, no fill, and not one pixel of band around the picture. Each of the
+     three tokens fails this on its own if it comes back. */
+  expect(frame.borderWidth, 'the enlarged photograph wears a border again').toBe(0);
+  expect(frame.background, 'the frame wrapper paints a mat behind the photograph').toMatch(
+    /rgba\(0, 0, 0, 0\)|transparent/
+  );
+  expect(frame.padding, 'the frame wrapper reserves a band around the photograph').toEqual([0, 0, 0, 0]);
+  /* Half a CSS pixel of allowance rather than this file's usual hundredth,
+     because this is a difference between two boxes on a scaled device: the
+     Pixel 5 lane snaps layout to its 2.75x grid and reported a 0.03125px band
+     around an image that has no padding at all. Half a pixel cannot hide a
+     frame — the smallest band any of these tokens can produce is a quarter-rem
+     of padding on both sides, which is 8px. */
+  const bandGrainPx = 0.5;
+  expect(
+    Math.max(frame.band.width, frame.band.height),
+    `the frame wrapper is ${frame.band.width}x${frame.band.height} larger than the photograph inside it`
+  ).toBeLessThanOrEqual(bandGrainPx);
 
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
@@ -3019,14 +3163,14 @@ test('the token panel detail card shows the value and the view-scoped period, an
   expect(dailyRows[0], 'the first row must be the raw count').toMatch(/^\d[\d,]*$/);
   expect(dailyRows[1], 'the daily card must read "on <month> <day>"').toMatch(/^on [A-Z][a-z]{2} \d{1,2}$/);
 
-  await panel.getByRole('radio', { name: 'weekly', exact: true }).first().click();
+  await chooseDisplay(page, 0, 'view', 'weekly');
   const weeklyRows = await readDetail();
   expect(
     weeklyRows[1],
     'the weekly card must name its own calendar week, not a single day'
   ).toMatch(/^week of [A-Z][a-z]{2} \d{1,2}, \d{4}$/);
 
-  await panel.getByRole('radio', { name: 'cumulative', exact: true }).first().click();
+  await chooseDisplay(page, 0, 'view', 'cumulative');
   const cumulativeRows = await readDetail();
   expect(
     cumulativeRows[1],
@@ -3049,25 +3193,25 @@ test('the token panel detail card shows the value and the view-scoped period, an
   const summaryOf = () =>
     panel.locator('.usage-activity-total').first().textContent();
 
-  await panel.getByRole('radio', { name: 'daily', exact: true }).first().click();
+  await chooseDisplay(page, 0, 'view', 'daily');
   expect(
     (await summaryOf()).trim(),
     'the daily sentence must count days and name a day peak'
   ).toMatch(/tokens over \d+ days, peaking at /);
 
-  await panel.getByRole('radio', { name: 'weekly', exact: true }).first().click();
+  await chooseDisplay(page, 0, 'view', 'weekly');
   expect(
     (await summaryOf()).trim(),
     'the weekly sentence must count weeks, average per week, and peak a week'
   ).toMatch(/tokens over \d+ weeks, averaging .+ per week, peaking at .+ in one week$/);
 
-  await panel.getByRole('radio', { name: 'monthly', exact: true }).first().click();
+  await chooseDisplay(page, 0, 'view', 'monthly');
   expect(
     (await summaryOf()).trim(),
     'the monthly sentence must count months'
   ).toMatch(/tokens over \d+ months?, averaging .+ per month, peaking at .+ in one month$/);
 
-  await panel.getByRole('radio', { name: 'cumulative', exact: true }).first().click();
+  await chooseDisplay(page, 0, 'view', 'cumulative');
   expect(
     (await summaryOf()).trim(),
     'the cumulative sentence states a rate, never a peak that would repeat its own total'
@@ -3273,11 +3417,24 @@ test('pointing at a swatch changes its presence and nothing else', async ({ page
   expect(moved, 'pointing at a swatch moved the popover under the pointer').toEqual(before);
 });
 
-test('choosing a reading mode marks it by shape, and moves nothing', async ({ page }) => {
+/* SUPERSEDED premise (owner directive, 2026-08-28): the chosen mode used to
+ * be underlined by a ::after bar, and this lane measured that exactly one bar
+ * was painted, on the pressed swatch, at a size that did not change. The bar
+ * is gone — the chosen swatch is now COLOURED IN with the brand ink while the
+ * unchosen ones stay muted — so what the lane measures moved from a
+ * pseudo-element's box to the glyphs' own ink. The two halves it exists for
+ * did not move: exactly one swatch must be marked, on the pressed one, and
+ * marking it must cost no layout. */
+test('choosing a reading mode marks it by ink, and moves nothing', async ({ page }) => {
   await visit(page);
   await openedAndStill(page);
-  const marks = () =>
-    page.evaluate(() => {
+
+  const marks = async () => {
+    /* Away from every swatch first: hover paints the SAME brand ink the
+       choice does, so a pointer left resting on the swatch that was just
+       clicked would report two marked swatches and hide a broken one. */
+    await page.mouse.move(0, 0);
+    return page.evaluate(() => {
       const box = (node) => {
         const { x, y, width, height } = node.getBoundingClientRect();
         return [x, y, width, height].map((value) => Math.round(value * 100) / 100);
@@ -3285,42 +3442,57 @@ test('choosing a reading mode marks it by shape, and moves nothing', async ({ pa
       return {
         popover: box(window.document.querySelector('#reading-mode-menu')),
         swatches: [...window.document.querySelectorAll('.swatch')].map(box),
-        /* The chosen-mode mark, measured as a painted box rather than read
-           off a class: a pseudo-element with no content and no size would
-           satisfy every source pin and show the reader nothing. */
-        marked: [...window.document.querySelectorAll('.swatch')].map((node) => {
-          const after = getComputedStyle(node, '::after');
-          return {
-            label: node.getAttribute('aria-label'),
-            pressed: node.getAttribute('aria-pressed') === 'true',
-            drawn: after.content !== 'none' && after.content !== 'normal',
-            width: Number.parseFloat(after.width) || 0,
-            height: Number.parseFloat(after.height) || 0,
-          };
-        }),
+        /* The mark's target colour, read off the CHROME rather than from a
+           token name — the same reference the hover lane beside this one
+           uses. The reading-mode trigger wears exactly that ink for as long
+           as its own popover is open (aria-expanded="true", the shared
+           .icon-button rule), so the page states its own expectation and this
+           lane never parses a custom property. It is re-read per measurement
+           because the brand ink is per reading mode. */
+        chosenInk: getComputedStyle(window.document.querySelector('.theme-menu .trigger')).color,
+        /* The chosen-mode mark, measured as the ink an engine actually
+           resolved rather than read off a class: a rule that named a colour
+           nothing resolves to would satisfy every source pin and show the
+           reader nothing. */
+        marked: [...window.document.querySelectorAll('.swatch')].map((node) => ({
+          label: node.getAttribute('aria-label'),
+          pressed: node.getAttribute('aria-pressed') === 'true',
+          ink: getComputedStyle(node).color,
+        })),
       };
     });
+  };
+
+  /* Exactly one mode is chosen at a time, the mark is on it, and the mark is
+     a DIFFERENCE rather than a claim: every unchosen swatch shares one
+     resting ink and it is not the chosen one's. A stylesheet that painted all
+     five the brand colour would satisfy "the pressed one is brand" while
+     showing the reader nothing. */
+  const marked = (state) => {
+    const chosen = state.marked.filter((swatch) => swatch.ink === state.chosenInk);
+    expect(chosen.length, 'exactly one reading mode must carry the chosen ink').toBe(1);
+    expect(chosen[0].pressed, 'the mark is not on the pressed swatch').toBe(true);
+    const resting = new Set(
+      state.marked.filter((swatch) => !swatch.pressed).map((swatch) => swatch.ink)
+    );
+    expect([...resting], 'the unchosen swatches do not share one resting ink').toHaveLength(1);
+    expect(
+      [...resting][0],
+      `every swatch is painted ${state.chosenInk}; the choice is not marked at all`
+    ).not.toBe(state.chosenInk);
+    return chosen[0];
+  };
 
   const before = await marks();
-  /* Exactly one mode is chosen at a time, and the mark follows the choice. */
-  const chosenBefore = before.marked.filter((swatch) => swatch.drawn);
-  expect(chosenBefore.length, 'exactly one reading mode must carry the chosen mark').toBe(1);
-  expect(chosenBefore[0].pressed, 'the mark is not on the pressed swatch').toBe(true);
-  expect(
-    chosenBefore[0].width * chosenBefore[0].height,
-    `the chosen mark on "${chosenBefore[0].label}" is painted at ${chosenBefore[0].width}x${chosenBefore[0].height}; selection is carried by color alone`
-  ).toBeGreaterThan(0);
+  marked(before);
 
   await page.getByRole('button', { name: 'Sepia', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'sepia');
   await openedAndStill(page);
   const after = await marks();
-  const chosenAfter = after.marked.filter((swatch) => swatch.drawn);
-  expect(chosenAfter.length, 'exactly one reading mode must carry the chosen mark').toBe(1);
-  expect(chosenAfter[0].label, 'the chosen mark did not follow the choice').toBe('Sepia');
-  expect(chosenAfter[0].width).toBeCloseTo(chosenBefore[0].width, 1);
-  expect(chosenAfter[0].height).toBeCloseTo(chosenBefore[0].height, 1);
-  /* And the mark costs no space: the row it sits in is the row it sat in. */
+  expect(marked(after).label, 'the chosen ink did not follow the choice').toBe('Sepia');
+  /* And the mark costs no space — the whole reason it is ink and not a bar:
+     the row it sits in is the row it sat in. */
   expect(after.popover, 'choosing a reading mode resized the popover').toEqual(before.popover);
   expect(after.swatches, 'choosing a reading mode moved the swatches').toEqual(before.swatches);
 });
@@ -3334,12 +3506,25 @@ test('every swatch paints a distinct silhouette, at a legible ink, in every read
      complaint was that this was unreadable at 18px — three near-identical
      moons told apart only by a crater color difference nobody could see. The
      glyphs now paint ONE ink (currentColor) and tell the five modes apart by
-     SHAPE instead, so what this lane must measure inverted: every swatch now
-     SHARES its ink (zero theme branching) and instead must paint a distinct
-     SILHOUETTE. */
+     SHAPE instead, so what this lane must measure inverted: the swatches
+     SHARE their ink (zero theme branching) and instead must paint a distinct
+     SILHOUETTE.
+
+     AMENDED (owner directive, 2026-08-28): there are now exactly TWO inks in
+     the popover, because the underline that used to mark the chosen mode was
+     replaced by colouring that swatch in. So "one ink" became "one RESTING
+     ink plus the chosen one", and both are non-text indicators that have to
+     clear 3:1 on the surface they are drawn on — the chosen ink most of all,
+     since it is the thing carrying the state. Nothing else about the lane
+     moved: five distinct silhouettes, in every reading mode. */
   await visit(page);
   const read = async () => {
     await openedAndStill(page);
+    /* Away from the swatches before measuring: hover paints the same brand
+       ink the choice does, and the loop below clicks a swatch immediately
+       before each read, so a resting pointer would report a second marked
+       swatch that no reader who moved their hand would see. */
+    await page.mouse.move(0, 0);
     return page.evaluate(() => {
       const popover = window.document.querySelector('#reading-mode-menu');
       return {
@@ -3366,6 +3551,7 @@ test('every swatch paints a distinct silhouette, at a legible ink, in every read
             .join('|');
           return {
             label: node.getAttribute('aria-label'),
+            pressed: node.getAttribute('aria-pressed') === 'true',
             ink: outline.stroke !== 'none' ? outline.stroke : outline.fill,
             painted: box.width > 0 && box.height > 0,
             geometry,
@@ -3393,14 +3579,21 @@ test('every swatch paints a distinct silhouette, at a legible ink, in every read
       await expect(page.locator('html')).toHaveAttribute('data-theme', id);
     }
     const painted = await read();
-    const ink = painted.swatches[0].ink;
+    const chosen = painted.swatches.filter((swatch) => swatch.pressed);
+    expect(chosen, `${label} mode marks no swatch as chosen`).toHaveLength(1);
+    const restingInk = painted.swatches.find((swatch) => !swatch.pressed).ink;
     const seen = new Map();
     for (const swatch of painted.swatches) {
       expect(swatch.painted, `"${swatch.label}" paints nothing in ${label} mode`).toBe(true);
-      /* Zero theme branching: at rest, every glyph resolves to the SAME
-         currentColor ink as its neighbours — a swatch that painted its own
-         color again would be the per-mode branching issue #180 removed. */
-      expect(swatch.ink, `"${swatch.label}" does not share the popover's one ink`).toBe(ink);
+      /* Zero theme branching: every glyph resolves to the currentColor its
+         swatch was given, and there are exactly two answers on this popover —
+         the resting ink, and the chosen swatch's brand ink. A swatch that
+         painted its own PALETTE colour again would be the per-mode branching
+         issue #180 removed, and it shows up here as a third ink. */
+      expect(
+        swatch.ink,
+        `"${swatch.label}" paints neither the popover's resting ink nor the chosen one`
+      ).toBe(swatch.pressed ? chosen[0].ink : restingInk);
       /* No two swatches draw the same shape. */
       expect(
         seen.get(swatch.geometry),
@@ -3408,13 +3601,25 @@ test('every swatch paints a distinct silhouette, at a legible ink, in every read
       ).toBeUndefined();
       seen.set(swatch.geometry, swatch.label);
     }
-    /* WCAG 1.4.11: the one shared ink is a non-text indicator, so it clears
-       3:1 against the surface it is drawn on, in every reading mode. */
-    const ratio = contrastRatio(ink, painted.surface);
+    /* The chosen ink is what carries the state now that the underline is
+       gone, so it must be legible AS a difference: a brand ink that resolved
+       to the resting one would mark nothing at all. */
     expect(
-      ratio,
-      `in ${label} mode the reading-mode ink sits at ${ratio.toFixed(2)}:1 on the popover`
-    ).toBeGreaterThanOrEqual(3);
+      chosen[0].ink,
+      `in ${label} mode the chosen swatch is painted the same ${restingInk} as its neighbours`
+    ).not.toBe(restingInk);
+    /* WCAG 1.4.11: both inks are non-text indicators, so both clear 3:1
+       against the surface they are drawn on, in every reading mode. */
+    for (const [role, ink] of [
+      ['resting', restingInk],
+      ['chosen', chosen[0].ink],
+    ]) {
+      const ratio = contrastRatio(ink, painted.surface);
+      expect(
+        ratio,
+        `in ${label} mode the ${role} reading-mode ink sits at ${ratio.toFixed(2)}:1 on the popover`
+      ).toBeGreaterThanOrEqual(3);
+    }
   }
 });
 
@@ -4159,18 +4364,25 @@ test('the token-activity grid fills its card, not a tiny left-aligned block', as
 test('a source lens moves its own graph and leaves its neighbour on daily', async ({ page }) => {
   await visit(page);
   /* Scoped to the LENS groups (issue 158 added a second radiogroup per
-     source, for the trailing range). Every group on this card is a
-     .usage-views pill; the range one carries its own marker, so this reads
-     the lens groups alone rather than four groups answering two questions. */
-  const readLenses = () =>
-    page.evaluate(() =>
-      [
-        ...window.document.querySelectorAll(
-          '[data-panel-id="token-usage"] .usage-views:not([data-usage-ranges])[role="radiogroup"]'
+     source, for the trailing range, and a source that reports categories adds
+     a third). Every group is a .usage-views pill row inside one
+     .filter-group of that source's display menu, and the group is identified
+     by the QUESTION the reader sees over it — the .filter-group-label — so
+     this reads the lens groups alone rather than every group on the card.
+     (It used to read a `data-usage-ranges` marker attribute on the range
+     group; the rows moved into UsageFilterMenu on 2026-08-28 and the marker
+     went with them. The visible label is the better anchor anyway: it is the
+     thing that would have to be wrong for a reader to press the wrong
+     control.) */
+  const readGroups = (question) =>
+    page.evaluate((asked) =>
+      [...window.document.querySelectorAll('[data-panel-id="token-usage"] .filter-group')]
+        .filter(
+          (block) => block.querySelector('.filter-group-label')?.textContent.trim() === asked
         )
-      ].map(
-        (group) => {
-          const region = group.closest('.usage-activity');
+        .map((block) => {
+          const group = block.querySelector('.usage-views[role="radiogroup"]');
+          const region = block.closest('.usage-activity');
           const chosen = [...group.querySelectorAll('[role="radio"]')].find(
             (radio) => radio.getAttribute('aria-checked') === 'true'
           );
@@ -4179,9 +4391,11 @@ test('a source lens moves its own graph and leaves its neighbour on daily', asyn
             lens: chosen === undefined ? null : chosen.textContent.trim(),
             grid: region?.querySelector('.grid-strip')?.getAttribute('aria-label') ?? '',
           };
-        }
-      )
+        }),
+      question
     );
+
+  const readLenses = () => readGroups('view');
 
   const before = await readLenses();
   expect(
@@ -4197,10 +4411,7 @@ test('a source lens moves its own graph and leaves its neighbour on daily', asyn
     expect(group.lens, `"${group.name}" does not open on the daily lens`).toBe('daily');
   }
 
-  const groups = page.locator(
-    '[data-panel-id="token-usage"] .usage-views:not([data-usage-ranges])[role="radiogroup"]'
-  );
-  await groups.first().getByRole('radio', { name: 'cumulative' }).click();
+  await chooseDisplay(page, 0, 'view', 'cumulative');
 
   const after = await readLenses();
   /* The pressed one moved, in its toggle AND in the graph under it — the
@@ -4235,33 +4446,35 @@ test('a source range redraws its own graph, keeps the newest day, and leaves its
   page,
 }) => {
   await visit(page);
+  /* The range groups, found by the question the reader sees over them — see
+     the note on the lens lane above for why the old `data-usage-ranges`
+     marker is gone. */
   const readRanges = () =>
     page.evaluate(() =>
-      [
-        ...window.document.querySelectorAll(
-          '[data-panel-id="token-usage"] .usage-views[data-usage-ranges][role="radiogroup"]'
-        )
-      ].map((group) => {
-        const region = group.closest('.usage-activity');
-        const chosen = [...group.querySelectorAll('[role="radio"]')].find(
-          (radio) => radio.getAttribute('aria-checked') === 'true'
-        );
-        const cells = [...(region?.querySelectorAll('[data-grid-cell]') ?? [])];
-        const dated = cells
-          .map((cell) => cell.getAttribute('aria-label') ?? '')
-          .filter((label) => label !== 'no data for this day');
-        const box = cells[0]?.getBoundingClientRect();
-        return {
-          name: group.getAttribute('aria-label'),
-          range: chosen === undefined ? null : chosen.textContent.trim(),
-          columns: cells.length / 7,
-          captured: dated.length,
-          cellWidth: box?.width ?? 0,
-          cellHeight: box?.height ?? 0,
-          summary: region?.querySelector('.usage-activity-total')?.textContent.trim() ?? '',
-          coverage: region?.querySelector('.usage-activity-coverage')?.textContent.trim() ?? '',
-        };
-      })
+      [...window.document.querySelectorAll('[data-panel-id="token-usage"] .filter-group')]
+        .filter((block) => block.querySelector('.filter-group-label')?.textContent.trim() === 'range')
+        .map((block) => {
+          const group = block.querySelector('.usage-views[role="radiogroup"]');
+          const region = block.closest('.usage-activity');
+          const chosen = [...group.querySelectorAll('[role="radio"]')].find(
+            (radio) => radio.getAttribute('aria-checked') === 'true'
+          );
+          const cells = [...(region?.querySelectorAll('[data-grid-cell]') ?? [])];
+          const dated = cells
+            .map((cell) => cell.getAttribute('aria-label') ?? '')
+            .filter((label) => label !== 'no data for this day');
+          const box = cells[0]?.getBoundingClientRect();
+          return {
+            name: group.getAttribute('aria-label'),
+            range: chosen === undefined ? null : chosen.textContent.trim(),
+            columns: cells.length / 7,
+            captured: dated.length,
+            cellWidth: box?.width ?? 0,
+            cellHeight: box?.height ?? 0,
+            summary: region?.querySelector('.usage-activity-total')?.textContent.trim() ?? '',
+            coverage: region?.querySelector('.usage-activity-coverage')?.textContent.trim() ?? '',
+          };
+        })
     );
 
   const before = await readRanges();
@@ -4288,10 +4501,7 @@ test('a source range redraws its own graph, keeps the newest day, and leaves its
     );
   }
 
-  const groups = page.locator(
-    '[data-panel-id="token-usage"] .usage-views[data-usage-ranges][role="radiogroup"]'
-  );
-  await groups.first().getByRole('radio', { name: '90d' }).click();
+  await chooseDisplay(page, 0, 'range', '90d');
 
   const after = await readRanges();
   expect(after[0].range, 'the pressed range did not take').toBe('90d');
@@ -5163,8 +5373,8 @@ test('every width the handle can reach keeps every section intact', async ({ pag
       const grid = window.document.querySelector('.stat-grid[data-cells="roomy"]');
       const cells = [...grid.querySelectorAll('.stat-cell')];
       const distinct = (values) => new Set(values.map((value) => Math.round(value))).size;
-      const frames = [...window.document.querySelectorAll('.gallery-image-button')].map((frame) => {
-        const box = frame.getBoundingClientRect();
+      const frames = [...window.document.querySelectorAll('.gallery-stage')].map((stage) => {
+        const box = stage.getBoundingClientRect();
         return { width: box.width, height: box.height };
       });
       const root = window.document.documentElement;
@@ -5225,30 +5435,36 @@ test('every width the handle can reach keeps every section intact', async ({ pag
     expect(state.strips, `the heatmap strips disappeared ${at}`).toBeGreaterThan(0);
     expect(state.navLinks, `the nav lost links ${at}`).toBeGreaterThan(3);
     expect(state.sections, `the page lost a section ${at}`).toBeGreaterThan(3);
-    /* The pictures still reserve the box they will fill: 16:9 below the
-       tokenized cap (issue 157), the cap itself above it — a narrow column
-       still gets the full photograph proportion, and a wide one stops
-       growing the frame instead of reproducing the complaint the cap
-       exists to fix. galleryFrameCapPx is the literal cap value, never the
-       page's own computed style (see its declaration for why) — this is
-       what makes the assertion below independent, rather than the
-       self-referential shape Daybreak Blue's review of PR #161 found: a
-       mutation that widened the token could no longer widen its own
+    /* The pictures still reserve the box they will fill, and since
+       2026-08-28 that box is a SQUARE stage rather than the feed card's 16:9
+       media frame (owner: the drawings are portrait scans, and a wide frame
+       cropped them). Squareness is the property under test at every column
+       width: whatever the track does, the stage keeps its ratio and stops
+       at its own ceiling, so a narrow column shrinks the work rather than
+       distorting it and a wide one stops growing instead of reproducing the
+       complaint the cap exists to fix. galleryStageCapPx is the literal cap
+       value, never the page's own computed style (see its declaration for
+       why) — this is what makes the assertion below independent, rather
+       than the self-referential shape Daybreak Blue's review of PR #161
+       found: a mutation that widened the token could no longer widen its own
        expectation along with it.
        (This viewport is the narrow "rails" one the handle needs to exist at
        all — MEASURED: even the widest column this sweep can reach keeps the
-       gallery card's own max-inline-size under ~569px, so the uncapped 16:9
-       height here never clears 320px by a comfortable margin. The
-       unambiguous "the cap is doing real work, not coincidentally equal to
-       the uncapped ratio" proof lives in the dedicated single-frame test
+       stage's track under ~570px, so the cap engages here only at the wider
+       end. The unambiguous "the cap is doing real work, not coincidentally
+       equal to the track" proof lives in the dedicated single-frame test
        above instead, at a viewport wide enough to make that margin real.) */
     expect(state.frames.length, `the gallery rendered no frame ${at}`).toBe(1);
     for (const frame of state.frames) {
-      const expectedHeight = Math.min(frame.width * (9 / 16), galleryFrameCapPx);
       expect(
         frame.height,
-        `the gallery frame is ${frame.height.toFixed(1)}px, not the capped ${expectedHeight.toFixed(1)}px ${at}`
-      ).toBeCloseTo(expectedHeight, 0);
+        `the gallery stage is ${frame.width.toFixed(1)}x${frame.height.toFixed(1)} ${at}, not square`
+      ).toBeCloseTo(frame.width, 0);
+      expect(
+        frame.width,
+        `the gallery stage grew to ${frame.width.toFixed(1)}px ${at}, past its ${galleryStageCapPx}px ceiling`
+      ).toBeLessThanOrEqual(galleryStageCapPx + subPixel);
+      expect(frame.width, `the gallery stage reserves nothing ${at}`).toBeGreaterThan(0);
     }
   }
 });
@@ -6958,22 +7174,51 @@ test('the refresh gesture has a control a keyboard can reach (issue 219)', async
  * MEASURED before the fix at 390x844 in WebKit: icon x 330-374 y 16-60,
  * "cumulative" x 283.19-360.0 y 26.98-70.98 — a 30x33px overlap. At 1440px
  * there was none (icon x 1380-1424, column x 240-1200), which is why it only
- * ever appeared on a phone. */
+ * ever appeared on a phone.
+ *
+ * That "cumulative" segment no longer renders in the open: the display
+ * choices moved behind a per-source menu on 2026-08-28. The control that took
+ * its place at the end of the same header — the menu's own trigger — is what
+ * this lane scrolls under the plate now, because the collision was never
+ * about which control it was, only about where the column ends. */
 test('the fixed reading-mode control never renders over page text (issue 219)', async ({ page }) => {
   await visit(page);
 
   const plate = await page.evaluate(() => {
     const header = window.document.querySelector('.page-header');
     const style = window.getComputedStyle(header);
-    return { background: style.backgroundColor, shadow: style.boxShadow };
+    return {
+      background: style.backgroundColor,
+      shadow: style.boxShadow,
+      radius: style.borderTopLeftRadius,
+      blur: style.backdropFilter || style.webkitBackdropFilter,
+    };
   });
-  // A transparent plate is the defect: whatever scrolls beneath shows THROUGH
-  // the glyph. The engine must report a real, opaque backdrop.
-  expect(plate.background, 'the reading-mode control paints no backdrop of its own').not.toBe(
-    'rgba(0, 0, 0, 0)',
+  /* A transparent plate is the original defect: whatever scrolls beneath shows
+     THROUGH the glyph. But the first cut over-corrected — a fully opaque disc
+     ringed by a gutter-wide shadow spread, which on a phone reads as a huge
+     solid circle stamped on the page (owner defect report, 0.1.52). What the
+     control needs is not opacity but a VEIL: enough of the page's own surface
+     to separate the glyph from the text, over a blur that softens what passes
+     under it, and no halo at all.
+
+     So all three properties are pinned in the direction the redesign chose,
+     and each fails on its own: a plate that went transparent again, one that
+     went back to opaque, one that lost its blur, and one that brought the
+     spread back are four different red builds. */
+  const alpha = alphaOf(plate.background);
+  expect(alpha, 'the reading-mode control paints no backdrop of its own').toBeGreaterThan(0);
+  expect(
+    alpha,
+    `the plate is painted at ${alpha}: an opaque disc, not the veil the owner asked for`
+  ).toBeLessThan(1);
+  expect(plate.blur, 'the plate does not soften what scrolls beneath it').toContain('blur');
+  expect(plate.shadow, 'the plate rings itself with a halo again').toBe('none');
+  // The pill the 44px hit box already describes — the plate is shaped by the
+  // control it backs rather than by a number of its own.
+  expect(Number.parseFloat(plate.radius), 'the plate is not the control’s own pill').toBeGreaterThan(
+    touchFloorPx / 2,
   );
-  expect(plate.background).not.toBe('transparent');
-  expect(plate.shadow, 'the plate has no spread to cover the control it backs').not.toBe('none');
 
   // Browser-driven scrolling must not park a target under the control either.
   expect(
@@ -6989,7 +7234,15 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
      same machinery) now honours the scroll padding, so the segment the owner
      could not read lands BELOW the control instead of beneath it. */
   const landing = await page.evaluate(() => {
-    const segments = [...window.document.querySelectorAll('.usage-view')];
+    /* The right-aligned panel control the owner's report was actually about.
+       It used to be the last "cumulative" segment of an exposed pill row;
+       those rows moved into a per-source display menu on 2026-08-28 and are
+       display:none until a reader opens it, so a closed drawer's pill can
+       neither be scrolled to nor rendered under anything. The TRIGGER that
+       replaced them sits in the same place — the end of the activity header,
+       hard against the column's own end edge — which is what makes it the
+       same collision. */
+    const segments = [...window.document.querySelectorAll('.filter-trigger')];
     if (segments.length === 0) return null;
     const segment = segments.at(-1);
     segment.scrollIntoView({ block: 'start' });
@@ -7000,7 +7253,7 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
       headerBottom: header.getBoundingClientRect().bottom,
     };
   });
-  expect(landing, 'the token panel rendered no segmented control to measure').not.toBeNull();
+  expect(landing, 'the token panel rendered no display control to measure').not.toBeNull();
   /* A whole pixel of tolerance here rather than the sub-pixel one used for
      box SIZES, and the difference is deliberate. A scroll offset is rounded
      to the device's own pixel grid, so a target the engine placed exactly at
@@ -7022,7 +7275,7 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
      element at the centre of the overlap is measured — it must be the
      control, not the text. */
   const occlusion = await page.evaluate(() => {
-    const segments = [...window.document.querySelectorAll('.usage-view')];
+    const segments = [...window.document.querySelectorAll('.filter-trigger')];
     const segment = segments.at(-1);
     const header = window.document.querySelector('.page-header');
     const hb = header.getBoundingClientRect();

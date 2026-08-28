@@ -5,14 +5,15 @@
   so a new tool appears by shipping data, never by editing code.
 
   Each source block is, top to bottom: a tile grid of headline figures (a
-  final odd tile spans the full width); the usage windows with their
-  utilization meters, the numeric reading always rendered beside the fill so
-  severity is never color alone; an activity section whose toggles read ONE
-  delivered payload three ways — a view lens (daily/weekly/monthly/cumulative),
-  a trailing range (30d/90d/12mo/all), and, for a source that reports one, a
-  category lens (total plus its own accounting classes) — with no extra bytes
-  and no ceiling on how much history the series may grow to hold; and an
-  insights list.
+  final odd tile spans the full width); the usage windows on one uniform line
+  (meters, when a window carries one, keep the numeric reading beside the
+  fill so severity is never color alone); an activity section whose display
+  choices read ONE delivered payload three ways — a view lens
+  (daily/weekly/monthly/cumulative), a trailing range (30d/90d/12mo/all),
+  and, for a source that reports one, a category lens (total plus its own
+  accounting classes) — collapsed behind one compact menu per source
+  (UsageFilterMenu), with no extra bytes and no ceiling on how much history
+  the series may grow to hold; and an insights list.
 
   Every section is optional and every absence is honest. A figure the origin
   does not report arrives as an explicit dash, and a payload that fails
@@ -52,7 +53,7 @@
 <script lang="ts">
   import type { UsageActivity, UsageCategory, UsageTrackerProps } from '../blocks.ts';
   import { formatMagnitude, seriesCells, seriesViews, viewColumns, type SeriesView } from '../grid';
-  import { isChord, ringTarget } from '../keys.ts';
+  import UsageFilterMenu from './UsageFilterMenu.svelte';
   import {
     activityReading,
     coverageReading,
@@ -140,56 +141,10 @@
      more. */
   let ranges = $state<Record<string, SeriesRange>>({});
 
-  /* THE SEGMENTED PILLS' KEYBOARD (issue 219). Every pill on this panel is a
-     real `radiogroup` of real `radio`s — the semantics were right — but a
-     radio group is a COMPOSITE widget, and WAI-ARIA gives composites one tab
-     stop with the arrows moving inside it. What shipped had neither half:
-     all sixteen segments were tab stops, and no arrow key did anything, so a
-     keyboard reader tabbed through every segment of every group while a
-     screen reader announced controls whose documented interaction was
-     missing.
-     Both halves land here. `tabindex` is roving — only the checked segment
-     is tabbable — and the arrows move the choice and the focus together,
-     which is exactly how a radio group behaves everywhere else and is also
-     the non-gesture equivalent this panel's gestures owe (AGENTS.md's
-     rendering floors, and the standing rule that a gesture-only affordance
-     is a defect). Home and End jump to the ends; the wrap is deliberate,
-     because a segmented control is a ring in every platform toolkit.
-     One helper drives all three groups, so a fourth group inherits the
-     behaviour by rendering the same markup rather than by remembering to.
-     The RING itself is lib/keys.ts's, shared with the gallery's position dots
-     and the reading-mode swatches: this file writing its own key table is how
-     one page ended up with three of them and had to be told about the same
-     defect three times. */
-  function onRadioKeydown(
-    event: KeyboardEvent,
-    options: readonly string[],
-    current: string,
-    choose: (next: string) => void
-  ): void {
-    /* A chord is the browser's or the platform's — Cmd/Alt+Arrow is Back,
-       Ctrl+Home is top-of-document — so it is neither acted on nor swallowed
-       (lib/keys.ts). Branching on `event.key` alone swallowed all of them. */
-    if (isChord(event)) {
-      return;
-    }
-    const next = ringTarget(event.key, options.indexOf(current), options.length);
-    if (next === null) {
-      return;
-    }
-    /* The arrows belong to the group once focus is inside it, so the page
-       must not scroll underneath the reader as well. */
-    event.preventDefault();
-    choose(options[next]);
-    /* Focus follows selection: in a radio group the checked control IS the
-       tab stop, so leaving focus behind would strand it on a segment that
-       just became untabbable. */
-    const group = event.currentTarget;
-    if (group instanceof HTMLElement) {
-      group.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus();
-    }
-  }
-
+  /* The segmented pills' keyboard contract (issue 219) — one tab stop per
+     group, roving tabindex, arrows on lib/keys.ts's shared ring — moved with
+     the pills into UsageFilterMenu, which is the one place the groups render
+     now. */
   function rangeOf(key: string): SeriesRange {
     return ranges[key] ?? defaultSeriesRange;
   }
@@ -304,120 +259,56 @@
               <section class="usage-activity">
                 <header class="usage-activity-head">
                   <h4 class="usage-section-title">{source.activity.heading}</h4>
-                  <!-- Two radio groups, each styled as a segmented pill: the
-                    choice inside each is exclusive, so radios carry the right
-                    semantics for free, and the two questions stay separate —
-                    how a day is READ (the lens) and how much history is DRAWN
-                    (the range). One combined list would make "monthly" and
-                    "90d" alternatives, which they are not. -->
-                  <!-- Each group is named for its own source AND its own
-                    question, so a screen reader hears which graph it belongs
-                    to and what it changes, rather than four identically named
-                    groups on one panel — the audible half of the same
-                    decoupling. -->
+                  <!-- The display choices — view, range, and (when the source
+                    reports one) the category lens — live behind ONE compact
+                    menu per source (owner directive, 2026-08-28: the exposed
+                    pill rows read as too many settings; hide them). Each
+                    question is still its own labeled radio group inside the
+                    popover, named for its own source, and the values still
+                    live in this component's per-source maps so they survive
+                    the adapter rebuilding sections every delivery. -->
                   <div class="usage-controls">
-                    <div
-                      class="usage-views"
-                      role="radiogroup"
-                      tabindex="-1"
-                      aria-label={`${source.label} ${source.activity.heading} view`}
-                      onkeydown={(event) =>
-                        onRadioKeydown(
-                          event,
-                          seriesViews,
-                          view,
-                          (next) => (views[source.key] = next as SeriesView)
-                        )}
-                    >
-                      {#each seriesViews as candidate}
-                        <button
-                          type="button"
-                          class="usage-view"
-                          role="radio"
-                          aria-checked={view === candidate}
-                          tabindex={view === candidate ? 0 : -1}
-                          onclick={() => (views[source.key] = candidate)}
-                        >
-                          {candidate}
-                        </button>
-                      {/each}
-                    </div>
-                    <div
-                      class="usage-views"
-                      data-usage-ranges
-                      role="radiogroup"
-                      tabindex="-1"
-                      aria-label={`${source.label} ${source.activity.heading} range`}
-                      onkeydown={(event) =>
-                        onRadioKeydown(
-                          event,
-                          seriesRanges,
-                          range,
-                          (next) => (ranges[source.key] = next as SeriesRange)
-                        )}
-                    >
-                      {#each seriesRanges as candidate}
-                        <button
-                          type="button"
-                          class="usage-view"
-                          role="radio"
-                          aria-checked={range === candidate}
-                          tabindex={range === candidate ? 0 : -1}
-                          onclick={() => (ranges[source.key] = candidate)}
-                        >
-                          {candidate}
-                        </button>
-                      {/each}
-                    </div>
+                    <UsageFilterMenu
+                      sourceLabel={source.label}
+                      groups={[
+                        {
+                          label: 'view',
+                          options: seriesViews.map((candidate) => ({
+                            key: candidate,
+                            label: candidate
+                          })),
+                          current: view,
+                          choose: (next) => (views[source.key] = next as SeriesView)
+                        },
+                        {
+                          label: 'range',
+                          options: seriesRanges.map((candidate) => ({
+                            key: candidate,
+                            label: candidate
+                          })),
+                          current: range,
+                          choose: (next) => (ranges[source.key] = next as SeriesRange)
+                        },
+                        ...(source.activity.categories && source.activity.categories.length > 0
+                          ? [
+                              {
+                                label: `${source.activity.noun} category`,
+                                options: [
+                                  { key: totalLens, label: 'total' },
+                                  ...source.activity.categories.map((category) => ({
+                                    key: category.key,
+                                    label: category.label
+                                  }))
+                                ],
+                                current: lensOf(source.key),
+                                choose: (next: string) => (lenses[source.key] = next)
+                              }
+                            ]
+                          : [])
+                      ]}
+                    />
                   </div>
                 </header>
-                {#if source.activity.categories && source.activity.categories.length > 0}
-                  <!-- The category lens: the same grid re-read through one
-                    accounting category. A second, per-source radio group —
-                    vocabularies differ per source, so a panel-global choice
-                    would name a lens some source cannot answer. Every key,
-                    label, and slot arrives as adapter data; only the
-                    always-available total reading is the component's own. -->
-                  <!-- Bound here rather than inside the handler: the {#if}
-                    above narrows `categories` for the template, but a closure
-                    written in an attribute is checked outside that narrowing
-                    and would read as possibly-undefined. -->
-                  {@const lensKeys = [
-                    totalLens,
-                    ...source.activity.categories.map((one) => one.key)
-                  ]}
-                  <div
-                    class="usage-views usage-category-views"
-                    role="radiogroup"
-                    tabindex="-1"
-                    aria-label={`${source.label} ${source.activity.noun} category`}
-                    onkeydown={(event) =>
-                      onRadioKeydown(event, lensKeys, lensOf(source.key), (next) => (lenses[source.key] = next))}
-                  >
-                    <button
-                      type="button"
-                      class="usage-view"
-                      role="radio"
-                      aria-checked={lensOf(source.key) === totalLens}
-                      tabindex={lensOf(source.key) === totalLens ? 0 : -1}
-                      onclick={() => (lenses[source.key] = totalLens)}
-                    >
-                      total
-                    </button>
-                    {#each source.activity.categories as category (category.key)}
-                      <button
-                        type="button"
-                        class="usage-view"
-                        role="radio"
-                        aria-checked={lensOf(source.key) === category.key}
-                        tabindex={lensOf(source.key) === category.key ? 0 : -1}
-                        onclick={() => (lenses[source.key] = category.key)}
-                      >
-                        {category.label}
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
                 <ContributionGrid
                   {columns}
                   noun={source.activity.noun}
@@ -618,25 +509,33 @@
     font-style: italic;
   }
 
+  /* ONE line, spread uniformly across the card (owner directive,
+     2026-08-28: the stacked period-over-figures blocks read "blocky and
+     messy"). Every window is an inline run — its period word, then its
+     pairs — and the runs distribute across the full width, which is also
+     the no-dead-space rule applied to this row. A narrow card wraps whole
+     runs rather than splitting a figure from its label. */
   .usage-windows {
     margin: 0;
     padding: 0;
     list-style: none;
     display: flex;
-    flex-direction: column;
-    gap: var(--usage-window-gap, 0.5rem);
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--usage-row-gap, 0.375rem) var(--usage-window-gap, 1.25rem);
   }
 
   .usage-window {
-    display: flex;
-    flex-direction: column;
-    gap: var(--usage-row-gap, 0.375rem);
+    display: inline-flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--usage-row-gap, 0.375rem) 0.625rem;
   }
 
   .usage-window-head {
-    display: flex;
+    display: inline-flex;
     align-items: baseline;
-    justify-content: space-between;
     gap: 0.5rem;
   }
 
@@ -653,6 +552,11 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    /* Inside the one-line window run a meter takes the run's full width on
+       its own wrapped line — a track squeezed to zero by inline flow would
+       be a bar with no reading. */
+    flex-basis: 100%;
+    min-inline-size: 12rem;
     --usage-meter-fill-color: var(--usage-meter-ok, var(--panel-status-ok, rgb(94, 171, 94)));
   }
 
@@ -737,6 +641,21 @@
     --grid-day-max: 1.25rem;
   }
 
+  /* At a phone width the bound flips from protecting the graph to starving
+     it: a 312px strip capped to ten 20px days stops 80px short of its own
+     right edge, and a 30d window stops at a third (owner defect report,
+     0.1.52 — and the standing no-dead-space rule: content that stops short
+     of its container's right edge is a defect). 100vw is ContributionGrid's
+     own "this cap can never bind" sentinel, so below 30rem the columns
+     simply share the strip. The 88px absurdity issue 158 measured was a
+     914px card; the worst a ≤480px viewport can produce is a fraction of
+     that, on a box too narrow for the bound and the fill to coexist. */
+  @media (max-width: 30rem) {
+    .usage-activity {
+      --grid-day-max: 100vw;
+    }
+  }
+
   .usage-activity-head {
     display: flex;
     align-items: center;
@@ -752,73 +671,19 @@
     color: var(--panel-text, rgb(230, 230, 230));
   }
 
-  /* The two segmented pills share one wrapping row (issue 158). They wrap as
-     a pair rather than as eight loose buttons, so a narrow card breaks
-     BETWEEN the lens and the range instead of splitting either group across
-     two lines — a segmented control with three segments on one row and one on
-     the next stops reading as one control. */
+  /* The controls row holds one thing now — the per-source display menu —
+     and keeps the header's end-alignment. The pill grammar itself (44px
+     touch floor on both axes, the measured "30d is 40.78px" lesson) moved
+     into UsageFilterMenu with the pills. */
   .usage-controls {
     display: flex;
-    flex-wrap: wrap;
     justify-content: flex-end;
-    gap: var(--usage-row-gap, 0.375rem);
-  }
-
-  .usage-views {
-    display: inline-flex;
-    padding: 2px;
-    border-radius: 999px;
-    background: var(--usage-tile-surface, var(--panel-tip-surface, rgb(23, 23, 23)));
-    border: 1px solid var(--panel-border, rgb(23, 23, 23));
-  }
-
-  /* Segments are 44px on BOTH axes so the pill clears the repository's
-     touch-target floor; the visual pill stays compact through the
-     transparent padding.
-
-     The inline floor is not belt-and-braces, and it is not what shipped:
-     the lens words ("daily", "cumulative") carried their own width, so a
-     block-size floor alone read as sufficient until the range pills arrived
-     beside them. MEASURED in all five rendering lanes: "30d" drew 40.78px
-     wide — three characters plus 0.625rem of padding either side — which is
-     the touch floor failing on the axis nobody had a short enough label to
-     test. A floor that depends on the length of a word is not a floor. */
-  .usage-view {
-    min-block-size: 2.75rem;
-    min-inline-size: 2.75rem;
-    padding-inline: 0.625rem;
-    border: 0;
-    border-radius: 999px;
-    background: transparent;
-    color: var(--panel-muted, rgb(158, 158, 158));
-    font: inherit;
-    font-size: var(--panel-badge-size, 0.6875rem);
-    text-transform: lowercase;
-    cursor: pointer;
-  }
-
-  .usage-view[aria-checked='true'] {
-    background: var(--usage-view-active, var(--panel-surface, rgb(40, 40, 40)));
-    color: var(--panel-text, rgb(230, 230, 230));
-  }
-
-  .usage-view:focus-visible {
-    outline: 1px solid var(--panel-accent, rgb(220, 138, 0));
-    outline-offset: -1px;
   }
 
   .usage-activity-total {
     margin: 0;
     font-size: var(--panel-badge-size, 0.6875rem);
     color: var(--panel-muted, rgb(158, 158, 158));
-  }
-
-  /* The category lens row reuses the segmented-pill pattern above and may
-     carry more segments than fit one line on a narrow viewport, so it wraps
-     instead of forcing horizontal body scroll. */
-  .usage-category-views {
-    align-self: flex-start;
-    flex-wrap: wrap;
   }
 
   /* The composition strip. Category hues resolve from the global tokens

@@ -94,6 +94,18 @@
                             stroke-linecap="round"
                           />
                         </svg>
+                      {:else if count.glyph === 'clock'}
+                        <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                          <circle cx="12" cy="12" r="8.4" fill="none" stroke="currentColor" stroke-width="2" />
+                          <path
+                            d="M12 7.6V12l3.2 2.2"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          />
+                        </svg>
                       {:else}
                         <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
                           <path
