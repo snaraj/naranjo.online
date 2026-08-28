@@ -247,10 +247,38 @@ func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, error) {
 	if dated < minCalendarDays {
 		return nil, fmt.Errorf("contribution calendar: only %d dated cells found, want at least %d", dated, minCalendarDays)
 	}
-	if last.After(now.UTC().AddDate(0, 0, 1)) {
-		// The window this package asked for ends now, so a cell dated past
-		// tomorrow is an answer to a question nobody asked.
-		return nil, fmt.Errorf("contribution calendar ends on %s, past the window that was requested", last.Format(dayLayout))
+	// TRAILING WEEK PADDING. The window this package asks for ends today, but a
+	// calendar is drawn in whole week columns, so an upstream may legitimately
+	// close the final column with the rest of the current week — days that have
+	// not happened yet. Refusing those outright would mean the panel silently
+	// stopped updating the day a credential landed, which is exactly the
+	// failure this producer exists to prevent, so they are DROPPED and the
+	// window's real end is reported through EndDate — the field the payload
+	// already carries so the frontend can draw days past it as holes rather
+	// than as quiet ones.
+	//
+	// It is a narrow allowance, not a repair, and three things keep it narrow:
+	// only days strictly after today are dropped, only a ZERO one may be
+	// dropped (a contribution dated in the future is nonsense, not padding),
+	// and at most a week's worth may be dropped before the document is refused
+	// as describing a range nobody asked for.
+	today := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
+	dropped := 0
+	for last.After(today) {
+		key := last.Format(dayLayout)
+		if counts[key] != 0 {
+			return nil, fmt.Errorf("contribution calendar reports %d contributions on %s, which has not happened yet", counts[key], key)
+		}
+		delete(counts, key)
+		dated--
+		dropped++
+		if dropped >= daysPerWeek {
+			return nil, fmt.Errorf("contribution calendar runs %d days past the window that was requested", dropped)
+		}
+		last = last.AddDate(0, 0, -1)
+	}
+	if dated < minCalendarDays {
+		return nil, fmt.Errorf("contribution calendar: only %d dated cells remain inside the requested window, want at least %d", dated, minCalendarDays)
 	}
 	span := int(last.Sub(first)/(24*time.Hour)) + 1
 	if span > maxCalendarDays {

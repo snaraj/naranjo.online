@@ -972,11 +972,16 @@ func TestTheCalendarRefusesDocumentsTheWindowNeverAskedFor(t *testing.T) {
 		t.Parallel()
 		// The same honest document, read against a clock a fortnight earlier:
 		// every day is well formed and the totals agree, and it still describes
-		// a range nobody asked for.
+		// a range nobody asked for. It is refused by the SPECIFIC half of that
+		// rule rather than the general one, and the distinction is the point —
+		// the trailing days carry contributions, so they are days that have not
+		// happened rather than the blank week padding a calendar may honestly
+		// close its final column with (see the padding test below, which pins
+		// the general overrun refusal and the tolerated case together).
 		if _, err := mapCalendarDocument([]byte(calendarAnswer(start, days, 1, nil)), now.AddDate(0, 0, -14)); err == nil {
 			t.Fatal("a calendar ending past the requested window was admitted")
-		} else if !strings.Contains(err.Error(), "past the window") {
-			t.Fatalf("refusal = %v, want the window named", err)
+		} else if !strings.Contains(err.Error(), "has not happened yet") {
+			t.Fatalf("refusal = %v, want the unhappened day named", err)
 		}
 	})
 
@@ -1066,4 +1071,99 @@ func TestARepositoryDocumentThatDoesNotMapDegradesItsOwnRow(t *testing.T) {
 	if !payload.Repos[1].Recorded {
 		t.Error("a row whose document failed admission does not say it fell back")
 	}
+}
+
+// TestTheCalendarToleratesTrailingWeekPaddingButNotFutureContributions is the
+// one upstream-shape assumption in this producer that could not be verified
+// without a live credential, so it is pinned from both sides instead of
+// assumed.
+//
+// A calendar is drawn in whole week columns while the window this package asks
+// for ends TODAY, so the final column may legitimately be closed with the rest
+// of the current week — days that have not happened. Refusing those outright
+// would mean the panel silently stopped updating the day a credential landed,
+// which is the exact failure this producer exists to prevent. They are dropped
+// and the window's real end is reported through EndDate.
+//
+// The allowance is narrow, and the narrowness is what the second half pins: a
+// future day carrying CONTRIBUTIONS is nonsense rather than padding, and a
+// document running a whole week past the window is describing a range nobody
+// asked for.
+func TestTheCalendarToleratesTrailingWeekPaddingButNotFutureContributions(t *testing.T) {
+	t.Parallel()
+	// A Wednesday, so the padded column carries three unhappened days.
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	start := firstSunday(now.AddDate(0, 0, -calendarWindowDays))
+	real := int(now.Sub(start)/(24*time.Hour)) + 1
+
+	// padded builds the same calendar with `extra` trailing days appended,
+	// each carrying `future` contributions.
+	padded := func(extra, future int) []byte {
+		body := calendarAnswer(start, real+extra, 1, nil)
+		var document map[string]any
+		if err := json.Unmarshal([]byte(body), &document); err != nil {
+			t.Fatalf("reparse fixture: %v", err)
+		}
+		calendar := document["data"].(map[string]any)["viewer"].(map[string]any)["contributionsCollection"].(map[string]any)["contributionCalendar"].(map[string]any)
+		seen := 0
+		for _, week := range calendar["weeks"].([]any) {
+			for _, day := range week.(map[string]any)["contributionDays"].([]any) {
+				seen++
+				if seen > real {
+					day.(map[string]any)["contributionCount"] = future
+				}
+			}
+		}
+		// The reported total counts only the days inside the window, which is
+		// what an upstream that pads with unhappened days would report.
+		calendar["totalContributions"] = real
+		encoded, err := json.Marshal(document)
+		if err != nil {
+			t.Fatalf("re-encode fixture: %v", err)
+		}
+		return encoded
+	}
+
+	t.Run("padding is dropped and the window's real end is reported", func(t *testing.T) {
+		t.Parallel()
+		mapped, err := mapCalendarDocument(padded(3, 0), now)
+		if err != nil {
+			t.Fatalf("a padded calendar was refused: %v", err)
+		}
+		var payload VCSActivityData
+		if err := json.Unmarshal(mapped, &payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if payload.EndDate != now.Format(dayLayout) {
+			t.Errorf("endDate = %q, want today (%s): the padding must not extend the window", payload.EndDate, now.Format(dayLayout))
+		}
+		if payload.TotalContributions != real {
+			t.Errorf("totalContributions = %d, want %d", payload.TotalContributions, real)
+		}
+	})
+
+	t.Run("an unpadded calendar is unaffected", func(t *testing.T) {
+		t.Parallel()
+		if _, err := mapCalendarDocument(padded(0, 0), now); err != nil {
+			t.Fatalf("an exactly-fitting calendar was refused: %v", err)
+		}
+	})
+
+	t.Run("a future day carrying contributions is refused", func(t *testing.T) {
+		t.Parallel()
+		if _, err := mapCalendarDocument(padded(3, 4), now); err == nil {
+			t.Fatal("a calendar reporting contributions on a day that has not happened was admitted")
+		} else if !strings.Contains(err.Error(), "has not happened yet") {
+			t.Fatalf("refusal = %v, want the future day named", err)
+		}
+	})
+
+	t.Run("more than a week past the window is refused", func(t *testing.T) {
+		t.Parallel()
+		if _, err := mapCalendarDocument(padded(daysPerWeek+1, 0), now); err == nil {
+			t.Fatal("a calendar running a week past the window was admitted")
+		} else if !strings.Contains(err.Error(), "past the window") {
+			t.Fatalf("refusal = %v, want the overrun named", err)
+		}
+	})
 }
