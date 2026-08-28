@@ -20,10 +20,13 @@
   it.
 
   The stage is reserved before any byte arrives — same box, same ratio,
-  same place — through the --gallery-stage-* tokens in styles.css (a square
-  by default, per the owner's 0.1.52 direction), so nothing here computes a
-  shape of its own. The card around it is variant="flat": the framed
-  --card-media-* treatment retired with the container box.
+  same place — through the --gallery-stage-* tokens in styles.css, so nothing
+  here computes a shape of its own. There are TWO pairs of those tokens and
+  the item's own kind picks one: a still keeps the square of the owner's
+  0.1.52 direction, and a film takes the wider, larger pair, because a 16:9
+  film inside a square is a small picture between two bands of dead ground.
+  The card around it is variant="flat": the framed --card-media-* treatment
+  retired with the container box.
 
   The enlarged frame's border is TOKENS ONLY — see the --gallery-frame-*
   block in styles.css; border-image's initial value is 'none', so a future
@@ -63,34 +66,64 @@
      BELOW the gallery reflows when a captioned item comes round, which is
      content arriving rather than a layout promise being broken.
 
-  MOVING ITEMS (issue 207). An item carrying a `video` bag is a film; every
-  other item is exactly the still it was before that field existed. Three
-  rules make it safe as well as legible:
+  MOVING ITEMS (issue 207, rebuilt for issue 233). An item carrying a `video`
+  bag is a film; every other item is exactly the still it was before that
+  field existed. Four rules make it safe as well as legible:
 
-  1. THE STRIP NEVER MOUNTS A VIDEO. The single visible frame shows the
-     poster's small derivative through the same <img> every photograph uses,
-     with a small drawn mark so a reader can tell a film from a photograph
-     before opening it. A gallery that mounted eight <video> elements to show
-     eight thumbnails is the weight problem the one-frame redesign removed,
-     reintroduced in a heavier form.
+  1. THE STRIP MOUNTS EXACTLY ONE VIDEO, AND ONLY THE CURRENT ITEM'S. A film
+     plays where it sits, the way an embedded player does (owner directive,
+     2026-08-28: "just play it in this small minimal version"). What the
+     older "never mounts a video" rule was actually protecting is untouched,
+     and it is what makes this safe: the stage renders `item`, the ONE item
+     the index names, so moving to another item UNMOUNTS the element. Eight
+     mounted <video> elements was the weight problem the one-frame redesign
+     removed; one is the same count as the one <img> a still mounts.
+     The drawn play triangle that used to sit on a film's poster went with
+     the change (owner: "remove the play icon from all videos, its just there
+     doing nothing") — it promised a press that happened somewhere else, and
+     the real control is now under the reader's finger.
   2. NOTHING EVER AUTOPLAYS. The element carries `controls`, `playsinline`
      and `preload="metadata"`, and it carries no `autoplay` attribute anywhere
      in this file — not conditionally, not muted, not "just for the poster".
      That is also how prefers-reduced-motion is honoured STRUCTURALLY rather
      than by a media query: there is no motion to suppress until a reader
      presses play, and a reader pressing play has asked for it. `preload` is
-     metadata rather than none because the video only MOUNTS once a reader
-     has clicked to enlarge — that click is the request. `none` here left the
-     element unable to even choose a source until play was pressed, which on
-     a phone rendered as a dead black rectangle that answered no taps (owner
-     defect report, 0.1.52); metadata costs a few KB of headers, buys working
-     controls and a duration, and still defers the actual film until play.
+     metadata rather than none because the element is now ON SCREEN and has to
+     answer the first press: `none` left it unable to even choose a source
+     until play was pressed, which on a phone rendered as a dead black
+     rectangle that answered no taps (owner defect report, 0.1.52). Metadata
+     costs a few KB of headers, buys working controls and a duration, and
+     still defers the film itself until play.
   3. SOURCE ORDER IS THE MANIFEST'S. The <source> children render in the
      order they arrive and this component neither sorts nor filters them,
      because the browser takes the first it can decode — a typical ladder is
      a high-efficiency rung ahead of a universal one, and reordering it would
-     silently hand a reader different bytes. -->
+     silently hand a reader different bytes. The ladder is wrapped in {#key
+     item.key} so moving between two films REMOUNTS the element: swapping
+     <source> children under a live <video> does not re-run resource
+     selection, so a reused element would keep playing the previous film's
+     bytes under the new item's poster.
+  4. THE PLAYER OWNS ITS OWN SURFACE. A film's stage carries no swipe binding
+     and no enlarge button, because either would contest the presses the
+     native controls need — a horizontal drag along a seek bar is exactly the
+     shape lib/gesture.ts claims, and the action captures the pointer the
+     moment it claims, which turns a scrub into a page turn. Stopping the
+     gesture at the video element was considered and does not work: Svelte 5
+     DELEGATES pointerdown at the root, so a handler written there runs AFTER
+     the action's own listener on the stage and cannot stand it down. Binding
+     the gesture only to the still's stage is the honest form of the same
+     decision, and no reader loses a way through the gallery — the arrows,
+     the dots and their keyboard all still move the strip. Arrow keys inside
+     the player stay the player's for the same structural reason: the
+     gallery's frame keydown lives on the enlarge button, which a film has
+     not got.
+  5. THE LIGHTBOX IS FOR STILLS. There is nothing left to enlarge to for a
+     film — the player IS the surface — so the dialog's video branch went
+     with the change rather than being left unreachable. Navigating the
+     lightbox onto a film therefore closes it, which is the one route that
+     could still have landed there. -->
 <script lang="ts">
+  import { tick } from 'svelte';
   import FeedCard from './FeedCard.svelte';
   import { swipeHorizontal } from '../gesture.ts';
   import { isChord, ringTarget } from '../keys.ts';
@@ -234,6 +267,28 @@
      element in every engine. */
   let frameButtonEl: HTMLButtonElement | undefined = $state();
 
+  /* The film's player, and the OTHER thing focus can be returned to. Exactly
+     one of these two exists at a time — a still's stage holds the enlarge
+     button, a film's stage holds the player — which is the same fact the
+     markup below is built from, stated once here so the focus restore does
+     not have to ask which kind of item it is looking at. */
+  let playerEl: HTMLVideoElement | undefined = $state();
+
+  /* THE LIGHTBOX IS FOR STILLS, enforced rather than promised. A film has no
+     enlarge button, so `enlarged` cannot be set from a film's stage at all;
+     the route that survives is the dialog's own arrow keys, which move the
+     index while the dialog is open and can land on a film. Written as an
+     invariant on the state rather than as a branch inside that handler,
+     because the question "is the enlarged surface showing an item it can
+     honestly enlarge?" belongs to the state and not to one of the ways of
+     reaching it. It sits ABOVE the sync effect so a single flush closes the
+     dialog rather than opening it onto a film first. */
+  $effect(() => {
+    if (enlarged && item.video !== undefined) {
+      enlarged = false;
+    }
+  });
+
   // showModal()/close() are imperative; this is the one place the dialog's
   // own open state is kept in step with `enlarged`.
   $effect(() => {
@@ -242,11 +297,17 @@
     else if (!enlarged && dialogEl.open) dialogEl.close();
   });
 
-  // The dialog's native 'close' event covers Escape, the close button and a
-  // backdrop click alike, so this is the single place `enlarged` resets.
-  function onDialogClose(): void {
+  /* The dialog's native 'close' event covers Escape, the close button and a
+     backdrop click alike, so this is the single place `enlarged` resets.
+
+     The focus restore waits for tick() because the element it restores to may
+     not exist yet: a lightbox closed by arrowing onto a film is closing
+     precisely BECAUSE the stage is about to swap its button for a player, and
+     focusing the button on its way out would land the reader on the body. */
+  async function onDialogClose(): Promise<void> {
     enlarged = false;
-    frameButtonEl?.focus();
+    await tick();
+    (frameButtonEl ?? playerEl)?.focus();
   }
 
   function onDialogKeydown(event: KeyboardEvent): void {
@@ -269,7 +330,7 @@
     {#snippet media()}
       <div class="gallery-frame">
         <button type="button" class="icon-button" onclick={previous} aria-label="Previous photograph">
-          <svg class="gallery-glyph" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <svg class="gallery-glyph" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
             <path
               d="M14.5 6l-6 6 6 6"
               fill="none"
@@ -280,52 +341,70 @@
             />
           </svg>
         </button>
-        <!-- The gesture surface is the STAGE, not the button inside it: the
-          drag has to be available across the whole photograph, and the button
-          is the thing the drag must not accidentally press (lib/gesture.ts
-          suppresses exactly one click after a real drag). aria-hidden is
-          wrong here and deliberately absent — the stage carries no semantics
-          of its own, and everything a reader needs is already on the button,
-          the arrows and the dots. -->
-        <div
-          class="gallery-stage"
-          bind:this={stageEl}
-          use:swipeHorizontal={swipe}
-          data-gallery-settling={settling ? 'true' : undefined}
-          style:--gallery-drag={`${dragX}px`}
-        >
-          <button
-            type="button"
-            class="gallery-image-button"
-            bind:this={frameButtonEl}
-            onkeydown={onFrameKeydown}
-            onclick={() => (enlarged = true)}
+        {#if item.video}
+          <!-- A FILM'S STAGE. Same reserved box arithmetic as the still's,
+            different token pair (data-gallery-kind picks it), and no gesture
+            binding and no button on it at all — the player is the interactive
+            surface and rule 4 in this file's opening comment is why. The
+            element is keyed on the item so moving between two films remounts
+            it; a reused <video> keeps the resource it already selected. -->
+          <div class="gallery-stage" data-gallery-kind="video">
+            {#key item.key}
+              <!-- svelte-ignore a11y_media_has_caption -->
+              <video
+                class="gallery-player"
+                controls
+                playsinline
+                preload="metadata"
+                poster={item.video.posterSrc}
+                aria-label={item.alt}
+                width={itemWidth}
+                height={itemHeight}
+                bind:this={playerEl}
+              >
+                {#each item.video.sources as source (source.src)}
+                  <source src={source.src} type={source.type} />
+                {/each}
+              </video>
+            {/key}
+          </div>
+        {:else}
+          <!-- The gesture surface is the STAGE, not the button inside it: the
+            drag has to be available across the whole photograph, and the button
+            is the thing the drag must not accidentally press (lib/gesture.ts
+            suppresses exactly one click after a real drag). aria-hidden is
+            wrong here and deliberately absent — the stage carries no semantics
+            of its own, and everything a reader needs is already on the button,
+            the arrows and the dots. -->
+          <div
+            class="gallery-stage"
+            data-gallery-kind="image"
+            bind:this={stageEl}
+            use:swipeHorizontal={swipe}
+            data-gallery-settling={settling ? 'true' : undefined}
+            style:--gallery-drag={`${dragX}px`}
           >
-            <img
-              class="gallery-image"
-              src={item.previewSrc}
-              alt={item.alt}
-              width={itemWidth}
-              height={itemHeight}
-              loading="lazy"
-              decoding="async"
-            />
-            {#if item.video}
-              <!-- Signposting, not a control: the whole frame already opens the
-                lightbox, so this mark is aria-hidden and the item's alt text is
-                what a screen reader is told. It is drawn rather than an
-                overlaid glyph font, and it is absolutely positioned so adding
-                it moves nothing in the reserved box. -->
-              <span class="gallery-play-mark" aria-hidden="true">
-                <svg class="gallery-glyph" viewBox="0 0 24 24" width="16" height="16">
-                  <path d="M9 7.5l8 4.5-8 4.5z" fill="currentColor" />
-                </svg>
-              </span>
-            {/if}
-          </button>
-        </div>
+            <button
+              type="button"
+              class="gallery-image-button"
+              bind:this={frameButtonEl}
+              onkeydown={onFrameKeydown}
+              onclick={() => (enlarged = true)}
+            >
+              <img
+                class="gallery-image"
+                src={item.previewSrc}
+                alt={item.alt}
+                width={itemWidth}
+                height={itemHeight}
+                loading="lazy"
+                decoding="async"
+              />
+            </button>
+          </div>
+        {/if}
         <button type="button" class="icon-button" onclick={next} aria-label="Next photograph">
-          <svg class="gallery-glyph" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <svg class="gallery-glyph" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
             <path
               d="M9.5 6l6 6-6 6"
               fill="none"
@@ -409,35 +488,23 @@
     </button>
     {#if enlarged}
       <div class="gallery-lightbox-border">
-        {#if item.video}
-          <!-- svelte-ignore a11y_media_has_caption -->
-          <video
-            class="gallery-lightbox-image"
-            controls
-            playsinline
-            preload="metadata"
-            poster={item.video.posterSrc}
-            aria-label={item.alt}
-            width={itemWidth}
-            height={itemHeight}
-          >
-            {#each item.video.sources as source (source.src)}
-              <source src={source.src} type={source.type} />
-            {/each}
-          </video>
-        {:else}
-          <!-- The full derivative can be megabytes; until it decodes, the
-               small preview — already in cache, it IS the strip's visible
-               frame — paints as this element's background so the enlargement
-               opens onto the picture instead of a grey void (owner defect
-               report, 0.1.52). The decoded full image then covers it. -->
-          <img
-            class="gallery-lightbox-image"
-            src={item.fullSrc}
-            alt={item.alt}
-            style={`background-image: url("${item.previewSrc}")`}
-          />
-        {/if}
+        <!-- STILLS ONLY (issue 233). The branch that mounted a <video> here
+             is gone rather than left unreachable: a film plays in the strip,
+             so there is nothing an enlarged copy of it would add, and the one
+             route that could still have arrived here — arrowing the open
+             dialog onto a film — closes the dialog instead (see the invariant
+             effect above).
+             The full derivative can be megabytes; until it decodes, the small
+             preview — already in cache, it IS the strip's visible frame —
+             paints as this element's background so the enlargement opens onto
+             the picture instead of a grey void (owner defect report, 0.1.52).
+             The decoded full image then covers it. -->
+        <img
+          class="gallery-lightbox-image"
+          src={item.fullSrc}
+          alt={item.alt}
+          style={`background-image: url("${item.previewSrc}")`}
+        />
       </div>
       {#if hasMeta}
         <div class="gallery-lightbox-meta">
@@ -468,6 +535,16 @@
 
   .gallery-glyph {
     color: inherit;
+  }
+
+  /* THE PAINTED ARROW, and only the frame's (owner directive, 2026-08-28:
+     the controls should be smaller). The hit box is .icon-button's own 44px
+     and is untouched — what shrinks is the ink inside it, which is the same
+     trade the lightbox close mark already made. Scoped to the frame's direct
+     children so the close mark, a .gallery-glyph too, keeps its own size. */
+  .gallery-frame > .icon-button .gallery-glyph {
+    inline-size: var(--gallery-arrow-size, 0.75rem);
+    block-size: var(--gallery-arrow-size, 0.75rem);
   }
 
   /* Issue 202, the owner's "large dead gap on the right". The frame is
@@ -509,6 +586,33 @@
     overflow: hidden;
   }
 
+  /* THE SECOND SHAPE (issue 233). A film gets a wider, larger stage than a
+     drawing does, and it gets it by REDECLARING the same two custom
+     properties the three declarations above already read — so there is one
+     piece of stage arithmetic on this page, not two, and the reservation
+     stays byte-independent exactly as it was. The values themselves are
+     global tokens (--gallery-stage-*-video, styles.css) like every other
+     dimension here; only the CHOICE between the two pairs lives in the
+     component, because only the component knows an item's kind. */
+  .gallery-stage[data-gallery-kind='video'] {
+    --gallery-stage-size: var(--gallery-stage-size-video, 27rem);
+    --gallery-stage-aspect: var(--gallery-stage-aspect-video, 1.7778);
+  }
+
+  /* The player fills the reserved stage the same way the enlarge button
+     does — absolutely, by insets plus an explicit 100% on both axes, because
+     a replaced element with `inset: 0` and auto sizing keeps its INTRINSIC
+     box rather than stretching. `contain` for the same reason the still uses
+     it: a film is letterboxed inside its stage rather than cropped, and with
+     the 16:9 pair above there is nothing to letterbox in the common case. */
+  .gallery-player {
+    position: absolute;
+    inset: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    object-fit: contain;
+  }
+
   /* Filling the stage by INSETS, not by a size: a size on a control is a
      number the touch-floor sweep must be able to read, and "100%" is not one.
      The insets say the same thing without stating a length at all, and they
@@ -516,15 +620,16 @@
      stretched a grid item here to a square, MEASURED, so grid stretch was
      not enough). */
   .gallery-image-button {
-    /* Absolute, filling the stage. Issue 207 wanted a containing block here
-       for the moving-item mark below and added `position: relative`; composing
-       that with issue 202's centred stage left the property declared TWICE
-       with `relative` last, which took the button out of its absolute fill and
-       let a <button>'s fit-content sizing decide the frame's width again —
-       measured off centre by 569px in Firefox and WebKit at 1440px, the exact
-       dead gutter issue 202 removed. One declaration, and it is `absolute`:
-       an absolutely positioned box is already a containing block for
-       absolutely positioned descendants, so the mark needs nothing further. */
+    /* Absolute, filling the stage. The history is worth keeping because the
+       trap is easy to walk back into: issue 207 wanted a containing block
+       here for the play mark it drew inside the frame and added `position:
+       relative`; composing that with issue 202's centred stage left the
+       property declared TWICE with `relative` last, which took the button out
+       of its absolute fill and let a <button>'s fit-content sizing decide the
+       frame's width again — measured off centre by 569px in Firefox and
+       WebKit at 1440px, the exact dead gutter issue 202 removed. The mark
+       itself is gone (issue 233); one declaration remains, and it is
+       `absolute`. */
     position: absolute;
     inset: 0;
     display: grid;
@@ -542,25 +647,6 @@
        drawing (owner, 2026-08-28: "the art is cut off significantly"). */
     object-fit: contain;
   }
-
-  /* The moving-item mark (issue 207). Absolutely positioned inside the
-     already-reserved frame, so a film's frame is exactly a photograph's
-     frame and adding the mark moves nothing. It is the only difference the
-     strip draws between the two kinds; everything else about a film's
-     thumbnail IS a photograph. */
-  .gallery-play-mark {
-    position: absolute;
-    inset-block-end: var(--gallery-play-inset, 0.5rem);
-    inset-inline-end: var(--gallery-play-inset, 0.5rem);
-    display: grid;
-    place-items: center;
-    inline-size: var(--gallery-play-size, 1.75rem);
-    block-size: var(--gallery-play-size, 1.75rem);
-    border-radius: 999px;
-    background: var(--gallery-play-surface, rgba(0, 0, 0, 0.55));
-    color: var(--gallery-play-ink, white);
-  }
-
 
   .gallery-position {
     display: flex;
@@ -611,9 +697,12 @@
     cursor: pointer;
   }
 
+  /* The painted mark, at its own token (owner directive, 2026-08-28: the
+     current-media indicator should be smaller too). The 44px button above is
+     untouched — a smaller mark is a smaller MARK, never a smaller target. */
   .gallery-dot-mark {
-    inline-size: 0.375rem;
-    block-size: 0.375rem;
+    inline-size: var(--gallery-dot-size, 0.25rem);
+    block-size: var(--gallery-dot-size, 0.25rem);
     border-radius: 999px;
     background: var(--card-meta-ink);
     opacity: 0.35;
@@ -621,10 +710,12 @@
 
   /* Position is never carried by the fill alone: the current dot is both
      brighter AND larger, so the state survives a reading mode that flattens
-     contrast and a reader who cannot separate the two tones. */
+     contrast and a reader who cannot separate the two tones. The scale is a
+     token beside the size, because shrinking one without the other is how the
+     marked state quietly stops being distinguishable. */
   .gallery-dot[aria-checked='true'] .gallery-dot-mark {
     opacity: 1;
-    transform: scale(1.5);
+    transform: scale(var(--gallery-dot-active-scale, 1.5));
   }
 
   .gallery-dot:focus-visible {
@@ -670,8 +761,49 @@
     }
   }
 
+  /* VIEWPORT-ANCHORED, and this one declaration is the whole of the owner's
+     "when I close the media, it returns me to the top of the page" (0.1.52).
+
+     A modal <dialog> is placed by the UA as `position: fixed`, centred by
+     `inset: 0` and `margin: auto`. This rule used to say `position: relative`,
+     and an author declaration beats the UA sheet on cascade ORIGIN whatever
+     the specificity, so the UA's `position: fixed` never applied. What the
+     engines computed instead was `absolute` (MEASURED, both), which put the
+     box in the DOCUMENT's coordinate space at the top of the page rather than
+     against the viewport. showModal() then moves focus to the first control
+     inside the dialog (the close mark below), the engine scrolls that control
+     into view, and the reader's place is gone before the lightbox has even
+     painted.
+
+     MEASURED at a 1280x720 viewport, all three close paths, against the live
+     0.1.52 origin and the binary built from that tree alike: scrollY 1943
+     before the click and 0 while the dialog was open, on Chromium AND WebKit.
+     The two engines then differed only in the clean-up — WebKit restored 1943
+     on close, Chromium left it at 0 — so one defect read as a broken page on
+     Chrome and as nothing at all on Safari.
+
+     The close handler was never the cause, so this fix changes nothing about
+     WHY the restore below exists. (Its shape did move, in this same PR and
+     for an unrelated reason: the restore now waits a tick and falls through
+     to the player, because a lightbox can close BECAUSE the stage is about to
+     stop being a still. What it does for a still is what it always did.) It
+     stays because it is load-bearing on WEBKIT specifically: MEASURED,
+     removing it leaves the close lane green on Chromium, whose native dialog
+     restores focus by itself, and red on WebKit, where a mouse click never
+     focused the button and the reader lands on the document body instead.
+
+     `fixed` rather than deleting the declaration: the close control is
+     absolutely positioned against this box and needs a containing block,
+     which `fixed` is exactly as `relative` was. The insets and auto margins
+     are stated here rather than inherited from the UA sheet, so the centring
+     is this file's own claim on every engine instead of a default it happens
+     to agree with. */
   .gallery-lightbox {
-    position: relative;
+    position: fixed;
+    inset: 0;
+    margin: auto;
+    inline-size: fit-content;
+    block-size: fit-content;
     max-inline-size: var(--gallery-lightbox-max-inline, min(94vw, 90rem));
     /* The close mark's lane, reserved above the frame so the mark has
        somewhere to live that is NOT the photograph (issue 202). Only the

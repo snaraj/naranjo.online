@@ -68,7 +68,6 @@ const [
   gridSource,
   activityTracker,
   usageTracker,
-  usageFilterMenu,
   styles,
   themeMenu,
   detailTip,
@@ -89,7 +88,6 @@ const [
   read('../src/lib/grid.ts'),
   read('../src/lib/components/ActivityTracker.svelte'),
   read('../src/lib/components/UsageTracker.svelte'),
-  read('../src/lib/components/UsageFilterMenu.svelte'),
   read('../src/styles.css'),
   read('../src/lib/ThemeMenu.svelte'),
   read('../src/lib/components/DetailTip.svelte'),
@@ -1091,166 +1089,78 @@ test('both panels opt the shared grid into full width; only the token panel take
   );
 });
 
-/* One lens PER SOURCE (owner directive, 2026-08-25).
+/* ONE GRAPH PER SOURCE, AND NO WAY TO RE-ASK IT (owner directive,
+ * 2026-08-28, reversing the 0.1.52 decision after seeing it live: "remove
+ * this entire menu. it doesnt look good and it doesn't provide any value").
  *
- * The panel held a single `view` for every source in it, on the argument that
- * two series read side by side should not be compared through different
- * lenses. The owner reversed that after using the page: each source renders
- * its own graph with its own toggle over it, and pressing one re-read the
- * other — a control beside one graph that changes a different graph.
+ * The two tests this replaces pinned a per-source view lens and a per-source
+ * trailing range — first as exposed pill rows, then collapsed behind a
+ * compact popover. Both are gone, and this is deliberately not a smaller
+ * pin than they were: what they guaranteed was that the graph read the
+ * control beside it, and what this guarantees is that there is no control
+ * and the graph reads the ONE fixed answer instead. Every state, map,
+ * resolver and sentinel behind the old controls is named here as an absence,
+ * so none of them can drift back in one at a time.
  *
- * Source-pinned here, because the state machine is a component's and there is
- * no DOM in this runner; the BEHAVIOUR — press one, watch the other stay put —
- * is measured in a real engine by e2e/rendering-lanes.spec.mjs. */
-test('each usage source keeps its own lens, and the shared one cannot come back', () => {
-  assert.match(usageTracker, /let views = \$state<Record<string, SeriesView>>\(\{\}\);/);
-  assert.match(usageTracker, /return views\[key\] \?\? 'daily';/, 'a source nobody has pressed no longer reads daily');
-  assert.match(usageTracker, /\{@const view = viewOf\(source\.key\)\}/);
-  // The write is keyed by the source and handed to the menu as its group's
-  // `choose`; the menu renders the radios (owner directive, 2026-08-28: the
-  // exposed pill rows collapsed behind one compact menu per source).
-  assert.match(usageTracker, /choose: \(next\) => \(views\[source\.key\] = next as SeriesView\)/);
-  // Keyed by the source rather than parked in a child instance, so a refresh
-  // that rebuilds every section does not reset the reader's lens to daily.
-  assert.match(usageTracker, /source\.key/);
-  // The retired single-panel lens, in both the state and the write.
-  assert.doesNotMatch(usageTracker, /let view = \$state/, 'the panel-wide lens is back');
-  assert.doesNotMatch(usageTracker, /\(view = candidate\)/, 'a toggle writes the panel-wide lens again');
-  // The audible half: each group names its own source, so a screen reader
-  // hears which graph it belongs to instead of three identical groups.
-  // The audible half now composes across the seam: the tracker names the
-  // source (sourceLabel) and the question ('view'); the menu stamps them on
-  // the radiogroup, so a screen reader still hears which graph and which
-  // question rather than identical groups.
-  assert.match(usageTracker, /sourceLabel=\{source\.label\}/);
-  assert.match(usageTracker, /label: 'view',/);
-  assert.match(usageFilterMenu, /aria-label=\{`\$\{sourceLabel\} \$\{group\.label\}`\}/);
-  // And the grid still reads the SAME lens the toggle above it wrote.
-  assert.match(usageTracker, /const columns = viewColumns\(windowed, view\)/);
-  assert.match(usageTracker, /<ContributionGrid\s+\{columns\}[\s\S]*?\{view\}/);
+ * The lens ENGINE is untouched and still proven, executed rather than
+ * pattern-matched, in tests/grid.test.mjs and tests/periods.test.mjs — this
+ * component simply stopped offering a reader four ways to ask one question. */
+test('each usage source renders one fixed graph, and no display control survives', () => {
+  /* The fixed reading: the source's own totals, laid on calendar weeks over
+     the window lib/periods.ts calls fullDepthColumns — every captured day,
+     floored at the grid's reserve. The component decides nothing about it,
+     which is the point: the window is arithmetic with its own executed tests,
+     not a literal a component could drift. */
+  assert.match(
+    usageTracker,
+    /return fullDepthColumns\(seriesCells\(activity\.series\.startDate, activity\.series\.totals\)\);/,
+    'the graph is no longer built from the source’s own totals at full depth'
+  );
+  assert.doesNotMatch(usageTracker, /rangeColumns/, 'the component parameterises its window again');
+  assert.match(usageTracker, /\{@const columns = windowedColumns\(source\.activity\)\}/);
+  // The graph the gate reads IS the graph it draws, exactly as before.
+  assert.match(usageTracker, /<ContributionGrid\s+\{columns\}/);
 
-  /* The CATEGORY lens (issue #142) is a second toggle over the same graph,
-     and it is held to this test's rule rather than exempted from it: the
-     owner's ruling is about a control beside one graph changing a different
-     graph, which says nothing about WHICH control. So the category lens is
-     per-source state keyed the same way, its default reads total for a
-     source nobody has pressed, its write is keyed by the source, its
-     radiogroup names its own source aloud, and the third argument the WINDOW
-     step now takes is resolved from that same per-source key — not from a
-     panel-wide choice reintroduced beside the retired one.
+  /* The DAILY reading is taken by omission, not by restating it: both
+     lib/periods.ts's activityReading and ContributionGrid already default to
+     daily, and passing it here would be a third statement of one default
+     that could then disagree with the other two. */
+  assert.match(
+    usageTracker,
+    /activityReading\(columns, source\.activity\.noun, formatMagnitude\)/,
+    'the sentence no longer reads the same cells the graph draws'
+  );
+  assert.match(usageTracker, /coverageReading\(columns\)/);
+  assert.doesNotMatch(usageTracker, /\{view\}/, 'a view is threaded through the render again');
 
-     That third argument sits on windowedColumns rather than on the view step
-     deliberately (issue 158 composition): the category lens chooses WHICH
-     series is read, so it has to apply before the window is cut and before
-     the view aggregates, which is also what makes the readings below —
-     taken from those same windowed cells — describe the lens the reader
-     actually pressed. */
-  assert.match(usageTracker, /let lenses = \$state<Record<string, string>>\(\{\}\);/);
-  assert.match(
-    usageTracker,
-    /return lenses\[key\] \?\? totalLens;/,
-    'a source nobody has pressed no longer reads the total'
-  );
-  assert.match(
-    usageTracker,
-    /\{@const lensCategory = activeLensCategory\(source\.activity, lensOf\(source\.key\)\)\}/
-  );
-  assert.match(
-    usageTracker,
-    /\{@const windowed = windowedColumns\(source\.activity, range, lensCategory\)\}/,
-    'the window no longer reads the source’s own category lens'
-  );
+  /* THE ABSENCES, one per retired mechanism. Each of these was a live line in
+     0.1.52; any one of them coming back alone is a display control growing
+     back through a component the owner asked to have none. */
+  for (const [pattern, complaint] of [
+    [/UsageFilterMenu/, 'the display menu is back'],
+    [/usage-controls/, 'the controls row is back'],
+    [/usage-activity-head/, 'the header that only held the controls row is back'],
+    [/let views = \$state/, 'the per-source view lens is back'],
+    [/let view = \$state/, 'a panel-wide view lens is back'],
+    [/let ranges = \$state/, 'the per-source range is back'],
+    [/let lenses = \$state/, 'the per-source category lens is back'],
+    [/let lens = \$state/, 'a panel-wide category lens is back'],
+    [/viewOf|rangeOf|lensOf/, 'a per-source display choice is resolved again'],
+    [/activeLensCategory/, 'the category resolver is back'],
+    [/totalLens/, 'the "no category" sentinel outlived the lens it belonged to'],
+    [/seriesViews|seriesRanges|defaultSeriesRange/, 'a display vocabulary is offered to the reader again'],
+    [/viewColumns/, 'the view aggregation is applied to a graph nobody can re-read'],
+    [/role="radiogroup"/, 'a radio group is back inside the token panel'],
+  ]) {
+    assert.doesNotMatch(usageTracker, pattern, complaint);
+  }
+  // And nothing else in the tree imports the deleted component either.
+  assert.doesNotMatch(styles, /filter-trigger|filter-popover|filter-group/, 'the menu left styles behind');
 
-  /* The lookup ITSELF, and the fallback it feeds. These two lines are the
-     whole of lens resolution on this page — an adapter-side resolver helper
-     was deleted as dead code (coordinator ruling, 2026-08-26) rather than
-     wired in beside them, so the behaviour its suite pinned is pinned here,
-     where it actually happens.
-
-     Three inputs reach the plain series, and all three are in these lines:
-     the total sentinel, a source whose payload carries no breakdown at all,
-     and a stale or unknown key that `find` cannot match. None of them is a
-     zero and none is a guess — every one of them draws real delivered
-     totals. */
-  assert.match(
-    usageTracker,
-    /if \(lens === totalLens \|\| !activity\.categories\) \{\s*return undefined;\s*\}/,
-    'the total sentinel and the breakdown-less series no longer fall back to the plain totals'
-  );
-  assert.match(
-    usageTracker,
-    /return activity\.categories\.find\(\(category\) => category\.key === lens\);/,
-    'an unreported lens key no longer resolves to nothing and falls back'
-  );
-  assert.match(
-    usageTracker,
-    /const totals = category \? category\.totals : activity\.series\.totals;/,
-    'the window stopped falling back to the plain series'
-  );
-  assert.match(usageTracker, /choose: \(next: string\) => \(lenses\[source\.key\] = next\)/);
-  // The always-available total reading leads the category group's options.
-  assert.match(usageTracker, /\{ key: totalLens, label: 'total' \}/);
-  assert.doesNotMatch(usageTracker, /let lens = \$state/, 'a panel-wide category lens is back');
-  assert.match(usageTracker, /label: `\$\{source\.activity\.noun\} category`,/);
-
-  /* And the sentinel those assertions read is stated ONCE, here, in the only
-     file that decides anything with it. The adapter used to export a copy of
-     it beside a lens resolver nothing called; both were deleted rather than
-     wired in, so there is no second statement of "no category" left to drift
-     from this one. */
-  assert.match(usageTracker, /const totalLens = 'total';/);
-  assert.equal(usageTracker.match(/const totalLens =/g).length, 1, 'the sentinel is stated twice');
-});
-
-/* One RANGE per source too (issue 158), held exactly like the lens beside it.
- *
- * The two are separate controls because they answer separate questions — how
- * a day is READ, and how much history is DRAWN — and a single list of seven
- * options would make "monthly" and "90d" alternatives, which they are not.
- *
- * Source-pinned here for the same reason the lens is; the behaviour is
- * measured in a real engine by e2e/rendering-lanes.spec.mjs. */
-test('each usage source keeps its own range, defaulting to the window the strip already drew', () => {
-  assert.match(usageTracker, /let ranges = \$state<Record<string, SeriesRange>>\(\{\}\);/);
-  assert.match(
-    usageTracker,
-    /return ranges\[key\] \?\? defaultSeriesRange;/,
-    'a source nobody has pressed must open on the shipped default range'
-  );
-  assert.match(usageTracker, /\{@const range = rangeOf\(source\.key\)\}/);
-  assert.match(usageTracker, /choose: \(next\) => \(ranges\[source\.key\] = next as SeriesRange\)/);
-  // Its own group, named for its own source AND its own question, so a reader
-  // on a screen reader hears four distinguishable groups on a two-source card
-  // rather than four identical ones.
-  assert.match(usageTracker, /label: 'range',/);
-  assert.match(usageFilterMenu, /aria-label=\{`\$\{sourceLabel\} \$\{group\.label\}`\}/);
-  // The graph's own accessible name carries BOTH choices, so an assistive
-  // reading of the strip says which lens and which window it is looking at —
-  // the same reason the lens was folded into that label to begin with.
-  assert.match(usageTracker, /\$\{view\} view, \$\{range\} range/);
-  // Both readings under the strip are taken from the WINDOWED cells, never
-  // from the lens' output (which repeats one aggregate across every day it
-  // covers) and never from the whole payload behind the window.
-  //
-  // The reading's NOUN is the category lens's when one is pressed and the
-  // region's otherwise — the only thing that lens contributes to the sentence,
-  // because those windowed cells already carry its dailies. Pinned as one
-  // expression so a future edit cannot quietly go back to reading a
-  // sentence the adapter built.
-  //
-  // The VIEW is the fourth argument, and it belongs there for the same reason
-  // the windowed cells are the first: the sentence describes the graph, and a
-  // reader looking at weekly columns is asking about weeks. What the view
-  // changes is the PERIOD the figures are grouped into — never where they are
-  // read from, which stays these daily cells (issue #170).
-  assert.match(
-    usageTracker,
-    /activityReading\(\s*windowed,\s*lensCategory \? lensCategory\.noun : source\.activity\.noun,\s*formatMagnitude,\s*view\s*\)/
-  );
-  assert.match(usageTracker, /coverageReading\(windowed\)/);
-  // The retired adapter-built sentences, which described the whole series and
-  // could not know which window a reader had chosen — in BOTH their forms, the
-  // region's and the per-category one the lens work briefly carried.
+  /* The retired adapter-built sentences, which described the whole series and
+     could not know which window a reader had chosen. They stay retired: the
+     window is fixed now, but it is still the CELLS that must answer, because
+     an adapter sentence would go stale the moment the capture grows. */
   assert.doesNotMatch(usageTracker, /source\.activity\.summary/, 'the window-blind summary is back');
   assert.doesNotMatch(usageTracker, /lensCategory\.summary/, 'the window-blind category summary is back');
 });
@@ -1332,11 +1242,11 @@ test('a token source with no series renders no graph, and one with a series stil
     /<ContributionGrid\s+\{columns\}/,
     'the gate and the graph read different things'
   );
-  // The heading and the lens toggle are inside the gate with it: an activity
-  // heading over a toggle with nothing to toggle is the same hole wearing
-  // different markup.
+  // The heading is inside the gate with it: an activity heading over nothing
+  // is the same hole wearing different markup. (It used to name the display
+  // menu here too; the menu went with the owner's 2026-08-28 reversal, and
+  // the heading is what is left to gate.)
   assert.match(region[1], /\{source\.activity\.heading\}/, 'the heading survived its graph');
-  assert.match(region[1], /<UsageFilterMenu/, 'the display menu survived its series');
   // And the panel never asks the shared component for its empty treatment.
   assert.doesNotMatch(usageTracker, /emptyNote=/, 'the panel asks for an empty grid again');
   assert.doesNotMatch(usageTracker, /series pending/, 'the retired "pending" claim is back');

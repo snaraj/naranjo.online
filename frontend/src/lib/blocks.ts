@@ -430,9 +430,10 @@ export type MediaGallerySource = {
 
 /* What makes an item MOVE (issue 207). Its presence is the discriminator:
  * an item without it is a still, and every still renders exactly as it did
- * before this field existed. Nothing here autoplays — `preload` is none and
- * no autoplay attribute exists anywhere in the component — so a reader who
- * has asked for reduced motion gets none until they press play themselves. */
+ * before this field existed. Nothing here autoplays — `preload` is metadata
+ * and no autoplay attribute exists anywhere in the component — so a reader
+ * who has asked for reduced motion gets none until they press play
+ * themselves. */
 export type MediaGalleryVideo = {
   /* The frame shown before play. Distinct from fullSrc so the operator can
    * publish a dedicated poster, and defaulted to fullSrc by the adapter when
@@ -445,11 +446,12 @@ export type MediaGalleryVideo = {
 export type MediaGalleryItem = {
   readonly key: string;
   /* The small derivative the feed frame shows; loaded eagerly-lazy like any
-   * other card. For a moving item this is the poster's small derivative —
-   * the strip shows a picture, never a video element. */
+   * other card. A STILL's stage shows it. A moving item's stage mounts its
+   * player instead (issue 233), so for a film this is the small derivative
+   * the manifest published and the strip does not render it. */
   readonly previewSrc: string;
   /* The full-resolution derivative, loaded for the first time only when a
-   * reader enlarges the frame. */
+   * reader enlarges the frame — which only a still can be. */
   readonly fullSrc: string;
   readonly alt: string;
   /* Optional per-item metadata (owner directive 2026-08-25, issue 202).
@@ -520,10 +522,4 @@ export type EntryLogProps = {
   readonly variant?: FeedCardVariant;
   /* The heading depth entries sit at in the document outline. */
   readonly titleLevel?: 2 | 3 | 4 | 5 | 6;
-};
-
-/* --- EmptyNote: one flat card stating an honest empty state -------------- */
-
-export type EmptyNoteProps = {
-  readonly note: string;
 };
