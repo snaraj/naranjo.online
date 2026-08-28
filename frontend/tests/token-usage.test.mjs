@@ -24,8 +24,9 @@ import {
 } from '../src/lib/token-usage.ts';
 import { formatMagnitude } from '../src/lib/grid.ts';
 
-const [component, helper, manifest, binding] = await Promise.all([
+const [component, filterMenu, helper, manifest, binding] = await Promise.all([
   readFile(new URL('../src/lib/components/UsageTracker.svelte', import.meta.url), 'utf8'),
+  readFile(new URL('../src/lib/components/UsageFilterMenu.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/token-usage.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/page.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/blocks/tokenUsage.ts', import.meta.url), 'utf8')
@@ -546,9 +547,12 @@ describe('UsageTracker live surface', () => {
   });
 
   it('switches the activity view client-side over one series', () => {
-    assert.match(component, /role="radiogroup"/);
-    assert.match(component, /\{#each seriesViews as candidate\}/);
-    assert.match(component, /aria-checked=\{view === candidate\}/);
+    /* The radios render inside the per-source display menu since 2026-08-28
+       (owner: hide the exposed pill rows behind one sleek control); the
+       pipeline they drive stays in the tracker. Both halves pinned. */
+    assert.match(filterMenu, /role="radiogroup"/);
+    assert.match(filterMenu, /aria-checked=\{group\.current === option\.key\}/);
+    assert.match(component, /options: seriesViews\.map\(/);
     // THREE toggles, ONE delivered payload, one pipeline, in this order:
     // the CATEGORY lens picks which dailies are read, the RANGE cuts the
     // trailing window out of them, and the VIEW lens aggregates the cut. All
@@ -561,13 +565,12 @@ describe('UsageTracker live surface', () => {
     );
     assert.match(component, /const totals = category \? category\.totals : activity\.series\.totals;/);
     assert.match(component, /const columns = viewColumns\(windowed, view\)/);
-    // The range control is the second radiogroup, over the same closed
-    // vocabulary the engine admits (issue 158).
-    assert.match(component, /\{#each seriesRanges as candidate\}/);
-    assert.match(component, /aria-checked=\{range === candidate\}/);
-    // Touch target floor for BOTH segmented controls — one rule, both groups,
-    // because they are the same pill.
-    assert.match(component, /min-block-size:\s*2\.75rem/);
+    // The range control is the second group in the same menu, over the same
+    // closed vocabulary the engine admits (issue 158).
+    assert.match(component, /options: seriesRanges\.map\(/);
+    // Touch target floor for every segment AND the trigger — the pills kept
+    // their grammar when they moved into the menu.
+    assert.match(filterMenu, /min-block-size:\s*2\.75rem/);
   });
 
   it('renders the activity heatmap only where there is a series to draw', () => {
@@ -592,7 +595,7 @@ describe('UsageTracker live surface', () => {
       );
     assert.ok(region, 'the graph region is no longer gated on there being columns to draw');
     assert.match(region[1], /<ContributionGrid/, 'the gate does not contain the graph');
-    assert.match(region[1], /role="radiogroup"/, 'the lens toggle is outside the gate it belongs to');
+    assert.match(region[1], /<UsageFilterMenu/, 'the display menu is outside the gate it belongs to');
     assert.doesNotMatch(component, /live refresh is off/);
     // The adapter half, executed: no series (or an empty one) means no
     // activity region at all; a real series carries the region and its
@@ -1288,10 +1291,12 @@ describe('activity insights provenance', () => {
 });
 
 describe('category breakdown surface', () => {
-  it('gates the lens row and composition strip on categories existing', () => {
-    assert.match(component, /\{#if source\.activity\.categories && source\.activity\.categories\.length > 0\}/);
+  it('gates the category group and composition strip on categories existing', () => {
+    // The category group joins the display menu only when the source reports
+    // categories — a ternary in the groups list, the same gate the old
+    // standalone row wore.
+    assert.match(component, /source\.activity\.categories && source\.activity\.categories\.length > 0\n/);
     assert.match(component, /\{#if source\.activity\.composition && source\.activity\.composition\.length > 0\}/);
-    assert.match(component, /class="usage-views usage-category-views"/);
     assert.match(component, /class="usage-composition-bar"/);
     assert.match(component, /class="usage-composition-rows"/);
   });

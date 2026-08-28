@@ -68,6 +68,7 @@ const [
   gridSource,
   activityTracker,
   usageTracker,
+  usageFilterMenu,
   styles,
   themeMenu,
   detailTip,
@@ -88,6 +89,7 @@ const [
   read('../src/lib/grid.ts'),
   read('../src/lib/components/ActivityTracker.svelte'),
   read('../src/lib/components/UsageTracker.svelte'),
+  read('../src/lib/components/UsageFilterMenu.svelte'),
   read('../src/styles.css'),
   read('../src/lib/ThemeMenu.svelte'),
   read('../src/lib/components/DetailTip.svelte'),
@@ -1104,7 +1106,10 @@ test('each usage source keeps its own lens, and the shared one cannot come back'
   assert.match(usageTracker, /let views = \$state<Record<string, SeriesView>>\(\{\}\);/);
   assert.match(usageTracker, /return views\[key\] \?\? 'daily';/, 'a source nobody has pressed no longer reads daily');
   assert.match(usageTracker, /\{@const view = viewOf\(source\.key\)\}/);
-  assert.match(usageTracker, /onclick=\{\(\) => \(views\[source\.key\] = candidate\)\}/);
+  // The write is keyed by the source and handed to the menu as its group's
+  // `choose`; the menu renders the radios (owner directive, 2026-08-28: the
+  // exposed pill rows collapsed behind one compact menu per source).
+  assert.match(usageTracker, /choose: \(next\) => \(views\[source\.key\] = next as SeriesView\)/);
   // Keyed by the source rather than parked in a child instance, so a refresh
   // that rebuilds every section does not reset the reader's lens to daily.
   assert.match(usageTracker, /source\.key/);
@@ -1113,10 +1118,13 @@ test('each usage source keeps its own lens, and the shared one cannot come back'
   assert.doesNotMatch(usageTracker, /\(view = candidate\)/, 'a toggle writes the panel-wide lens again');
   // The audible half: each group names its own source, so a screen reader
   // hears which graph it belongs to instead of three identical groups.
-  assert.match(
-    usageTracker,
-    /aria-label=\{`\$\{source\.label\} \$\{source\.activity\.heading\} view`\}/
-  );
+  // The audible half now composes across the seam: the tracker names the
+  // source (sourceLabel) and the question ('view'); the menu stamps them on
+  // the radiogroup, so a screen reader still hears which graph and which
+  // question rather than identical groups.
+  assert.match(usageTracker, /sourceLabel=\{source\.label\}/);
+  assert.match(usageTracker, /label: 'view',/);
+  assert.match(usageFilterMenu, /aria-label=\{`\$\{sourceLabel\} \$\{group\.label\}`\}/);
   // And the grid still reads the SAME lens the toggle above it wrote.
   assert.match(usageTracker, /const columns = viewColumns\(windowed, view\)/);
   assert.match(usageTracker, /<ContributionGrid\s+\{columns\}[\s\S]*?\{view\}/);
@@ -1179,13 +1187,11 @@ test('each usage source keeps its own lens, and the shared one cannot come back'
     /const totals = category \? category\.totals : activity\.series\.totals;/,
     'the window stopped falling back to the plain series'
   );
-  assert.match(usageTracker, /onclick=\{\(\) => \(lenses\[source\.key\] = category\.key\)\}/);
-  assert.match(usageTracker, /onclick=\{\(\) => \(lenses\[source\.key\] = totalLens\)\}/);
+  assert.match(usageTracker, /choose: \(next: string\) => \(lenses\[source\.key\] = next\)/);
+  // The always-available total reading leads the category group's options.
+  assert.match(usageTracker, /\{ key: totalLens, label: 'total' \}/);
   assert.doesNotMatch(usageTracker, /let lens = \$state/, 'a panel-wide category lens is back');
-  assert.match(
-    usageTracker,
-    /aria-label=\{`\$\{source\.label\} \$\{source\.activity\.noun\} category`\}/
-  );
+  assert.match(usageTracker, /label: `\$\{source\.activity\.noun\} category`,/);
 
   /* And the sentinel those assertions read is stated ONCE, here, in the only
      file that decides anything with it. The adapter used to export a copy of
@@ -1212,14 +1218,12 @@ test('each usage source keeps its own range, defaulting to the window the strip 
     'a source nobody has pressed must open on the shipped default range'
   );
   assert.match(usageTracker, /\{@const range = rangeOf\(source\.key\)\}/);
-  assert.match(usageTracker, /onclick=\{\(\) => \(ranges\[source\.key\] = candidate\)\}/);
+  assert.match(usageTracker, /choose: \(next\) => \(ranges\[source\.key\] = next as SeriesRange\)/);
   // Its own group, named for its own source AND its own question, so a reader
   // on a screen reader hears four distinguishable groups on a two-source card
   // rather than four identical ones.
-  assert.match(
-    usageTracker,
-    /aria-label=\{`\$\{source\.label\} \$\{source\.activity\.heading\} range`\}/
-  );
+  assert.match(usageTracker, /label: 'range',/);
+  assert.match(usageFilterMenu, /aria-label=\{`\$\{sourceLabel\} \$\{group\.label\}`\}/);
   // The graph's own accessible name carries BOTH choices, so an assistive
   // reading of the strip says which lens and which window it is looking at —
   // the same reason the lens was folded into that label to begin with.
@@ -1332,7 +1336,7 @@ test('a token source with no series renders no graph, and one with a series stil
   // heading over a toggle with nothing to toggle is the same hole wearing
   // different markup.
   assert.match(region[1], /\{source\.activity\.heading\}/, 'the heading survived its graph');
-  assert.match(region[1], /role="radiogroup"/, 'the lens toggle survived its series');
+  assert.match(region[1], /<UsageFilterMenu/, 'the display menu survived its series');
   // And the panel never asks the shared component for its empty treatment.
   assert.doesNotMatch(usageTracker, /emptyNote=/, 'the panel asks for an empty grid again');
   assert.doesNotMatch(usageTracker, /series pending/, 'the retired "pending" claim is back');

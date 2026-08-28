@@ -19,9 +19,11 @@
   lightbox; its own close button and a genuine backdrop click also close
   it.
 
-  The frame is reserved before any byte arrives — same box, same ratio,
-  same place — through the shared --card-media-* tokens every media card on
-  the page uses, so nothing here computes a shape of its own.
+  The stage is reserved before any byte arrives — same box, same ratio,
+  same place — through the --gallery-stage-* tokens in styles.css (a square
+  by default, per the owner's 0.1.52 direction), so nothing here computes a
+  shape of its own. The card around it is variant="flat": the framed
+  --card-media-* treatment retired with the container box.
 
   The enlarged frame's border is TOKENS ONLY — see the --gallery-frame-*
   block in styles.css; border-image's initial value is 'none', so a future
@@ -72,13 +74,17 @@
      eight thumbnails is the weight problem the one-frame redesign removed,
      reintroduced in a heavier form.
   2. NOTHING EVER AUTOPLAYS. The element carries `controls`, `playsinline`
-     and `preload="none"`, and it carries no `autoplay` attribute anywhere in
-     this file — not conditionally, not muted, not "just for the poster".
+     and `preload="metadata"`, and it carries no `autoplay` attribute anywhere
+     in this file — not conditionally, not muted, not "just for the poster".
      That is also how prefers-reduced-motion is honoured STRUCTURALLY rather
      than by a media query: there is no motion to suppress until a reader
-     presses play, and a reader pressing play has asked for it. `preload` of
-     none additionally means the enlarged frame costs a poster image, not a
-     multi-gigabyte transfer, until they do.
+     presses play, and a reader pressing play has asked for it. `preload` is
+     metadata rather than none because the video only MOUNTS once a reader
+     has clicked to enlarge — that click is the request. `none` here left the
+     element unable to even choose a source until play was pressed, which on
+     a phone rendered as a dead black rectangle that answered no taps (owner
+     defect report, 0.1.52); metadata costs a few KB of headers, buys working
+     controls and a duration, and still defers the actual film until play.
   3. SOURCE ORDER IS THE MANIFEST'S. The <source> children render in the
      order they arrive and this component neither sorts nor filters them,
      because the browser takes the first it can decode — a typical ladder is
@@ -256,7 +262,10 @@
 </script>
 
 {#if total > 0}
-  <FeedCard variant="media">
+  <!-- flat, not media (owner directive, 2026-08-28): the art carries its own
+    white ground, so a card box around it read as an ugly outline. The stage
+    below centers the work; the page's column is the only frame. -->
+  <FeedCard variant="flat">
     {#snippet media()}
       <div class="gallery-frame">
         <button type="button" class="icon-button" onclick={previous} aria-label="Previous photograph">
@@ -335,10 +344,11 @@
     moved, and it cannot be pressed. The dots say both — how many, which one,
     and that the set is navigable — and each is a real button, so the gesture's
     keyboard-and-tap equivalent is the same control that shows the position
-    rather than a second one somewhere else. The counter stays beside them
-    because a dot row stops being countable past a handful, and it keeps the
-    live region: a number is what assistive technology can usefully announce
-    on a change, and eight identical dots are not.
+    rather than a second one somewhere else. The dots are the ONLY visible
+    position mark (owner directive, 2026-08-28: "I only like the dots") —
+    the counter below is clipped out of view but kept in the tree, because
+    it is the live region: a number is what assistive technology can
+    usefully announce on a change, and nine identical dots are not.
     "Reachable by keyboard" is a claim with a shape: one tab stop for the
     group, the arrows moving inside it, Home and End at the ends, and focus
     following the choice — see onDotsKeydown. A roving tabindex without that
@@ -405,7 +415,7 @@
             class="gallery-lightbox-image"
             controls
             playsinline
-            preload="none"
+            preload="metadata"
             poster={item.video.posterSrc}
             aria-label={item.alt}
             width={itemWidth}
@@ -416,7 +426,17 @@
             {/each}
           </video>
         {:else}
-          <img class="gallery-lightbox-image" src={item.fullSrc} alt={item.alt} />
+          <!-- The full derivative can be megabytes; until it decodes, the
+               small preview — already in cache, it IS the strip's visible
+               frame — paints as this element's background so the enlargement
+               opens onto the picture instead of a grey void (owner defect
+               report, 0.1.52). The decoded full image then covers it. -->
+          <img
+            class="gallery-lightbox-image"
+            src={item.fullSrc}
+            alt={item.alt}
+            style={`background-image: url("${item.previewSrc}")`}
+          />
         {/if}
       </div>
       {#if hasMeta}
@@ -468,20 +488,25 @@
      reserved box itself is built from, so the two cannot disagree. */
   .gallery-stage {
     position: relative;
-    inline-size: min(100%, calc(var(--card-media-max-block-size) * (var(--card-media-aspect))));
+    /* NEAR-SQUARE, not the feed's 16:9 (owner directive, 2026-08-28): the
+       drawings are portrait scans, and a wide stage either cropped them
+       (the old cover fit cut the signature off) or drowned them in dead
+       side space. A square-ish stage sized by its own token holds portrait
+       and landscape work alike; the reservation stays byte-independent
+       exactly as before, just built from the gallery's own two tokens. */
+    inline-size: min(100%, calc(var(--gallery-stage-size, 28rem) * (var(--gallery-stage-aspect, 1))));
     margin-inline: auto;
     /* The reserved box, and the reason nothing on this page moves when the
-       photograph lands: the same ratio and the same ceiling every media
-       card on the page shares. It sits on the STAGE and not on the button
-       because a <button> is a form control — its `auto` inline size is
-       fit-content in every engine, so a button carrying the ratio is sized
-       by whatever has loaded inside it, which is the opposite of a
-       reservation. The stage's width is definite; the button stretches into
-       it as an ordinary grid item. */
-    aspect-ratio: var(--card-media-aspect);
-    max-block-size: var(--card-media-max-block-size);
+       photograph lands: the ratio and ceiling are the gallery's own two
+       stage tokens, declared in styles.css with every other dimension. It
+       sits on the STAGE and not on the button because a <button> is a form
+       control — its `auto` inline size is fit-content in every engine, so a
+       button carrying the ratio is sized by whatever has loaded inside it,
+       which is the opposite of a reservation. The stage's width is definite;
+       the button stretches into it as an ordinary grid item. */
+    aspect-ratio: var(--gallery-stage-aspect, 1);
+    max-block-size: var(--gallery-stage-size, 28rem);
     overflow: hidden;
-    border-radius: var(--card-radius);
   }
 
   /* Filling the stage by INSETS, not by a size: a size on a control is a
@@ -512,7 +537,10 @@
   .gallery-image {
     inline-size: 100%;
     block-size: 100%;
-    object-fit: var(--card-media-fit);
+    /* contain, never the feed's cover: the work renders WHOLE, centered in
+       the stage, whatever its aspect — a cropped drawing is a different
+       drawing (owner, 2026-08-28: "the art is cut off significantly"). */
+    object-fit: contain;
   }
 
   /* The moving-item mark (issue 207). Absolutely positioned inside the
@@ -541,12 +569,18 @@
     gap: 0.125rem;
   }
 
+  /* Visually clipped, never removed: this is the dots' aria-live voice.
+     Clipping (not display:none) keeps it announceable; 1px, not 0, because
+     some engines skip announcing zero-sized live regions. */
   .gallery-count {
-    margin: 0.375rem 0 0;
-    text-align: center;
-    font-size: var(--card-meta-size);
-    font-variant-numeric: tabular-nums;
-    color: var(--card-meta-ink);
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .gallery-dots {
@@ -665,6 +699,13 @@
   .gallery-lightbox-image {
     display: block;
     max-inline-size: 90vw;
+    /* The loading affordance's canvas: the enlarged <img> inlines the strip's
+       cached preview as its background-image, and these three make that
+       stand-in sit exactly where the full picture will land. A video sets no
+       background-image, so on a film these are inert. */
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
     /* The static viewport unit is never used here (issue #26): the base is a
        fixed cap, generous enough that a browser without svh still shows a
        whole photograph, and the dynamic unit is a pure upgrade on top of it. */

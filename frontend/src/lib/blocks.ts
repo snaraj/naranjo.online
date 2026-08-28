@@ -486,7 +486,7 @@ export type MediaGalleryProps = {
  * visible words that carry the figure (never the glyph alone). */
 export type EntryCount = {
   readonly key: string;
-  readonly glyph: 'node' | 'star';
+  readonly glyph: 'node' | 'star' | 'clock';
   readonly label: string;
 };
 

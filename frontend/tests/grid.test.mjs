@@ -670,6 +670,16 @@ test('the block is sized from the columns it rendered, as a cap', () => {
     /stripColumns\(columns\.length > 0 \? columns\.length : chrome\.length\)/,
     'the width must come from the columns actually drawn, not from a constant'
   );
+  // The floor is refused exactly where it lied (0.1.52): a dated full-width
+  // series claims the columns it draws, so no template track is ever a ghost
+  // — and BOTH guards are pinned, because dropping the floor for an undated
+  // chunked series would revive the issue-141 misread, and dropping it for
+  // the capped layout would spill the legend the floor was measured against.
+  assert.match(
+    grid,
+    /columns\.length > 0 && fullWidth && datedSeries\s*\n?\s*\? columns\.length/,
+    'a dated full-width series must claim exactly its drawn columns'
+  );
   assert.match(grid, /style:--grid-columns=\{claimedColumns\}/, 'the count never reaches the stylesheet');
   const block = /\.grid-block \{([^}]*)\}/.exec(grid);
   assert.ok(block, 'the grid block lost its rule');

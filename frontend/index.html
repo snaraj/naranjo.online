@@ -9,6 +9,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="dark light" />
     <title>naranjo.online</title>
+    <!-- Link-preview identity (owner directive, 0.1.52: "when I text a link
+      to the website, I expect to see a preview... SN. white and black, very
+      simple"). These live in the STATIC head, not svelte:head, because the
+      scrapers that build message previews read the document as served and
+      run no script — a tag added at hydration does not exist for them. The
+      image URL is absolute because the Open Graph spec requires a full URL,
+      and it names this site's one canonical origin. -->
+    <meta name="description" content="naranjo.online, served from a Raspberry Pi Kubernetes cluster." />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="naranjo.online" />
+    <meta property="og:title" content="Samuel Naranjo" />
+    <meta property="og:description" content="naranjo.online, served from a Raspberry Pi Kubernetes cluster." />
+    <meta property="og:url" content="https://naranjo.online/" />
+    <meta property="og:image" content="https://naranjo.online/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="SN." />
+    <meta name="twitter:card" content="summary_large_image" />
   </head>
   <body>
     <div id="app">

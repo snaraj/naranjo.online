@@ -51,8 +51,16 @@ test('static and hydrated shells preserve the same accessible identity', () => {
   // heading, but the text itself is temporary placeholder content and will be
   // replaced by the real site — it is deliberately not a contract.
   assert.match(fallback, /<h1 id="static-page-title">[^<]+<\/h1>/);
-  assert.match(component, /<svelte:head>/);
-  assert.match(component, /name="description"/);
+  // The description and the link-preview identity live in the STATIC head
+  // (0.1.52): the scrapers that build message previews read the document as
+  // served and run no script, so a tag added at hydration does not exist for
+  // them — and the component must not add a second copy of the description
+  // the static shell already carries.
+  assert.match(fallback, /name="description"/);
+  assert.match(fallback, /property="og:title"/);
+  assert.match(fallback, /property="og:image"/);
+  assert.match(fallback, /name="twitter:card"/);
+  assert.doesNotMatch(component, /name="description"/);
   assert.match(component, /<main aria-labelledby="page-title">/);
   assert.match(component, /<h1 id="page-title">[^<]+<\/h1>/);
 });
@@ -70,7 +78,18 @@ test('initial source remains local and viewport-responsive', () => {
     // not. Honest residual, in the fail-closed direction only: a
     // single-label authority (`//cdn/x`) is not matched, and a comment
     // opening straight onto a dotted word (`//foo.bar`) still is.
-    assert.doesNotMatch(source, /(?:https?:)?\/\/(?=[\w-]+\.)/, `${name} introduces a remote origin`);
+    // One authority is admitted by name (0.1.52): the site's own canonical
+    // origin, which the static head's link-preview tags must spell in full
+    // because the Open Graph spec requires absolute URLs. That is a
+    // SELF-reference — the og:image is fetched by external scrapers, never
+    // by this page — so the invariant this sweep protects (the page loads
+    // nothing remote) is untouched, and any OTHER dotted authority still
+    // fails the file.
+    assert.doesNotMatch(
+      source,
+      /(?:https?:)?\/\/(?!naranjo\.online[/"'\s])(?=[\w-]+\.)/,
+      `${name} introduces a remote origin`
+    );
   }
   assert.match(styles, /font-size:\s*clamp\(/);
   // Rendering-lane floor (issue #26, delivered by #78): dynamic viewport
@@ -1325,24 +1344,32 @@ test('the reading-mode swatches are drawn in the header chrome grammar', () => {
   assert.ok(rest > 0 && rest < active, `a swatch rests at ${rest} against an active ${active}`);
   assert.equal(declaredValue(swatch, 'opacity'), 'var(--swatch-rest-opacity)');
 
-  /* Selection is never color alone (the dataviz floor). The chosen mode
-     carries a bar under its glyph, drawn by a pseudo-element so that
-     choosing a mode repaints without moving the swatch beside it. */
-  const chosen = ruleNamed(menuFile, ".swatch[aria-pressed='true']::after");
-  assert.equal(declaredValue(chosen, 'content'), "''");
-  assert.equal(declaredValue(chosen, 'position'), 'absolute');
-  for (const property of ['inline-size', 'block-size']) {
-    const value = declaredValue(chosen, property);
-    assert.match(
-      value ?? '',
-      /^var\(--swatch-mark-/,
-      `the chosen-mode mark sizes its ${property} as "${value}"; every dimension here is a token`
-    );
-    assert.ok(
-      Number.parseFloat(resolveToken(/var\((--[a-z-]+)\)/.exec(value)[1], tokens)) > 0,
-      `the chosen-mode mark resolves to no ${property}, so selection is carried by color alone`
-    );
-  }
+  /* Selection is COLORED IN, not underlined (owner directive, 2026-08-28:
+     "do not underline the icon, instead color it in and grey out the ones
+     not on use"). The chosen swatch joins hover and focus on the brand ink
+     at full presence; unchosen swatches keep the muted rest opacity above.
+     The bar pseudo-element is gone WITH its tokens — a chosen-mode ::after
+     coming back is the retired design returning. aria-pressed still names
+     the state for assistive technology, so the choice never rides on the
+     visual channel alone. */
+  const menuSource = componentSources[menuFile];
+  assert.doesNotMatch(
+    menuSource,
+    /aria-pressed='true'\]::after/,
+    'the retired chosen-mode underline bar is back'
+  );
+  assert.doesNotMatch(menuSource, /--swatch-mark-/, 'the underline mark tokens are read again');
+  assert.doesNotMatch(styles, /--swatch-mark-/, 'the underline mark tokens are declared again');
+  assert.match(
+    menuSource,
+    /\.swatch\[aria-pressed='true'\] \{[^}]*opacity: var\(--swatch-active-opacity\)/,
+    'the chosen swatch no longer reaches full presence'
+  );
+  assert.match(
+    menuSource,
+    /\.swatch\[aria-pressed='true'\] \{[^}]*color: var\(--color-brand\)/,
+    'the chosen swatch no longer wears the brand ink'
+  );
 
   /* Every dimension the component states is a token — no raw px, no raw
      line weight, no second copy of a size that styles.css already owns. The

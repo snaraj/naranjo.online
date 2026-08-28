@@ -449,9 +449,24 @@
      state sizes itself to its data: whichever is on screen, the box is the
      box its contents need. And because the chrome is one year wide and the
      calendar that replaces it is one year wide, that arrival changes no
-     dimension at all. */
+     dimension at all.
+
+     A DATED full-width series claims exactly the columns it draws, with no
+     floor. stripColumns' minimum exists for the capped layout's legend and
+     for undated positional chunks, where a short strip reads as a graph that
+     lost its data (issue #141) — but issue 189 already superseded that
+     misread for any series the calendar can date, and under fullWidth the
+     floor turned into a lie with a cost: a 30-day window drew five columns
+     into a template of ten, so half the tracks were phantom empty space and
+     the stylesheet stretched the real cells as if they shared the row with
+     five ghosts (owner defect report, 0.1.52 — the mobile heatmap's dead
+     right half). The empty chrome is unaffected either way: it is 53 columns,
+     far above the floor. */
+  const datedSeries = $derived(cells.some((cell) => cell.date));
   const claimedColumns = $derived(
-    stripColumns(columns.length > 0 ? columns.length : chrome.length)
+    columns.length > 0 && fullWidth && datedSeries
+      ? columns.length
+      : stripColumns(columns.length > 0 ? columns.length : chrome.length)
   );
 
   let strip = $state<HTMLDivElement>();
