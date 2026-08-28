@@ -114,7 +114,12 @@
                           />
                         </svg>
                       {/if}
-                      <span class="entry-count-text">{count.label}</span>
+                      <span class="entry-count-text"
+                        >{count.label}{#if count.marked}<span
+                            class="entry-recorded"
+                            title="recorded out of band, not fetched live">· recorded</span
+                          >{/if}</span
+                      >
                     </li>
                   {/each}
                 </ul>
@@ -250,6 +255,15 @@
     overflow-wrap: anywhere;
     font-size: var(--card-title-size);
     letter-spacing: var(--card-title-tracking);
+  }
+
+  /* The provenance-by-exception mark, worded and styled exactly as the usage
+     tiles' is: one visual vocabulary for "this figure was recorded out of
+     band" across the page. Scoped per component because Svelte scopes styles,
+     so the two declarations are twins rather than one shared rule. */
+  .entry-recorded {
+    font-style: italic;
+    margin-inline-start: 0.25rem;
   }
 
   .entry-counts {

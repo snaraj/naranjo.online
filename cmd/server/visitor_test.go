@@ -122,9 +122,10 @@ func TestVisitorBrowsesTheSite(t *testing.T) {
 // boot: every panel is now fetch-backed, so every panel serves its embedded
 // snapshot fallback as stale until live refresh is explicitly enabled.
 var visitorColdStatus = map[string]string{
-	"token-usage":  "stale",
-	"vcs-activity": "stale",
-	"boss-log":     "stale",
+	"token-usage":     "stale",
+	"vcs-activity":    "stale",
+	"boss-log":        "stale",
+	"coding-projects": "stale",
 }
 
 type visitorPanelIndex struct {
@@ -193,8 +194,8 @@ func TestVisitorReadsThePanels(t *testing.T) {
 		}
 		var index visitorPanelIndex
 		decodeVisitorJSON(t, response.Body, &index)
-		if len(index.Panels) != 3 {
-			t.Fatalf("index lists %d panels, want 3", len(index.Panels))
+		if len(index.Panels) != len(visitorColdStatus) {
+			t.Fatalf("index lists %d panels, want %d", len(index.Panels), len(visitorColdStatus))
 		}
 		for _, row := range index.Panels {
 			if row.ID == "" || row.Title == "" || !versionedKind(row.Kind) {
@@ -648,6 +649,109 @@ type visitorActivityCommit struct {
 // the exact contract the strip renders — week columns of exactly seven
 // non-negative daily counts, non-negative totals and streak, dated recent
 // commits, and a generatedAt instant the strip can anchor cell dates on.
+// TestVisitorReadsTheProjectFeed is the user story behind issue 242's second
+// half: a visitor scrolls to Coding Projects and reads what the owner's host
+// says about each repository, rather than what it said on the day the release
+// was cut.
+//
+// This boot enables no refresh, so what the scenario proves is the COLD half
+// of the contract — which is the half that has to be right for the change to
+// be safe to merge before any credential exists. The panel serves its shipped
+// snapshot, says stale, and marks every row recorded; the page renders it
+// without waiting, because the block's adapter answers a null envelope with
+// the captured rows instead of nothing.
+func TestVisitorReadsTheProjectFeed(t *testing.T) {
+	requireBuiltFrontend(t)
+	base, runResult := bootServer(t, nil)
+	session := testsupport.NewVisitor(t, base)
+
+	t.Run("loads the page: the built assets carry the project feed", func(t *testing.T) {
+		visitor := session.On(t)
+		shell := visitor.Navigate("/")
+		if shell.StatusCode != http.StatusOK {
+			t.Fatalf("GET / = %d", shell.StatusCode)
+		}
+		assets := visitor.AssetReferences(shell.Body)
+		if len(assets) == 0 {
+			t.Fatal("document references no built assets to follow")
+		}
+		var bundled []byte
+		for _, asset := range assets {
+			response := visitor.Navigate(asset)
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("GET %s = %d", asset, response.StatusCode)
+			}
+			bundled = append(bundled, response.Body...)
+		}
+		// Structure and markers, never copy: the panel id the block subscribes
+		// to, the entry-count class the feed's figures render in, and the
+		// provenance mark a captured figure carries.
+		for _, marker := range []string{"coding-projects", "entry-count", "recorded"} {
+			if !bytes.Contains(bundled, []byte(marker)) {
+				t.Errorf("built assets lack the project-feed marker %q", marker)
+			}
+		}
+	})
+
+	t.Run("reads the panel: every row is present, dated, and honest about itself", func(t *testing.T) {
+		visitor := session.On(t)
+		response := visitor.Navigate("/api/panels/coding-projects")
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("GET /api/panels/coding-projects = %d", response.StatusCode)
+		}
+		var envelope visitorPanelEnvelope
+		decodeVisitorJSON(t, response.Body, &envelope)
+		if envelope.Kind != "coding-projects/v1" {
+			t.Fatalf("kind = %q, want coding-projects/v1", envelope.Kind)
+		}
+		if want := visitorColdStatus[envelope.ID]; envelope.Status != want {
+			t.Errorf("status = %q, want %q on an egress-free boot", envelope.Status, want)
+		}
+		if _, err := time.Parse(time.RFC3339, envelope.GeneratedAt); err != nil {
+			t.Errorf("generatedAt = %q: %v", envelope.GeneratedAt, err)
+		}
+		var payload struct {
+			Repos []struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+				Stars       *int64 `json:"stars"`
+				PushedAt    string `json:"pushedAt"`
+				Recorded    bool   `json:"recorded"`
+			} `json:"repos"`
+		}
+		decodeVisitorJSON(t, envelope.Data, &payload)
+		if len(payload.Repos) == 0 {
+			t.Fatal("the project feed serves no repositories at all")
+		}
+		seen := make(map[string]bool, len(payload.Repos))
+		for _, repo := range payload.Repos {
+			if repo.Name == "" {
+				t.Error("a row carries no repository name")
+			}
+			if seen[repo.Name] {
+				t.Errorf("%s appears twice in one payload", repo.Name)
+			}
+			seen[repo.Name] = true
+			if repo.Description == "" {
+				t.Errorf("%s serves no description", repo.Name)
+			}
+			if _, err := time.Parse(time.RFC3339, repo.PushedAt); err != nil {
+				t.Errorf("%s pushedAt = %q: %v", repo.Name, repo.PushedAt, err)
+			}
+			// The whole point of the cold state: nothing here was read live,
+			// and every row says so rather than passing as fresh.
+			if !repo.Recorded {
+				t.Errorf("%s claims a freshness this boot cannot have", repo.Name)
+			}
+			if repo.Stars == nil {
+				t.Errorf("%s serves a null tally where the snapshot records one", repo.Name)
+			}
+		}
+	})
+
+	drainScenario(t, runResult)
+}
+
 func TestVisitorSeesTheActivityStrip(t *testing.T) {
 	requireBuiltFrontend(t)
 	base, runResult := bootServer(t, nil)

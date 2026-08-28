@@ -60,7 +60,7 @@ image:
   # It is locked to this chart's appVersion by the release gate's four-way
   # lock (numeric VERSION/chart version/appVersion <-> plain-v image tag), so a chart
   # claiming one release can never ship the tag of another.
-  tag: v0.1.55
+  tag: v0.1.56
   digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
   pullPolicy: IfNotPresent
 
@@ -182,6 +182,23 @@ media:
 panels:
   refresh:
     enabled: true
+    # The Secret the version-control producers read their credential from
+    # (issue #242), under the key GITHUB_PANELS_TOKEN. The Deployment wires it
+    # unconditionally and OPTIONALLY, so this names where the token would come
+    # from whether or not it exists yet, and a missing Secret degrades rather
+    # than blocks:
+    #
+    #   * the contribution calendar reads the public document instead of the
+    #     credentialed one, and the payload says so through its coverage field
+    #     -- a real, live, narrower figure, worded narrowly on the page;
+    #   * the repository rows read anonymously, which returns the same data on
+    #     a smaller rate budget, so nothing about them changes.
+    #
+    # That is the state this chart ships in. Creating the token and the Secret
+    # is an owner step taken at the owner's own timing; nothing in this
+    # repository grants it, and the name below is a Secret NAME, never any part
+    # of a credential (requirement 12).
+    tokenSecret: naranjo-online-panels-refresh
   # The panels data root (issue #142): a read-only mounted directory carrying
   # ONE sealed (AES-256-GCM) usage-series file, pushed out-of-band from the
   # workstation that records the usage, decrypted in-process with a key fed

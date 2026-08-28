@@ -826,7 +826,7 @@ func orderBreakdown(rows map[string][]int64, declared string, vocabulary []strin
 // envelope's single provenance cannot describe. Every key the vocabulary
 // defines must be present; a producer that cannot compute one of them is a
 // producer whose document is refused.
-func overlayDerivedStats(stats []TokenUsageStat, derived map[string]int64) ([]TokenUsageStat, error) {
+func overlayDerivedStats(stats []TokenUsageStat, derived map[string]*int64) ([]TokenUsageStat, error) {
 	if len(derived) != len(usageSeriesDerivedKeys) {
 		return nil, fmt.Errorf("the section refreshes %d derived figures; the closed vocabulary defines %d, and a series-derived tile may never keep a release-time value beside a runtime series", len(derived), len(usageSeriesDerivedKeys))
 	}
@@ -834,7 +834,14 @@ func overlayDerivedStats(stats []TokenUsageStat, derived map[string]int64) ([]To
 		if _, ok := usageSeriesDerivedKeys[key]; !ok {
 			return nil, fmt.Errorf("derived key %q is outside the closed vocabulary", key)
 		}
-		if err := admitCount(value); err != nil {
+		if value == nil {
+			// A key present carrying nothing is a figure the producer could
+			// not measure. Publishing it as 0 would put a number the data
+			// cannot vouch for on a tile whose whole vocabulary already has a
+			// way to say "unreported"; refusing keeps the truthful tile.
+			return nil, fmt.Errorf("derived key %q carries no figure; a tile the producer cannot measure may not be published as a zero", key)
+		}
+		if err := admitCount(*value); err != nil {
 			return nil, fmt.Errorf("derived key %q: %w", key, err)
 		}
 	}
@@ -848,7 +855,7 @@ func overlayDerivedStats(stats []TokenUsageStat, derived map[string]int64) ([]To
 		if stat.Unit != usageSeriesDerivedKeys[stat.Key] {
 			return nil, fmt.Errorf("tile %q carries unit %q; the series defines %q", stat.Key, stat.Unit, usageSeriesDerivedKeys[stat.Key])
 		}
-		fresh := value
+		fresh := *value
 		stat.Value = &fresh
 		overlaid[index] = stat
 	}
@@ -870,10 +877,16 @@ func admitSeriesWindows(windows map[string]usageSeriesWindow) ([]TokenUsageWindo
 		if _, ok := usageSeriesWindowKeys[key]; !ok {
 			return nil, fmt.Errorf("window key %q is outside the closed vocabulary", key)
 		}
-		if err := admitCount(window.Input); err != nil {
+		if window.Input == nil || window.Output == nil {
+			// The same rule the derived tiles follow: a window whose halves
+			// the producer could not measure is refused rather than served as
+			// "in 0 · out 0", which reads as a measurement and is not one.
+			return nil, fmt.Errorf("window %q carries no figures; a window the producer cannot measure may not be published as a zero", key)
+		}
+		if err := admitCount(*window.Input); err != nil {
 			return nil, fmt.Errorf("window %q input: %w", key, err)
 		}
-		if err := admitCount(window.Output); err != nil {
+		if err := admitCount(*window.Output); err != nil {
 			return nil, fmt.Errorf("window %q output: %w", key, err)
 		}
 	}
@@ -885,8 +898,8 @@ func admitSeriesWindows(windows map[string]usageSeriesWindow) ([]TokenUsageWindo
 		}
 		served = append(served, TokenUsageWindow{
 			Period:       usageSeriesWindowKeys[key],
-			InputTokens:  window.Input,
-			OutputTokens: window.Output,
+			InputTokens:  *window.Input,
+			OutputTokens: *window.Output,
 		})
 	}
 	return served, nil

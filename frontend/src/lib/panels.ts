@@ -16,7 +16,8 @@ export const panelEnvelopeSchema = 'panel/v1';
 export const panelKinds = {
   tokenUsage: 'token-usage/v2',
   vcsActivity: 'vcs-activity/v1',
-  bossLog: 'boss-log/v1'
+  bossLog: 'boss-log/v1',
+  codingProjects: 'coding-projects/v1'
 } as const;
 
 export interface PanelEnvelope<Data = unknown> {
@@ -129,10 +130,23 @@ export interface VCSCommit {
   at: string;
 }
 
+/* Which producer answered for the calendar. The two count different things
+ * while both being live and both being true: 'public' is what an anonymous
+ * reader may see, 'complete' is the account holder's own record with private
+ * repositories included. Absent means the payload declared none, which is what
+ * the embedded snapshot and every payload written before this field existed
+ * say by omission. */
+export type VCSCoverage = 'public' | 'complete';
+
 export interface VCSActivityData {
   totalContributions: number;
   weeks: number[][];
   streak: number;
+  /* See VCSCoverage. Optional: additive inside the same kind version, so a
+   * payload from a replica that predates it still renders — this chart runs a
+   * RollingUpdate, and a browser holding the new frontend can reach an old
+   * replica mid-rollout. */
+  coverage?: VCSCoverage;
   /* The calendar date (YYYY-MM-DD) of the last day the window covers. The
    * final week is padded to seven days like every other, so without this the
    * padding is indistinguishable from real quiet days. Optional: added after
@@ -166,6 +180,29 @@ export interface BossLogData {
   account: string;
   skills?: BossLogSkill[];
   bosses: BossLogEntry[];
+}
+
+/* coding-projects/v1 — the owner's repositories as their host describes them
+ * RIGHT NOW. Every figure is nullable and every row carries its own
+ * provenance, so a row whose live read failed serves the shipped values and
+ * says so rather than borrowing the freshness of the rows beside it. */
+export interface CodingProjectRow {
+  name: string;
+  /* The repository's own description. Empty is a real state — a repository
+   * with no description has none — never a placeholder. */
+  description: string;
+  /* Null means the host reported no tally, rendered as a dash. */
+  stars: number | null;
+  /* The last push, as an ISO instant; absent when unreported. The page turns
+   * it into a sentence against the reader's own clock. */
+  pushedAt?: string;
+  /* True when this row came from the shipped snapshot rather than a live
+   * read, exactly as `recorded` marks a token-usage tile. */
+  recorded?: boolean;
+}
+
+export interface CodingProjectsData {
+  repos: CodingProjectRow[];
 }
 
 /* The panel API's base path, and the ONE place it is written down: panelUrl

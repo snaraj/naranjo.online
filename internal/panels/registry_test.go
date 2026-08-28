@@ -17,9 +17,10 @@ import (
 func TestNewPreparesEveryBuiltinPanel(t *testing.T) {
 	t.Parallel()
 	coldStatus := map[string]Status{
-		"token-usage":  StatusStale,
-		"vcs-activity": StatusStale,
-		"boss-log":     StatusStale,
+		"token-usage":     StatusStale,
+		"vcs-activity":    StatusStale,
+		"boss-log":        StatusStale,
+		"coding-projects": StatusStale,
 	}
 	registry := New(nil)
 	index := decodeIndex(t, registry)

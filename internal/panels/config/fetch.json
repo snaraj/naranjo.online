@@ -5,7 +5,7 @@
   "maxBytes": 524288,
   "initialBackoffSeconds": 60,
   "maxBackoffMinutes": 15,
-  "titles": { "vcs-activity": "GitHub" },
+  "titles": { "vcs-activity": "GitHub", "coding-projects": "Coding Projects" },
   "bossLog": {
     "endpoint": "https://secure.runescape.com/m=hiscore_oldschool/index_lite.json?player=Roll+The+J",
     "account": "Roll The J",
@@ -41,6 +41,16 @@
     "maxBytes": 524288,
     "contentType": "text/html",
     "minIntervalMinutes": 15,
+    "calendar": {
+      "endpoint": "https://api.github.com/graphql",
+      "query": "query($from: DateTime!, $to: DateTime!) { viewer { contributionsCollection(from: $from, to: $to) { contributionCalendar { totalContributions weeks { contributionDays { date contributionCount } } } } } }",
+      "keyEnvName": "GITHUB_PANELS_TOKEN",
+      "keyHeader": "Authorization",
+      "keyPrefix": "Bearer ",
+      "headers": { "Accept": "application/json", "Content-Type": "application/json" },
+      "maxBytes": 262144,
+      "contentType": "application/json"
+    },
     "commits": {
       "headers": { "Accept": "application/json" },
       "maxBytes": 262144,
@@ -62,6 +72,23 @@
         }
       ]
     }
+  },
+  "codingProjects": {
+    "headers": { "Accept": "application/json" },
+    "keyEnvName": "GITHUB_PANELS_TOKEN",
+    "keyHeader": "Authorization",
+    "keyPrefix": "Bearer ",
+    "maxBytes": 262144,
+    "contentType": "application/json",
+    "minIntervalMinutes": 15,
+    "sources": [
+      { "name": "naranjo.online", "endpoint": "https://api.github.com/repos/snaraj/naranjo.online" },
+      { "name": "website-infrastructure", "endpoint": "https://api.github.com/repos/snaraj/website-infrastructure" },
+      { "name": "lidersea.com", "endpoint": "https://api.github.com/repos/snaraj/lidersea.com" },
+      { "name": "foobar2000-lyricsbuddy", "endpoint": "https://api.github.com/repos/snaraj/foobar2000-lyricsbuddy" },
+      { "name": "foobar2000-library-visualizer", "endpoint": "https://api.github.com/repos/snaraj/foobar2000-library-visualizer" },
+      { "name": "foobar2000-album-visualizer", "endpoint": "https://api.github.com/repos/snaraj/foobar2000-album-visualizer" }
+    ]
   },
   "tokenUsage": {
     "sources": [

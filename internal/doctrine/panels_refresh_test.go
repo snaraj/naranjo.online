@@ -73,6 +73,12 @@ import (
 // stated once here and every assertion below derives from it.
 const panelsRefreshEnv = "PANELS_REFRESH"
 
+// panelsTokenEnv is the version-control credential the refresh loops read
+// (issue #242). It is a NAME and nothing else — the same name the Secret keys
+// its value under and the same one fetch.json's keyEnvName declares — and no
+// part of any credential's value belongs in this repository (requirement 12).
+const panelsTokenEnv = "GITHUB_PANELS_TOKEN"
+
 // readRepoFile reads a repository source outside chart/, with the same
 // build-context capability boundary readChartFile applies: a reduced context
 // that carries no such tree skips by name, while a full checkout — every pull
@@ -129,6 +135,74 @@ func TestChartRendersTheRefreshSwitchUnconditionally(t *testing.T) {
 				"be read off the manifest when it is off",
 			panelsRefreshEnv,
 		)
+	}
+}
+
+// TestChartWiresTheRefreshCredentialOptionally pins the second reachability
+// property the same edit created, and the direction it has to fail in.
+//
+// A credential the chart does not wire is a producer nobody can turn on — the
+// gap this file already exists to close, one variable along. A credential the
+// chart wires REQUIRED is worse than not wiring it: a Secret the owner has not
+// created yet would then block the pod from scheduling, so the day the token
+// is added would be the first day anyone learned the site had been unable to
+// start. Optional is what makes the shipped, credential-free state a working
+// state rather than an outage waiting for a receipt.
+//
+// The name is bound from values rather than written twice, for the reason
+// every other binding in this chart is: a hardcoded Secret name would make the
+// values file and the schema decorative.
+func TestChartWiresTheRefreshCredentialOptionally(t *testing.T) {
+	deployment := readChartFile(t, "templates", "deployment.yaml")
+	at := strings.Index(deployment, "- name: "+panelsTokenEnv)
+	if at < 0 {
+		t.Fatalf(
+			"chart/templates/deployment.yaml renders no %s: the credentialed contribution "+
+				"calendar is then unreachable from a deployment, which is the same defect "+
+				"this file exists to prevent for the switch beside it",
+			panelsTokenEnv,
+		)
+	}
+	entry := deployment[at:]
+	if next := strings.Index(entry[1:], "- name: "); next >= 0 {
+		entry = entry[:next+1]
+	}
+	for _, required := range []string{
+		"secretKeyRef",
+		"name: {{ .Values.panels.refresh.tokenSecret }}",
+		"key: " + panelsTokenEnv,
+		"optional: true",
+	} {
+		if !strings.Contains(entry, required) {
+			t.Errorf(
+				"the %s entry must carry %q; without it the credential is either unwired, "+
+					"hardcoded, or REQUIRED — and a required Secret the owner has not created "+
+					"yet stops the pod from scheduling instead of degrading the panel",
+				panelsTokenEnv, required,
+			)
+		}
+	}
+	// A literal value would put a credential in git, which requirement 12
+	// forbids outright; the entry may reference a Secret and nothing else.
+	if strings.Contains(entry, "value: ") {
+		t.Errorf("the %s entry carries an inline value: a credential is referenced, never written here", panelsTokenEnv)
+	}
+	// The producer half names the same variable. The two are separate files
+	// and neither can see the other, so this is the pin that keeps a rename in
+	// one of them from silently unwiring the other.
+	config := readChartFile(t, "..", "internal", "panels", "config", "fetch.json")
+	if !strings.Contains(config, `"keyEnvName": "`+panelsTokenEnv+`"`) {
+		t.Errorf(
+			"internal/panels/config/fetch.json declares no keyEnvName of %s: the chart would "+
+				"then wire a variable no producer reads",
+			panelsTokenEnv,
+		)
+	}
+	// And the schema requires a non-empty name, so an empty one fails
+	// validation rather than rendering a reference to nothing.
+	schema := readChartFile(t, "values.schema.json")
+	if !strings.Contains(schema, `"required": ["enabled", "tokenSecret"]`) {
+		t.Error("chart/values.schema.json no longer requires panels.refresh.tokenSecret: an omitted name renders a secretKeyRef naming nothing")
 	}
 }
 

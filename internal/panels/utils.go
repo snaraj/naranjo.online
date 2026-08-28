@@ -48,6 +48,8 @@ func decodeKindPayload(kind string, raw json.RawMessage) (json.RawMessage, error
 		payload = &VCSActivityData{}
 	case KindBossLog:
 		payload = &BossLogData{}
+	case KindCodingProjects:
+		payload = &CodingProjectsData{}
 	default:
 		return nil, fmt.Errorf("unknown panel kind %q", kind)
 	}

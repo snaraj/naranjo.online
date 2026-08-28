@@ -11,6 +11,7 @@
 package panels
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -114,7 +115,7 @@ func NewFetchSource(fallback SnapshotSource, config FetchConfig, specs panelFetc
 		return nil, err
 	}
 	declared := 0
-	for _, present := range []bool{specs.bossLog != nil, specs.usage != nil, specs.vcs != nil} {
+	for _, present := range []bool{specs.bossLog != nil, specs.usage != nil, specs.vcs != nil, specs.projects != nil} {
 		if present {
 			declared++
 		}
@@ -164,6 +165,27 @@ func NewFetchSource(fallback SnapshotSource, config FetchConfig, specs panelFetc
 				if err := validateEndpoint(source.Endpoint, config.Hosts); err != nil {
 					return nil, err
 				}
+			}
+		}
+		if calendar := specs.vcs.Calendar; calendar != nil {
+			if err := validateEndpoint(calendar.Endpoint, config.Hosts); err != nil {
+				return nil, err
+			}
+			if err := validateBodyCap(calendar.MaxBytes, config.MaxBytes); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if specs.projects != nil {
+		if err := validateCodingProjectsSpec(specs.projects); err != nil {
+			return nil, err
+		}
+		if err := validateBodyCap(specs.projects.MaxBytes, config.MaxBytes); err != nil {
+			return nil, err
+		}
+		for _, source := range specs.projects.Sources {
+			if err := validateEndpoint(source.Endpoint, config.Hosts); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -506,7 +528,10 @@ func (s *FetchSource) refresh(ctx context.Context, doer fetchDoer, env func(stri
 		return s.refreshBossLog(ctx, doer, now)
 	}
 	if s.specs.vcs != nil {
-		return s.refreshActivity(ctx, doer, now)
+		return s.refreshActivity(ctx, doer, env, now)
+	}
+	if s.specs.projects != nil {
+		return s.refreshProjects(ctx, doer, env, now)
 	}
 	return s.refreshUsage(ctx, doer, env, now)
 }
@@ -551,9 +576,9 @@ func (s *FetchSource) refreshBossLog(ctx context.Context, doer fetchDoer, now ti
 // commit half at most one loop tick rather than an outage: the failed calendar
 // attempt still spent its own budget, so the next tick takes the retained
 // calendar and the commits refresh normally underneath it.
-func (s *FetchSource) refreshActivity(ctx context.Context, doer fetchDoer, now time.Time) (loadedPayload, error) {
+func (s *FetchSource) refreshActivity(ctx context.Context, doer fetchDoer, env func(string) string, now time.Time) (loadedPayload, error) {
 	spec := s.specs.vcs
-	calendar, calendarAt, calendarDue, err := s.calendarSection(ctx, doer, spec, now)
+	calendar, calendarAt, calendarDue, err := s.calendarSection(ctx, doer, env, spec, now)
 	if err != nil {
 		return loadedPayload{}, err
 	}
@@ -583,7 +608,7 @@ func (s *FetchSource) refreshActivity(ctx context.Context, doer fetchDoer, now t
 // fetched one when the calendar's budget admits an attempt, the retained one
 // otherwise. A cycle where the calendar is not due and nothing has ever been
 // fetched has nothing to build from, and says so.
-func (s *FetchSource) calendarSection(ctx context.Context, doer fetchDoer, spec *vcsActivityFetchSpec, now time.Time) (json.RawMessage, time.Time, bool, error) {
+func (s *FetchSource) calendarSection(ctx context.Context, doer fetchDoer, env func(string) string, spec *vcsActivityFetchSpec, now time.Time) (json.RawMessage, time.Time, bool, error) {
 	if !s.reserve(roleVCSCalendar, now, s.config.endpointInterval(spec.MinIntervalMinutes)) {
 		s.mu.Lock()
 		retained, at := s.calendar, s.calendarAt
@@ -593,21 +618,181 @@ func (s *FetchSource) calendarSection(ctx context.Context, doer fetchDoer, spec 
 		}
 		return retained, at, false, nil
 	}
-	body, err := s.fetchDocument(ctx, doer, fetchRequest{
-		source: roleVCSCalendar, endpoint: spec.Endpoint, headers: spec.Headers, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
-	})
+	mapped, err := s.readCalendar(ctx, doer, env, spec, now)
 	if err != nil {
 		s.coolOnRateLimit(roleVCSCalendar, now, err)
-		return nil, time.Time{}, false, err
-	}
-	mapped, err := mapContributions(body)
-	if err != nil {
 		return nil, time.Time{}, false, err
 	}
 	s.mu.Lock()
 	s.calendar, s.calendarAt = mapped, now
 	s.mu.Unlock()
 	return mapped, now, true, nil
+}
+
+// readCalendar picks THE calendar producer for this round and maps its answer.
+//
+// Exactly one producer runs per round, and which one is a CONFIGURATION fact
+// rather than a race: the credentialed producer when its variable is set, the
+// public document otherwise. Three consequences are deliberate.
+//
+//   - An unset credential is not a failure. It is the deployment saying it has
+//     no token, which is the state this repository ships in and the state it
+//     must stay honest in, so the public document answers and the payload
+//     records the narrower coverage rather than pretending to the wider one.
+//   - A credentialed FAILURE does not silently fall through to the public
+//     document. Falling through would answer a transient fault by quietly
+//     switching the panel to a figure four hundred contributions smaller, with
+//     nothing on the page to say why — and would double the round's request
+//     count exactly when the upstream is already unhappy. The round fails, the
+//     retained calendar keeps serving as stale, and the next round tries
+//     again: the same treatment every other producer's failure gets.
+//   - The credential is read HERE, moments before the request, and lives in
+//     one local and one request header. It is never stored on the source,
+//     never logged, and never part of any served value.
+func (s *FetchSource) readCalendar(ctx context.Context, doer fetchDoer, env func(string) string, spec *vcsActivityFetchSpec, now time.Time) (json.RawMessage, error) {
+	if credentialed := spec.Calendar; credentialed != nil {
+		if key := env(credentialed.KeyEnvName); key != "" {
+			payload, err := calendarRequestBody(credentialed.Query, now)
+			if err != nil {
+				return nil, err
+			}
+			body, err := s.fetchDocument(ctx, doer, fetchRequest{
+				source:      roleVCSCalendar,
+				endpoint:    credentialed.Endpoint,
+				headers:     credentialed.Headers,
+				keyHeader:   credentialed.KeyHeader,
+				keyValue:    credentialed.KeyPrefix + key,
+				maxBytes:    credentialed.MaxBytes,
+				contentType: credentialed.ContentType,
+				payload:     payload,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return mapCalendarDocument(body, now)
+		}
+		// The variable NAME is config data and the value is absent, so there
+		// is nothing here that could leak; what a cluster log needs is the
+		// reason this panel reports the narrower figure.
+		s.log().LogAttrs(ctx, slog.LevelDebug, "calendar producer skipped: credential unset; serving the public coverage")
+	}
+	body, err := s.fetchDocument(ctx, doer, fetchRequest{
+		source: roleVCSCalendar, endpoint: spec.Endpoint, headers: spec.Headers, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mapContributions(body)
+}
+
+// calendarQueryRequest is the request body posted to the credentialed
+// producer: the configured query document plus the window this package
+// computed. It is a package-owned struct so the body's shape is fixed in Go
+// and config supplies only the query text.
+type calendarQueryRequest struct {
+	Query     string                 `json:"query"`
+	Variables calendarQueryVariables `json:"variables"`
+}
+
+// calendarQueryVariables carries the window the query asks over.
+type calendarQueryVariables struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// calendarRequestBody builds that body for one round. The window ends now and
+// begins on the Sunday on or before calendarWindowDays ago — see that
+// constant for why the alignment is load-bearing rather than tidy.
+func calendarRequestBody(query string, now time.Time) ([]byte, error) {
+	to := now.UTC()
+	start := to.AddDate(0, 0, -calendarWindowDays)
+	from := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC).
+		AddDate(0, 0, -int(start.Weekday()))
+	body, err := json.Marshal(calendarQueryRequest{
+		Query:     query,
+		Variables: calendarQueryVariables{From: from.Format(time.RFC3339), To: to.Format(time.RFC3339)},
+	})
+	if err != nil {
+		// Marshaling a package-owned struct of two strings cannot fail; the
+		// branch exists so a future field mistake is refused, not sent.
+		return nil, errors.New("calendar request: the query body could not be built")
+	}
+	return body, nil
+}
+
+// refreshProjects reads every configured repository document and assembles the
+// coding-projects payload in CONFIG order.
+//
+// The degradation rule is the one mergeUsagePayload established, applied per
+// ROW: a repository whose document could not be read or admitted serves the
+// shipped snapshot's row for that name, marked recorded, and the envelope
+// reports stale. A mixed payload is therefore normal and legible — five live
+// rows beside one that says it is not — rather than an all-or-nothing panel
+// that blanks six repositories because one endpoint had a bad minute.
+//
+// A round in which NOTHING could be read is an error, so the caller keeps
+// serving the payload it already has instead of replacing six live rows with
+// six recorded ones.
+func (s *FetchSource) refreshProjects(ctx context.Context, doer fetchDoer, env func(string) string, now time.Time) (loadedPayload, error) {
+	spec := s.specs.projects
+	if !s.reserve(roleCodingProjects, now, s.config.endpointInterval(spec.MinIntervalMinutes)) {
+		return loadedPayload{}, errNothingDue
+	}
+	logger := s.log()
+	key := ""
+	if spec.KeyEnvName != "" {
+		key = env(spec.KeyEnvName)
+	}
+	request := fetchRequest{
+		source: roleCodingProjects, headers: spec.Headers, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
+	}
+	if key != "" {
+		request.keyHeader, request.keyValue = spec.KeyHeader, spec.KeyPrefix+key
+	}
+	fetched := make(map[string]CodingProject, len(spec.Sources))
+	for _, source := range spec.Sources {
+		attempt := request
+		attempt.endpoint = source.Endpoint
+		body, err := s.fetchDocument(ctx, doer, attempt)
+		if err != nil {
+			s.coolOnRateLimit(roleCodingProjects, now, err)
+			// A failed row never propagates — the round degrades to a recorded
+			// row instead — so its failure is narrated HERE or nowhere. The
+			// name is configuration data and the error chain names a host at
+			// most; no URL.
+			logger.LogAttrs(ctx, slog.LevelWarn, "repository source failed",
+				slog.String("repo", source.Name), slog.Any("error", err))
+			continue
+		}
+		row, err := mapRepository(body, source.Name, now)
+		if err != nil {
+			logger.LogAttrs(ctx, slog.LevelWarn, "repository source failed",
+				slog.String("repo", source.Name), slog.Any("error", err))
+			continue
+		}
+		fetched[source.Name] = row
+	}
+	if len(fetched) == 0 {
+		return loadedPayload{}, errors.New("coding projects: no repository could be read")
+	}
+	fallbackLoaded, err := s.fallback.load(snapshotFiles, KindCodingProjects)
+	var fallback CodingProjectsData
+	if err == nil {
+		// The fallback snapshot already passed the strict gate at load.
+		_ = decodeStrict(fallbackLoaded.data, &fallback)
+	}
+	merged, allFresh := mergeProjectRows(spec, fetched, fallback)
+	status := StatusOK
+	if !allFresh {
+		status = StatusStale
+	}
+	logger.LogAttrs(ctx, slog.LevelDebug, "coding projects refresh cycle",
+		slog.Int("repos_ok", len(fetched)),
+		slog.Int("repos_recorded", len(spec.Sources)-len(fetched)),
+	)
+	// Marshaling the package-owned payload cannot fail.
+	data, _ := json.Marshal(merged)
+	return loadedPayload{generatedAt: now.Format(time.RFC3339), data: data, status: status}, nil
 }
 
 // commitSection returns the recent-commit rows to serve, the instant they
@@ -792,6 +977,29 @@ type fetchRequest struct {
 	// contentType is the exact media type the answer must declare; empty
 	// skips the check.
 	contentType string
+	// payload is the request body, and its presence is the ONLY thing that
+	// makes an attempt a POST rather than a GET. Every other producer leaves
+	// it nil and is fetched exactly as it always was.
+	//
+	// A body is a capability, so where its bytes may come from is stated here
+	// rather than left to each caller: a payload is assembled from CONFIG data
+	// plus values this package computes from its own clock, never from any
+	// part of any upstream answer. That is what keeps the set of things this
+	// process can be made to ask unbounded by what it has been told — the same
+	// property complete literal endpoint URLs give the request LINE, extended
+	// to the request BODY.
+	payload []byte
+}
+
+// method reports the HTTP method one request uses. It is derived rather than
+// configured on purpose: a method field in config data would be a way to turn
+// a read into a write by editing a JSON file, while a body this package built
+// is the only thing that can make an attempt anything other than a GET.
+func (r fetchRequest) method() string {
+	if r.payload == nil {
+		return http.MethodGet
+	}
+	return http.MethodPost
 }
 
 // fetchDocument performs one bounded GET through exchangeDocument and
@@ -850,7 +1058,11 @@ func (s *FetchSource) exchangeDocument(ctx context.Context, doer fetchDoer, requ
 	}
 	attemptCtx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	defer cancel()
-	outbound, err := http.NewRequestWithContext(attemptCtx, http.MethodGet, request.endpoint, nil)
+	var outgoing io.Reader
+	if request.payload != nil {
+		outgoing = bytes.NewReader(request.payload)
+	}
+	outbound, err := http.NewRequestWithContext(attemptCtx, request.method(), request.endpoint, outgoing)
 	if err != nil {
 		return nil, 0, host, fmt.Errorf("fetch: build request: %w", transportErrorCause(err))
 	}

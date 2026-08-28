@@ -128,12 +128,17 @@
         "refresh": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["enabled"],
+          "required": ["enabled", "tokenSecret"],
           "properties": {
             "enabled": {
               "type": "boolean",
               "default": true,
               "description": "Start the background refresh loops. false starts no loop at all, so the origin makes no outbound request and the panels serve their embedded snapshots as stale, which stays fully supported. true — the shipped default since 2026-08-27 — additionally requires the credential Secrets named by keyEnvName in internal/panels/config/fetch.json for the sources that use one, and an egress allowance for that file's hosts list, which chart/templates/network-policy.yaml now renders as exactly two rules. A source whose credential is absent is skipped rather than faked, so a missing Secret is fail-soft, not an outage. The host bound is enforced in-process by internal/panels/fetch.go, never by the policy, which cannot express a host name."
+            },
+            "tokenSecret": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The Secret name the version-control producers read GITHUB_PANELS_TOKEN from (issue #242). Required and non-empty so a values file cannot render a secretKeyRef naming nothing: the reference is optional at the Kubernetes level — a Secret that does not exist yet leaves the variable unset and the panels degrade honestly — but an EMPTY name is a template accident rather than a decision, and it fails validation instead of rendering. This is a Secret name, never any part of a credential (requirement 12)."
             }
           }
         },
