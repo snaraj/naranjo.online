@@ -1250,20 +1250,30 @@ test('an open modal stops the document scrolling behind it, without moving it (i
      still scrolled it — and closing then returned the reader to a place they
      never chose, which is the same complaint issue 233 answered for the open
      half. */
-  assert.match(
-    stylesCode,
-    /html\[data-modal-open\] \{\s*overflow: hidden;\s*\}/,
-    'nothing stops the document scrolling behind an open modal'
-  );
+  const locked = /html\[data-modal-open\] \{([^}]*)\}/.exec(stylesCode);
+  assert.ok(locked, 'nothing stops the document scrolling behind an open modal');
+  assert.match(locked[1], /overflow: hidden;/, 'the locked document can still be scrolled');
   /* The zero-CLS half, and it is not decoration: taking `overflow` away takes
-     the scrollbar with it, so on a classic-scrollbar platform the viewport
-     would widen the instant the lightbox opened and snap back on close — a
-     layout shift caused by a control. The gutter is reserved unconditionally,
-     so there is nothing to give back. */
+     the scrollbar with it, so on a classic-scrollbar platform the reading
+     column would widen the instant the lightbox opened and snap back on close
+     — a layout shift caused by a control. The width the scrollbar was holding
+     is given straight back as root padding.
+
+     It is a MEASURED width, not a reserved gutter. `scrollbar-gutter: stable`
+     on the root is the usual recipe and it was this fix's first draft; CI
+     measured what it actually costs — a 15px strip reserved at rest on every
+     classic-scrollbar platform, off-centring the column, cutting the phone
+     column from 244px to 229px and pushing the fixed control 15px inboard —
+     so the pin now holds the giveback to the state that needs it. */
   assert.match(
+    locked[1],
+    /padding-inline-end: var\(--modal-scrollbar-giveback, 0px\);/,
+    'locking the scroll takes the scrollbar away and hands nothing back, so the column moves'
+  );
+  assert.doesNotMatch(
     stylesCode,
-    /html \{\s*scrollbar-gutter: stable;\s*\}/,
-    'the scrollbar gutter is not reserved, so locking the scroll resizes the viewport'
+    /scrollbar-gutter/,
+    'a reserved gutter charges every page view at rest for a strip only an open dialog needs'
   );
   // The state is raised by the component that opens the dialog, and released
   // by an effect teardown rather than by a pair of handlers that a torn-down
@@ -1271,7 +1281,17 @@ test('an open modal stops the document scrolling behind it, without moving it (i
   const gallery = componentSources['lib/components/MediaGallery.svelte'];
   assert.ok(gallery, 'the gallery component is not where this pin expects it');
   assert.match(gallery, /root\.setAttribute\('data-modal-open', 'true'\)/);
-  assert.match(gallery, /return \(\) => root\.removeAttribute\('data-modal-open'\)/);
+  assert.match(gallery, /root\.removeAttribute\('data-modal-open'\)/);
+  assert.match(gallery, /root\.style\.removeProperty\('--modal-scrollbar-giveback'\)/);
+  /* The measurement reads the viewport against the root's own client box, and
+     it must happen BEFORE the attribute goes up — after it, the scrollbar is
+     already gone and the difference it measures is zero. */
+  const measure = /const giveback = window\.innerWidth - root\.clientWidth;/.exec(gallery);
+  assert.ok(measure, 'the giveback is not measured from the scrollbar the platform actually draws');
+  assert.ok(
+    measure.index < gallery.indexOf("root.setAttribute('data-modal-open'"),
+    'the giveback is measured after the lock has already taken the scrollbar away, so it is always zero'
+  );
 });
 
 test('motion exists only where the reader has not asked for less of it (issue #26)', () => {

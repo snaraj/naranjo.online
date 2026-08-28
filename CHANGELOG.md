@@ -64,12 +64,18 @@ onto three lines, and labels calling four films photographs.
   starts. Above that breakpoint the column's existing two-rail giveback
   already clears it — proven arithmetically in `experience.test.mjs` rather
   than assumed.
-- `html[data-modal-open] { overflow: hidden }` plus an unconditional
-  `scrollbar-gutter: stable`: the document no longer scrolls behind an open
-  lightbox, and the lock costs no layout shift because the gutter it would
-  otherwise reclaim was never given back. The attribute is raised by an effect
-  in `MediaGallery.svelte`, so its teardown covers an unmount with the dialog
-  still open.
+- `html[data-modal-open] { overflow: hidden }` plus a measured scrollbar
+  giveback: the document no longer scrolls behind an open lightbox, and the
+  lock costs no layout shift because the width the scrollbar was holding is
+  handed straight back as root padding. The amount is measured in
+  `MediaGallery.svelte` at lock time (`innerWidth` minus the root's
+  `clientWidth`, read before the attribute goes up) — 0 wherever scrollbars
+  overlay — rather than reserved unconditionally with `scrollbar-gutter:
+  stable`, which the rendering lanes measured as a 15px strip charged to every
+  page view on classic-scrollbar platforms: off-centre column, a 320px phone
+  column cut from 244px to 229px, and the fixed reading-mode control pushed
+  15px inboard of the viewport edge it anchors to. The attribute is raised by
+  an effect, so its teardown covers an unmount with the dialog still open.
 - `--gallery-controls-gap`: the space between the two arrows and the dot row
   they now bracket.
 
@@ -139,7 +145,10 @@ onto three lines, and labels calling four films photographs.
 - `experience.test.mjs` derives the control-lane breakpoint from the four
   tokens it is made of and proves the arithmetic fails without the two-rail
   giveback, so the range split is load-bearing rather than decorative; it also
-  pins the scroll lock and the stable gutter.
+  pins the scroll lock, the measured giveback, that the measurement precedes
+  the lock it compensates for, and that no reserved gutter comes back — the
+  half no browser lane can prove, because every engine in the matrix draws
+  overlay scrollbars.
 - `sections.test.mjs` re-aims three pins rather than relaxing them — the
   arrows' names are now derived and cannot produce a kind literal, the
   lightbox's `<source>` ban is now "image renditions only" (`srcset`, no

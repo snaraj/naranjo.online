@@ -728,22 +728,34 @@ body {
    reach; the component writes the attribute and nothing else, so the rule and
    the state that raises it stay one thing.
 
-   The stable gutter is the zero-CLS half and it is NOT decoration. Taking
-   away `overflow` takes away the scrollbar with it, and on any platform with
-   a classic (space-taking) scrollbar the page would widen by its thickness
-   the instant the lightbox opened and snap back on close — a layout shift
-   caused by a control, which is the floor this page holds hardest. Reserving
-   the gutter unconditionally means there is nothing to give back: the
-   viewport measures the same open and closed. It costs nothing on the
-   overlay-scrollbar platforms (macOS, every phone), where the gutter is zero
-   wide, and nothing on this page even where it is not — the document is
-   always long enough to scroll, so the space was already spoken for. */
-html {
-  scrollbar-gutter: stable;
-}
+   The padding is the zero-CLS half and it is NOT decoration. Taking away
+   `overflow` takes away the scrollbar with it, and on any platform with a
+   classic (space-taking) scrollbar the reading column would widen by its
+   thickness the instant the lightbox opened and snap back on close — a
+   layout shift caused by a control, which is the floor this page holds
+   hardest. So the width the scrollbar was occupying is given straight back
+   as root padding, and the column's box measures the same open and closed.
 
+   The amount is MEASURED by the component at lock time (`innerWidth` minus
+   the root's `clientWidth`, read before the attribute goes up) rather than
+   stated here, because no stylesheet can know it: it is a platform and
+   user-setting fact, 0 wherever scrollbars overlay the content and whatever
+   the desktop theme says where they do not. Hence the `0px` fallback — absent
+   the property nothing is given back, which is exactly right for the
+   platforms where nothing was taken.
+
+   An earlier revision of this fix reserved `scrollbar-gutter: stable` on the
+   root unconditionally instead. That is the widely-repeated recipe and it is
+   wrong here, because a reserved gutter is charged even where the scrollbar
+   itself costs the layout nothing: on the CI rendering-lane runners, where
+   every engine measures `innerWidth` equal to the root's `clientWidth`, the
+   gutter still took 15px at rest — moving the centred column off centre,
+   cutting the 320px phone column from 244px to 229px, and pushing the fixed
+   reading-mode control 15px inboard of the viewport edge it is anchored to. A
+   strip only an open dialog needs must not be charged to every page view. */
 html[data-modal-open] {
   overflow: hidden;
+  padding-inline-end: var(--modal-scrollbar-giveback, 0px);
 }
 
 /* THE PULL'S OWN TRAVEL (issue 219). The declaration above is what makes this

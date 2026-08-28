@@ -3290,25 +3290,40 @@ test('the document holds still while the lightbox is open, and is unchanged afte
   const scrollY = () => page.evaluate(() => Math.round(window.scrollY));
   const start = await scrollY();
   expect(start, 'the gallery is inside the first viewport here, so this lane proves nothing').toBeGreaterThan(150);
-  const widthBefore = await page.evaluate(() => window.document.documentElement.clientWidth);
+  /* Zero CLS across the lock is measured on the READING COLUMN, not on the
+     viewport: taking the document's overflow away takes its scrollbar with it,
+     which on a classic-scrollbar platform WIDENS the viewport by design — what
+     must not move is the content the reader is looking at, which the measured
+     giveback holds still. On every engine in this matrix the scrollbar costs
+     the layout nothing — measured: setting the giveback's fallback to 20px
+     moved this column on all five projects, so the property is never set and
+     the difference it is measured from is zero — which is why this lane
+     asserts the half that holds on every platform, and the arithmetic that
+     only a space-taking scrollbar exercises is pinned as structure in
+     `tests/experience.test.mjs`. */
+  const columnShape = () =>
+    page.evaluate(() => {
+      const box = window.document.querySelector('main').getBoundingClientRect();
+      return { x: Math.round(box.x * 10) / 10, width: Math.round(box.width * 10) / 10 };
+    });
+  const shapeBefore = await columnShape();
 
   await frame.click();
   await expect(dialog).toHaveJSProperty('open', true);
 
-  /* Zero CLS across the lock itself: taking the document's overflow away takes
-     its scrollbar with it, so without a reserved gutter the page would widen
-     the instant this opened. */
-  expect(
-    await page.evaluate(() => window.document.documentElement.clientWidth),
-    'opening the lightbox resized the page under the reader'
-  ).toBe(widthBefore);
+  expect(await columnShape(), 'opening the lightbox moved the page under the reader').toEqual(shapeBefore);
 
   if (canWheel) {
     await page.mouse.move(10, 10);
     await page.mouse.wheel(0, 800);
+    await page.mouse.wheel(0, -800);
   }
   await page.keyboard.press('PageDown');
   await page.keyboard.press('End');
+  /* Both directions, so no engine can pass this by having nowhere to go: the
+     document below the gallery is as tall as its own content makes it, but
+     `start` is always over 150px from the top, so `Home` always has room. */
+  await page.keyboard.press('Home');
   expect(
     await scrollY(),
     `the page scrolled behind the open lightbox, from ${start}`
@@ -3317,15 +3332,23 @@ test('the document holds still while the lightbox is open, and is unchanged afte
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveJSProperty('open', false);
   expect(await scrollY(), 'closing the lightbox left the reader somewhere else').toBe(start);
+  expect(await columnShape(), 'closing the lightbox moved the page under the reader').toEqual(shapeBefore);
   /* And the lock is RELEASED, not merely ineffective: the page scrolls again.
      Without this half the same green could be bought by a page that can never
-     scroll at all. */
+     scroll at all.
+
+     UPWARD, because that is the direction this lane can prove has somewhere to
+     go: `start` is over 150px down the document, whereas whether there is a
+     further page BELOW the gallery depends on how tall the rest of the page
+     renders on a given engine — desktop WebKit on the CI runner lands this
+     scroll at the document's own end, where a downward press is refused by
+     the page being over rather than by any lock. */
   if (canWheel) {
-    await page.mouse.wheel(0, 400);
+    await page.mouse.wheel(0, -400);
   } else {
-    await page.keyboard.press('PageDown');
+    await page.keyboard.press('PageUp');
   }
-  await expect.poll(scrollY, { message: 'the page never scrolls again after the lightbox closes' }).toBeGreaterThan(start);
+  await expect.poll(scrollY, { message: 'the page never scrolls again after the lightbox closes' }).toBeLessThan(start);
 });
 
 /* The gallery frame's box and its two gutters, measured as one shape. Used

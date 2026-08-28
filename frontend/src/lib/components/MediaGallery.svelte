@@ -383,18 +383,32 @@
      half of.
 
      The lock is one attribute on the document element, read by one rule in
-     styles.css (`overflow: hidden` plus the stable gutter that keeps the
-     switch free of layout shift). It is written by an effect rather than by
+     styles.css (`overflow: hidden`). It is written by an effect rather than by
      the open/close handlers so it cannot be left behind: an effect's teardown
      runs when `enlarged` goes false AND when this component unmounts with the
-     dialog still open, which no pair of handlers can promise. */
+     dialog still open, which no pair of handlers can promise.
+
+     The giveback beside it is the zero-CLS half. Removing the document's
+     overflow removes its scrollbar, so on a classic-scrollbar platform the
+     reading column would widen by the scrollbar's thickness as the lightbox
+     opened and snap back on close. That thickness is a platform fact no
+     stylesheet can name — 0 wherever scrollbars overlay — so it is measured
+     HERE, before the attribute goes up and while the scrollbar is still
+     taking its space, and handed to the rule as root padding. */
   $effect(() => {
     if (!enlarged) {
       return;
     }
     const root = document.documentElement;
+    const giveback = window.innerWidth - root.clientWidth;
+    if (giveback > 0) {
+      root.style.setProperty('--modal-scrollbar-giveback', `${giveback}px`);
+    }
     root.setAttribute('data-modal-open', 'true');
-    return () => root.removeAttribute('data-modal-open');
+    return () => {
+      root.removeAttribute('data-modal-open');
+      root.style.removeProperty('--modal-scrollbar-giveback');
+    };
   });
 
   // showModal()/close() are imperative; this is the one place the dialog's
