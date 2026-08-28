@@ -101,9 +101,13 @@ onto three lines, and labels calling four films photographs.
   control row with the position dots. Beside the stage they cost a 320px phone
   116px of a 288px card — which left a film 172x97, smaller than the ~48px
   control bar drawn inside it — and on a desktop they sat 212px from the
-  artwork at the far edges of their track. Measured after: the film stage is
-  the frame's full width at every phone size (288px at 320px, +67%), and each
-  arrow sits 4px from the marks it brackets on all three engines.
+  artwork at the far edges of their track. Measured after, at a 320px viewport
+  on Chromium, Firefox and WebKit alike: the film stage is the frame's full
+  width, 244x137 against 172x97, so 41.9% wider and twice the area. The card
+  itself is 244px rather than the old 288px because the reading-mode lane above
+  takes 44px of the same viewport — the two fixes interact, and the stage still
+  gains because it now uses whatever the frame has. Each arrow sits 4px from
+  the marks it brackets on all three engines.
 - **The dot row is one row that scrolls**, never two or three that wrap. Nine
   44px targets are 396px wide; the targets are untouched and the surplus goes
   to the scroll axis inside the row's own container. A definite zero inline

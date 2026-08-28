@@ -1642,7 +1642,13 @@ test('the frame reserves ONE box, so changing kind moves nothing (issue 241)', (
   const style = styleBlock(mediaGallery);
   const frame = /\.gallery-frame\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
   assert.ok(frame.length > 0, 'the frame rule is not where this pin expects it');
-  assert.match(frame, /inline-size:\s*100%/, 'the frame no longer fills the card, so its reservation follows content');
+  // Anchored for the same reason the dot row's zero is, below: `min-inline-size:
+  // 100%` contains this string and reserves nothing.
+  assert.match(
+    frame,
+    /^\s*inline-size:\s*100%/m,
+    'the frame no longer fills the card, so its reservation follows content'
+  );
   /* The semicolon is load-bearing: `aspect-ratio: 1` also matches "1.7778",
      which is the film's own ratio and exactly the mutation this pin exists to
      refuse — a frame shaped like one of the two kinds is the defect. */
@@ -1664,10 +1670,28 @@ test('the frame reserves ONE box, so changing kind moves nothing (issue 241)', (
     /<div class="gallery-frame"[^>]*data-gallery-kind/,
     'the frame declares a kind, so the box the page is laid out from can change with the item'
   );
-  /* And the film's own stage still cannot be taller than that reservation:
-     27rem x 1.7778 is 432px of block against the square's 448, which is what
-     makes "centred inside it" true rather than "overflowing it". */
-  assert.ok(27 < 28, 'a film’s stage is taller than the frame reserved for it');
+  /* And the film's own stage still cannot be taller than that reservation,
+     which is what makes "centred inside it" true rather than "overflowing
+     it". A film's block size is its own size token (27rem = 432px, the ×1.7778
+     goes to the INLINE axis), and the frame's is the square's (28rem = 448px).
+
+     Read from the stylesheet rather than written here. The first form of this
+     assertion compared two literals — `assert.ok(27 < 28, …)` — which no
+     mutation of any source file could turn red: a decorative check, and the
+     protocol names those findings for a reason. The geometry was never
+     unguarded (the issue-233 pin dies on either token moving), but a pin that
+     claims to hold something must be able to fail. */
+  const remToken = (name) => {
+    const declared = new RegExp(`${name}:\\s*([0-9.]+)rem;`).exec(styles);
+    assert.ok(declared, `styles.css declares no ${name}, so the frame's reservation cannot be checked`);
+    return Number(declared[1]);
+  };
+  const filmBlockRem = remToken('--gallery-stage-size-video');
+  const frameBlockRem = remToken('--gallery-stage-size');
+  assert.ok(
+    filmBlockRem < frameBlockRem,
+    `a film’s stage is ${filmBlockRem}rem tall inside a frame reserving ${frameBlockRem}rem; it overflows the box the page was laid out from`
+  );
 });
 
 test('the position marks are one scrolling row, and the artwork accepts a pinch (issue 241)', () => {
@@ -1686,7 +1710,13 @@ test('the position marks are one scrolling row, and the artwork accepts a pinch 
      the page column — MEASURED, `min-inline-size: 0` and a zero flex-basis
      both leave it propagating. It is grown back to at most its own content, so
      a row that fits stays exactly as wide as its marks. */
-  assert.match(dots, /inline-size:\s*0;/, 'the row’s minimum contribution is its content again');
+  /* ANCHORED to the start of its own declaration, and that is the whole point
+     of the regex rather than tidiness: `min-inline-size: 0;` CONTAINS
+     `inline-size: 0;`, so the unanchored form was satisfied by the exact
+     alternative the comment above documents as measured-and-broken. The
+     browser lane kills that substitution on all five projects; a source pin
+     that cannot is a pin pointing at the wrong thing. */
+  assert.match(dots, /^\s*inline-size:\s*0;/m, 'the row’s minimum contribution is its content again');
   assert.match(dots, /flex-grow:\s*1;/, 'the row cannot take the space the arrows leave');
   assert.match(dots, /max-inline-size:\s*max-content;/, 'the row grows past its own marks, pushing the arrows away from them');
   // A safe centring over a plain one, so an overflowing row is reachable at

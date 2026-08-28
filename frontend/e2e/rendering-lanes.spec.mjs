@@ -3316,6 +3316,23 @@ test('the document holds still while the lightbox is open, and is unchanged afte
       () => true,
       () => false
     );
+  /* ONE PROJECT MAY NOT OPT OUT. A precondition that every project is allowed
+     to skip on is a matrix that reports green for a site nobody can scroll:
+     `html { overflow: hidden }` written unconditionally skips this lane
+     everywhere and leaves the whole suite passing — measured by the
+     adversarial review of this branch, 463 passed / 27 skipped / 0 failed with
+     the unit suite still 437/0. So desktop Chromium, the project where this
+     page scrolls by construction (a fixed-width desktop viewport, a document
+     several times its height, and an engine whose synthetic input this file
+     depends on throughout), asserts it instead of skipping — measured
+     answering on all five projects today, so nothing is being carved out for a
+     known failure. The named boundary stays for the other four, where an
+     engine's synthetic-input behaviour is its own business and a skip is
+     honest; it is loud in the run output either way. */
+  const mustScroll = browserName === 'chromium' && !isMobile;
+  if (mustScroll) {
+    expect(answered, 'the page never scrolls from a synthetic input, locked or not').toBe(true);
+  }
   test.skip(
     !answered,
     `${browserName} does not move the page from a synthetic scroll here, so neither half of this lane could mean anything on it`
