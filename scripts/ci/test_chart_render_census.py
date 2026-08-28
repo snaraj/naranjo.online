@@ -130,8 +130,51 @@ spec:
         - port: {port}
           protocol: TCP
   # A comment inside the spec, exactly like the real template carries.
-  egress: []
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
 """
+
+# The pinned egress sub-tree as the fixture renders it, so a test that rewrites
+# it names the whole run rather than a line that is no longer unique. It
+# mirrors EGRESS_RULES in chart_render_census.py; the census owns the meaning,
+# this owns the text the tests mutate.
+FIXTURE_EGRESS = """\
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP"""
 
 REST_OF_RENDER = """\
 ---
@@ -1387,15 +1430,63 @@ class CensusRefusesAWidenedPolicy(CensusFixture):
         return mutated
 
     def test_one_empty_egress_rule_is_an_allowance(self):
-        self.reject(self.widen("  egress: []", "  egress: [{}]"), "an exactly empty list is pinned")
+        # The emptiest-looking rule is the widest one there is, and it stays
+        # refused now that the pinned shape is an allowance rather than a deny.
+        self.reject(self.widen(FIXTURE_EGRESS, "  egress: [{}]"),
+                    "egress is not the pinned allowance")
 
     def test_an_empty_egress_mapping_is_refused(self):
-        self.reject(self.widen("  egress: []", "  egress: {}"), "an exactly empty list is pinned")
+        self.reject(self.widen(FIXTURE_EGRESS, "  egress: {}"),
+                    "egress is not the pinned allowance")
 
-    def test_a_dns_exception_is_refused(self):
-        self.reject(self.widen("  egress: []",
-                               "  egress:\n    - ports:\n        - port: 53\n          protocol: UDP"),
-                    "an exactly empty list is pinned")
+    def test_narrowing_back_to_the_retired_total_deny_is_refused(self):
+        # The other direction, and the one that only exists because the
+        # contract CHANGED on 2026-08-27: an empty list was the pinned answer
+        # until the owner directed live panel fetches. This census pins what
+        # the chart is meant to render, so a render that quietly went back to
+        # the old contract is drift a human should see, not a silent win.
+        self.reject(self.widen(FIXTURE_EGRESS, "  egress: []"),
+                    "egress is not the pinned allowance")
+
+    def test_a_third_egress_rule_is_refused(self):
+        # Egress rules are ADDITIVE: one extra rule grants everything the
+        # pinned two withhold, while both pinned rules still read correctly.
+        self.reject(self.widen(FIXTURE_EGRESS, FIXTURE_EGRESS + "\n    - {}"),
+                    "egress is not the pinned allowance")
+
+    def test_dropping_the_tls_rules_ports_is_refused(self):
+        # Rule 1 without ports is every port to every address.
+        portless = FIXTURE_EGRESS.replace(
+            "      ports:\n        - port: 443\n          protocol: TCP\n", "", 1)
+        self.reject(self.widen(FIXTURE_EGRESS, portless),
+                    "egress is not the pinned allowance")
+
+    def test_splitting_the_dns_peer_into_two_peers_is_refused(self):
+        # The namespace and pod selectors sit in ONE peer element and are
+        # therefore ANDed. Two peer elements is an OR: every Pod in kube-system
+        # plus every kube-dns-labelled Pod in the cluster.
+        split = FIXTURE_EGRESS.replace(
+            "          podSelector:\n            matchLabels:\n"
+            "              k8s-app: kube-dns",
+            "        - podSelector:\n            matchLabels:\n"
+            "              k8s-app: kube-dns", 1)
+        self.assertNotEqual(split, FIXTURE_EGRESS)
+        self.reject(self.widen(FIXTURE_EGRESS, split),
+                    "egress is not the pinned allowance")
+
+    def test_dropping_the_dns_pod_selector_is_refused(self):
+        # What is left admits every Pod in the DNS namespace on port 53.
+        widened = FIXTURE_EGRESS.replace(
+            "\n          podSelector:\n            matchLabels:\n"
+            "              k8s-app: kube-dns", "", 1)
+        self.assertNotEqual(widened, FIXTURE_EGRESS)
+        self.reject(self.widen(FIXTURE_EGRESS, widened),
+                    "egress is not the pinned allowance")
+
+    def test_the_pinned_allowance_itself_passes(self):
+        # A guard that refused everything would pass every test above and be
+        # worthless. The unmutated fixture must still census clean.
+        self.assertEqual(self.census(render())["objects"], FIXTURE_OBJECTS)
 
     def test_dropping_the_egress_policy_type_is_refused(self):
         self.reject(self.widen("    - Ingress\n    - Egress", "    - Ingress"), "policyTypes")
@@ -1420,10 +1511,11 @@ class CensusRefusesAWidenedPolicy(CensusFixture):
                     "ingress is not the one rule")
 
     def test_an_unpinned_spec_key_is_refused(self):
-        self.reject(self.widen("  egress: []", "  egress: []\n  shadowKey: true"), "spec keys")
+        self.reject(self.widen(FIXTURE_EGRESS, FIXTURE_EGRESS + "\n  shadowKey: true"), "spec keys")
 
     def test_a_respelled_but_widened_egress_is_still_refused(self):
-        self.reject(self.widen("  egress: []", "  egress : [{}]"), "an exactly empty list is pinned")
+        self.reject(self.widen(FIXTURE_EGRESS, "  egress : [{}]"),
+                    "egress is not the pinned allowance")
 
     def test_a_respelled_but_unchanged_policy_still_passes(self):
         # Normalisation must not turn a legal respelling into a false alarm:
@@ -1431,7 +1523,7 @@ class CensusRefusesAWidenedPolicy(CensusFixture):
         base = render()
         respelled = (base
                      .replace("kind: NetworkPolicy", '"kind": NetworkPolicy', 1)
-                     .replace("  egress: []", "  egress : []", 1))
+                     .replace("  egress:\n", "  egress :\n", 1))
         self.assertNotEqual(respelled, base)
         self.assertEqual(CRC.census(respelled, self.facts)["objects"], FIXTURE_OBJECTS)
 

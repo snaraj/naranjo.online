@@ -29,9 +29,11 @@ derived from the thing it checks passes for anything that thing renders.
 
 WHERE THE EXPECTED FACTS COME FROM.
 
-- The deny itself (`policyTypes` including `Egress`, `egress: []`) and the
-  document inventory are CONSTANTS in this file. "No outbound connection,
-  ever" is not configuration.
+- The egress contract (`policyTypes` including `Egress`, and the exact two-rule
+  allowance in `EGRESS_RULES`) and the document inventory are CONSTANTS in this
+  file. Until 2026-08-27 that contract was "no outbound connection, ever"; the
+  owner directed live panel fetches, so it is now exactly two rules. Either way
+  it is not configuration, and it is not read back out of the template.
 - The workload selector's two facts are the chart name (`chart/Chart.yaml`
   metadata) and the release name/namespace this gate renders with (passed in
   on the command line).
@@ -269,6 +271,7 @@ argparse's own usage-error status for a malformed invocation.
 from __future__ import annotations
 
 import argparse
+import copy
 import re
 import sys
 from pathlib import Path
@@ -312,6 +315,48 @@ POLICY_NAME_PREFIX = "ingress-to-"
 POLICY_TYPES = ["Ingress", "Egress"]
 POLICY_SPEC_KEYS = ("podSelector", "policyTypes", "ingress", "egress")
 POLICY_METADATA_KEYS = ("name", "namespace", "labels")
+
+# The outbound allowance, stated here as a constant for exactly the reason the
+# total deny it replaced was stated here as a constant: it is not
+# configuration, and an expectation read out of the template under test would
+# pass for anything that template renders. Until 2026-08-27 this was the empty
+# list. The owner directed live panel fetches, so the pinned contract is now
+# these two rules and nothing else -- the change is a deliberate replacement of
+# one exactly-pinned shape with another exactly-pinned shape, never a relaxation
+# into "some egress is fine".
+#
+# Rule 1 bounds protocol and port and leaves the destination open, because a
+# NetworkPolicy cannot express a host name and a CIDR list would look like a
+# host bound while pinning addresses nobody here can verify. The HOST bound is
+# in-process: internal/panels/fetch.go admits only https URLs on the
+# fetch.json allowlist at construction (fetch.go:190 via :129/:141/:153/:164)
+# and re-checks every request against the same allowlist (fetch.go:848), while
+# guardedDial refuses a resolved private, loopback or link-local address.
+#
+# Rule 2 is name resolution, scoped as tightly as a policy can scope anything:
+# the cluster DNS Pods, selected by namespace AND pod labels in ONE peer
+# element so the two are ANDed, over both UDP and TCP (a truncated or
+# oversized answer retries over TCP).
+EGRESS_RULES = [
+    {
+        "to": [{"ipBlock": {"cidr": "0.0.0.0/0"}}],
+        "ports": [{"port": 443, "protocol": "TCP"}],
+    },
+    {
+        "to": [
+            {
+                "namespaceSelector": {
+                    "matchLabels": {"kubernetes.io/metadata.name": "kube-system"}
+                },
+                "podSelector": {"matchLabels": {"k8s-app": "kube-dns"}},
+            }
+        ],
+        "ports": [
+            {"port": 53, "protocol": "UDP"},
+            {"port": 53, "protocol": "TCP"},
+        ],
+    },
+]
 
 # The complete installable render, as (apiVersion, kind) pairs. A census that
 # only counted NetworkPolicies would still miss a second policy written under
@@ -1477,7 +1522,7 @@ class ChartFacts:
                         "ports": [{"port": self.service_port, "protocol": "TCP"}],
                     }
                 ],
-                "egress": [],
+                "egress": copy.deepcopy(EGRESS_RULES),
             },
         }
 
@@ -1870,11 +1915,15 @@ def census(text: str, facts: ChartFacts, origin: str = "<render>") -> dict:
         raise CensusError("the policy does not declare the Egress policy type, so Kubernetes "
                           "applies no egress rule at all and an empty egress list restricts "
                           "nothing")
-    if not isinstance(spec["egress"], list) or spec["egress"] != []:
-        raise CensusError("the policy's egress is %s; an exactly empty list is pinned. An "
-                          "empty mapping, a single empty rule, or any rule at all is an "
-                          "ALLOWANCE -- the emptiest-looking rule is the widest one there is."
-                          % _describe(spec["egress"]))
+    if spec["egress"] != expected["spec"]["egress"]:
+        raise CensusError("the policy's egress is not the pinned allowance. Egress rules are "
+                          "ADDITIVE and the emptiest-looking rule is the widest one there is, "
+                          "so this comparison is whole-subtree equality rather than a check "
+                          "for anything in particular: an extra rule, a widened or removed "
+                          "port, a loosened DNS peer, a list emptied back to allow-all, and a "
+                          "list narrowed back to the retired total deny all stop here for a "
+                          "human to read.\nexpected:\n%s\n\nrendered:\n%s"
+                          % (_describe(expected["spec"]["egress"]), _describe(spec["egress"])))
     if spec["ingress"] != expected["spec"]["ingress"]:
         raise CensusError("the policy's ingress is not the one rule the chart values declare."
                           "\nexpected:\n%s\n\nrendered:\n%s"
@@ -2439,6 +2488,42 @@ def mutations(facts: PolicyFacts) -> list[tuple[str, Rewriter]]:
     # pin, so a mutation of its metadata reaches the installability check
     # rather than tripping the pinned-policy assertions first.
     account_anchor = ["kind: ServiceAccount", "metadata:", "  name: " + name]
+    # The whole egress sub-tree as the template renders it. Anchoring on the
+    # COMPLETE block rather than a single line is what lets a mutation rewrite
+    # any part of the two-rule allowance while still requiring exactly one
+    # match: with two rules, two `to:` lines and three `ports:` lines in the
+    # document, no single-line anchor inside it is unique any more.
+    egress_anchor = [
+        "  egress:",
+        "    - to:",
+        "        - ipBlock:",
+        "            cidr: 0.0.0.0/0",
+        "      ports:",
+        "        - port: 443",
+        "          protocol: TCP",
+        "    - to:",
+        "        - namespaceSelector:",
+        "            matchLabels:",
+        "              kubernetes.io/metadata.name: kube-system",
+        "          podSelector:",
+        "            matchLabels:",
+        "              k8s-app: kube-dns",
+        "      ports:",
+        "        - port: 53",
+        "          protocol: UDP",
+        "        - port: 53",
+        "          protocol: TCP",
+    ]
+
+    def egress(*replacement: str):
+        """Rewrite the whole egress sub-tree into the given lines."""
+        return lambda text: _replace_block(text, egress_anchor, list(replacement))
+
+    def egress_plus(*extra: str):
+        """Keep the pinned allowance and append to it."""
+        return lambda text: _replace_block(text, egress_anchor,
+                                           egress_anchor + list(extra))
+
     shadow_source = "%s/templates/shadow-policy.yaml" % name
 
     def same_file(document: str):
@@ -2504,13 +2589,85 @@ def mutations(facts: PolicyFacts) -> list[tuple[str, Rewriter]]:
         ("render-with-an-uninstallable-annotation-key",
          lambda text: _replace_block(text, account_anchor,
                                      account_anchor + _SHADOW_UNINSTALLABLE_ANNOTATION_KEY)),
-        # --- the pinned policy itself, widened ------------------------------
+        # --- the pinned allowance itself, widened ----------------------------
+        #
+        # The allowance replaced a total deny on 2026-08-27 (owner directive),
+        # so this battery replaced the deny's. It is the same discipline about
+        # a different pinned shape, and it deliberately covers BOTH directions:
+        # widening the allowance is the danger, and narrowing it back to the
+        # retired deny is drift a human should see rather than a silent
+        # improvement.
         ("policy-egress-allow-all",
-         lambda text: _replace_block(text, ["  egress: []"], ["  egress: [{}]"])),
+         egress("  egress: [{}]")),
         ("policy-egress-respelled-and-widened",
-         lambda text: _replace_block(text, ["  egress: []"], ["  egress : [{}]"])),
+         egress("  egress : [{}]")),
         ("policy-egress-empty-mapping",
-         lambda text: _replace_block(text, ["  egress: []"], ["  egress: {}"])),
+         egress("  egress: {}")),
+        ("policy-egress-narrowed-back-to-the-retired-deny",
+         egress("  egress: []")),
+        ("policy-egress-third-rule-appended",
+         egress_plus("    - {}")),
+        ("policy-egress-second-rule-to-anywhere",
+         egress_plus("    - to:",
+                     "        - ipBlock:",
+                     "            cidr: 0.0.0.0/0",
+                     "      ports:",
+                     "        - port: 22",
+                     "          protocol: TCP")),
+        # Rule 1 without ports is every port to every address -- the exact
+        # shape a careless edit of the ports list produces.
+        ("policy-egress-tls-rule-loses-its-ports",
+         egress("  egress:",
+                "    - to:",
+                "        - ipBlock:",
+                "            cidr: 0.0.0.0/0",
+                *egress_anchor[7:])),
+        ("policy-egress-tls-port-widened-to-a-range",
+         egress("  egress:",
+                "    - to:",
+                "        - ipBlock:",
+                "            cidr: 0.0.0.0/0",
+                "      ports:",
+                "        - port: 1",
+                "          endPort: 65535",
+                "          protocol: TCP",
+                *egress_anchor[7:])),
+        ("policy-egress-tls-rule-gains-udp",
+         egress(*egress_anchor[:7],
+                "        - port: 443",
+                "          protocol: UDP",
+                *egress_anchor[7:])),
+        # The DNS peer is two selectors ANDed inside ONE peer element.
+        # Dropping either half, or splitting them into two peer elements,
+        # turns a kube-dns allowance into a namespace-wide or cluster-wide one.
+        ("policy-egress-dns-peer-loses-its-namespace-selector",
+         egress(*egress_anchor[:8],
+                "        - podSelector:",
+                "            matchLabels:",
+                "              k8s-app: kube-dns",
+                *egress_anchor[14:])),
+        ("policy-egress-dns-peer-loses-its-pod-selector",
+         egress(*egress_anchor[:11], *egress_anchor[14:])),
+        ("policy-egress-dns-peer-split-into-two-peers",
+         egress(*egress_anchor[:11],
+                "        - podSelector:",
+                "            matchLabels:",
+                "              k8s-app: kube-dns",
+                *egress_anchor[14:])),
+        ("policy-egress-dns-pod-label-repointed",
+         egress(*egress_anchor[:13],
+                "              k8s-app: not-the-cluster-dns",
+                *egress_anchor[14:])),
+        ("policy-egress-dns-rule-loses-its-ports",
+         egress(*egress_anchor[:14])),
+        ("policy-egress-dns-port-widened-to-a-range",
+         egress(*egress_anchor[:15],
+                "        - port: 1",
+                "          endPort: 65535",
+                "          protocol: UDP",
+                *egress_anchor[17:])),
+        ("policy-egress-dns-loses-its-tcp-half",
+         egress(*egress_anchor[:17])),
         ("policy-drop-egress-policy-type",
          lambda text: _replace_block(text,
                                      ["  policyTypes:", "    - Ingress", "    - Egress"],
@@ -2523,8 +2680,7 @@ def mutations(facts: PolicyFacts) -> list[tuple[str, Rewriter]]:
                                      + ["      app.kubernetes.io/name: " + name + "-elsewhere"]
                                      + selector_anchor[3:])),
         ("policy-extra-spec-key",
-         lambda text: _replace_block(text, ["  egress: []"],
-                                     ["  egress: []", "  shadowKey: true"])),
+         egress_plus("  shadowKey: true")),
         ("policy-second-ingress-rule",
          lambda text: _replace_block(text, ports_anchor, ports_anchor + ["    - {}"])),
         ("policy-drop-peer-instance",

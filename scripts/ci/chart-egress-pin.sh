@@ -1,17 +1,42 @@
 #!/usr/bin/env bash
-# chart-egress-pin — prove the rendered application NetworkPolicy denies ALL
-# outbound traffic: it declares the Egress policy type AND an exactly empty
-# egress rule list, over a pod selector that names this workload.
+# chart-egress-pin — prove the rendered application NetworkPolicy carries the
+# EXACT outbound allowance the owner directed and nothing wider: it declares the
+# Egress policy type AND exactly two egress rules, over a pod selector that
+# names this workload.
 #
-# Why both halves are load-bearing. `egress: []` alone is inert: Kubernetes
-# applies egress rules only to policies that list `Egress` in `policyTypes`,
-# so a policy carrying an empty egress list WITHOUT that type restricts
-# nothing and the Pod keeps unrestricted outbound connectivity. Conversely
-# `policyTypes: [Egress]` with any rule present is an allowance, and the
-# emptiest-looking rule — `- {}` — is the widest one there is. And both
-# halves only bind the Pods the policy selects, so a selector that names the
-# wrong app or drops the instance leaves the workload with full egress while
-# the manifest still reads "default deny".
+# WHAT CHANGED ON 2026-08-27, AND WHY THIS IS NOT A WEAKENED GATE. Until then
+# this file pinned a total deny — the Egress policy type over an exactly empty
+# rule list — and its own header promised that the day an allowance arrived it
+# would be "an exact allow-list, never a widening of this one". The owner
+# directed live panel fetches, so that day came. The pinned contract was
+# REPLACED, not relaxed: one exactly-pinned shape gave way to another
+# exactly-pinned shape, compared the same way (whole sub-tree equality), proven
+# refusable the same way (a hostile mutation battery run against the real
+# render), and with MORE hostile shapes covered than before, because an
+# allowance has more moving parts than an empty list. Narrowing back to the
+# retired deny is itself one of the refusals: this gate pins what the chart is
+# meant to render, in both directions.
+#
+# THE TWO RULES, AND THE BOUND THAT IS NOT HERE. Rule 1 is TCP/443 to
+# 0.0.0.0/0; rule 2 is UDP+TCP/53 to the cluster DNS Pods, selected by
+# namespace AND pod labels inside ONE peer element so the two are ANDed. The
+# fetch surface is the five HTTPS hosts in internal/panels/config/fetch.json,
+# and a NetworkPolicy cannot express a host name at all — so the HOST bound is
+# enforced in-process by internal/panels/fetch.go, at construction over every
+# configured endpoint and again on every request, with private, loopback and
+# link-local resolved addresses refused at dial time. The template header states
+# that split in full. Reading 0.0.0.0/0 here and stopping is how a reader
+# concludes the opposite of what is true.
+#
+# Why the policy type is still load-bearing. Egress rules alone are inert:
+# Kubernetes applies them only to policies that list `Egress` in `policyTypes`,
+# so a policy carrying rules WITHOUT that type restricts nothing and the Pod
+# keeps unrestricted outbound connectivity. Conversely the emptiest-looking
+# rule — `- {}` — is the widest one there is, and rules are ADDITIVE, so one
+# extra rule grants everything the pinned two withhold. And every half only
+# binds the Pods the policy selects, so a selector that names the wrong app or
+# drops the instance leaves the workload governed by nothing while the manifest
+# still reads like a bounded allowance.
 #
 # HOW THIS GATE READS THE RENDER. Like its ingress sibling it does not grep
 # for a token: it extracts each `spec` child sub-tree by indentation and
@@ -40,16 +65,16 @@
 #
 # WHERE THE EXPECTATIONS COME FROM. The ingress sibling reads the peer
 # identity out of chart/values.yaml because that peer is configuration. This
-# policy has no configuration: "no outbound connection, ever" is a constant,
-# so it is written here as a constant and NOT read back out of the template
-# under test — an expectation derived from the template would pass for any
-# template. The selector's two facts come from chart/Chart.yaml (the chart
-# name) and this script (the release name and namespace it renders with).
+# policy has none: the allowance is a reviewed constant, exactly as the deny
+# before it was, so it is written here as a constant and NOT read back out of
+# the template under test — an expectation derived from the template would pass
+# for any template. The selector's two facts come from chart/Chart.yaml (the
+# chart name) and this script (the release name and namespace it renders with).
 #
 # Seven assertions, all failing closed:
 #   a. the DEFAULT render — no flags, shipped values — carries the pinned
-#      selector, exactly [Ingress, Egress] policy types, and exactly
-#      `egress: []`, each compared in full;
+#      selector, exactly [Ingress, Egress] policy types, and the exact two-rule
+#      egress sub-tree, each compared in full;
 #   b. every hostile mutation below is REFUSED. Each is applied to the real
 #      render and fed back through assertion (a)'s own checker, which must
 #      exit non-zero. A gate that cannot fail is not a gate, and a mutation
@@ -60,9 +85,10 @@
 #      lines;
 #   d. every hostile whole-render mutation is REFUSED by (c) — including the
 #      shadow policies that defeated the text pin;
-#   e. no values override re-opens egress — the deny is unconditional, not a
-#      default (requirement 4: security behavior is never toggleable) — and
-#      no override adds a second policy anywhere in the render either;
+#   e. no values override moves the allowance — its SHAPE is unconditional,
+#      not a default (requirement 4: security behavior is never toggleable), so
+#      no value can widen it and none can silently close it either — and no
+#      override adds a second policy anywhere in the render;
 #   f. the text mutation battery has not been quietly shrunk;
 #   g. the census battery has not been quietly shrunk either.
 #
@@ -81,10 +107,13 @@ chart_file="${chart_dir}/Chart.yaml"
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 census_module="${script_dir}/chart_render_census.py"
 
-# Bumped only when a mutation is ADDED. They exist so deleting one is a red
-# build rather than a silently smaller battery.
-minimum_mutations=19
-minimum_census_mutations=48
+# The exact size of each battery, so deleting a mutation is a red build rather
+# than a silently smaller battery. Bumped when mutations are added -- and they
+# were, from 19/48 to 29/61, when the total deny became the two-rule allowance
+# on 2026-08-27: the replacement contract has more moving parts, so it needs
+# more hostile shapes proven refused, not the same number aimed elsewhere.
+minimum_mutations=29
+minimum_census_mutations=61
 
 fail() {
   printf 'chart-egress-pin: %s\n' "$1" >&2
@@ -191,7 +220,7 @@ def cmd_assert(name, release):
             "    - Ingress",
             "    - Egress",
         ]),
-        ("egress", "  egress: []", []),
+        ("egress", "  egress:", EGRESS_BLOCK),
     ]
     for key, header, expected in pins:
         at = key_positions(block, key)
@@ -211,84 +240,185 @@ def cmd_assert(name, release):
             die("spec.%s does not equal the pinned block.\nexpected:\n%s\n\n"
                 "rendered:\n%s" % (key, shown(expected), shown(rendered)))
 
+# The pinned allowance, as the template renders it. A CONSTANT here, exactly
+# like the total deny it replaced was a constant: an expectation read out of
+# the template under test would pass for anything that template renders.
+EGRESS_BLOCK = [
+    "    - to:",
+    "        - ipBlock:",
+    "            cidr: 0.0.0.0/0",
+    "      ports:",
+    "        - port: 443",
+    "          protocol: TCP",
+    "    - to:",
+    "        - namespaceSelector:",
+    "            matchLabels:",
+    "              kubernetes.io/metadata.name: kube-system",
+    "          podSelector:",
+    "            matchLabels:",
+    "              k8s-app: kube-dns",
+    "      ports:",
+    "        - port: 53",
+    "          protocol: UDP",
+    "        - port: 53",
+    "          protocol: TCP",
+]
+
+EGRESS_ANCHOR = ["  egress:"] + EGRESS_BLOCK
+
+
+def egress(*lines):
+    return [(EGRESS_ANCHOR, list(lines))]
+
+
+def egress_plus(*lines):
+    return [(EGRESS_ANCHOR, EGRESS_ANCHOR + list(lines))]
+
+
 def mutations(name, release):
+    """Every hostile render this gate must refuse, as (name, [(target, repl)]).
+
+    A target is a list of CONSECUTIVE lines that must appear EXACTLY ONCE in
+    the render; it was a single line while egress was one empty list, and it
+    could not stay one. The allowance carries two rules, two `to:` lines and
+    three `ports:` lines, so no single line inside it is unique any more and a
+    single-line anchor would either miss or match ambiguously -- both of which
+    are ways for a battery to report on itself instead of on the render.
+    """
     app_line = "      app.kubernetes.io/name: " + name
     instance_line = "      app.kubernetes.io/instance: " + release
     return [
-        # The inert-policy trap: an empty egress list that Kubernetes never
-        # applies, because the policy does not claim the Egress type.
-        ("omit-egress-policy-type", [("    - Egress", [])]),
+        # The inert-policy trap: rules Kubernetes never applies, because the
+        # policy does not claim the Egress type. Still the first mutation,
+        # because the allowance depends on that type exactly as the deny did.
+        ("omit-egress-policy-type", [(["    - Egress"], [])]),
         ("omit-policy-types", [
-            ("  policyTypes:", []),
-            ("    - Ingress", []),
-            ("    - Egress", []),
+            (["  policyTypes:", "    - Ingress", "    - Egress"], []),
         ]),
-        ("omit-egress-rule", [("  egress: []", [])]),
-        ("egress-empty-mapping", [("  egress: []", ["  egress: {}"])]),
-        ("egress-empty-rule", [("  egress: []", ["  egress:", "    - {}"])]),
-        ("egress-allow-all-ipv4", [("  egress: []", [
+        # --- the allowance emptied, widened, or replaced wholesale ----------
+        ("omit-egress-rules", egress()),
+        ("egress-empty-mapping", egress("  egress: {}")),
+        ("egress-single-empty-rule", egress("  egress:", "    - {}")),
+        ("egress-inline-empty-rule", egress("  egress: [{}]")),
+        # Narrowing back to the retired total deny is not a danger, it is
+        # DRIFT: this gate pins the shape the owner directed, so a render that
+        # quietly went back to the old contract stops here for a human.
+        ("egress-narrowed-back-to-the-retired-deny", egress("  egress: []")),
+        ("egress-allow-all-ipv6-peer-appended", egress_plus(
+            "    - to:",
+            "        - ipBlock:",
+            "            cidr: ::/0",
+        )),
+        ("egress-third-rule-appended", egress_plus("    - {}")),
+        ("egress-extra-port-rule-appended", egress_plus(
+            "    - to:",
+            "        - ipBlock:",
+            "            cidr: 0.0.0.0/0",
+            "      ports:",
+            "        - port: 22",
+            "          protocol: TCP",
+        )),
+        ("egress-duplicate-key", egress_plus("  egress:", "    - {}")),
+        # A key spelled with a space before the colon is a DIFFERENT raw line
+        # and the same YAML key; the gate pins the canonical render, so it
+        # stops rather than trying to decide which one it read.
+        ("egress-noncanonical-header", egress("  egress :", *EGRESS_BLOCK)),
+        # --- rule 1: the TLS fetch surface ---------------------------------
+        # Ports removed is every port to every address, which is the widest
+        # rule expressible and the easiest one to produce by accident.
+        ("egress-tls-rule-loses-its-ports", egress(
             "  egress:",
             "    - to:",
             "        - ipBlock:",
             "            cidr: 0.0.0.0/0",
-        ])]),
-        ("egress-allow-all-ipv6", [("  egress: []", [
+            *EGRESS_BLOCK[6:],
+        )),
+        ("egress-tls-port-widened-to-a-range", egress(
             "  egress:",
             "    - to:",
             "        - ipBlock:",
-            "            cidr: ::/0",
-        ])]),
-        ("egress-ports-only", [("  egress: []", [
-            "  egress:",
-            "    - ports:",
-            "        - port: 443",
+            "            cidr: 0.0.0.0/0",
+            "      ports:",
+            "        - port: 1",
+            "          endPort: 65535",
             "          protocol: TCP",
-        ])]),
-        ("egress-dns-exception", [("  egress: []", [
+            *EGRESS_BLOCK[6:],
+        )),
+        ("egress-tls-port-moved-off-443", egress(
             "  egress:",
-            "    - ports:",
-            "        - port: 53",
+            *EGRESS_BLOCK[:4],
+            "        - port: 8080",
+            "          protocol: TCP",
+            *EGRESS_BLOCK[6:],
+        )),
+        ("egress-tls-rule-gains-udp", egress(
+            "  egress:",
+            *EGRESS_BLOCK[:6],
+            "        - port: 443",
             "          protocol: UDP",
-        ])]),
-        ("egress-namespace-peer", [("  egress: []", [
+            *EGRESS_BLOCK[6:],
+        )),
+        # --- rule 2: the cluster DNS peer ----------------------------------
+        # The two selectors sit in ONE peer element and are therefore ANDed.
+        # Dropping either half, or splitting them into two peer elements,
+        # turns a kube-dns allowance into a namespace-wide or cluster-wide one
+        # while the rendered text still mentions both names.
+        ("egress-dns-peer-loses-its-namespace-selector", egress(
             "  egress:",
-            "    - to:",
-            "        - namespaceSelector:",
-            "            matchLabels:",
-            "              kubernetes.io/metadata.name: kube-system",
-        ])]),
-        ("egress-pod-peer", [("  egress: []", [
-            "  egress:",
-            "    - to:",
+            *EGRESS_BLOCK[:7],
             "        - podSelector:",
             "            matchLabels:",
-            "              app.kubernetes.io/name: any-workload",
-        ])]),
-        ("egress-inline-rule", [("  egress: []", ["  egress: [{}]"])]),
-        # Semantically still empty, so this one is drift detection rather
-        # than a danger: the gate pins the exact canonical render, and a
-        # render that changed shape is a render a human should look at.
-        ("egress-noncanonical-empty", [("  egress: []", ["  egress: [ ]"])]),
-        ("egress-duplicate-key", [("  egress: []", [
-            "  egress: []",
+            "              k8s-app: kube-dns",
+            *EGRESS_BLOCK[13:],
+        )),
+        ("egress-dns-peer-loses-its-pod-selector", egress(
+            "  egress:", *EGRESS_BLOCK[:10], *EGRESS_BLOCK[13:],
+        )),
+        ("egress-dns-peer-split-into-two-peers", egress(
             "  egress:",
-            "    - {}",
-        ])]),
+            *EGRESS_BLOCK[:10],
+            "        - podSelector:",
+            "            matchLabels:",
+            "              k8s-app: kube-dns",
+            *EGRESS_BLOCK[13:],
+        )),
+        ("egress-dns-namespace-label-dropped", egress(
+            "  egress:", *EGRESS_BLOCK[:9], *EGRESS_BLOCK[10:],
+        )),
+        ("egress-dns-pod-label-repointed", egress(
+            "  egress:",
+            *EGRESS_BLOCK[:12],
+            "              k8s-app: not-the-cluster-dns",
+            *EGRESS_BLOCK[13:],
+        )),
+        ("egress-dns-rule-loses-its-ports", egress(
+            "  egress:", *EGRESS_BLOCK[:13],
+        )),
+        ("egress-dns-port-widened-to-a-range", egress(
+            "  egress:",
+            *EGRESS_BLOCK[:14],
+            "        - port: 1",
+            "          endPort: 65535",
+            "          protocol: UDP",
+            *EGRESS_BLOCK[16:],
+        )),
+        ("egress-dns-loses-its-tcp-half", egress(
+            "  egress:", *EGRESS_BLOCK[:16],
+        )),
         ("policy-types-inline", [
-            ("  policyTypes:", ["  policyTypes: [Ingress, Egress]"]),
-            ("    - Ingress", []),
-            ("    - Egress", []),
+            (["  policyTypes:", "    - Ingress", "    - Egress"],
+             ["  policyTypes: [Ingress, Egress]"]),
         ]),
-        # The deny binds only the Pods it selects.
-        ("pod-selector-wrong-app", [(app_line, [app_line + "-elsewhere"])]),
-        ("pod-selector-drop-instance", [(instance_line, [])]),
+        # The allowance, like the deny before it, binds only the Pods the
+        # policy selects: a selector that names the wrong app or drops the
+        # instance leaves this workload governed by no policy at all.
+        ("pod-selector-wrong-app", [([app_line], [app_line + "-elsewhere"])]),
+        ("pod-selector-drop-instance", [([instance_line], [])]),
         ("pod-selector-empty", [
-            ("  podSelector:", ["  podSelector: {}"]),
-            ("    matchLabels:", []),
-            (app_line, []),
-            (instance_line, []),
+            (["  podSelector:", "    matchLabels:", app_line, instance_line],
+             ["  podSelector: {}"]),
         ]),
-        ("second-policy-document", [("apiVersion: networking.k8s.io/v1", [
+        ("second-policy-document", [(["apiVersion: networking.k8s.io/v1"], [
             "apiVersion: networking.k8s.io/v1",
             "kind: NetworkPolicy",
             "metadata:",
@@ -307,6 +437,16 @@ def mutations(name, release):
 def cmd_mutations(name, release):
     sys.stdout.write("\n".join(n for n, _ in mutations(name, release)) + "\n")
 
+def find_run(lines, target):
+    """Every index where the consecutive run `target` starts."""
+    span = len(target)
+    hits = []
+    for i in range(len(lines) - span + 1):
+        if [l.rstrip() for l in lines[i:i + span]] == target:
+            hits.append(i)
+    return hits
+
+
 def cmd_mutate(name, release, wanted):
     table = dict(mutations(name, release))
     if wanted not in table:
@@ -314,18 +454,13 @@ def cmd_mutate(name, release, wanted):
     text = sys.stdin.read()
     lines = text.split("\n")
     for target, replacement in table[wanted]:
-        out = []
-        hits = 0
-        for l in lines:
-            if l.rstrip() == target:
-                hits += 1
-                out.extend(replacement)
-            else:
-                out.append(l)
-        if hits != 1:
-            die("mutation %s anchored on [%s], which matched %d lines; the "
-                "self-test needs exactly one" % (wanted, target, hits))
-        lines = out
+        hits = find_run(lines, target)
+        if len(hits) != 1:
+            die("mutation %s anchored on the run starting [%s], which matched "
+                "%d places; the self-test needs exactly one"
+                % (wanted, target[0], len(hits)))
+        at = hits[0]
+        lines = lines[:at] + replacement + lines[at + len(target):]
     mutated = "\n".join(lines)
     if mutated == text:
         die("mutation %s changed nothing, so refusing it would prove nothing"
@@ -388,11 +523,11 @@ fi
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 
-# (a) The default render denies every outbound connection, over this
-# workload's own selector.
+# (a) The default render carries the exact allowance, over this workload's own
+# selector.
 render >"${work}/render.yaml"
 check <"${work}/render.yaml"
-echo "chart-egress-pin: (a) default render pins the selector, [Ingress, Egress], and egress: []"
+echo "chart-egress-pin: (a) default render pins the selector, [Ingress, Egress], and the exact two-rule egress allowance"
 
 # (b) Every hostile mutation is refused. The list comes from the checker
 # itself, so the loop cannot drift away from what is actually covered.
@@ -440,17 +575,20 @@ $(python3 -I -B "${census_module}" mutations)
 EOF
 echo "chart-egress-pin: (d) ${census_mutation_count} hostile whole-render mutations all refused"
 
-# (e) The deny is unconditional. No shipped value toggles it, so every value
-# the schema lets a deployment move must leave the egress answer identical —
-# and must not add a second policy to the render either, which is why the
-# whole-render census runs under each override too. This is a fixed sample of
-# the overrides the schema admits, not an exhaustive sweep of them: the
-# exact-render pin in (a) and the object census in (c) are what stand behind
-# a values-conditional change nobody sampled.
+# (e) The allowance is unconditional. No shipped value toggles its shape, so
+# every value the schema lets a deployment move must leave the egress answer
+# identical — including the two switches whose FEATURES this allowance exists
+# for, since a policy that widened when a capability turned on, or that leaned
+# on a capability being on, would be a policy nobody could reason about from the
+# template alone. It must not add a second policy to the render either, which is
+# why the whole-render census runs under each override too. This is a fixed
+# sample of the overrides the schema admits, not an exhaustive sweep: the
+# exact-render pin in (a) and the object census in (c) are what stand behind a
+# values-conditional change nobody sampled.
 while IFS= read -r override; do
   [ -n "${override}" ] || continue
   render --set "${override}" | check ||
-    fail "the override '${override}' changed the egress answer — a deny that a value can move is not a deny"
+    fail "the override '${override}' changed the egress answer — an allowance a value can move is not an allowance"
   # One override deliberately moves the ingress peer identity, which the
   # census pins as well. Telling the census which instance was rendered keeps
   # the assertion exact under the override instead of skipping it — and
@@ -460,11 +598,11 @@ while IFS= read -r override; do
     ingress.peerInstance=*)
       render_all --set "${override}" |
         census --peer-instance "${override#ingress.peerInstance=}" >/dev/null ||
-        fail "the override '${override}' changed the whole-render census — a deny that a value can move is not a deny"
+        fail "the override '${override}' changed the whole-render census — an allowance a value can move is not an allowance"
       ;;
     *)
       render_all --set "${override}" | census >/dev/null ||
-        fail "the override '${override}' changed the whole-render census — a deny that a value can move is not a deny"
+        fail "the override '${override}' changed the whole-render census — an allowance a value can move is not an allowance"
       ;;
   esac
 done <<'EOF'
@@ -473,8 +611,10 @@ deploymentReady=true
 ingress.peerInstance=another-connector-instance
 resources.limits.cpu=500m
 resources.requests.cpu=50m
+panels.refresh.enabled=false
+media.enabled=false
 EOF
-echo "chart-egress-pin: (e) no shipped value override re-opens egress or adds a policy"
+echo "chart-egress-pin: (e) no shipped value override moves the allowance or adds a policy"
 
 # (f) The text battery has not been quietly shrunk.
 [ "${mutation_count}" -ge "${minimum_mutations}" ] ||
@@ -486,4 +626,4 @@ echo "chart-egress-pin: (f) mutation battery is at or above its pinned floor of 
   fail "only ${census_mutation_count} census mutations ran; at least ${minimum_census_mutations} are required. Mutations are added, never removed."
 echo "chart-egress-pin: (g) census battery is at or above its pinned floor of ${minimum_census_mutations}"
 
-echo "chart-egress-pin: the rendered policy makes every outbound connection unrepresentable, and it is the only policy the chart installs"
+echo "chart-egress-pin: the rendered policy allows exactly TCP/443 outbound and cluster DNS, nothing else is representable, and it is the only policy the chart installs"

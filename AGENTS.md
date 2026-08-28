@@ -853,8 +853,11 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   (toolchain pinned AND verified — Node 24.19.0, npm 11.17.0,
   Go 1.26.6; frontend check/test/build; gofmt/vet/tests/race; the
   coverage floor), `chart` (the ingress peer-identity pin,
-  `scripts/ci/chart-ingress-pin.sh`; the whole-render outbound-deny census,
-  `scripts/ci/chart-egress-pin.sh`; the media enablement pin,
+  `scripts/ci/chart-ingress-pin.sh`; the whole-render outbound-allowance
+  census, `scripts/ci/chart-egress-pin.sh` — exactly two egress rules
+  (TCP/443, and cluster DNS over UDP+TCP/53), pinned as whole sub-trees and
+  proven refusable against 29 text and 61 census mutations, replacing the
+  total deny the owner retired on 2026-08-27; the media enablement pin,
   `scripts/ci/chart-media-pin.sh` — media on by default as exactly one
   read-only volume at both levels, an incompletely specified enablement
   unrepresentable, and no media at all when it is explicitly disabled;
@@ -1009,15 +1012,27 @@ Structural promises of the panels subsystem, pinned by
   stable forever by design. Evolution happens inside the kind-versioned
   payloads: a breaking payload change mints a NEW kind version, never
   mutates an existing one, never bends the outer shape.
-- **Live refresh is opt-in, and enabling it is an operational decision.**
+- **Live refresh is a switch, and flipping it is an operational decision.**
   `PANELS_REFRESH` gates every background refresh loop; unset or `false`
   launches no loop at all, so egress is impossible rather than merely
   unattempted, and any other value fails the boot. Enabling it in a cluster
   needs three things together — `PANELS_REFRESH=true`, the credential
   variables named by `keyEnvName` in `internal/panels/config/fetch.json`
   supplied as Secrets, and an egress allowance for that file's `hosts`
-  list — and that enablement is a SEPARATE owner-reviewed step (standing
-  audit item S2). No key, and no reference to a key, ever lands here
+  list — and that enablement was the SEPARATE owner-reviewed step of
+  standing audit item S2. The owner took it on 2026-08-27: the chart now
+  ships `panels.refresh.enabled: true` TOGETHER with the egress allowance,
+  because refresh without the allowance is a no-op and the allowance without
+  refresh is an opening nothing uses, so the two move as one change or not at
+  all. That allowance is EXACTLY two rules — TCP/443 to any address, and
+  UDP+TCP/53 to the cluster DNS Pods selected by namespace AND pod labels —
+  and it is NOT the host bound. A NetworkPolicy cannot express a host name,
+  so the five hosts stay bounded in-process by `internal/panels/fetch.go`,
+  checked at construction over every configured endpoint and again on every
+  request, with private, loopback and link-local resolved addresses refused
+  at dial time. Two layers, two different jobs; neither substitutes for the
+  other, and a reader who sees the policy alone will reach the wrong
+  conclusion. No key, and no reference to a key, ever lands here
   (requirement 12); a source whose variable is unset is skipped, never
   faked. README's "Enabling live refresh" section is the operator-facing
   copy of this, and both must move together.

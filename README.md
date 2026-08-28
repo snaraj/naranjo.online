@@ -223,8 +223,9 @@ hidden.
 
 ### Refreshing the shipped snapshots
 
-With live refresh off everywhere, the embedded snapshots are what the site
-actually serves, so keeping them true is an operator task rather than a code
+The embedded snapshots are what a deployment serves whenever live refresh is
+off, what every panel falls back to when a fetch fails, and what the site
+serves locally, so keeping them true is an operator task rather than a code
 one. Both steps below are read-only, run on the operator's own machine, and
 put only public or aggregate facts into the repository.
 
@@ -349,19 +350,21 @@ and the deliberate failure modes — is `docs/usage-export.md`; the chart
 contract is pinned by `scripts/ci/chart-storage-pin.sh` in the same CI job
 as the ingress and egress pins.
 
-### Enabling live refresh (not enabled anywhere today)
+### Enabling live refresh (on since 2026-08-27)
 
-Live refresh is off in every deployment this repository describes, and
-turning it on is a reviewed operational change, not a code change. It
-requires all of the following, together:
+Live refresh was off in every deployment this repository described until the
+owner's live-sync directive of 2026-08-27. Turning it on was a reviewed
+operational change, not a code change, and it required all of the following
+together — which is also the list to re-read before changing any of them:
 
 1. `PANELS_REFRESH=true` in the pod environment. The chart renders that
-   variable from `panels.refresh.enabled`, which defaults to `false` and is
+   variable from `panels.refresh.enabled`, which now defaults to `true` and is
    required by `chart/values.schema.json` — a values file that omits the
    decision fails validation rather than letting the origin guess, and the
    variable is rendered whether it is on or off so the deployed state is
    readable off the manifest. Any value other than `true`/`false` fails the
-   boot rather than guessing.
+   boot rather than guessing. Setting it back to `false` remains supported and
+   starts no loop at all.
 2. The credential environment variables named by the `keyEnvName` fields in
    `internal/panels/config/fetch.json`, supplied as cluster Secrets. They are
    read at fetch time only, flow straight into a request header, and are
@@ -371,14 +374,35 @@ requires all of the following, together:
    number. This applies to the token-usage producers ONLY — the game
    hiscores, the contribution calendar, and the commit lists are zero-secret
    by construction and need nothing from this step.
-3. An egress allowance for the hosts in that file's `hosts` allowlist. The
-   chart's NetworkPolicy denies every outbound connection — it declares the
-   `Egress` policy type over an empty rule list — so with policy unchanged
-   the refresh attempts fail and the panels keep serving their snapshots as
-   `stale` — the fail-soft outcome, not an outage. Turning that into an
-   allowance means naming exact destinations in a separately reviewed change
-   (issue #79); it never means removing the deny. Until that lands, setting
-   `panels.refresh.enabled` buys nothing but failed attempts.
+3. An egress allowance for the hosts in that file's `hosts` allowlist. This is
+   the one the chart itself used to withhold: its NetworkPolicy denied every
+   outbound connection, so refresh alone bought nothing but failed attempts and
+   the same `stale` snapshots — fail-soft, not an outage. The policy now
+   renders an allowance instead, and it is exactly two rules: TCP/443 to any
+   address, and UDP+TCP/53 to the cluster DNS Pods, selected by namespace AND
+   pod labels so the two are ANDed rather than ORed.
+
+   **That is not the host bound, and the distinction matters.** A NetworkPolicy
+   selects Pods, namespaces and CIDRs; it cannot express a host name at all, so
+   rule 1 bounds the protocol and port and leaves the destination open. Writing
+   a CIDR list there would look like a host bound while pinning addresses this
+   repository cannot verify and upstreams re-assign at will. The host bound
+   lives in `internal/panels/fetch.go`, where it can be exact: only absolute
+   `https` URLs on the `fetch.json` allowlist are admitted, checked once at
+   construction over every configured endpoint — so a config naming an unlisted
+   host refuses to build — and checked again on every request after the URL has
+   been rebuilt, so a redirect or a rewritten parameter cannot reach a host
+   construction approved for nobody. Non-https schemes and URL userinfo are
+   refused, and a resolved address in private, loopback or link-local space is
+   refused at dial time, so an allowlisted NAME pointed at a LAN address by a
+   hostile DNS answer still cannot be reached. Two layers, two different jobs.
+
+   `chart/templates/network-policy.yaml` carries the same explanation beside
+   the rules, and `scripts/ci/chart-egress-pin.sh` pins both rules as whole
+   sub-trees — refusing a third rule, a widened or removed port, a loosened DNS
+   peer, a list emptied back to allow-all, a list narrowed back to the retired
+   deny, and a second policy document — across 29 text and 61 whole-render
+   mutations.
 
 One panel is claimed rather than refreshed when both capabilities are on.
 With `PANELS_DATA_ROOT` set, the sealed data root OWNS the token-usage panel:
@@ -388,10 +412,13 @@ it, and the pod logs that decision once at startup. Every OTHER
 refresh-backed panel is unaffected — enabling the sealed feed never silently
 disables the rest (2026-08-24 security review, finding 8).
 
-**Cluster enablement is a separate owner-reviewed step** (standing audit item
-S2) covering the Secret material, the egress policy, and the review of what
-the origin is then permitted to talk to. Nothing in this repository performs
-it, and no artifact here should be read as approval for it.
+**Cluster enablement was a separate owner-reviewed step** (standing audit item
+S2) covering the Secret material, the egress policy, and the review of what the
+origin is then permitted to talk to. The owner took it on 2026-08-27, and the
+chart records the outcome: the refresh switch and the two-rule allowance ship
+together, with the host bound where a policy cannot express it. Nothing in this
+repository grants that step — the values and the policy describe a decision
+already made, and changing either is another decision, not a formality.
 
 ## Observability contract
 

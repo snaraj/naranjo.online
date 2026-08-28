@@ -32,13 +32,71 @@ spec:
       ports:
         - port: {{ .Values.service.port }}
           protocol: TCP
-  # The site serves an embedded bundle and has no runtime dependency, so any
-  # outbound connection is denied. Live panel refresh is opt-in and ships
-  # disabled, so egress is impossible rather than merely unattempted; enabling
-  # it is a separate reviewed decision that adds an exact allow-list, never a
-  # widening of this one.
-  # Verified live: the API server drops this empty list from the stored spec
-  # (omitempty), so the admitted object carries the deny through the - Egress
-  # entry in policyTypes alone. That entry is the load-bearing line -- dropping
-  # it while leaving this one here silently restores full outbound access.
-  egress: []
+  {{- /* THE OUTBOUND ALLOWANCE, AND WHY IT REPLACED A TOTAL DENY.
+
+  Until 2026-08-27 this list was exactly empty: the site served an embedded
+  bundle with no runtime dependency, live panel refresh shipped disabled, and so
+  egress was impossible rather than merely unattempted. The header of that
+  version promised the day it changed would bring "an exact allow-list, never a
+  widening", and this is that change, made deliberately on the owner's live-sync
+  directive rather than arrived at by erosion. The panels now fetch live, which
+  needs three things together (see chart/values.yaml panels.refresh): the
+  switch, the credential Secrets, and this allowance. It is exactly two rules,
+  and every one of them is pinned whole by scripts/ci/chart-egress-pin.sh, whose
+  battery refuses a third rule, a widened port, a loosened DNS peer, an emptied
+  list, and a second policy document.
+
+  THE HOST BOUND IS NOT HERE, AND THAT IS THE HONEST PART. The fetch surface is
+  the five HTTPS hosts listed in internal/panels/config/fetch.json. A
+  NetworkPolicy cannot express a host name at all -- it selects Pods, namespaces
+  and CIDRs -- so rule 1 below bounds the PROTOCOL and PORT and leaves the
+  destination open. Writing a CIDR list here would be worse than useless: it
+  would look like a host bound while pinning addresses this repository cannot
+  verify and upstreams re-assign at will.
+
+  The host bound lives in the process instead, which is where it can be exact:
+
+    * internal/panels/fetch.go:190 validateEndpoint admits only absolute https
+      URLs whose host is on the allowlist, and it runs at CONSTRUCTION over
+      every configured endpoint (fetch.go:129, :141, :153, :164), so a config
+      naming an unlisted host refuses to build rather than failing later;
+    * internal/panels/fetch.go:848 re-checks the same admitURL against
+      s.config.Hosts on every request, after the URL has been rebuilt, so a
+      redirect, a rewritten window parameter or in-memory tampering cannot
+      reach a host construction approved for nobody;
+    * admitURL (fetch.go:211) additionally refuses any non-https scheme and any
+      userinfo, and guardedDial refuses a resolved address in private, loopback
+      or link-local space -- so an allowlisted NAME resolved to a LAN address by
+      a hostile answer still cannot be dialled.
+
+  Two layers, two different jobs: the policy bounds what the POD may open, the
+  process bounds where it may open it. Neither substitutes for the other, and
+  the reason this comment is long is that a reader who sees 0.0.0.0/0 here and
+  stops reading would conclude the opposite of what is true.
+
+  RULE 2 IS NOT A CONVENIENCE. Name resolution is what makes rule 1 usable at
+  all, and it is scoped as narrowly as a policy can scope anything: the cluster
+  DNS Pods, selected by BOTH their namespace and their pod labels, on port 53
+  over UDP and TCP (TCP is required, not optional -- a response over 512 bytes
+  or a truncated answer retries over TCP). A namespaceSelector without the
+  podSelector would open every Pod in that namespace, which is why the two sit
+  in ONE peer element and are ANDed rather than listed as two peers. */}}
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

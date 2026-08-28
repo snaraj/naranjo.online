@@ -120,7 +120,7 @@
     },
     "panels": {
       "type": "object",
-      "description": "The panel API's live-data behavior. Unlike media, this block is not frozen to a single value: enabling background refresh is an operational decision the operator is allowed to express here. What the schema enforces is that the decision is EXPLICIT — the key is required and boolean, so a values file cannot omit it and have the origin guess, and the default in values.yaml is off.",
+      "description": "The panel API's live-data behavior. Enabling background refresh is an operational decision the operator expresses here. What the schema enforces is that the decision is EXPLICIT — the key is required and boolean, so a values file cannot omit it and have the origin guess. The default in values.yaml is on since the owner's live-sync directive of 2026-08-27, the same change that gave the chart's NetworkPolicy the exact two-rule egress allowance those loops need.",
       "additionalProperties": false,
       "required": ["refresh"],
       "allOf": [{ "required": ["data"] }],
@@ -132,8 +132,8 @@
           "properties": {
             "enabled": {
               "type": "boolean",
-              "default": false,
-              "description": "Start the background refresh loops. false (the default) starts no loop at all, so the origin makes no outbound request and the panels serve their embedded snapshots as stale. true additionally requires the credential Secrets named by keyEnvName in internal/panels/config/fetch.json and an egress allowance for that file's hosts list; without the egress allowance the attempts fail and the panels keep serving snapshots, which is fail-soft, not an outage."
+              "default": true,
+              "description": "Start the background refresh loops. false starts no loop at all, so the origin makes no outbound request and the panels serve their embedded snapshots as stale, which stays fully supported. true — the shipped default since 2026-08-27 — additionally requires the credential Secrets named by keyEnvName in internal/panels/config/fetch.json for the sources that use one, and an egress allowance for that file's hosts list, which chart/templates/network-policy.yaml now renders as exactly two rules. A source whose credential is absent is skipped rather than faked, so a missing Secret is fail-soft, not an outage. The host bound is enforced in-process by internal/panels/fetch.go, never by the policy, which cannot express a host name."
             }
           }
         },
