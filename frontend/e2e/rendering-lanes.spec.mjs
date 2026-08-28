@@ -3288,6 +3288,41 @@ test('the document holds still while the lightbox is open, and is unchanged afte
   await settled(page);
 
   const scrollY = () => page.evaluate(() => Math.round(window.scrollY));
+  /* Every scroll this lane sends is INPUT, never `scrollTo`: a locked root is
+     `overflow: hidden`, which stops a reader scrolling and leaves the document
+     programmatically scrollable, so a scripted scroll would move the page in
+     both states and measure nothing.
+
+     Which makes "the engine moved the page from an input event" a
+     precondition, not an assumption — and it is measured HERE, on the
+     unlocked page, before anything is opened. An engine that never answers a
+     synthetic scroll would otherwise read as a perfect lock and then fail the
+     release half for a reason that has nothing to do with the lock. */
+  const scrollInput = async () => {
+    if (canWheel) {
+      await page.mouse.move(10, 10);
+      await page.mouse.wheel(0, -400);
+    }
+    await page.keyboard.press('Home');
+  };
+  const settledStart = await scrollY();
+  await scrollInput();
+  /* Waited for, not read once: a scroll the page animates has not landed by
+     the time the press returns, and reading immediately would report every
+     smooth-scrolling engine as one that cannot scroll at all. */
+  const answered = await page
+    .waitForFunction((from) => window.scrollY < from, settledStart, { timeout: 4000 })
+    .then(
+      () => true,
+      () => false
+    );
+  test.skip(
+    !answered,
+    `${browserName} does not move the page from a synthetic scroll here, so neither half of this lane could mean anything on it`
+  );
+  await frame.scrollIntoViewIfNeeded();
+  await settled(page);
+
   const start = await scrollY();
   expect(start, 'the gallery is inside the first viewport here, so this lane proves nothing').toBeGreaterThan(150);
   /* Zero CLS across the lock is measured on the READING COLUMN, not on the
@@ -3340,14 +3375,14 @@ test('the document holds still while the lightbox is open, and is unchanged afte
      UPWARD, because that is the direction this lane can prove has somewhere to
      go: `start` is over 150px down the document, whereas whether there is a
      further page BELOW the gallery depends on how tall the rest of the page
-     renders on a given engine — desktop WebKit on the CI runner lands this
-     scroll at the document's own end, where a downward press is refused by
-     the page being over rather than by any lock. */
-  if (canWheel) {
-    await page.mouse.wheel(0, -400);
-  } else {
-    await page.keyboard.press('PageUp');
-  }
+     renders on a given engine — the first form of this half scrolled down and
+     went red on the CI runner's desktop WebKit with the page already at its
+     own end, where a press is refused by the document being over rather than
+     by any lock.
+
+     It is the SAME input the precondition above proved this engine answers, so
+     a failure here can only be the lock. */
+  await scrollInput();
   await expect.poll(scrollY, { message: 'the page never scrolls again after the lightbox closes' }).toBeLessThan(start);
 });
 
