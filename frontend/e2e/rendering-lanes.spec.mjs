@@ -3865,6 +3865,67 @@ test('every repo card places its counters the same way relative to its title, re
   }
 });
 
+/* A provenance mark says a figure was recorded out of band. It is a WORD
+ * beside a figure, so it costs horizontal room — and a counter row is the one
+ * place on this page where horizontal room is deliberately rationed, because
+ * `.entry-count-text` is nowrap so a number is never split from the noun it
+ * counts. Nest the mark inside that run and it joins it: the card's
+ * min-content grows by the mark's whole width, the panel column can no longer
+ * shrink to a phone, and the page scrolls sideways. That is exactly what
+ * happened on 0.1.56 — red on all five projects, green on the author's
+ * workstation, because the identical string sets ~3.4px narrower in macOS's
+ * UI font than in the runner's.
+ *
+ * So the WIDTH tests above are not the pin. They are font-dependent by
+ * construction: on a narrow enough typeface the regression fits and passes,
+ * which is how it reached CI in the first place. This pin is STRUCTURAL and
+ * font-independent — it asks the engine what it computed, and a mark that is
+ * back inside an unbreakable run answers `nowrap` on every engine and at every
+ * font size. */
+test('a provenance mark never joins the unbreakable run it sits beside (issue 242)', async ({
+  page,
+}) => {
+  await visit(page);
+  await page.setViewportSize({ width: 320, height: 900 });
+  await settled(page);
+
+  const observed = await page.evaluate(() => {
+    const marks = [...window.document.querySelectorAll('.entry-recorded')];
+    return {
+      count: marks.length,
+      /* The mark's OWN computed value. `white-space` inherits, so a mark
+         nested back inside `.entry-count-text` reports that ancestor's
+         `nowrap` here without this test naming any ancestor. */
+      unbreakable: marks.filter((mark) => getComputedStyle(mark).whiteSpace === 'nowrap').length,
+      /* And the row it sits in must be able to take a second line, or the
+         mark is unwrappable by a second route. */
+      rigidRows: [...window.document.querySelectorAll('.entry-count')].filter(
+        (row) => getComputedStyle(row).flexWrap === 'nowrap'
+      ).length,
+      /* Non-vacuity, stated as data rather than assumed: the label it marks
+         IS an unbreakable run, so "not nowrap" is a real distinction here
+         and not a property every span on the page happens to have. */
+      rigidLabels: [...window.document.querySelectorAll('.entry-count-text')].filter(
+        (label) => getComputedStyle(label).whiteSpace === 'nowrap'
+      ).length,
+    };
+  });
+
+  expect(observed.count, 'no provenance mark rendered; this lane proves nothing').toBeGreaterThan(0);
+  expect(
+    observed.rigidLabels,
+    'no counter label is an unbreakable run, so this lane is no longer testing what it describes'
+  ).toBeGreaterThan(0);
+  expect(
+    observed.unbreakable,
+    `${observed.unbreakable} provenance marks compute white-space: nowrap; a mark inside an unbreakable run adds its whole width to the card's min-content`
+  ).toBe(0);
+  expect(
+    observed.rigidRows,
+    `${observed.rigidRows} counter rows refuse to wrap, so the mark has nowhere to go on a narrow card`
+  ).toBe(0);
+});
+
 /* The pull-to-refresh settle guard (issue 187). What this lane CAN prove,
  * in every engine: the declaration reached the page and the engine computed
  * it — not a source-text scan, the same "what a real engine did with it"

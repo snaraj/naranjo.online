@@ -164,6 +164,19 @@ says it is narrower, and repository rows read anonymously.
 - `usageSeriesWindow` halves and `derived` values became pointers on the wire
   so an absent figure is refusable rather than silently zero.
 
+### Fixed
+
+- The new provenance mark on a repository card was nested inside the counter
+  label's `white-space: nowrap` run, so it added its whole width to the card's
+  minimum: the panel column could no longer shrink to a phone, and the page
+  scrolled sideways at 320px and below. The mark is now a sibling of the label
+  in a row that may wrap, which puts the card's minimum back exactly where it
+  was. Caught by the browser lanes on all five projects while passing on the
+  author's machine — the same string sets narrower in macOS's UI font than in
+  the runner's — so the regression is now pinned STRUCTURALLY as well: a
+  provenance mark may not compute `white-space: nowrap`, and its row may not
+  refuse to wrap, on any engine at any font size.
+
 ### Security
 
 - POST is reachable from exactly one producer, through a body this package

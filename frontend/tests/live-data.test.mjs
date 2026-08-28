@@ -257,12 +257,22 @@ test('the Coding Projects block is bound to the panel, not to a frozen props obj
 test('the entry log renders the provenance mark beside a figure, never instead of it', async () => {
   const entryLog = await read('../src/lib/components/EntryLog.svelte');
   // The mark is an addition to the label, so the figure and its word survive.
-  assert.match(entryLog, /\{count\.label\}\{#if count\.marked\}/);
+  // This used to pin the two as ADJACENT source text, which happened to also
+  // pin the mark INSIDE the nowrap run — the arrangement the browser lanes
+  // measured as a min-content regression on 0.1.56. The adjacency was never
+  // the property worth having; that the unbreakable run holds the label and
+  // NOTHING ELSE is, and this shape states it directly: the span closes on
+  // the label, so no conditional can ever be nested inside it.
+  assert.match(entryLog, /<span class="entry-count-text">\{count\.label\}<\/span>/);
+  assert.match(entryLog, /\{#if count\.marked\}/);
   assert.match(entryLog, /· recorded/);
   // Worded identically to the usage panel's, so a reader learns one mark for
   // "recorded out of band" across the whole page rather than one per panel.
   const usage = await read('../src/lib/components/UsageTracker.svelte');
-  const wording = /title="recorded out of band, not fetched live">· recorded/;
+  // Whitespace-tolerant between the attribute and the text: the two files
+  // are wrapped by the formatter at different columns, and where the closing
+  // angle bracket lands is the formatter's business. The WORDING is the pin.
+  const wording = /title="recorded out of band, not fetched live"\s*>·\s*recorded/;
   assert.match(entryLog, wording);
   assert.match(usage, wording);
 });
