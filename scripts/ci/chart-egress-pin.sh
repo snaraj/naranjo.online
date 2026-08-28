@@ -112,8 +112,8 @@ census_module="${script_dir}/chart_render_census.py"
 # were, from 19/48 to 29/61, when the total deny became the two-rule allowance
 # on 2026-08-27: the replacement contract has more moving parts, so it needs
 # more hostile shapes proven refused, not the same number aimed elsewhere.
-minimum_mutations=29
-minimum_census_mutations=61
+minimum_mutations=31
+minimum_census_mutations=63
 
 fail() {
   printf 'chart-egress-pin: %s\n' "$1" >&2
@@ -247,6 +247,11 @@ EGRESS_BLOCK = [
     "    - to:",
     "        - ipBlock:",
     "            cidr: 0.0.0.0/0",
+    "            except:",
+    "              - 10.0.0.0/8",
+    "              - 172.16.0.0/12",
+    "              - 192.168.0.0/16",
+    "              - 169.254.0.0/16",
     "      ports:",
     "        - port: 443",
     "          protocol: TCP",
@@ -328,35 +333,48 @@ def mutations(name, release):
         # rule expressible and the easiest one to produce by accident.
         ("egress-tls-rule-loses-its-ports", egress(
             "  egress:",
-            "    - to:",
-            "        - ipBlock:",
-            "            cidr: 0.0.0.0/0",
-            *EGRESS_BLOCK[6:],
+            *EGRESS_BLOCK[:8],
+            *EGRESS_BLOCK[11:],
         )),
         ("egress-tls-port-widened-to-a-range", egress(
             "  egress:",
-            "    - to:",
-            "        - ipBlock:",
-            "            cidr: 0.0.0.0/0",
+            *EGRESS_BLOCK[:8],
             "      ports:",
             "        - port: 1",
             "          endPort: 65535",
             "          protocol: TCP",
-            *EGRESS_BLOCK[6:],
+            *EGRESS_BLOCK[11:],
         )),
         ("egress-tls-port-moved-off-443", egress(
             "  egress:",
-            *EGRESS_BLOCK[:4],
+            *EGRESS_BLOCK[:9],
             "        - port: 8080",
             "          protocol: TCP",
-            *EGRESS_BLOCK[6:],
+            *EGRESS_BLOCK[11:],
         )),
         ("egress-tls-rule-gains-udp", egress(
             "  egress:",
-            *EGRESS_BLOCK[:6],
+            *EGRESS_BLOCK[:11],
             "        - port: 443",
             "          protocol: UDP",
-            *EGRESS_BLOCK[6:],
+            *EGRESS_BLOCK[11:],
+        )),
+        # The except list makes the fabric state the same refusal guardedDial
+        # makes in-process: 443 into private or link-local space is never a
+        # legitimate panel fetch. Dropping the list restores the pre-2026-08-27
+        # rule 1 exactly, which is why it is refused BY NAME rather than left
+        # to the block equality alone; dropping one entry is the subtler edit,
+        # a narrower except being a wider allowance, and the entry chosen for
+        # the probe is the RFC1918 block the production LAN actually sits in.
+        ("egress-tls-except-list-dropped", egress(
+            "  egress:",
+            *EGRESS_BLOCK[:3],
+            *EGRESS_BLOCK[8:],
+        )),
+        ("egress-tls-except-loses-the-lan-block", egress(
+            "  egress:",
+            *EGRESS_BLOCK[:6],
+            *EGRESS_BLOCK[7:],
         )),
         # --- rule 2: the cluster DNS peer ----------------------------------
         # The two selectors sit in ONE peer element and are therefore ANDed.
@@ -365,45 +383,45 @@ def mutations(name, release):
         # while the rendered text still mentions both names.
         ("egress-dns-peer-loses-its-namespace-selector", egress(
             "  egress:",
-            *EGRESS_BLOCK[:7],
+            *EGRESS_BLOCK[:12],
             "        - podSelector:",
             "            matchLabels:",
             "              k8s-app: kube-dns",
-            *EGRESS_BLOCK[13:],
+            *EGRESS_BLOCK[18:],
         )),
         ("egress-dns-peer-loses-its-pod-selector", egress(
-            "  egress:", *EGRESS_BLOCK[:10], *EGRESS_BLOCK[13:],
+            "  egress:", *EGRESS_BLOCK[:15], *EGRESS_BLOCK[18:],
         )),
         ("egress-dns-peer-split-into-two-peers", egress(
             "  egress:",
-            *EGRESS_BLOCK[:10],
+            *EGRESS_BLOCK[:15],
             "        - podSelector:",
             "            matchLabels:",
             "              k8s-app: kube-dns",
-            *EGRESS_BLOCK[13:],
+            *EGRESS_BLOCK[18:],
         )),
         ("egress-dns-namespace-label-dropped", egress(
-            "  egress:", *EGRESS_BLOCK[:9], *EGRESS_BLOCK[10:],
+            "  egress:", *EGRESS_BLOCK[:14], *EGRESS_BLOCK[15:],
         )),
         ("egress-dns-pod-label-repointed", egress(
             "  egress:",
-            *EGRESS_BLOCK[:12],
+            *EGRESS_BLOCK[:17],
             "              k8s-app: not-the-cluster-dns",
-            *EGRESS_BLOCK[13:],
+            *EGRESS_BLOCK[18:],
         )),
         ("egress-dns-rule-loses-its-ports", egress(
-            "  egress:", *EGRESS_BLOCK[:13],
+            "  egress:", *EGRESS_BLOCK[:18],
         )),
         ("egress-dns-port-widened-to-a-range", egress(
             "  egress:",
-            *EGRESS_BLOCK[:14],
+            *EGRESS_BLOCK[:19],
             "        - port: 1",
             "          endPort: 65535",
             "          protocol: UDP",
-            *EGRESS_BLOCK[16:],
+            *EGRESS_BLOCK[21:],
         )),
         ("egress-dns-loses-its-tcp-half", egress(
-            "  egress:", *EGRESS_BLOCK[:16],
+            "  egress:", *EGRESS_BLOCK[:21],
         )),
         ("policy-types-inline", [
             (["  policyTypes:", "    - Ingress", "    - Egress"],

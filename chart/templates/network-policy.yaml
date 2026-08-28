@@ -50,9 +50,20 @@ spec:
   the five HTTPS hosts listed in internal/panels/config/fetch.json. A
   NetworkPolicy cannot express a host name at all -- it selects Pods, namespaces
   and CIDRs -- so rule 1 below bounds the PROTOCOL and PORT and leaves the
-  destination open. Writing a CIDR list here would be worse than useless: it
-  would look like a host bound while pinning addresses this repository cannot
-  verify and upstreams re-assign at will.
+  PUBLIC destination open. Writing an ALLOW list of upstream CIDRs here would be
+  worse than useless: it would look like a host bound while pinning addresses
+  this repository cannot verify and upstreams re-assign at will. The EXCEPT list
+  is the opposite kind of claim and is stable where an allow list is not: those
+  four blocks are IANA-reserved private, and link-local space, never assigned to
+  any public upstream, so carving them out of rule 1 pins nothing that can
+  drift. It exists because 443 into cluster or LAN space is not a fetch this
+  panel could ever legitimately make, and the process already refuses it --
+  guardedDial (internal/panels/fetch.go) refuses any resolved private,
+  loopback or link-local address before dialling. The except list makes the
+  FABRIC state that same refusal, so a future regression in the dialer, or any
+  other process ever run in this Pod, meets a second, independent enforcement
+  of the boundary that matters most on a single-node cluster: the Pod may
+  speak HTTPS to the internet, and never to its neighbours.
 
   The host bound lives in the process instead, which is where it can be exact:
 
@@ -85,6 +96,11 @@ spec:
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
       ports:
         - port: 443
           protocol: TCP
