@@ -806,7 +806,9 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   discussion: the panels API pins `MaxIndexResponseBytes` = 4096 and
   `MaxPanelResponseBytes` = 131072 — raised from 32768 by the owner on
   2026-08-24, because full-depth token-usage history structurally reaches
-  98,853 bytes served (115,981 with the v2 models section) and the old gate,
+  104,508 bytes served with the v2 models section (issue #170 measured it;
+  the 115,981 figure recorded here beforehand was a projection) and the old
+  gate,
   chosen before any real content existed, would have refused exactly the
   documents the sealed-data pipeline exists to deliver. It is now the same
   NUMBER as `seal.MaxSealedBytes`, which means the serve step no longer hides
@@ -814,7 +816,7 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   governs both, and reading it that way was a finding of the 2026-08-25
   round-4 review. The two bound different bytes: the sealed FILE versus the
   finished ENVELOPE, which also carries the embedded snapshot, measured at
-  +517 bytes for the maximal admissible document. A file at exactly the
+  +875 bytes for the maximal admissible document. A file at exactly the
   transport ceiling is refused at serve time, and the refusal — never a
   truncation — is what the guarantee actually rests on. A budget the owner
   revises is still a budget: the bound

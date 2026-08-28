@@ -53,8 +53,12 @@ const (
 	// added before we even started developing the real websites."
 	//
 	// The measurement behind it: full-depth token-usage history structurally
-	// maxes at 98,853 bytes served, and 115,981 with the v2 models section
-	// (issue #158's reproducible arithmetic). The 32 KiB gate would therefore
+	// maxes at 104,508 bytes served, MEASURED with the v2 models section by
+	// TestTheMaximalDocumentFitsTheRaisedBudget. (The figures that stood here
+	// before issue #170 were 98,853 without that section and 115,981 with it;
+	// the second was a projection made before the section existed, and the
+	// real one is smaller because the models partition is windowed rather
+	// than covering the whole series.) The 32 KiB gate would therefore
 	// have refused exactly the full-history documents the sealed-data
 	// pipeline exists to deliver — a serve-time outage waiting for real depth
 	// to arrive, produced by a budget chosen before any real content existed.
@@ -71,8 +75,8 @@ const (
 	// bounds the finished envelope the handler writes, seal.MaxSealedBytes
 	// bounds the sealed FILE. The envelope is the payload merged onto the
 	// embedded snapshot plus the envelope scaffolding, so it is strictly
-	// larger than the file it came from — measured at +517 bytes for the
-	// maximal admissible document (87,791 sealed, 88,308 served;
+	// larger than the file it came from — measured at +875 bytes for the
+	// maximal admissible document (103,633 sealed, 104,508 served;
 	// TestTheMaximalDocumentFitsTheRaisedBudget logs both), and larger still
 	// by however much the snapshot contributes. A file sealed at exactly
 	// 131,072 bytes therefore serves OVER this budget and is refused.
@@ -1294,8 +1298,10 @@ const (
 	// ENVELOPE — payload plus framing, minus the AEAD overhead. At the very
 	// top of the range a file at exactly this ceiling can therefore still be
 	// refused at serve time by the envelope's own bytes. That is refusal,
-	// not truncation, and the measured maxima sit far below it: the
-	// structural document seals to 98,958 bytes and serves at 98,853.
+	// not truncation, and the measured maxima sit below it: the maximal
+	// admissible document seals to 103,633 bytes and serves at 104,508, and
+	// the structural maximum CapParityTest builds from the shipped
+	// vocabularies seals to 109,280.
 	maxSealedSeriesBytes = 128 << 10
 
 	// dataRootFutureSkew is how far ahead of the local clock a series

@@ -272,8 +272,8 @@ not (2026-08-25 round-4 review, finding 7). The two bound different bytes:
 this one bounds the sealed FILE, the response budget bounds the finished
 ENVELOPE — the payload merged onto the embedded snapshot, plus the envelope
 around it — so the served bytes always exceed the transported ones. The
-maximal document the origin admits measures the gap at +517 bytes (87,791
-sealed, 88,308 served; `TestTheServedEnvelopeExceedsTheFileItCameFrom` in
+maximal document the origin admits measures the gap at +875 bytes (103,633
+sealed, 104,508 served; `TestTheServedEnvelopeExceedsTheFileItCameFrom` in
 `internal/panels/dataroot_test.go` logs both), and a larger snapshot widens
 it. A file sealed at exactly 131,072 bytes is therefore refused at serve
 time. What equality buys is only that the last step no longer hides a
