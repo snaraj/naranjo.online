@@ -401,7 +401,7 @@ together — which is also the list to re-read before changing any of them:
    the rules, and `scripts/ci/chart-egress-pin.sh` pins both rules as whole
    sub-trees — refusing a third rule, a widened or removed port, a loosened DNS
    peer, a list emptied back to allow-all, a list narrowed back to the retired
-   deny, and a second policy document — across 29 text and 61 whole-render
+   deny, and a second policy document — across 31 text and 63 whole-render
    mutations.
 
 One panel is claimed rather than refreshed when both capabilities are on.

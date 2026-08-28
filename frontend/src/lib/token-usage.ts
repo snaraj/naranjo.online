@@ -393,6 +393,13 @@ function admitInsights(value: unknown): TokenUsageInsight[] | null {
  * never inflate the render with hundreds of entries. */
 const maxBreakdownRows = 8;
 
+/* maxModelDays bounds how many trailing days the model breakdown may cover —
+ * the same 92-day budget the Go boundary enforces (maxModelDays in
+ * internal/panels/types.go), mirrored here so a regression there still meets
+ * a refusal before rendering. The categories breakdown carries no separate
+ * day bound on either side, exactly as in Go. */
+const maxModelDays = 92;
+
 /* admitSeries returns the admitted series, undefined when the section is
  * absent, or null when it exists and is malformed. The start date must be a
  * plain calendar date: the grid does day arithmetic on it, and an instant or
@@ -432,7 +439,7 @@ function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
     }
   }
   if (value.models !== undefined) {
-    const models = admitBreakdown(value.models, totals, value.startDate, modelSlots);
+    const models = admitBreakdown(value.models, totals, value.startDate, modelSlots, maxModelDays);
     if (models === null) {
       return null;
     }
@@ -482,7 +489,8 @@ function admitBreakdown(
   value: unknown,
   totals: number[],
   seriesStart: string,
-  vocabulary: ReadonlyMap<string, number>
+  vocabulary: ReadonlyMap<string, number>,
+  maxDays = 0
 ): TokenUsageCategory[] | null {
   if (!Array.isArray(value) || value.length > maxBreakdownRows) {
     return null;
@@ -496,6 +504,15 @@ function admitBreakdown(
   }
   const { offset, declared } = window;
   const span = totals.length - offset;
+  /* The model window's day bound, mirrored from the Go boundary
+   * (maxModelDays in internal/panels/types.go) so the frontend admits by
+   * the same five rules plus this sixth wherever the boundary states one —
+   * zero means the breakdown answers to the series bound alone, which is
+   * the categories case (2026-08-27 adversarial review of PR #230,
+   * finding 4). */
+  if (maxDays > 0 && span > maxDays) {
+    return null;
+  }
   const seen = new Set<string>();
   const rows: TokenUsageCategory[] = [];
   const sums = new Array<number>(span).fill(0);

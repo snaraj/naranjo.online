@@ -500,6 +500,41 @@ class OversizedLineTest(unittest.TestCase):
         self.assertEqual(counters["oversized"], 1)
         self.assertEqual(len(rows), 1)
 
+    def test_an_exactly_terminated_oversized_line_does_not_swallow_its_neighbour(self):
+        # The boundary case the 2026-08-27 adversarial review of PR #230
+        # found (finding 1): readline(MAX+1) can return an oversized line
+        # that is ALREADY newline-terminated — content of exactly the bound
+        # plus its newline. The drain exists for a line that came back
+        # truncated; draining past a complete one consumes the NEXT record
+        # whole, uncounted by any counter. Both neighbours must survive.
+        def with_content(content):
+            return transcript_line(
+                requestId="req_exact",
+                message={
+                    "id": "msg_exact",
+                    "content": content,
+                    "usage": {"input_tokens": 999_999},
+                },
+            )
+
+        # Each "x" costs exactly one byte inside the JSON string, so padding
+        # the empty-content probe out to the bound is exact, and the newline
+        # the walk appends is what pushes readline past it.
+        padding = capture_usage_series.MAX_RECORD_LINE_BYTES - len(with_content(""))
+        exact = with_content("x" * padding)
+        self.assertEqual(len(exact), capture_usage_series.MAX_RECORD_LINE_BYTES)
+        rows, counters = self.walk(
+            exact + "\n"
+            + transcript_line(
+                timestamp="2026-08-11T12:00:00Z",
+                requestId="req_next",
+                message={"id": "msg_next", "usage": {"output_tokens": 7}},
+            )
+            + "\n"
+        )
+        self.assertEqual(counters["oversized"], 1)
+        self.assertEqual([total for _d, total, _p, _m in rows], [7])
+
     def test_the_other_record_shape_skips_it_the_same_way(self):
         fat = json.loads(running_line(500))
         fat["payload"]["info"]["padding"] = "x" * (

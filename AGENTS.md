@@ -858,7 +858,7 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   `scripts/ci/chart-ingress-pin.sh`; the whole-render outbound-allowance
   census, `scripts/ci/chart-egress-pin.sh` — exactly two egress rules
   (TCP/443, and cluster DNS over UDP+TCP/53), pinned as whole sub-trees and
-  proven refusable against 29 text and 61 census mutations, replacing the
+  proven refusable against 31 text and 63 census mutations, replacing the
   total deny the owner retired on 2026-08-27; the media enablement pin,
   `scripts/ci/chart-media-pin.sh` — media on by default as exactly one
   read-only volume at both levels, an incompletely specified enablement

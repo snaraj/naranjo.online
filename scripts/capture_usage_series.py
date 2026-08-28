@@ -655,6 +655,14 @@ def bounded_lines(handle, counters):
         if len(line) > MAX_RECORD_LINE_BYTES:
             counters["oversized"] += 1
             counters["bytes"] += len(line)
+            # Drain ONLY when the oversized line came back truncated. A line
+            # whose content is exactly the bound arrives here already
+            # newline-terminated, and draining past it would swallow the NEXT
+            # record whole — uncounted by any counter, which is the silent
+            # version of the bug this branch exists to end (2026-08-27
+            # adversarial review of PR #230, finding 1).
+            if line.endswith("\n"):
+                continue
             while True:
                 if counters["bytes"] > MAX_RECORD_BYTES:
                     raise CaptureError(

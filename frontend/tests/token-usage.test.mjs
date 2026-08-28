@@ -972,6 +972,42 @@ describe('the model breakdown (token-usage/v2)', () => {
     );
   });
 
+  it('holds the model window to the 92-day budget the Go boundary enforces', () => {
+    // The same sixth rule the origin applies (maxModelDays in
+    // internal/panels/types.go), mirrored per the 2026-08-27 adversarial
+    // review of PR #230 (finding 4). A 93-day series: the models section
+    // may cover its trailing 92 days, not all 93 — while the categories
+    // breakdown answers to the series bound alone, exactly as in Go.
+    const days = 93;
+    const totals = Array.from({ length: days }, () => 2);
+    const series = (extra) => ({
+      sources: [
+        {
+          label: 'alpha',
+          windows: [],
+          series: { startDate: '2026-01-01', totals, ...extra }
+        }
+      ]
+    });
+    const windowed = Array.from({ length: days - 1 }, () => 2);
+    assert.deepEqual(
+      tokenUsageSources(
+        series({ models: [{ key: 'opus-5', startDate: '2026-01-02', totals: windowed }] })
+      )[0]?.series?.models?.[0]?.totals?.length,
+      92
+    );
+    assert.deepEqual(
+      tokenUsageSources(series({ models: [{ key: 'opus-5', totals }] })),
+      []
+    );
+    assert.deepEqual(
+      tokenUsageSources(
+        series({ categories: [{ key: 'input', totals }] })
+      )[0]?.series?.categories?.[0]?.totals?.length,
+      93
+    );
+  });
+
   it('refuses every way a window can be a claim the series cannot back', () => {
     // Restating the series start is a SECOND spelling of aligned, and two
     // spellings of one state is how the same document renders two ways.
