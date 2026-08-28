@@ -2302,14 +2302,14 @@ test('every section the nav names is on the page, and its link reaches it', asyn
   await visit(page);
   const links = page.locator('.section-link');
   const count = await links.count();
-  expect(count, 'the page renders no section links at all').toBeGreaterThan(3);
+  expect(count, 'the page renders no section links at all').toBeGreaterThan(2);
   for (let index = 0; index < count; index += 1) {
     const link = links.nth(index);
     const href = await link.getAttribute('href');
     expect(href, 'a nav link points nowhere').toMatch(/^#[a-z-]+$/);
     /* The section exists. This is the assertion a source pin cannot make on
        the assembled page: the nav is one component and the sections are
-       four others, and only the rendered document knows they agree. */
+       three others, and only the rendered document knows they agree. */
     await expect(page.locator(href), `${href} names no section on this page`).toHaveCount(1);
     await link.click();
     const landed = await page.locator(href).evaluate((node) => ({
@@ -5573,8 +5573,8 @@ test('every width the handle can reach keeps every section intact', async ({ pag
     expect(state.bossRows, `the boss table lost rows ${at}`).toBe(Math.ceil(state.bossCells / 3));
     expect(state.tiles, `the usage tiles disappeared ${at}`).toBeGreaterThan(0);
     expect(state.strips, `the heatmap strips disappeared ${at}`).toBeGreaterThan(0);
-    expect(state.navLinks, `the nav lost links ${at}`).toBeGreaterThan(3);
-    expect(state.sections, `the page lost a section ${at}`).toBeGreaterThan(3);
+    expect(state.navLinks, `the nav lost links ${at}`).toBeGreaterThan(2);
+    expect(state.sections, `the page lost a section ${at}`).toBeGreaterThan(2);
     /* The pictures still reserve the box they will fill, and since
        2026-08-28 that box is a SQUARE stage rather than the feed card's 16:9
        media frame (owner: the drawings are portrait scans, and a wide frame
@@ -5774,9 +5774,9 @@ test('the reading-mode popover is unaffected by the column, even at its narrowes
  * ======================================================================== */
 
 /* The card-body surfaces the ruling covers, by the class the page gives them.
- * A summary paragraph, a bullet list, an honest empty note — every block that
- * used to read the 42rem measure. */
-const filledCardBodies = ['.entry-summary', '.entry-points', '.empty-note'];
+ * A summary paragraph and a bullet list — the blocks that used to read the
+ * 42rem measure. */
+const filledCardBodies = ['.entry-summary', '.entry-points'];
 
 /* The widths this rule is measured at, and why they are COLUMN values rather
  * than only viewport ones. The page column is a fixed 60rem token, so a 1440px
@@ -5863,8 +5863,8 @@ const measureCardFill = (page) =>
  * the pass was taken at, so a failure says which one it was. */
 function expectCardsFilled(observed, where) {
   /* Vacuity guards, both halves. This lane proves nothing if the page rendered
-     no cards, so all three surfaces must be present — the work log's bullets,
-     the project log's summaries, About Me's honest empty note... */
+     no cards, so both surfaces must be present — the work log's bullets and
+     the project log's summaries... */
   for (const selector of filledCardBodies) {
     expect(
       observed.filter((row) => row.selector === selector).length,
@@ -5889,7 +5889,7 @@ function expectCardsFilled(observed, where) {
     /* THE RULE. The block's own box ends ON the card's content edge: the
        card's padding is the only thing between its text and its border, and
        nothing narrows it further. Before the ruling this read 262.0px short for
-       .entry-points, 270.0px for .entry-summary and 288.0px for .empty-note. */
+       .entry-points and 270.0px for .entry-summary. */
     expect(
       row.short,
       `${row.selector} stops ${row.short.toFixed(1)}px short of the card's content edge at ${where} (${((row.short / row.card) * 100).toFixed(1)}% of the card left blank)`

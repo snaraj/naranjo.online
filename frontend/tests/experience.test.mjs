@@ -1534,8 +1534,8 @@ test('the cap reader resolves every unit a measure can be written in (issue 212)
 
 test('no surface caps its prose short of the container it sits in (issue 212)', () => {
   /* The token itself. `none` is the whole ruling in one value, and the
-     declaration is still READ by three components, which is what keeps the
-     per-card override channel alive instead of forcing a fork. */
+     declaration is still READ by two surfaces in the entry log, which is what
+     keeps the per-card override channel alive instead of forcing a fork. */
   const declared = /--card-measure:\s*([^;]+);/.exec(stylesCode);
   assert.ok(declared, '--card-measure is gone; the card primitive lost its measure channel');
   assert.equal(
@@ -1553,7 +1553,6 @@ test('no surface caps its prose short of the container it sits in (issue 212)', 
   assert.deepEqual(
     readers.map((rule) => `${rule.file}: ${rule.selector}`).sort(),
     [
-      'lib/components/EmptyNote.svelte: .empty-note',
       'lib/components/EntryLog.svelte: .entry-points',
       'lib/components/EntryLog.svelte: .entry-summary',
     ],

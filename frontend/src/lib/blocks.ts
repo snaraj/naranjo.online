@@ -523,9 +523,3 @@ export type EntryLogProps = {
   /* The heading depth entries sit at in the document outline. */
   readonly titleLevel?: 2 | 3 | 4 | 5 | 6;
 };
-
-/* --- EmptyNote: one flat card stating an honest empty state -------------- */
-
-export type EmptyNoteProps = {
-  readonly note: string;
-};
