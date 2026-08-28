@@ -761,8 +761,49 @@
     }
   }
 
+  /* VIEWPORT-ANCHORED, and this one declaration is the whole of the owner's
+     "when I close the media, it returns me to the top of the page" (0.1.52).
+
+     A modal <dialog> is placed by the UA as `position: fixed`, centred by
+     `inset: 0` and `margin: auto`. This rule used to say `position: relative`,
+     and an author declaration beats the UA sheet on cascade ORIGIN whatever
+     the specificity, so the UA's `position: fixed` never applied. What the
+     engines computed instead was `absolute` (MEASURED, both), which put the
+     box in the DOCUMENT's coordinate space at the top of the page rather than
+     against the viewport. showModal() then moves focus to the first control
+     inside the dialog (the close mark below), the engine scrolls that control
+     into view, and the reader's place is gone before the lightbox has even
+     painted.
+
+     MEASURED at a 1280x720 viewport, all three close paths, against the live
+     0.1.52 origin and the binary built from that tree alike: scrollY 1943
+     before the click and 0 while the dialog was open, on Chromium AND WebKit.
+     The two engines then differed only in the clean-up — WebKit restored 1943
+     on close, Chromium left it at 0 — so one defect read as a broken page on
+     Chrome and as nothing at all on Safari.
+
+     The close handler was never the cause, so this fix changes nothing about
+     WHY the restore below exists. (Its shape did move, in this same PR and
+     for an unrelated reason: the restore now waits a tick and falls through
+     to the player, because a lightbox can close BECAUSE the stage is about to
+     stop being a still. What it does for a still is what it always did.) It
+     stays because it is load-bearing on WEBKIT specifically: MEASURED,
+     removing it leaves the close lane green on Chromium, whose native dialog
+     restores focus by itself, and red on WebKit, where a mouse click never
+     focused the button and the reader lands on the document body instead.
+
+     `fixed` rather than deleting the declaration: the close control is
+     absolutely positioned against this box and needs a containing block,
+     which `fixed` is exactly as `relative` was. The insets and auto margins
+     are stated here rather than inherited from the UA sheet, so the centring
+     is this file's own claim on every engine instead of a default it happens
+     to agree with. */
   .gallery-lightbox {
-    position: relative;
+    position: fixed;
+    inset: 0;
+    margin: auto;
+    inline-size: fit-content;
+    block-size: fit-content;
     max-inline-size: var(--gallery-lightbox-max-inline, min(94vw, 90rem));
     /* The close mark's lane, reserved above the frame so the mark has
        somewhere to live that is NOT the photograph (issue 202). Only the

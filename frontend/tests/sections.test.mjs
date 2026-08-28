@@ -1644,6 +1644,39 @@ test('the gallery frame cap is pinned at its literal value, independent of compu
   );
 });
 
+/* WHERE THE LIGHTBOX IS ANCHORED, which is where the owner's "when I close
+ * the media, it returns me to the top of the page" was decided (0.1.52,
+ * issue 233). An author `position: relative` beats the UA's `dialog:modal
+ * { position: fixed }` on cascade ORIGIN whatever the specificity, so that
+ * `position: fixed` never applied. What the engines computed instead was
+ * `absolute` (MEASURED, both), which put the box in the document's own
+ * coordinate space at the top of the page, and showModal() scrolled the
+ * reader there to focus the first control inside it. MEASURED at a 1280x720
+ * viewport on the live 0.1.52 origin:
+ * scrollY 1943 before the click, 0 while the dialog was open, on Chromium and
+ * WebKit alike. The rendered half of this floor is
+ * e2e/rendering-lanes.spec.mjs, which measures a real engine's scroll across
+ * all three close paths; neither half replaces the other — this one binds
+ * every engine, including the ones no runner has. */
+test('the enlarged lightbox is anchored to the viewport, never to the document (issue 233)', () => {
+  const rule = /\.gallery-lightbox\s*\{([^}]*)\}/.exec(mediaGallery);
+  assert.ok(rule, 'the lightbox lost the rule that places it');
+  assert.match(
+    rule[1],
+    /position:\s*fixed;/,
+    'a modal dialog is placed against the viewport; anything else scrolls the reader to wherever the box landed in the document'
+  );
+  assert.doesNotMatch(
+    rule[1],
+    /position:\s*(?:relative|absolute|static);/,
+    'an author position other than fixed overrides the UA modal placement on cascade origin, which is the defect itself'
+  );
+  // Centred by the same two declarations a UA uses for a modal, stated in the
+  // component so the placement is its own claim rather than an inherited one.
+  assert.match(rule[1], /inset:\s*0;/, 'the lightbox states no insets, so its centring is whatever the engine defaults to');
+  assert.match(rule[1], /margin:\s*auto;/, 'the lightbox states no auto margins, so it cannot centre itself');
+});
+
 // ---------------------------------------------------------------------------
 // The art binding
 // ---------------------------------------------------------------------------
