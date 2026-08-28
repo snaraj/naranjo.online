@@ -7,13 +7,22 @@
   Each source block is, top to bottom: a tile grid of headline figures (a
   final odd tile spans the full width); the usage windows on one uniform line
   (meters, when a window carries one, keep the numeric reading beside the
-  fill so severity is never color alone); an activity section whose display
-  choices read ONE delivered payload three ways — a view lens
-  (daily/weekly/monthly/cumulative), a trailing range (30d/90d/12mo/all),
-  and, for a source that reports one, a category lens (total plus its own
-  accounting classes) — collapsed behind one compact menu per source
-  (UsageFilterMenu), with no extra bytes and no ceiling on how much history
-  the series may grow to hold; and an insights list.
+  fill so severity is never color alone); an activity section holding ONE
+  graph; and an insights list.
+
+  ONE GRAPH, NO DISPLAY CONTROLS (owner directive, 2026-08-28, reversing the
+  0.1.52 decision after seeing it live: "remove this entire menu. it doesnt
+  look good and it doesn't provide any value"). Three questions used to be
+  askable per source — a view lens (daily/weekly/monthly/cumulative), a
+  trailing range (30d/90d/12mo/all), and, for a source that reports one, a
+  category lens — first as three exposed pill rows, then collapsed behind a
+  compact per-source popover. Both shapes are gone, and so is the state
+  behind them: every source now renders the daily reading of its total
+  tokens over the FULL captured depth, which is the widest answer the data
+  can give and the one a reader asking "how much have I used" wants. The
+  lens engine itself is untouched and still proven in lib/grid.ts and
+  lib/periods.ts — what this component stopped doing is offering a reader
+  four ways to re-ask one question.
 
   Every section is optional and every absence is honest. A figure the origin
   does not report arrives as an explicit dash, and a payload that fails
@@ -51,129 +60,35 @@
   Every color and metric reads a custom property with a dark-native default,
   so themes restyle by overriding variables. -->
 <script lang="ts">
-  import type { UsageActivity, UsageCategory, UsageTrackerProps } from '../blocks.ts';
-  import { formatMagnitude, seriesCells, seriesViews, viewColumns, type SeriesView } from '../grid';
-  import UsageFilterMenu from './UsageFilterMenu.svelte';
-  import {
-    activityReading,
-    coverageReading,
-    defaultSeriesRange,
-    rangeColumns,
-    seriesRanges,
-    type SeriesRange
-  } from '../periods.ts';
+  import type { UsageActivity, UsageTrackerProps } from '../blocks.ts';
+  import { formatMagnitude, seriesCells } from '../grid';
+  import { activityReading, coverageReading, fullDepthColumns } from '../periods.ts';
   import ContributionGrid from './ContributionGrid.svelte';
   import PanelShell from './PanelShell.svelte';
 
   let { id, title, status, generatedAt, sections, emptyNote }: UsageTrackerProps = $props();
 
-  /* One view choice PER SOURCE (owner directive, 2026-08-25).
+  /* THE FIXED READING (owner directive, 2026-08-28). Everything this
+     component used to hold as presentation state — a per-source view lens, a
+     per-source trailing range, a per-source category lens, and the maps that
+     kept each of them alive across a payload refresh — went with the menu
+     that asked for it. What replaces four choices is one honest answer: the
+     source's own totals, read daily, over every day it has captured.
 
-     This used to be a single `view` for the whole panel, on the argument that
-     sources read side by side should not be compared through different
-     lenses. The owner reversed it after using the page: the panel renders a
-     graph per source, each with its own toggle sitting over its own strip,
-     and pressing one toggle re-read the OTHER source's graph too — which
-     reads as a bug whatever the rationale, because a control beside one graph
-     that changes a different graph is not a control that says what it does.
+     WHICH WINDOW that is, and why it is not simply 'all', lives in
+     lib/periods.ts beside the arithmetic (fullDepthColumns). The short of it:
+     deleting the control while keeping its 12mo default would have restored
+     the year-long CEILING issue 158 removed, and taking the bare capture
+     instead would draw a fifty-eight-day history as a tenth of the card the
+     owner's no-dead-space rule says must be filled. The window is the wider
+     of the two, so neither failure is reachable.
 
-     Keyed by the source's own key rather than held in a child component, so
-     the state survives a payload refresh: the adapter rebuilds its sections
-     every delivery, and a lens parked in a component instance would reset to
-     daily every sixty seconds. A source whose key has never been pressed
-     reads `daily`, the shipped default, so a source appearing mid-session
-     needs no initialisation.
-
-     It is still the ONE piece of state that lives here rather than in the
-     adapter, because it is presentation — the same series read three ways —
-     and the lens math (lib/grid.ts) knows no source either. */
-  let views = $state<Record<string, SeriesView>>({});
-
-  function viewOf(key: string): SeriesView {
-    return views[key] ?? 'daily';
-  }
-
-  /* The CATEGORY lens is a second piece of per-source presentation state,
-     held here for exactly the reasons `views` is: the adapter rebuilds its
-     sections every delivery, and a lens parked anywhere else would reset
-     every sixty seconds. Per source because category vocabularies genuinely
-     differ between sources — one tool reports reasoning tokens, another does
-     not — and forcing one choice across sources would render a lens a source
-     cannot answer. A source without categories simply has no lens row and
-     always reads as total. The component knows no category by name: every
-     key, label, palette slot, and per-lens noun arrives as data built by the
-     adapter.
-
-     `totalLens` is the key meaning "no category", and it is stated HERE, once
-     in the whole tree. The adapter used to export a copy of it beside a lens
-     RESOLVER that nothing called; both were deleted rather than wired in, so
-     the sentinel now lives in the one file that decides anything with it —
-     this component, which resolves the lens and falls back to the plain
-     series. */
-  let lenses = $state<Record<string, string>>({});
-
-  const totalLens = 'total';
-
-  function lensOf(key: string): string {
-    return lenses[key] ?? totalLens;
-  }
-
-  /* activeLensCategory resolves a source's lens to the adapter-built
-     category it names, or undefined for the total reading — including an
-     unknown or stale lens, which falls back to the plain totals because
-     those are always real data, never a guess. */
-  function activeLensCategory(activity: UsageActivity, lens: string): UsageCategory | undefined {
-    if (lens === totalLens || !activity.categories) {
-      return undefined;
-    }
-    return activity.categories.find((category) => category.key === lens);
-  }
-
-  /* And one RANGE choice per source, held the same way and for the same
-     reason (issue 158). The lens says how a day is read; the range says how
-     much history is drawn — two genuinely separate questions, which is why
-     they are two controls rather than one list of six things.
-
-     The default is the range the strip has always drawn (defaultSeriesRange
-     is 12mo, which resolves to the grid's own reserve width), so a reader who
-     never touches this control sees exactly what this panel rendered before
-     it existed, and history accrues into the same box until they ask for
-     more. */
-  let ranges = $state<Record<string, SeriesRange>>({});
-
-  /* The segmented pills' keyboard contract (issue 219) — one tab stop per
-     group, roving tabindex, arrows on lib/keys.ts's shared ring — moved with
-     the pills into UsageFilterMenu, which is the one place the groups render
-     now. */
-  function rangeOf(key: string): SeriesRange {
-    return ranges[key] ?? defaultSeriesRange;
-  }
-
-  /* windowedColumns is the region's daily series laid onto true calendar
-     weeks across the chosen trailing window (issue 189's calendarColumns,
-     reached through issue 158's rangeColumns): every day the window covers
-     and the capture does not comes back as a dated absent cell — a hole with
-     a real date on it, never a zero.
-
-     The dailies are the CATEGORY lens's when one is active, which is what
-     makes the two lenses one engine rather than two: the category lens picks
-     which series is read, the range picks how much of it is drawn, and the
-     view lens picks how a drawn day is aggregated. All three re-read ONE
-     delivered payload with no extra bytes, and every reading below is taken
-     from the same cells the graph draws.
-
-     Deliberately kept SEPARATE from the view step below, because the two
-     readings under the graph have to be taken from these cells rather than
-     from the lens' output: a weekly or monthly lens repeats one aggregate
-     across every day it covers, and a total summed from that would count each
-     period once per day in it. */
-  function windowedColumns(
-    activity: UsageActivity,
-    range: SeriesRange,
-    category: UsageCategory | undefined
-  ) {
-    const totals = category ? category.totals : activity.series.totals;
-    return rangeColumns(seriesCells(activity.series.startDate, totals), range);
+     The daily reading needs no name at all: it is what activityReading and
+     ContributionGrid both already default to, and passing it here would be a
+     third statement of one default that could then disagree with the other
+     two. */
+  function windowedColumns(activity: UsageActivity) {
+    return fullDepthColumns(seriesCells(activity.series.startDate, activity.series.totals));
   }
 </script>
 
@@ -243,108 +158,41 @@
             </ul>
           {/if}
 
-          <!-- The whole region, heading and lens toggle included, and not
-            merely the graph inside it: a heading over a three-way toggle with
-            nothing to toggle is the hole by another name. A source with no
-            columns to draw renders none of this and reads as what it is — a
-            source that reports figures and no daily record. See the ruling in
-            this file's opening comment. -->
+          <!-- The whole region, heading included and not merely the graph
+            inside it: a heading over nothing is the hole by another name. A
+            source with no columns to draw renders none of this and reads as
+            what it is — a source that reports figures and no daily record.
+            See the ruling in this file's opening comment. -->
           {#if source.activity}
-            {@const view = viewOf(source.key)}
-            {@const range = rangeOf(source.key)}
-            {@const lensCategory = activeLensCategory(source.activity, lensOf(source.key))}
-            {@const windowed = windowedColumns(source.activity, range, lensCategory)}
-            {@const columns = viewColumns(windowed, view)}
+            {@const columns = windowedColumns(source.activity)}
             {#if columns.length > 0}
               <section class="usage-activity">
-                <header class="usage-activity-head">
-                  <h4 class="usage-section-title">{source.activity.heading}</h4>
-                  <!-- The display choices — view, range, and (when the source
-                    reports one) the category lens — live behind ONE compact
-                    menu per source (owner directive, 2026-08-28: the exposed
-                    pill rows read as too many settings; hide them). Each
-                    question is still its own labeled radio group inside the
-                    popover, named for its own source, and the values still
-                    live in this component's per-source maps so they survive
-                    the adapter rebuilding sections every delivery. -->
-                  <div class="usage-controls">
-                    <UsageFilterMenu
-                      sourceLabel={source.label}
-                      groups={[
-                        {
-                          label: 'view',
-                          options: seriesViews.map((candidate) => ({
-                            key: candidate,
-                            label: candidate
-                          })),
-                          current: view,
-                          choose: (next) => (views[source.key] = next as SeriesView)
-                        },
-                        {
-                          label: 'range',
-                          options: seriesRanges.map((candidate) => ({
-                            key: candidate,
-                            label: candidate
-                          })),
-                          current: range,
-                          choose: (next) => (ranges[source.key] = next as SeriesRange)
-                        },
-                        ...(source.activity.categories && source.activity.categories.length > 0
-                          ? [
-                              {
-                                label: `${source.activity.noun} category`,
-                                options: [
-                                  { key: totalLens, label: 'total' },
-                                  ...source.activity.categories.map((category) => ({
-                                    key: category.key,
-                                    label: category.label
-                                  }))
-                                ],
-                                current: lensOf(source.key),
-                                choose: (next: string) => (lenses[source.key] = next)
-                              }
-                            ]
-                          : [])
-                      ]}
-                    />
-                  </div>
-                </header>
+                <h4 class="usage-section-title">{source.activity.heading}</h4>
                 <ContributionGrid
                   {columns}
                   noun={source.activity.noun}
-                  {view}
-                  label={`${source.activity.label}, ${view} view, ${range} range${
-                    lensCategory ? `, ${lensCategory.label} only` : ''
-                  }`}
+                  label={source.activity.label}
                   fullWidth
                   cardTitle="Tokens used"
                   formatValue={formatMagnitude}
                 />
-                <!-- Both readings are taken from the WINDOWED cells, never
-                  from the lens' output and never from the payload behind it,
-                  so the sentence and the graph are the same statement twice.
-                  That is also why the category lens needs no sentence of its
-                  own: those cells ALREADY carry the category's dailies when
-                  one is pressed, so the only thing the lens contributes here
-                  is its noun — adapter-built, like every other word this
-                  component renders. A category summary built in the adapter
-                  would describe the whole capture while the graph drew ninety
-                  days of it, which is the exact defect issue 158 moved this
-                  sentence out of the adapter to fix.
+                <!-- Both readings are taken from the SAME cells the graph
+                  draws, never from the payload behind them, so the sentence
+                  and the graph are one statement made twice. An adapter-built
+                  summary would describe the whole capture whatever the graph
+                  drew, which is the defect issue 158 moved this sentence out
+                  of the adapter to fix — and it stays out of the adapter now
+                  that the window is fixed, because the cells remain the only
+                  honest source for it.
                   The second line carries the denominator the first
                   structurally cannot: "15 days" is the same phrase whether
-                  the reader asked for thirty days or a year, and the two are
-                  very different graphs. -->
+                  the capture is a month or a year deep, and the two are very
+                  different graphs. -->
                 <p class="usage-activity-total">
-                  {activityReading(
-                    windowed,
-                    lensCategory ? lensCategory.noun : source.activity.noun,
-                    formatMagnitude,
-                    view
-                  )}
+                  {activityReading(columns, source.activity.noun, formatMagnitude)}
                 </p>
                 <p class="usage-activity-coverage">
-                  {coverageReading(windowed)}
+                  {coverageReading(columns)}
                 </p>
                 {#if source.activity.composition && source.activity.composition.length > 0}
                   <!-- The composition strip: how the window's total divides
@@ -452,9 +300,13 @@
     gap: 0.5rem;
   }
 
+  /* The source's own name, one step above the panel's body size (owner
+     directive, 2026-08-28: "a bit bigger so they're easier to see"). It is
+     the name of the thing every figure under it belongs to, and it was set
+     at the same size as the prose it titles. */
   .usage-source-label {
     margin: 0;
-    font-size: var(--panel-font-size, 0.8125rem);
+    font-size: var(--usage-source-label-size, 1rem);
     font-weight: 650;
     letter-spacing: 0.02em;
     color: var(--panel-text, rgb(230, 230, 230));
@@ -656,28 +508,11 @@
     }
   }
 
-  .usage-activity-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-
   .usage-section-title {
     margin: 0;
     font-size: var(--panel-font-size, 0.8125rem);
     font-weight: 650;
     color: var(--panel-text, rgb(230, 230, 230));
-  }
-
-  /* The controls row holds one thing now — the per-source display menu —
-     and keeps the header's end-alignment. The pill grammar itself (44px
-     touch floor on both axes, the measured "30d is 40.78px" lesson) moved
-     into UsageFilterMenu with the pills. */
-  .usage-controls {
-    display: flex;
-    justify-content: flex-end;
   }
 
   .usage-activity-total {

@@ -7,6 +7,99 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.53] - 2026-08-28
+
+Two owner UX dispatches, both reversing decisions 0.1.52 shipped the day
+before: a gallery film now plays where it sits instead of wearing a
+decorative play mark, and the token panel's display menu is gone entirely.
+
+### Added
+
+- **Gallery films play inline, on their own enlarged widescreen stage.** The
+  current item's stage mounts a real `<video controls playsinline
+  preload="metadata">` carrying the manifest's source ladder in the manifest's
+  own order, so a film is playable in place the way an embedded player is
+  (owner: "develop the ability to treat them like youtube videos where I can
+  just play it in this small minimal version"). Only the CURRENT item ever
+  mounts a player and the element is keyed on the item, so navigating away
+  unmounts it and the strip still never carries more than one — the weight
+  rule the previous design protected, kept exactly. Nothing autoplays: no
+  `autoplay` attribute exists anywhere in the component, playback starts only
+  from the reader's press on the native controls, and that is how reduced
+  motion is honoured structurally rather than by a media query.
+- **A second stage shape, chosen by the item's kind.** `--gallery-stage-size-video`
+  (27rem) and `--gallery-stage-aspect-video` (1.7778) join the square's pair in
+  `styles.css`; a film's stage redeclares the same two custom properties the
+  stage arithmetic already reads, so there is one piece of sizing code and the
+  reservation stays byte-independent. A film renders 768x432 against a still's
+  448x448 — 71% wider, 65% more area — because a 16:9 film inside a square is a
+  small picture between two bands of dead ground.
+- `fullDepthColumns` in `src/lib/periods.ts`: the one window the token panel
+  draws now that its range control is gone — every captured day, floored at the
+  grid's 53-column reserve. It is the wider of the two on purpose, because
+  either alone is a defect this repository has already measured (the reserve
+  alone is issue 158's year-long ceiling; the bare capture alone draws a
+  two-month history as a tenth of a full-width card).
+
+### Changed
+
+- **The token panel's display menu is deleted, and with it every display
+  choice** (owner: "remove this entire menu. it doesnt look good and it doesn't
+  provide any value"). `UsageFilterMenu.svelte` is gone, along with
+  `UsageTracker`'s per-source view, range and category state, the lens
+  resolver, the `total` sentinel and the controls row that held them. Each
+  source renders ONE graph: daily, the full captured depth, the source's own
+  totals. The lens arithmetic itself is untouched and still executed by
+  `tests/grid.test.mjs` and `tests/periods.test.mjs`; what this component
+  stopped doing is offering a reader four ways to re-ask one question.
+- **The per-source headings are bigger** (owner: "a bit bigger so they're
+  easier to see") through a new `--usage-source-label-size` token, declared in
+  `styles.css` rather than left as a component fallback.
+- **The gallery's painted controls shrank while every touch target kept its
+  44px** (owner: reduce "left, right, current media"). The prev/next glyph
+  paints at `--gallery-arrow-size` (0.75rem, from 18px) inside the same
+  `.icon-button` box, and the position dots at `--gallery-dot-size` (0.25rem,
+  from 0.375rem) with `--gallery-dot-active-scale` keeping the current one
+  distinguishable — the small-mark-in-a-44px-hit-box pattern the lightbox close
+  control already followed.
+- The lightbox is stills only. Its video branch is removed rather than left
+  unreachable, and arrowing the open dialog onto a film closes it — the one
+  route that could still have landed there — with focus restored to whichever
+  surface the stage then holds.
+
+### Removed
+
+- **The decorative play mark on every film** (owner: "remove the play icon from
+  all videos, its just there doing nothing"). It promised a press that happened
+  somewhere else; the real control is now under the reader's finger. Its four
+  component-local tokens went with it.
+
+### Tests
+
+- The gallery pins are re-aimed at the new contract at equal strength: the
+  play-mark presence pin became an absence pin over the class, the drawn
+  triangle and every token only it read; "no video outside the enlarged branch"
+  became "exactly one video, the current item's, in the stage and never in the
+  dialog"; and new pins cover the kind-switched stage tokens, the player owning
+  its own surface (no swipe binding, no button, no gallery arrow keys) and the
+  shrunk marks inside unchanged targets.
+- A new rendering lane drives a routed `gallery/v1` manifest carrying a still
+  and a film through all five browser projects, measuring the real inline
+  player — element, controls, `playsinline`, `preload`, poster, source ladder
+  order, paused-and-at-zero — its widescreen enlarged stage against the still's
+  square on the same page, and the painted arrow and dot marks inside their
+  44px boxes.
+- The usage pins are re-aimed the same way: the per-source lens and range tests
+  became one pin that the panel offers nothing to press AND still draws its
+  fixed graph, in both the unit suite and the rendering lanes. The retired
+  view/range/category state is pinned as fourteen named absences so it cannot
+  drift back one piece at a time.
+- `fullDepthColumns` is executed at six capture depths on both sides of the
+  reserve, including the comparison that proves it is not the ceiling the 12mo
+  default was.
+- The touch-floor sweep's measured-dimension count is re-derived from 18 to 16,
+  the two lost being `.filter-trigger` and `.usage-view` from the deleted menu.
+
 ## [0.1.52] - 2026-08-27
 
 An owner UX dispatch across the whole frontend: the gallery decluttered to a

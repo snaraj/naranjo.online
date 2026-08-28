@@ -1000,16 +1000,25 @@ test('every control the markup declares clears the 44px touch floor (issue #26)'
   }
   /* The count is pinned because the DANGEROUS failure of a sweep is silence:
      a control that stops matching measures nothing and reports nothing, and a
-     `>= 0` walk is green either way. Eighteen is what the four axis rows above
-     find today across the page-level controls and every control whose only
-     size is a minimum. It is a floor rather than an equality so that adding a
-     properly-sized control never fails this — but losing one does. A control
-     sized only by its padding is a legitimate shape this pin still says
-     nothing about; the browser lanes measure those, because only a rendered
-     box knows how big padding made it. */
+     `>= 0` walk is green either way. It is a floor rather than an equality so
+     that adding a properly-sized control never fails this — but a control
+     losing its size declaration does. A control sized only by its padding is a
+     legitimate shape this pin still says nothing about; the browser lanes
+     measure those, because only a rendered box knows how big padding made it.
+
+     SIXTEEN, down from the eighteen the floor was set at, and the two that
+     left are accounted for rather than allowed for: the owner deleted the
+     token panel's display menu on 2026-08-28 ("remove this entire menu"), and
+     UsageFilterMenu.svelte's `.filter-trigger` was the only control in the
+     tree whose inline and block minimums this walk measured and whose class no
+     longer exists. Its sibling `.usage-view` pills went with it. Re-deriving
+     the count when a control is deliberately REMOVED is what keeps the pin
+     honest in the direction it cares about; it is still exactly as strict
+     about a surviving control that stops declaring a size, which is the
+     regression it was written for. */
   assert.ok(
-    measured >= 18,
-    `only ${measured} control dimensions were measured; the walk found 18 when this floor was set, so it has lost sight of a control rather than gained one`
+    measured >= 16,
+    `only ${measured} control dimensions were measured; the walk found 16 after the display menu was deleted, so it has lost sight of a control rather than gained one`
   );
 });
 

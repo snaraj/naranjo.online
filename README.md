@@ -520,8 +520,8 @@ by name, and `media.enabled=false` still renders no media at all. On the
 frontend, the gallery reads
 a `gallery/v1` manifest from the media volume when one is served and falls
 back to the vendored set above when it is not, and it renders film as well as
-photography: poster in the strip, click-to-play in the lightbox, never
-autoplay. `docs/media-manifest.md` is the whole contract, including how an
+photography: a film plays inline in the strip, on a wider stage than a still
+takes, and never autoplays — playback begins only on the reader's own press. `docs/media-manifest.md` is the whole contract, including how an
 operator publishes without touching git, CI, or a release.
 
 ## License

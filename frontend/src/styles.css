@@ -463,6 +463,13 @@
   --usage-cat-3: var(--color-cat-3);
   --usage-cat-4: var(--color-cat-4);
   --usage-cat-5: var(--color-cat-5);
+  /* The per-source heading ("Claude Code", "Codex") -- one step above the
+     panel's body size (owner directive, 2026-08-28: "a bit bigger so they're
+     easier to see"). It is the name of the thing every figure under it
+     belongs to, and it was rendering at the same 0.8125rem as the prose it
+     titles. Declared here rather than left to a component fallback, because
+     this is a dimension the owner tunes. */
+  --usage-source-label-size: 1rem;
 
   /* The hover-detail token layer. The detail that hangs off a tile is one
      primitive (lib/components/DetailTip.svelte), so like the card above it
@@ -1249,6 +1256,34 @@ h1 {
      so 1 IS the square and a later widescreen stage is one token edit. */
   --gallery-stage-size: 28rem;
   --gallery-stage-aspect: 1;
+  /* The SECOND stage shape, and why there are two (owner directive,
+     2026-08-28: a film "should be enlarged"). A square holds a portrait scan
+     whole; it holds a 16:9 film inside a band of dead ground on either side,
+     which is the no-dead-space rule broken by the very box that exists to
+     respect it. So a moving item takes its own pair, read through the SAME
+     two declarations by way of a kind attribute on the stage -- same
+     arithmetic, same byte-independent reservation, different numbers.
+
+     The pair keeps the meaning the square's pair has: SIZE is the block edge,
+     ASPECT multiplies the inline axis. 27rem by 1.7778 is a 432px-tall,
+     768px-wide stage against the still's 448x448 -- 71% wider and 65% more
+     area -- while staying inside a desktop column's own track, so the ceiling
+     still does work rather than coincidentally matching it. */
+  --gallery-stage-size-video: 27rem;
+  --gallery-stage-aspect-video: 1.7778;
+  /* The PAINTED size of the prev/next glyph inside the 44px hit box
+     .icon-button keeps (owner directive, 2026-08-28: make the controls
+     smaller). 18px is the site's chrome-icon glyph; the gallery's arrows are
+     not chrome -- they sit beside the artwork -- and the rule the lightbox's
+     close mark already follows applies here too: shrink the ink, never the
+     target. */
+  --gallery-arrow-size: 0.75rem;
+  /* The position marks, the same way: a 4px dot inside that same 44px button,
+     scaled on the current one so position is never carried by opacity alone.
+     Tokens rather than literals because these are the two numbers the owner
+     asked to be able to tune. */
+  --gallery-dot-size: 0.25rem;
+  --gallery-dot-active-scale: 1.5;
   --gallery-scrim: rgba(0, 0, 0, 0.7);
   --gallery-close-surface: rgba(0, 0, 0, 0.5);
   --gallery-close-ink: white;
