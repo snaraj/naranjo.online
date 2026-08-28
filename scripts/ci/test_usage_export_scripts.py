@@ -326,6 +326,66 @@ class PushTransportHardeningTest(unittest.TestCase):
         self.assertIn("-I", argv)
         self.assertIn("-B", argv)
 
+    def test_a_locally_recorded_merge_source_is_recaptured_every_run(self):
+        # The fault this replaced: the second source was a file somebody
+        # wrote by hand. It aged silently between edits and — as shipped on
+        # the owner's machine — was missing the sections the loader requires,
+        # so every scheduled export refused until a human looked (2026-08-27).
+        second = self.scratch / "second-transcripts"
+        transcript_fixture(second)
+        self.write_config(MERGE_CAPTURES="beta=messages=%s" % second)
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = self.sandbox_args_file.read_text(encoding="utf-8").splitlines()
+        # The LAST sandboxed invocation is the export, and it merges the file
+        # the capture before it produced — inside the private scratch, never
+        # a configured path that could outlive the run.
+        merged = argv[argv.index("--merge-source") + 1]
+        key, _, path = merged.partition("=")
+        self.assertEqual(key, "beta")
+        self.assertTrue(path.endswith("/beta.json"), path)
+        self.assertNotIn(str(second), path)
+        self.assertIn("checksum verified", result.stdout)
+
+    def test_a_failed_recapture_pushes_nothing_at_all(self):
+        # Refusing is the only correct answer here, and it is a property of
+        # the RECEIVER rather than a preference: the origin refuses a
+        # document whose source set is not equal to the set its snapshot
+        # ships, so a partial push would be built, sealed, sent and refused
+        # on arrival — the same failure, later and quieter.
+        empty = self.scratch / "nothing-here"
+        empty.mkdir()
+        self.write_config(MERGE_CAPTURES="beta=messages=%s" % empty)
+        result = run_script(PUSH, env=self.env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not be recaptured", result.stderr)
+        self.assertIn("nothing was pushed", result.stderr)
+        self.assertFalse(
+            self.args_file.exists(),
+            "a failed recapture still reached the transport",
+        )
+
+    def test_a_merge_capture_key_is_held_to_a_label_shape_before_it_is_a_path(self):
+        # The key becomes a file name in the scratch directory, so it is
+        # checked BEFORE it is used to build one — a key carrying a separator
+        # would otherwise choose where the capture writes.
+        second = self.scratch / "second-transcripts"
+        transcript_fixture(second)
+        for key in ("../escape", "Beta", "9beta", "beta/two", ""):
+            with self.subTest(key=key):
+                self.write_config(MERGE_CAPTURES="%s=messages=%s" % (key, second))
+                result = run_script(PUSH, env=self.env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.args_file.exists())
+
+    def test_a_malformed_merge_capture_triple_refuses(self):
+        for entry in ("beta", "beta=messages", "beta==%s" % self.scratch):
+            with self.subTest(entry=entry):
+                self.write_config(MERGE_CAPTURES=entry)
+                result = run_script(PUSH, env=self.env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("KEY=FORMAT=DIRECTORY", result.stderr)
+
     def test_a_host_without_the_sandbox_never_walks_raw_records(self):
         # Fail-closed, proven by absence of work rather than by a message: on
         # a PATH that resolves everything the pipeline needs EXCEPT the
@@ -367,27 +427,43 @@ class PushTransportHardeningTest(unittest.TestCase):
         )
 
     def test_the_push_script_has_no_unconfined_producer_invocation(self):
-        # Structural companion to the behavioral tests above: there is exactly
-        # ONE place the export script is started, and it is the sandboxed one.
-        # A second, unwrapped invocation would satisfy every test that only
-        # observes the happy path.
+        # Structural companion to the behavioral tests above: EVERY place a
+        # program that walks raw records is started is a sandboxed place. An
+        # unwrapped invocation would satisfy every test that only observes the
+        # happy path, which is exactly why this is checked as a property of
+        # the file rather than of one run.
+        #
+        # It is written over the SET of walkers rather than over the export
+        # script alone (2026-08-27): the push now recaptures every locally
+        # recorded merge source at the top of each run, so the capture tool
+        # walks raw records here too and inherits the identical boundary. A
+        # pin naming only the export would have said nothing about the walker
+        # added beside it.
         source = PUSH.read_text(encoding="utf-8")
-        invocations = [
-            line.strip()
-            for line in source.splitlines()
-            if "$EXPORT_SCRIPT" in line and not line.lstrip().startswith("#")
+        lines = [
+            line for line in source.splitlines() if not line.lstrip().startswith("#")
         ]
-        # The guard that the file exists, and the sandboxed run.
-        self.assertEqual(len(invocations), 2, invocations)
-        self.assertTrue(any(line.startswith("[ -f ") for line in invocations))
-        run_line = [line for line in invocations if not line.startswith("[ -f ")][0]
-        self.assertIn("python3", run_line)
+        for walker in ("$EXPORT_SCRIPT", "$CAPTURE_SCRIPT"):
+            invocations = [line.strip() for line in lines if walker in line]
+            # The guard that the file exists, and the sandboxed run.
+            self.assertEqual(len(invocations), 2, invocations)
+            self.assertTrue(any(line.startswith("[ -f ") for line in invocations))
+            run_line = [line for line in invocations if not line.startswith("[ -f ")][0]
+            self.assertIn("python3", run_line)
         sandbox_lines = [
-            line for line in source.splitlines()
-            if line.strip().startswith("sandbox-exec ")
+            line for line in lines if line.strip().startswith("sandbox-exec ")
         ]
-        self.assertEqual(len(sandbox_lines), 1, sandbox_lines)
-        self.assertIn('-f "$PRODUCER_PROFILE"', sandbox_lines[0])
+        # One per walker, and each one carrying the profile: a count alone
+        # would pass if both lines started the same program.
+        self.assertEqual(len(sandbox_lines), 2, sandbox_lines)
+        for line in sandbox_lines:
+            self.assertIn('-f "$PRODUCER_PROFILE"', line)
+        # Every python3 invocation in the file is one of those sandboxed
+        # lines' continuations — there is no third interpreter start anywhere.
+        starts = [line.strip() for line in lines if "python3" in line]
+        self.assertEqual(len(starts), 2, starts)
+        for line in starts:
+            self.assertIn("-I -B", line)
 
     def test_the_push_carries_every_hardening_option(self):
         result = run_script(PUSH, env=self.env)
