@@ -110,7 +110,11 @@ row costs one row.
 - `kind: image` must carry NEITHER `poster` nor `sources`.
 - `kind: video` must carry `sources`: one to three entries of `path`,
   `sha256`, `type` and `height`, in the operator's own preference order.
-  `poster` is optional; without one the large still is the poster.
+  `poster` is optional; without one the PREVIEW derivative stands in, not the
+  large still. A poster is painted into a stage a few hundred CSS pixels wide,
+  and enlarging is stills-only — so a film's full-size still is shown to nobody
+  at any size, and using it as a poster paid several times over for a rendition
+  nothing else on the page uses.
 - A source `type` must be `video/mp4` or `video/webm`, optionally with a
   single `codecs="…"` parameter over a narrow character set. Those two are
   the video rows of the origin's own reviewed media types — offering the
@@ -118,6 +122,24 @@ row costs one row.
   ONE unusable rung refuses the whole ladder rather than being dropped:
   quietly deleting a rung changes which rendition a reader receives with
   nobody saying so.
+- **A rung's `height` decides which viewports are offered it**, and this is the
+  half an operator has to know about when publishing a ladder. Type answers
+  "can this browser decode it"; height answers "is this rendition a sensible
+  size for this screen", and without the second question every engine that
+  decodes the high-efficiency rung sends a phone the 4K master. So the page
+  groups the rungs by height and offers each group above the SMALLEST from the
+  width at which the next smaller rung would start being upscaled — that rung's
+  native width, derived from its height through the item's own `full` box. For
+  a 3840x2160 item publishing 2160/1080/720 that reads: 720p is offered to
+  every viewport, 1080p from 1280px, 2160p from 1920px.
+
+  Two consequences worth publishing against. The SMALLEST rung is never gated,
+  so a film can never become unplayable however the ladder is written — and it
+  is the rung a phone gets, so it is the one worth encoding well. And every
+  rung of ONE height carries the same gate, so a high-efficiency and a
+  universal rendition of the same size stay a codec choice decided by the order
+  you wrote them in. A ladder whose rungs are all one height is gated nowhere
+  and behaves exactly as it did before this existed.
 - `title` (160), `description` (800) and `link` are each independently
   optional, and absent means absent — nothing renders, nothing is reserved.
   A `link` carries `href` and `label` together, and the `href` must parse as
