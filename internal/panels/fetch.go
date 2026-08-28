@@ -732,7 +732,7 @@ func (s *FetchSource) refreshUsage(ctx context.Context, doer fetchDoer, env func
 	if len(fetched) == 0 {
 		return loadedPayload{}, errors.New("token usage: no source could be fetched")
 	}
-	fallbackLoaded, err := s.fallback.load(snapshotFiles, KindTokenUsage)
+	fallbackLoaded, err := s.fallback.load(snapshotFiles, KindTokenUsageV2)
 	var fallback TokenUsageData
 	if err == nil {
 		// The fallback snapshot already passed the strict gate at load.

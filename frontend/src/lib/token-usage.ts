@@ -10,7 +10,8 @@ import type {
   UsageTrackerProps,
   UsageWindow
 } from './blocks.ts';
-import { formatMagnitude, formatWhole } from './grid.ts';
+import { addDays, formatMagnitude, formatWhole } from './grid.ts';
+import { dayNumber, formatDateRange } from './periods.ts';
 import type {
   PanelEnvelope,
   TokenStatUnit,
@@ -384,13 +385,20 @@ function admitInsights(value: unknown): TokenUsageInsight[] | null {
   return insights;
 }
 
-/* maxCategories bounds how many categories one series may carry — the same
- * bound the Go boundary enforces (maxSeriesCategories in
- * internal/panels/types.go). The closed vocabulary below is already tighter;
- * this is the structural guard that still holds if the vocabulary is ever
- * widened, so a payload can never inflate the render with hundreds of
- * entries. */
-const maxCategories = 8;
+/* maxBreakdownRows bounds how many rows ONE breakdown of a series may carry —
+ * the same bound the Go boundary enforces for both of them
+ * (maxSeriesCategories and maxSeriesModels in internal/panels/types.go, equal
+ * by design). The closed vocabularies below are already tighter; this is the
+ * structural guard that still holds if one is ever widened, so a payload can
+ * never inflate the render with hundreds of entries. */
+const maxBreakdownRows = 8;
+
+/* maxModelDays bounds how many trailing days the model breakdown may cover —
+ * the same 92-day budget the Go boundary enforces (maxModelDays in
+ * internal/panels/types.go), mirrored here so a regression there still meets
+ * a refusal before rendering. The categories breakdown carries no separate
+ * day bound on either side, exactly as in Go. */
+const maxModelDays = 92;
 
 /* admitSeries returns the admitted series, undefined when the section is
  * absent, or null when it exists and is malformed. The start date must be a
@@ -414,9 +422,15 @@ function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
     return null;
   }
   const totals = value.totals as number[];
+  if (value.recorded !== undefined && typeof value.recorded !== 'boolean') {
+    return null;
+  }
   const series: TokenUsageSeries = { startDate: value.startDate, totals };
+  if (value.recorded === true) {
+    series.recorded = true;
+  }
   if (value.categories !== undefined) {
-    const categories = admitCategories(value.categories, totals);
+    const categories = admitBreakdown(value.categories, totals, value.startDate, categorySlots);
     if (categories === null) {
       return null;
     }
@@ -424,59 +438,103 @@ function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
       series.categories = categories;
     }
   }
+  if (value.models !== undefined) {
+    const models = admitBreakdown(value.models, totals, value.startDate, modelSlots, maxModelDays);
+    if (models === null) {
+      return null;
+    }
+    if (models.length > 0) {
+      series.models = models;
+    }
+  }
   return series;
 }
 
-/* admitCategories validates the optional per-day breakdown against the SAME
- * three rules the Go boundary applies, not a weaker shape check
- * (2026-08-24 security review, finding 6):
+/* admitBreakdown validates ONE optional per-day breakdown of the series
+ * against the SAME rules the Go boundary applies, not a weaker shape check
+ * (2026-08-24 security review, finding 6; extended for the model partition by
+ * issue #170):
  *
- *   1. CLOSED MEMBERSHIP. A key must be one of the canonical accounting
- *      classes — the keys categorySlots declares, which is the frontend's
- *      single statement of the vocabulary and is pinned against the capture
- *      tool and the Go admission list by CategoryVocabularyParityTest. The
- *      previous check was a label SHAPE (`/^[a-z][a-z0-9-]{0,31}$/`), and
- *      shape admits far more than the vocabulary does: `private-feature` is
- *      perfectly label-shaped, and categoryLabel would have humanized it
- *      into public copy. The origin blocks such a payload today, so this is
- *      defense in depth — which is exactly what it must be, because the
- *      claim that hostile keys cannot reach rendering has to survive a
- *      future boundary regression rather than depend on one.
- *   2. COUNT. At most maxCategories entries, and no key twice.
- *   3. PARTITION. The categories must sum to the day's own total on EVERY
- *      day, so the stacked reading and the plain reading cannot disagree.
- *      A breakdown that says something different from the graph above it is
- *      not a smaller error than a missing one.
+ *   1. CLOSED MEMBERSHIP. A key must be a member of the vocabulary handed in
+ *      — the frontend's single statement of that vocabulary, pinned against
+ *      the capture tool and the Go serve order by the parity tests in
+ *      scripts/ci. The previous check was a label SHAPE
+ *      (`/^[a-z][a-z0-9-]{0,31}$/`), and shape admits far more than a
+ *      vocabulary does: `private-feature` is perfectly label-shaped, and the
+ *      label helper would have humanized it into public copy. The origin
+ *      blocks such a payload today, so this is defense in depth — which is
+ *      exactly what it must be, because the claim that hostile keys cannot
+ *      reach rendering has to survive a future boundary regression rather
+ *      than depend on one.
+ *   2. COUNT. At most maxBreakdownRows entries, and no key twice.
+ *   3. WINDOW. Rows may cover a declared TRAILING window of the series
+ *      instead of all of it. Every row must declare the SAME window, and a
+ *      declared start must name a day strictly INSIDE the series — so
+ *      "aligned" has exactly one spelling (omission) and a window can never
+ *      claim days the series does not have.
+ *   4. LENGTH. Every row covers exactly the days the window spans.
+ *   5. PARTITION. The rows must sum to the day's own total on EVERY day the
+ *      window covers, so the stacked reading and the plain reading cannot
+ *      disagree. A breakdown that says something different from the graph
+ *      above it is not a smaller error than a missing one.
+ *
+ * ONE function, TWO vocabularies. Categories and models differ in nothing but
+ * which vocabulary admits a key, so they share this admission rather than
+ * growing two implementations of the same five rules — the identical shape
+ * the Go boundary took for the identical reason.
  *
  * Any failing corner refuses the whole payload rather than rendering a
  * half-true breakdown. */
-function admitCategories(value: unknown, totals: number[]): TokenUsageCategory[] | null {
-  if (!Array.isArray(value) || value.length > maxCategories) {
+function admitBreakdown(
+  value: unknown,
+  totals: number[],
+  seriesStart: string,
+  vocabulary: ReadonlyMap<string, number>,
+  maxDays = 0
+): TokenUsageCategory[] | null {
+  if (!Array.isArray(value) || value.length > maxBreakdownRows) {
     return null;
   }
-  const days = totals.length;
+  if (value.length === 0) {
+    return [];
+  }
+  const window = breakdownWindow(value, seriesStart, totals.length);
+  if (window === null) {
+    return null;
+  }
+  const { offset, declared } = window;
+  const span = totals.length - offset;
+  /* The model window's day bound, mirrored from the Go boundary
+   * (maxModelDays in internal/panels/types.go) so the frontend admits by
+   * the same five rules plus this sixth wherever the boundary states one —
+   * zero means the breakdown answers to the series bound alone, which is
+   * the categories case (2026-08-27 adversarial review of PR #230,
+   * finding 4). */
+  if (maxDays > 0 && span > maxDays) {
+    return null;
+  }
   const seen = new Set<string>();
-  const categories: TokenUsageCategory[] = [];
-  const sums = new Array<number>(days).fill(0);
+  const rows: TokenUsageCategory[] = [];
+  const sums = new Array<number>(span).fill(0);
   for (const entry of value) {
-    if (!isRecord(entry) || typeof entry.key !== 'string' || !categorySlots.has(entry.key)) {
+    if (!isRecord(entry) || typeof entry.key !== 'string' || !vocabulary.has(entry.key)) {
       return null;
     }
     if (seen.has(entry.key)) {
       return null;
     }
     seen.add(entry.key);
-    if (!Array.isArray(entry.totals) || entry.totals.length !== days || !entry.totals.every(isCount)) {
+    if (!Array.isArray(entry.totals) || entry.totals.length !== span || !entry.totals.every(isCount)) {
       return null;
     }
     const dailies = entry.totals as number[];
-    for (let day = 0; day < days; day += 1) {
+    for (let day = 0; day < span; day += 1) {
       /* CHECKED summation, the frontend end of finding 9's one numeric
        * contract. Go refuses an int64 category sum that overflows and
        * Python refuses a counter past MAX_COUNT; here the hazard is
        * different in kind but identical in effect. JavaScript addition
        * does not overflow — it silently stops being exact, so eight
-       * admissible categories can sum past 2^53-1 and land on a number
+       * admissible rows can sum past 2^53-1 and land on a number
        * that is merely NEAR the truth. The equality check below would
        * then be comparing two approximations, and could pass on a
        * document whose parts do not actually add up. Refusing the moment
@@ -488,16 +546,75 @@ function admitCategories(value: unknown, totals: number[]): TokenUsageCategory[]
       }
       sums[day] = running;
     }
-    categories.push({ key: entry.key, totals: dailies });
+    const row: TokenUsageCategory = { key: entry.key, totals: dailies };
+    if (declared !== undefined) {
+      row.startDate = declared;
+    }
+    rows.push(row);
   }
-  if (categories.length > 0) {
-    for (let day = 0; day < days; day += 1) {
-      if (sums[day] !== totals[day]) {
-        return null;
-      }
+  for (let day = 0; day < span; day += 1) {
+    if (sums[day] !== totals[offset + day]) {
+      return null;
     }
   }
-  return categories;
+  return rows;
+}
+
+/* breakdownWindow resolves the one window a breakdown's rows declare, or
+ * refuses. Every row must agree — a breakdown whose rows claimed different
+ * ranges would be several breakdowns wearing one section — and an absent
+ * declaration on every row is the aligned case, offset zero.
+ *
+ * A declared start must land strictly INSIDE the series: at zero it would be
+ * a second spelling of "aligned", and at or past the end it would claim days
+ * the series has no totals for. Both are refusals rather than corrections,
+ * because a window is a claim about which days are being described and a
+ * silently adjusted claim is worse than a refused one. */
+function breakdownWindow(
+  rows: readonly unknown[],
+  seriesStart: string,
+  days: number
+): { offset: number; declared?: string } | null {
+  let declared: string | undefined;
+  for (const entry of rows) {
+    if (!isRecord(entry)) {
+      return null;
+    }
+    if (entry.startDate === undefined) {
+      if (declared !== undefined) {
+        return null;
+      }
+      continue;
+    }
+    if (typeof entry.startDate !== 'string') {
+      return null;
+    }
+    if (declared !== undefined && declared !== entry.startDate) {
+      return null;
+    }
+    declared = entry.startDate;
+  }
+  if (declared === undefined) {
+    return { offset: 0 };
+  }
+  /* A partly-declared breakdown — some rows carrying the window, some not —
+   * was already refused above by the first branch, which is why this only
+   * has to resolve one date. */
+  for (const entry of rows) {
+    if (!isRecord(entry) || entry.startDate !== declared) {
+      return null;
+    }
+  }
+  const start = dayNumber(seriesStart);
+  const from = dayNumber(declared);
+  if (start === null || from === null) {
+    return null;
+  }
+  const offset = from - start;
+  if (offset <= 0 || offset >= days) {
+    return null;
+  }
+  return { offset, declared };
 }
 
 /* categoryLabel renders a category key as display copy: hyphens become
@@ -557,6 +674,78 @@ export function categorySlot(key: string): number {
   return categorySlots.get(key) ?? 0;
 }
 
+/* modelSlots is the frontend's single statement of the CLOSED MODEL
+ * vocabulary, and the fixed palette slot each member owns — the same two jobs
+ * categorySlots does, for the second partition of the same series (issue
+ * #170). It is pinned against the capture tool's MODEL_KEYS and the Go
+ * modelServeOrder by ModelVocabularyParityTest in scripts/ci, so adding a
+ * model is one deliberate edit made in three places together.
+ *
+ * The order is the canonical serve order, and `other` leads it because it is
+ * the RESIDUAL: the producer folds an identifier it does not recognize into
+ * it and counts the fold, so a vendor renaming a model mid-flight loses the
+ * split for those tokens rather than losing the tokens. Admission here is
+ * still by MEMBERSHIP — a key outside this map refuses the whole payload —
+ * because the fold happens at capture, where the raw identifier is, and a
+ * document arriving with an unknown key has not been through it. */
+const modelSlots: ReadonlyMap<string, number> = new Map([
+  ['other', 1],
+  ['fable-5', 2],
+  ['opus-5', 3],
+  ['sonnet-5', 4],
+  ['opus-4-8', 5]
+]);
+
+export function modelSlot(key: string): number {
+  return modelSlots.get(key) ?? 0;
+}
+
+/* modelLabels is display copy, and the reason it is a table rather than a
+ * transformation: a model's written name is not derivable from its key. The
+ * category labels are (hyphens become spaces, and "cache read" is right), but
+ * `opus-4-8` humanizes to "opus 4 8", which is not the product's name. The
+ * keys stay machine-shaped on the wire — the producer's emission guard admits
+ * only lowercase label shapes, so "Opus 4.8" could never travel as a key —
+ * and the written form is resolved here, at the one place that renders.
+ *
+ * A key the map does not know cannot reach this function: admission refuses
+ * a model outside the vocabulary, and the two lists are the same list. The
+ * fallback exists so a future vocabulary edit that forgets a label degrades
+ * to the key rather than to `undefined` in the reader's face. */
+const modelLabels: ReadonlyMap<string, string> = new Map([
+  ['other', 'Other'],
+  ['fable-5', 'Fable 5'],
+  ['opus-5', 'Opus 5'],
+  ['sonnet-5', 'Sonnet 5'],
+  ['opus-4-8', 'Opus 4.8']
+]);
+
+export function modelLabel(key: string): string {
+  return modelLabels.get(key) ?? key;
+}
+
+/* modelShares summarizes the model partition the way categoryShares does the
+ * category one, with ONE deliberate difference in the denominator: a model
+ * breakdown normally covers a declared trailing WINDOW of the series, so the
+ * shares are taken over the days the window covers, never over the whole
+ * series. Dividing a window's totals by the whole series' grand total would
+ * produce percentages that sum to well under a hundred and describe nothing
+ * — the shares would silently be answering a question nobody asked. */
+export function modelShares(series: TokenUsageSeries): CategoryShare[] {
+  if (!series.models || series.models.length === 0) {
+    return [];
+  }
+  const totals = series.models.map((model) =>
+    model.totals.reduce((sum, value) => sum + value, 0)
+  );
+  const grand = totals.reduce((sum, total) => sum + total, 0);
+  return series.models.map((model, index) => ({
+    key: model.key,
+    total: totals[index],
+    pct: grand > 0 ? (totals[index] / grand) * 100 : 0
+  }));
+}
+
 /* ---------------------------------------------------------------------------
  * The adapter (issue 165): token-usage envelope in, UsageTracker props out.
  * This is where token accounting becomes sections of a generic usage panel —
@@ -606,7 +795,14 @@ function usageWindowProps(entry: TokenUsageWindow): UsageWindow {
 }
 
 function usageSection(source: TokenUsageSource): UsageSection {
-  const mixed = provenanceIsMixed(source);
+  /* The rendered insight set is resolved BEFORE provenance is, because the
+     two are the same question asked in the right order: what figures does
+     this section show, and do they come from one place? Deriving the rows
+     first means a live-derived set is weighed by provenanceIsMixed exactly
+     as a served one is, instead of the marks being decided against figures
+     that were then replaced. */
+  const insights = renderedInsights(source);
+  const mixed = provenanceIsMixed({ ...source, insights });
   const activity =
     source.series && source.series.totals.length > 0
       ? {
@@ -638,10 +834,11 @@ function usageSection(source: TokenUsageSource): UsageSection {
     windows: source.windows.length > 0 ? source.windows.map(usageWindowProps) : undefined,
     activity,
     insights:
-      source.insights && source.insights.length > 0
+      insights.length > 0
         ? {
-            heading: 'Activity insights',
-            rows: source.insights.map((insight) => ({
+            heading: insightsHeading,
+            note: insightsNote(source.series),
+            rows: insights.map((insight) => ({
               key: insight.label,
               label: insight.label,
               marked: mixed && insight.recorded === true,
@@ -651,6 +848,56 @@ function usageSection(source: TokenUsageSource): UsageSection {
           }
         : undefined
   };
+}
+
+const insightsHeading = 'Activity insights';
+
+/* renderedInsights answers which proportions this section actually shows.
+ *
+ * The panel has always had an insights row, and until the series carried a
+ * MODEL partition those proportions could only be release-time figures frozen
+ * into the shipped snapshot: true when the snapshot was cut, and quietly
+ * ageing from then on. The v2 models section measures the same division from
+ * the same days the graph above draws, so when it is present it is what the
+ * rows report, and the frozen set becomes the documented fallback for a
+ * payload that has no model partition — an older document, a source that does
+ * not report one, or a live fetch that never carried one.
+ *
+ * The derived rows inherit the SERIES' provenance rather than claiming none:
+ * the sealed push is an out-of-band capture, so a derived share is a recorded
+ * figure exactly as the tiles beside it are, and it says so through the same
+ * marking rule instead of borrowing a freshness the envelope did not
+ * promise. */
+function renderedInsights(source: TokenUsageSource): TokenUsageInsight[] {
+  const shares = source.series ? modelShares(source.series) : [];
+  if (shares.length > 0) {
+    return shares.map((share) => ({
+      label: modelLabel(share.key),
+      pct: share.pct,
+      recorded: source.series?.recorded === true
+    }));
+  }
+  return source.insights ?? [];
+}
+
+/* insightsNote states the DAYS the derived proportions were measured over,
+ * and exists because they are measured over a window rather than over the
+ * whole series: the model partition costs one integer per day per model, so
+ * the origin serves a declared trailing window of it. A percentage whose
+ * range is unstated invites the reader to assume the widest one, which is the
+ * assumption most likely to be wrong here.
+ *
+ * Absent for the frozen fallback set, which is not measured over any window
+ * this panel can name — a range invented for it would be exactly the
+ * borrowed freshness the doctrine forbids. */
+function insightsNote(series: TokenUsageSeries | undefined): string | undefined {
+  if (!series || !series.models || series.models.length === 0) {
+    return undefined;
+  }
+  const first = series.models[0].startDate ?? series.startDate;
+  const last = addDays(series.startDate, series.totals.length - 1);
+  const range = formatDateRange(first, last);
+  return range === '' ? undefined : `share of tokens · ${range}`;
 }
 
 /* The sentence under the activity strip used to be built HERE, over the whole

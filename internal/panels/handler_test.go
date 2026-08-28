@@ -228,8 +228,8 @@ func TestResponsesStayWithinTheOwnerBudgets(t *testing.T) {
 	// payload merged onto the embedded snapshot, plus the envelope
 	// scaffolding — and seal.MaxSealedBytes bounds the sealed FILE, so the
 	// served bytes are strictly more than the transported ones. The maximal
-	// admissible document measures the gap at +517 bytes (87,791 sealed,
-	// 88,308 served; TestTheMaximalDocumentFitsTheRaisedBudget in
+	// admissible document measures the gap at +875 bytes (103,633 sealed,
+	// 104,508 served; TestTheMaximalDocumentFitsTheRaisedBudget in
 	// dataroot_test.go logs both), and a snapshot with more rows widens it
 	// without bound. A file sealed at exactly the ceiling is refused at
 	// serve time, and TestDataRootRefusesAnOverBudgetEnvelope drives exactly

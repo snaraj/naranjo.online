@@ -72,23 +72,23 @@
     },
     "media": {
       "type": "object",
-      "description": "The read-only media delivery boundary. Disabled in every deployment this repository describes; the default values are the refusal, not a placeholder. Enabling it is an operator decision gated on ADR 0012's storage evidence and the platform lane's provisioning receipt for the claim, and the conditional below is what makes 'enabled' mean something: it is representable ONLY together with a reviewed profile, a named claim, a mount path, and a measured transfer budget. Every key is required so a values file cannot omit one and have the chart or the origin guess.",
+      "description": "The read-only media delivery boundary. Enabled since 2026-08-27: ADR 0012's storage evidence and the platform lane's provisioning receipt for the claim both landed (issue #182), so the shipped defaults now state the answer that evidence supports. What did NOT change is the conditional below, which is what makes 'enabled' mean something: true is representable ONLY together with a reviewed profile, a named claim, a mount path, and a measured transfer budget. The defaults satisfy that conditional; they do not relax it, and clearing any one of the four still fails validation. Every key is required so a values file cannot omit one and have the chart or the origin guess.",
       "additionalProperties": false,
       "required": ["enabled", "profile", "claimName", "mountPath", "maxConcurrent"],
       "properties": {
         "enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "Render the media volume, its read-only mount, and the origin's media environment. false (the default) renders none of the three, so the process has no media capability at all rather than an unused one."
+          "default": true,
+          "description": "Render the media volume, its read-only mount, and the origin's media environment. true is the shipped default since 2026-08-27. false renders none of the three, so the process has no media capability at all rather than an unused one, and it remains fully supported — turning media off is a values override, never a code change."
         },
         "profile": {
           "type": "string",
           "enum": ["UNRESOLVED_PI_MEDIA_STORAGE", "pi-local-static"],
-          "description": "The reviewed storage arrangement. UNRESOLVED_PI_MEDIA_STORAGE names the unanswered question rather than an arrangement, and the conditional below refuses it whenever enabled is true — so an enabled deployment cannot inherit the sentinel by failing to choose."
+          "description": "The reviewed storage arrangement; pi-local-static is the shipped default. UNRESOLVED_PI_MEDIA_STORAGE names the unanswered question rather than an arrangement, and the conditional below refuses it whenever enabled is true — so a deployment cannot express 'not decided' beside an enabled media boundary, whether by failing to choose or by deliberately setting the sentinel back."
         },
         "claimName": {
           "type": "string",
-          "description": "The operator-provisioned PersistentVolumeClaim carrying the media tree. Empty while media is off; required non-empty when enabled, so no render can mount a claim nobody named. This chart never creates the claim.",
+          "description": "The operator-provisioned PersistentVolumeClaim carrying the media tree. Required non-empty when enabled, so no render can mount a claim nobody named; the empty string stays representable only for a media-disabled deployment. This chart never creates the claim.",
           "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$"
         },
         "mountPath": {
@@ -98,10 +98,10 @@
         },
         "maxConcurrent": {
           "type": "integer",
-          "default": 0,
+          "default": 32,
           "minimum": 0,
           "maximum": 4096,
-          "description": "MEDIA_MAX_CONCURRENT: the measured bound on simultaneous media transfers. 0 is the no-budget-measured sentinel and is refused whenever enabled is true (see the conditional below), so an enabled deployment must carry a real figure. The maximum mirrors server.MaxMediaConcurrency in internal/server/types.go — an implementation safety bound, never a recommended value; the real figure comes from saturation measurement against the actual storage."
+          "description": "MEDIA_MAX_CONCURRENT: the measured bound on simultaneous media transfers. 0 is the no-budget-measured sentinel and is refused whenever enabled is true (see the conditional below), so an enabled deployment must carry a real figure. The shipped 32 is such a figure — saturation measurement against this storage put the knee at 16 and throughput flat from there to 128 with zero errors, so 32 is twice the knee (chart/values.yaml states the measurement). The maximum mirrors server.MaxMediaConcurrency in internal/server/types.go — an implementation safety bound, never a recommended value."
         }
       },
       "if": {
@@ -120,7 +120,7 @@
     },
     "panels": {
       "type": "object",
-      "description": "The panel API's live-data behavior. Unlike media, this block is not frozen to a single value: enabling background refresh is an operational decision the operator is allowed to express here. What the schema enforces is that the decision is EXPLICIT — the key is required and boolean, so a values file cannot omit it and have the origin guess, and the default in values.yaml is off.",
+      "description": "The panel API's live-data behavior. Enabling background refresh is an operational decision the operator expresses here. What the schema enforces is that the decision is EXPLICIT — the key is required and boolean, so a values file cannot omit it and have the origin guess. The default in values.yaml is on since the owner's live-sync directive of 2026-08-27, the same change that gave the chart's NetworkPolicy the exact two-rule egress allowance those loops need.",
       "additionalProperties": false,
       "required": ["refresh"],
       "allOf": [{ "required": ["data"] }],
@@ -132,8 +132,8 @@
           "properties": {
             "enabled": {
               "type": "boolean",
-              "default": false,
-              "description": "Start the background refresh loops. false (the default) starts no loop at all, so the origin makes no outbound request and the panels serve their embedded snapshots as stale. true additionally requires the credential Secrets named by keyEnvName in internal/panels/config/fetch.json and an egress allowance for that file's hosts list; without the egress allowance the attempts fail and the panels keep serving snapshots, which is fail-soft, not an outage."
+              "default": true,
+              "description": "Start the background refresh loops. false starts no loop at all, so the origin makes no outbound request and the panels serve their embedded snapshots as stale, which stays fully supported. true — the shipped default since 2026-08-27 — additionally requires the credential Secrets named by keyEnvName in internal/panels/config/fetch.json for the sources that use one, and an egress allowance for that file's hosts list, which chart/templates/network-policy.yaml now renders as exactly two rules. A source whose credential is absent is skipped rather than faked, so a missing Secret is fail-soft, not an outage. The host bound is enforced in-process by internal/panels/fetch.go, never by the policy, which cannot express a host name."
             }
           }
         },
@@ -145,8 +145,8 @@
           "properties": {
             "enabled": {
               "type": "boolean",
-              "default": false,
-              "description": "Render both claims, the mounts, and the PANELS_DATA_ROOT / PANELS_DATA_STATE / PANELS_DATA_KEY wiring. Off by default (2026-08-24 review finding M6): false serves the embedded release-time snapshot — an explicit, documented as-of-release decision, not a silent fallback — and true requires the pre-provisioned PVs and host directories of docs/usage-export.md first, because defaults that render claims against absent volumes leave a fresh cluster's pod Pending. Enable deliberately, last."
+              "default": true,
+              "description": "Render both claims, the mounts, and the PANELS_DATA_ROOT / PANELS_DATA_STATE / PANELS_DATA_KEY wiring. On by default since 2026-08-27. Finding M6 of the 2026-08-24 review is what kept it off, and its hazard was specific: defaults that render claims against ABSENT volumes leave a fresh cluster's pod Pending. Both PersistentVolumes are now applied and Available with claimRefs pre-pinned to these claim names, and the key Secret exists (issue #182), so the claims bind rather than wait. false remains fully supported and serves the embedded release-time snapshot — an explicit, documented as-of-release decision, not a silent fallback."
             },
             "storageClass": {
               "type": "string",

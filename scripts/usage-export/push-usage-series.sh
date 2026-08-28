@@ -41,13 +41,36 @@
 #                   a machine-local fact, so it lives in the config, not here)
 # and may define:
 #   PUSH_PORT       destination port (default 22)
+#   ACTIVITY_CACHE  a rollup file the first tool maintains beside its
+#                   transcripts, naming per-day totals per model. It EXTENDS
+#                   the walked series backwards over days whose transcripts
+#                   the tool's own retention has already deleted, and nothing
+#                   else: a day the walk still holds keeps the walked figure,
+#                   because that one is derived from the records themselves.
+#                   Optional by design — an absent or unreadable cache costs
+#                   depth, never correctness, so a run without one is a
+#                   shorter honest series rather than a failure.
 #   MERGE_SOURCES   space-separated KEY=FILE pairs for further tools'
-#                   captured series (e.g. the second tool's capture output).
-#                   REQUIRED whenever the origin's embedded snapshot ships
-#                   more than one source: a document whose source set does
-#                   not EQUAL the shipped set is refused whole, because one
-#                   envelope status cannot describe two ages of data
-#                   (2026-08-24 security review, finding 7).
+#                   captured series, each file produced by an earlier capture
+#                   run. REQUIRED, together with MERGE_CAPTURES below,
+#                   whenever the origin's embedded snapshot ships more than
+#                   one source: a document whose source set does not EQUAL the
+#                   shipped set is refused whole, because one envelope status
+#                   cannot describe two ages of data (2026-08-24 security
+#                   review, finding 7).
+#   MERGE_CAPTURES  space-separated KEY=FORMAT=DIRECTORY triples for further
+#                   tools whose records are on THIS machine. Each is walked
+#                   fresh at the top of every run — inside the same sandbox
+#                   the export runs in — and merged from the private scratch,
+#                   so a second tool's half of the panel is exactly as current
+#                   as the first tool's.
+#                   This exists because the alternative was a file somebody
+#                   maintained by hand. A hand-written merge source ages
+#                   silently between edits, and it can be WRONG in a way no
+#                   schedule ever repairs: the one on this machine was missing
+#                   the window and derived sections the loader requires, so
+#                   every scheduled export refused for as long as it took a
+#                   human to look (2026-08-27).
 #
 # Exit status is nonzero on any failure; diagnostics never include payload
 # content. Stage names and byte counts only.
@@ -84,6 +107,8 @@ esac
 : "${SOURCE_LABEL:?SOURCE_LABEL missing from configuration}"
 : "${TRANSCRIPTS:?TRANSCRIPTS missing from configuration}"
 MERGE_SOURCES="${MERGE_SOURCES:-}"
+MERGE_CAPTURES="${MERGE_CAPTURES:-}"
+ACTIVITY_CACHE="${ACTIVITY_CACHE:-}"
 PUSH_PORT="${PUSH_PORT:-22}"
 
 # The destination must carry its own user, because -F /dev/null means no
@@ -99,6 +124,8 @@ esac
 
 EXPORT_SCRIPT="$REPO_DIR/scripts/export_usage_series.py"
 [ -f "$EXPORT_SCRIPT" ] || fail "export script not found under REPO_DIR"
+CAPTURE_SCRIPT="$REPO_DIR/scripts/capture_usage_series.py"
+[ -f "$CAPTURE_SCRIPT" ] || fail "capture script not found under REPO_DIR"
 [ -x "$USAGESEAL_BIN" ] || fail "usageseal binary not executable"
 
 # The producer's capability boundary, and the reason it lives HERE rather than
@@ -130,21 +157,70 @@ trap 'rm -rf "$SCRATCH"' EXIT INT TERM
 PLAIN="$SCRATCH/usage.json"
 SEALED="$SCRATCH/usage.enc"
 
-# 1. Export, inside the sandbox declared above: no process can be created and
+# 1. Recapture every merge source whose records live on this machine, so the
+#    document carries one age of data rather than one fresh half beside a file
+#    somebody last edited by hand.
+#
+#    ON A FAILED RECAPTURE THIS RUN REFUSES, and pushes nothing. The tempting
+#    alternative — carry on with the sources that did work — is not available
+#    here, and that is a property of the receiving end rather than a judgement
+#    call: the origin refuses a document whose source set does not EQUAL the
+#    set its embedded snapshot ships, because one envelope instant cannot
+#    honestly describe a fresh half beside a release-time half (2026-08-24
+#    security review, finding 7). A partial document would therefore be built,
+#    sealed, pushed, and refused on arrival — a failure moved later and made
+#    quieter. Refusing here keeps the last good sealed file serving on the
+#    receiving host, and the panel's own envelope goes stale on its TTL, which
+#    is the honest report of exactly what happened.
+#
+#    The capture runs inside the same sandbox the export does, for the same
+#    reason: it walks raw records.
+for triple in $MERGE_CAPTURES; do
+    key=${triple%%=*}
+    rest=${triple#*=}
+    format=${rest%%=*}
+    tree=${rest#*=}
+    [ "$key" != "$triple" ] && [ "$format" != "$rest" ] && [ -n "$format" ] && [ -n "$tree" ] \
+        || fail "MERGE_CAPTURES entries take the form KEY=FORMAT=DIRECTORY"
+    # The key becomes a file name in the scratch directory, so it is held to
+    # the same label shape the exporter enforces on it — before it is used to
+    # build a path, not after.
+    printf '%s' "$key" | grep -q '^[a-z][a-z0-9-]*$' \
+        || fail "a MERGE_CAPTURES key must be label-shaped"
+    sandbox-exec -f "$PRODUCER_PROFILE" \
+        /usr/bin/env python3 -I -B "$CAPTURE_SCRIPT" \
+        --transcripts "$tree" --source "$key" --format "$format" \
+        > "$SCRATCH/$key.json" \
+        || fail "a merge source could not be recaptured; nothing was pushed"
+    MERGE_SOURCES="$MERGE_SOURCES $key=$SCRATCH/$key.json"
+done
+
+# 2. Export, inside the sandbox declared above: no process can be created and
 #    no socket can be opened for the whole walk, enforced by the kernel rather
 #    than asserted by the walked program's import list. The interpreter is
 #    still isolated (-I ignores user site and environment hooks; -B writes no
 #    bytecode), and the guard inside the script is still what limits the
 #    emission to dates and integers — three independent controls, none of them
 #    load-bearing alone.
+#
+#    The activity cache, when configured, is passed here rather than assumed:
+#    a configured path that is not a readable file REFUSES, because a silently
+#    dropped cache would shorten the published history with nothing to say so,
+#    and a series that quietly loses two months of depth between runs is the
+#    failure this whole work package exists to end (issue #170).
 set -- --transcripts "$TRANSCRIPTS" --source "$SOURCE_LABEL" --out "$PLAIN"
+if [ -n "$ACTIVITY_CACHE" ]; then
+    [ -f "$ACTIVITY_CACHE" ] \
+        || fail "ACTIVITY_CACHE does not name a file; a configured cache that cannot be read would silently shorten the series"
+    set -- "$@" --activity-cache "$ACTIVITY_CACHE"
+fi
 for pair in $MERGE_SOURCES; do
     set -- "$@" --merge-source "$pair"
 done
 sandbox-exec -f "$PRODUCER_PROFILE" \
     /usr/bin/env python3 -I -B "$EXPORT_SCRIPT" "$@" || fail "export refused"
 
-# 2. Seal on this machine, before anything leaves it.
+# 3. Seal on this machine, before anything leaves it.
 "$USAGESEAL_BIN" -mode seal -key-file "$KEY_FILE" < "$PLAIN" > "$SEALED" \
     || fail "sealing refused"
 
@@ -172,7 +248,7 @@ else
     local_sum=$(sha256sum "$SEALED" | cut -d' ' -f1)
 fi
 
-# 3. Push. The connection is assembled ENTIRELY on this command line and
+# 4. Push. The connection is assembled ENTIRELY on this command line and
 #    resolves against NO configuration file (2026-08-24 round-3 review,
 #    finding 8). `-F /dev/null` is what makes that true: OpenSSH documents
 #    that giving -F also causes /etc/ssh/ssh_config to be ignored, so neither

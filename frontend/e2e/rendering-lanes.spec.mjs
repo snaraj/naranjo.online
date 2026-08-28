@@ -3039,6 +3039,39 @@ test('the token panel detail card shows the value and the view-scoped period, an
   expect(Number(cumulativeRows[0].replace(/,/g, ''))).toBeGreaterThanOrEqual(
     Number(dailyRows[0].replace(/,/g, ''))
   );
+
+  /* The SENTENCE under the strip answers in the same period the card does
+     (issue #170). A reader looking at weekly columns is asking a question
+     about weeks, and the sentence used to answer with a day's peak whatever
+     lens was pressed — describing a graph nobody was looking at. Read from
+     the live DOM after a real lens switch, because that is the only place
+     the two can be seen to agree. */
+  const summaryOf = () =>
+    panel.locator('.usage-activity-total').first().textContent();
+
+  await panel.getByRole('radio', { name: 'daily', exact: true }).first().click();
+  expect(
+    (await summaryOf()).trim(),
+    'the daily sentence must count days and name a day peak'
+  ).toMatch(/tokens over \d+ days, peaking at /);
+
+  await panel.getByRole('radio', { name: 'weekly', exact: true }).first().click();
+  expect(
+    (await summaryOf()).trim(),
+    'the weekly sentence must count weeks, average per week, and peak a week'
+  ).toMatch(/tokens over \d+ weeks, averaging .+ per week, peaking at .+ in one week$/);
+
+  await panel.getByRole('radio', { name: 'monthly', exact: true }).first().click();
+  expect(
+    (await summaryOf()).trim(),
+    'the monthly sentence must count months'
+  ).toMatch(/tokens over \d+ months?, averaging .+ per month, peaking at .+ in one month$/);
+
+  await panel.getByRole('radio', { name: 'cumulative', exact: true }).first().click();
+  expect(
+    (await summaryOf()).trim(),
+    'the cumulative sentence states a rate, never a peak that would repeat its own total'
+  ).toMatch(/tokens accumulated over \d+ days, averaging .+ per day$/);
 });
 
 /* ===========================================================================

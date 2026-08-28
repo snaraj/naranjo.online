@@ -7,6 +7,77 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.51] - 2026-08-27
+
+The production-enablement release: real media and live panel data, on by
+default, on the owner's 2026-08-27 directives.
+
+### Added
+
+- Production chart defaults for the media subsystem: `media.enabled: true`,
+  the pre-provisioned read-only claim `naranjo-online-media` mounted at
+  `/naranjo-online-media`, `profile: pi-local-static`, and
+  `maxConcurrent: 32` — measured on the production host (saturation knee at
+  16 workers ≈ 489 MB/s over 4 MiB ranged reads, flat to 128, zero errors),
+  set at 2× the knee.
+- Production chart defaults for the panels data root: the sealed-series
+  claim and its state volume mounted read-only/read-write respectively, the
+  `PANELS_DATA_KEY` Secret wired, and `panels.refresh.enabled: true` so the
+  key-free fetch tier (GitHub contributions and commits, OSRS hiscores)
+  refreshes live instead of serving the release-time snapshot.
+- An exact two-rule egress allowance replacing the total outbound deny the
+  chart carried while nothing fetched: TCP/443 to public address space, and
+  DNS to the cluster DNS Pods selected by namespace AND pod label in one
+  ANDed peer. Rule 1 carries an `ipBlock.except` list of exactly the
+  routable ranges the in-process dialer refuses (10.0.0.0/8, 172.16.0.0/12,
+  192.168.0.0/16, 169.254.0.0/16), so the fabric states the same refusal
+  the process enforces: HTTPS to the internet, never to the cluster or LAN.
+  `chart-egress-pin.sh` pins the new shape whole — 31 policy mutations and
+  63 whole-render mutations all refused, floors raised to match.
+- `token-usage/v2`: a per-day, per-model partition of each source's series
+  over a closed, append-only model vocabulary (`other` reserved at index 0
+  for tokens the producer cannot attribute), windowed to at most 92 trailing
+  days as a byte-budget decision, declared by the section's own start date,
+  and admitted by the same five rules on every boundary — closed membership,
+  bounded rows, window contained in the series, exact span coverage, and
+  per-day sums equal to the aggregate under an overflow-checked add. v1
+  keeps a decode-only mirror so a document claiming the old kind while
+  carrying a models section refuses rather than quietly upgrading.
+- Per-view readings under the token-usage grids: the sentence now answers in
+  the reader's own period (daily, weekly, monthly, cumulative), computed
+  from the windowed daily cells rather than the lens output, so a weekly
+  total is never a day's figure and never a 7×-counted aggregate.
+
+### Fixed
+
+- One oversized transcript line (> 4 MiB) no longer refuses the entire
+  usage export: the line is skipped without being read whole, counted, and
+  drained to a record boundary, while the tree-size work bound still holds
+  (raised 2 GiB → 16 GiB after the real tree measured past the old bound).
+  The drain runs only for a line that arrived truncated: a line of exactly
+  the bound arrives newline-terminated, and draining past it swallowed the
+  next record whole, uncounted (found by this release's adversarial review,
+  fixed with a regression test proven against the pre-fix producer).
+- The frontend's breakdown admission now mirrors the origin's 92-day
+  model-window budget, so both sides of the boundary state the same rules
+  (adversarial review, defense-in-depth finding).
+- The hand-assembled second-tool merge source is gone: `MERGE_CAPTURES`
+  recaptures every local tool's series fresh at the top of each push run,
+  inside the same kernel sandbox, and a failed recapture refuses the whole
+  push rather than shipping two ages of data under one envelope instant.
+- The exporter's series depth now extends back to the earliest retained
+  evidence (2026-07-02 for the first tool via its activity cache,
+  2026-08-09 for the second) instead of the 15 days the walk alone held.
+
+### Security
+
+- Egress opens by exact allow-list, never by erosion: the two rules above
+  are the complete outbound surface, the five-host bound stays enforced
+  in-process at construction and per-request, and the resolved-address
+  guard refuses private, loopback and link-local answers before dialling.
+  The network-layer except list is defense in depth over that dialer, not
+  a replacement for it.
+
 ## [0.1.50] - 2026-08-27
 
 ### Added

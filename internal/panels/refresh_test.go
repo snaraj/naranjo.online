@@ -525,7 +525,7 @@ func shippedSeries(t *testing.T, registry *Registry, label string) *TokenUsageSe
 func TestUsageRefreshSkipsUnkeyedSourcesAndMerges(t *testing.T) {
 	t.Parallel()
 	registry := newRegistry(snapshotFiles, []panelDefinition{
-		{id: "token-usage", kind: KindTokenUsage, title: "Token usage", source: usageFetchSource(t)},
+		{id: "token-usage", kind: KindTokenUsageV2, title: "Token usage", source: usageFetchSource(t)},
 	})
 	state := registry.byID["token-usage"]
 	// The recorded series the unkeyed source ships, read BEFORE any refresh

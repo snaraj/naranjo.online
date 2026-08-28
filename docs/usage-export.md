@@ -229,20 +229,28 @@ forced command truncated at 128 KiB, and the origin refused past 64 KiB
 admitted, and an oversized one was truncated, atomically installed over the
 last good file, and only then reported as a checksum mismatch.
 
-The ceiling is measured, not guessed, and the measurement was REDONE at the
-2026-08-24 round-3 review: the figures previously printed here had gone stale
-against the document the producer now emits, because finding 5 made a
-per-source `capturedAt` required and the complete window and derived sections
-mandatory. The structural maximum the origin can admit is one document
+The ceiling is measured, not guessed, and the measurement has been REDONE
+twice — at the 2026-08-24 round-3 review, when a required per-source
+`capturedAt` and mandatory window and derived sections made the printed
+figures stale, and again for issue #170, which added the per-model
+partition. The structural maximum the origin can admit is one document
 covering both shipped snapshot sources, each at the 732-day series bound with
-the complete five-key category vocabulary and every required section present.
-Compact-encoded and sealed, that measures **98,958 bytes** at ten-digit daily
+the complete five-key category vocabulary, the complete five-key model
+vocabulary over its own 92-day window, and every required section present.
+Compact-encoded and sealed, that measures **109,280 bytes** at ten-digit daily
 values — an order of magnitude above the shipped snapshot's own measured peak
-day of 1,911,380,289. Pretty-printed, the identical document is 196,256
-bytes, so compact output alone roughly halves it. 131,072 leaves **32,114
-bytes** of headroom: the same maximum still seals to 125,340 bytes at
-thirteen-digit values and only crosses the ceiling at fourteen, where it
-reaches 134,134.
+day of 1,911,380,289. Pretty-printed, the identical document is 216,898
+bytes, so compact output alone roughly halves it. 131,072 leaves **21,792
+bytes** of headroom: the same maximum still seals to 128,708 bytes at
+twelve-digit values and only crosses the ceiling at thirteen, where it
+reaches 138,422.
+
+The models section spent one decimal digit of that headroom — it was three
+before #170 — and that is precisely the trade its 92-day window bounds. One
+integer per day per member over the full 732-day series would cost roughly
+eight times what the window costs and would not fit under this ceiling at
+all, which is why the section declares the range it covers instead of
+quietly covering fewer days than the series above it.
 
 These figures are no longer transcribed into a test assertion. `CapParityTest`
 BUILDS the maximum document from the shipped snapshot's own labels and the
@@ -264,8 +272,8 @@ not (2026-08-25 round-4 review, finding 7). The two bound different bytes:
 this one bounds the sealed FILE, the response budget bounds the finished
 ENVELOPE — the payload merged onto the embedded snapshot, plus the envelope
 around it — so the served bytes always exceed the transported ones. The
-maximal document the origin admits measures the gap at +517 bytes (87,791
-sealed, 88,308 served; `TestTheServedEnvelopeExceedsTheFileItCameFrom` in
+maximal document the origin admits measures the gap at +875 bytes (103,633
+sealed, 104,508 served; `TestTheServedEnvelopeExceedsTheFileItCameFrom` in
 `internal/panels/dataroot_test.go` logs both), and a larger snapshot widens
 it. A file sealed at exactly 131,072 bytes is therefore refused at serve
 time. What equality buys is only that the last step no longer hides a
@@ -317,7 +325,9 @@ safe is the refusal itself, which keeps the last good response serving.
    SOURCE_LABEL=first-tool-label
    TRANSCRIPTS=$HOME/.claude/projects
    # PUSH_PORT=22
+   # ACTIVITY_CACHE=$HOME/<first-tool-state-dir>/stats-cache.json
    # MERGE_SOURCES=other-label=/path/to/other-series.json
+   # MERGE_CAPTURES=other-label=running-totals=$HOME/<other-tool-records>
    ```
 
    **`PUSH_HOST` is a real `user@host`, not an `~/.ssh/config` alias, and
@@ -352,8 +362,36 @@ safe is the refusal itself, which keeps the last good response serving.
    would otherwise authenticate with your ordinary key — quite possibly an
    admin key, and without the forced command.
 
-   `MERGE_SOURCES` is how a second tool's captured series joins the same
-   document: point it at that tool's capture output (the capture tool's
+   `ACTIVITY_CACHE` is how the series keeps its DEPTH (issue #170). The
+   first tool's transcript journals are retention-pruned on its own
+   schedule, so a walk of the tree reaches only as far back as the tree
+   still goes and the published history was getting quietly shorter every
+   time old journals aged out. The tool keeps its own per-day, per-model
+   roll-up beside them, which survives that pruning. Pointing at it extends
+   the series over the days the walk has LOST and nothing else: a day the
+   walk still covers keeps the walked figure, because the walk de-duplicates
+   replayed records and the roll-up does not — measured on the owner's own
+   tree the roll-up runs roughly twice as high on days both cover, so the
+   two are never summed and the walk always wins a conflict.
+
+   The option is optional and the refusal is narrow: configure nothing and
+   the series is simply shorter, which is honest. Configure a path that is
+   not a readable file and the run REFUSES before it pushes, because a
+   silently dropped cache would shorten the published history with nothing
+   anywhere saying why.
+
+   `MERGE_CAPTURES` is the same idea for a SECOND tool whose records live on
+   this machine: each `KEY=FORMAT=DIRECTORY` triple is walked fresh at the
+   top of every run, inside the same kernel sandbox the export runs in, and
+   merged from the private scratch directory. It replaced a file somebody
+   maintained by hand — one that aged silently between edits and, as shipped
+   on the owner's machine, was missing sections the loader requires, so every
+   scheduled export refused for as long as it took a human to look
+   (2026-08-27). A recapture that fails refuses the whole run, for the same
+   reason `MERGE_SOURCES` is required below.
+
+   `MERGE_SOURCES` is how a second tool's ALREADY-CAPTURED series joins the
+   same document: point it at that tool's capture output (the capture tool's
    stdout shape). The export validates and re-guards whatever it merges.
 
    **It is REQUIRED whenever the shipped snapshot carries more than one

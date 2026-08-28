@@ -621,64 +621,131 @@ func admitSeriesSection(section usageSeriesSource) (*TokenUsageSeries, error) {
 			return nil, fmt.Errorf("series total: %w", err)
 		}
 	}
-	categories, err := admitSeriesCategories(section.Categories, totals)
+	categories, err := admitBreakdown(
+		section.Categories,
+		section.CategoriesStartDate,
+		section.Series.StartDate,
+		totals,
+		categoryServeOrder,
+		maxSeriesCategories,
+		0,
+	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("categories: %w", err)
+	}
+	models, err := admitBreakdown(
+		section.Models,
+		section.ModelsStartDate,
+		section.Series.StartDate,
+		totals,
+		modelServeOrder,
+		maxSeriesModels,
+		maxModelDays,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("models: %w", err)
 	}
 	return &TokenUsageSeries{
 		StartDate:  section.Series.StartDate,
 		Totals:     totals,
 		Recorded:   true,
 		Categories: categories,
+		Models:     models,
 	}, nil
 }
 
-// admitSeriesCategories validates the optional category partition: bounded
-// count, machine-shaped keys, exact series length, values inside the one
-// numeric contract, and the per-day sums equal to the series totals — so the
+// breakdownOffset resolves a declared breakdown window to its offset into the
+// series, or refuses. Absent is offset zero — the aligned case every document
+// written before windows existed states by omission — and a declared date
+// must name a day strictly INSIDE the series, so "aligned" has exactly one
+// spelling and a window can never claim days the series does not have.
+func breakdownOffset(declared, seriesStart string, days int) (int, error) {
+	if declared == "" {
+		return 0, nil
+	}
+	start, err := time.Parse(dayLayout, seriesStart)
+	if err != nil {
+		return 0, fmt.Errorf("startDate: %w", err)
+	}
+	from, err := time.Parse(dayLayout, declared)
+	if err != nil {
+		return 0, fmt.Errorf("window startDate: %w", err)
+	}
+	offset := int(from.Sub(start) / (24 * time.Hour))
+	if offset <= 0 || offset >= days {
+		return 0, fmt.Errorf("window starts %d days into a %d day series", offset, days)
+	}
+	return offset, nil
+}
+
+// admitBreakdown validates ONE optional labelled partition of a daily series:
+// bounded row count, closed-vocabulary keys, a window contained in the
+// series, rows exactly covering that window, values inside the one numeric
+// contract, and the per-day sums equal to the series totals across it — so a
 // stacked reading and the plain reading can never disagree.
+//
+// ONE function, TWO vocabularies (issue #170). Categories and models differ
+// in exactly three data points — which vocabulary admits a key, how many rows
+// are allowed, and how many days the window may span — so they share this
+// admission instead of growing two implementations of the same five rules.
+// The producer's own emission checks the identical five before it writes.
+//
+// The window makes the partition a claim about the days it covers and NOTHING
+// else. Days before it carry no row and are not summed against; the series
+// total for them stands on its own, which is the honest shape for a day whose
+// magnitude is known and whose division is not.
 //
 // The arithmetic is CHECKED, and the review earned that (2026-08-24 round-3,
 // finding 9). Every value was individually authenticated and non-negative,
-// and the day sum was still a plain int64 addition: three categories at
-// MaxInt64, MaxInt64 and 2 wrapped to exactly zero and were admitted against
-// a total of zero — a "partition" that proves nothing at all. Two independent
-// controls close it. admitCount bounds every count to maxCountValue, which
-// alone makes maxSeriesCategories values unable to overflow; and addCounts
-// refuses an overflow anyway, so a future edit to either bound cannot quietly
-// reopen the wrap.
-func admitSeriesCategories(categories map[string][]int64, totals []int64) ([]TokenUsageCategory, error) {
-	if len(categories) == 0 {
+// and the day sum was still a plain int64 addition: three rows at MaxInt64,
+// MaxInt64 and 2 wrapped to exactly zero and were admitted against a total of
+// zero — a "partition" that proves nothing at all. Two independent controls
+// close it. admitCount bounds every count to maxCountValue, which alone makes
+// maxRows values unable to overflow; and addCounts refuses an overflow
+// anyway, so a future edit to either bound cannot quietly reopen the wrap.
+func admitBreakdown(rows map[string][]int64, declared, seriesStart string, totals []int64, vocabulary []string, maxRows, maxDays int) ([]TokenUsageCategory, error) {
+	if len(rows) == 0 {
+		if declared != "" {
+			return nil, errors.New("a window is declared with no rows to cover it")
+		}
 		return nil, nil
 	}
-	if len(categories) > maxSeriesCategories {
-		return nil, fmt.Errorf("%d categories, over the %d bound", len(categories), maxSeriesCategories)
+	if len(rows) > maxRows {
+		return nil, fmt.Errorf("%d rows, over the %d bound", len(rows), maxRows)
 	}
-	sums := make([]int64, len(totals))
-	for key, values := range categories {
-		if !validCategoryKey(key) {
-			return nil, errors.New("category key is outside the closed category vocabulary")
+	offset, err := breakdownOffset(declared, seriesStart, len(totals))
+	if err != nil {
+		return nil, err
+	}
+	span := len(totals) - offset
+	if maxDays > 0 && span > maxDays {
+		return nil, fmt.Errorf("the window spans %d days, over the %d day bound", span, maxDays)
+	}
+	sums := make([]int64, span)
+	for key, values := range rows {
+		if !inVocabulary(key, vocabulary) {
+			return nil, errors.New("key is outside the closed vocabulary")
 		}
-		if len(values) != len(totals) {
-			return nil, fmt.Errorf("category %q covers %d days; the series covers %d", key, len(values), len(totals))
+		if len(values) != span {
+			return nil, fmt.Errorf("row %q covers %d days; the window covers %d", key, len(values), span)
 		}
 		for day, value := range values {
 			if err := admitCount(value); err != nil {
-				return nil, fmt.Errorf("category %q: %w", key, err)
+				return nil, fmt.Errorf("row %q: %w", key, err)
 			}
 			sum, ok := addCounts(sums[day], value)
 			if !ok {
-				return nil, fmt.Errorf("category %q overflows the day %d partition", key, day)
+				return nil, fmt.Errorf("row %q overflows the day %d partition", key, day)
 			}
 			sums[day] = sum
 		}
 	}
 	for day, sum := range sums {
-		if sum != totals[day] {
-			return nil, fmt.Errorf("categories sum to %d on day %d; the series total is %d", sum, day, totals[day])
+		if sum != totals[offset+day] {
+			return nil, fmt.Errorf("rows sum to %d on day %d; the series total is %d", sum, offset+day, totals[offset+day])
 		}
 	}
-	return orderCategories(categories), nil
+	return orderBreakdown(rows, declared, vocabulary), nil
 }
 
 // admitCount is THE numeric contract for every figure a pushed document
@@ -707,16 +774,15 @@ func addCounts(left, right int64) (int64, bool) {
 	return sum, true
 }
 
-// validCategoryKey admits exactly the CLOSED category vocabulary — the keys
-// categoryServeOrder declares, and nothing else. Membership, not shape: the
-// original shape check admitted any lowercase identifier, so a label-shaped
-// private identifier (`private-feature`) passed admission and rendered
-// publicly through the frontend's category labels (2026-08-24 review finding
-// H1). The vocabulary is the panel's accounting classes; a new class is a
-// deliberate edit of categoryServeOrder on BOTH ends of the pipe, never
-// something a pushed file can mint.
-func validCategoryKey(key string) bool {
-	for _, allowed := range categoryServeOrder {
+// inVocabulary admits exactly the CLOSED vocabulary it is handed and nothing
+// else. Membership, not shape: the original check was a lowercase-identifier
+// SHAPE test, so a label-shaped private identifier (`private-feature`) passed
+// admission and rendered publicly through the frontend's labels (2026-08-24
+// review finding H1). A vocabulary is the panel's own list of accounting
+// classes or models; extending one is a deliberate edit in three places
+// together, never something a pushed file can mint.
+func inVocabulary(key string, vocabulary []string) bool {
+	for _, allowed := range vocabulary {
 		if key == allowed {
 			return true
 		}
@@ -724,18 +790,23 @@ func validCategoryKey(key string) bool {
 	return false
 }
 
-// orderCategories fixes the served order to the canonical vocabulary list.
-// Admission has already proven every key a member of categoryServeOrder
-// (validCategoryKey is a closed membership check), so walking that list IS
-// the complete, deterministic order — every replica's bytes, and therefore
-// its digest ETag, stay identical. The earlier alphabetical tail for
-// out-of-vocabulary keys is gone with the vocabulary that admitted them
+// orderBreakdown fixes the served order to the canonical vocabulary list and
+// stamps each row with the window it covers. Admission has already proven
+// every key a member (inVocabulary is a closed membership check), so walking
+// that list IS the complete, deterministic order — every replica's bytes, and
+// therefore its digest ETag, stay identical. The earlier alphabetical tail
+// for out-of-vocabulary keys is gone with the vocabulary that admitted them
 // (2026-08-24 review finding H1).
-func orderCategories(categories map[string][]int64) []TokenUsageCategory {
-	ordered := make([]TokenUsageCategory, 0, len(categories))
-	for _, key := range categoryServeOrder {
-		if values, ok := categories[key]; ok {
-			ordered = append(ordered, TokenUsageCategory{Key: key, Totals: values})
+//
+// The window is repeated per row rather than stated once beside them so each
+// row is self-describing to a consumer that admits rows one at a time; it is
+// the declared value or empty, never re-derived, so the served claim is the
+// admitted one.
+func orderBreakdown(rows map[string][]int64, declared string, vocabulary []string) []TokenUsageCategory {
+	ordered := make([]TokenUsageCategory, 0, len(rows))
+	for _, key := range vocabulary {
+		if values, ok := rows[key]; ok {
+			ordered = append(ordered, TokenUsageCategory{Key: key, StartDate: declared, Totals: values})
 		}
 	}
 	return ordered

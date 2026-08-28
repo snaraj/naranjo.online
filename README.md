@@ -94,11 +94,13 @@ no Makefile-side code can intercept that. The environment-variable form is
 not subject to it and is the only form this repository documents or
 supports.
 
-Panels serve their embedded snapshot data egress-free by default; live
-refresh (`PANELS_REFRESH`) stays a production opt-in, never a local default
-(see "Enabling live refresh" below). Media stays disabled unless
+Locally the app serves egress-free and media-free, and that is a property of
+the unset environment rather than a build flag: live refresh (`PANELS_REFRESH`)
+starts no loop unless it is switched on, and media stays disabled unless
 `MEDIA_ENABLED`, `MEDIA_ROOT`, and `MEDIA_MAX_CONCURRENT` are all supplied
-together — unset locally, the app serves with media off.
+together. What the deployed chart supplies is a separate question, answered in
+"Enabling live refresh" and "Media" below; the local default path is unchanged
+either way.
 
 ## Development
 
@@ -221,8 +223,9 @@ hidden.
 
 ### Refreshing the shipped snapshots
 
-With live refresh off everywhere, the embedded snapshots are what the site
-actually serves, so keeping them true is an operator task rather than a code
+The embedded snapshots are what a deployment serves whenever live refresh is
+off, what every panel falls back to when a fetch fails, and what the site
+serves locally, so keeping them true is an operator task rather than a code
 one. Both steps below are read-only, run on the operator's own machine, and
 put only public or aggregate facts into the repository.
 
@@ -332,30 +335,36 @@ compare-and-swap in the origin and by a render that refuses more than one
 replica while the capability is on — not by the access mode: the state claim
 is `ReadWriteOnce`, and the mode that would enforce it in the storage layer,
 `ReadWriteOncePod`, is supported for CSI volumes only and this target runs
-none. The capability defaults OFF in the chart
-(`panels.data.enabled=false`): a fresh install schedules with no storage
-ceremony and serves the embedded release-time snapshot — an explicit,
-documented as-of-release state — and enabling the sealed feed is the
-deliberate last step of the storage ceremony. The end-to-end operator
+none. The capability defaults ON in the chart
+(`panels.data.enabled=true`) since 2026-08-27. It defaulted off for as long as
+the storage ceremony was outstanding, because claims rendered against absent
+volumes leave a fresh install's pod Pending; both PersistentVolumes are now
+applied and Available with claimRefs pre-pinned to these claim names, so the
+claims bind rather than wait. Setting `panels.data.enabled=false` remains
+fully supported and serves the embedded release-time snapshot — an explicit,
+documented as-of-release state, still rendered and still checked on every pull
+request. The end-to-end operator
 manual — key generation, the forced-command push identity, the
 cluster-side directory and PV ceremonies, enablement order, verification,
 and the deliberate failure modes — is `docs/usage-export.md`; the chart
 contract is pinned by `scripts/ci/chart-storage-pin.sh` in the same CI job
 as the ingress and egress pins.
 
-### Enabling live refresh (not enabled anywhere today)
+### Enabling live refresh (on since 2026-08-27)
 
-Live refresh is off in every deployment this repository describes, and
-turning it on is a reviewed operational change, not a code change. It
-requires all of the following, together:
+Live refresh was off in every deployment this repository described until the
+owner's live-sync directive of 2026-08-27. Turning it on was a reviewed
+operational change, not a code change, and it required all of the following
+together — which is also the list to re-read before changing any of them:
 
 1. `PANELS_REFRESH=true` in the pod environment. The chart renders that
-   variable from `panels.refresh.enabled`, which defaults to `false` and is
+   variable from `panels.refresh.enabled`, which now defaults to `true` and is
    required by `chart/values.schema.json` — a values file that omits the
    decision fails validation rather than letting the origin guess, and the
    variable is rendered whether it is on or off so the deployed state is
    readable off the manifest. Any value other than `true`/`false` fails the
-   boot rather than guessing.
+   boot rather than guessing. Setting it back to `false` remains supported and
+   starts no loop at all.
 2. The credential environment variables named by the `keyEnvName` fields in
    `internal/panels/config/fetch.json`, supplied as cluster Secrets. They are
    read at fetch time only, flow straight into a request header, and are
@@ -365,14 +374,35 @@ requires all of the following, together:
    number. This applies to the token-usage producers ONLY — the game
    hiscores, the contribution calendar, and the commit lists are zero-secret
    by construction and need nothing from this step.
-3. An egress allowance for the hosts in that file's `hosts` allowlist. The
-   chart's NetworkPolicy denies every outbound connection — it declares the
-   `Egress` policy type over an empty rule list — so with policy unchanged
-   the refresh attempts fail and the panels keep serving their snapshots as
-   `stale` — the fail-soft outcome, not an outage. Turning that into an
-   allowance means naming exact destinations in a separately reviewed change
-   (issue #79); it never means removing the deny. Until that lands, setting
-   `panels.refresh.enabled` buys nothing but failed attempts.
+3. An egress allowance for the hosts in that file's `hosts` allowlist. This is
+   the one the chart itself used to withhold: its NetworkPolicy denied every
+   outbound connection, so refresh alone bought nothing but failed attempts and
+   the same `stale` snapshots — fail-soft, not an outage. The policy now
+   renders an allowance instead, and it is exactly two rules: TCP/443 to any
+   address, and UDP+TCP/53 to the cluster DNS Pods, selected by namespace AND
+   pod labels so the two are ANDed rather than ORed.
+
+   **That is not the host bound, and the distinction matters.** A NetworkPolicy
+   selects Pods, namespaces and CIDRs; it cannot express a host name at all, so
+   rule 1 bounds the protocol and port and leaves the destination open. Writing
+   a CIDR list there would look like a host bound while pinning addresses this
+   repository cannot verify and upstreams re-assign at will. The host bound
+   lives in `internal/panels/fetch.go`, where it can be exact: only absolute
+   `https` URLs on the `fetch.json` allowlist are admitted, checked once at
+   construction over every configured endpoint — so a config naming an unlisted
+   host refuses to build — and checked again on every request after the URL has
+   been rebuilt, so a redirect or a rewritten parameter cannot reach a host
+   construction approved for nobody. Non-https schemes and URL userinfo are
+   refused, and a resolved address in private, loopback or link-local space is
+   refused at dial time, so an allowlisted NAME pointed at a LAN address by a
+   hostile DNS answer still cannot be reached. Two layers, two different jobs.
+
+   `chart/templates/network-policy.yaml` carries the same explanation beside
+   the rules, and `scripts/ci/chart-egress-pin.sh` pins both rules as whole
+   sub-trees — refusing a third rule, a widened or removed port, a loosened DNS
+   peer, a list emptied back to allow-all, a list narrowed back to the retired
+   deny, and a second policy document — across 31 text and 63 whole-render
+   mutations.
 
 One panel is claimed rather than refreshed when both capabilities are on.
 With `PANELS_DATA_ROOT` set, the sealed data root OWNS the token-usage panel:
@@ -382,10 +412,13 @@ it, and the pod logs that decision once at startup. Every OTHER
 refresh-backed panel is unaffected — enabling the sealed feed never silently
 disables the rest (2026-08-24 security review, finding 8).
 
-**Cluster enablement is a separate owner-reviewed step** (standing audit item
-S2) covering the Secret material, the egress policy, and the review of what
-the origin is then permitted to talk to. Nothing in this repository performs
-it, and no artifact here should be read as approval for it.
+**Cluster enablement was a separate owner-reviewed step** (standing audit item
+S2) covering the Secret material, the egress policy, and the review of what the
+origin is then permitted to talk to. The owner took it on 2026-08-27, and the
+chart records the outcome: the refresh switch and the two-rule allowance ship
+together, with the host bound where a policy cannot express it. Nothing in this
+repository grants that step — the values and the policy describe a decision
+already made, and changing either is another decision, not a formality.
 
 ## Observability contract
 
@@ -471,15 +504,20 @@ carve-out with provenance recorded in its `SOURCES.md`, an exact-file
 allowlist plus size ceiling pinned by test, and replacement by the real
 media pipeline tracked in issue #182.
 
-Media is still **disabled**, and enabling it remains an operator decision
-that needs ADR 0012's storage evidence and a provisioned claim. What is
-prepared (issue #207) is everything on this side of that decision: the chart
-can now DESCRIBE an enabled deployment — `media.enabled: true` is
-representable only together with a reviewed profile, a named claim, a mount
+Media is **enabled** as of 2026-08-27. It was an operator decision needing
+ADR 0012's storage evidence and a provisioned claim, and both landed: the
+claim is Bound against a `local` PersistentVolume on the platform's own
+StorageClass and populated with the real tree, and the delivery contract was
+proven against the running binary rather than a render. What issue #207 had
+prepared was everything on this side of that decision — `media.enabled: true`
+is representable only together with a reviewed profile, a named claim, a mount
 path and a measured transfer budget, all four, and the mount it renders is
-read-only — while the shipped defaults stay off and
-`scripts/ci/chart-media-pin.sh` proves the default render carries no media
-volume, no mount and no media environment. On the frontend, the gallery reads
+read-only. That conditional is unchanged; only the answer is. The shipped
+defaults now satisfy it, and `scripts/ci/chart-media-pin.sh` pins the inverted
+truth in all three directions: the default render carries exactly one media
+volume read-only at both levels, every incomplete enablement is still refused
+by name, and `media.enabled=false` still renders no media at all. On the
+frontend, the gallery reads
 a `gallery/v1` manifest from the media volume when one is served and falls
 back to the vendored set above when it is not, and it renders film as well as
 photography: poster in the strip, click-to-play in the lightbox, never

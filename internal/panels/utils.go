@@ -38,6 +38,11 @@ func decodeKindPayload(kind string, raw json.RawMessage) (json.RawMessage, error
 	var payload any
 	switch kind {
 	case KindTokenUsage:
+		// The decode-only v1 mirror, deliberately: v1's admission may not
+		// widen because v2 was minted beside it, and a shared struct would
+		// have made a models section a KNOWN field under the old kind.
+		payload = &tokenUsageDataV1{}
+	case KindTokenUsageV2:
 		payload = &TokenUsageData{}
 	case KindVCSActivity:
 		payload = &VCSActivityData{}

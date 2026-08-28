@@ -42,6 +42,36 @@ guard, the splice — is shared:
     a shape change in the journal degrades to a loud refusal — no records
     found — rather than to a quietly wrong number.
 
+WHAT ONE CAPTURE EMITS. One section, in exactly the shape the runtime
+exporter's merge loader admits and the origin's data root then merges: the
+aggregate daily series, a per-day CATEGORY partition of it, a per-day MODEL
+partition of it, the complete aggregate window set, and the complete set of
+series-derived tiles. One shape from one function is the point — the second
+tool's section used to be assembled by hand, which is how it came to be
+missing two required sections and refusing every export until somebody
+noticed (2026-08-27).
+
+BREAKDOWNS ARE WINDOWED, AND THEY SAY SO. A breakdown covers a contiguous
+TRAILING window of the series and declares where it starts; absent, it is
+aligned with the series. Two different reasons produce a shorter window and
+both are honest rather than degraded. The category split can only cover days
+whose records carry one, so a series extended into days the journals have
+lost carries its categories over the days that still have journals. The model
+split is bounded by a byte BUDGET — a row costs one integer per day per
+member, and at the series-day bound the section alone would outweigh the
+whole payload ceiling — so it covers a declared trailing quarter. A window
+that is stated is a window a reader can be told about; a window that is
+silently truncated is a lie about depth.
+
+DEPTH SURVIVES PRUNING. The journals are deleted on the tool's own schedule,
+so a walk alone measures a history that gets SHORTER on its own. `--activity-
+cache` reads the tool's own per-day, per-model roll-up for the days the walk
+has lost. The union is by date and the WALK wins every day it covers: the two
+are different measurements (the walk de-duplicates replayed records, the
+roll-up does not, and on the owner's tree they differ by roughly a factor of
+two), so mixing them inside one day would produce a figure neither tool ever
+measured.
+
 WHAT LEAVES THE WALK — this is the whole security argument, and requirement 12
 of AGENTS.md is absolute about it. The transcripts contain prompts, responses,
 file names, project directory names, session identifiers and machine-local
@@ -124,10 +154,13 @@ the snapshot path it is given.
 
     scripts/capture_usage_series.py --transcripts DIR --source LABEL \
         [--format messages|running-totals] \
+        [--activity-cache FILE] \
         [--snapshot internal/panels/snapshots/token-usage.json]
 
-With no `--snapshot` the series and its derived figures print to stdout as
-JSON, so the capture can be inspected before it is committed to anything.
+With no `--snapshot` the complete section prints to stdout as JSON, so the
+capture can be inspected before it is committed to anything — and so that one
+invocation is a valid merge source for the runtime exporter with no hand
+assembly anywhere between them.
 """
 
 from __future__ import annotations
@@ -166,6 +199,29 @@ KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9-]{0,31}$")
 # here keeps the vendor-neutrality pin intact.
 CATEGORY_KEYS = ("input", "output", "cache-read", "cache-write", "reasoning")
 
+# The CLOSED model vocabulary, in the order it is served, and the same list
+# the origin's modelServeOrder and the frontend's modelSlots carry — pinned
+# across the three by ModelVocabularyParityTest exactly as the category
+# vocabulary is. The members are MACHINE KEYS, never display copy: a key is
+# what crosses the boundary, and the reader that renders it resolves its own
+# label from its own copy of this list. That split is what lets the emission
+# guard below stay a closed membership check — a display label carries spaces
+# and dots and could never be a field name — and it is why no product name is
+# spelled anywhere in this file.
+#
+# `other` is index 0 BY RULE, not by convention: it is the reserved residual
+# member, the class every token that this tool cannot attribute to a
+# vocabulary member falls into. It is never a named entity's slot, so a
+# reader's colour for a named model never lands on the residual.
+#
+# The list is APPEND-ONLY. An index is a colour, so reusing or reordering one
+# repaints history under a different entity; a retired model keeps its slot
+# as a tombstone rather than freeing it.
+MODEL_KEYS = ("other", "fable-5", "opus-5", "sonnet-5", "opus-4-8")
+
+# The reserved residual member, spelled once.
+MODEL_OTHER = "other"
+
 # Every field name the emission may legitimately contain, CLOSED. The guard
 # refuses any dictionary key outside this set (plus the caller's explicitly
 # declared extra keys — the operator-typed source labels, which the origin
@@ -176,12 +232,21 @@ EMISSION_KEYS = frozenset(
         # Section names of one exported source.
         "series",
         "categories",
+        "models",
         "windows",
         "derived",
         # The series shape.
         "startDate",
         "totals",
         "recorded",
+        # Where a windowed breakdown section begins. Both are optional and
+        # both mean the same thing: the section covers a TRAILING window of
+        # the series rather than all of it, because the section can only
+        # measure the days its own record covers. Absent means "aligned with
+        # the series", which is what every document written before these
+        # existed says by omission.
+        "categoriesStartDate",
+        "modelsStartDate",
         # The window vocabulary and its two figures.
         "today",
         "week",
@@ -190,18 +255,7 @@ EMISSION_KEYS = frozenset(
         "current-streak",
         "longest-streak",
     }
-).union(CATEGORY_KEYS)
-
-# The usage fields that make up one message's contribution to its day. The
-# names are the transcript's; the SUM is what internal/panels/mapping.go
-# computes from the vendor usage document, so a snapshot series and a live
-# series are the same measurement.
-USAGE_FIELDS = (
-    "input_tokens",
-    "output_tokens",
-    "cache_read_input_tokens",
-    "cache_creation_input_tokens",
-)
+).union(CATEGORY_KEYS).union(MODEL_KEYS)
 
 # The record shapes the walk knows how to read, named for what the record
 # CONTAINS rather than for the tool that wrote it: a shape is a journal
@@ -219,6 +273,52 @@ RECORD_FORMATS = (FORMAT_MESSAGES, FORMAT_RUNNING_TOTALS)
 # keeps the reader correct for records that report only the aggregate.
 RUNNING_USAGE_KEY = "total_token_usage"
 RUNNING_TOTAL_FIELD = "total_tokens"
+
+# The running-totals record's remaining fields, and the accounting classes
+# they resolve to. They are NOT additions to the total: measured across the
+# owner's tree, `input_tokens + output_tokens == total_tokens` on every
+# well-formed record, while the cached/cache-write fields are SUBSETS of the
+# input side and the reasoning field is a SUBSET of the output side. So the
+# five-way partition is built by SUBTRACTION — the input class keeps what the
+# cache classes do not claim, the output class keeps what reasoning does not —
+# and the parts then sum to the record's own total by construction rather
+# than by hope. running_parts below checks that construction anyway and
+# degrades in two named steps rather than emitting a partition that lies.
+RUNNING_INPUT_FIELD = "input_tokens"
+RUNNING_OUTPUT_FIELD = "output_tokens"
+RUNNING_CACHE_READ_FIELD = "cached_input_tokens"
+RUNNING_CACHE_WRITE_FIELD = "cache_write_input_tokens"
+RUNNING_REASONING_FIELD = "reasoning_output_tokens"
+RUNNING_FIELDS = (
+    RUNNING_TOTAL_FIELD,
+    RUNNING_INPUT_FIELD,
+    RUNNING_OUTPUT_FIELD,
+    RUNNING_CACHE_READ_FIELD,
+    RUNNING_CACHE_WRITE_FIELD,
+    RUNNING_REASONING_FIELD,
+)
+
+# The transcript usage fields of the MESSAGE shape mapped to their served
+# category keys. The FIELD names are the transcript's own; the KEYS are the
+# canonical vocabulary above. These four are DISJOINT, so a message's parts
+# partition its own total with no subtraction at all.
+CATEGORY_FIELDS = (
+    ("input_tokens", "input"),
+    ("output_tokens", "output"),
+    ("cache_read_input_tokens", "cache-read"),
+    ("cache_creation_input_tokens", "cache-write"),
+)
+
+# The usage fields that make up one message's contribution to its day, read
+# off the mapping above so the two can never name different sets. The SUM is
+# what internal/panels/mapping.go computes from the vendor usage document, so
+# a snapshot series and a live series are the same measurement.
+USAGE_FIELDS = tuple(field for field, _ in CATEGORY_FIELDS)
+
+# Where the message shape records which model produced it. The value is a
+# vendor-qualified identifier; model_key below reduces it to this file's own
+# vocabulary WITHOUT ever spelling one.
+MESSAGE_MODEL_FIELD = "model"
 
 # The one file extension either shape is journalled in.
 RECORD_SUFFIX = ".jsonl"
@@ -257,8 +357,47 @@ MAX_RECORD_FILES = 20_000
 MAX_TREE_DEPTH = 16
 MAX_RECORD_LINE_BYTES = 4 << 20
 MAX_RECORD_LINES = 5_000_000
-MAX_RECORD_BYTES = 2 << 30
+# RESIZED 2026-08-27, against a measurement rather than a guess. At 2 GiB this
+# bound was smaller than a real transcript tree on the owner's own machine —
+# one of them measures over three gigabytes — so the walk refused before it
+# reached a single record, and the tool it was meant to read had to be
+# hand-transcribed instead. A bound that refuses the ordinary case is not a
+# guard, it is an outage with a comment.
+#
+# It stays a bound, and the two beside it are why it can afford to be a
+# generous one: the walk is STREAMING (no file is held whole), the per-LINE
+# bound is what keeps memory finite, and the file and line counts below still
+# stop a pathological tree. This one bounds the WORK an unattended hourly job
+# may do, so it is sized to leave real headroom over a growing record rather
+# than to sit just above today's.
+MAX_RECORD_BYTES = 16 << 30
 MAX_DEDUP_IDENTITIES = 2_000_000
+
+# The CLOSED window vocabulary and the span the week window covers. Closed on
+# both ends of the pipe: the origin refuses any other key, so none can be
+# produced here.
+WINDOW_TODAY = "today"
+WINDOW_WEEK = "week"
+WEEK_DAYS = 7
+
+# How many trailing days the per-model breakdown may cover. It is a BUDGET,
+# not a limit of the record: a per-model row costs one integer per day per
+# member, and at the series-day bound the section alone would outweigh the
+# entire payload ceiling every stage of this pipeline enforces. A quarter is
+# the reserve the shared ceiling can carry with room left for the aggregate
+# and its categories, and the covered range is DECLARED (the section carries
+# its own start date) so a reader is told what it is looking at rather than
+# shown a silent truncation.
+MAX_MODEL_DAYS = 92
+
+# The tool's own per-day roll-up, named for what it contains. `read_activity_
+# cache` explains why a second, weaker source of the same measurement exists
+# at all; these are the three field names it reads and the bound it reads
+# them under.
+ACTIVITY_CACHE_DAILY_KEY = "dailyModelTokens"
+ACTIVITY_CACHE_DATE_KEY = "date"
+ACTIVITY_CACHE_MODELS_KEY = "tokensByModel"
+MAX_ACTIVITY_CACHE_BYTES = 1 << 20
 
 # The stat keys a daily series defines on its own — the same four
 # internal/panels/types.go lists, minus the window total, which is a property
@@ -293,6 +432,16 @@ def new_counters():
         # (2026-08-24 round-3 review, finding 10).
         "bytes": 0,
         "symlinks": 0,
+        # Lines skipped for exceeding the per-line memory guard, and records
+        # whose own fields could not be reduced to a partition of their own
+        # total. Both are DIAGNOSTICS rather than refusals: see bounded_lines
+        # and running_parts for why each degrades instead of failing the run.
+        "oversized": 0,
+        "unpartitioned": 0,
+        # Records whose model identifier is outside the closed vocabulary, and
+        # therefore contributed to the reserved residual member instead of
+        # minting a label nobody reviewed.
+        "unattributed": 0,
     }
 
 
@@ -477,15 +626,56 @@ def bounded_lines(handle, counters):
     line is refused BEFORE it is read into memory — iterating the handle
     would have read it first and refused afterwards, which is the failure
     mode, not the fix (2026-08-24 round-3 review, finding 10).
+
+    AN OVERSIZED LINE IS SKIPPED, NOT FATAL (2026-08-27). The bound was
+    written as a memory guard and then used as a refusal, so ONE pasted
+    payload in ONE journal file refused the whole export — measured on the
+    owner's own tree, where a single line past the bound stopped every
+    scheduled push, for every source, indefinitely. That is the wrong
+    direction on both counts: the guard's job is to stop this process holding
+    an unbounded line in memory, which skipping does exactly as well as
+    raising, and a producer that goes silent because one record is fat is a
+    panel that quietly stops advancing.
+    So the bound still bounds — the line is never read whole — and the record
+    it belongs to is dropped, counted, and reported. The count is the honest
+    part: an operator can see how many records the walk could not read
+    without the walk naming, or holding, any of them. The dropped record's
+    tokens are simply not counted, which understates a day rather than
+    inventing one.
+    The remainder of the line is drained in bounded chunks so the next yield
+    starts at a real record boundary; without that drain the tail of the
+    oversized line would be handed out as a sequence of fragments, each
+    failing to parse — silently, since an unparsable line is skipped — which
+    is a subtler version of the same bug.
     """
     while True:
         line = handle.readline(MAX_RECORD_LINE_BYTES + 1)
         if not line:
             return
         if len(line) > MAX_RECORD_LINE_BYTES:
-            raise CaptureError(
-                "a transcript line is longer than the %d byte bound" % MAX_RECORD_LINE_BYTES
-            )
+            counters["oversized"] += 1
+            counters["bytes"] += len(line)
+            # Drain ONLY when the oversized line came back truncated. A line
+            # whose content is exactly the bound arrives here already
+            # newline-terminated, and draining past it would swallow the NEXT
+            # record whole — uncounted by any counter, which is the silent
+            # version of the bug this branch exists to end (2026-08-27
+            # adversarial review of PR #230, finding 1).
+            if line.endswith("\n"):
+                continue
+            while True:
+                if counters["bytes"] > MAX_RECORD_BYTES:
+                    raise CaptureError(
+                        "the transcript tree is larger than the %d byte bound"
+                        % MAX_RECORD_BYTES
+                    )
+                rest = handle.readline(MAX_RECORD_LINE_BYTES + 1)
+                if not rest:
+                    return
+                counters["bytes"] += len(rest)
+                if rest.endswith("\n"):
+                    break
+            continue
         counters["lines"] += 1
         if counters["lines"] > MAX_RECORD_LINES:
             raise CaptureError(
@@ -601,7 +791,7 @@ def open_record_file(record, counters):
 
 
 def read_records(root, counters):
-    """Yield (day, total) pairs from every message-shaped record under root.
+    """Yield (day, total, parts, model) rows from every message-shaped record.
 
     Every value this generator produces is already reduced to a date and an
     integer; the parsed record itself never escapes the loop body. Files that
@@ -623,7 +813,7 @@ def read_records(root, counters):
 
 
 def read_running_totals(root, counters):
-    """Yield (day, advance) pairs from every running-totals record under root.
+    """Yield (day, advance, parts, model) rows from every running-totals record.
 
     The running total is per FILE — every journal in the owner's tree opens
     its own accounting at zero — so the high-water mark resets at each file
@@ -642,30 +832,39 @@ def read_running_totals(root, counters):
         handle = open_record_file(record, counters)
         if handle is None:
             continue
-        previous = 0
+        previous = {field: 0 for field in RUNNING_FIELDS}
         with handle:
             for line in bounded_lines(handle, counters):
                 reduced = reduce_running_line(line)
                 if reduced is None:
                     continue
                 day, running = reduced
-                if running == previous:
+                if running[RUNNING_TOTAL_FIELD] == previous[RUNNING_TOTAL_FIELD]:
                     counters["duplicates"] += 1
+                    previous = running
                     continue
-                if running > previous:
-                    advance = running - previous
+                if running[RUNNING_TOTAL_FIELD] > previous[RUNNING_TOTAL_FIELD]:
+                    advances = {
+                        field: field_advance(running[field], previous[field])
+                        for field in RUNNING_FIELDS
+                    }
                 else:
                     counters["restarts"] += 1
-                    advance = running
+                    advances = dict(running)
                 previous = running
+                advance = advances[RUNNING_TOTAL_FIELD]
                 if advance <= 0:
                     continue
                 counters["counted"] += 1
-                yield day, advance
+                # This shape journals no model, so every record it carries is
+                # the residual member by construction — never an invented
+                # label, and never a silent omission from a partition that has
+                # to cover every day.
+                yield day, advance, running_parts(advances, advance, counters), MODEL_OTHER
 
 
 def reduce_line(line, seen, counters):
-    """Reduce one transcript line to (day, total), or None if it carries none.
+    """Reduce one transcript line to (day, total, parts, model), or None.
 
     De-duplication is load-bearing rather than tidy. The tool replays earlier
     assistant messages into later transcript files when a session is resumed
@@ -702,7 +901,8 @@ def reduce_line(line, seen, counters):
     day = utc_day(stamp)
     if day is None:
         return None
-    return day, usage_total(usage)
+    parts = usage_parts(usage)
+    return day, sum(parts.values()), parts, model_key(message.get(MESSAGE_MODEL_FIELD), counters)
 
 
 def reduce_running_line(line):
@@ -739,7 +939,7 @@ def reduce_running_line(line):
     day = utc_day(stamp)
     if day is None:
         return None
-    return day, running_total(running)
+    return day, running_fields(running)
 
 
 def running_total(usage):
@@ -750,10 +950,110 @@ def running_total(usage):
     a walk that found nothing refuses loudly in `daily_series`, which is the
     honest failure for a journal whose shape has changed.
     """
-    value = usage.get(RUNNING_TOTAL_FIELD)
+    return count_field(usage, RUNNING_TOTAL_FIELD)
+
+
+def count_field(usage, field):
+    """One usage field as a non-negative count, or 0.
+
+    Booleans are rejected explicitly: `True` is an `int` in Python, and a
+    usage field that ever arrived as a flag would otherwise add one token.
+    """
+    value = usage.get(field)
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
     return 0
+
+
+def running_fields(usage):
+    """Every cumulative field one running-totals record reports."""
+    return {field: count_field(usage, field) for field in RUNNING_FIELDS}
+
+
+def field_advance(current, previous):
+    """How far one cumulative field moved, under the module's three cases.
+
+    The same arithmetic the total obeys, applied per field: an ADVANCE is the
+    distance moved, a REPEAT moves nothing, and a RESTART from a lower figure
+    contributes the new value itself. Doing it per field rather than scaling
+    the total is what keeps the parts a MEASUREMENT — a proportional split of
+    the total against some ratio would be an invention with tidy arithmetic.
+    """
+    if current >= previous:
+        return current - previous
+    return current
+
+
+def running_parts(advances, total, counters):
+    """The five-way partition of one running-totals record's own advance.
+
+    THREE TIERS, EACH NAMED, because a partition that cannot be measured must
+    degrade rather than lie:
+
+      1. The full partition — input less its two cache classes, output less
+         reasoning, and the three subsets themselves. Emitted when every part
+         is non-negative and the parts sum to the record's own total.
+      2. The two-way partition — input and output alone — when the subsets
+         disagree with their parents but input plus output still equals the
+         total. Coarser, still exactly true, and still a member-only
+         partition of the closed vocabulary, so a day mixing tier-1 and
+         tier-2 records still partitions.
+      3. None, counted as `unpartitioned`. The record's tokens still reach
+         the daily total (that measurement stands on its own field), and the
+         DAY it lands in can no longer be partitioned, which daily_series
+         turns into an omitted categories section rather than a wrong one.
+    """
+    cache_read = advances[RUNNING_CACHE_READ_FIELD]
+    cache_write = advances[RUNNING_CACHE_WRITE_FIELD]
+    reasoning = advances[RUNNING_REASONING_FIELD]
+    uncached = advances[RUNNING_INPUT_FIELD] - cache_read - cache_write
+    visible = advances[RUNNING_OUTPUT_FIELD] - reasoning
+    parts = {
+        "input": uncached,
+        "output": visible,
+        "cache-read": cache_read,
+        "cache-write": cache_write,
+        "reasoning": reasoning,
+    }
+    if all(value >= 0 for value in parts.values()) and sum(parts.values()) == total:
+        return {key: value for key, value in parts.items() if value > 0}
+    coarse = {
+        "input": advances[RUNNING_INPUT_FIELD],
+        "output": advances[RUNNING_OUTPUT_FIELD],
+    }
+    if sum(coarse.values()) == total:
+        return {key: value for key, value in coarse.items() if value > 0}
+    counters["unpartitioned"] += 1
+    return None
+
+
+def model_key(value, counters):
+    """One record's model identifier reduced to a vocabulary member.
+
+    The identifier a journal writes is VENDOR-QUALIFIED — a vendor segment,
+    a hyphen, then the model. This drops the leading segment and asks the
+    closed vocabulary whether what remains is a member; nothing here spells a
+    vendor or a model, so the reduction stays a mechanical transform rather
+    than a table of names in code (the same rule that keeps the record shapes
+    named for what they contain).
+
+    AN IDENTIFIER OUTSIDE THE VOCABULARY BECOMES THE RESIDUAL MEMBER, and it
+    is counted. That is the deliberate half of the design: model churn is
+    constant, and the two failure modes on the other side are both worse —
+    minting a label nobody reviewed puts unreviewed copy on a public page,
+    and refusing the document leaves the panel frozen until a human edits
+    three files. The residual member is already in the vocabulary, already
+    has its neutral slot, and already means exactly this. The REFUSAL lives
+    where it belongs instead: the origin and the browser refuse any models
+    key outside the vocabulary, so an unreviewed label can never be rendered
+    even if a producer somehow emitted one.
+    """
+    if isinstance(value, str):
+        _, separator, remainder = value.partition("-")
+        if separator and remainder in MODEL_KEYS and remainder != MODEL_OTHER:
+            return remainder
+    counters["unattributed"] += 1
+    return MODEL_OTHER
 
 
 def utc_day(stamp):
@@ -767,25 +1067,55 @@ def utc_day(stamp):
     return moment.astimezone(datetime.timezone.utc).date().isoformat()
 
 
-def usage_total(usage):
-    """Sum one message's usage fields, ignoring anything that is not a count.
+def usage_parts(usage):
+    """One message's usage fields as its own partition, by category key.
 
-    Booleans are rejected explicitly: `True` is an `int` in Python, and a
-    usage field that ever arrived as a flag would otherwise add one token.
+    The four fields are DISJOINT in this record shape, so they partition the
+    message's total by construction — no subtraction, and nothing to check.
+    Zero-valued classes are dropped rather than carried, so a day's partition
+    names only the classes it actually measured.
     """
-    total = 0
-    for field in USAGE_FIELDS:
-        value = usage.get(field)
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-            total += value
-    return total
+    parts = {}
+    for field, key in CATEGORY_FIELDS:
+        value = count_field(usage, field)
+        if value > 0:
+            parts[key] = value
+    return parts
 
 
-def daily_series(pairs):
-    """Build the contiguous day-indexed series from (day, total) pairs."""
+def usage_total(usage):
+    """Sum one message's usage fields, ignoring anything that is not a count."""
+    return sum(usage_parts(usage).values())
+
+
+def daily_series(rows):
+    """Build the contiguous day-indexed series from reduced record rows.
+
+    A row is (day, total, parts, model): the day's own arithmetic, the
+    record's category partition (None when the record could not be
+    partitioned) and the vocabulary member its tokens belong to. All three
+    day indexes are built in ONE walk over ONE stream, so the aggregate, the
+    breakdown, and the attribution are the same records read once — a second
+    walk would be a second chance to disagree.
+
+    Returns (series, categories, models, partitioned days), where `categories`
+    and `models` map a vocabulary key to a day-indexed list over the same
+    contiguous window the series covers. The caller windows them.
+    """
     totals_by_day = {}
-    for day, total in pairs:
+    parts_by_day = {}
+    models_by_day = {}
+    uncategorised = set()
+    for day, total, parts, model in rows:
         totals_by_day[day] = totals_by_day.get(day, 0) + total
+        bucket = models_by_day.setdefault(day, {})
+        bucket[model] = bucket.get(model, 0) + total
+        if parts is None:
+            uncategorised.add(day)
+            continue
+        carried = parts_by_day.setdefault(day, {})
+        for key, value in parts.items():
+            carried[key] = carried.get(key, 0) + value
     if not totals_by_day:
         raise CaptureError("no usage records found under the transcript root")
     days = sorted(totals_by_day)
@@ -797,14 +1127,37 @@ def daily_series(pairs):
             "the record spans %d days, over the %d day bound the origin enforces"
             % (span, MAX_SERIES_DAYS)
         )
-    totals = [
-        totals_by_day.get((first + datetime.timedelta(days=offset)).isoformat(), 0)
-        for offset in range(span)
-    ]
+    window = [(first + datetime.timedelta(days=offset)).isoformat() for offset in range(span)]
+    totals = [totals_by_day.get(day, 0) for day in window]
     # `recorded` is what marks this as the out-of-band capture it is. The live
     # refresh path builds its series without it, so the flag is also how the
     # registry pin tells a shipped series from a fetched one.
-    return {"startDate": days[0], "totals": totals, "recorded": True}
+    series = {"startDate": days[0], "totals": totals, "recorded": True}
+    categories = day_indexed(parts_by_day, window, CATEGORY_KEYS)
+    models = day_indexed(models_by_day, window, MODEL_KEYS)
+    partitioned = [day for day in window if day not in uncategorised]
+    return series, categories, models, partitioned
+
+
+def day_indexed(by_day, window, vocabulary):
+    """Lay per-day, per-key sums onto one contiguous day window.
+
+    Only keys the record actually reported get a row: a vocabulary member no
+    day carries is an all-zero list that says nothing and costs bytes on
+    every push. Order is the vocabulary's, so two runs over one tree emit
+    identical bytes.
+    """
+    rows = {}
+    for key in vocabulary:
+        row = [by_day.get(day, {}).get(key, 0) for day in window]
+        # An all-zero row is not a measurement of nothing, it is nothing: it
+        # adds a member to the rendered vocabulary, costs one integer per day
+        # on every push, and contributes exactly zero to the partition. The
+        # residual member reaches this by the ordinary route — records with no
+        # attributable model that also carry no tokens.
+        if any(row):
+            rows[key] = row
+    return rows
 
 
 def daily_streaks(totals):
@@ -843,6 +1196,225 @@ def derived_figures(series):
         STAT_CURRENT_STREAK: current,
         STAT_LONGEST_STREAK: longest,
     }
+
+
+def assert_partition(totals, sections, offset):
+    """Refuse a breakdown whose rows do not sum to the series totals.
+
+    Checked over the section's OWN window — `offset` days into the series —
+    because a windowed section makes no claim about the days before it
+    starts. Inside the window the claim is exact in both directions: over is
+    a lie, and under is a hole wearing a partition's label.
+
+    The origin enforces exactly this, so checking here means a broken build
+    of this program can never push a file the origin will reject every five
+    minutes until the next capture.
+    """
+    for index in range(len(totals) - offset):
+        summed = sum(values[index] for values in sections.values())
+        if summed != totals[offset + index]:
+            raise CaptureError(
+                "a breakdown sums to a different figure than the series total on day %d"
+                % (offset + index)
+            )
+
+
+def window_section(sections, offset):
+    """Trim every row of a breakdown to a trailing window of the series."""
+    return {key: values[offset:] for key, values in sections.items()}
+
+
+def trailing_offset(window, covered):
+    """Where the trailing run of covered days begins, or None if there is none.
+
+    A breakdown covers a CONTIGUOUS TRAILING window and nothing else. Two
+    facts force that shape rather than a per-day mask: the wire carries one
+    start date and one list per key, and a mask would let a hole in the
+    middle of a "partition" pass unnoticed. So the window begins after the
+    newest day the breakdown could not measure, and everything older is
+    simply not claimed.
+    """
+    offset = len(window)
+    while offset > 0 and window[offset - 1] in covered:
+        offset -= 1
+    return None if offset == len(window) else offset
+
+
+def windows_from(series, categories, offset, today):
+    """Derive the closed window set from the daily categories.
+
+    `today` is the capture instant's UTC date; a day the record does not
+    cover contributes zero, which inside the asked window is a measurement —
+    "no recorded usage that day" — never an invention. The input figure sums
+    the input-class categories (uncached input plus both cache classes),
+    matching what the live mapper counts as input; output is the output
+    category alone.
+
+    A day inside the SERIES but before the categories window contributes zero
+    for the same reason: the total for that day is known, its split is not,
+    and a window figure is a split. The categories window is trailing and
+    these figures ask about today and the six days before it, so that case
+    needs the newest days themselves to be unsplittable — at which point a
+    zero is the only honest answer available.
+    """
+    start = datetime.date.fromisoformat(series["startDate"]) + datetime.timedelta(days=offset)
+    span = len(series["totals"]) - offset
+
+    def day_amount(day, keys):
+        index = (day - start).days
+        if index < 0 or index >= span:
+            return 0
+        return sum(categories[key][index] for key in keys if key in categories)
+
+    input_keys = ("input", "cache-read", "cache-write")
+    output_keys = ("output",)
+    week_days = [today - datetime.timedelta(days=age) for age in range(WEEK_DAYS)]
+    return {
+        WINDOW_TODAY: {
+            "input": day_amount(today, input_keys),
+            "output": day_amount(today, output_keys),
+        },
+        WINDOW_WEEK: {
+            "input": sum(day_amount(day, input_keys) for day in week_days),
+            "output": sum(day_amount(day, output_keys) for day in week_days),
+        },
+    }
+
+
+def read_bounded_json(path, bound):
+    """Read one small JSON document under an explicit byte bound.
+
+    One byte PAST the bound is read so the ceiling itself is admitted and
+    anything larger refuses. The parse is guarded against a recursion
+    blow-up too: depth is a resource, and a document nobody can parse
+    without exhausting the stack is refused like any other oversized input
+    (2026-08-24 round-3 review, finding 10).
+
+    Neither refusal names the path, exactly like every other refusal here.
+    """
+    with open(path, "r", encoding="utf-8") as handle:
+        text = handle.read(bound + 1)
+    if len(text) > bound:
+        raise CaptureError("a merge source is larger than the %d byte bound" % bound)
+    try:
+        return json.loads(text)
+    except (ValueError, RecursionError):
+        raise CaptureError("a merge source is not a parsable JSON document")
+
+
+def read_activity_cache(path, counters):
+    """Read the tool's own per-day, per-model roll-up: {day: {member: count}}.
+
+    WHY THIS EXISTS. The transcript journals are RETENTION-PRUNED — the tool
+    deletes them on its own schedule — so a walk of the tree measures only as
+    far back as the tree still goes, and the panel's history was silently
+    getting SHORTER as older journals aged out. The tool keeps its own
+    roll-up of the same usage beside them, which survives that pruning, and
+    reading it is what makes the panel's depth a property of the record
+    rather than of a cleanup interval.
+
+    It is a WEAKER measurement than the walk and is treated as one. Its
+    figures are the tool's own accounting and do not agree with the walk's
+    de-duplicated totals — measured on the owner's tree, they run roughly
+    twice as high on the days both cover — so a day the walk covers is never
+    taken from here (the caller's union rule), and the two are never summed.
+    What this supplies is the days the walk has LOST, and the per-model split
+    on them.
+
+    Nothing but calendar dates, vocabulary members and integers leaves this
+    function; an identifier outside the vocabulary becomes the residual
+    member exactly as it does on the walk's own path.
+    """
+    document = read_bounded_json(path, MAX_ACTIVITY_CACHE_BYTES)
+    if not isinstance(document, dict):
+        raise CaptureError("the activity cache must be a JSON object")
+    rows = document.get(ACTIVITY_CACHE_DAILY_KEY)
+    if not isinstance(rows, list):
+        raise CaptureError("the activity cache carries no daily model roll-up")
+    by_day = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        day = row.get(ACTIVITY_CACHE_DATE_KEY)
+        amounts = row.get(ACTIVITY_CACHE_MODELS_KEY)
+        if not valid_calendar_day(day) or not isinstance(amounts, dict):
+            continue
+        bucket = by_day.setdefault(day, {})
+        for identifier, value in amounts.items():
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                continue
+            key = model_key(identifier, counters)
+            bucket[key] = bucket.get(key, 0) + value
+    return by_day
+
+
+def extend_with_cache(series, categories, models, partitioned, cached):
+    """Union the walked series with the cache's days; the WALK wins a conflict.
+
+    The union is by DATE, and the rule is one sentence: a day the walk covers
+    is the walk's, and only the days the walk has lost come from the cache.
+    That direction is not arbitrary — the walk de-duplicates replayed
+    records and the cache does not, so mixing the two inside one day would
+    produce a figure neither tool measured, and preferring the cache on a
+    covered day would silently double it.
+
+    Everything the union adds is honest about what it is: the added days
+    carry a total and a per-model split, and they carry NO category split,
+    because the roll-up has none to give. `partitioned` is what carries that
+    fact forward — the categories section is windowed to the trailing run of
+    days that really do have one, so the breakdown never claims a day it
+    cannot measure.
+    """
+    if not cached:
+        return series, categories, models, partitioned
+    start = datetime.date.fromisoformat(series["startDate"])
+    walked = {
+        (start + datetime.timedelta(days=offset)).isoformat(): offset
+        for offset in range(len(series["totals"]))
+    }
+    first = min([start] + [datetime.date.fromisoformat(day) for day in cached])
+    last = max(
+        [start + datetime.timedelta(days=len(series["totals"]) - 1)]
+        + [datetime.date.fromisoformat(day) for day in cached]
+    )
+    span = (last - first).days + 1
+    if span > MAX_SERIES_DAYS:
+        raise CaptureError(
+            "the record spans %d days, over the %d day bound the origin enforces"
+            % (span, MAX_SERIES_DAYS)
+        )
+    window = [(first + datetime.timedelta(days=offset)).isoformat() for offset in range(span)]
+    totals = []
+    merged_categories = {key: [] for key in categories}
+    merged_models = {key: [] for key in models}
+    for day in window:
+        offset = walked.get(day)
+        if offset is not None:
+            totals.append(series["totals"][offset])
+            for key, values in merged_categories.items():
+                values.append(categories[key][offset])
+            for key, values in merged_models.items():
+                values.append(models[key][offset])
+            continue
+        amounts = cached.get(day, {})
+        totals.append(sum(amounts.values()))
+        for values in merged_categories.values():
+            values.append(0)
+        for key, values in merged_models.items():
+            values.append(amounts.get(key, 0))
+    # A member the walk never saw but the cache did needs its own row, laid
+    # onto the same window with zeros wherever the walk was the source.
+    for key in MODEL_KEYS:
+        if key in merged_models:
+            continue
+        if not any(key in cached.get(day, {}) for day in window):
+            continue
+        merged_models[key] = [
+            0 if day in walked else cached.get(day, {}).get(key, 0) for day in window
+        ]
+    ordered_models = {key: merged_models[key] for key in MODEL_KEYS if key in merged_models}
+    extended = {"startDate": window[0], "totals": totals, "recorded": True}
+    return extended, merged_categories, ordered_models, partitioned
 
 
 def valid_calendar_day(value):
@@ -928,24 +1500,78 @@ def _assert_emission(value, where, extra_keys, allow_bool):
     raise CaptureError("%s carries a value that is neither a date nor an integer" % where)
 
 
-def capture(root, record_format=FORMAT_MESSAGES):
-    """Walk the transcripts and return (series, derived, counters).
+def capture(root, record_format=FORMAT_MESSAGES, activity_cache=None, today=None):
+    """Walk the transcripts and return (section, counters).
 
-    The shape decides only HOW a record becomes a (day, integer) pair. Every
-    step after that — the contiguous day index, the streak arithmetic, and
-    the emission guard below — is the same code for both, so a second reader
-    can never acquire a second privacy contract.
+    The shape decides only HOW a record becomes a (day, integer, parts,
+    member) row. Every step after that — the contiguous day index, the
+    windowing, the partition arithmetic, the streak rules, and the emission
+    guard below — is the same code for both, so a second reader can never
+    acquire a second privacy contract.
+
+    The returned section is EXACTLY the shape export_usage_series.py's
+    merge-source loader admits and the origin's data root then merges: the
+    aggregate series, the two windowed breakdowns with their own start dates,
+    the complete window set, and the complete derived-tile set. It is one
+    shape, produced by one function, so "capture a second tool's series and
+    merge it" needs no hand assembly and no second definition of what a valid
+    section is — which is exactly how a hand-written merge file came to be
+    missing the sections the loader requires, refusing every export until a
+    human noticed (2026-08-27).
     """
     if record_format not in RECORD_FORMATS:
         raise CaptureError("unknown record format")
     counters = new_counters()
     reader = read_records if record_format == FORMAT_MESSAGES else read_running_totals
-    series = daily_series(reader(root, counters))
-    derived = derived_figures(series)
-    # Both halves are proven clean before either is printed or written.
-    assert_only_dates_and_integers(series, "series")
-    assert_only_dates_and_integers(derived, "derived")
-    return series, derived, counters
+    series, categories, models, partitioned = daily_series(reader(root, counters))
+    if activity_cache is not None:
+        series, categories, models, partitioned = extend_with_cache(
+            series, categories, models, partitioned, read_activity_cache(activity_cache, counters)
+        )
+    section = {"series": series}
+    totals = series["totals"]
+    start = datetime.date.fromisoformat(series["startDate"])
+    window = [(start + datetime.timedelta(days=offset)).isoformat() for offset in range(len(totals))]
+
+    offset = trailing_offset(window, set(partitioned)) if categories else None
+    if offset is None:
+        # A capture with no partition at all cannot state a window figure
+        # either: a window is an input/output SPLIT, and inventing one would
+        # be the fabrication this whole pipeline exists to make impossible.
+        raise CaptureError(
+            "no day of the record carries a category partition, so the window "
+            "figures cannot be measured"
+        )
+    categories = window_section(categories, offset)
+    assert_partition(totals, categories, offset)
+    section["categories"] = categories
+    if offset > 0:
+        section["categoriesStartDate"] = window[offset]
+
+    # A breakdown whose only member is the residual one says nothing the
+    # aggregate does not already say, and costs a row per day on every push to
+    # say it. The record shapes that journal no model at all land here, and
+    # the honest emission for them is no section — which the origin, the
+    # merge loader and the browser all already read as "this source cannot
+    # break its series down that way".
+    if models and set(models) != {MODEL_OTHER}:
+        model_offset = max(0, len(totals) - MAX_MODEL_DAYS)
+        windowed = window_section(models, model_offset)
+        assert_partition(totals, windowed, model_offset)
+        section["models"] = windowed
+        if model_offset > 0:
+            section["modelsStartDate"] = window[model_offset]
+
+    section["windows"] = windows_from(
+        series,
+        categories,
+        offset,
+        today if today is not None else datetime.datetime.now(datetime.timezone.utc).date(),
+    )
+    section["derived"] = derived_figures(series)
+    # Proven clean before anything is printed, written, or spliced.
+    assert_only_dates_and_integers(section, "section")
+    return section, counters
 
 
 def splice(document, label, series, derived, generated_at):
@@ -1018,6 +1644,10 @@ def parse_arguments(argv):
         help="the record shape the tree is journalled in",
     )
     parser.add_argument(
+        "--activity-cache",
+        help="the tool's own per-day model roll-up, read for the days retention has pruned",
+    )
+    parser.add_argument(
         "--snapshot",
         help="snapshot file to splice the series into; prints to stdout when omitted",
     )
@@ -1037,23 +1667,36 @@ def main(argv=None):
         # reading it as licence would have made the leak it excused.
         print("no such transcript directory", file=sys.stderr)
         return 2
+    cache = None
+    if arguments.activity_cache is not None:
+        cache = pathlib.Path(arguments.activity_cache).expanduser()
+        if not cache.is_file():
+            print("no such activity cache", file=sys.stderr)
+            return 2
     try:
-        series, derived, counters = capture(root, arguments.record_format)
+        section, counters = capture(root, arguments.record_format, cache)
     except CaptureError as error:
         print(str(error), file=sys.stderr)
         return 1
+    except OSError:
+        # Counted, never named, exactly as unreadable transcripts are.
+        print("the activity cache could not be read", file=sys.stderr)
+        return 1
     print(
-        "files=%d unreadable=%d symlinks=%d lines=%d counted=%d duplicates=%d "
-        "restarts=%d days=%d"
+        "files=%d unreadable=%d symlinks=%d oversized=%d lines=%d counted=%d "
+        "duplicates=%d restarts=%d unpartitioned=%d unattributed=%d days=%d"
         % (
             counters.get("files", 0),
             counters.get("unreadable", 0),
             counters.get("symlinks", 0),
+            counters.get("oversized", 0),
             counters.get("lines", 0),
             counters.get("counted", 0),
             counters.get("duplicates", 0),
             counters.get("restarts", 0),
-            len(series["totals"]),
+            counters.get("unpartitioned", 0),
+            counters.get("unattributed", 0),
+            len(section["series"]["totals"]),
         ),
         file=sys.stderr,
     )
@@ -1070,17 +1713,17 @@ def main(argv=None):
         # source and refuses one that cannot say when it was captured, because
         # a second tool's series can be arbitrarily older than the export
         # carrying it (2026-08-24 round-3 review, finding 5).
-        json.dump(
-            {"generatedAt": generated_at, "series": series, "derived": derived},
-            sys.stdout,
-            indent=2,
-        )
+        document = {"generatedAt": generated_at}
+        document.update(section)
+        json.dump(document, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 0
     with open(arguments.snapshot, "r", encoding="utf-8") as handle:
         document = json.load(handle)
     try:
-        spliced = splice(document, arguments.source, series, derived, generated_at)
+        spliced = splice(
+            document, arguments.source, section["series"], section["derived"], generated_at
+        )
     except CaptureError as error:
         print(str(error), file=sys.stderr)
         return 1

@@ -17,6 +17,7 @@ test go red before it can make a commit go public.
 from __future__ import annotations
 
 import ast
+import datetime
 import importlib.util
 import json
 import os
@@ -181,8 +182,51 @@ class ReduceLineTest(unittest.TestCase):
     def reduce(self, line):
         return capture_usage_series.reduce_line(line, self.seen, self.counters)
 
-    def test_reduces_a_record_to_a_day_and_an_integer(self):
-        self.assertEqual(self.reduce(transcript_line()), ("2026-08-10", 135))
+    def test_reduces_a_record_to_a_day_a_total_a_partition_and_a_member(self):
+        # Four values, and the last two are what make the breakdown sections
+        # a MEASUREMENT of the same records the total is measured from: the
+        # partition is the record's own disjoint usage fields, and the member
+        # is the closed vocabulary's, resolved from the record's own model.
+        self.assertEqual(
+            self.reduce(transcript_line()),
+            (
+                "2026-08-10",
+                135,
+                {"input": 10, "output": 5, "cache-read": 100, "cache-write": 20},
+                "other",
+            ),
+        )
+        # The partition IS the total, checked rather than described.
+        _day, total, parts, _member = self.reduce(transcript_line(requestId="req_2"))
+        self.assertEqual(sum(parts.values()), total)
+
+    def test_a_record_names_its_model_and_an_unknown_one_becomes_the_residual(self):
+        # Membership, not shape. A vendor-qualified identifier whose model
+        # half is a vocabulary member resolves to that member; anything else
+        # lands on the reserved residual and is COUNTED, so an operator can
+        # see model churn without an unreviewed label ever being minted.
+        member = capture_usage_series.MODEL_KEYS[1]
+        record = json.loads(transcript_line())
+        record["message"]["model"] = "avendor-%s" % member
+        self.assertEqual(self.reduce(json.dumps(record))[3], member)
+        self.assertEqual(self.counters["unattributed"], 0)
+        for unknown in ("<synthetic>", "avendor-not-a-member", "", None, 17):
+            with self.subTest(unknown=unknown):
+                record = json.loads(transcript_line(requestId="req_%s" % unknown))
+                record["message"]["model"] = unknown
+                self.assertEqual(
+                    self.reduce(json.dumps(record))[3], capture_usage_series.MODEL_OTHER
+                )
+        self.assertEqual(self.counters["unattributed"], 5)
+
+    def test_the_residual_member_can_never_be_named_by_a_record(self):
+        # `other` is the vocabulary's own reserved slot. A record claiming it
+        # by name must not be admitted AS a named model — it takes the same
+        # residual path every unattributable record takes, and is counted.
+        record = json.loads(transcript_line())
+        record["message"]["model"] = "avendor-%s" % capture_usage_series.MODEL_OTHER
+        self.assertEqual(self.reduce(json.dumps(record))[3], capture_usage_series.MODEL_OTHER)
+        self.assertEqual(self.counters["unattributed"], 1)
 
     def test_the_same_billed_message_is_counted_once(self):
         # The tool replays earlier assistant messages into later transcript
@@ -255,18 +299,20 @@ class ReduceRunningLineTest(unittest.TestCase):
     def reduce(self, line):
         return capture_usage_series.reduce_running_line(line)
 
-    def test_reduces_a_record_to_a_day_and_its_running_total(self):
-        self.assertEqual(self.reduce(running_line(500)), ("2026-08-23", 500))
+    def test_reduces_a_record_to_a_day_and_its_cumulative_fields(self):
+        day, running = self.reduce(running_line(500))
+        self.assertEqual(day, "2026-08-23")
+        self.assertEqual(set(running), set(capture_usage_series.RUNNING_FIELDS))
+        self.assertEqual(running[capture_usage_series.RUNNING_TOTAL_FIELD], 500)
 
     def test_the_day_comes_from_the_record_and_never_from_the_clock(self):
         # A session started before midnight local time is journalled under
         # the day it STARTED, while its records happen after midnight UTC.
         # Reading the day off anything but the record's own instant would put
         # a whole evening's work on the wrong cell.
-        self.assertEqual(
-            self.reduce(running_line(500, stamp="2026-08-24T03:51:18.443Z")),
-            ("2026-08-24", 500),
-        )
+        day, running = self.reduce(running_line(500, stamp="2026-08-24T03:51:18.443Z"))
+        self.assertEqual(day, "2026-08-24")
+        self.assertEqual(running[capture_usage_series.RUNNING_TOTAL_FIELD], 500)
 
     def test_skips_everything_that_is_not_a_running_total_record(self):
         for line in (
@@ -307,8 +353,12 @@ class RunningTotalsWalkTest(unittest.TestCase):
                 path = pathlib.Path(root) / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            pairs = list(capture_usage_series.read_running_totals(root, counters))
-        return pairs, counters
+            rows = list(capture_usage_series.read_running_totals(root, counters))
+        return rows, counters
+
+    @staticmethod
+    def days(rows):
+        return [(day, total) for day, total, _parts, _member in rows]
 
     def test_a_repeated_accounting_bills_nothing(self):
         # 100, then 300, then THE SAME 300 emitted a second time for one
@@ -326,7 +376,7 @@ class RunningTotalsWalkTest(unittest.TestCase):
                 ]
             }
         )
-        self.assertEqual(sum(total for _day, total in pairs), 600)
+        self.assertEqual(sum(total for _day, total, _p, _m in pairs), 600)
         self.assertEqual(counters["duplicates"], 1)
         self.assertEqual(counters["restarts"], 0)
 
@@ -345,7 +395,7 @@ class RunningTotalsWalkTest(unittest.TestCase):
                 ]
             }
         )
-        self.assertEqual(sum(total for _day, total in pairs), 420)
+        self.assertEqual(sum(total for _day, total, _p, _m in pairs), 420)
         self.assertEqual(counters["restarts"], 1)
 
     def test_each_file_opens_its_own_accounting(self):
@@ -357,7 +407,7 @@ class RunningTotalsWalkTest(unittest.TestCase):
                 "day/second.jsonl": [running_line(100), running_line(250)],
             }
         )
-        self.assertEqual(sum(total for _day, total in pairs), 650)
+        self.assertEqual(sum(total for _day, total, _p, _m in pairs), 650)
 
     def test_a_session_that_crosses_midnight_splits_across_its_two_days(self):
         # The directory a journal lives in is the LOCAL day it started on, so
@@ -371,7 +421,7 @@ class RunningTotalsWalkTest(unittest.TestCase):
                 ]
             }
         )
-        self.assertEqual(pairs, [("2026-08-23", 100), ("2026-08-24", 350)])
+        self.assertEqual(self.days(pairs), [("2026-08-23", 100), ("2026-08-24", 350)])
 
     def test_a_file_that_reports_nothing_usable_contributes_nothing(self):
         pairs, counters = self.walk(
@@ -380,6 +430,198 @@ class RunningTotalsWalkTest(unittest.TestCase):
         self.assertEqual(pairs, [])
         self.assertEqual(counters["files"], 1)
         self.assertEqual(counters["counted"], 0)
+
+
+class OversizedLineTest(unittest.TestCase):
+    """One fat record must not silence the whole pipeline (2026-08-27).
+
+    The per-line bound is a MEMORY guard. It was also, until this suite, a
+    refusal: a single line past it raised, so one pasted payload in one
+    journal stopped every scheduled export for every source — measured on the
+    owner's own tree, where exactly one line over the bound had frozen the
+    panel. Skipping bounds memory just as well and loses only the record it
+    could not read.
+    """
+
+    def walk(self, text, record_format=capture_usage_series.FORMAT_MESSAGES):
+        counters = capture_usage_series.new_counters()
+        reader = (
+            capture_usage_series.read_records
+            if record_format == capture_usage_series.FORMAT_MESSAGES
+            else capture_usage_series.read_running_totals
+        )
+        with tempfile.TemporaryDirectory() as root:
+            path = pathlib.Path(root) / "session.jsonl"
+            path.write_text(text, encoding="utf-8")
+            rows = list(reader(root, counters))
+        return rows, counters
+
+    def fat_line(self):
+        # One record whose own bytes exceed the bound, by exactly the field
+        # the bound exists to stop this process holding: a huge string.
+        return transcript_line(
+            requestId="req_fat",
+            message={
+                "id": "msg_fat",
+                "content": "x" * (capture_usage_series.MAX_RECORD_LINE_BYTES + 64),
+                "usage": {"input_tokens": 999_999},
+            },
+        )
+
+    def test_an_oversized_line_is_skipped_counted_and_not_fatal(self):
+        rows, counters = self.walk(
+            transcript_line() + "\n" + self.fat_line() + "\n"
+            + transcript_line(
+                timestamp="2026-08-11T12:00:00Z",
+                requestId="req_after",
+                message={"id": "msg_after", "usage": {"output_tokens": 7}},
+            )
+            + "\n"
+        )
+        self.assertEqual(counters["oversized"], 1)
+        # The records on BOTH sides of it are still read: the tail of the
+        # oversized line is drained to its own newline, so the next record
+        # starts at a real boundary rather than mid-string.
+        self.assertEqual([day for day, _t, _p, _m in rows], ["2026-08-10", "2026-08-11"])
+        self.assertEqual([total for _d, total, _p, _m in rows], [135, 7])
+        # And the skipped record contributes nothing rather than a guess.
+        self.assertNotIn(999_999, [total for _d, total, _p, _m in rows])
+
+    def test_the_bound_still_bounds_what_is_held_in_memory(self):
+        # Non-vacuity in the direction that matters: the yielded lines are
+        # every one of them inside the bound, so nothing past it was ever
+        # materialised as a record.
+        rows, counters = self.walk(self.fat_line() + "\n" + transcript_line() + "\n")
+        self.assertEqual(counters["oversized"], 1)
+        self.assertEqual(len(rows), 1)
+
+    def test_an_unterminated_oversized_line_ends_the_file_cleanly(self):
+        rows, counters = self.walk(transcript_line() + "\n" + self.fat_line())
+        self.assertEqual(counters["oversized"], 1)
+        self.assertEqual(len(rows), 1)
+
+    def test_an_exactly_terminated_oversized_line_does_not_swallow_its_neighbour(self):
+        # The boundary case the 2026-08-27 adversarial review of PR #230
+        # found (finding 1): readline(MAX+1) can return an oversized line
+        # that is ALREADY newline-terminated — content of exactly the bound
+        # plus its newline. The drain exists for a line that came back
+        # truncated; draining past a complete one consumes the NEXT record
+        # whole, uncounted by any counter. Both neighbours must survive.
+        def with_content(content):
+            return transcript_line(
+                requestId="req_exact",
+                message={
+                    "id": "msg_exact",
+                    "content": content,
+                    "usage": {"input_tokens": 999_999},
+                },
+            )
+
+        # Each "x" costs exactly one byte inside the JSON string, so padding
+        # the empty-content probe out to the bound is exact, and the newline
+        # the walk appends is what pushes readline past it.
+        padding = capture_usage_series.MAX_RECORD_LINE_BYTES - len(with_content(""))
+        exact = with_content("x" * padding)
+        self.assertEqual(len(exact), capture_usage_series.MAX_RECORD_LINE_BYTES)
+        rows, counters = self.walk(
+            exact + "\n"
+            + transcript_line(
+                timestamp="2026-08-11T12:00:00Z",
+                requestId="req_next",
+                message={"id": "msg_next", "usage": {"output_tokens": 7}},
+            )
+            + "\n"
+        )
+        self.assertEqual(counters["oversized"], 1)
+        self.assertEqual([total for _d, total, _p, _m in rows], [7])
+
+    def test_the_other_record_shape_skips_it_the_same_way(self):
+        fat = json.loads(running_line(500))
+        fat["payload"]["info"]["padding"] = "x" * (
+            capture_usage_series.MAX_RECORD_LINE_BYTES + 64
+        )
+        rows, counters = self.walk(
+            json.dumps(fat) + "\n" + running_line(100) + "\n",
+            capture_usage_series.FORMAT_RUNNING_TOTALS,
+        )
+        self.assertEqual(counters["oversized"], 1)
+        self.assertEqual([total for _d, total, _p, _m in rows], [100])
+
+
+class RunningPartsTest(unittest.TestCase):
+    """The three named tiers of the running-totals partition."""
+
+    def parts(self, **advances):
+        counters = capture_usage_series.new_counters()
+        full = {field: 0 for field in capture_usage_series.RUNNING_FIELDS}
+        full.update(advances)
+        return (
+            capture_usage_series.running_parts(
+                full, full[capture_usage_series.RUNNING_TOTAL_FIELD], counters
+            ),
+            counters,
+        )
+
+    def test_the_full_partition_subtracts_the_subsets_from_their_parents(self):
+        parts, counters = self.parts(
+            input_tokens=100,
+            cached_input_tokens=60,
+            cache_write_input_tokens=10,
+            output_tokens=40,
+            reasoning_output_tokens=25,
+            total_tokens=140,
+        )
+        self.assertEqual(
+            parts,
+            {
+                "input": 30,
+                "output": 15,
+                "cache-read": 60,
+                "cache-write": 10,
+                "reasoning": 25,
+            },
+        )
+        self.assertEqual(sum(parts.values()), 140)
+        self.assertEqual(counters["unpartitioned"], 0)
+
+    def test_a_fully_cached_input_leaves_no_uncached_class_at_all(self):
+        # The boundary of tier 1 rather than a fall through it: every input
+        # token was a cache read, so the uncached class is exactly zero and is
+        # dropped rather than carried as a row of zeros.
+        parts, counters = self.parts(
+            input_tokens=100, cached_input_tokens=100, output_tokens=40, total_tokens=140
+        )
+        self.assertEqual(parts, {"output": 40, "cache-read": 100})
+        self.assertEqual(sum(parts.values()), 140)
+        self.assertEqual(counters["unpartitioned"], 0)
+
+    def test_a_subset_larger_than_its_parent_falls_back_to_the_coarse_split(self):
+        # The tier-2 case: the cache classes claim more than the input side
+        # holds, so a five-way split would be NEGATIVE. The two-way split is
+        # coarser and still exactly true, so it is what gets emitted rather
+        # than nothing.
+        parts, counters = self.parts(
+            input_tokens=100,
+            cached_input_tokens=140,
+            output_tokens=40,
+            total_tokens=140,
+        )
+        self.assertEqual(parts, {"input": 100, "output": 40})
+        self.assertEqual(sum(parts.values()), 140)
+        self.assertEqual(counters["unpartitioned"], 0)
+
+    def test_a_total_its_own_fields_disagree_with_partitions_not_at_all(self):
+        parts, counters = self.parts(input_tokens=1, output_tokens=1, total_tokens=99)
+        self.assertIsNone(parts)
+        self.assertEqual(counters["unpartitioned"], 1)
+
+    def test_every_tier_emits_only_closed_vocabulary_members(self):
+        for kwargs in (
+            dict(input_tokens=10, cached_input_tokens=4, output_tokens=5, total_tokens=15),
+            dict(input_tokens=10, cached_input_tokens=10, output_tokens=5, total_tokens=15),
+        ):
+            parts, _counters = self.parts(**kwargs)
+            self.assertLessEqual(set(parts), set(capture_usage_series.CATEGORY_KEYS))
 
 
 class RunningTotalsCaptureTest(unittest.TestCase):
@@ -399,21 +641,32 @@ class RunningTotalsCaptureTest(unittest.TestCase):
             with open(os.path.join(nested, "notes.txt"), "w", encoding="utf-8") as handle:
                 handle.write(running_line(9_000_000) + "\n")  # not .jsonl: never read
 
-            series, derived, counters = capture_usage_series.capture(
+            section, counters = capture_usage_series.capture(
                 root, capture_usage_series.FORMAT_RUNNING_TOTALS
             )
+        series = section["series"]
+        derived = section["derived"]
 
         self.assertEqual(
             series, {"startDate": "2026-08-23", "totals": [60, 0, 140], "recorded": True}
         )
         self.assertEqual(derived, {"peak-day": 140, "current-streak": 1, "longest-streak": 1})
+        # This shape journals no model at all, so the models section is
+        # ABSENT rather than a single residual row that repeats the aggregate.
+        self.assertNotIn("models", section)
+        self.assertNotIn("modelsStartDate", section)
+        # The fixture's cache fields equal its whole, which no five-way
+        # partition can express, so the coarse two-way tier carries it — and
+        # it still partitions exactly.
+        self.assertEqual(section["categories"], {"input": [60, 0, 140]})
+        self.assertEqual(counters["unpartitioned"], 0)
         self.assertEqual(counters["files"], 1)
         self.assertEqual(counters["duplicates"], 1)
         self.assertEqual(counters["counted"], 2)
 
         # The whole emission, re-read as text: not one identifier, path,
         # branch name, session id or sentence from the journal may appear.
-        emitted = json.dumps({"series": series, "derived": derived, "counters": counters})
+        emitted = json.dumps({"section": section, "counters": counters})
         for leak in (
             "a-private-project",
             "someone",
@@ -428,13 +681,171 @@ class RunningTotalsCaptureTest(unittest.TestCase):
                 self.assertNotIn(leak, emitted)
 
 
+class ActivityCacheTest(unittest.TestCase):
+    """Depth that survives retention pruning, and stays honest about itself.
+
+    The journals are pruned on the tool's own schedule, so a walk measures
+    only as far back as the tree still goes and the panel's history was
+    getting shorter on its own. The tool's roll-up survives that pruning, so
+    it supplies the days the walk has lost — and nothing else, because it is
+    a weaker measurement than the walk and disagrees with it where both cover
+    the same day.
+    """
+
+    MEMBER = capture_usage_series.MODEL_KEYS[2]
+
+    def cache(self, rows):
+        return json.dumps(
+            {
+                "version": 5,
+                capture_usage_series.ACTIVITY_CACHE_DAILY_KEY: [
+                    {
+                        capture_usage_series.ACTIVITY_CACHE_DATE_KEY: day,
+                        capture_usage_series.ACTIVITY_CACHE_MODELS_KEY: amounts,
+                    }
+                    for day, amounts in rows
+                ],
+            }
+        )
+
+    def capture_with(self, cache_rows, lines=None):
+        with tempfile.TemporaryDirectory() as root:
+            path = pathlib.Path(root) / "session.jsonl"
+            path.write_text(
+                "\n".join(lines if lines is not None else [transcript_line()]) + "\n",
+                encoding="utf-8",
+            )
+            cache_path = pathlib.Path(root) / "cache.json"
+            cache_path.write_text(self.cache(cache_rows), encoding="utf-8")
+            return capture_usage_series.capture(
+                root,
+                capture_usage_series.FORMAT_MESSAGES,
+                cache_path,
+                datetime.date(2026, 8, 10),
+            )
+
+    def test_the_cache_supplies_only_the_days_the_walk_has_lost(self):
+        section, _counters = self.capture_with(
+            [
+                ("2026-07-30", {"avendor-%s" % self.MEMBER: 4_000}),
+                # The same day the walk covers, at a DIFFERENT figure. The
+                # walk's 135 wins; 9_999 must appear nowhere.
+                ("2026-08-10", {"avendor-%s" % self.MEMBER: 9_999}),
+            ]
+        )
+        series = section["series"]
+        self.assertEqual(series["startDate"], "2026-07-30")
+        self.assertEqual(len(series["totals"]), 12)
+        self.assertEqual(series["totals"][0], 4_000)
+        self.assertEqual(series["totals"][-1], 135)
+        self.assertNotIn(9_999, series["totals"])
+
+    def test_the_categories_window_starts_where_the_split_is_measurable(self):
+        section, _counters = self.capture_with(
+            [("2026-07-30", {"avendor-%s" % self.MEMBER: 4_000})]
+        )
+        # The roll-up carries no accounting split, so the categories cover the
+        # trailing walked run and DECLARE where they start — they never claim
+        # a day whose division nobody measured.
+        self.assertEqual(section["categoriesStartDate"], "2026-08-10")
+        self.assertEqual(
+            section["categories"],
+            {"input": [10], "output": [5], "cache-read": [100], "cache-write": [20]},
+        )
+        capture_usage_series.assert_partition(
+            section["series"]["totals"], section["categories"], 11
+        )
+
+    def test_the_models_section_partitions_every_day_of_the_union(self):
+        record = json.loads(transcript_line())
+        record["message"]["model"] = "avendor-%s" % capture_usage_series.MODEL_KEYS[1]
+        section, _counters = self.capture_with(
+            [("2026-07-30", {"avendor-%s" % self.MEMBER: 4_000})],
+            lines=[json.dumps(record)],
+        )
+        totals = section["series"]["totals"]
+        capture_usage_series.assert_partition(totals, section["models"], 0)
+        self.assertEqual(section["models"][self.MEMBER][0], 4_000)
+        self.assertEqual(section["models"][capture_usage_series.MODEL_KEYS[1]][-1], 135)
+        # Serve order is the vocabulary's, so two runs emit identical bytes.
+        self.assertEqual(
+            list(section["models"]),
+            [key for key in capture_usage_series.MODEL_KEYS if key in section["models"]],
+        )
+
+    def test_a_model_outside_the_vocabulary_folds_into_the_residual(self):
+        # The walked day names a real member, so the residual is a genuine
+        # second row rather than the whole section (which would be omitted).
+        record = json.loads(transcript_line())
+        record["message"]["model"] = "avendor-%s" % capture_usage_series.MODEL_KEYS[1]
+        section, counters = self.capture_with(
+            [("2026-07-30", {"avendor-not-a-member": 4_000})],
+            lines=[json.dumps(record)],
+        )
+        self.assertEqual(section["models"][capture_usage_series.MODEL_OTHER][0], 4_000)
+        self.assertGreaterEqual(counters["unattributed"], 1)
+        # The unreviewed name itself reaches nothing.
+        self.assertNotIn("not-a-member", json.dumps(section))
+
+    def test_a_malformed_cache_refuses_rather_than_guessing(self):
+        for document in ("[]", "{}", json.dumps({"dailyModelTokens": {}})):
+            with self.subTest(document=document[:20]):
+                with tempfile.TemporaryDirectory() as root:
+                    (pathlib.Path(root) / "session.jsonl").write_text(
+                        transcript_line() + "\n", encoding="utf-8"
+                    )
+                    cache_path = pathlib.Path(root) / "cache.json"
+                    cache_path.write_text(document, encoding="utf-8")
+                    with self.assertRaises(CaptureError):
+                        capture_usage_series.capture(
+                            root, capture_usage_series.FORMAT_MESSAGES, cache_path
+                        )
+
+    def test_a_cache_row_that_is_not_a_day_is_skipped_not_believed(self):
+        section, _counters = self.capture_with(
+            [
+                ("2026-99-99", {"avendor-%s" % self.MEMBER: 1}),
+                ("2026-08-09", {"avendor-%s" % self.MEMBER: 2}),
+            ]
+        )
+        self.assertEqual(section["series"]["startDate"], "2026-08-09")
+        self.assertEqual(section["series"]["totals"], [2, 135])
+
+
+class ModelWindowTest(unittest.TestCase):
+    """The per-model section is a DECLARED trailing window, never a silent one."""
+
+    def test_a_long_series_windows_the_models_and_says_where_they_start(self):
+        member = capture_usage_series.MODEL_KEYS[1]
+        span = capture_usage_series.MAX_MODEL_DAYS + 30
+        start = datetime.date(2026, 1, 1)
+        rows = [
+            (
+                (start + datetime.timedelta(days=offset)).isoformat(),
+                1,
+                {"input": 1},
+                member,
+            )
+            for offset in range(span)
+        ]
+        with tempfile.TemporaryDirectory() as root:
+            (pathlib.Path(root) / "session.jsonl").write_text("", encoding="utf-8")
+            series, categories, models, partitioned = capture_usage_series.daily_series(rows)
+        self.assertEqual(len(models[member]), span)
+        # The window the emission takes, and the partition it must satisfy.
+        offset = span - capture_usage_series.MAX_MODEL_DAYS
+        windowed = capture_usage_series.window_section(models, offset)
+        self.assertEqual(len(windowed[member]), capture_usage_series.MAX_MODEL_DAYS)
+        capture_usage_series.assert_partition(series["totals"], windowed, offset)
+
+
 class CaptureFormatTest(unittest.TestCase):
     def test_the_default_shape_is_the_message_reader(self):
         with tempfile.TemporaryDirectory() as root:
             with open(os.path.join(root, "session.jsonl"), "w", encoding="utf-8") as handle:
                 handle.write(transcript_line() + "\n")
-            series, _derived, _counters = capture_usage_series.capture(root)
-        self.assertEqual(series["totals"], [135])
+            section, _counters = capture_usage_series.capture(root)
+        self.assertEqual(section["series"]["totals"], [135])
 
     def test_each_shape_reads_only_its_own_records(self):
         # The two record shapes share a tree walk and nothing else. A journal
@@ -673,19 +1084,57 @@ class UTCDayTest(unittest.TestCase):
 
 
 class DailySeriesTest(unittest.TestCase):
+    @staticmethod
+    def rows(*entries):
+        """Reduced rows for the day/total pairs given, each fully attributed.
+
+        The parts and the member are what the aggregate is built beside, so a
+        fixture that omitted them would be testing a shape the readers never
+        produce.
+        """
+        return [
+            (day, total, {"input": total}, capture_usage_series.MODEL_KEYS[1])
+            for day, total in entries
+        ]
+
     def test_fills_the_span_contiguously_and_sums_repeated_days(self):
-        series = capture_usage_series.daily_series(
-            [("2026-08-10", 5), ("2026-08-12", 7), ("2026-08-10", 5)]
+        series, categories, models, partitioned = capture_usage_series.daily_series(
+            self.rows(("2026-08-10", 5), ("2026-08-12", 7), ("2026-08-10", 5))
         )
         self.assertEqual(series["startDate"], "2026-08-10")
         self.assertEqual(series["totals"], [10, 0, 7])
         self.assertTrue(series["recorded"])
+        # Both breakdowns are laid on the SAME contiguous window and partition
+        # it exactly — the interior zero day included.
+        self.assertEqual(categories, {"input": [10, 0, 7]})
+        self.assertEqual(models, {capture_usage_series.MODEL_KEYS[1]: [10, 0, 7]})
+        self.assertEqual(partitioned, ["2026-08-10", "2026-08-11", "2026-08-12"])
+
+    def test_a_record_that_cannot_be_partitioned_still_counts_toward_its_day(self):
+        # The total is measured on its own field, so it stands. What is lost
+        # is the DAY's claim to a breakdown, and losing it loudly is the whole
+        # point: a partition that silently omits a record is a hole wearing a
+        # partition's label.
+        series, categories, _models, partitioned = capture_usage_series.daily_series(
+            [("2026-08-10", 5, None, "other"), ("2026-08-11", 7, {"input": 7}, "other")]
+        )
+        self.assertEqual(series["totals"], [5, 7])
+        self.assertEqual(categories, {"input": [0, 7]})
+        self.assertEqual(partitioned, ["2026-08-11"])
+
+    def test_a_breakdown_row_that_is_zero_every_day_is_not_emitted(self):
+        _series, categories, _models, _partitioned = capture_usage_series.daily_series(
+            [("2026-08-10", 5, {"input": 5, "output": 0}, "other")]
+        )
+        self.assertEqual(categories, {"input": [5]})
 
     def test_a_zero_inside_the_window_is_a_measurement_not_an_invention(self):
         # The window never extends past the days the record covers, which is
         # what keeps the interior zeros honest: they say the record has
         # nothing for that day, not that the day did not exist.
-        series = capture_usage_series.daily_series([("2026-08-10", 1), ("2026-08-11", 2)])
+        series, _c, _m, _p = capture_usage_series.daily_series(
+            self.rows(("2026-08-10", 1), ("2026-08-11", 2))
+        )
         self.assertEqual(len(series["totals"]), 2)
 
     def test_an_empty_walk_refuses_rather_than_emitting_an_empty_series(self):
@@ -696,7 +1145,9 @@ class DailySeriesTest(unittest.TestCase):
         # Shipping a series the origin will refuse at load is worse than
         # shipping none: the panel would degrade to unavailable on boot.
         with self.assertRaises(CaptureError):
-            capture_usage_series.daily_series([("2020-01-01", 1), ("2026-01-01", 1)])
+            capture_usage_series.daily_series(
+                self.rows(("2020-01-01", 1), ("2026-01-01", 1))
+            )
 
 
 class DailyStreaksTest(unittest.TestCase):
@@ -869,6 +1320,71 @@ class CategoryVocabularyParityTest(unittest.TestCase):
         )
 
 
+class ModelVocabularyParityTest(unittest.TestCase):
+    """The closed MODEL vocabulary is ONE fact spelled in three places.
+
+    scripts/capture_usage_series.py MODEL_KEYS (the capture-side guard and
+    the residual fold), internal/panels/types.go modelServeOrder (origin
+    admission and serve order), and frontend/src/lib/token-usage.ts modelSlots
+    (the fixed palette slots and the frontend's own admission). Exactly the
+    three seats the category vocabulary occupies, for exactly the same reason:
+    a key admitted by one side and refused by another is a pipeline that
+    disagrees with itself.
+
+    ORDER matters here as much as membership. modelServeOrder is the canonical
+    SERVE order — the origin walks it to emit rows deterministically, so every
+    replica's bytes and therefore its digest ETag stay identical — and the
+    palette slots are assigned down the same list, so a reordering on one side
+    alone would silently repaint every model (issue #170).
+    """
+
+    REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+    def test_matches_the_go_admission_vocabulary(self):
+        source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
+
+        match = required_match(
+            r"modelServeOrder = \[\]string\{([^}]*)\}",
+            source,
+            "internal/panels/types.go carries no modelServeOrder",
+        )
+        go_keys = tuple(re.findall(r'"([^"]+)"', match.group(1)))
+        self.assertEqual(
+            go_keys,
+            capture_usage_series.MODEL_KEYS,
+            "modelServeOrder in internal/panels/types.go and MODEL_KEYS in "
+            "scripts/capture_usage_series.py must stay identical, in order",
+        )
+
+    def test_matches_the_frontend_palette_slots(self):
+        source = (self.REPO_ROOT / "frontend/src/lib/token-usage.ts").read_text(encoding="utf-8")
+
+        match = required_match(
+            r"modelSlots[^(]*\(\[([^\]]*(?:\][^\]]*)*?)\]\);",
+            source,
+            "frontend/src/lib/token-usage.ts carries no modelSlots",
+        )
+        ts_keys = tuple(re.findall(r"\['([^']+)',\s*\d+\]", match.group(1)))
+        self.assertEqual(
+            ts_keys,
+            capture_usage_series.MODEL_KEYS,
+            "modelSlots in frontend/src/lib/token-usage.ts and MODEL_KEYS in "
+            "scripts/capture_usage_series.py must stay identical, in order",
+        )
+
+    def test_the_residual_member_leads_the_vocabulary(self):
+        # MODEL_KEYS[0] is the residual by RULE, not by convention: the
+        # producer folds an unrecognized identifier into it and counts the
+        # fold, so a vendor renaming a model mid-flight loses the split for
+        # those tokens rather than losing the tokens. A vocabulary edit that
+        # moved it would silently reassign every fold to a real model.
+        self.assertEqual(
+            capture_usage_series.MODEL_KEYS[0],
+            capture_usage_series.MODEL_OTHER,
+            "the residual member must lead MODEL_KEYS; the fold is keyed on it",
+        )
+
+
 class CapParityTest(unittest.TestCase):
     """The payload ceiling is ONE fact spelled in five places.
 
@@ -904,11 +1420,18 @@ class CapParityTest(unittest.TestCase):
         review, which found the quoted figure off by the mandatory trailing
         newline). The maximum is one document covering every label the
         SHIPPED snapshot carries — a document can never name another — each
-        at the series-day bound with the complete category vocabulary and the
+        at the series-day bound with the complete category vocabulary, the
+        complete model vocabulary over its own MAX_MODEL_DAYS window, and the
         complete window and derived sets, emitted in the producer's own
         compact form with its terminating newline, plus the AEAD overhead.
         Re-deriving it from the shipped constants means the number cannot go
         stale behind a document-shape change again.
+
+        The models section is why MAX_MODEL_DAYS exists rather than the
+        section simply covering the series (issue #170): one integer per day
+        per member across MAX_SERIES_DAYS would outweigh the entire ceiling
+        on its own, so the section is a declared trailing WINDOW and this
+        measurement is what keeps that claim honest.
         """
         snapshot = json.loads(
             (self.REPO_ROOT / "internal/panels/snapshots/token-usage.json").read_text(
@@ -921,6 +1444,18 @@ class CapParityTest(unittest.TestCase):
         value = 10**digits - 1
         total = value * len(capture_usage_series.CATEGORY_KEYS)
         days = capture_usage_series.MAX_SERIES_DAYS
+        model_days = capture_usage_series.MAX_MODEL_DAYS
+        # The model rows partition the SAME totals over the trailing window,
+        # so the two vocabularies being the same length is what lets one
+        # `value` serve both. Asserting it means a vocabulary that grows on
+        # one side alone fails here instead of silently measuring a document
+        # the origin would refuse.
+        self.assertEqual(
+            len(capture_usage_series.MODEL_KEYS),
+            len(capture_usage_series.CATEGORY_KEYS),
+            "the structural maximum divides one total across both vocabularies",
+        )
+        models_start = datetime.date(2024, 1, 1) + datetime.timedelta(days=days - model_days)
         document = {
             "schema": "usage-series/v1",
             "generatedAt": instant,
@@ -935,6 +1470,10 @@ class CapParityTest(unittest.TestCase):
                     "categories": {
                         key: [value] * days for key in capture_usage_series.CATEGORY_KEYS
                     },
+                    "models": {
+                        key: [value] * model_days for key in capture_usage_series.MODEL_KEYS
+                    },
+                    "modelsStartDate": models_start.isoformat(),
                     "windows": {
                         "today": {"input": value, "output": value},
                         "week": {"input": value, "output": value},
@@ -960,11 +1499,15 @@ class CapParityTest(unittest.TestCase):
         self.assertEqual(cap, 131072)
         maximum = self.structural_maximum(10)
         self.assertGreater(cap, maximum)
-        # The headroom is three further decimal digits on every value: the
-        # same maximum still fits at thirteen digits and only crosses at
-        # fourteen. That is the claim docs/usage-export.md makes, measured.
-        self.assertLess(self.structural_maximum(13), cap)
-        self.assertGreater(self.structural_maximum(14), cap)
+        # The headroom is two further decimal digits on every value: the same
+        # maximum still fits at twelve digits and only crosses at thirteen.
+        # That is the claim docs/usage-export.md makes, measured. It was
+        # three digits before the models section (issue #170) — the window
+        # spends one digit of headroom, which is exactly the trade
+        # MAX_MODEL_DAYS was chosen to bound, and the number moved here
+        # rather than in a comment somewhere because it is MEASURED.
+        self.assertLess(self.structural_maximum(12), cap)
+        self.assertGreater(self.structural_maximum(13), cap)
 
     def test_matches_the_origin_admission_cap(self):
         source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
@@ -1085,7 +1628,9 @@ class CaptureTest(unittest.TestCase):
             with open(os.path.join(nested, "notes.txt"), "w", encoding="utf-8") as handle:
                 handle.write(transcript_line() + "\n")  # not .jsonl: never read
 
-            series, derived, counters = capture_usage_series.capture(root)
+            section, counters = capture_usage_series.capture(root)
+        series = section["series"]
+        derived = section["derived"]
 
         self.assertEqual(series, {"startDate": "2026-08-10", "totals": [135, 0, 7], "recorded": True})
         self.assertEqual(derived, {"peak-day": 135, "current-streak": 1, "longest-streak": 1})
@@ -1095,7 +1640,7 @@ class CaptureTest(unittest.TestCase):
 
         # The whole emission, re-read as text: not one identifier, path,
         # branch name or sentence from the transcripts may appear in it.
-        emitted = json.dumps({"series": series, "derived": derived, "counters": counters})
+        emitted = json.dumps({"section": section, "counters": counters})
         for leak in (
             "a-private-project",
             "someone",

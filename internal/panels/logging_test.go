@@ -245,7 +245,7 @@ func TestUsageRefreshNarratesSkipsFailuresAndFallback(t *testing.T) {
 		t.Parallel()
 		var out bytes.Buffer
 		registry := newRegistry(snapshotFiles, []panelDefinition{
-			{id: "token-usage", kind: KindTokenUsage, title: "Token usage", source: usageFetchSource(t)},
+			{id: "token-usage", kind: KindTokenUsageV2, title: "Token usage", source: usageFetchSource(t)},
 		})
 		state := registry.byID["token-usage"]
 		state.fetch.setLogger(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
@@ -276,7 +276,7 @@ func TestUsageRefreshNarratesSkipsFailuresAndFallback(t *testing.T) {
 		t.Parallel()
 		var out bytes.Buffer
 		registry := newRegistry(snapshotFiles, []panelDefinition{
-			{id: "token-usage", kind: KindTokenUsage, title: "Token usage", source: usageFetchSource(t)},
+			{id: "token-usage", kind: KindTokenUsageV2, title: "Token usage", source: usageFetchSource(t)},
 		})
 		state := registry.byID["token-usage"]
 		state.fetch.setLogger(slog.New(slog.NewJSONHandler(&out, nil)))
@@ -350,7 +350,7 @@ func TestUsageSourceWarnSurvivesProductionURLError(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	registry := newRegistry(snapshotFiles, []panelDefinition{
-		{id: "token-usage", kind: KindTokenUsage, title: "Token usage", source: usageFetchSource(t)},
+		{id: "token-usage", kind: KindTokenUsageV2, title: "Token usage", source: usageFetchSource(t)},
 	})
 	state := registry.byID["token-usage"]
 	state.fetch.setLogger(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))

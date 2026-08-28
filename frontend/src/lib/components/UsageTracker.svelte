@@ -448,7 +448,8 @@
                   {activityReading(
                     windowed,
                     lensCategory ? lensCategory.noun : source.activity.noun,
-                    formatMagnitude
+                    formatMagnitude,
+                    view
                   )}
                 </p>
                 <p class="usage-activity-coverage">
@@ -497,6 +498,13 @@
           {#if source.insights && source.insights.rows.length > 0}
             <section class="usage-insights">
               <h4 class="usage-section-title">{source.insights.heading}</h4>
+              <!-- The range the proportions were measured over, present
+                exactly when they were measured rather than frozen at release
+                time. A percentage with no stated range invites the reader to
+                assume the widest one. -->
+              {#if source.insights.note}
+                <p class="usage-insights-note">{source.insights.note}</p>
+              {/if}
               <ul class="usage-insight-rows">
                 {#each source.insights.rows as insight (insight.key)}
                   <li class="usage-insight">
@@ -904,6 +912,19 @@
      so the ratio's digits do not dance as the window changes. */
   .usage-activity-coverage {
     margin: 0;
+    font-size: var(--panel-badge-size, 0.6875rem);
+    font-variant-numeric: tabular-nums;
+    color: var(--usage-coverage-ink, var(--panel-muted, rgb(158, 158, 158)));
+    opacity: var(--usage-coverage-strength, 0.8);
+  }
+
+  /* The insights range note, styled as the coverage line under the strip is
+     and for the same reason: it is the denominator of the rows below it, a
+     quieter claim than the figures themselves, and the two lines that answer
+     "over what days?" on this card should not read as two different kinds of
+     statement. Tokens only — no palette literal reaches this file. */
+  .usage-insights-note {
+    margin: 0 0 var(--usage-row-gap, 0.375rem);
     font-size: var(--panel-badge-size, 0.6875rem);
     font-variant-numeric: tabular-nums;
     color: var(--usage-coverage-ink, var(--panel-muted, rgb(158, 158, 158)));

@@ -1233,9 +1233,15 @@ test('each usage source keeps its own range, defaulting to the window the strip 
   // because those windowed cells already carry its dailies. Pinned as one
   // expression so a future edit cannot quietly go back to reading a
   // sentence the adapter built.
+  //
+  // The VIEW is the fourth argument, and it belongs there for the same reason
+  // the windowed cells are the first: the sentence describes the graph, and a
+  // reader looking at weekly columns is asking about weeks. What the view
+  // changes is the PERIOD the figures are grouped into — never where they are
+  // read from, which stays these daily cells (issue #170).
   assert.match(
     usageTracker,
-    /activityReading\(\s*windowed,\s*lensCategory \? lensCategory\.noun : source\.activity\.noun,\s*formatMagnitude\s*\)/
+    /activityReading\(\s*windowed,\s*lensCategory \? lensCategory\.noun : source\.activity\.noun,\s*formatMagnitude,\s*view\s*\)/
   );
   assert.match(usageTracker, /coverageReading\(windowed\)/);
   // The retired adapter-built sentences, which described the whole series and

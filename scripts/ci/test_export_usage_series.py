@@ -399,103 +399,44 @@ class ImportSurfaceTest(unittest.TestCase):
         self.assertNotIn("os", imported_roots(self.tree))
 
 
-class ReduceCategoryLineTest(unittest.TestCase):
-    def reduce(self, line, seen=None, counters=None):
-        return export_usage_series.reduce_category_line(
-            line, set() if seen is None else seen, counters or capture.new_counters()
-        )
+class SharedWalkTest(unittest.TestCase):
+    """The two programs read the transcripts through ONE reader.
 
-    def test_reduces_to_day_and_per_category_amounts(self):
-        day, amounts = self.reduce(transcript_line())
-        self.assertEqual(day, "2026-08-10")
-        self.assertEqual(
-            amounts,
-            {"input": 10, "output": 5, "cache-read": 100, "cache-write": 20},
-        )
+    This module used to carry its own copy of the walk, the reduction, the
+    day index, the partition check and the window arithmetic. Every one of
+    them was a second statement of something the capture tool already said,
+    and the parity test that lived here existed only to keep the two copies
+    agreeing. They are the capture tool's now, so the agreement is
+    structural; what remains worth asserting is that this module really does
+    reach for them rather than quietly growing a copy back.
+    """
 
-    def test_absent_zero_negative_and_boolean_fields_contribute_nothing(self):
-        line = transcript_line(
-            message={
-                "id": "msg_b",
-                "usage": {
-                    "input_tokens": 0,
-                    "output_tokens": -5,
-                    "cache_read_input_tokens": True,
-                },
-            }
-        )
-        day, amounts = self.reduce(line)
-        self.assertEqual(day, "2026-08-10")
-        self.assertEqual(amounts, {})
-
-    def test_duplicate_identity_is_dropped_and_tallied(self):
-        seen = set()
-        counters = capture.new_counters()
-        first = self.reduce(transcript_line(), seen, counters)
-        second = self.reduce(transcript_line(), seen, counters)
-        self.assertIsNotNone(first)
-        self.assertIsNone(second)
-        self.assertEqual(counters["duplicates"], 1)
-
-    def test_missing_identity_is_counted_not_deduplicated(self):
-        seen = set()
-        line = transcript_line(
-            requestId=None,
-            message={"usage": {"input_tokens": 3}},
-        )
-        self.assertIsNotNone(self.reduce(line, seen))
-        self.assertIsNotNone(self.reduce(line, seen))
-
-    def test_malformed_lines_reduce_to_none(self):
-        for line in (
-            "",
-            "not json",
-            json.dumps(["a", "list"]),
-            json.dumps({"timestamp": "2026-08-10T12:00:00Z"}),
-            json.dumps({"message": {"usage": {}}}),
-            transcript_line(timestamp=12345),
-            transcript_line(timestamp="not a timestamp"),
+    def test_this_module_defines_no_second_walk_or_vocabulary(self):
+        source = _MODULE_PATH.read_text(encoding="utf-8")
+        for redefinition in (
+            "def read_category_records",
+            "def reduce_category_line",
+            "def category_series",
+            "def assert_partition",
+            "def windows_from",
+            "CATEGORY_FIELDS = (",
         ):
-            self.assertIsNone(self.reduce(line))
+            self.assertNotIn(
+                redefinition,
+                source,
+                "%s belongs to the capture tool; a copy here is a second "
+                "statement of the same rule" % redefinition,
+            )
 
+    def test_the_window_vocabulary_is_the_capture_tools_own(self):
+        self.assertIs(export_usage_series.WINDOW_TODAY, capture.WINDOW_TODAY)
+        self.assertIs(export_usage_series.WINDOW_WEEK, capture.WINDOW_WEEK)
 
-class CategorySeriesTest(unittest.TestCase):
-    def test_builds_contiguous_partitioned_series(self):
-        pairs = [
-            ("2026-08-10", {"input": 10, "output": 5}),
-            ("2026-08-12", {"cache-read": 7}),
-            ("2026-08-10", {"input": 1}),
-        ]
-        series, categories = export_usage_series.category_series(pairs)
-        self.assertEqual(series["startDate"], "2026-08-10")
-        self.assertEqual(series["totals"], [16, 0, 7])
-        self.assertTrue(series["recorded"])
-        self.assertEqual(categories["input"], [11, 0, 0])
-        self.assertEqual(categories["output"], [5, 0, 0])
-        self.assertEqual(categories["cache-read"], [0, 0, 7])
-        self.assertEqual(categories["cache-write"], [0, 0, 0])
-        export_usage_series.assert_partition(series, categories)
-
-    def test_empty_walk_is_a_refusal(self):
-        with self.assertRaises(CaptureError):
-            export_usage_series.category_series([])
-
-    def test_over_long_span_is_refused_like_the_capture_tool(self):
-        pairs = [("2020-01-01", {"input": 1}), ("2026-01-01", {"input": 1})]
-        with self.assertRaises(CaptureError):
-            export_usage_series.category_series(pairs)
-
-    def test_partition_violation_is_a_refusal(self):
-        series = {"startDate": "2026-08-10", "totals": [10], "recorded": True}
-        categories = {"input": [9]}
-        with self.assertRaises(CaptureError):
-            export_usage_series.assert_partition(series, categories)
-
-
-class CaptureParityTest(unittest.TestCase):
-    """The runtime document and the embedded snapshot are ONE measurement."""
-
-    def test_category_series_sums_to_the_capture_tools_series(self):
+    def test_one_walk_produces_the_aggregate_and_both_breakdowns(self):
+        # The property the deleted parity test was reaching for, asserted
+        # where it actually lives: the totals, the categories and the models
+        # come out of one pass over one tree and agree with each other by
+        # construction.
         with tempfile.TemporaryDirectory() as root:
             write_tree(
                 root,
@@ -506,10 +447,7 @@ class CaptureParityTest(unittest.TestCase):
                         transcript_line(
                             timestamp="2026-08-12T03:00:00Z",
                             requestId="req_b",
-                            message={
-                                "id": "msg_b",
-                                "usage": {"output_tokens": 40},
-                            },
+                            message={"id": "msg_b", "usage": {"output_tokens": 40}},
                         ),
                         "not json at all",
                     ],
@@ -529,17 +467,27 @@ class CaptureParityTest(unittest.TestCase):
                     "ignored.txt": ["never read"],
                 },
             )
-            capture_counters = capture.new_counters()
-            capture_series = capture.daily_series(
-                capture.read_records(root, capture_counters)
+            section, counters = capture.capture(
+                root, capture.FORMAT_MESSAGES, None, datetime.date(2026, 8, 12)
             )
-            export_counters = capture.new_counters()
-            series, categories = export_usage_series.category_series(
-                export_usage_series.read_category_records(root, export_counters)
-            )
-        self.assertEqual(series, capture_series)
-        self.assertEqual(export_counters, capture_counters)
-        export_usage_series.assert_partition(series, categories)
+        totals = section["series"]["totals"]
+        self.assertEqual(section["series"]["startDate"], "2026-08-10")
+        self.assertEqual(totals, [145, 0, 40])
+        self.assertEqual(counters["duplicates"], 1)
+        # Categories partition every day of the series, in both directions.
+        capture.assert_partition(totals, section["categories"], 0)
+        self.assertEqual(
+            section["categories"],
+            {
+                "input": [12, 0, 0],
+                "output": [5, 0, 40],
+                "cache-read": [100, 0, 0],
+                "cache-write": [28, 0, 0],
+            },
+        )
+        # No record here names a model, so the models section is absent
+        # rather than a residual row that repeats the aggregate.
+        self.assertNotIn("models", section)
 
 
 class WindowsTest(unittest.TestCase):
@@ -555,26 +503,30 @@ class WindowsTest(unittest.TestCase):
 
     def test_today_counts_the_capture_days_own_bucket(self):
         series, categories = self.fixture()
-        windows = export_usage_series.windows_from(
-            series, categories, datetime.date(2026, 8, 12)
-        )
+        windows = capture.windows_from(series, categories, 0, datetime.date(2026, 8, 12))
         self.assertEqual(windows["today"], {"input": 7, "output": 40})
         self.assertEqual(windows["week"], {"input": 137, "output": 45})
 
     def test_days_outside_the_record_contribute_zero(self):
         series, categories = self.fixture()
-        windows = export_usage_series.windows_from(
-            series, categories, datetime.date(2026, 8, 20)
-        )
+        windows = capture.windows_from(series, categories, 0, datetime.date(2026, 8, 20))
         # No recorded usage today or in the last seven days: an honest zero.
         self.assertEqual(windows["today"], {"input": 0, "output": 0})
         self.assertEqual(windows["week"], {"input": 0, "output": 0})
 
+    def test_a_windowed_breakdown_makes_no_claim_before_it_starts(self):
+        # The categories cover only the trailing two days here. The first
+        # day's total is known and its SPLIT is not, so a window figure that
+        # reaches back to it reads zero rather than inventing a division.
+        series = {"startDate": "2026-08-10", "totals": [135, 0, 47], "recorded": True}
+        categories = {"input": [0, 7], "output": [0, 40]}
+        windows = capture.windows_from(series, categories, 1, datetime.date(2026, 8, 12))
+        self.assertEqual(windows["today"], {"input": 7, "output": 40})
+        self.assertEqual(windows["week"], {"input": 7, "output": 40})
+
     def test_window_vocabulary_is_closed(self):
         series, categories = self.fixture()
-        windows = export_usage_series.windows_from(
-            series, categories, datetime.date(2026, 8, 12)
-        )
+        windows = capture.windows_from(series, categories, 0, datetime.date(2026, 8, 12))
         self.assertEqual(set(windows), {"today", "week"})
 
 
@@ -616,6 +568,80 @@ class MergeSourceTest(unittest.TestCase):
         # file's, never the export run's (2026-08-24 round-3 finding 5).
         self.assertEqual(captured.strftime(export_usage_series.INSTANT_FORMAT),
                          MERGE_CAPTURED_AT)
+
+    def test_a_windowed_breakdown_is_admitted_against_its_declared_start(self):
+        # The section covers a TRAILING window of the series and says so. Its
+        # rows are exactly that long and partition exactly the days it claims.
+        document = merge_document(
+            categories={"input": [4], "output": [3], "cache-read": [3]},
+            categoriesStartDate="2026-08-11",
+        )
+        section, _captured = self.load(document)
+        self.assertEqual(section["categoriesStartDate"], "2026-08-11")
+        self.assertEqual(section["categories"]["input"], [4])
+
+    def test_a_models_section_is_admitted_against_the_closed_vocabulary(self):
+        member = capture.MODEL_KEYS[1]
+        other = capture.MODEL_OTHER
+        section, _captured = self.load(
+            merge_document(models={member: [30, 4], other: [0, 6]})
+        )
+        self.assertEqual(section["models"][member], [30, 4])
+        self.assertEqual(section["models"][other], [0, 6])
+
+    def test_a_breakdown_key_outside_its_vocabulary_refuses_the_document(self):
+        # MEMBERSHIP, never label shape: `private-feature` is perfectly
+        # label-shaped and would render publicly if admitted.
+        for name, document in (
+            ("category", merge_document(categories={"private-feature": [30, 10]})),
+            ("model", merge_document(models={"private-feature": [30, 10]})),
+            # A category key is not a model key and the reverse holds too:
+            # two vocabularies, one admitter, no cross-admission.
+            ("crossed", merge_document(models={"input": [30, 10]})),
+        ):
+            with self.subTest(name):
+                with self.assertRaises(CaptureError):
+                    self.load(document)
+
+    def test_a_breakdown_that_does_not_partition_refuses_in_both_directions(self):
+        for name, rows in (
+            ("under", {capture.MODEL_KEYS[1]: [29, 10]}),
+            ("over", {capture.MODEL_KEYS[1]: [31, 10]}),
+        ):
+            with self.subTest(name):
+                with self.assertRaises(CaptureError):
+                    self.load(merge_document(models=rows))
+
+    def test_a_breakdown_window_outside_the_series_refuses(self):
+        for name, document in (
+            ("before the series", merge_document(categoriesStartDate="2026-08-09")),
+            ("past its end", merge_document(categoriesStartDate="2026-08-20")),
+            (
+                "aligned but spelled out",
+                # There is exactly ONE spelling of "aligned": omit the field.
+                merge_document(categoriesStartDate="2026-08-10"),
+            ),
+            ("not a calendar day", merge_document(categoriesStartDate="2026-99-99")),
+            (
+                "declared with no section",
+                merge_document(modelsStartDate="2026-08-11"),
+            ),
+        ):
+            with self.subTest(name):
+                with self.assertRaises(CaptureError):
+                    self.load(document)
+
+    def test_the_model_window_is_bounded_where_the_categories_window_is_not(self):
+        # The per-model rows cost one integer per day per member, so they
+        # carry their own day bound; the aggregate's categories answer only
+        # to the series bound.
+        days = capture.MAX_MODEL_DAYS + 1
+        document = merge_section(days, 1)
+        document["models"] = {capture.MODEL_KEYS[1]: [
+            sum(1 for _ in capture.CATEGORY_KEYS)] * days}
+        with self.assertRaises(CaptureError) as caught:
+            self.load(document)
+        self.assertIn("day bound", str(caught.exception))
 
     def test_the_complete_window_and_derived_sets_are_required(self):
         # This test asserts the OPPOSITE of what it asserted before the
@@ -873,7 +899,8 @@ class MainTest(unittest.TestCase):
         # Diagnostics are counts, never paths.
         self.assertRegex(
             stderr.strip(),
-            r"^files=\d+ unreadable=\d+ symlinks=\d+ lines=\d+ counted=\d+ duplicates=\d+ sources=\d+$",
+            r"^files=\d+ unreadable=\d+ symlinks=\d+ oversized=\d+ lines=\d+ counted=\d+ "
+        r"duplicates=\d+ unpartitioned=\d+ unattributed=\d+ sources=\d+$",
         )
 
     def test_prints_to_stdout_when_no_out_file_is_given(self):

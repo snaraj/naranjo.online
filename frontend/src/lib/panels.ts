@@ -14,7 +14,7 @@ export const panelEnvelopeSchema = 'panel/v1';
 /* Versioned panel kinds. A breaking payload change mints a new kind version;
  * it never mutates an existing one. */
 export const panelKinds = {
-  tokenUsage: 'token-usage/v1',
+  tokenUsage: 'token-usage/v2',
   vcsActivity: 'vcs-activity/v1',
   bossLog: 'boss-log/v1'
 } as const;
@@ -30,8 +30,16 @@ export interface PanelEnvelope<Data = unknown> {
   data: Data | null;
 }
 
-/* token-usage/v1 — token consumption windows grouped per labeled source.
- * Source labels are data supplied by the origin, never frontend constants. */
+/* token-usage/v2 — token consumption windows grouped per labeled source.
+ * Source labels are data supplied by the origin, never frontend constants.
+ *
+ * v2 is a strict superset of v1: it adds a per-day MODEL partition of each
+ * source's series and an optional window on either breakdown. It is a new
+ * KIND rather than another optional section because the models section binds
+ * CROSS-FIELD rules — a window contained in the series, and an exact per-day
+ * partition of its totals — that a consumer cannot skip and still be telling
+ * the truth about what it renders. The breaking change is what a compliant
+ * consumer must CHECK, not the shape. */
 export interface TokenUsageWindow {
   period: string;
   inputTokens: number;
@@ -59,18 +67,37 @@ export interface TokenUsageStat {
 export interface TokenUsageSeries {
   startDate: string;
   totals: number[];
+  /* True when the series was captured out of band — the sealed one-way push
+   * rather than a live fetch. It is the series' own provenance, and it is
+   * what the insight rows derived from the series inherit, so a derived
+   * figure says where it came from exactly as a tile does. */
+  recorded?: boolean;
   /* Optional per-day breakdown of the same series by accounting category
    * (input, output, cache reads, ...). The origin guarantees the categories
    * PARTITION the totals — per day they sum exactly to the total — and
    * serves them in one canonical order; the panel admission re-checks the
    * structure and the machine-shaped keys. */
   categories?: TokenUsageCategory[];
+  /* Optional per-day breakdown of the same series by MODEL, under exactly
+   * the same partition guarantee and re-checked exactly as strictly. It is
+   * the section that made this kind v2. Unlike the categories it is normally
+   * WINDOWED: one integer per day per model across the full history would
+   * outweigh the whole payload ceiling, so the origin serves a declared
+   * trailing window and every row says which one. */
+  models?: TokenUsageCategory[];
 }
 
 export interface TokenUsageCategory {
   /* Stable machine-shaped identifier (lowercase letters, digits, hyphens). */
   key: string;
-  /* Per-day counts, indexed exactly like the owning series' totals. */
+  /* The calendar date this row's first value falls on, when the breakdown
+   * covers only a TRAILING WINDOW of the owning series; absent when it is
+   * aligned with the series, which is what every breakdown produced before
+   * windows existed says by omission. Repeated per row so a row is
+   * self-describing to a consumer that admits rows one at a time. */
+  startDate?: string;
+  /* Per-day counts, indexed from startDate when one is declared and from the
+   * owning series' startDate when it is not. */
   totals: number[];
 }
 

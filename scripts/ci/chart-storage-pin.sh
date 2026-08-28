@@ -2,10 +2,16 @@
 # chart-storage-pin — prove the rendered panels data root keeps every storage
 # invariant (issue #142), in BOTH directions:
 #
-#   enabled (--set panels.data.enabled=true — deliberately NOT the default
-#   since the 2026-08-24 review's finding M6: the capability binds to
-#   admin-provisioned volumes, so a default render must never carry its
-#   claims): exactly TWO PersistentVolumeClaims — the
+#   enabled (the DEFAULT since 2026-08-27, and asserted BOTH through the
+#   untouched default render and through an explicit
+#   --set panels.data.enabled=true, so the two can never diverge). It was
+#   deliberately not the default under the 2026-08-24 review's finding M6:
+#   the capability binds to admin-provisioned volumes, so a default render
+#   must never carry claims against volumes that do not exist. Both
+#   PersistentVolumes are now applied and Available with claimRefs pre-pinned
+#   to these two names (issue #182), so a default install binds instead of
+#   waiting and the hazard M6 named is gone rather than tolerated. The
+#   enabled render carries exactly TWO PersistentVolumeClaims — the
 #   read-only DATA claim carrying the pushed sealed series, and the writable
 #   replay-floor STATE claim (2026-08-24 security review, finding H2) — each
 #   pinned to its PersistentVolume by name and to the enumerated
@@ -30,13 +36,13 @@
 #   pair from the volume side too, and the two directories disjoint in BOTH
 #   directions after normalization.
 #
-#   disabled — proven for BOTH the untouched DEFAULT render (the
-#   fresh-install schedulability pin: nothing renders that could leave a
-#   pod Pending on an unbindable claim) and an explicit
-#   panels.data.enabled=false: NONE of it — no claim, no volume, no mount,
-#   no PANELS_DATA_* environment. The capability cannot half-exist, and
-#   turning it off is the documented as-of-release-snapshot decision, not
-#   a silent surprise.
+#   disabled (an explicit panels.data.enabled=false, which stays fully
+#   supported): NONE of it — no claim, no volume, no mount, no PANELS_DATA_*
+#   environment. The capability cannot half-exist, and turning it off is the
+#   documented as-of-release-snapshot decision, not a silent surprise. This
+#   direction is what keeps the capability genuinely reversible now that it
+#   is on by default: the off shape is still rendered and still checked on
+#   every pull request, so it cannot rot while nobody looks at it.
 #
 # The checker (chart_storage_pin.py) reads renders through the census's own
 # fail-closed document reader, and the expected facts are read HERE from
@@ -168,9 +174,9 @@ printf '%s' "${with_pv_render}" | pin with-pv ||
   fail "the with-pv render violates the storage pin"
 echo "chart-storage-pin: (b) admin render: the exact pair of local PersistentVolumes, node-pinned"
 
-printf '%s' "${default_render}" | pin disabled ||
-  fail "the DEFAULT render carries capability objects; a fresh install must never wait on admin volumes (review M6)"
-echo "chart-storage-pin: (c) default render: capability fully absent — fresh installs schedule"
+printf '%s' "${default_render}" | pin enabled ||
+  fail "the DEFAULT render does not carry the capability the shipped values enable; the default and the explicit enablement must render the same thing"
+echo "chart-storage-pin: (c) default render: identical to the explicit enablement — the shipped default IS the checked shape"
 
 printf '%s' "${disabled_render}" | pin disabled ||
   fail "the disabled render still carries capability objects"
@@ -423,4 +429,4 @@ echo "chart-storage-pin: (f) disjointness proven in both directions, template an
   fail "only ${mutation_count} mutations ran; at least ${minimum_mutations} are required. Mutations are added, never removed."
 echo "chart-storage-pin: (g) mutation battery held (${mutation_count} mutants, all caught)"
 
-echo "chart-storage-pin: the data root renders read-only, pinned, and absent by default and when disabled"
+echo "chart-storage-pin: the data root renders read-only and pinned by default, and fully absent when disabled"
