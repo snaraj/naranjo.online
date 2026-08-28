@@ -7,6 +7,109 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.56] - 2026-08-28
+
+Six owner rulings from a live review of 0.1.55, and two of them reverse designs
+this repository argued for in the two releases before it. Where that happens the
+old reasoning is kept beside the new rule rather than deleted, because a reader
+who finds only the replacement cannot tell whether the original problem was
+solved or forgotten.
+
+### Changed
+
+- **The gallery is ONE block, and the media reduces inside it** (owner: "the art
+  box changes heights depending on it being a video or art, I don't like the
+  entire website moving around because of that, make it one single block that
+  doesn't expand, reduce based on the media"). The
+  `--gallery-stage-size-video` / `--gallery-stage-aspect-video` pair added at
+  0.1.54 is retired, along with the component rule that read it. Issue 241 had
+  already stopped the DOCUMENT moving on a kind change, but not the thing the
+  owner was looking at: the visible stage still went from 448x448 to 768x432 on
+  every press of the next arrow, inside a reservation nobody can see. A film now
+  takes the identical box a still does and is letterboxed inside it by the
+  `object-fit: contain` its player already carried. The absence is the pin —
+  with no film-specific expression anywhere, the block cannot expand for a film.
+- **A film is swipeable, and only its play control is sensitive to a press**
+  (owner: "you cannot swipe out of a video, it instead starts to play
+  immediately... the sensitive area should only be the button and not the entire
+  video"). This reverses 0.1.54's "the player owns its own surface", whose
+  reasoning was sound as far as it went — a horizontal drag along a seek bar is
+  exactly what `lib/gesture.ts` claims — but which disarmed the whole stage for
+  the whole life of the item, turning four films in nine into dead ends in the
+  strip's only direct gesture. A veil now covers the player before playback: it
+  carries the same swipe binding a still's stage does, it holds the one play
+  control, and the player under it declares no `controls` at all, so there is no
+  seek bar for the drag to contest. Pressing play unmounts the veil and hands
+  the surface over. `ended` gives it back; `pause` deliberately does not, because
+  restoring a swipe surface over the controls a reader just stopped the film to
+  use would cost them their position on every pause. Nothing autoplays: no
+  `autoplay` attribute exists anywhere in the component, and the single `play()`
+  call is reached only from a press.
+- **A drag writes its offset once a painted frame, not once a pointer event**
+  (owner: "swiping is NOT very smooth on the phone"). `frameCoalescer` in
+  `lib/gesture.ts` keeps only the newest value and delivers it inside an
+  animation frame; every terminal position is flushed instead, so a stale drag
+  frame can never land after the settle. All four pointer listeners are now
+  declared passive — none of them ever called `preventDefault`, and the page's
+  vertical scroll is handed over by `touch-action` rather than fought for.
+  MEASURED over a 30-move drag dispatched in separate tasks: 30 style writes
+  before, 10 to 14 after, exactly the number of frames the drag spanned
+  (Chromium 14, WebKit 10, iPhone 13 10).
+- **A completed pull says so, and is held long enough to be seen** (owner: "pull
+  to refresh feels broken"). `refreshPanels()` resolves against a same-origin
+  endpoint in tens of milliseconds, so the armed hold collapsed before its own
+  260ms settle had finished drawing — the reader saw a flicker, which is
+  indistinguishable from a gesture the site ignored. `refreshCycle` gives the
+  refreshing state a 700ms minimum dwell (a floor, never a delay added to slow
+  work: the hold ends when both have elapsed) and a 350ms `complete` phase that
+  reads "Refreshed" and draws a tick. Both the gesture and the keyboard control
+  run the identical cycle. Every settle guarantee is unchanged, and one is
+  added: nothing renders after the binding is destroyed, which the previous
+  synchronous shape did not need to promise.
+- **Every panel read states `cache: 'no-cache'` on the request.** The origin
+  already sends `Cache-Control: no-cache` on every envelope, so this changes no
+  behaviour today — it removes the dependency of a refresh gesture's meaning on
+  a header written in another language. Not `no-store`, which would also refuse
+  to send the validators and download the whole envelope (up to 104,508 bytes
+  for the token-usage panel) instead of taking the 304 the digest ETags exist to
+  produce.
+- **Professional Experience titles are links** (owner: "do not change the
+  styling... instead turn them into links") to `panasonic.aero`, `fathom5.com`,
+  `ontrajectory.com` and `umbc.edu`, each resolved before being recorded. The
+  card primitive gained `titleHref`, which keeps the ordinary card — byline and
+  all — and only makes its heading navigable; EntryLog's existing `href` branch
+  replaces the whole header region and would have dropped the role, the span and
+  the place. The rendered text is unchanged: inherited ink, no resting
+  underline, the site's hover and focus marks. The one thing that is not
+  inherited is the box, and it is not a style choice — a link is a control, so
+  the anchor takes the 44px touch floor exactly as the repo card titles already
+  do, which makes the title row taller than it was.
+
+### Added
+
+- **A layered motion battery** (owner: "ensure that our motion test for the UX
+  of mobile users is THOROUGH... a foundation that is not brittle, NOT SLOW TO
+  RUN UNDER ANY CHANCE"). Layer 1 is `tests/gesture.test.mjs`: synthetic pointer
+  sequences against the real bindings with every clock injected — no DOM, no
+  engine, no sleep — covering claim, stand-down, distance, velocity, cancel,
+  click suppression, keyboard activation, second finger, secondary button,
+  bounded ends, coalescing, teardown, the dwell floor, the busy guard and every
+  settle exit. Nineteen cases were added and the whole file still runs in
+  roughly a tenth of a second. Layer 2 is three new real-engine walks in
+  `browser-lanes.yml` — a film swipe and handover, a coalesced drag, a complete
+  pull cycle — kept to one walk each because the matrix multiplies everything by
+  five projects. Layer 3 is the structural pins that no run can observe. The
+  layer each owns is written in the files' own headers so a future motion
+  feature knows where its tests go.
+- `--card-link-target`, `--card-focus-ring-width`, `--card-focus-ring-offset` and
+  `--card-link-underline-offset` for the linked card title, and
+  `--gallery-play-button-*` for the film's play control. `lengthInPx` in
+  `tests/experience.test.mjs` now resolves a one-hop `var()` against the `:root`
+  layer, which settles a genuine conflict between two of this repository's own
+  pins — the card primitive may state no hardcoded length, and the touch-floor
+  walk demands a number it can compare against 44px — in the direction that
+  measures more rather than less.
+
 ## [0.1.55] - 2026-08-28
 
 Three defects with one shape: in each of them the page showed a visitor

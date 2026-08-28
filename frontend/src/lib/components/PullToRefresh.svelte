@@ -34,6 +34,7 @@
     pullMetrics,
     pullProgress,
     pullToRefresh,
+    refreshCycle,
     type PullPhase
   } from '../pullToRefresh.ts';
 
@@ -55,13 +56,21 @@
 
   /* The copy is the SAME rule the release decision uses (pullArmed, through
      the phase the binding reports), so the indicator can never say "release to
-     refresh" at a distance that would not refresh. */
+     refresh" at a distance that would not refresh.
+
+     "Refreshed" is the acknowledgement the 0.1.55 control could not give: the
+     work resolves in tens of milliseconds, so a reader who pulled saw the mark
+     flash and vanish and had no way to tell a completed refresh from an
+     ignored gesture. The word is past tense on purpose — it reports what
+     happened rather than promising anything. */
   const caption = $derived(
     phase === 'refreshing'
       ? 'Refreshing'
-      : phase === 'armed'
-        ? 'Release to refresh'
-        : 'Pull to refresh'
+      : phase === 'complete'
+        ? 'Refreshed'
+        : phase === 'armed'
+          ? 'Release to refresh'
+          : 'Pull to refresh'
   );
 
   const binding = {
@@ -81,10 +90,10 @@
     refresh: () => refreshPanels()
   };
 
-  /* The keyboard path runs the identical work and shows the identical
-     indicator — it is the same refresh, not a second one — so a reader who
-     presses it sees the control settle when real data lands, exactly as a
-     reader who pulled does.
+  /* The keyboard path runs the identical work THROUGH THE IDENTICAL CYCLE —
+     refreshCycle owns the dwell floor and the acknowledgement for both call
+     sites, so the two paths cannot drift into showing a reader different
+     things for the same refresh.
      It does NOT move the page, and that is the difference between the two
      paths rather than an inconsistency: a gesture displaces the document
      because a finger is holding it displaced, while a press displaces
@@ -93,17 +102,13 @@
      readout — with the cursor and the aria-activedescendant a screen reader
      is following — survives the refresh it asked for. */
   async function refreshFromControl(): Promise<void> {
-    if (phase === 'refreshing') {
+    if (phase === 'refreshing' || phase === 'complete') {
       return;
     }
-    distance = pullMetrics.rest;
-    phase = 'refreshing';
-    try {
-      await refreshPanels();
-    } finally {
-      distance = 0;
-      phase = 'idle';
-    }
+    await refreshCycle(refreshPanels, (next) => {
+      phase = next;
+      distance = next === 'idle' ? 0 : pullMetrics.rest;
+    });
   }
 
   /* Applied to <body> rather than to a wrapper: the thing being pulled is the
@@ -172,16 +177,32 @@
   "Refreshing" when the state changes, and does not need the button's own name
   re-announced every frame of a drag. -->
 <div class="pull-indicator" data-pull-phase={phase} aria-hidden={distance === 0}>
-  <span class="pull-mark" style:--pull-progress={progress}>
+  <!-- The mark carries the state in THREE channels, never one: its fill, its
+    rotation toward the threshold, and — once the work is done — its SHAPE. A
+    tick is not decoration here; it is the only channel that survives a reader
+    who cannot separate the filled state from the armed one, and the caption
+    beside it says the same thing in words. -->
+  <span class="pull-mark" style:--pull-progress={phase === 'complete' ? 0 : progress}>
     <svg class="pull-glyph" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-      <path
-        d="M12 5v10m0 0l-4-4m4 4l4-4"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
+      {#if phase === 'complete'}
+        <path
+          d="M6 12.5l4 4 8-9"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      {:else}
+        <path
+          d="M12 5v10m0 0l-4-4m4 4l4-4"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      {/if}
     </svg>
   </span>
   <span class="pull-caption" aria-live="polite">{caption}</span>
@@ -191,7 +212,7 @@
   type="button"
   class="pull-control"
   onclick={refreshFromControl}
-  disabled={phase === 'refreshing'}
+  disabled={phase === 'refreshing' || phase === 'complete'}
 >
   Refresh panel data
 </button>
@@ -234,7 +255,8 @@
   /* Past the threshold the mark is filled as well as turned — two channels
      for one state, which is the dataviz floor applied to a control. */
   .pull-indicator[data-pull-phase='armed'] .pull-mark,
-  .pull-indicator[data-pull-phase='refreshing'] .pull-mark {
+  .pull-indicator[data-pull-phase='refreshing'] .pull-mark,
+  .pull-indicator[data-pull-phase='complete'] .pull-mark {
     background: var(--panel-accent);
     color: var(--color-surface);
   }

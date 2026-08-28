@@ -7,8 +7,8 @@
  * nothing left to disclaim, and a "placeholder entries" line over four real
  * roles would be its own kind of false statement.
  *
- * The content is the owner's PORTFOLIO — employer, role, dates, work location
- * and what was accomplished there — which is the narrow canonical exception
+ * The content is the owner's PORTFOLIO — employer, its public website, role,
+ * dates, work location and what was accomplished there — the narrow exception
  * requirement 12 names alongside the commit identity and the license. Nothing
  * beyond it is written down: no contact detail, no address, no account, no
  * private operational fact about any employer's systems. What is here is what
@@ -33,6 +33,15 @@ export interface WorkEntry {
   readonly dates: string;
   /* Where the role was based. */
   readonly location: string;
+  /* The employer's own home on the web (owner directive, 2026-08-28, issue
+   * 243). It is a public marketing address and nothing else: no account, no
+   * portal, no private host, which is what keeps it inside requirement 12's
+   * portfolio exception rather than outside it. Every one was resolved before
+   * being written down — the value here is the address that answered, so a
+   * reader is not sent through a redirect the site could have skipped.
+   * Required rather than optional: all four roles have one, and an optional
+   * field would invite a future entry to quietly ship without it. */
+  readonly site: string;
   /* What was accomplished, one bullet each. */
   readonly points: readonly string[];
 }
@@ -54,6 +63,7 @@ export const workEntries: readonly WorkEntry[] = [
     role: 'Software Engineer, Automation, DevOps and Tools',
     dates: 'July 2023 – Present',
     location: 'Irvine, CA',
+    site: 'https://www.panasonic.aero',
     points: [
       'Productionalized legacy RouterOS infrastructure into a self-service, multi-region platform that lets engineers connect physical access points to cloud-hosted Virtual Racks anywhere in the world — 4,100+ unique devices, and an 80% reduction in MikroTik management tickets.',
       'Expanded the Virtual Rack platform with a mechanism for developers to deploy custom x86 and ARM KubeVirt virtual machines alongside the native infrastructure; roughly 47% of users now deploy custom workloads regularly.',
@@ -68,6 +78,7 @@ export const workEntries: readonly WorkEntry[] = [
     role: 'Software Engineer, Condition Based Maintenance',
     dates: 'Mar 2022 – July 2023',
     location: 'Austin, TX',
+    site: 'https://www.fathom5.com',
     points: [
       'Architected and deployed the microservices that let the US Navy perform remote condition-based maintenance across fleets of warships, saving millions of dollars in unnecessary repairs and thousands of hours of reactive labor.',
       'Improved continuous integration with automated jobs that build and deploy production-like environments for service, unit and integration testing.',
@@ -81,6 +92,7 @@ export const workEntries: readonly WorkEntry[] = [
     role: 'Software Engineering Intern',
     dates: 'May 2019 – Aug 2019',
     location: 'Towson, MD',
+    site: 'https://www.ontrajectory.com',
     points: [
       'Implemented XPath-queried scripts that automate the test suites verifying the reliability of new web releases.',
       'Built a daily regression-test framework that detects whether a new feature has adversely affected existing behavior.'
@@ -91,6 +103,7 @@ export const workEntries: readonly WorkEntry[] = [
     role: 'Software Engineering Intern',
     dates: 'May 2017 – Aug 2017',
     location: 'Baltimore, MD',
+    site: 'https://umbc.edu',
     points: [
       'Halved the per-run time of the in-house Mie-scattering algorithm for aerosol and air-quality evaluation by automating its configuration, input/output and export steps.',
       "Created graphical representations of aerosol distributions with MATLAB and Python's Matplotlib."
@@ -113,6 +126,11 @@ export const workHistoryProps: EntryLogProps = {
   entries: workEntries.map((entry) => ({
     key: entry.company,
     title: entry.company,
+    /* titleHref, not href (issue 243): the employer's name becomes navigation
+     * while the card keeps the byline that carries the role, the span and the
+     * place. EntryLog's `href` branch replaces the whole header region and
+     * would drop that line — see the note beside both fields in blocks.ts. */
+    titleHref: entry.site,
     byline: workByline(entry),
     points: entry.points
   })),

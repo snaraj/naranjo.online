@@ -801,8 +801,36 @@ const lengthUnitsInPx = {
  * value the parser does not understand is precisely where an undersized one
  * would hide. CSS unit identifiers are ASCII case-insensitive, so `Q` and `q`
  * are the same unit and both are read. */
+/* A token's declared default, read out of the :root layer — `--card-link-target`
+ * to `2.75rem`. It resolves ONE hop and no fallback: a token whose default is
+ * itself a var(), or one declared nowhere, comes back null and the caller
+ * reports an unmeasurable value exactly as it always did. Chasing a chain here
+ * would mean re-implementing the cascade in a test, and a pin that guesses at
+ * a resolved value is worse than one that admits it cannot see. */
+function rootTokenValue(token) {
+  const root = /:root\s*\{([\s\S]*?)\n\}/.exec(styles);
+  if (!root) return null;
+  const declared = new RegExp(`(?:^|;|\\n)\\s*${token}\\s*:\\s*([^;]+);`).exec(root[1]);
+  return declared === null ? null : declared[1].trim();
+}
+
+/* THE TOKEN LAYER IS NOT A BLIND SPOT (issue 243). This used to return null
+ * for `var(--card-link-target)`, which put two of this file's own pins in
+ * direct conflict: FeedCard.svelte is swept for hardcoded lengths (a card
+ * dimension must be tunable from the token layer), while the touch-floor walk
+ * below demands a number it can compare against 44px. A control on the card
+ * primitive could satisfy one or the other and never both.
+ * Resolving one hop settles it in the direction that measures MORE rather than
+ * less: a tokenised size is now checked against the floor instead of being
+ * waved through, so the walk gained a control rather than losing an argument. */
 function lengthInPx(value) {
-  const parsed = /^([\d.]+)([a-z]+)$/i.exec(value.trim());
+  const trimmed = value.trim();
+  const token = /^var\(\s*(--[\w-]+)\s*\)$/.exec(trimmed);
+  if (token) {
+    const declared = rootTokenValue(token[1]);
+    return declared === null ? null : lengthInPx(declared);
+  }
+  const parsed = /^([\d.]+)([a-z]+)$/i.exec(trimmed);
   if (!parsed) return null;
   const perPx = lengthUnitsInPx[parsed[2].toLowerCase()];
   return perPx === undefined ? null : Number(parsed[1]) * perPx;

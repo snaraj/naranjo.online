@@ -513,9 +513,17 @@ export type EntryLogEntry = {
   readonly title: string;
   /* A place, a source — whatever names the entry's origin. */
   readonly byline?: string;
-  /* A linked entry renders its title as outbound navigation. */
+  /* A linked entry renders its title as outbound navigation IN PLACE OF the
+   * card's own header: a mark, the name, and counters beside it. That shape
+   * carries no byline, which is exactly right for a repository card and wrong
+   * for anything whose meta line matters. */
   readonly href?: string;
   readonly linkLabel?: string;
+  /* The OTHER way a title can be navigation (issue 243): the ordinary card,
+   * byline and all, with its heading pointing somewhere. An entry declares one
+   * or the other; declaring `href` wins, because that branch renders the whole
+   * header itself and there is no heading left for this to reach. */
+  readonly titleHref?: string;
   /* The mark drawn before a linked title; omitted means none. */
   readonly glyph?: 'code';
   readonly counts?: readonly EntryCount[];
