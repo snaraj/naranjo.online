@@ -36,6 +36,7 @@ test that is explicitly about the real sandbox.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import pathlib
@@ -138,13 +139,18 @@ def run_script(script, args=(), env=None, cwd=None):
     )
 
 
+# The fixture record's calendar day, named once so a test that needs a day
+# BEFORE it derives that day instead of restating a literal that can drift.
+TRANSCRIPT_FIXTURE_DAY = "2026-08-10"
+
+
 def transcript_fixture(root: pathlib.Path) -> None:
     """One minimal valid transcript record for the export walk."""
     tree = root / "project"
     tree.mkdir(parents=True)
     record = {
         "type": "assistant",
-        "timestamp": "2026-08-10T12:00:00Z",
+        "timestamp": TRANSCRIPT_FIXTURE_DAY + "T12:00:00Z",
         "requestId": "req_fixture",
         "message": {
             "id": "msg_fixture",
@@ -346,6 +352,60 @@ class PushTransportHardeningTest(unittest.TestCase):
         self.assertTrue(path.endswith("/beta.json"), path)
         self.assertNotIn(str(second), path)
         self.assertIn("checksum verified", result.stdout)
+
+    def test_the_activity_cache_reaches_the_producer_when_one_is_configured(self):
+        # The cache is what carries the series back past the first tool's own
+        # transcript retention (issue #170). A configured cache the producer
+        # never received would publish a silently shorter history, so what is
+        # pinned is the ARGUMENT, not merely the configuration key.
+        cache = self.scratch / "activity-cache.json"
+        # A roll-up the producer really admits, for the day BEFORE the
+        # fixture's own record — which is the shape production has, and the
+        # only shape that means anything: the cache exists to supply days the
+        # walk has lost to retention, and those are always earlier ones.
+        earlier = datetime.date.fromisoformat(TRANSCRIPT_FIXTURE_DAY) - datetime.timedelta(days=1)
+        cache.write_text(
+            json.dumps(
+                {
+                    "dailyModelTokens": [
+                        {
+                            "date": earlier.isoformat(),
+                            "tokensByModel": {"claude-opus-5": 4096},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_config(ACTIVITY_CACHE=str(cache))
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = self.sandbox_args_file.read_text(encoding="utf-8").splitlines()
+        self.assertIn("--activity-cache", argv)
+        self.assertEqual(argv[argv.index("--activity-cache") + 1], str(cache))
+
+    def test_no_configured_cache_passes_no_cache_argument(self):
+        # The negative control, and the reason the test above is not vacuous:
+        # the cache is optional, and a run without one must invoke the
+        # producer exactly as it did before the option existed.
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = self.sandbox_args_file.read_text(encoding="utf-8").splitlines()
+        self.assertNotIn("--activity-cache", argv)
+
+    def test_a_configured_cache_that_is_not_a_file_pushes_nothing(self):
+        # Fail closed on a MISCONFIGURATION, not on an absent option. Dropping
+        # an unreadable cache and carrying on would publish a series two
+        # months shorter with nothing anywhere saying why — the exact silent
+        # shortening this work package exists to end.
+        self.write_config(ACTIVITY_CACHE=str(self.scratch / "not-here.json"))
+        result = run_script(PUSH, env=self.env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ACTIVITY_CACHE does not name a file", result.stderr)
+        self.assertFalse(
+            self.args_file.exists(),
+            "a misconfigured cache still reached the transport",
+        )
 
     def test_a_failed_recapture_pushes_nothing_at_all(self):
         # Refusing is the only correct answer here, and it is a property of

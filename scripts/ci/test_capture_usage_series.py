@@ -1320,11 +1320,18 @@ class CapParityTest(unittest.TestCase):
         review, which found the quoted figure off by the mandatory trailing
         newline). The maximum is one document covering every label the
         SHIPPED snapshot carries — a document can never name another — each
-        at the series-day bound with the complete category vocabulary and the
+        at the series-day bound with the complete category vocabulary, the
+        complete model vocabulary over its own MAX_MODEL_DAYS window, and the
         complete window and derived sets, emitted in the producer's own
         compact form with its terminating newline, plus the AEAD overhead.
         Re-deriving it from the shipped constants means the number cannot go
         stale behind a document-shape change again.
+
+        The models section is why MAX_MODEL_DAYS exists rather than the
+        section simply covering the series (issue #170): one integer per day
+        per member across MAX_SERIES_DAYS would outweigh the entire ceiling
+        on its own, so the section is a declared trailing WINDOW and this
+        measurement is what keeps that claim honest.
         """
         snapshot = json.loads(
             (self.REPO_ROOT / "internal/panels/snapshots/token-usage.json").read_text(
@@ -1337,6 +1344,18 @@ class CapParityTest(unittest.TestCase):
         value = 10**digits - 1
         total = value * len(capture_usage_series.CATEGORY_KEYS)
         days = capture_usage_series.MAX_SERIES_DAYS
+        model_days = capture_usage_series.MAX_MODEL_DAYS
+        # The model rows partition the SAME totals over the trailing window,
+        # so the two vocabularies being the same length is what lets one
+        # `value` serve both. Asserting it means a vocabulary that grows on
+        # one side alone fails here instead of silently measuring a document
+        # the origin would refuse.
+        self.assertEqual(
+            len(capture_usage_series.MODEL_KEYS),
+            len(capture_usage_series.CATEGORY_KEYS),
+            "the structural maximum divides one total across both vocabularies",
+        )
+        models_start = datetime.date(2024, 1, 1) + datetime.timedelta(days=days - model_days)
         document = {
             "schema": "usage-series/v1",
             "generatedAt": instant,
@@ -1351,6 +1370,10 @@ class CapParityTest(unittest.TestCase):
                     "categories": {
                         key: [value] * days for key in capture_usage_series.CATEGORY_KEYS
                     },
+                    "models": {
+                        key: [value] * model_days for key in capture_usage_series.MODEL_KEYS
+                    },
+                    "modelsStartDate": models_start.isoformat(),
                     "windows": {
                         "today": {"input": value, "output": value},
                         "week": {"input": value, "output": value},
@@ -1376,11 +1399,15 @@ class CapParityTest(unittest.TestCase):
         self.assertEqual(cap, 131072)
         maximum = self.structural_maximum(10)
         self.assertGreater(cap, maximum)
-        # The headroom is three further decimal digits on every value: the
-        # same maximum still fits at thirteen digits and only crosses at
-        # fourteen. That is the claim docs/usage-export.md makes, measured.
-        self.assertLess(self.structural_maximum(13), cap)
-        self.assertGreater(self.structural_maximum(14), cap)
+        # The headroom is two further decimal digits on every value: the same
+        # maximum still fits at twelve digits and only crosses at thirteen.
+        # That is the claim docs/usage-export.md makes, measured. It was
+        # three digits before the models section (issue #170) — the window
+        # spends one digit of headroom, which is exactly the trade
+        # MAX_MODEL_DAYS was chosen to bound, and the number moved here
+        # rather than in a comment somewhere because it is MEASURED.
+        self.assertLess(self.structural_maximum(12), cap)
+        self.assertGreater(self.structural_maximum(13), cap)
 
     def test_matches_the_origin_admission_cap(self):
         source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")

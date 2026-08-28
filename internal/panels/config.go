@@ -25,7 +25,7 @@ func buildBuiltinPanels() []panelDefinition {
 	vcsActivitySnapshot := SnapshotSource{Name: "snapshots/vcs-activity.json"}
 	bossLogSnapshot := SnapshotSource{Name: "snapshots/boss-log.json"}
 	definitions := []panelDefinition{
-		{id: "token-usage", kind: KindTokenUsage, title: "Token usage", source: tokenUsageSnapshot},
+		{id: "token-usage", kind: KindTokenUsageV2, title: "Token usage", source: tokenUsageSnapshot},
 		{id: "vcs-activity", kind: KindVCSActivity, title: "Version-control activity", source: vcsActivitySnapshot},
 		// The id and kind are the panel's stable public identity and stay put;
 		// the TITLE is display copy the owner chose, and the panel now serves

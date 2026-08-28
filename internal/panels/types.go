@@ -97,6 +97,26 @@ const (
 	// are data supplied by snapshots and config — never Go identifiers — so a
 	// new tool or vendor appears by shipping data, not by editing code.
 	KindTokenUsage = "token-usage/v1"
+	// KindTokenUsageV2 is the same payload plus a per-day MODEL partition of
+	// each source's series (issue #170), and it is a new KIND rather than
+	// another optional v1 section for one reason: the section binds
+	// CROSS-FIELD integrity rules — a declared window contained in the
+	// aggregate's, and an exact per-day partition of the aggregate's totals.
+	// Every other section added to v1 since it shipped (tiles, the series,
+	// insights, the category partition, the capture instant) could be ignored
+	// by a consumer without the rest becoming untrue. This one cannot: a
+	// consumer that admitted v1's shape and skipped these rules would render
+	// a v2 payload while silently failing to verify what makes it true.
+	// Minting the kind is what forces every consumer through the new
+	// admission. The breaking change is not the shape — v2 is a strict
+	// superset — it is what a compliant consumer must CHECK.
+	//
+	// The panel/v1 ENVELOPE is untouched, as it is forever by design; only
+	// the kind moves. v1 stays decodable, and its admission stays exactly as
+	// strict as it was: tokenUsageDataV1 below is a decode-only mirror with
+	// no models field anywhere in it, so a document claiming v1 while
+	// carrying a models section is refused rather than quietly upgraded.
+	KindTokenUsageV2 = "token-usage/v2"
 	// KindVCSActivity reports contribution activity: weekly counts, totals,
 	// the current streak, and recent commits.
 	KindVCSActivity = "vcs-activity/v1"
@@ -164,7 +184,7 @@ type IndexEntry struct {
 	Status Status `json:"status"`
 }
 
-// TokenUsageData is the token-usage/v1 payload: token consumption windows
+// TokenUsageData is the token-usage/v2 payload: token consumption windows
 // grouped per source. Sources are data labels — a vendor's or tool's name
 // arrives in snapshot and config bytes, and adding a source is a data change,
 // never a code change (doctrine_test pins vendor names out of Go source).
@@ -203,8 +223,8 @@ type TokenUsageSource struct {
 	//
 	// Additive, exactly like Account, Stats, Series, Insights and the
 	// series' Recorded flag before it: a payload written before this field
-	// existed still decodes and still renders, so the kind stays
-	// token-usage/v1.
+	// existed still decodes and still renders, so this field did not move
+	// the kind either.
 	CapturedAt string `json:"capturedAt,omitempty"`
 }
 
@@ -264,8 +284,10 @@ type TokenUsageSeries struct {
 	//
 	// Additive, exactly like Account, Stats, Series and Insights before it: a
 	// payload written before this field existed still decodes and still
-	// renders, so the kind stays token-usage/v1. Minting a new kind version is
-	// for a BREAKING reshape, and an optional flag is not one.
+	// renders, so this field did not move the kind. Minting a new kind
+	// version is for a BREAKING reshape, and an optional flag is not one —
+	// contrast Models below, whose cross-field integrity rules a consumer
+	// cannot skip, which is exactly what did mint token-usage/v2.
 	Recorded bool `json:"recorded,omitempty"`
 	// Categories optionally breaks every day of Totals down by accounting
 	// category (input, output, cache reads, ...), in a canonical served
@@ -273,6 +295,16 @@ type TokenUsageSeries struct {
 	// produced before it existed, and an absent section renders the plain
 	// single-series grid it always did.
 	Categories []TokenUsageCategory `json:"categories,omitempty"`
+	// Models optionally breaks the same days down by MODEL instead — the
+	// same labelled-sub-series shape over a different closed vocabulary, and
+	// the section that mints token-usage/v2 (issue #170). Absent is a real
+	// producer state, "this source cannot attribute its series per model",
+	// and renders the complete v1 story rather than an empty or degraded one.
+	//
+	// It is a SEPARATE partition of the same totals, not a nesting of the
+	// category one: a day's tokens divide by accounting class and by model
+	// independently, and each division is checked against the aggregate.
+	Models []TokenUsageCategory `json:"models,omitempty"`
 }
 
 // TokenUsageCategory is one per-day breakdown component of a daily series:
@@ -283,11 +315,63 @@ type TokenUsageSeries struct {
 // the same measurement, never two claims that can disagree.
 type TokenUsageCategory struct {
 	// Key is the stable category identifier, e.g. "input" or "cache-read".
-	// It is data with a machine-checked shape (lowercase letters, digits,
-	// hyphens), never free text, so it can double as a rendering key.
+	// It is data admitted by MEMBERSHIP of a closed vocabulary, never by
+	// shape, so it can double as a rendering key.
 	Key string `json:"key"`
-	// Totals holds this category's per-day counts, indexed exactly like the
-	// owning series' Totals.
+	// StartDate is the calendar date of Totals[0] when this breakdown covers
+	// only a TRAILING WINDOW of the owning series; absent when it is aligned
+	// with the series, which is what every breakdown produced before this
+	// field existed says by omission.
+	//
+	// A window is not a degraded state and is never silent. Two honest
+	// reasons produce one. A category split can only cover days whose
+	// records carry an accounting split, so a series extended back into days
+	// the producer's journals no longer hold carries its categories over the
+	// days that still have them. A model split answers to a byte BUDGET —
+	// one integer per day per member, which at the series-day bound would
+	// outweigh the whole payload ceiling — so it covers a declared trailing
+	// window. Both are DECLARED here so a reader can be told the range it is
+	// looking at instead of being shown a truncation it cannot see.
+	StartDate string `json:"startDate,omitempty"`
+	// Totals holds this breakdown row's per-day counts, indexed from
+	// StartDate (or from the owning series' StartDate when absent).
+	Totals []int64 `json:"totals"`
+}
+
+// The token-usage/v1 DECODE MIRROR. It exists so that minting v2 could not
+// quietly widen v1: the served types above gained an optional models section
+// and an optional breakdown window, and a payload declaring the OLD kind must
+// still be refused for carrying either. Sharing one type would have made
+// "v1 is untouched" a claim nobody checks — decodeStrict refuses unknown
+// FIELDS, and a field the shared struct declares is not unknown.
+//
+// These types are decode-only and unexported: nothing constructs them, and
+// the canonical bytes they re-marshal are byte-identical to what v1 served
+// before v2 existed. Adding a field here is the same deliberate act as
+// adding one to the kind itself.
+type tokenUsageDataV1 struct {
+	Sources []tokenUsageSourceV1 `json:"sources"`
+}
+
+type tokenUsageSourceV1 struct {
+	Label      string              `json:"label"`
+	Account    string              `json:"account,omitempty"`
+	Windows    []TokenUsageWindow  `json:"windows"`
+	Stats      []TokenUsageStat    `json:"stats,omitempty"`
+	Series     *tokenUsageSeriesV1 `json:"series,omitempty"`
+	Insights   []TokenUsageInsight `json:"insights,omitempty"`
+	CapturedAt string              `json:"capturedAt,omitempty"`
+}
+
+type tokenUsageSeriesV1 struct {
+	StartDate  string                 `json:"startDate"`
+	Totals     []int64                `json:"totals"`
+	Recorded   bool                   `json:"recorded,omitempty"`
+	Categories []tokenUsageCategoryV1 `json:"categories,omitempty"`
+}
+
+type tokenUsageCategoryV1 struct {
+	Key    string  `json:"key"`
 	Totals []int64 `json:"totals"`
 }
 
@@ -571,7 +655,7 @@ const (
 type panelFetchSpecs struct {
 	// bossLog is set when this source feeds a boss-log/v1 panel.
 	bossLog *bossLogFetchSpec
-	// usage is set when this source feeds a token-usage/v1 panel.
+	// usage is set when this source feeds a token-usage panel.
 	usage *tokenUsageFetchSpec
 	// vcs is set when this source feeds a vcs-activity/v1 panel.
 	vcs *vcsActivityFetchSpec
@@ -1232,6 +1316,26 @@ const (
 	// bound stops a hostile file from inflating the payload with hundreds.
 	maxSeriesCategories = 8
 
+	// maxSeriesModels bounds the per-model breakdown the same way and at the
+	// same number, for the same reason: a structural guard that still holds
+	// if the closed vocabulary is ever widened.
+	maxSeriesModels = 8
+
+	// maxModelDays bounds how many trailing days the per-model breakdown may
+	// cover, and it is a BUDGET rather than a limit of the record. A row
+	// costs one integer per day per member, so at maxSeriesDays the section
+	// alone would outweigh the entire sealed ceiling before the aggregate is
+	// counted at all — full-depth per-model dailies are not a cap edit away,
+	// they are a different encoding. A quarter is the reserve this ceiling
+	// can carry with room left over, and the covered range is DECLARED by the
+	// section's own start date, so a reader is told what they are looking at
+	// rather than shown a silent truncation.
+	//
+	// The categories breakdown has no separate day bound: it answers to
+	// maxSeriesDays like the series it partitions, because it costs the same
+	// per day as the totals beside it rather than a multiple of them.
+	maxModelDays = 92
+
 	// maxCountValue is THE upper bound on every count a pushed document
 	// carries, and it is one number three languages agree on (2026-08-24
 	// round-3 review, finding 9). 2^53-1 is the largest integer JavaScript
@@ -1317,6 +1421,29 @@ var usageSeriesDerivedKeys = map[string]string{
 // hue assignment is stable.
 var categoryServeOrder = []string{"input", "output", "cache-read", "cache-write", "reasoning"}
 
+// modelServeOrder is the CLOSED model vocabulary AND the canonical order its
+// rows are SERVED in — the same two jobs categoryServeOrder does, for the
+// second breakdown (issue #170). Its members are MACHINE KEYS, never display
+// copy: a key is what crosses this boundary, and the reader that renders it
+// resolves its own label from its own copy of this list. That split is what
+// keeps this file free of a model name (doctrine_test's vendor pin) while
+// still admitting by MEMBERSHIP rather than by shape — the H1 lesson, which
+// a label-shaped `private-feature` would otherwise walk straight through and
+// onto a public page.
+//
+// Index is the palette slot the frontend paints from, so the list is
+// APPEND-ONLY: reusing or reordering an index repaints history under a
+// different entity, and a retired member keeps its slot as a tombstone. The
+// first member is the reserved residual — the class every token the producer
+// cannot attribute falls into — and it holds index 0 by RULE, so a named
+// entity never inherits the neutral slot.
+//
+// Pinned by value against the producer's MODEL_KEYS and the frontend's
+// modelSlots by ModelVocabularyParityTest in scripts/ci, exactly as the
+// category vocabulary is: adding a model is one reviewed data edit landing
+// in three places together, never a document's choice.
+var modelServeOrder = []string{"other", "fable-5", "opus-5", "sonnet-5", "opus-4-8"}
+
 // usageSeriesDocument is the strict on-disk shape of the sealed series file
 // (schema usage-series/v1). Sources are keyed by the SAME label the embedded
 // snapshot uses for that source — a key with no matching snapshot label
@@ -1347,9 +1474,25 @@ type usageSeriesSource struct {
 	// an out-of-band capture, and a file claiming live provenance is refused.
 	Series usageSeriesSection `json:"series"`
 	// Categories optionally partitions the series per day, keyed by category
-	// key. Every category must have exactly the series' length and the
-	// per-day category sum must equal the series total.
+	// key. Every row must cover exactly the section's own window and the
+	// per-day row sum must equal the series total across it.
 	Categories map[string][]int64 `json:"categories,omitempty"`
+	// CategoriesStartDate optionally declares that the category rows cover a
+	// TRAILING WINDOW of the series rather than all of it. Absent means
+	// aligned, which is what every document written before this field
+	// existed says by omission; present, it must name a day strictly inside
+	// the series, so there is exactly one spelling of "aligned".
+	CategoriesStartDate string `json:"categoriesStartDate,omitempty"`
+	// Models optionally partitions the same series per day by MODEL, over a
+	// different closed vocabulary and under its own day bound. Optional
+	// because "this source cannot attribute per model" is a real producer
+	// state that renders the complete v1 story — unlike Windows and Derived
+	// below, whose absence would leave a release-time figure standing beside
+	// a runtime series under one instant (2026-08-24 round-3 finding 5).
+	Models map[string][]int64 `json:"models,omitempty"`
+	// ModelsStartDate declares the models window, exactly as
+	// CategoriesStartDate declares the categories one.
+	ModelsStartDate string `json:"modelsStartDate,omitempty"`
 	// Windows carries the COMPLETE aggregate window set, keyed by the closed
 	// usageSeriesWindowKeys vocabulary. Required and complete: an omitted
 	// window used to leave the release-time one rendered beside a runtime

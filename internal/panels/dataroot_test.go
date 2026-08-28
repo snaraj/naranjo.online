@@ -68,7 +68,7 @@ func usageDataRootRegistry(t *testing.T, snapshot string) (*Registry, *panelStat
 	}
 	reg := newRegistry(fsys, []panelDefinition{{
 		id:     "token-usage",
-		kind:   KindTokenUsage,
+		kind:   KindTokenUsageV2,
 		title:  "Token usage",
 		source: SnapshotSource{Name: "snapshots/token-usage.json"},
 	}})
@@ -415,7 +415,7 @@ func TestDataRootRefusesHostileDocuments(t *testing.T) {
 			categories := alphaSection(d)["categories"].(map[string]any)
 			categories["<img src=x>"] = categories["input"]
 			delete(categories, "input")
-		}, "category key"},
+		}, "categories: key is outside the closed vocabulary"},
 		// MEMBERSHIP, not shape (2026-08-24 review finding H1): these keys
 		// are perfectly label-shaped — lowercase, hyphenated, bounded — and
 		// the original shape-only guard ADMITTED them, which would have
@@ -425,22 +425,22 @@ func TestDataRootRefusesHostileDocuments(t *testing.T) {
 			categories := alphaSection(d)["categories"].(map[string]any)
 			categories["private-feature"] = categories["input"]
 			delete(categories, "input")
-		}, "closed category vocabulary"},
+		}, "categories: key is outside the closed vocabulary"},
 		"category key label-shaped project name": {func(d map[string]any) {
 			categories := alphaSection(d)["categories"].(map[string]any)
 			categories["internal-project-name"] = categories["input"]
 			delete(categories, "input")
-		}, "closed category vocabulary"},
+		}, "categories: key is outside the closed vocabulary"},
 		"category key with a path": {func(d map[string]any) {
 			categories := alphaSection(d)["categories"].(map[string]any)
 			categories["a/b"] = categories["input"]
 			delete(categories, "input")
-		}, "category key"},
+		}, "categories: key is outside the closed vocabulary"},
 		"category key uppercase": {func(d map[string]any) {
 			categories := alphaSection(d)["categories"].(map[string]any)
 			categories["Input"] = categories["input"]
 			delete(categories, "input")
-		}, "category key"},
+		}, "categories: key is outside the closed vocabulary"},
 		"too many categories": {func(d map[string]any) {
 			section := alphaSection(d)
 			series := section["series"].(map[string]any)
@@ -528,6 +528,218 @@ func TestDataRootAdmitsTheWholeClosedCategoryVocabulary(t *testing.T) {
 		if categories[index].Key != key {
 			t.Fatalf("category %d is %q, want %q (canonical order)", index, categories[index].Key, key)
 		}
+	}
+}
+
+// TestDataRootAdmitsAWindowedModelBreakdown is the positive half of issue
+// #170's admission: a per-model partition covering a declared TRAILING window
+// of the series is admitted, served in canonical vocabulary order, and every
+// row carries the window it covers so a reader is told the range rather than
+// shown an invisible truncation. The categories in the same document stay
+// aligned, proving the two breakdowns are windowed independently.
+func TestDataRootAdmitsAWindowedModelBreakdown(t *testing.T) {
+	t.Parallel()
+	reg, state := usageDataRootRegistry(t, dataRootSnapshot)
+	document := validDocument()
+	section := alphaSection(document)
+	section["modelsStartDate"] = "2026-08-16"
+	section["models"] = map[string]any{
+		"opus-4-8": []int64{0, 1},
+		"sonnet-5": []int64{0, 2},
+		"opus-5":   []int64{0, 2},
+		"fable-5":  []int64{0, 1},
+		"other":    []int64{0, 1},
+	}
+	if _, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex)); err != nil {
+		t.Fatalf("the windowed model breakdown was refused: %v", err)
+	}
+	_, data := decodeServedUsage(t, state)
+	models := data.Sources[0].Series.Models
+	if len(models) != len(modelServeOrder) {
+		t.Fatalf("served %d models, want %d", len(models), len(modelServeOrder))
+	}
+	for index, key := range modelServeOrder {
+		if models[index].Key != key {
+			t.Fatalf("model %d is %q, want %q (canonical order)", index, models[index].Key, key)
+		}
+		if models[index].StartDate != "2026-08-16" {
+			t.Fatalf("model %q carries window %q, want the declared 2026-08-16", key, models[index].StartDate)
+		}
+		if len(models[index].Totals) != 2 {
+			t.Fatalf("model %q covers %d days, want the 2 the window spans", key, len(models[index].Totals))
+		}
+	}
+	for _, category := range data.Sources[0].Series.Categories {
+		if category.StartDate != "" {
+			t.Fatalf("category %q claims window %q; it is aligned with the series", category.Key, category.StartDate)
+		}
+	}
+}
+
+// TestDataRootRefusesHostileBreakdownWindows drives the window and vocabulary
+// rules the models section brought with it. Each case is a document that is
+// otherwise perfectly well formed and authenticated — the only thing wrong is
+// the claim the breakdown makes about the days it covers or the keys it uses.
+func TestDataRootRefusesHostileBreakdownWindows(t *testing.T) {
+	t.Parallel()
+	for name, testCase := range map[string]struct {
+		mutate  func(document map[string]any)
+		wantErr string
+	}{
+		"a model key outside the closed vocabulary": {func(d map[string]any) {
+			alphaSection(d)["models"] = map[string]any{"private-model": []int64{5, 0, 7}}
+		}, "models: key is outside the closed vocabulary"},
+		// The two vocabularies are closed against EACH OTHER, not merely
+		// against arbitrary text: a category name is not a model name, and
+		// admitting one in the other's section would let a document claim a
+		// partition of a thing it never measured.
+		"a category key smuggled into the models section": {func(d map[string]any) {
+			alphaSection(d)["models"] = map[string]any{"input": []int64{5, 0, 7}}
+		}, "models: key is outside the closed vocabulary"},
+		"a model key smuggled into the categories section": {func(d map[string]any) {
+			alphaSection(d)["categories"] = map[string]any{"opus-5": []int64{5, 0, 7}}
+		}, "categories: key is outside the closed vocabulary"},
+		"models sum over the series totals": {func(d map[string]any) {
+			alphaSection(d)["models"] = map[string]any{"opus-5": []int64{5, 0, 8}}
+		}, "models: rows sum to 8 on day 2; the series total is 7"},
+		"models sum under the series totals": {func(d map[string]any) {
+			alphaSection(d)["models"] = map[string]any{"opus-5": []int64{5, 0, 6}}
+		}, "models: rows sum to 6 on day 2; the series total is 7"},
+		"a model window starting before the series": {func(d map[string]any) {
+			section := alphaSection(d)
+			section["modelsStartDate"] = "2026-08-14"
+			section["models"] = map[string]any{"opus-5": []int64{0, 5, 0, 7}}
+		}, "window starts -1 days into a 3 day series"},
+		// "Aligned" has exactly ONE spelling — omission. A window redundantly
+		// restating the series start is refused rather than accepted as a
+		// synonym, so two documents covering identical days cannot differ in
+		// their served bytes.
+		"a model window restating the series start": {func(d map[string]any) {
+			section := alphaSection(d)
+			section["modelsStartDate"] = "2026-08-15"
+			section["models"] = map[string]any{"opus-5": []int64{5, 0, 7}}
+		}, "window starts 0 days into a 3 day series"},
+		"a model window past the last series day": {func(d map[string]any) {
+			section := alphaSection(d)
+			section["modelsStartDate"] = "2026-08-18"
+			section["models"] = map[string]any{"opus-5": []int64{}}
+		}, "window starts 3 days into a 3 day series"},
+		"a model window declared with no rows to cover it": {func(d map[string]any) {
+			alphaSection(d)["modelsStartDate"] = "2026-08-16"
+		}, "models: a window is declared with no rows to cover it"},
+		"model rows that do not cover the declared window": {func(d map[string]any) {
+			section := alphaSection(d)
+			section["modelsStartDate"] = "2026-08-16"
+			section["models"] = map[string]any{"opus-5": []int64{5, 0, 7}}
+		}, `row "opus-5" covers 3 days; the window covers 2`},
+		"a category window declared with no rows to cover it": {func(d map[string]any) {
+			section := alphaSection(d)
+			delete(section, "categories")
+			section["categoriesStartDate"] = "2026-08-16"
+		}, "categories: a window is declared with no rows to cover it"},
+		"a category window that does not partition the days it claims": {func(d map[string]any) {
+			section := alphaSection(d)
+			section["categoriesStartDate"] = "2026-08-16"
+			section["categories"] = map[string]any{"input": []int64{0, 6}}
+		}, "categories: rows sum to 6 on day 2; the series total is 7"},
+		"more model rows than the bound allows": {func(d map[string]any) {
+			rows := map[string]any{}
+			for index := range maxSeriesModels + 1 {
+				rows[fmt.Sprintf("model-%d", index)] = []int64{0, 0, 0}
+			}
+			alphaSection(d)["models"] = rows
+		}, fmt.Sprintf("models: %d rows, over the %d bound", maxSeriesModels+1, maxSeriesModels)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			refuseCase(t, testCase.mutate, testCase.wantErr)
+		})
+	}
+}
+
+// TestDataRootRefusesAModelWindowOverTheDayBound pins the bound that keeps the
+// models section affordable. The series may run to maxSeriesDays; the model
+// partition costs one integer per day per member, so a window claiming more
+// than maxModelDays is refused at admission rather than measured at the
+// serve budget, where it would already have been decoded.
+//
+// The negative control is the same document one day shorter: it must be
+// ADMITTED, or the bound would be indistinguishable from a refusal of the
+// whole shape.
+func TestDataRootRefusesAModelWindowOverTheDayBound(t *testing.T) {
+	t.Parallel()
+	// The window starts one day into the series, so the span is days-1: at
+	// days = maxModelDays+2 the window is one day over the bound, and at
+	// days = maxModelDays+1 it is exactly at it.
+	build := func(days int) map[string]any {
+		document := validDocument()
+		section := alphaSection(document)
+		totals := make([]int64, days)
+		values := make([]int64, days-1)
+		for index := range totals {
+			totals[index] = 5
+		}
+		for index := range values {
+			values[index] = 5
+		}
+		section["series"] = map[string]any{"startDate": "2026-01-01", "totals": totals, "recorded": true}
+		delete(section, "categories")
+		section["modelsStartDate"] = "2026-01-02"
+		section["models"] = map[string]any{"opus-5": values}
+		return document
+	}
+	refuseCase(t, func(d map[string]any) {
+		over := build(maxModelDays + 2)
+		d["sources"].(map[string]any)["alpha"] = alphaSection(over)
+	}, fmt.Sprintf("models: the window spans %d days, over the %d day bound", maxModelDays+1, maxModelDays))
+
+	reg, state := usageDataRootRegistry(t, dataRootSnapshot)
+	if _, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, build(maxModelDays+1))), productionUnsealer(dataRootTestKeyHex)); err != nil {
+		t.Fatalf("a window exactly at the %d day bound was refused: %v", maxModelDays, err)
+	}
+	_, data := decodeServedUsage(t, state)
+	if got := len(data.Sources[0].Series.Models[0].Totals); got != maxModelDays {
+		t.Fatalf("served %d model days, want the %d the bound allows", got, maxModelDays)
+	}
+}
+
+// TestTokenUsageV1AdmissionDidNotWiden is the proof behind the claim that
+// minting token-usage/v2 left v1 exactly as strict as it was. The decode-only
+// mirror in types.go is only worth its duplication if something fails when it
+// stops mirroring, so this drives both directions on the identical bytes: the
+// new sections are UNKNOWN fields under the old kind and known ones under the
+// new. Deleting the mirror and pointing both kinds at the served types turns
+// every refusal here green.
+func TestTokenUsageV1AdmissionDidNotWiden(t *testing.T) {
+	t.Parallel()
+	for name, testCase := range map[string]struct {
+		payload string
+		refused string
+	}{
+		"a models section": {
+			`{"sources":[{"label":"alpha","windows":[],"series":{"startDate":"2026-08-15","totals":[5],` +
+				`"models":[{"key":"opus-5","totals":[5]}]}}]}`,
+			"models",
+		},
+		"a windowed category": {
+			`{"sources":[{"label":"alpha","windows":[],"series":{"startDate":"2026-08-15","totals":[5],` +
+				`"categories":[{"key":"input","startDate":"2026-08-15","totals":[5]}]}}]}`,
+			"startDate",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := decodeKindPayload(KindTokenUsage, json.RawMessage(testCase.payload))
+			if err == nil {
+				t.Fatalf("token-usage/v1 admitted %s", name)
+			}
+			if !strings.Contains(err.Error(), "unknown field") || !strings.Contains(err.Error(), testCase.refused) {
+				t.Fatalf("error %q does not refuse %q as an unknown field", err, testCase.refused)
+			}
+			if _, err := decodeKindPayload(KindTokenUsageV2, json.RawMessage(testCase.payload)); err != nil {
+				t.Fatalf("token-usage/v2 refused its own %s: %v", name, err)
+			}
+		})
 	}
 }
 
@@ -716,30 +928,77 @@ func TestDataRootRefusesOversizeBeforeDecryption(t *testing.T) {
 // last good payload: the budget is structural on this path exactly as it is
 // on construction and refresh.
 // maximalDocument is the largest document the ORIGIN'S OWN BOUNDS admit: the
-// full 732-day series on both shipped sources, the complete five-key
-// category partition on the one that reports one, and every value at the
-// shared numeric ceiling. Nothing structurally valid can be bigger, which is
-// what makes the two measurements below meaningful rather than arbitrary.
+// full 732-day series on both shipped sources, the complete category
+// partition on the one that reports one, the complete per-model partition at
+// its own day bound on BOTH, and every value at the shared numeric ceiling.
+// Nothing structurally valid can be bigger, which is what makes the
+// measurements below meaningful rather than arbitrary.
+//
+// It is BUILT from the shipped vocabularies and bounds rather than
+// transcribed, so a vocabulary edit or a bound change moves the measurement
+// instead of leaving it stale — the same construction CapParityTest uses on
+// the producer side. Adding the models section (issue #170) grew it, which is
+// exactly the growth the budget has to be measured against.
 func maximalDocument() map[string]any {
 	const days = 732
+	categories := len(categoryServeOrder)
 	totals := make([]int64, days)
 	category := make([]int64, days)
 	betaTotals := make([]int64, days)
 	for index := range totals {
-		category[index] = maxCountValue / 5
-		totals[index] = 5 * (maxCountValue / 5)
+		category[index] = maxCountValue / int64(categories)
+		totals[index] = int64(categories) * (maxCountValue / int64(categories))
 		betaTotals[index] = maxCountValue
 	}
 	document := validDocument()
 	section := alphaSection(document)
 	section["series"] = map[string]any{"startDate": "2024-01-01", "totals": totals, "recorded": true}
-	section["categories"] = map[string]any{
-		"input": category, "output": category, "cache-read": category,
-		"cache-write": category, "reasoning": category,
-	}
+	section["categories"] = fullBreakdown(categoryServeOrder, category, nil, days)
+	// The models window is the trailing maxModelDays of the same series, on
+	// both sources, every row at the numeric ceiling its own total allows.
+	section["models"] = fullBreakdown(modelServeOrder, nil, totals[days-maxModelDays:], maxModelDays)
+	section["modelsStartDate"] = maximalModelsStart(days)
 	beta := betaSection(document)
 	beta["series"] = map[string]any{"startDate": "2024-01-01", "totals": betaTotals, "recorded": true}
+	beta["models"] = fullBreakdown(modelServeOrder, nil, betaTotals[days-maxModelDays:], maxModelDays)
+	beta["modelsStartDate"] = maximalModelsStart(days)
 	return document
+}
+
+// maximalModelsStart is the calendar date maxModelDays before the end of the
+// maximal document's series, derived from the same start date the series
+// declares so the two cannot drift.
+func maximalModelsStart(days int) string {
+	start, err := time.Parse(dayLayout, "2024-01-01")
+	if err != nil {
+		panic(err)
+	}
+	return start.AddDate(0, 0, days-maxModelDays).Format(dayLayout)
+}
+
+// fullBreakdown builds one complete breakdown over a vocabulary. Given a
+// uniform per-row value it repeats it; given the day TOTALS instead it
+// divides each day across the vocabulary and gives the remainder to the last
+// row, so the partition is exact for any total rather than only for ones that
+// happen to divide.
+func fullBreakdown(vocabulary []string, uniform, totals []int64, days int) map[string]any {
+	rows := make(map[string]any, len(vocabulary))
+	for position, key := range vocabulary {
+		values := make([]int64, days)
+		for day := range values {
+			if uniform != nil {
+				values[day] = uniform[day]
+				continue
+			}
+			share := totals[day] / int64(len(vocabulary))
+			values[day] = share
+			if position == len(vocabulary)-1 {
+				values[day] = totals[day] - share*int64(len(vocabulary)-1)
+			}
+		}
+		rows[key] = values
+	}
+	return rows
 }
 
 // paddedSnapshot builds a snapshot whose SERVED bytes are large while the
@@ -1556,7 +1815,7 @@ func compositionRegistry(t *testing.T) *Registry {
 		t.Fatalf("boss-log fetch source: %v", err)
 	}
 	return newRegistry(fsys, []panelDefinition{
-		{id: "token-usage", kind: KindTokenUsage, title: "Token usage", source: usage},
+		{id: "token-usage", kind: KindTokenUsageV2, title: "Token usage", source: usage},
 		{id: "boss-log", kind: KindBossLog, title: "Boss log", source: boss},
 	})
 }

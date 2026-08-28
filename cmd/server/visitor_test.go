@@ -197,7 +197,7 @@ func TestVisitorReadsThePanels(t *testing.T) {
 			t.Fatalf("index lists %d panels, want 3", len(index.Panels))
 		}
 		for _, row := range index.Panels {
-			if row.ID == "" || row.Title == "" || !strings.HasSuffix(row.Kind, "/v1") {
+			if row.ID == "" || row.Title == "" || !versionedKind(row.Kind) {
 				t.Errorf("index row incomplete: %+v", row)
 			}
 			// Live refresh is opt-in and this boot never enables it, so
@@ -407,7 +407,31 @@ func TestVisitorChecksTheBossLog(t *testing.T) {
 	drainScenario(t, runResult)
 }
 
-// The token-usage/v1 payload contract, pinned as independent expected shapes
+// versionedKind reports whether a kind carries an explicit payload version —
+// a `/v` followed by at least one digit and nothing else. The visitor used to
+// spell this as a literal "/v1" suffix, which pinned the wrong fact: what the
+// envelope doctrine promises is that every payload names a VERSION, not that
+// every payload is forever on its first one. That literal went stale the day
+// token-usage/v2 was minted (issue #170), and it would have gone stale for
+// any other panel's second version too.
+func versionedKind(kind string) bool {
+	marker := strings.LastIndex(kind, "/v")
+	if marker < 0 {
+		return false
+	}
+	digits := kind[marker+2:]
+	if digits == "" {
+		return false
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// The token-usage payload contract, pinned as independent expected shapes
 // exactly like the envelope above: sources are labeled by DATA the origin
 // serves, windows carry the /usage-shaped fields, and the two optional fields
 // stay pointers because absence is meaningful and must survive decoding.
@@ -424,7 +448,7 @@ type visitorTokenUsageSource struct {
 	Insights []visitorTokenUsageInsight `json:"insights"`
 }
 
-// visitorTokenUsageStat, -Series, and -Insight are the additive token-usage/v1
+// visitorTokenUsageStat, -Series, and -Insight are the additive token-usage
 // sections: headline tiles, the daily activity series behind the grid, and
 // the labeled proportions under it. Value and Pct are pointers because "the
 // source does not report this figure" is real information the panel renders
@@ -508,7 +532,7 @@ func TestVisitorChecksTokenUsage(t *testing.T) {
 		}
 		var envelope visitorPanelEnvelope
 		decodeVisitorJSON(t, response.Body, &envelope)
-		if envelope.Schema != "panel/v1" || envelope.ID != "token-usage" || envelope.Kind != "token-usage/v1" {
+		if envelope.Schema != "panel/v1" || envelope.ID != "token-usage" || envelope.Kind != "token-usage/v2" {
 			t.Fatalf("envelope identity = %+v", envelope)
 		}
 		// The stale/fallback case: live refresh is never enabled on this

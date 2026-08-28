@@ -41,6 +41,15 @@
 #                   a machine-local fact, so it lives in the config, not here)
 # and may define:
 #   PUSH_PORT       destination port (default 22)
+#   ACTIVITY_CACHE  a rollup file the first tool maintains beside its
+#                   transcripts, naming per-day totals per model. It EXTENDS
+#                   the walked series backwards over days whose transcripts
+#                   the tool's own retention has already deleted, and nothing
+#                   else: a day the walk still holds keeps the walked figure,
+#                   because that one is derived from the records themselves.
+#                   Optional by design — an absent or unreadable cache costs
+#                   depth, never correctness, so a run without one is a
+#                   shorter honest series rather than a failure.
 #   MERGE_SOURCES   space-separated KEY=FILE pairs for further tools'
 #                   captured series, each file produced by an earlier capture
 #                   run. REQUIRED, together with MERGE_CAPTURES below,
@@ -99,6 +108,7 @@ esac
 : "${TRANSCRIPTS:?TRANSCRIPTS missing from configuration}"
 MERGE_SOURCES="${MERGE_SOURCES:-}"
 MERGE_CAPTURES="${MERGE_CAPTURES:-}"
+ACTIVITY_CACHE="${ACTIVITY_CACHE:-}"
 PUSH_PORT="${PUSH_PORT:-22}"
 
 # The destination must carry its own user, because -F /dev/null means no
@@ -192,7 +202,18 @@ done
 #    bytecode), and the guard inside the script is still what limits the
 #    emission to dates and integers — three independent controls, none of them
 #    load-bearing alone.
+#
+#    The activity cache, when configured, is passed here rather than assumed:
+#    a configured path that is not a readable file REFUSES, because a silently
+#    dropped cache would shorten the published history with nothing to say so,
+#    and a series that quietly loses two months of depth between runs is the
+#    failure this whole work package exists to end (issue #170).
 set -- --transcripts "$TRANSCRIPTS" --source "$SOURCE_LABEL" --out "$PLAIN"
+if [ -n "$ACTIVITY_CACHE" ]; then
+    [ -f "$ACTIVITY_CACHE" ] \
+        || fail "ACTIVITY_CACHE does not name a file; a configured cache that cannot be read would silently shorten the series"
+    set -- "$@" --activity-cache "$ACTIVITY_CACHE"
+fi
 for pair in $MERGE_SOURCES; do
     set -- "$@" --merge-source "$pair"
 done
