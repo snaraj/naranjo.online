@@ -4,6 +4,7 @@ package web_test
 
 import (
 	"io/fs"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -203,5 +204,102 @@ func TestBuiltFrontendIsEmbeddedAndServed(t *testing.T) {
 		if response.Code != http.StatusNotFound {
 			t.Errorf("source artifact %s status = %d", sourcePath, response.Code)
 		}
+	}
+}
+
+// faviconDeclaration reads the icon the built document actually asks a browser
+// for, so the test below follows the document's own reference rather than a
+// path restated here — a renamed file that nothing declares fails, and so does
+// a declaration pointing at a file the bundle never embedded.
+var faviconDeclaration = regexp.MustCompile(`<link rel="icon"[^>]*href="(/[^"]+)"`)
+
+// browserIconTypes are the media types a browser will accept as a tab icon AND
+// that Go resolves from its own BUILT-IN table, which is the only registry the
+// distroless runtime image has: it carries no /etc/mime.types, so an extension
+// outside that table is served application/octet-stream and, under the
+// nosniff header this origin always sends, is refused as an icon. The list is
+// stated here rather than derived from mime.TypeByExtension precisely so a
+// development machine's richer registry cannot vouch for an extension
+// production would fail on — ".ico" resolves to image/x-icon on macOS and to
+// nothing at all in the container.
+var browserIconTypes = map[string]struct{}{
+	"image/svg+xml": {},
+	"image/png":     {},
+	"image/webp":    {},
+	"image/gif":     {},
+	"image/jpeg":    {},
+	"image/avif":    {},
+}
+
+// TestBuiltFrontendServesTheDeclaredFavicon proves the tab mark is a promise
+// the origin keeps (issue #239). Before it the site declared no icon at all,
+// so every visit cost a WARN-level 404 for the /favicon.ico a browser probes
+// when a document names none.
+func TestBuiltFrontendServesTheDeclaredFavicon(t *testing.T) {
+	assets, err := website.FileSystem()
+	if err != nil {
+		t.Fatalf("FileSystem() error = %v", err)
+	}
+	siteHandler, err := server.New(assets)
+	if err != nil {
+		t.Fatalf("server.New() error = %v; run the pinned frontend build before Go tests", err)
+	}
+
+	root := httptest.NewRecorder()
+	siteHandler.ServeHTTP(root, edgeRequest(http.MethodGet, "/"))
+	declared := faviconDeclaration.FindStringSubmatch(root.Body.String())
+	if declared == nil {
+		t.Fatalf("the built document declares no icon, so every visit is probed for /favicon.ico: %q", root.Body.String())
+	}
+	href := declared[1]
+
+	icon := httptest.NewRecorder()
+	siteHandler.ServeHTTP(icon, edgeRequest(http.MethodGet, href))
+	if icon.Code != http.StatusOK {
+		t.Fatalf("declared icon %s status = %d; the document names a file the bundle does not embed", href, icon.Code)
+	}
+	contentType, _, err := mime.ParseMediaType(icon.Header().Get("Content-Type"))
+	if err != nil {
+		t.Fatalf("declared icon %s Content-Type = %q: %v", href, icon.Header().Get("Content-Type"), err)
+	}
+	if _, ok := browserIconTypes[contentType]; !ok {
+		t.Errorf(
+			"declared icon %s is served %q; the runtime image has no MIME registry beyond Go's built-in table, so an extension outside it becomes application/octet-stream and nosniff refuses it as an icon",
+			href, contentType,
+		)
+	}
+	// A root-level bundle file: revalidated, never immutable — it carries no
+	// content hash, so the operator replacing the mark must be able to publish
+	// it under the same URL.
+	assertServedFile(t, siteHandler, href, "no-cache")
+}
+
+// TestBuiltShellStatesItsOwnBootFailure proves the honest boot state survives
+// the build and reaches the wire (issue #239). The failure it is for is the
+// one where the entry module is asked for and never arrives, so the answer has
+// to be in the bytes the origin already sent — nothing that runs later can
+// help, which is also why the retry is a plain link rather than a control.
+func TestBuiltShellStatesItsOwnBootFailure(t *testing.T) {
+	assets, err := website.FileSystem()
+	if err != nil {
+		t.Fatalf("FileSystem() error = %v", err)
+	}
+	siteHandler, err := server.New(assets)
+	if err != nil {
+		t.Fatalf("server.New() error = %v; run the pinned frontend build before Go tests", err)
+	}
+
+	root := httptest.NewRecorder()
+	siteHandler.ServeHTTP(root, edgeRequest(http.MethodGet, "/"))
+	body := root.Body.String()
+	// Structure, never copy: the markers are the contract, the words are the
+	// owner's to change.
+	for _, marker := range []string{"data-static-fallback", "data-boot-status", "data-boot-noscript"} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("the served shell carries no %s; a visitor whose module never arrives reads a bare heading", marker)
+		}
+	}
+	if !strings.Contains(body, `<a href="/">`) {
+		t.Error("the served shell offers no scriptless retry; the visitor it is for has no working script to give them one")
 	}
 }

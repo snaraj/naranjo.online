@@ -14,6 +14,8 @@ import {
   admitGalleryItem,
   galleryManifestPath,
   galleryManifestSchema,
+  galleryPosterAsset,
+  galleryVideoSourceMedia,
   loadGalleryManifest,
   maxGalleryManifestBytes,
   maxGalleryManifestItems,
@@ -259,6 +261,160 @@ describe('gallery/v1 item admission', () => {
     for (const key of ['', '   ', '.hidden', '-leading', 'has space', 'has/slash', 'x'.repeat(maxGalleryTextLengths.key + 1)]) {
       assert.equal(admitGalleryItem(imageItem({ key })), null, `key ${JSON.stringify(key)} must refuse the item`);
     }
+  });
+});
+
+/* The poster choice (issue 239), EXECUTED rather than described. It is the one
+ * decision the strip makes about a film before a reader touches anything, and
+ * it used to reach for the 4K master: the poster is painted into a stage a few
+ * hundred CSS pixels wide, and the full still is never shown at any size —
+ * enlarging is stills-only — so the strip paid for a rendition nothing on the
+ * page uses. */
+describe('the poster a film shows before it plays', () => {
+  it('takes the operator’s published poster when there is one', () => {
+    const item = admitGalleryItem(videoItem());
+    assert.ok(item !== null);
+    assert.equal(galleryPosterAsset(item).url, item.poster.url);
+    // Not vacuous: the chosen file is a DIFFERENT file from either stand-in,
+    // so a function returning the preview or the full still would fail here.
+    assert.notEqual(item.poster.url, item.preview.url);
+    assert.notEqual(item.poster.url, item.full.url);
+  });
+
+  it('stands the PREVIEW derivative in when the operator published none, never the full-size still', () => {
+    const item = admitGalleryItem(videoItem({ poster: undefined }));
+    assert.ok(item !== null);
+    assert.equal(item.poster, undefined);
+    assert.equal(
+      galleryPosterAsset(item).url,
+      item.preview.url,
+      'an absent poster must fall back to the small derivative, not to the 4K master'
+    );
+    assert.notEqual(
+      galleryPosterAsset(item).url,
+      item.full.url,
+      'the full-size still is the rendition the lightbox stopped showing; the strip must not fetch it'
+    );
+    // The dimensions are the reason, stated as a measurement rather than a
+    // claim: the stand-in is genuinely the smaller picture.
+    assert.ok(
+      galleryPosterAsset(item).width < item.full.width,
+      `the poster stand-in is ${galleryPosterAsset(item).width}px wide against the full still's ${item.full.width}px; it is not the smaller rendition`
+    );
+  });
+
+  it('always has an answer, because every admitted item carries a preview', () => {
+    // A still never reaches this function through the adapter, but the
+    // function is total over admitted items and says so.
+    for (const candidate of [imageItem(), videoItem(), videoItem({ poster: undefined })]) {
+      const item = admitGalleryItem(candidate);
+      assert.ok(item !== null);
+      assert.ok(galleryPosterAsset(item).url.length > 0, 'an admitted item resolved to no poster at all');
+    }
+  });
+});
+
+/* WHICH VIEWPORT GETS WHICH RUNG (issue 241). The defect these run against was
+ * measured on the live volume's own film at 0.1.54: an engine that can decode
+ * the high-efficiency rung — WebKit and Gecko both can — took the 2160p master
+ * into a 242x136 box on a phone, and the 720p rung was selected by nobody at
+ * any viewport, because nothing on the page ever asked how BIG a rendition
+ * should be. Each assertion below is the rule executed, not described. */
+describe('the size a viewport is allowed to ask a film for', () => {
+  const laddered = (heights) =>
+    admitGalleryItem(
+      videoItem({
+        sources: heights.map((height, at) => ({
+          path: `gallery/motion-${height}-${at}.mp4`,
+          sha256: digest(String.fromCharCode(97 + at)),
+          type: at === 0 ? 'video/mp4; codecs="hvc1"' : 'video/mp4',
+          height
+        }))
+      })
+    );
+
+  it('offers the smallest rung to every viewport and each larger one from the next rung’s own native width', () => {
+    const item = laddered([2160, 1080, 720]);
+    assert.ok(item !== null);
+    /* The item is 3840x2160, so a 1080-tall rung is natively 1920 wide and a
+       720-tall one is 1280. Each rung above the floor is offered from the
+       width at which the rung BELOW it would start being upscaled. */
+    assert.deepEqual(galleryVideoSourceMedia(item), [
+      '(min-width: 1920px)',
+      '(min-width: 1280px)',
+      undefined
+    ]);
+  });
+
+  it('never leaves a film unplayable: the floor carries no query at all', () => {
+    for (const heights of [[2160, 1080, 720], [2160, 720], [1080], [720, 2160]]) {
+      const item = laddered(heights);
+      assert.ok(item !== null);
+      const media = galleryVideoSourceMedia(item);
+      const floor = Math.min(...heights);
+      for (const [at, height] of heights.entries()) {
+        if (height === floor) {
+          assert.equal(media[at], undefined, `the smallest rung of [${heights}] was gated behind ${media[at]}`);
+        }
+      }
+      assert.ok(
+        media.some((query) => query === undefined),
+        `every rung of [${heights}] carries a query, so a narrow viewport is offered nothing at all`
+      );
+    }
+  });
+
+  it('gives every rung of ONE size the same query, so codec fallback inside a size class is untouched', () => {
+    /* Two 1080p rungs (a high-efficiency one and the universal one) above a
+       720p floor: the pair must be offered together, or the browser's own
+       first-playable choice between them would depend on the viewport. */
+    const item = laddered([1080, 1080, 720]);
+    assert.ok(item !== null);
+    const media = galleryVideoSourceMedia(item);
+    assert.equal(media[0], media[1], 'two rungs of the same height were offered to different viewports');
+    assert.equal(media[2], undefined);
+    assert.equal(media[0], '(min-width: 1280px)');
+  });
+
+  it('says nothing when there is nothing to choose between', () => {
+    // One size class: every rung is the floor, so no query is written at all.
+    assert.deepEqual(galleryVideoSourceMedia(laddered([1080, 1080])), [undefined, undefined]);
+    // And a still has no ladder to speak about.
+    const still = admitGalleryItem(imageItem());
+    assert.ok(still !== null);
+    assert.deepEqual(galleryVideoSourceMedia(still), []);
+  });
+
+  it('reads the ITEM’s own aspect, never an assumed 16:9', () => {
+    /* A square film: a 1080-tall rung is 1080 wide, not 1920. The breakpoint
+       has to come from the manifest's declared box or it is a guess dressed as
+       arithmetic. */
+    const item = admitGalleryItem(
+      videoItem({
+        full: asset(photoDigest, 'gallery/square-still.webp', 2160, 2160),
+        sources: [
+          { path: 'gallery/square-2160.mp4', sha256: filmDigest, type: 'video/mp4', height: 2160 },
+          { path: 'gallery/square-1080.mp4', sha256: digest('e'), type: 'video/mp4', height: 1080 }
+        ]
+      })
+    );
+    assert.ok(item !== null);
+    assert.deepEqual(galleryVideoSourceMedia(item), ['(min-width: 1080px)', undefined]);
+  });
+
+  it('answers positionally, in the manifest’s own order', () => {
+    // The caller zips this against item.sources, so a reordered answer would
+    // silently attach one rung's query to another's bytes.
+    const item = laddered([720, 2160, 1080]);
+    assert.ok(item !== null);
+    const media = galleryVideoSourceMedia(item);
+    assert.equal(media.length, item.sources.length);
+    assert.deepEqual(media, [undefined, '(min-width: 1920px)', '(min-width: 1280px)']);
+    assert.deepEqual(
+      item.sources.map((source) => source.height),
+      [720, 2160, 1080],
+      'admission reordered the ladder, which this answer is aligned to'
+    );
   });
 });
 

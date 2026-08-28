@@ -426,6 +426,13 @@ export type MediaGalleryLink = {
 export type MediaGallerySource = {
   readonly src: string;
   readonly type: string;
+  /* The viewport this rung is offered to, when the ladder has more than one
+   * SIZE to choose between (issue 241). Absent means "always eligible", which
+   * is what the smallest rung always carries — so some source always matches.
+   * The value is derived from the manifest's own rung heights and item aspect
+   * by galleryVideoSourceMedia (lib/galleryManifest.ts); nothing here or in
+   * the component invents a breakpoint. */
+  readonly media?: string;
 };
 
 /* What makes an item MOVE (issue 207). Its presence is the discriminator:
@@ -473,6 +480,15 @@ export type MediaGalleryItem = {
    * nothing. */
   readonly width?: number;
   readonly height?: number;
+  /* The PREVIEW derivative's own intrinsic width, when the source of the item
+   * declares one (issue 241). It is the only number the enlarged surface needs
+   * to offer a reader the small rendition instead of the master: above it the
+   * preview would be upscaled, below it the master is bytes nobody can see.
+   * Absent means the item's source published no dimensions for its preview —
+   * the vendored bootstrap set — and the lightbox then loads the full
+   * derivative exactly as it always did, because guessing a breakpoint from a
+   * file nobody measured is how a reader gets a blurry enlargement. */
+  readonly previewWidth?: number;
 };
 
 export type MediaGalleryProps = {

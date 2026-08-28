@@ -141,9 +141,9 @@ export interface GalleryItem {
   /* The small derivative the single visible feed frame shows. */
   readonly preview: GalleryAsset;
   /* Video only, and optional even then: the frame the <video> element shows
-   * before play. Absent means the large still serves as the poster, which is
-   * the sensible default and saves the operator publishing the same image
-   * twice. */
+   * before play. Absent is the ordinary case and costs the operator nothing —
+   * galleryPosterAsset below decides what stands in, and saves publishing the
+   * same image twice. */
   readonly poster?: GalleryAsset;
   /* Video only, in the manifest's own order: the browser takes the first it
    * can play, so order IS the preference and this module never reorders it. */
@@ -424,6 +424,88 @@ export function parseGalleryManifest(document: unknown): GalleryItem[] {
     items.push(item);
   }
   return items;
+}
+
+/* --- Reading an admitted item -------------------------------------------- */
+
+/* WHICH FILE STANDS IN FOR AN ABSENT POSTER, decided here beside the field
+ * that declares one optional (issue 239). It is a pure read over an already
+ * admitted item — no admission, no URL building, no I/O — and it lives in this
+ * module rather than in the binding layer so the rule and the `poster?`
+ * comment above cannot drift apart, and so it can be EXECUTED by a test
+ * instead of described by one.
+ *
+ * The order is poster, then preview, and the second half is the fix. A
+ * published poster wins, always: it is the one frame the operator chose. With
+ * none, the stand-in is the PREVIEW derivative and no longer the full-size
+ * still, because a poster is painted into a stage of a few hundred CSS pixels
+ * and the still is a 4K master — on the volume's own film the two measure
+ * ~86-91 KB against ~315 KB for the same visible frame. The old default was
+ * defended as "the picture the lightbox would have shown anyway", and that
+ * defence expired: enlarging is stills-only, so a film's full-size still is
+ * never shown to anybody at any size, and the strip was paying 3.5x for a
+ * rendition nothing else on the page uses.
+ *
+ * There is no third rung and no null: `preview` is required of every admitted
+ * item, so this function always has an answer. */
+export function galleryPosterAsset(item: GalleryItem): GalleryAsset {
+  return item.poster ?? item.preview;
+}
+
+/* WHICH RUNG A VIEWPORT IS ALLOWED TO ASK FOR, decided here beside the ladder
+ * that declares them (issue 241). The `sources` comment above is true and was
+ * not enough: the browser takes the first source it can PLAY, and "can play"
+ * is a question about codecs alone. So on every engine that decodes the
+ * high-efficiency rung — WebKit and Gecko both do — a phone streamed the 4K
+ * master into a box a few hundred CSS pixels wide, and the smallest rung on
+ * the ladder was selected by nobody, ever. MEASURED on the live volume's own
+ * film at 0.1.54: a 874 MiB 2160p file into a 242x136 box on an iPhone 13
+ * viewport, with the 720p rung dead on the page.
+ *
+ * `media` on a <source> is the mechanism the resource selection algorithm
+ * already has for this: a source whose media query does not match is SKIPPED
+ * before its type is ever considered, so the ladder becomes two questions in
+ * the right order — how big a rendition may this viewport ask for, then which
+ * of the rungs that size can it decode.
+ *
+ * THE BREAKPOINTS ARE THE MANIFEST'S OWN NUMBERS, never a per-film literal.
+ * Rungs are grouped by height, and each group above the SMALLEST is offered
+ * from the viewport width at which the next smaller rung would start being
+ * upscaled — that rung's own native width, derived from its height through
+ * the item's declared aspect (`full`'s width and height, both admitted). For
+ * a 3840x2160 item publishing 2160/1080/720 that reads: 720p is the floor and
+ * carries no query at all, 1080p from 1280px, 2160p from 1920px. A phone gets
+ * the floor, a laptop the middle rung, a large display the master.
+ *
+ * Two properties fall out of it and both are deliberate. The floor NEVER
+ * carries a query, so some source always matches and a film can never become
+ * unplayable by arithmetic. And every rung of one height carries the SAME
+ * query, so codec fallback inside a size class is untouched — order still
+ * decides which of two equally sized renditions a browser takes, which is the
+ * rule the `sources` field already states.
+ *
+ * The answer is per-source and positional, so the caller can zip it against
+ * `item.sources` without this module reordering anything. A still, or a film
+ * whose rungs are all one height, gets undefined for every source: there is
+ * nothing to choose between, and an unnecessary query is one more way for a
+ * viewport to be told no. */
+export function galleryVideoSourceMedia(item: GalleryItem): readonly (string | undefined)[] {
+  const sources = item.sources;
+  if (sources === undefined) {
+    return [];
+  }
+  const heights = [...new Set(sources.map((source) => source.height))].sort((first, second) => first - second);
+  /* The native width a rung of height H covers, through the item's own
+     declared aspect. Rounded to a whole pixel because it becomes a media
+     query, and a query is a number a reader could check by hand. */
+  const nativeWidth = (height: number): number => Math.round((height * item.full.width) / item.full.height);
+  return sources.map((source) => {
+    const rung = heights.indexOf(source.height);
+    if (rung < 1) {
+      return undefined;
+    }
+    return `(min-width: ${nativeWidth(heights[rung - 1])}px)`;
+  });
 }
 
 export type GalleryManifestFetcher = (url: string) => Promise<Response>;

@@ -63,6 +63,53 @@ test('static and hydrated shells preserve the same accessible identity', () => {
   assert.doesNotMatch(component, /name="description"/);
   assert.match(component, /<main aria-labelledby="page-title">/);
   assert.match(component, /<h1 id="page-title">[^<]+<\/h1>/);
+  // The tab mark rides in the same static head and for the same reason
+  // (issue 239): a document that declares no icon shows the browser's blank
+  // glyph and is probed for /favicon.ico on every visit.
+  assert.match(fallback, /<link rel="icon"[^>]*href="\/favicon\.svg"/);
+  assert.match(fallback, /<link rel="icon"[^>]*type="image\/svg\+xml"/);
+});
+
+/* The failure the static shell is FOR (issue 239). It is not the no-JavaScript
+ * case — that one has a <noscript> of its own below — but the case where the
+ * entry module was asked for and never arrived: degraded transport, or the
+ * brief post-deploy window where a cached shell names assets the answering pod
+ * no longer has. The shell used to answer that with a bare heading on an empty
+ * page, which reads as a broken site and offers the reader nothing.
+ *
+ * Structure and markers only, never copy: the words are the owner's to change,
+ * the shape is the contract. */
+test('the static shell states its own boot failure and offers a way out (issue 239)', () => {
+  const shell = /<main[^>]*data-static-fallback[^>]*>([\s\S]*?)<\/main>/.exec(fallback)?.[1];
+  assert.ok(shell, 'the static fallback element is not where this pin expects it');
+  const status = /<p data-boot-status>([\s\S]*?)<\/p>/.exec(shell)?.[1];
+  assert.ok(
+    status,
+    'the shell carries no boot-status line; a visitor whose module never arrives reads a bare heading and is told nothing'
+  );
+  assert.match(status, /\S/, 'the boot-status line is empty');
+  assert.match(
+    status,
+    /<a href="\/">[^<]+<\/a>/,
+    'the boot status offers no way to try again — the retry must be a plain same-origin link, because the visitor it is for has no working script'
+  );
+  assert.match(
+    shell,
+    /<noscript>[\s\S]*?data-boot-noscript[\s\S]*?<\/noscript>/,
+    'scripting-off is a different truth from failed-to-load and needs its own element'
+  );
+  /* And the constraint the whole design is shaped by: the origin's policy is
+     default-src 'self', it is not being widened, and neither a script-hosting
+     status detector nor an inline handler may creep in here later. Every one
+     of these would be silently DEAD under that policy, which is worse than
+     absent — it looks like a working affordance in the source. */
+  assert.doesNotMatch(
+    fallback,
+    /<script(?![^>]*\ssrc=)/,
+    "an inline <script> is refused by default-src 'self'; it would be dead code wearing a feature's shape"
+  );
+  assert.doesNotMatch(fallback, /\son[a-z]+=["']/, "an inline event handler is refused by default-src 'self'");
+  assert.doesNotMatch(fallback, /\sstyle=["']/, "an inline style attribute is refused by default-src 'self'");
 });
 
 test('initial source remains local and viewport-responsive', () => {
@@ -1120,6 +1167,137 @@ test('the page reserves the space above its name, derived from the chrome that s
     stylesCode,
     /padding-block: max\(0px, env\(safe-area-inset-top\)\)/,
     'the zero-height top reserve is back; the page name touches the top of the viewport again'
+  );
+});
+
+test('the column gives the fixed control its own lane wherever it would run into it (issue 241)', () => {
+  /* The defect, MEASURED on 0.1.54 in Chromium and WebKit alike: <main> ends
+     at exactly the reading-mode trigger's own end edge at every phone width
+     (at 320px the trigger box is x 260-304 and main[16,304]), so scrolling
+     put body text — bullets, card bylines, a card title — under a 44px
+     control 9 to 11 times per sweep at 320, 360, 390, 412 and 768. At 1280
+     and 1440 the count was zero, because there the capped column stops 116px
+     short of it.
+
+     The plate under the glyph answers a DIFFERENT half of the same collision
+     (text must not render through the icon) and cannot answer this one: text
+     a control is painted over is unreadable however opaque the control is.
+
+     Two ranges, and neither is left to chance. Above the handle breakpoint the
+     column's own ceiling already gives back two rail lanes, which puts its end
+     edge at or before the control's start edge — proven arithmetically below
+     rather than asserted. Below it, this reserve does the same job with the
+     same token. */
+  const token = (name) => {
+    const found = new RegExp(`--${name}:\\s*([^;]+);`).exec(stylesCode);
+    assert.ok(found, `--${name} is gone; the control lane is derived from it`);
+    return lengthInPx(found[1].trim());
+  };
+  const gutter = token('page-gutter');
+  const rail = token('page-rail-size');
+  const columnMax = token('page-column-max');
+  assert.ok(gutter !== null && rail !== null && columnMax !== null, 'the lane is built from a length this pin cannot read');
+  assert.equal(rail, 44, 'the reserved lane is no longer the 44px the control actually occupies');
+
+  // The reserve itself, in both branches of #app's padding — the plain one an
+  // engine without env() keeps, and the inset-aware upgrade over it.
+  assert.match(
+    stylesCode,
+    /@media not all and \(min-width: 67\.5rem\) \{\s*#app \{\s*padding-inline-end: calc\(var\(--page-gutter\) \+ var\(--page-rail-size\)\);/,
+    'the column reserves no lane for the fixed control below the handle breakpoint'
+  );
+  assert.match(
+    stylesCode,
+    /padding-inline-end: calc\(max\(var\(--page-gutter\), env\(safe-area-inset-right\)\) \+ var\(--page-rail-size\)\);/,
+    'the inset-aware reserve is gone, so a notched phone loses either its safe area or its control lane'
+  );
+  // The control's own placement is what the lane is measured against: it sits
+  // one gutter in from the viewport's end edge, so its start edge is a gutter
+  // plus its own width away — which is exactly the reserve above.
+  assert.match(stylesCode, /\.page-header \{[^}]*inset-inline-end: var\(--header-inset-inline, var\(--page-gutter\)\)/);
+  assert.match(stylesCode, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
+
+  /* And the breakpoint is the right one, derived rather than trusted. At and
+     above it the column is capped AND gives back two rail lanes, so its end
+     edge — half the viewport plus half the column — never passes the control's
+     start edge. The tightest case is the breakpoint itself; anything wider only
+     adds slack. Below it the column fills the screen, which is the range the
+     reserve above covers. */
+  const breakpointPx = 67.5 * 16;
+  const columnAt = (viewport) => Math.min(columnMax, viewport - 2 * gutter - 2 * rail);
+  for (const viewport of [breakpointPx, breakpointPx + 200, 1920]) {
+    const columnEnd = viewport / 2 + columnAt(viewport) / 2;
+    const controlStart = viewport - gutter - rail;
+    assert.ok(
+      columnEnd <= controlStart,
+      `at ${viewport}px the capped column ends at ${columnEnd}px, past the control's own ${controlStart}px start edge`
+    );
+  }
+  // Non-vacuity: WITHOUT the two-rail giveback the same arithmetic fails at the
+  // breakpoint, which is what makes the range split load-bearing rather than
+  // decorative.
+  const unreserved = Math.min(columnMax, breakpointPx - 2 * gutter);
+  assert.ok(
+    breakpointPx / 2 + unreserved / 2 > breakpointPx - gutter - rail,
+    'the column would clear the control even with no lane reserved at all; this pin proves nothing'
+  );
+});
+
+test('an open modal stops the document scrolling behind it, without moving it (issue 241)', () => {
+  /* MEASURED with the lightbox open on 0.1.54: +485px at an iPhone 13
+     viewport and +1400px at 1280x720. showModal() makes the page inert to
+     POINTER interaction only, so a wheel, a two-finger drag and PageDown all
+     still scrolled it — and closing then returned the reader to a place they
+     never chose, which is the same complaint issue 233 answered for the open
+     half. */
+  const locked = /html\[data-modal-open\] \{([^}]*)\}/.exec(stylesCode);
+  assert.ok(locked, 'nothing stops the document scrolling behind an open modal');
+  assert.match(locked[1], /overflow: hidden;/, 'the locked document can still be scrolled');
+  /* The zero-CLS half, and it is not decoration: taking `overflow` away takes
+     the scrollbar with it, so on a classic-scrollbar platform the reading
+     column would widen the instant the lightbox opened and snap back on close
+     — a layout shift caused by a control. The width the scrollbar was holding
+     is given straight back as root padding.
+
+     It is a MEASURED width, not a reserved gutter. `scrollbar-gutter: stable`
+     on the root is the usual recipe and it was this fix's first draft; CI
+     measured what it actually costs — a 15px strip reserved at rest on every
+     classic-scrollbar platform, off-centring the column, cutting the phone
+     column from 244px to 229px and pushing the fixed control 15px inboard —
+     so the pin now holds the giveback to the state that needs it. */
+  assert.match(
+    locked[1],
+    /padding-inline-end: var\(--modal-scrollbar-giveback, 0px\);/,
+    'locking the scroll takes the scrollbar away and hands nothing back, so the column moves'
+  );
+  assert.doesNotMatch(
+    stylesCode,
+    /scrollbar-gutter/,
+    'a reserved gutter charges every page view at rest for a strip only an open dialog needs'
+  );
+  // The state is raised by the component that opens the dialog, and released
+  // by an effect teardown rather than by a pair of handlers that a torn-down
+  // component would never reach.
+  const gallery = componentSources['lib/components/MediaGallery.svelte'];
+  assert.ok(gallery, 'the gallery component is not where this pin expects it');
+  assert.match(gallery, /root\.setAttribute\('data-modal-open', 'true'\)/);
+  /* BOTH halves of the release inside the effect's own teardown, matched as
+     one block: a removal written into a close handler instead would leave the
+     document locked forever when the component unmounts with the dialog open,
+     which is the case no pair of handlers can reach. */
+  assert.match(
+    gallery,
+    /return \(\) => \{\s*root\.removeAttribute\('data-modal-open'\);\s*root\.style\.removeProperty\('--modal-scrollbar-giveback'\);\s*\};/,
+    'the lock and its giveback are not both released by the effect teardown'
+  );
+  /* The measurement reads the viewport against the root's own client box, and
+     it must happen BEFORE the attribute goes up — after it, the scrollbar is
+     already gone and the difference it measures is zero. */
+  const measure = /const giveback = window\.innerWidth - root\.clientWidth;/.exec(gallery);
+  assert.ok(measure, 'the giveback is not measured from the scrollbar the platform actually draws');
+  assert.ok(
+    measure.index < gallery.indexOf("root.setAttribute('data-modal-open'"),
+    'the giveback is measured after the lock has already taken the scrollbar away, so it is always zero'
   );
 });
 

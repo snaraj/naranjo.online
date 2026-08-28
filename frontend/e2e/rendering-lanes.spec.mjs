@@ -81,11 +81,17 @@ const galleryManifestFixture = {
       full: { path: 'gallery/film.webp', sha256: 'c'.repeat(64), width: 3840, height: 2160 },
       preview: { path: 'gallery/film-preview.webp', sha256: 'd'.repeat(64), width: 960, height: 540 },
       poster: { path: 'gallery/film-poster.webp', sha256: 'e'.repeat(64), width: 1920, height: 1080 },
-      /* Two rungs, high-efficiency first: the ORDER is the preference, and
-         the lane reads it back off the DOM to prove nothing re-ranked it. */
+      /* Three rungs, high-efficiency first: the ORDER is the preference, and
+         the lane reads it back off the DOM to prove nothing re-ranked it.
+         THREE rather than the two this fixture used to carry (issue 241),
+         because a ladder with one size class has no size question to answer:
+         the item is 3840x2160, so these heights are natively 3840, 1920 and
+         1280 wide, and the rung ladder's own rule offers each above the floor
+         from the next smaller rung's native width. */
       sources: [
         { path: 'gallery/film-2160.mp4', sha256: 'f'.repeat(64), type: 'video/mp4; codecs="hvc1"', height: 2160 },
         { path: 'gallery/film-1080.mp4', sha256: '0'.repeat(64), type: 'video/mp4', height: 1080 },
+        { path: 'gallery/film-720.mp4', sha256: '1'.repeat(64), type: 'video/mp4', height: 720 },
       ],
     },
   ],
@@ -494,6 +500,14 @@ const desktopWidths = [1440, 1920];
 // filled page is the viewport minus exactly this and nothing else.
 const gutterPx = 32;
 
+/* The lane the page reserves on its inline end for the fixed reading-mode
+ * control, below the handle breakpoint (issue 241). It is the same 44px every
+ * control on this page is, and it is why a phone's column is its viewport less
+ * its two gutters AND this — the arrangement that stops body text from
+ * scrolling under a control it cannot move. Above the breakpoint the column's
+ * own ceiling reserves two rail lanes instead and this term does not apply. */
+const controlLanePx = 44;
+
 /* The width the arrangement before this one was rejected FOR: a 30rem ribbon
  * down the middle of a desktop. The owner asked for one centred container,
  * wider than that (issue 134), so a column that failed to clear it would be
@@ -628,12 +642,15 @@ test('a phone still renders the single full-width column it always did', async (
       observed.tracks,
       `a ${width}px phone lays out ${observed.tracks} columns of panels`
     ).toBe(1);
-    expect(observed.stack).toBeCloseTo(observed.viewport - gutterPx, 0);
+    /* Full width MINUS the fixed control's own lane since issue 241: a phone's
+       column ends where the reading-mode control starts, because a column that
+       ran under it put body text beneath a 44px control at every phone width
+       (MEASURED on 0.1.54). The stack still fills every pixel it is given —
+       what changed is how many it is given, and by exactly one control. */
+    const expected = observed.viewport - gutterPx - controlLanePx;
+    expect(observed.stack).toBeCloseTo(expected, 0);
     for (const card of observed.cards) {
-      expect(card, `a card is ${card}px wide on a ${width}px phone`).toBeCloseTo(
-        observed.viewport - gutterPx,
-        0
-      );
+      expect(card, `a card is ${card}px wide on a ${width}px phone`).toBeCloseTo(expected, 0);
     }
   }
 });
@@ -2541,19 +2558,15 @@ test('the gallery shows exactly one loaded photograph, never eight stacked (issu
     const counter = window.document.querySelector('.gallery-count');
     const counterStyle = counter === null ? null : getComputedStyle(counter);
     const counterBox = counter === null ? null : counter.getBoundingClientRect();
-    /* The 1fr track the stage centres itself in, derived from the boxes the
-       engine actually painted: the frame row is `auto 1fr auto`, so the track
-       is what the two arrows and the two gaps leave behind. Measured rather
-       than read off a token, because it is the thing the stage's own cap has
-       to be compared AGAINST. */
+    /* The track the stage centres itself in, measured rather than read off a
+       token, because it is the thing the stage's own cap has to be compared
+       AGAINST. Since issue 241 the track IS the frame: the arrows moved out of
+       this row and into the control row under the work, so the whole of it
+       belongs to the stage. */
     const row = window.document.querySelector('.gallery-frame');
-    const rowStyle = getComputedStyle(row);
-    const arrows = [...row.querySelectorAll(':scope > .icon-button')];
-    const track =
-      row.getBoundingClientRect().width -
-      arrows.reduce((total, arrow) => total + arrow.getBoundingClientRect().width, 0) -
-      (Number.parseFloat(rowStyle.columnGap) || 0) * arrows.length;
+    const track = row.getBoundingClientRect().width;
     return {
+      arrowsInFrame: row.querySelectorAll(':scope > .icon-button').length,
       frameCount: frames.length,
       imageCount: images.length,
       track,
@@ -2580,11 +2593,15 @@ test('the gallery shows exactly one loaded photograph, never eight stacked (issu
   });
   expect(observed.frameCount, 'the gallery must render exactly one visible frame, never eight').toBe(1);
   expect(observed.imageCount, 'exactly one <img> may be mounted in the feed frame').toBe(1);
+  expect(
+    observed.arrowsInFrame,
+    'an arrow is back inside the frame, taking inline size from the work it points at'
+  ).toBe(0);
   /* The number survives as the live region — an assistive reader can be told
      "2 / 8", and cannot usefully be told that the second of eight identical
      dots lit up — but it is clipped rather than painted, so the visible
      position mark is the dots and nothing else. */
-  expect(observed.count).toBe('1 / 8');
+  expect(observed.count).toBe('Photograph 1 of 8');
   expect(
     observed.counterWidth,
     `the counter paints ${observed.counterWidth}px of visible text beside the dots`
@@ -2640,11 +2657,11 @@ test('prev/next cycle the visible photograph without leaving the page', async ({
   const image = page.locator('img.gallery-image');
   const before = await image.getAttribute('src');
   await page.getByRole('button', { name: 'Next photograph' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('2 / 8');
+  await expect(page.locator('.gallery-count')).toHaveText('Photograph 2 of 8');
   const after = await image.getAttribute('src');
   expect(after, 'next must actually change which photograph is visible').not.toBe(before);
   await page.getByRole('button', { name: 'Previous photograph' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('1 / 8');
+  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 8');
   const backToStart = await image.getAttribute('src');
   expect(backToStart).toBe(before);
 });
@@ -2655,6 +2672,17 @@ test('clicking the photograph opens a real modal dialog with a larger, unframed 
   await visit(page);
   const dialog = page.locator('dialog.gallery-lightbox');
   await expect(dialog).not.toBeVisible();
+  /* The strip's picture has to have decoded before the comparison below, which
+     reads its intrinsic ratio to work out how much of its square stage the
+     photograph actually paints. */
+  const strip = page.locator('img.gallery-image');
+  await strip.scrollIntoViewIfNeeded();
+  await expect
+    .poll(async () => strip.evaluate((img) => img.complete && img.naturalWidth > 0), {
+      message: 'the vendored preview never finished decoding',
+      timeout: 10_000,
+    })
+    .toBe(true);
   await page.locator('.gallery-image-button').click();
   await expect(dialog).toBeVisible();
   // A native <dialog> shown with showModal() reports itself open, and its
@@ -2664,7 +2692,23 @@ test('clicking the photograph opens a real modal dialog with a larger, unframed 
   const enlarged = page.locator('img.gallery-lightbox-image');
   await expect(enlarged).toBeVisible();
   const [previewBox, enlargedBox, frame] = await Promise.all([
-    page.locator('.gallery-image-button').boundingBox(),
+    /* The PAINTED picture in the strip, not the box around it (issue 241).
+       The stage is a square and the photograph is `contain` inside it, so the
+       element's box has always been larger than the picture it shows — and
+       since the stage took back the width the arrows used to occupy, that
+       difference is big enough on a phone to make a box-to-box comparison
+       claim the enlargement shrank the photograph. What "larger" means here
+       is the pixels a reader can see, so the contain fit is computed from the
+       element's own intrinsic ratio. */
+    page.evaluate(() => {
+      const image = window.document.querySelector('img.gallery-image');
+      const box = image.getBoundingClientRect();
+      const ratio = image.naturalWidth / image.naturalHeight;
+      const painted = box.width / box.height > ratio
+        ? { width: box.height * ratio, height: box.height }
+        : { width: box.width, height: box.width / ratio };
+      return painted;
+    }),
     enlarged.boundingBox(),
     page.evaluate(() => {
       const wrapper = window.document.querySelector('.gallery-lightbox-border');
@@ -2837,7 +2881,7 @@ test('a film plays inline on an enlarged widescreen stage, and the play mark is 
 
   // The manifest replaced the vendored set wholesale, so the strip opens on
   // its first item — the still — and the counter says how many there are.
-  await expect(page.locator('.gallery-count')).toHaveText('1 / 2');
+  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
   const still = await page.evaluate(() => {
     const node = window.document.querySelector('.gallery-stage');
     const box = node.getBoundingClientRect();
@@ -2858,15 +2902,18 @@ test('a film plays inline on an enlarged widescreen stage, and the play mark is 
     `the still’s stage is ${still.width.toFixed(1)}x${still.height.toFixed(1)}, not the square it keeps`
   ).toBeCloseTo(still.width, 0);
 
-  await page.getByRole('button', { name: 'Next photograph' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('2 / 2');
+  /* The arrow names the item it will REACH (issue 241), so the control that
+     moves onto a film says so — which is also this lane's proof that the
+     kind-aware naming reaches a real engine rather than only the source. */
+  await page.getByRole('button', { name: 'Next film' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
 
   const film = await page.evaluate(() => {
     const node = window.document.querySelector('.gallery-stage');
     const box = node.getBoundingClientRect();
     const video = window.document.querySelector('video');
     const player = video === null ? null : video.getBoundingClientRect();
-    const arrow = window.document.querySelector('.gallery-frame > .icon-button');
+    const arrow = window.document.querySelector('.gallery-controls > .icon-button');
     const arrowGlyph = arrow.querySelector('svg').getBoundingClientRect();
     const arrowBox = arrow.getBoundingClientRect();
     const dot = window.document.querySelector('.gallery-dot[aria-checked="true"]');
@@ -2901,6 +2948,11 @@ test('a film plays inline on an enlarged widescreen stage, and the play mark is 
               sources: [...video.querySelectorAll('source')].map((source) => ({
                 src: source.getAttribute('src'),
                 type: source.getAttribute('type'),
+                media: source.getAttribute('media'),
+                /* What the ENGINE makes of that query at this viewport, which
+                   is the only thing that decides whether the rung is a
+                   candidate at all. */
+                eligible: source.media === '' || window.matchMedia(source.media).matches,
               })),
               width: player.width,
               height: player.height,
@@ -2937,10 +2989,27 @@ test('a film plays inline on an enlarged widescreen stage, and the play mark is 
   expect(film.player.sources.map((source) => source.type)).toEqual([
     'video/mp4; codecs="hvc1"',
     'video/mp4',
+    'video/mp4',
   ]);
   expect(film.player.sources[0].src).toContain(`/media/immutable/${'f'.repeat(64)}/gallery/film-2160.mp4`);
   expect(film.player.sources[1].src).toContain(`/media/immutable/${'0'.repeat(64)}/gallery/film-1080.mp4`);
+  expect(film.player.sources[2].src).toContain(`/media/immutable/${'1'.repeat(64)}/gallery/film-720.mp4`);
   expect(film.player.poster).toContain(`/media/immutable/${'e'.repeat(64)}/gallery/film-poster.webp`);
+
+  /* THE LADDER ALSO STATES A SIZE (issue 241), and the engine agrees with the
+     arithmetic. The queries are the manifest's own numbers through the item's
+     declared aspect; the floor carries none, so some rung always matches. */
+  expect(film.player.sources.map((source) => source.media)).toEqual([
+    '(min-width: 1920px)',
+    '(min-width: 1280px)',
+    null,
+  ]);
+  const eligible = film.player.sources.filter((source) => source.eligible);
+  expect(eligible.length, 'no rung is eligible at this viewport; the film is unplayable').toBeGreaterThan(0);
+  expect(
+    film.player.sources.at(-1).eligible,
+    'the smallest rung is gated behind a query, so a narrow viewport can be offered nothing'
+  ).toBe(true);
 
   /* THE STAGE IS WIDESCREEN AND ENLARGED. The ratio holds at every viewport
      this lane runs, because it is the item's own aspect; the SIZE comparison
@@ -2972,6 +3041,23 @@ test('a film plays inline on an enlarged widescreen stage, and the play mark is 
   expect(film.player.width).toBeCloseTo(film.width, 0);
   expect(film.player.height).toBeCloseTo(film.height, 0);
 
+  /* AND ON A PHONE IT USES THE WHOLE FRAME (issue 241). The arrows used to
+     flank the stage inside this row and took 116px of a 288px card with them,
+     which left a film 172px wide and 97px tall — smaller than the ~48px
+     control bar the player draws inside itself, so half the picture was
+     chrome. With the arrows in the control row the stage is the frame, and on
+     any viewport too narrow for the film's own token width that is exactly
+     what it measures. */
+  const frameWidth = await page.evaluate(
+    () => window.document.querySelector('.gallery-frame').getBoundingClientRect().width
+  );
+  if (frameWidth < galleryVideoStageInlinePx) {
+    expect(
+      film.width,
+      `the film stage is ${film.width.toFixed(1)}px inside a ${frameWidth.toFixed(1)}px frame; something else is taking its width`
+    ).toBeCloseTo(frameWidth, 0);
+  }
+
   /* THE CONTROLS SHRANK AND THE TARGETS DID NOT (owner: reduce "left, right,
      current media"). Both halves, because a shrink that took the touch target
      with it is the stage-1 floor broken. */
@@ -2991,6 +3077,67 @@ test('a film plays inline on an enlarged widescreen stage, and the play mark is 
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
+/* THE RUNG A VIEWPORT ACTUALLY PULLS (issue 241).
+ *
+ * The lane above proves the queries are written and that the engine agrees
+ * with them. This one proves the consequence, which is the whole defect: what
+ * the browser REQUESTS. Before the queries existed the ladder's size was
+ * decided by codec support alone, so every engine that decodes the
+ * high-efficiency rung — WebKit and Gecko both do — streamed the 2160p master
+ * into a phone-sized box, and the smallest rung was requested by nobody at any
+ * viewport.
+ *
+ * The expectation is derived from the engine's own viewport rather than stated
+ * per project, so the phone lanes and the desktop lanes assert the same rule
+ * and neither is a special case. The files 404 (the e2e origin serves no media
+ * volume), which is exactly right here: this measures resource SELECTION, and
+ * selection happens before a single byte of the file is read. */
+test('a phone never pulls the 4K rung, and the smallest rung is reachable at all (issue 241)', async ({
+  page,
+}) => {
+  const requested = [];
+  await page.route('**/gallery/film-*.mp4', (route) => {
+    requested.push(route.request().url());
+    return route.fulfill({ status: 404, body: '' });
+  });
+  await serveGalleryManifest(page);
+  await visit(page);
+
+  await page.getByRole('button', { name: 'Next film' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  // preload="metadata" means the element goes and gets one, so this waits for
+  // the selection to have happened rather than for a fixed time.
+  await expect
+    .poll(() => requested.length, {
+      message: 'the player requested no rendition at all, so this lane measured no selection',
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(0);
+
+  const viewport = await page.evaluate(() => window.innerWidth);
+  const pulled = requested.map((url) => Number(/film-([0-9]+)[.]mp4/.exec(url)[1]));
+
+  /* THE 4K RUNG IS OFF-LIMITS BELOW ITS OWN BREAKPOINT. 1920px is the 1080p
+     rung's native width through this item's declared 3840x2160 box — the
+     manifest's own number, not this file's. */
+  if (viewport < 1920) {
+    expect(
+      pulled,
+      `a ${viewport}px viewport pulled the 2160p master: ${requested.join(', ')}`
+    ).not.toContain(2160);
+  }
+  // And below the middle rung's own breakpoint the floor is the only rendition
+  // there is — which is the rung that used to be selected by nobody.
+  if (viewport < 1280) {
+    expect(
+      [...new Set(pulled)],
+      `a ${viewport}px viewport pulled something other than the 720p floor: ${requested.join(', ')}`
+    ).toEqual([720]);
+  }
+
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
 test('the gallery frame is centred in its track, with no dead gutter (issue 202)', async ({ page }) => {
   /* The owner's complaint, measured: the frame's inline size is TRANSFERRED
      from its block cap through aspect-ratio, so on a column wider than
@@ -3004,18 +3151,26 @@ test('the gallery frame is centred in its track, with no dead gutter (issue 202)
   const frame = page.locator('.gallery-image-button');
   await frame.scrollIntoViewIfNeeded();
   const observed = await page.evaluate(() => {
-    const row = window.document.querySelector('.gallery-frame');
-    const button = row.querySelector('.gallery-image-button').getBoundingClientRect();
-    const [previous, next] = [...row.querySelectorAll('.icon-button')].map((control) =>
-      control.getBoundingClientRect()
+    /* The gutters are measured against the FRAME's own edges since issue 241.
+       They used to be measured against the arrows that bounded the 1fr track,
+       and the arrows have moved into the control row under the work — where
+       they are adjacent to it at every width instead of floating 212px away
+       at a desktop one, which was the other half of the same dead-gutter
+       complaint. Two rendered boxes still, and an expectation derived from
+       neither the stylesheet nor a token. */
+    const row = window.document.querySelector('.gallery-frame').getBoundingClientRect();
+    const button = window.document.querySelector('.gallery-image-button').getBoundingClientRect();
+    const arrows = [...window.document.querySelectorAll('.gallery-controls > .icon-button')].map(
+      (control) => control.getBoundingClientRect()
     );
+    const dots = window.document.querySelector('.gallery-dots').getBoundingClientRect();
     return {
-      left: button.left - previous.right,
-      right: next.left - button.right,
-      arrows: [
-        { width: previous.width, height: previous.height },
-        { width: next.width, height: next.height },
-      ],
+      left: button.left - row.left,
+      right: row.right - button.right,
+      arrows: arrows.map((arrow) => ({ width: arrow.width, height: arrow.height })),
+      /* How far each arrow sits from the position marks it brackets — the
+         proximity half of the same rule, and the number that was 212px. */
+      gaps: [dots.left - arrows[0].right, arrows[1].left - dots.right],
     };
   });
   expect(observed.left, 'the frame sits against the start edge of its track').toBeGreaterThanOrEqual(0);
@@ -3023,13 +3178,229 @@ test('the gallery frame is centred in its track, with no dead gutter (issue 202)
     observed.left,
     `the gutters are ${observed.left.toFixed(1)}px and ${observed.right.toFixed(1)}px — the frame is off centre`
   ).toBeCloseTo(observed.right, 0);
-  /* Centring must not have been bought by shrinking the controls that flank
-     it: both arrows still clear the touch floor at every viewport this lane
-     runs. */
+  /* Centring must not have been bought by shrinking the controls: both arrows
+     still clear the touch floor at every viewport this lane runs. */
+  expect(observed.arrows.length, 'the gallery lost one of its two arrows').toBe(2);
   for (const arrow of observed.arrows) {
     expect(arrow.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
     expect(arrow.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
   }
+  /* And they are BESIDE the marks they belong to rather than pushed to the far
+     edges of a track. The token that separates them is a quarter-rem; a whole
+     rem of allowance is generous and still an order of magnitude under the
+     212px this replaced. */
+  for (const gap of observed.gaps) {
+    expect(gap, `an arrow sits ${gap.toFixed(1)}px from the position marks`).toBeLessThanOrEqual(16);
+    expect(gap, 'an arrow overlaps the position marks').toBeGreaterThanOrEqual(-subPixel);
+  }
+});
+
+/* ZERO SHIFT ACROSS A KIND CHANGE (issue 241).
+ *
+ * MEASURED on 0.1.54: a still's stage is a square and a film's is 16:9, and
+ * each reserved its own box — so pressing next across the boundary resized the
+ * document under the reader, -105.9px at a 390px viewport and +105.9px coming
+ * back. The reservation now sits on the frame, which knows nothing about kind,
+ * and this measures the document itself rather than any box: the whole page's
+ * scroll height, and the top of the section BELOW the gallery, which is what a
+ * reader actually watches move. */
+test('moving between a still and a film shifts the document by nothing (issue 241)', async ({ page }) => {
+  await serveGalleryManifest(page);
+  await visit(page);
+  await page.locator('.gallery-frame').scrollIntoViewIfNeeded();
+  await settled(page);
+
+  const shape = () =>
+    page.evaluate(() => {
+      const frame = window.document.querySelector('.gallery-frame').getBoundingClientRect();
+      const stage = window.document.querySelector('.gallery-stage').getBoundingClientRect();
+      const below = window.document.querySelector('#trackers');
+      return {
+        document: window.document.documentElement.scrollHeight,
+        frame: Math.round(frame.height * 10) / 10,
+        stage: { width: Math.round(stage.width * 10) / 10, height: Math.round(stage.height * 10) / 10 },
+        below: below === null ? null : Math.round(below.getBoundingClientRect().top + window.scrollY),
+        kind: window.document.querySelector('.gallery-stage').getAttribute('data-gallery-kind'),
+      };
+    });
+
+  const still = await shape();
+  expect(still.kind).toBe('image');
+  await page.getByRole('button', { name: 'Next film' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  const film = await shape();
+  expect(film.kind).toBe('video');
+  await page.getByRole('button', { name: 'Previous photograph' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
+  const back = await shape();
+
+  /* Non-vacuity, and it is the point rather than a formality: the two stages
+     really are different shapes. If they were not, this lane would be
+     measuring a page that cannot shift and proving nothing. */
+  expect(
+    film.stage.height,
+    `both kinds render a ${film.stage.width}x${film.stage.height} stage, so there is no kind change to measure`
+  ).toBeLessThan(still.stage.height - 1);
+
+  for (const [label, state] of [
+    ['the film', film],
+    ['the still, coming back', back],
+  ]) {
+    expect(
+      state.frame,
+      `${label} changed the reserved frame from ${still.frame}px to ${state.frame}px`
+    ).toBeCloseTo(still.frame, 0);
+    expect(
+      state.document,
+      `${label} changed the document height from ${still.document}px to ${state.document}px`
+    ).toBe(still.document);
+    expect(
+      state.below,
+      `${label} moved the section under the gallery from ${still.below} to ${state.below}`
+    ).toBe(still.below);
+  }
+});
+
+/* THE PAGE DOES NOT SCROLL BEHIND THE LIGHTBOX (issue 241).
+ *
+ * showModal() makes the document inert to POINTER interaction and nothing
+ * else, so a wheel and a PageDown both moved the page under the scrim —
+ * MEASURED on 0.1.54 at +485px on an iPhone 13 viewport and +1400px at
+ * 1280x720 — and closing then landed the reader somewhere they never chose.
+ * Both halves are measured here: the lock while open, and the exact restore on
+ * close. The wheel is a real wheel event rather than window.scrollBy, which
+ * would scroll an overflow:hidden root programmatically and measure nothing. */
+test('the document holds still while the lightbox is open, and is unchanged after (issue 241)', async ({
+  page,
+  browserName,
+  isMobile,
+}) => {
+  /* ONE CAPABILITY BOUNDARY, named rather than skipped around: Playwright
+     cannot deliver a wheel to mobile WebKit ("Mouse wheel is not supported in
+     mobile WebKit"). The keyboard half runs on every engine including that
+     one, and the keyboard is the same scroller — so no project asserts
+     nothing here; the wheel is simply an extra input where one can be sent. */
+  const canWheel = !(browserName === 'webkit' && isMobile);
+  await visit(page);
+  const dialog = page.locator('dialog.gallery-lightbox');
+  const frame = page.locator('.gallery-image-button').first();
+  await frame.scrollIntoViewIfNeeded();
+  await settled(page);
+
+  const scrollY = () => page.evaluate(() => Math.round(window.scrollY));
+  /* Every scroll this lane sends is INPUT, never `scrollTo`: a locked root is
+     `overflow: hidden`, which stops a reader scrolling and leaves the document
+     programmatically scrollable, so a scripted scroll would move the page in
+     both states and measure nothing.
+
+     Which makes "the engine moved the page from an input event" a
+     precondition, not an assumption — and it is measured HERE, on the
+     unlocked page, before anything is opened. An engine that never answers a
+     synthetic scroll would otherwise read as a perfect lock and then fail the
+     release half for a reason that has nothing to do with the lock. */
+  const scrollInput = async () => {
+    if (canWheel) {
+      await page.mouse.move(10, 10);
+      await page.mouse.wheel(0, -400);
+    }
+    await page.keyboard.press('Home');
+  };
+  const settledStart = await scrollY();
+  await scrollInput();
+  /* Waited for, not read once: a scroll the page animates has not landed by
+     the time the press returns, and reading immediately would report every
+     smooth-scrolling engine as one that cannot scroll at all. */
+  const answered = await page
+    .waitForFunction((from) => window.scrollY < from, settledStart, { timeout: 4000 })
+    .then(
+      () => true,
+      () => false
+    );
+  /* ONE PROJECT MAY NOT OPT OUT. A precondition that every project is allowed
+     to skip on is a matrix that reports green for a site nobody can scroll:
+     `html { overflow: hidden }` written unconditionally skips this lane
+     everywhere and leaves the whole suite passing — measured by the
+     adversarial review of this branch, 463 passed / 27 skipped / 0 failed with
+     the unit suite still 437/0. So desktop Chromium, the project where this
+     page scrolls by construction (a fixed-width desktop viewport, a document
+     several times its height, and an engine whose synthetic input this file
+     depends on throughout), asserts it instead of skipping — measured
+     answering on all five projects today, so nothing is being carved out for a
+     known failure. The named boundary stays for the other four, where an
+     engine's synthetic-input behaviour is its own business and a skip is
+     honest; it is loud in the run output either way. */
+  const mustScroll = browserName === 'chromium' && !isMobile;
+  if (mustScroll) {
+    expect(answered, 'the page never scrolls from a synthetic input, locked or not').toBe(true);
+  }
+  test.skip(
+    !answered,
+    `${browserName} does not move the page from a synthetic scroll here, so neither half of this lane could mean anything on it`
+  );
+  await frame.scrollIntoViewIfNeeded();
+  await settled(page);
+
+  const start = await scrollY();
+  expect(start, 'the gallery is inside the first viewport here, so this lane proves nothing').toBeGreaterThan(150);
+  /* Zero CLS across the lock is measured on the READING COLUMN, not on the
+     viewport: taking the document's overflow away takes its scrollbar with it,
+     which on a classic-scrollbar platform WIDENS the viewport by design — what
+     must not move is the content the reader is looking at, which the measured
+     giveback holds still. On every engine in this matrix the scrollbar costs
+     the layout nothing — measured: setting the giveback's fallback to 20px
+     moved this column on all five projects, so the property is never set and
+     the difference it is measured from is zero — which is why this lane
+     asserts the half that holds on every platform, and the arithmetic that
+     only a space-taking scrollbar exercises is pinned as structure in
+     `tests/experience.test.mjs`. */
+  const columnShape = () =>
+    page.evaluate(() => {
+      const box = window.document.querySelector('main').getBoundingClientRect();
+      return { x: Math.round(box.x * 10) / 10, width: Math.round(box.width * 10) / 10 };
+    });
+  const shapeBefore = await columnShape();
+
+  await frame.click();
+  await expect(dialog).toHaveJSProperty('open', true);
+
+  expect(await columnShape(), 'opening the lightbox moved the page under the reader').toEqual(shapeBefore);
+
+  if (canWheel) {
+    await page.mouse.move(10, 10);
+    await page.mouse.wheel(0, 800);
+    await page.mouse.wheel(0, -800);
+  }
+  await page.keyboard.press('PageDown');
+  await page.keyboard.press('End');
+  /* Both directions, so no engine can pass this by having nowhere to go: the
+     document below the gallery is as tall as its own content makes it, but
+     `start` is always over 150px from the top, so `Home` always has room. */
+  await page.keyboard.press('Home');
+  expect(
+    await scrollY(),
+    `the page scrolled behind the open lightbox, from ${start}`
+  ).toBe(start);
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveJSProperty('open', false);
+  expect(await scrollY(), 'closing the lightbox left the reader somewhere else').toBe(start);
+  expect(await columnShape(), 'closing the lightbox moved the page under the reader').toEqual(shapeBefore);
+  /* And the lock is RELEASED, not merely ineffective: the page scrolls again.
+     Without this half the same green could be bought by a page that can never
+     scroll at all.
+
+     UPWARD, because that is the direction this lane can prove has somewhere to
+     go: `start` is over 150px down the document, whereas whether there is a
+     further page BELOW the gallery depends on how tall the rest of the page
+     renders on a given engine — the first form of this half scrolled down and
+     went red on the CI runner's desktop WebKit with the page already at its
+     own end, where a press is refused by the document being over rather than
+     by any lock.
+
+     It is the SAME input the precondition above proved this engine answers, so
+     a failure here can only be the lock. */
+  await scrollInput();
+  await expect.poll(scrollY, { message: 'the page never scrolls again after the lightbox closes' }).toBeLessThan(start);
 });
 
 /* The gallery frame's box and its two gutters, measured as one shape. Used
@@ -3041,16 +3412,18 @@ async function galleryFrameShape(page) {
   await page.locator('.gallery-image-button').scrollIntoViewIfNeeded();
   return page.evaluate(() => {
     const round = (value) => Math.round(value * 10) / 10;
-    const row = window.document.querySelector('.gallery-frame');
-    const frame = row.querySelector('.gallery-image-button').getBoundingClientRect();
-    const [previous, next] = [...row.querySelectorAll('.icon-button')].map((control) =>
-      control.getBoundingClientRect()
-    );
+    const row = window.document.querySelector('.gallery-frame').getBoundingClientRect();
+    const frame = window.document.querySelector('.gallery-image-button').getBoundingClientRect();
     return {
       width: round(frame.width),
       height: round(frame.height),
-      left: round(frame.left - previous.right),
-      right: round(next.left - frame.right),
+      // The gutters against the frame's own edges (issue 241): the arrows that
+      // used to bound this track now live in the control row under the work.
+      left: round(frame.left - row.left),
+      right: round(row.right - frame.right),
+      // And the reservation itself, which is the box the page is laid out
+      // from whether or not a byte ever lands.
+      reserved: round(row.height),
     };
   });
 }
@@ -3092,6 +3465,105 @@ test('the gallery frame reserves the SAME box with the photograph refused as wit
     refused,
     `the frame is ${refused.width}x${refused.height} without the photograph and ${served.width}x${served.height} with it — the box is not reserved, it is discovered`
   ).toEqual(served);
+});
+
+/* ONE ROW OF DOTS, AT EVERY WIDTH THIS SITE SUPPORTS (issue 241).
+ *
+ * MEASURED on 0.1.54: nine 44px targets are 396px of controls, so the row
+ * wrapped to two lines at 320, 360, 390 and 412, and to three at 250px. The
+ * floor that may not move is the target; the axis the surplus goes to is what
+ * changed, and this page's standing answer for wide content is that it scrolls
+ * inside its own container rather than taking the document sideways. Both
+ * halves are measured: one row, and no page-level horizontal scroll. */
+test('the position marks stay one row at every phone width, at full size (issue 241)', async ({ page }) => {
+  await visit(page);
+  for (const width of [250, ...phoneWidths]) {
+    await page.setViewportSize({ width, height: 800 });
+    await settled(page);
+    const row = await page.evaluate(() => {
+      const dots = [...window.document.querySelectorAll('.gallery-dot')];
+      const strip = window.document.querySelector('.gallery-dots');
+      return {
+        count: dots.length,
+        rows: new Set(dots.map((dot) => Math.round(dot.getBoundingClientRect().top))).size,
+        smallest: Math.min(...dots.map((dot) => dot.getBoundingClientRect().width)),
+        shortest: Math.min(...dots.map((dot) => dot.getBoundingClientRect().height)),
+        scrolls: strip.scrollWidth > strip.clientWidth,
+        overflow: getComputedStyle(strip).overflowX,
+        documentScrolls:
+          window.document.documentElement.scrollWidth > window.document.documentElement.clientWidth,
+      };
+    });
+    expect(row.count, 'the gallery drew no position marks to measure').toBeGreaterThan(1);
+    expect(row.rows, `the marks wrapped onto ${row.rows} rows at ${width}px`).toBe(1);
+    expect(
+      row.smallest + subPixel,
+      `a mark is ${row.smallest.toFixed(1)}px wide at ${width}px; the row was made to fit by shrinking its targets`
+    ).toBeGreaterThanOrEqual(touchFloorPx);
+    expect(row.shortest + subPixel).toBeGreaterThanOrEqual(touchFloorPx);
+    expect(
+      row.documentScrolls,
+      `the page itself scrolls sideways at ${width}px; the row took the document with it`
+    ).toBe(false);
+    // And where the surplus actually went, when there is one.
+    if (row.scrolls) {
+      expect(row.overflow, `the marks overflow at ${width}px with nowhere to scroll`).toBe('auto');
+    }
+  }
+});
+
+/* THE ENLARGED SURFACE OFFERS A PHONE THE RENDITION IT CAN SEE (issue 241).
+ *
+ * MEASURED on 0.1.54: the lightbox loaded the 3840px master — 1.8 MiB on the
+ * volume's own work — into a 351px box on an iPhone 13 viewport, because the
+ * element named one file and no other. The fixture's still publishes a 960px
+ * preview and a 3840px full, so the breakpoint under test is the preview's own
+ * declared width and nothing this file states. `currentSrc` is what the engine
+ * SELECTED, which is decided before a byte is read — the fixture's files 404,
+ * and that is not a gap here. */
+test('a phone enlarges to the preview and a wide screen to the master (issue 241)', async ({ page }) => {
+  await serveGalleryManifest(page);
+  await visit(page);
+  await page.locator('.gallery-image-button').click();
+  const enlarged = page.locator('img.gallery-lightbox-image');
+  await expect(enlarged).toBeVisible();
+  const chosen = await page.evaluate(() => ({
+    src: window.document.querySelector('.gallery-lightbox-image').currentSrc,
+    viewport: window.innerWidth,
+    sources: [...window.document.querySelectorAll('.gallery-lightbox picture source')].map((source) => ({
+      media: source.getAttribute('media'),
+      srcset: source.getAttribute('srcset'),
+    })),
+  }));
+  expect(chosen.sources.map((source) => source.media)).toEqual(['(max-width: 960px)']);
+  expect(chosen.sources[0].srcset).toContain('still-preview.webp');
+  if (chosen.viewport <= 960) {
+    expect(
+      chosen.src,
+      `a ${chosen.viewport}px viewport enlarged to ${chosen.src}, which is the master`
+    ).toContain('still-preview.webp');
+  } else {
+    expect(
+      chosen.src,
+      `a ${chosen.viewport}px viewport enlarged to ${chosen.src}, which is the preview upscaled`
+    ).toContain('/gallery/still.webp');
+  }
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+test('two fingers on the artwork can still zoom it (issue 241)', async ({ page }) => {
+  /* `touch-action: pan-y` hands the compositor the vertical axis and refuses
+     everything else — including the pinch a reader makes to look closer at a
+     drawing, on the one element anybody would ever try it on. The value is
+     read back off the engine rather than off the stylesheet, because an engine
+     that did not understand `pinch-zoom` would DROP the declaration, and the
+     base under it is what this proves survived either way. */
+  await visit(page);
+  const declared = await page.evaluate(
+    () => getComputedStyle(window.document.querySelector('.gallery-stage')).touchAction
+  );
+  expect(declared, `the stage declares "${declared}", so a pinch on the artwork is refused`).toContain('pinch-zoom');
+  expect(declared, 'the stage stopped handing the page its own vertical scrolling').toContain('pan-y');
 });
 
 test('the lightbox close mark is small, off the artwork, and still a 44px target (issue 202)', async ({
@@ -3205,17 +3677,18 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
            shift it is not. What must not move is the frame's own size, its
            two gutters, and how far the counter sits under it. */
         const round = (value) => Math.round(value * 100) / 100;
-        const row = window.document.querySelector('.gallery-frame');
-        const frame = row.querySelector('.gallery-image-button').getBoundingClientRect();
-        const [previous, next] = [...row.querySelectorAll('.icon-button')].map((control) =>
-          control.getBoundingClientRect()
-        );
+        const row = window.document.querySelector('.gallery-frame').getBoundingClientRect();
+        const frame = window.document.querySelector('.gallery-image-button').getBoundingClientRect();
         const counter = window.document.querySelector('.gallery-count').getBoundingClientRect();
         return {
           width: round(frame.width),
           height: round(frame.height),
-          left: round(frame.left - previous.right),
-          right: round(next.left - frame.right),
+          // The gutters against the frame's own edges since issue 241: the two
+          // arrows that used to bound this row moved under the work, so the
+          // relationship that must not move is the picture inside its frame.
+          left: round(frame.left - row.left),
+          right: round(row.right - frame.right),
+          reserved: round(row.height),
           counterHeight: round(counter.height),
           counterGap: round(counter.top - frame.bottom),
           captions: window.document.querySelectorAll('.gallery-caption').length,
@@ -5545,9 +6018,11 @@ test('a phone gets no handle and the page it has always had', async ({ page }) =
     ).toHaveCount(0);
     const column = await columnBox(page);
     /* Byte for byte the arrangement the phone lanes above already prove: the
-       column is the screen less its two gutters, and nothing scrolls
-       sideways. */
-    expect(column.width).toBeCloseTo(Math.min(60 * column.rem, width - gutterPx), 0);
+       column is the screen less its two gutters and the fixed control's own
+       lane (issue 241), and nothing scrolls sideways. Every width in this list
+       sits below the handle breakpoint, which is exactly the range that lane
+       is reserved in. */
+    expect(column.width).toBeCloseTo(Math.min(60 * column.rem, width - gutterPx - controlLanePx), 0);
     expect(column.scrollWidth).toBe(column.clientWidth);
   }
   /* And the boundary is where the stylesheet says it is, not near it. */
@@ -6720,7 +7195,12 @@ test('the gallery advances on a swipe and settles back on a fidget (issue 219)',
   expect(
     await stage.evaluate((node) => window.getComputedStyle(node).touchAction),
     'the gallery stage stopped handing vertical panning to the page',
-  ).toBe('pan-y');
+    /* `contain` rather than an exact match since issue 241: the declaration is
+       now `pan-y pinch-zoom`, so a two-finger zoom on the artwork is no longer
+       refused. What this half is about is unchanged and still fails on its
+       own — losing pan-y would hand the page's vertical scrolling to the
+       gesture layer, whatever else the value said. */
+  ).toContain('pan-y');
 
   /* A finger, dispatched as real PointerEvents with pointerType "touch".
      Playwright's touchscreen API offers only tap(), and its mouse API cannot
@@ -6880,7 +7360,15 @@ test('the gallery is reachable without a gesture, and says where it is (issue 21
     expect(to.checked, `${key} did not move the choice`).toBe(want);
     expect(to.focused, `${key} moved the choice but left focus behind`).toBe(want);
     expect(to.tabbable, `${key} left the tab stop on a dot that is no longer current`).toBe(want);
-    expect(to.counter, `${key} moved the dot but not the photograph`).toBe(`${want + 1} / ${total}`);
+    /* The live region names the KIND as well as the position since issue 241
+       — "Photograph 3 of 8" rather than "3 / 8" — because a bare ratio was the
+       one announcement a reader got on a move and it said nothing about what
+       they had landed on. The vendored set this lane drives is all stills, so
+       the noun is stated here rather than derived, which is what keeps the
+       assertion able to fail. */
+    expect(to.counter, `${key} moved the dot but not the photograph`).toBe(
+      `Photograph ${want + 1} of ${total}`
+    );
   }
 
   // And so do the arrow keys on the frame itself.
@@ -7531,5 +8019,47 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
       occlusion.headerOnTop,
       `page text renders over the fixed control instead of behind its plate (topmost element was "${occlusion.hit}")`,
     ).toBe(true);
+  }
+
+  /* HALF THREE — the column does not reach the control at all (issue 241),
+     which is the guarantee the two halves above could not give. Halves one and
+     two are about a target scrolled to a place and a plate painted under a
+     glyph; neither says anything about the ordinary case the owner was
+     actually reading, which is body text passing under a control on its way up
+     the screen. MEASURED on 0.1.54, and this half is why it was only ever a
+     phone defect: at 320px <main> ended at exactly 304 and the trigger box was
+     x 260-304, so a scroll sweep found body text under the control 9 to 11
+     times at 320, 360, 390, 412 and 768 — bullets, card bylines and a card
+     title — and zero times at 1280 and 1440.
+
+     The lane the page now reserves is what makes the answer geometric: below
+     the handle breakpoint the column ends where the control starts, so no
+     descendant of it can be under the control at any scroll offset. Every
+     width the sweep found the defect at is probed, in the engine this project
+     runs, rather than only the one this project's own viewport happens to
+     be. */
+  for (const width of [...phoneWidths, 768, 1024]) {
+    await page.setViewportSize({ width, height: 800 });
+    await settled(page);
+    const lane = await page.evaluate(() => {
+      const control = window.document.querySelector('.page-header').getBoundingClientRect();
+      const column = window.document.querySelector('#app > main').getBoundingClientRect();
+      return {
+        controlStart: control.left,
+        controlWidth: control.width,
+        columnEnd: column.right,
+        columnWidth: column.width,
+      };
+    });
+    // Non-vacuity: a column that had collapsed would pass this trivially.
+    expect(lane.columnWidth, `the column measures ${lane.columnWidth}px at ${width}px`).toBeGreaterThan(100);
+    expect(
+      lane.controlWidth + subPixel,
+      `the control shrank to ${lane.controlWidth}px to make room; the 44px target is the floor, not the variable`
+    ).toBeGreaterThanOrEqual(touchFloorPx);
+    expect(
+      lane.columnEnd,
+      `at ${width}px the column ends at ${lane.columnEnd}px, inside a control that starts at ${lane.controlStart}px`
+    ).toBeLessThanOrEqual(lane.controlStart + subPixel);
   }
 });
