@@ -14,6 +14,7 @@ import {
   admitGalleryItem,
   galleryManifestPath,
   galleryManifestSchema,
+  galleryPosterAsset,
   loadGalleryManifest,
   maxGalleryManifestBytes,
   maxGalleryManifestItems,
@@ -258,6 +259,56 @@ describe('gallery/v1 item admission', () => {
   it('refuses a key that is not a safe render identity', () => {
     for (const key of ['', '   ', '.hidden', '-leading', 'has space', 'has/slash', 'x'.repeat(maxGalleryTextLengths.key + 1)]) {
       assert.equal(admitGalleryItem(imageItem({ key })), null, `key ${JSON.stringify(key)} must refuse the item`);
+    }
+  });
+});
+
+/* The poster choice (issue 239), EXECUTED rather than described. It is the one
+ * decision the strip makes about a film before a reader touches anything, and
+ * it used to reach for the 4K master: the poster is painted into a stage a few
+ * hundred CSS pixels wide, and the full still is never shown at any size —
+ * enlarging is stills-only — so the strip paid for a rendition nothing on the
+ * page uses. */
+describe('the poster a film shows before it plays', () => {
+  it('takes the operator’s published poster when there is one', () => {
+    const item = admitGalleryItem(videoItem());
+    assert.ok(item !== null);
+    assert.equal(galleryPosterAsset(item).url, item.poster.url);
+    // Not vacuous: the chosen file is a DIFFERENT file from either stand-in,
+    // so a function returning the preview or the full still would fail here.
+    assert.notEqual(item.poster.url, item.preview.url);
+    assert.notEqual(item.poster.url, item.full.url);
+  });
+
+  it('stands the PREVIEW derivative in when the operator published none, never the full-size still', () => {
+    const item = admitGalleryItem(videoItem({ poster: undefined }));
+    assert.ok(item !== null);
+    assert.equal(item.poster, undefined);
+    assert.equal(
+      galleryPosterAsset(item).url,
+      item.preview.url,
+      'an absent poster must fall back to the small derivative, not to the 4K master'
+    );
+    assert.notEqual(
+      galleryPosterAsset(item).url,
+      item.full.url,
+      'the full-size still is the rendition the lightbox stopped showing; the strip must not fetch it'
+    );
+    // The dimensions are the reason, stated as a measurement rather than a
+    // claim: the stand-in is genuinely the smaller picture.
+    assert.ok(
+      galleryPosterAsset(item).width < item.full.width,
+      `the poster stand-in is ${galleryPosterAsset(item).width}px wide against the full still's ${item.full.width}px; it is not the smaller rendition`
+    );
+  });
+
+  it('always has an answer, because every admitted item carries a preview', () => {
+    // A still never reaches this function through the adapter, but the
+    // function is total over admitted items and says so.
+    for (const candidate of [imageItem(), videoItem(), videoItem({ poster: undefined })]) {
+      const item = admitGalleryItem(candidate);
+      assert.ok(item !== null);
+      assert.ok(galleryPosterAsset(item).url.length > 0, 'an admitted item resolved to no poster at all');
     }
   });
 });

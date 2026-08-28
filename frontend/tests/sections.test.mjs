@@ -1213,6 +1213,48 @@ test('nothing in the gallery ever autoplays, and reduced motion is structural (i
   assert.match(galleryMarkup, /poster=\{item\.video\.posterSrc\}/);
 });
 
+test('the film stage paints a ground of its own, so a poster in flight is not a white hole (issue 239)', () => {
+  const style = styleBlock(mediaGallery);
+  const filmStage = /\.gallery-stage\[data-gallery-kind='video'\]\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(filmStage.length > 0, 'the film stage rule is not where this pin expects it');
+  /* The rule the defect was: the stage declared no background, so the
+     reservation was transparent and the page's own near-white surface showed
+     through a 768x432 hole while a poster was still in flight. */
+  assert.match(
+    filmStage,
+    /background:\s*var\(--gallery-stage-ground\)/,
+    'the film stage paints no ground of its own; a poster still in flight shows the page through the reservation'
+  );
+  /* The value is a GLOBAL token like every other dimension the stage reads,
+     so it is tuned in styles.css and the component states no colour. */
+  const declared = /--gallery-stage-ground:\s*([^;]+);/.exec(styles)?.[1]?.trim();
+  assert.ok(declared, 'the film stage reads --gallery-stage-ground, which the token layer never declares');
+  /* MEASURED, not asserted: a ground is only honest if it is genuinely dark.
+     Declaring the token and setting it to the page's own near-white would
+     satisfy every pin above and re-create the exact hole this fixes, so the
+     value itself is read and weighed. A form this pin cannot measure fails
+     loudly rather than passing by default — that is where a light value would
+     hide. */
+  const channels = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(declared);
+  assert.ok(
+    channels,
+    `--gallery-stage-ground is "${declared}", which this pin cannot resolve to channels; state it as rgb(r, g, b) so its darkness can be measured`
+  );
+  for (const channel of channels.slice(1).map(Number)) {
+    assert.ok(
+      channel <= 64,
+      `--gallery-stage-ground is "${declared}"; a film's letterbox must be a dark ground, and a light one is the white hole this token exists to remove`
+    );
+  }
+  /* Zero CLS: the ground paints the box the three declarations above already
+     measured, so this rule may not restate a size of its own. */
+  assert.doesNotMatch(
+    filmStage,
+    /(?:^|[;{])\s*(?:inline-size|block-size|width|height|aspect-ratio|padding|margin)\s*:/,
+    'the film stage rule states a dimension of its own; the reservation is built from the two stage tokens and nothing else'
+  );
+});
+
 test('the source ladder renders in the manifest’s own order, never re-ranked (issue 207)', () => {
   // The browser takes the first source it can decode, so ORDER is the
   // preference. A sort, filter or reverse here would silently hand a reader
@@ -1238,6 +1280,24 @@ test('the Art block renders the vendored set first and lets a runtime manifest r
   // built those through lib/media.ts before this module saw them.
   assert.match(artBinding, /import\.meta\.glob\('\.\.\/\.\.\/assets\/images\/gallery\/\*\.webp'/);
   assert.doesNotMatch(artBinding, /\/media\/|mediaUrl\(/, 'the adapter must never build a media URL itself');
+  /* The poster choice is DELEGATED (issue 239). The rule now lives beside the
+     manifest field it reads, where gallery-manifest.test.mjs EXECUTES it
+     against real admitted items; this layer only binds the answer to a prop.
+     The branch is extracted rather than swept whole, because `item.full` is a
+     legitimate read two lines above it — the still a reader enlarges to — and
+     a file-wide ban would forbid the correct use along with the wrong one. */
+  const filmBranch = /if \(item\.kind === 'video'[\s\S]*?\n {2}\}/.exec(artBinding)?.[0] ?? '';
+  assert.ok(filmBranch.length > 0, 'the adapter’s film branch is not where this pin expects it');
+  assert.match(
+    filmBranch,
+    /posterSrc: galleryPosterAsset\(item\)\.url/,
+    'the adapter chooses a film’s poster itself again instead of delegating the rule to the module that documents it'
+  );
+  assert.doesNotMatch(
+    filmBranch,
+    /item\.full/,
+    'the strip reaches for the 4K master as a poster again; the full-size still is the rendition the lightbox stopped showing'
+  );
   // Manifest order is the operator's order here too, and this is the assertion
   // that has to survive somebody being clever: the adapter may not reorder the
   // items OR a film's source ladder, by any means — a spread and a reverse, a

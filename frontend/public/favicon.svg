@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="SN.">
+  <title>SN.</title>
+  <!-- The site's own mark, the same one og.png carries, inverted so it brings
+       its own field: an icon is painted at 16 CSS pixels into a browser chrome
+       whose colour this file cannot know, and a white-ground mark disappears
+       into a light tab strip while unfielded letterforms are too thin to
+       survive the rasteriser. Two inks, no gradient, no font file.
+
+       textLength with lengthAdjust pins the monogram to an exact 44-unit run,
+       so the mark occupies the same box whether the renderer resolves this
+       stack to Helvetica, Arial, or a Linux substitute. -->
+  <rect width="64" height="64" rx="10" fill="#000000" />
+  <text
+    x="32"
+    y="45"
+    text-anchor="middle"
+    textLength="44"
+    lengthAdjust="spacingAndGlyphs"
+    font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+    font-size="36"
+    font-weight="700"
+    fill="#ffffff"
+  >SN.</text>
+</svg>

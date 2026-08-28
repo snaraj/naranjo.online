@@ -63,6 +63,53 @@ test('static and hydrated shells preserve the same accessible identity', () => {
   assert.doesNotMatch(component, /name="description"/);
   assert.match(component, /<main aria-labelledby="page-title">/);
   assert.match(component, /<h1 id="page-title">[^<]+<\/h1>/);
+  // The tab mark rides in the same static head and for the same reason
+  // (issue 239): a document that declares no icon shows the browser's blank
+  // glyph and is probed for /favicon.ico on every visit.
+  assert.match(fallback, /<link rel="icon"[^>]*href="\/favicon\.svg"/);
+  assert.match(fallback, /<link rel="icon"[^>]*type="image\/svg\+xml"/);
+});
+
+/* The failure the static shell is FOR (issue 239). It is not the no-JavaScript
+ * case — that one has a <noscript> of its own below — but the case where the
+ * entry module was asked for and never arrived: degraded transport, or the
+ * brief post-deploy window where a cached shell names assets the answering pod
+ * no longer has. The shell used to answer that with a bare heading on an empty
+ * page, which reads as a broken site and offers the reader nothing.
+ *
+ * Structure and markers only, never copy: the words are the owner's to change,
+ * the shape is the contract. */
+test('the static shell states its own boot failure and offers a way out (issue 239)', () => {
+  const shell = /<main[^>]*data-static-fallback[^>]*>([\s\S]*?)<\/main>/.exec(fallback)?.[1];
+  assert.ok(shell, 'the static fallback element is not where this pin expects it');
+  const status = /<p data-boot-status>([\s\S]*?)<\/p>/.exec(shell)?.[1];
+  assert.ok(
+    status,
+    'the shell carries no boot-status line; a visitor whose module never arrives reads a bare heading and is told nothing'
+  );
+  assert.match(status, /\S/, 'the boot-status line is empty');
+  assert.match(
+    status,
+    /<a href="\/">[^<]+<\/a>/,
+    'the boot status offers no way to try again — the retry must be a plain same-origin link, because the visitor it is for has no working script'
+  );
+  assert.match(
+    shell,
+    /<noscript>[\s\S]*?data-boot-noscript[\s\S]*?<\/noscript>/,
+    'scripting-off is a different truth from failed-to-load and needs its own element'
+  );
+  /* And the constraint the whole design is shaped by: the origin's policy is
+     default-src 'self', it is not being widened, and neither a script-hosting
+     status detector nor an inline handler may creep in here later. Every one
+     of these would be silently DEAD under that policy, which is worse than
+     absent — it looks like a working affordance in the source. */
+  assert.doesNotMatch(
+    fallback,
+    /<script(?![^>]*\ssrc=)/,
+    "an inline <script> is refused by default-src 'self'; it would be dead code wearing a feature's shape"
+  );
+  assert.doesNotMatch(fallback, /\son[a-z]+=["']/, "an inline event handler is refused by default-src 'self'");
+  assert.doesNotMatch(fallback, /\sstyle=["']/, "an inline style attribute is refused by default-src 'self'");
 });
 
 test('initial source remains local and viewport-responsive', () => {

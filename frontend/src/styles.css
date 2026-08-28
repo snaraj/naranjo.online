@@ -1271,6 +1271,21 @@ h1 {
      still does work rather than coincidentally matching it. */
   --gallery-stage-size-video: 27rem;
   --gallery-stage-aspect-video: 1.7778;
+  /* The GROUND a film sits on (issue 239). The film stage carried no
+     background at all, so it was transparent: a poster still in flight left
+     the page's own near-white surface showing through a 768x432 hole, which
+     reads as a broken image rather than as a frame that has not arrived yet.
+     The same transparency showed through the bands `object-fit: contain`
+     leaves whenever a film's ratio is not exactly the stage's.
+
+     Deliberately NOT branched by reading mode, and for the same reason
+     --gallery-scrim and --gallery-meta-ink are not: this is the letterbox a
+     moving picture is projected onto, it carries no text, and a film's own
+     black bars do not lighten because a reader chose the sepia page. Every
+     video player on the web is dark in a light theme for exactly this reason.
+     Near-black rather than black so the stage still reads as a surface
+     against a true-dark page instead of dissolving into it. */
+  --gallery-stage-ground: rgb(20, 20, 20);
   /* The PAINTED size of the prev/next glyph inside the 44px hit box
      .icon-button keeps (owner directive, 2026-08-28: make the controls
      smaller). 18px is the site's chrome-icon glyph; the gallery's arrows are

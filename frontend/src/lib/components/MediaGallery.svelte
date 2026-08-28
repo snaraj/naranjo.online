@@ -597,6 +597,17 @@
   .gallery-stage[data-gallery-kind='video'] {
     --gallery-stage-size: var(--gallery-stage-size-video, 27rem);
     --gallery-stage-aspect: var(--gallery-stage-aspect-video, 1.7778);
+    /* The reserved box is now a VISIBLE box (issue 239). Without this the
+       stage was transparent, so a player whose poster had not landed showed
+       the page's near-white ground through the reservation and read as a
+       broken rectangle rather than as a film that has not arrived. The value
+       is the global token like every other dimension here, so the ground is
+       tuned in styles.css and nowhere else. Nothing about the reservation
+       moves: this paints the box the three declarations above already
+       measured, so CLS stays zero. (Prose here is read by the strip pins in
+       tests/sections.test.mjs, which strip HTML comments and not CSS ones —
+       naming the element in angle brackets would count as a second one.) */
+    background: var(--gallery-stage-ground);
   }
 
   /* The player fills the reserved stage the same way the enlarge button

@@ -23,7 +23,7 @@
 
 import { runtimeBlock, type MediaGalleryItem, type MediaGalleryProps, type PageBlock } from '../blocks.ts';
 import { galleryHeight, galleryPhotos, galleryWidth } from '../gallery.ts';
-import { loadGalleryManifest, type GalleryItem } from '../galleryManifest.ts';
+import { galleryPosterAsset, loadGalleryManifest, type GalleryItem } from '../galleryManifest.ts';
 import MediaGallery from '../components/MediaGallery.svelte';
 
 const galleryFiles = import.meta.glob('../../assets/images/gallery/*.webp', {
@@ -93,10 +93,10 @@ function toGalleryItem(item: GalleryItem): MediaGalleryItem {
   }
   if (item.kind === 'video' && item.sources !== undefined) {
     rendered.video = {
-      /* A dedicated poster when the operator published one, the large still
-         otherwise — the same picture the lightbox would have shown anyway,
-         so the default is a real frame rather than a blank rectangle. */
-      posterSrc: (item.poster ?? item.full).url,
+      /* Which file that is, and why, is stated once beside the manifest field
+         it reads (galleryPosterAsset, lib/galleryManifest.ts). This layer only
+         binds the answer to the component's prop. */
+      posterSrc: galleryPosterAsset(item).url,
       /* Manifest order, untouched: the browser picks the first source it can
          play, so reordering here would silently change which rendition a
          reader receives. */

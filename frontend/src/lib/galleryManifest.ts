@@ -141,9 +141,9 @@ export interface GalleryItem {
   /* The small derivative the single visible feed frame shows. */
   readonly preview: GalleryAsset;
   /* Video only, and optional even then: the frame the <video> element shows
-   * before play. Absent means the large still serves as the poster, which is
-   * the sensible default and saves the operator publishing the same image
-   * twice. */
+   * before play. Absent is the ordinary case and costs the operator nothing —
+   * galleryPosterAsset below decides what stands in, and saves publishing the
+   * same image twice. */
   readonly poster?: GalleryAsset;
   /* Video only, in the manifest's own order: the browser takes the first it
    * can play, so order IS the preference and this module never reorders it. */
@@ -424,6 +424,32 @@ export function parseGalleryManifest(document: unknown): GalleryItem[] {
     items.push(item);
   }
   return items;
+}
+
+/* --- Reading an admitted item -------------------------------------------- */
+
+/* WHICH FILE STANDS IN FOR AN ABSENT POSTER, decided here beside the field
+ * that declares one optional (issue 239). It is a pure read over an already
+ * admitted item — no admission, no URL building, no I/O — and it lives in this
+ * module rather than in the binding layer so the rule and the `poster?`
+ * comment above cannot drift apart, and so it can be EXECUTED by a test
+ * instead of described by one.
+ *
+ * The order is poster, then preview, and the second half is the fix. A
+ * published poster wins, always: it is the one frame the operator chose. With
+ * none, the stand-in is the PREVIEW derivative and no longer the full-size
+ * still, because a poster is painted into a stage of a few hundred CSS pixels
+ * and the still is a 4K master — on the volume's own film the two measure
+ * ~86-91 KB against ~315 KB for the same visible frame. The old default was
+ * defended as "the picture the lightbox would have shown anyway", and that
+ * defence expired: enlarging is stills-only, so a film's full-size still is
+ * never shown to anybody at any size, and the strip was paying 3.5x for a
+ * rendition nothing else on the page uses.
+ *
+ * There is no third rung and no null: `preview` is required of every admitted
+ * item, so this function always has an answer. */
+export function galleryPosterAsset(item: GalleryItem): GalleryAsset {
+  return item.poster ?? item.preview;
 }
 
 export type GalleryManifestFetcher = (url: string) => Promise<Response>;

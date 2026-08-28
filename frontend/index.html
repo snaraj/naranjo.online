@@ -9,6 +9,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="dark light" />
     <title>naranjo.online</title>
+    <!-- The tab mark (issue 239). Until this line existed the site declared no
+      icon at all, so every tab showed the browser's blank-document glyph and
+      every visit cost a WARN-level 404 for the /favicon.ico a browser probes
+      when a document names none. SVG rather than ICO is a serving fact, not a
+      preference: the embedded bundle is typed by Go's mime.TypeByExtension,
+      whose BUILT-IN table has .svg and .png and does not have .ico, and the
+      distroless image carries no /etc/mime.types to supply one — an .ico would
+      leave the origin as application/octet-stream under nosniff, which no
+      browser accepts as an icon.
+      TestBuiltFrontendServesTheDeclaredFavicon pins that it is served as a
+      real image type rather than as a download. -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <!-- Link-preview identity (owner directive, 0.1.52: "when I text a link
       to the website, I expect to see a preview... SN. white and black, very
       simple"). These live in the STATIC head, not svelte:head, because the
@@ -36,6 +48,42 @@
       <header class="page-header"></header>
       <main aria-labelledby="static-page-title" data-static-fallback>
         <h1 id="static-page-title">Samuel Naranjo</h1>
+        <!-- THE HONEST BOOT STATE (issue 239). This block is what a visitor
+          reads when the entry module never arrives — degraded HTTP/3, or the
+          brief post-deploy window where a cached shell names assets the
+          answering pod no longer has. Before it, that visitor got a bare
+          heading on an empty page: no statement that anything was still
+          expected, no reason, and nothing to do. It read as a broken site,
+          which is a worse answer than the truth.
+
+          It says the loading part and the failed part in ONE line on purpose,
+          because nothing on this page is in a position to tell the two apart.
+          Detecting the failure needs script, and the failure this is for is
+          exactly the one where script did not load — so a detector would be
+          absent precisely when it was needed, while adding a request that can
+          fail on its own. A CSP of default-src 'self' also forbids an inline
+          script and an inline handler outright, and widening it for a status
+          message is not a trade this repository makes. The retry is therefore
+          a plain link to the origin, which needs no script at all: the shell
+          is served no-cache, so following it revalidates and re-fetches.
+
+          This is the mounted page's floor, not its ceiling: hydration replaces
+          this whole element (the rendering lanes assert exactly that by
+          watching data-static-fallback disappear), so a reader on a working
+          connection sees the line only for as long as the boot takes.
+
+          The <noscript> half is a genuinely different truth and says so: with
+          scripting off, nothing is arriving later and this IS the page. -->
+        <p data-boot-status>
+          Loading the site. If this line is still here in a moment, it did not load —
+          <a href="/">try again</a>.
+        </p>
+        <noscript>
+          <p data-boot-noscript>
+            This site is rendered in the browser, so it needs JavaScript. Without it,
+            what you are reading is the whole page.
+          </p>
+        </noscript>
       </main>
     </div>
     <script type="module" src="/src/main.ts"></script>

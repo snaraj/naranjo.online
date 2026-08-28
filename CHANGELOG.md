@@ -7,6 +7,64 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.55] - 2026-08-28
+
+Three defects with one shape: in each of them the page showed a visitor
+something that was not true about its own state. A film whose poster had not
+arrived painted a blank white rectangle, a boot that never completed rendered
+a bare heading with no explanation and no way out, and the site declared no
+icon at all.
+
+### Added
+
+- `frontend/public/favicon.svg`: the site's own "SN." mark, the one `og.png`
+  carries, inverted to white-on-black so it brings its own field at 16 CSS
+  pixels. `index.html` declares it, which is what stops the WARN-level
+  `/favicon.ico` 404 a browser probes for when a document names no icon. SVG
+  rather than ICO is a serving fact: the embedded bundle is typed by Go's
+  `mime.TypeByExtension`, whose built-in table has `.svg` and does not have
+  `.ico`, and the distroless image carries no `/etc/mime.types` to supply one.
+- The honest boot state in `frontend/index.html`: a `data-boot-status` line
+  that says the page is loading and carries a plain same-origin retry link,
+  plus a `data-boot-noscript` element for the genuinely different
+  scripting-off truth. No script and no CSP change — the failure it is for is
+  the one where script did not arrive.
+- `galleryPosterAsset` in `frontend/src/lib/galleryManifest.ts`: the
+  poster-stand-in rule, stated beside the optional `poster` field it reads and
+  executed by `tests/gallery-manifest.test.mjs` rather than described by a
+  regex.
+- `--gallery-stage-ground` in `frontend/src/styles.css`: the letterbox a film
+  is projected onto, mode-independent for the same reason `--gallery-scrim`
+  is.
+
+### Changed
+
+- A film's default poster is the 1280x720 preview derivative, not the 4K
+  full-size still — roughly 86-91 KB against roughly 315 KB for the same
+  visible frame in a 768x432 stage. The comment defending the old default
+  ("the same picture the lightbox would have shown anyway") expired when
+  enlarging became stills-only in 0.1.54.
+- `.gallery-stage[data-gallery-kind='video']` paints
+  `var(--gallery-stage-ground)`. The stage declared no background at all, so
+  a poster still in flight showed the page's near-white surface through the
+  reservation. The reservation itself is untouched: CLS stays zero.
+
+### Tests
+
+- `gallery-manifest.test.mjs` executes the poster choice against real admitted
+  items, including that the stand-in is measurably the smaller rendition.
+- `sections.test.mjs` pins the adapter's delegation inside its film branch
+  only (the still's `item.full` read two lines up stays legal) and MEASURES
+  the stage ground's channels, so declaring the token and setting it light
+  fails.
+- `experience.test.mjs` pins the icon declaration and the boot-state
+  structure, and refuses an inline script, handler, or style attribute in the
+  shell — all three are dead under `default-src 'self'`.
+- `internal/web/assets_test.go` follows the document's OWN icon declaration to
+  the wire and requires a media type Go's built-in table supplies, so a
+  development machine's richer MIME registry cannot vouch for an extension
+  production would fail on.
+
 ## [0.1.54] - 2026-08-28
 
 Four owner UX dispatches, all of them reversing or repairing decisions 0.1.52
