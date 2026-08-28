@@ -9,9 +9,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [0.1.54] - 2026-08-28
 
-Two owner UX dispatches, both reversing decisions 0.1.52 shipped the day
-before: a gallery film now plays where it sits instead of wearing a
-decorative play mark, and the token panel's display menu is gone entirely.
+Four owner UX dispatches, all of them reversing or repairing decisions 0.1.52
+shipped the day before: a gallery film now plays where it sits instead of
+wearing a decorative play mark, the token panel's display menu is gone
+entirely, the empty "About Me" section is gone with the two files it existed
+for, and the enlarged lightbox no longer throws the reader to the top of the
+page.
 
 ### Added
 
@@ -73,6 +76,32 @@ decorative play mark, and the token panel's display menu is gone entirely.
   all videos, its just there doing nothing"). It promised a press that happened
   somewhere else; the real control is now under the reader's finger. Its four
   component-local tokens went with it.
+- **The empty "About Me" section** (owner: "ensure that the 'about me' section
+  is removed"). It was the page's last section and held nothing but an honest
+  note saying it had not been written — a heading, a nav link and a card spent
+  on the absence of content. The removal is one line in `src/page.ts` plus the
+  block that line named; the nav follows without being told, because the nav IS
+  that array. The two files it existed for left with it rather than lingering
+  unreferenced: `lib/blocks/about.ts` and the `EmptyNote` primitive it was the
+  only caller of, together with `EmptyNoteProps`.
+
+### Fixed
+
+- **The enlarged lightbox no longer throws the reader to the top of the page**
+  (owner: "when I close the media, it returns me to the top of the page, that
+  is not right at all"). The position was lost at OPEN rather than at close:
+  `.gallery-lightbox` declared `position: relative`, and an author declaration
+  beats the UA sheet's `dialog:modal { position: fixed }` on cascade ORIGIN
+  whatever the specificity, so the box was placed in the DOCUMENT's coordinate
+  space at the top of the page and `showModal()`'s focus move scrolled the
+  reader there. MEASURED at a 1280x720 viewport against the live 0.1.52 origin:
+  scrollY 1943 before the click and 0 while the dialog was open, on Chromium
+  AND WebKit. The two engines differed only in the clean-up — WebKit restored
+  1943 on close, Chromium left it at 0 — so one defect read as a broken page on
+  Chrome and as nothing at all on Safari. The dialog is now `position: fixed`
+  with the insets and auto margins stated in the component, so its centring is
+  this repository's own claim on every engine rather than a UA default it
+  happens to agree with.
 
 ### Tests
 
@@ -99,6 +128,18 @@ decorative play mark, and the token panel's display menu is gone entirely.
   default was.
 - The touch-floor sweep's measured-dimension count is re-derived from 18 to 16,
   the two lost being `.filter-trigger` and `.usage-view` from the deleted menu.
+- The About Me removal is pinned where it was DECIDED: the section absent from
+  the manifest, the import absent from it, and BOTH deleted files absent from
+  disk, so neither can survive the section it existed for. The nav and section
+  counts drop by one in both rendering sweeps that carry them.
+- The lightbox placement is pinned in both halves that can hold it. The source
+  pin binds every engine, including the ones no runner has: the rule computes
+  `position: fixed` and carries its own `inset` and `margin`, and any author
+  `relative`/`absolute`/`static` — the defect itself — fails it. The rendering
+  lane measures a real engine's `window.scrollY` across all three close paths
+  (Escape, the close control, a backdrop click) on all five browser projects,
+  with a vacuity guard refusing to pass on a page that never scrolled, and
+  asserts the focus restore that WebKit specifically needs.
 
 ## [0.1.53] - 2026-08-28
 

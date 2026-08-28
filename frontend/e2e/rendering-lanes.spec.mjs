@@ -2731,6 +2731,87 @@ test('clicking the photograph opens a real modal dialog with a larger, unframed 
   expect(focused, 'Escape left focus somewhere other than the frame that opened the lightbox').toBe(true);
 });
 
+/* ===========================================================================
+ * THE LIGHTBOX KEEPS THE READER'S PLACE (owner report, 0.1.52; issue 233)
+ *
+ * "When I close the media, it returns me to the top of the page, that is not
+ * right at all." The position was lost at OPEN rather than at close, and the
+ * two engines differed only in the clean-up: MEASURED at a 1280x720 viewport
+ * on the live 0.1.52 origin, scrollY 1943 before the click and 0 while the
+ * dialog was open on Chromium AND WebKit, after which WebKit restored 1943
+ * and Chromium did not. One defect, invisible on Safari and page-breaking on
+ * Chrome — the exact shape a single-engine lane would have called fixed. So
+ * this measures the real offset on every engine the matrix runs, across all
+ * three ways the dialog can be closed.
+ *
+ * It drives the STILL's stage deliberately: the lightbox is images-only since
+ * this same PR made films play in the strip, so the surface this lane is
+ * about is the one a still still opens.
+ * ======================================================================== */
+test('opening and closing the enlarged media leaves the reader exactly where they were (issue 233)', async ({
+  page,
+}) => {
+  await visit(page);
+  const dialog = page.locator('dialog.gallery-lightbox');
+  const frame = page.locator('.gallery-image-button').first();
+  await frame.scrollIntoViewIfNeeded();
+  await settled(page);
+
+  const scrollY = () => page.evaluate(() => Math.round(window.scrollY));
+  const start = await scrollY();
+  /* Vacuity guard: a page sitting at its own top cannot prove it kept its
+     place, and this lane would pass by measuring nothing. */
+  expect(
+    start,
+    'the gallery is inside the first viewport here, so this lane proves nothing'
+  ).toBeGreaterThan(150);
+
+  for (const close of ['escape', 'the close control', 'a backdrop click']) {
+    await frame.click();
+    await expect(dialog).toHaveJSProperty('open', true);
+    /* The defect was HERE, one step before the one the owner reported: the
+       dialog took the reader with it as it opened. */
+    expect(await scrollY(), `opening the lightbox moved the page from ${start}`).toBe(start);
+
+    if (close === 'escape') {
+      await page.keyboard.press('Escape');
+    } else if (close === 'the close control') {
+      await page.locator('.gallery-lightbox-close').click();
+    } else {
+      // The dialog's own box, never its content: that is what a backdrop
+      // click is, and the close lane's padding is where one can land.
+      const box = await dialog.boundingBox();
+      await page.mouse.click(Math.round(box.x + 3), Math.round(box.y + 3));
+    }
+    await expect(dialog).toHaveJSProperty('open', false);
+    await settled(page);
+
+    const after = await scrollY();
+    expect(
+      Math.abs(after - start),
+      `closing by ${close} moved the page from ${start} to ${after}`
+    ).toBeLessThanOrEqual(1);
+    /* The accessibility half of the same close, and the reason the fix is a
+       placement rather than a suppressed scroll: focus still returns to the
+       control that opened the dialog, so a keyboard reader lands on the
+       photograph rather than nowhere.
+       The two engines do NOT agree here on their own, and the component's
+       explicit restore is what makes them: MEASURED, deleting that restore
+       leaves this assertion GREEN on Chromium — whose native dialog returns
+       focus to the previously-focused element by itself, the button having
+       been focused by the click — and RED on WebKit, where a mouse click
+       never focused the button, so the reader lands on the document body.
+       WebKit is therefore the engine this half is about, and it is the engine
+       every iOS browser runs. */
+    const focused = await page.evaluate(
+      () => window.document.activeElement?.className ?? 'none'
+    );
+    expect(focused, `closing by ${close} left focus on "${focused}"`).toContain(
+      'gallery-image-button'
+    );
+  }
+});
+
 /* THE FILM PLAYS WHERE IT SITS (issue 233, owner directive 2026-08-28:
  * "remove the play icon from all videos, its just there doing nothing.
  * Instead develop the ability to treat them like youtube videos where I can
