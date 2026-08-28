@@ -191,11 +191,19 @@
      stopped the film to use, and every pause would cost them their position.
      Ended is different: there is nothing left to control, the player has
      returned to its poster, and handing the surface back is what lets the
-     reader keep moving through the strip without going to the arrows. Moving
-     to another item resets it too, and structurally rather than by a
-     handler — `playing` is derived from whether the playing key is the
-     CURRENT item's, so no unmount ordering can leave the next film with the
-     previous one's surface state.
+     reader keep moving through the strip without going to the arrows.
+     NAVIGATING AWAY HANDS IT BACK AS WELL, and the first cut of this change
+     got that wrong in a way worth recording, because the error is an easy one
+     to repeat. It derived `playing` from the playing key matching the current
+     item and called the derivation a reset. A derivation is not a reset: it
+     SUPPRESSED the handover while the reader was away and the key survived, so
+     returning to a film played once re-armed it with no press — REPRODUCED in
+     chromium as {"veils":0,"controls":true,"paused":true}, a veil-less paused
+     poster with native controls and no swipe binding, which is exactly the
+     owner's complaint restored for every film played once. The key is now
+     CLEARED by the one function that moves the index (goTo), so the handover
+     lasts one visit; the derivation stays because it is still what keeps a
+     render from ever showing two films' state at once.
      Arrow keys reach the strip from the play control (the same handler the
      still's enlarge button carries), so a film is no worse off by keyboard
      than a still. Once the player has the surface the arrows are the
@@ -219,11 +227,13 @@
   const item = $derived(items[index]);
 
   /* WHICH FILM THE READER HANDED THE SURFACE TO (issue 243). It is the item's
-     KEY rather than a boolean, and that is what makes "a film never inherits
-     the previous film's state" structural instead of a cleanup handler
-     somebody has to remember to write: `playing` can only be true while the
-     key names the item currently on the stage, so an index change turns it
-     false on its own, in the same flush that swaps the element. */
+     KEY rather than a boolean, and the key buys ONE thing precisely: no render
+     can ever show a film carrying another film's surface state, whatever order
+     the elements mount and unmount in.
+     It does NOT reset anything, and reading it as a reset was the defect the
+     review caught — a suppressed key is still a set key, and it comes back the
+     moment the reader does. goTo() clears it; see the note there. Both halves
+     are needed and neither substitutes for the other. */
   let playingKey = $state<string | undefined>(undefined);
   const playing = $derived(playingKey !== undefined && playingKey === item.key);
 
@@ -272,12 +282,32 @@
   const itemWidth = $derived(item.width ?? width);
   const itemHeight = $derived(item.height ?? height);
 
+  /* EVERY MOVE THROUGH THE STRIP GOES THROUGH HERE, and the reason is a defect
+     the first cut of issue 243 shipped: `playing` was DERIVED from the key
+     matching the current item, and the derivation alone was mistaken for a
+     reset. It is not one. Moving away only SUPPRESSED the handover — the key
+     survived — so coming back to a film the reader had played once re-armed it
+     with no press: REPRODUCED in chromium as {"veils":0,"controls":true,
+     "paused":true}, which is a veil-less paused poster carrying native
+     controls and no swipe binding. That is the owner's "you cannot swipe out
+     of a video" restored for every film played once, and it is the exact state
+     this design calls mutually exclusive.
+     So the handover is per VISIT rather than per item, and clearing it is an
+     assignment beside the one that moves the index rather than a rule spread
+     across five call sites. `index` is assigned in exactly one place in this
+     file — pinned in tests/sections.test.mjs — so a future control that moves
+     the strip cannot forget to hand the surface back. */
+  function goTo(at: number): void {
+    index = at;
+    playingKey = undefined;
+  }
+
   function next(): void {
-    index = (index + 1) % total;
+    goTo((index + 1) % total);
   }
 
   function previous(): void {
-    index = (index - 1 + total) % total;
+    goTo((index - 1 + total) % total);
   }
 
   /* THE SWIPE (issue 219). The owner's report was "I can't swipe/motion
@@ -391,7 +421,7 @@
     /* The arrows belong to the group once focus is inside it, so the page
        must not scroll underneath the reader as well. */
     event.preventDefault();
-    index = target;
+    goTo(target);
     /* Focus follows selection: in a radio group the checked control IS the
        tab stop, so leaving focus behind would strand it on a dot that just
        became untabbable. */
@@ -715,7 +745,7 @@
               aria-checked={at === index}
               tabindex={at === index ? 0 : -1}
               aria-label={positionLabel(at)}
-              onclick={() => (index = at)}
+              onclick={() => goTo(at)}
             ><span class="gallery-dot-mark" aria-hidden="true"></span></button>
           {/each}
         </div>

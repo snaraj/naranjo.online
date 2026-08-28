@@ -353,6 +353,41 @@ test('the card renders every region behind its own decision', () => {
   assert.match(feedCard, /this=\{`h\$\{titleLevel\}`\}/);
 });
 
+test('a linked card title is an anchor, and the heading around it still names itself', () => {
+  /* THE OWNER'S CONSTRAINT FIRST (issue 243): "Do not change the styling...
+     instead turn them into links." So the title's TEXT is unchanged — the
+     anchor renders `{title}` and nothing else — and the branch is conditional,
+     which is what keeps every unlinked card in the repository exactly as it
+     was. */
+  assert.match(feedCard, /\{#if titleHref\}/, 'the linked title is unconditional; every card grew an anchor');
+  const linked = /\{#if titleHref\}([\s\S]*?)\{:else\}/.exec(feedCard)?.[1];
+  assert.ok(
+    linked !== undefined && linked.includes('<a'),
+    'the linked title branch is not where this pin expects it; the scope below would prove nothing'
+  );
+  assert.match(linked, /href=\{titleHref\}/, 'the card assembles a href instead of rendering the one it was handed');
+  assert.match(linked, /target="_blank"/, 'an employer link replaces the page the reader was on');
+  assert.match(linked, /rel="noopener noreferrer"/, 'the opened tab can reach back into this page');
+  assert.match(linked, /aria-label=\{`\$\{title\} \(opens in a new tab\)`\}/);
+  assert.match(linked, />\{title\}<\/a/, 'the anchor renders something other than the plain title');
+
+  /* AND THE HEADING NAMES ITSELF (review finding, 2026-08-28). A heading's
+     accessible name is computed from its descendants, and an `aria-label` on a
+     descendant REPLACES that descendant's contribution — so without this the
+     heading's own name became "<employer> (opens in a new tab)" and the heading
+     list a screen-reader user navigates by turned into a list of tab warnings.
+     The condition is load-bearing in both directions: an unlinked card must
+     name itself from its text exactly as it always has, so the label is
+     `undefined` there rather than a second copy of the title. The engine half —
+     the name as assistive technology actually computes it — is measured in the
+     experience lane of e2e/rendering-lanes.spec.mjs. */
+  assert.match(
+    feedCard,
+    /aria-label=\{titleHref \? title : undefined\}/,
+    'the heading no longer names itself, so a linked title renames the heading around it'
+  );
+});
+
 test('every variant the card admits is a variant it styles', () => {
   const cardStyles = styleBlock(feedCard);
   const [base, ...others] = feedCardVariants;
@@ -1003,8 +1038,13 @@ test('prev/next are icon-only, and both wrap around the eight photographs', () =
   // accessible name, never visible label prose.
   assert.doesNotMatch(mediaGallery, />Next</);
   assert.doesNotMatch(mediaGallery, />Previous</);
-  assert.match(mediaGallery, /index = \(index \+ 1\) % total/, 'next must wrap forward');
-  assert.match(mediaGallery, /index = \(index - 1 \+ total\) % total/, 'previous must wrap backward');
+  /* The wrap arithmetic is unchanged; what moved is where it lands (issue 243
+     review finding 1): both moves now hand their target to goTo, which clears
+     the film handover on the way. The modulo is still asserted here, because
+     the wrap is this pin's subject and a move that stopped wrapping would be a
+     different defect from one that skipped the reset. */
+  assert.match(mediaGallery, /goTo\(\(index \+ 1\) % total\)/, 'next must wrap forward');
+  assert.match(mediaGallery, /goTo\(\(index - 1 \+ total\) % total\)/, 'previous must wrap backward');
 });
 
 test('every position label says what KIND of item it names (issue 241)', () => {
@@ -1096,6 +1136,17 @@ function stripComments(markup) {
 
 const galleryMarkup = stripComments(mediaGallery).markup;
 
+/* PROSE-FREE SOURCE, for the walks that decide something from a POSITION in
+ * the text rather than from a pattern anywhere in it. stripComments above only
+ * removes HTML comments, which is right for the markup pins — but this
+ * component explains itself at length in `/* *​/` blocks inside <script> and
+ * <style> too, and three of those blocks contain the literal `<button>` while
+ * one contains `index = at`. A walk that asks "what is the nearest enclosing
+ * element" or "how many times is this assigned" reads those as code and is
+ * wrong in the direction that lets a real regression through. Both comment
+ * forms go, so the walks below see only what the compiler sees. */
+const galleryCode = stripComments(mediaGallery).markup.replace(/\/\*[\s\S]*?\*\//g, ' ');
+
 test('the comment strip these pins depend on runs to a fixed point (issue 207)', () => {
   // Non-vacuity for the loop above, stated as the regression it prevents.
   // This input needs TWO effective passes: the first removes the inner
@@ -1185,14 +1236,22 @@ test('a moving item PLAYS in the strip — exactly one video, the current item�
      distinguishes the two: every play triangle in this file is inside a
      <button> that starts the film, and no drawn mark sits loose on a poster.
      The retired names stay retired below, so the old shape cannot come back
-     under its own identity either. */
-  const playGlyphs = [...mediaGallery.matchAll(/<svg[\s\S]*?<\/svg>/g)].filter(([svg]) =>
+     under its own identity either.
+
+     COMMENT-BLIND, and that is load-bearing rather than tidiness: this walk
+     decides enclosure from the NEAREST PRECEDING `<button` in the text, and
+     three of this component's own explanatory comments contain the literal
+     `<button>` in prose. Against the raw source a loose triangle inserted just
+     after `{#if !playing}` found one of those as its "enclosing" control and
+     survived green — a real surviving mutant, caught by review rather than by
+     this pin, and repaired by reading the same bytes the compiler does. */
+  const playGlyphs = [...galleryCode.matchAll(/<svg[\s\S]*?<\/svg>/g)].filter(([svg]) =>
     /<path d="M\d[^"]*"\s+fill="currentColor"/.test(svg)
   );
   assert.ok(playGlyphs.length > 0, 'the film has no play glyph at all; the control has no visible mark');
   for (const [glyph] of playGlyphs) {
-    const at = mediaGallery.indexOf(glyph);
-    const enclosing = mediaGallery.slice(0, at);
+    const at = galleryCode.indexOf(glyph);
+    const enclosing = galleryCode.slice(0, at);
     const opened = [...enclosing.matchAll(/<button\b|<\/button>/g)].at(-1)?.[0];
     assert.equal(
       opened,
@@ -1317,8 +1376,20 @@ test('a film is swipeable until the reader hands the surface to the player (issu
   );
 
   /* THE ONLY SENSITIVE AREA IS THE BUTTON — the owner's exact requirement.
-     The veil holds precisely one control, and it is the play control. */
-  const veil = /<div class="gallery-film-veil"[\s\S]*?\n              <\/div>/.exec(videoStage)?.[1] ?? videoStage;
+     The veil holds precisely one control, and it is the play control.
+
+     The extraction really is the veil now, and the review is why it says so:
+     the first cut had no capture group at all, so `?.[1]` was always undefined
+     and the whole video stage stood in for it. That was stricter than
+     advertised rather than weaker — nothing outside the veil carries a button
+     either — but a scope the comment claims and the code does not have is a
+     pin nobody can reason about. */
+  const veil = /<div class="gallery-film-veil"[^>]*>([\s\S]*?)\n {14}<\/div>/.exec(videoStage)?.[1];
+  assert.ok(
+    veil !== undefined && veil.trim().length > 0,
+    'the veil block is not where this pin expects it; the scope below would silently widen to the whole stage'
+  );
+  assert.doesNotMatch(veil, /<video/, 'the extracted veil swallowed the player, so its scope is not the veil');
   assert.equal(
     [...veil.matchAll(/<button/g)].length,
     1,
@@ -1347,14 +1418,49 @@ test('a film is swipeable until the reader hands the surface to the player (issu
   assert.match(videoStage, /onended=\{onFilmEnded\}/, 'a finished film never gets its swipe surface back');
   assert.doesNotMatch(videoStage, /onpause=/, 'pausing snatches the controls back from a reader who is using them');
 
-  /* AND NO FILM INHERITS ANOTHER'S SURFACE STATE, structurally: `playing` is
-     derived from whether the key names the CURRENT item, so no unmount
-     ordering can leave the next film already handed over. */
+  /* AND NO FILM INHERITS ANOTHER'S SURFACE STATE. Two independent halves, and
+     the first cut of issue 243 shipped only one of them — which is why the
+     second is pinned here rather than trusted.
+
+     Half one, the DERIVATION: `playing` is true only while the key names the
+     current item, so no mount/unmount ordering can render a film carrying
+     another film's state. */
   assert.match(
     mediaGallery,
     /const playing = \$derived\(playingKey !== undefined && playingKey === item\.key\)/,
     'the play state is not bound to the item it belongs to'
   );
+  /* Half two, the RESET, and the review finding it exists for: a derivation
+     SUPPRESSES a stale key, it does not clear one, so returning to a film
+     played once re-armed it with no press. The key is cleared where the index
+     moves — and `index` is assigned in exactly ONE place in the component, so
+     a control added later cannot move the strip without handing the surface
+     back. That count is the pin: routing every caller through goTo is what
+     makes the reset structural rather than five call sites somebody has to
+     remember. */
+  assert.match(
+    mediaGallery,
+    /function goTo\(at: number\): void \{\s*index = at;\s*playingKey = undefined;\s*\}/,
+    'the one function that moves the strip does not hand the film surface back'
+  );
+  const indexWrites = [...galleryCode.matchAll(/(?<![\w$.])index\s*=(?!=)/g)];
+  assert.equal(
+    indexWrites.length,
+    2,
+    `the component assigns \`index\` ${indexWrites.length} times; it must be exactly twice — its $state declaration and the assignment inside goTo — or a move through the strip can skip the reset`
+  );
+  assert.match(galleryCode, /let index = \$state\(0\);/, 'the index declaration moved');
+  /* And every control that moves the strip calls it, named individually so a
+     silent revert of any one of them is a failure rather than a count that
+     still happens to add up. */
+  for (const caller of [
+    /function next\(\): void \{\s*goTo\(\(index \+ 1\) % total\);/,
+    /function previous\(\): void \{\s*goTo\(\(index - 1 \+ total\) % total\);/,
+    /event\.preventDefault\(\);\s*goTo\(target\);/,
+    /onclick=\{\(\) => goTo\(at\)\}/
+  ]) {
+    assert.match(galleryCode, caller, `a control moves the strip without going through goTo: ${caller}`);
+  }
 
   /* The keyboard equivalence, which the retired design left a film without:
      the strip's arrow handler is on the play control as well as on the

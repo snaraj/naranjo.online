@@ -2495,6 +2495,28 @@ test('the experience section renders four complete roles, and no placeholder sur
   expect(observed.placeholders, 'a real role is still marked placeholder in the DOM').toBe(0);
   expect(observed.notes, 'the placeholder disclaimer is still printed over real roles').toBe(0);
   expect(observed.text, 'the filler copy is still on the page').not.toContain('lorem');
+
+  /* EACH SURFACE NAMES ITSELF (issue 243; review finding, 2026-08-28). Turning
+     the employer into a link put an `aria-label` inside the heading, and a
+     heading's accessible name is computed from its descendants — with an
+     `aria-label` REPLACING the labelled node's contribution. So the heading
+     briefly announced "Panasonic Avionics (opens in a new tab)" as its own
+     name, and the heading list a screen-reader user navigates by became a list
+     of tab warnings. Measured here rather than read off the source, because
+     the name is something the ENGINE computes and only an engine can settle:
+     `getByRole` resolves it exactly as assistive technology would. The heading
+     must be reachable by the bare employer, and the link inside it by the
+     employer plus the warning — two roles, two names, neither borrowed. */
+  for (const entry of observed.entries) {
+    await expect(
+      page.getByRole('heading', { name: entry.title, exact: true }),
+      `the "${entry.title}" heading does not answer to its own employer name; something inside it renamed it`
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole('link', { name: `${entry.title} (opens in a new tab)`, exact: true }),
+      `the "${entry.title}" title link no longer tells the reader a new tab is coming`
+    ).toHaveCount(1);
+  }
 });
 
 /* The trackers stack, in the order the owner asked for on 2026-08-25: the
@@ -2879,21 +2901,41 @@ test('opening and closing the enlarged media leaves the reader exactly where the
   }
 });
 
-/* THE FILM PLAYS WHERE IT SITS (issue 233, owner directive 2026-08-28:
- * "remove the play icon from all videos, its just there doing nothing.
- * Instead develop the ability to treat them like youtube videos where I can
- * just play it in this small minimal version, which should be enlarged").
+/* A FILM MOUNTS INLINE, IN THE BLOCK A STILL GETS, BEHIND ONE CONTROL
+ * (issue 233; re-aimed under issue 243).
  *
- * Every half of that sentence is a measurement here, in a real engine, on a
- * real gallery whose items came down a manifest exactly as the operator's own
- * would: the mark is gone, the player is real and inline, it has not started
- * itself, its stage is the wider and larger of the two shapes, and the still
- * beside it is untouched.
+ * The header this lane carried described the design the owner reversed, and a
+ * comment that describes retired intent is worse than none — a reader trusts
+ * it and reasons from a shape the code no longer has. So it is rewritten to
+ * the shape actually measured below, and the history is stated rather than
+ * quietly dropped.
+ *
+ * WHAT IT USED TO SAY: the film's stage was to be "the wider and larger of the
+ * two shapes" — 768x432 against a still's 448 square — under the 0.1.54
+ * directive to "treat them like youtube videos... in this small minimal
+ * version, which should be enlarged", and the decorative play mark was to be
+ * gone because the native controls stood in for it.
+ *
+ * WHAT IT PROVES NOW, in a real engine, on a gallery whose items came down a
+ * manifest exactly as the operator's own would:
+ *   - the film mounts as one real inline <video> inside the CURRENT item's own
+ *     stage — never in a dialog, never eight at once;
+ *   - the retired decorative mark stays retired, and the ONE control a film
+ *     carries is the play control inside the veil (owner, 2026-08-28: "the
+ *     sensitive area should only be the button and not the entire video");
+ *   - native controls are NOT declared yet — they arrive on the handover, which
+ *     the gesture walk at the end of this file drives and measures;
+ *   - nothing autoplays, measured (no attribute, still paused, time 0);
+ *   - the source ladder is the manifest's own order, sizes and poster;
+ *   - the stage is the IDENTICAL box the still's was — one block that does not
+ *     resize with its media (owner, 2026-08-28: "make it one single block that
+ *     doesn't expand, reduce based on the media"), with the film reduced inside
+ *     it by `object-fit: contain`.
  *
  * Both items ride one navigation so the two stages are compared as two states
  * of ONE page rather than against numbers this file states — the same
  * discipline the reservation lane below uses. */
-test('a film plays inline on an enlarged widescreen stage, and the play mark is gone (issue 233)', async ({
+test('a film mounts inline in the same block a still gets, behind one play control (issue 233, 243)', async ({
   page,
 }) => {
   await serveGalleryManifest(page);
@@ -7366,6 +7408,33 @@ test('a film swipes like a still until the reader presses play (issue 243)', asy
       timeout: 5_000,
     })
     .toBe(true);
+
+  /* AND LEAVING THE FILM TAKES THE HANDOVER BACK (review finding, 2026-08-28).
+     A played film used to be a one-way door: `playingKey` was only cleared on
+     `ended`, so a reader who pressed play, moved to the still, and came back
+     found the controls still declared and the veil gone — the swipe dead end
+     the owner reported, reachable again two navigations later. The repair is
+     structural (every index move runs through `goTo`, which clears the key),
+     and this walk is the exact sequence, in a real engine: play, leave, return,
+     and the film must be back behind its veil with no controls declared. */
+  await page.getByRole('button', { name: 'Previous photograph' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
+  await page.getByRole('button', { name: 'Next film' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  await expect(
+    page.locator('.gallery-film-veil'),
+    'a film played once never gets its swipe surface back; the strip is a dead end there'
+  ).toHaveCount(1);
+  expect(
+    await page.locator('video').evaluate((node) => node.controls),
+    'the returned film still declares the native controls it was handed two navigations ago'
+  ).toBe(false);
+  // ...and the returning film has not started itself either, which is the
+  // absence pin the handover must not be allowed to smuggle past.
+  expect(
+    await page.locator('video').evaluate((node) => node.paused),
+    'the returned film is playing without the reader pressing anything'
+  ).toBe(true);
 
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });

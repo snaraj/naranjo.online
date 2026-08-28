@@ -98,7 +98,20 @@
         {@render header()}
       {:else}
         {#if title}
-          <svelte:element this={`h${titleLevel}`} class="feed-card-title">
+          <!-- A LINKED HEADING NAMES ITSELF (review finding, 2026-08-28). The
+            accessible name of a heading is computed from its descendants, and
+            the anchor's aria-label REPLACES the anchor's contribution — so a
+            linked card's heading announced "Panasonic Avionics (opens in a new
+            tab)" as its own name, and the heading list a screen-reader user
+            navigates by turned into a list of tab warnings. Naming the heading
+            explicitly with the bare title puts each surface back in charge of
+            its own name: the heading says what the role is, the link inside it
+            still says where the press goes. Unlinked cards name themselves from
+            their text, exactly as they always have. -->
+          <svelte:element
+            this={`h${titleLevel}`}
+            class="feed-card-title"
+            aria-label={titleHref ? title : undefined}>
             {#if titleHref}
               <!-- The href reaches the DOM as the anchor's value and nothing
                 else; the title is TEXT, exactly as it is on an unlinked card.
