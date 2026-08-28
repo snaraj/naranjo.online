@@ -903,6 +903,59 @@ class MainTest(unittest.TestCase):
         r"duplicates=\d+ unpartitioned=\d+ unattributed=\d+ sources=\d+$",
         )
 
+    def test_a_history_store_carries_the_walked_source_across_pruning(self):
+        # Issue #234, end to end through the CLI: the walked tree is
+        # retention-pruned between two exports, and the configured store is
+        # what keeps the pruned day in the published series — the same
+        # mechanism the capture tool's own suite pins, proven here to be
+        # wired through this producer's argument surface.
+        with tempfile.TemporaryDirectory() as scratch:
+            root = os.path.join(scratch, "transcripts")
+            self.tree(root)
+            store = os.path.join(scratch, "store", "alpha.json")
+            os.makedirs(os.path.dirname(store))
+            argv = ["--transcripts", root, "--source", "alpha", "--history-store", store]
+            code, stdout, stderr = self.run_main(argv)
+            self.assertEqual(code, 0, stderr)
+            write_tree(
+                root,
+                {
+                    "p/one.jsonl": [
+                        transcript_line(
+                            timestamp="2026-08-12T12:00:00Z",
+                            requestId="req_later",
+                            message={
+                                "id": "msg_later",
+                                "usage": {"input_tokens": 7},
+                            },
+                        )
+                    ]
+                },
+            )
+            code, stdout, stderr = self.run_main(argv)
+            self.assertEqual(code, 0, stderr)
+            series = json.loads(stdout)["sources"]["alpha"]["series"]
+        self.assertEqual(series["startDate"], "2026-08-10")
+        self.assertEqual(series["totals"], [135, 0, 7])
+
+    def test_a_history_store_with_a_missing_directory_is_refused(self):
+        # A mistyped store location must refuse rather than silently
+        # remember nothing, run after run.
+        with tempfile.TemporaryDirectory() as root:
+            self.tree(root)
+            code, _stdout, stderr = self.run_main(
+                [
+                    "--transcripts",
+                    root,
+                    "--source",
+                    "alpha",
+                    "--history-store",
+                    os.path.join(root, "no-such-directory", "alpha.json"),
+                ]
+            )
+        self.assertEqual(code, 2)
+        self.assertIn("history store directory", stderr)
+
     def test_prints_to_stdout_when_no_out_file_is_given(self):
         with tempfile.TemporaryDirectory() as root:
             self.tree(root)

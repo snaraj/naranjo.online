@@ -328,6 +328,7 @@ safe is the refusal itself, which keeps the last good response serving.
    # ACTIVITY_CACHE=$HOME/<first-tool-state-dir>/stats-cache.json
    # MERGE_SOURCES=other-label=/path/to/other-series.json
    # MERGE_CAPTURES=other-label=running-totals=$HOME/<other-tool-records>
+   # HISTORY_DIR=$HOME/.config/naranjo-usage-export/history
    ```
 
    **`PUSH_HOST` is a real `user@host`, not an `~/.ssh/config` alias, and
@@ -389,6 +390,25 @@ safe is the refusal itself, which keeps the last good response serving.
    scheduled export refused for as long as it took a human to look
    (2026-08-27). A recapture that fails refuses the whole run, for the same
    reason `MERGE_SOURCES` is required below.
+
+   `HISTORY_DIR` is how depth becomes PERMANENT rather than borrowed
+   (issue #234). `ACTIVITY_CACHE` only extends the series as far as the
+   tool's own roll-up still reaches, and that roll-up is itself volatile —
+   measured on the owner's machine, one cache recompute discarded a whole
+   month of days, and every day both sources have lost is a day the panel
+   can never show again. When `HISTORY_DIR` is set, the walked source and
+   every `MERGE_CAPTURES` source each keep a durable per-day store at
+   `$HISTORY_DIR/<key>.json`: every run merges the freshly derived series
+   with the store and writes the union back atomically, so a day a capture
+   has measured survives its sources forever after. The rule is one
+   sentence per direction — a day the fresh capture measures at least as
+   large keeps the fresh figure, a day the sources have since lost (or
+   partially lost) keeps the stored one — and a day with no evidence on
+   either side stays absent, never zero-filled. The stores hold calendar
+   dates and non-negative integers only, live outside every repository,
+   and a malformed store refuses the run rather than silently forgetting.
+   Configure it; the option exists as an option only so an unconfigured
+   workstation still exports.
 
    `MERGE_SOURCES` is how a second tool's ALREADY-CAPTURED series joins the
    same document: point it at that tool's capture output (the capture tool's

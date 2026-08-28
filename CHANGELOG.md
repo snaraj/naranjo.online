@@ -7,6 +7,46 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.53] - 2026-08-28
+
+The usage export gains a memory (issue #234). Every source the exporter
+reads is volatile — transcript trees are retention-pruned and the roll-up
+cache has been measured discarding a month of days in one recompute — so the
+served token series silently got shorter as evidence was deleted, which the
+owner reported as days reading 0 or "no data". Each source can now keep a
+durable machine-local history store that every run merges and rewrites, so a
+day a capture has measured survives its sources forever after.
+
+### Added
+
+- `scripts/capture_usage_series.py`: `--history-store FILE` — a durable
+  per-source day store (`usage-history/v1`; dates and non-negative integers
+  under the closed emission vocabulary, nothing else). Each run unions the
+  freshly derived series with the store and writes the union back
+  atomically: a day the fresh capture measures at least as large keeps the
+  fresh figure, a day the sources have since lost keeps the stored one, and
+  a day with no evidence on either side stays absent — never zero-filled. A
+  malformed, oversized, or unreadable store refuses the run; a missing file
+  bootstraps.
+- `scripts/export_usage_series.py`: the same `--history-store` flag for the
+  walked source, passed through to the shared capture.
+- `scripts/usage-export/push-usage-series.sh`: optional `HISTORY_DIR`
+  configuration key wiring one store per source — the walked
+  `$SOURCE_LABEL.json` plus one `<key>.json` per `MERGE_CAPTURES` entry —
+  created under the script's private umask before any producer runs.
+- `docs/usage-export.md`: the `HISTORY_DIR` operator section.
+
+### Fixed
+
+- `bounded_lines`: the terminated-oversized-record path accumulated
+  `counters["bytes"]` but skipped the `MAX_RECORD_BYTES` ceiling check, so a
+  tree of newline-terminated oversized records was the one input shape the
+  walk-work bound never bounded (PR #230 review, INFO-6).
+- `capture`: the per-model window now retreats behind any day its rows
+  cannot partition — exactly as the categories window always has — so a
+  history-store entry carrying a total without a stored attribution can
+  never make the emitted models section fail the partition it declares.
+
 ## [0.1.52] - 2026-08-27
 
 An owner UX dispatch across the whole frontend: the gallery decluttered to a

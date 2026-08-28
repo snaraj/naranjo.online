@@ -363,10 +363,10 @@ def load_merge_source(path, now):
     return section, captured
 
 
-def export(root, source_key, merge_files, now, activity_cache=None):
+def export(root, source_key, merge_files, now, activity_cache=None, history_store=None):
     """Walk, merge, guard, and return (sources payload, counters)."""
     section, counters = capture.capture(
-        root, capture.FORMAT_MESSAGES, activity_cache, now.date()
+        root, capture.FORMAT_MESSAGES, activity_cache, now.date(), history_store
     )
     sources = {source_key: section}
     # The walked tree is captured by THIS run, so its instant is this run's.
@@ -421,6 +421,10 @@ def parse_arguments(argv):
         help="the walked tool's own per-day model roll-up, read for pruned days",
     )
     parser.add_argument(
+        "--history-store",
+        help="durable per-source day store for the walked tree, read and rewritten",
+    )
+    parser.add_argument(
         "--out",
         help="file to write the document to; prints to stdout when omitted",
     )
@@ -449,9 +453,19 @@ def main(argv=None):
         if not activity_cache.is_file():
             print("no such activity cache", file=sys.stderr)
             return 2
+    history_store = None
+    if arguments.history_store is not None:
+        history_store = pathlib.Path(arguments.history_store).expanduser()
+        if not history_store.parent.is_dir():
+            # The file bootstraps on first use; its directory must exist, or
+            # the store would silently remember nothing, run after run.
+            print("no such history store directory", file=sys.stderr)
+            return 2
     now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
     try:
-        sources, counters = export(root, arguments.source, merge_files, now, activity_cache)
+        sources, counters = export(
+            root, arguments.source, merge_files, now, activity_cache, history_store
+        )
     except capture.CaptureError as error:
         print(str(error), file=sys.stderr)
         return 1
