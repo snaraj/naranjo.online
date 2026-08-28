@@ -392,6 +392,19 @@
   /* The space BETWEEN cards in a feed, as opposed to --card-gap, which is the
      space between one card's own regions. */
   --feed-gap: 1rem;
+  /* A LINKED CARD TITLE (issue 243): the touch target it takes, the ring it
+     wears when a keyboard reaches it, and how far its underline sits off the
+     baseline when hover or focus brings that underline back. They are tokens
+     rather than literals because FeedCard.svelte is swept for hardcoded
+     lengths and rightly so — every dimension of the card primitive is tunable
+     from here or it is not tunable at all.
+     The target is the site's 44px floor written once for the card family. It
+     is a MINIMUM: a reader who enlarges their base font gets a taller target,
+     never a clipped one. */
+  --card-link-target: 2.75rem;
+  --card-focus-ring-width: 0.125rem;
+  --card-focus-ring-offset: 0.125rem;
+  --card-link-underline-offset: 0.2em;
   /* The card's optional reading-measure cap — NONE by default (owner
      directive, 2026-08-26, issue 212).
 
@@ -1339,21 +1352,22 @@ h1 {
      so 1 IS the square and a later widescreen stage is one token edit. */
   --gallery-stage-size: 28rem;
   --gallery-stage-aspect: 1;
-  /* The SECOND stage shape, and why there are two (owner directive,
-     2026-08-28: a film "should be enlarged"). A square holds a portrait scan
-     whole; it holds a 16:9 film inside a band of dead ground on either side,
-     which is the no-dead-space rule broken by the very box that exists to
-     respect it. So a moving item takes its own pair, read through the SAME
-     two declarations by way of a kind attribute on the stage -- same
-     arithmetic, same byte-independent reservation, different numbers.
-
-     The pair keeps the meaning the square's pair has: SIZE is the block edge,
-     ASPECT multiplies the inline axis. 27rem by 1.7778 is a 432px-tall,
-     768px-wide stage against the still's 448x448 -- 71% wider and 65% more
-     area -- while staying inside a desktop column's own track, so the ceiling
-     still does work rather than coincidentally matching it. */
-  --gallery-stage-size-video: 27rem;
-  --gallery-stage-aspect-video: 1.7778;
+  /* THERE IS NO SECOND STAGE SHAPE, and its absence is the load-bearing part
+     (owner directive, 2026-08-28, issue 243: "make it one single block that
+     doesn't expand, reduce based on the media").
+     A --gallery-stage-size-video / --gallery-stage-aspect-video pair lived
+     here for two releases and gave a film a 768x432 stage against a still's
+     448x448. It answered a real complaint -- a 16:9 film inside a square sits
+     between two bands of ground -- but it answered it by changing the size of
+     the one object on the page the owner watches, 320px wider and 16px
+     shorter on every press of the next arrow. The owner weighed the two and
+     ruled for the constant block.
+     Nothing replaces the pair. That is the point: with no film-specific
+     expression anywhere, the block CANNOT expand for a film, and restoring a
+     per-kind size means reintroducing tokens here rather than editing a
+     number somewhere. The film reduces inside the block instead, by the
+     `object-fit: contain` its player already carried, against the ground
+     below. */
   /* The GROUND a film sits on (issue 239). The film stage carried no
      background at all, so it was transparent: a poster still in flight left
      the page's own near-white surface showing through a 768x432 hole, which
@@ -1382,6 +1396,19 @@ h1 {
      asked to be able to tune. */
   --gallery-dot-size: 0.25rem;
   --gallery-dot-active-scale: 1.5;
+  /* The film's play control (issue 243): the painted disc inside the 44px
+     target, the ink on it, and how far the triangle is nudged off centre so a
+     right-pointing glyph reads centred in a circle. The disc is LARGER than
+     the gallery's other ink because it is the one control a reader has to
+     find on the artwork itself rather than in a control row, and it is
+     translucent at rest so it never becomes the picture. Not branched by
+     reading mode, exactly as --gallery-scrim and --gallery-stage-ground are
+     not: it sits on the film's own dark ground in every mode. */
+  --gallery-play-button-size: 3rem;
+  --gallery-play-button-surface: rgba(0, 0, 0, 0.55);
+  --gallery-play-button-ink: white;
+  --gallery-play-button-rest-opacity: 0.9;
+  --gallery-play-button-nudge: 0.1875rem;
   /* The space between the two arrows and the dot row they now bracket (issue
      241). A token like every other dimension of this card, and a small one on
      purpose: the arrows belong to the dots, and the whole row belongs under

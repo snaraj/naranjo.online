@@ -121,6 +121,90 @@ export function boundedDrag(
   return past ? rubberBand(dx, span / 3) : dx;
 }
 
+/* ONE VISIBLE UPDATE PER FRAME, and this is the whole of the owner's "swiping
+ * is NOT very smooth on the phone" (2026-08-28).
+ *
+ * A finger reports pointermove far more often than a display can draw one:
+ * 120Hz on the phones this site is read on, and every engine coalesces its own
+ * OS-level samples into rather more events than frames. Each of those events
+ * used to run the binding's `move`, which on the gallery sets a custom
+ * property on the stage — and a custom property write invalidates style for
+ * the whole subtree beneath it. So a drag paid for two to four style recalcs
+ * per painted frame, all but the last of which the reader never saw.
+ *
+ * The fix is the one the column rail already uses (lib/columnWidth.ts's
+ * consumer, pinned by its own lane): keep only the NEWEST value and hand it
+ * over once, inside an animation frame. It is not a delay — the value applied
+ * is always the latest the pointer reported, and it is applied in the frame
+ * that is about to paint it, which is the earliest moment it could matter.
+ *
+ * `view` is injected for the same reason settleTo's is: a test drives a
+ * deterministic clock rather than a real display. A view without
+ * cancelAnimationFrame is tolerated — the queued callback then finds nothing
+ * pending and does nothing, which is the same outcome by a slower road. */
+export interface FrameView {
+  requestAnimationFrame?(fn: (time: number) => void): number;
+  cancelAnimationFrame?(handle: number): void;
+}
+
+export interface FrameCoalescer<Value> {
+  /* Record the newest value; it is delivered at most once per frame. */
+  push(value: Value): void;
+  /* Deliver NOW, dropping anything queued — the settle's final position,
+     which must not be overtaken by a stale drag frame. */
+  flush(value: Value): void;
+  /* Drop anything queued without delivering it. */
+  cancel(): void;
+}
+
+export function frameCoalescer<Value>(
+  deliver: (value: Value) => void,
+  view: FrameView = globalThis
+): FrameCoalescer<Value> {
+  let handle: number | null = null;
+  let queued: { value: Value } | null = null;
+  const run = (): void => {
+    handle = null;
+    const pending = queued;
+    queued = null;
+    if (pending !== null) {
+      deliver(pending.value);
+    }
+  };
+  const cancel = (): void => {
+    if (handle !== null) {
+      view.cancelAnimationFrame?.(handle);
+      handle = null;
+    }
+    queued = null;
+  };
+  /* NO FRAME CLOCK, NO COALESCING — and delivering immediately is the correct
+     degradation rather than a silent drop. A host with no requestAnimationFrame
+     has no frames to coalesce against (a server render, a bare Node context,
+     a test harness that only wants the arithmetic), so "at most one per frame"
+     is a statement with no content there; what still has content is that every
+     value reaches the caller. Queuing against a clock that never ticks would
+     lose the drag entirely. */
+  const framed = typeof view.requestAnimationFrame === 'function';
+  return {
+    push(value) {
+      if (!framed) {
+        deliver(value);
+        return;
+      }
+      queued = { value };
+      if (handle === null) {
+        handle = view.requestAnimationFrame?.(run) ?? null;
+      }
+    },
+    flush(value) {
+      cancel();
+      deliver(value);
+    },
+    cancel
+  };
+}
+
 export interface SwipeBinding {
   /* The distance the gesture is measured against — the surface's own width.
      Read at gesture START rather than stored, so a resize between gestures
@@ -136,6 +220,9 @@ export interface SwipeBinding {
      wrapping surface answers false to both and is never resisted. */
   atStart?: () => boolean;
   atEnd?: () => boolean;
+  /* The frame clock the live drag is coalesced against. Injected for tests
+     exactly as settleTo's is; production takes the display's own. */
+  view?: FrameView;
 }
 
 /* swipeHorizontal binds the whole gesture to one element. It writes no style
@@ -143,6 +230,11 @@ export interface SwipeBinding {
  * `commit` and `settle`, so the component keeps its own presentation and this
  * file stays testable arithmetic plus event plumbing. */
 export function swipeHorizontal(node: HTMLElement, binding: SwipeBinding) {
+  /* The live drag, at one delivery per painted frame — see frameCoalescer.
+     Only the DRAG goes through it: every terminal position (the settle's
+     zero) is flushed, so a gesture can never end on a frame that never
+     arrived. */
+  const frames = frameCoalescer<number>((offset) => binding.move(offset), binding.view);
   let pointer = -1;
   let startX = 0;
   let startY = 0;
@@ -164,7 +256,7 @@ export function swipeHorizontal(node: HTMLElement, binding: SwipeBinding) {
   function reset(): void {
     pointer = -1;
     claimed = false;
-    binding.move(0);
+    frames.flush(0);
     binding.settle();
   }
 
@@ -218,7 +310,7 @@ export function swipeHorizontal(node: HTMLElement, binding: SwipeBinding) {
         /* Tracked without capture; pointerup still settles it. */
       }
     }
-    binding.move(
+    frames.push(
       boundedDrag(dx, binding.atStart?.() ?? false, binding.atEnd?.() ?? false, span)
     );
   }
@@ -243,8 +335,12 @@ export function swipeHorizontal(node: HTMLElement, binding: SwipeBinding) {
       binding.commit(direction);
     }
     /* Always settle, turn or no turn: the offset the drag was showing has to
-       go back to zero either way, and THAT is the snap-back the reader sees. */
-    binding.move(0);
+       go back to zero either way, and THAT is the snap-back the reader sees.
+       FLUSHED rather than queued: a coalesced drag frame still pending here
+       would land AFTER the zero and leave the surface displaced by whatever
+       the finger's last sample said — the exact defect this whole layer
+       exists to prevent, reintroduced by an optimisation. */
+    frames.flush(0);
     binding.settle();
   }
 
@@ -279,14 +375,24 @@ export function swipeHorizontal(node: HTMLElement, binding: SwipeBinding) {
     event.stopPropagation();
   }
 
-  node.addEventListener('pointerdown', onDown);
-  node.addEventListener('pointermove', onMove);
-  node.addEventListener('pointerup', onUp);
-  node.addEventListener('pointercancel', onCancel);
+  /* PASSIVE, all four, and it is a promise rather than a hint: none of these
+     handlers calls preventDefault, and saying so up front lets the engine
+     dispatch them without first waiting to find out. The declaration that
+     keeps the page's vertical scroll is `touch-action: pan-y` on the surface
+     itself (see the header), never a preventDefault here, which is what makes
+     the promise one this binding can actually keep.
+     The click listener stays non-passive and in CAPTURE: it exists precisely
+     to preventDefault a drag's trailing click. */
+  const passive = { passive: true } as const;
+  node.addEventListener('pointerdown', onDown, passive);
+  node.addEventListener('pointermove', onMove, passive);
+  node.addEventListener('pointerup', onUp, passive);
+  node.addEventListener('pointercancel', onCancel, passive);
   node.addEventListener('click', onClickCapture, true);
 
   return {
     destroy() {
+      frames.cancel();
       node.removeEventListener('pointerdown', onDown);
       node.removeEventListener('pointermove', onMove);
       node.removeEventListener('pointerup', onUp);

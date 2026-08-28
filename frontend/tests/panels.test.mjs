@@ -27,6 +27,44 @@ const goodEnvelope = {
 const jsonResponse = (body, status = 200) =>
   Promise.resolve(new Response(JSON.stringify(body), { status }));
 
+describe('the default transport', () => {
+  it('refuses to answer a panel read out of a cache (issue 243)', async () => {
+    /* The pull-to-refresh gesture's honesty rests on this. The origin already
+       sends `Cache-Control: no-cache` on every envelope (pinned on the Go side
+       in internal/panels/handler_test.go), so a default fetch does revalidate
+       today — but that is a fact about the SERVER, and a refresh whose meaning
+       depends on a header written in another language is one deployment away
+       from silently resolving out of memory without a request leaving the
+       page. Stating it on the REQUEST removes the dependency.
+       Exercised through loadPanel with no fetcher, which is the one path that
+       reaches the default transport; the seam every other test injects would
+       measure the fake instead. */
+    const original = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = (url, init) => {
+      calls.push({ url, init });
+      return jsonResponse(goodEnvelope);
+    };
+    try {
+      await loadPanel('boss-log');
+    } finally {
+      globalThis.fetch = original;
+    }
+    assert.equal(calls.length, 1, 'the default transport made a number of requests other than one');
+    assert.equal(calls[0].url, '/api/panels/boss-log');
+    /* `no-cache`, not `no-store`, and the difference is measured in bytes:
+       both defeat a cache, but `no-store` also refuses to send the validators,
+       so every read would download the whole envelope — up to 104,508 bytes
+       for the token-usage panel — instead of taking the 304 the panel API's
+       digest ETags exist to produce. */
+    assert.equal(
+      calls[0].init?.cache,
+      'no-cache',
+      'a panel read may be answered from a cache without ever asking the origin'
+    );
+  });
+});
+
 describe('panel URLs', () => {
   it('builds every panel URL from the one same-origin base', () => {
     assert.equal(panelsIndexUrl, '/api/panels');

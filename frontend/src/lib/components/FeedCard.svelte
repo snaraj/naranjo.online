@@ -33,6 +33,7 @@
 
   let {
     title,
+    titleHref,
     byline,
     date,
     titleLevel = 3,
@@ -45,6 +46,16 @@
   }: {
     /* The card's own heading, when its content has one. */
     title?: string;
+    /* Where the heading points, when the thing the card is about has a home
+       of its own (owner directive, 2026-08-28, issue 243: the Professional
+       Experience employers "turn them into links"). The card renders the
+       IDENTICAL title either way — same element, same class, same type step,
+       same ink — and only wraps it in outbound navigation, because the
+       instruction was explicitly "do not change the styling".
+       It lives here rather than in the header snippet the linked EntryLog
+       branch already uses because that branch replaces the whole header
+       region, byline and all, and these cards need to keep theirs. */
+    titleHref?: string;
     /* A source, a place, an author — whatever names the content's origin. */
     byline?: string;
     /* An ISO calendar date; rendered in words beside a machine-readable one. */
@@ -87,7 +98,38 @@
         {@render header()}
       {:else}
         {#if title}
-          <svelte:element this={`h${titleLevel}`} class="feed-card-title">{title}</svelte:element>
+          <!-- A LINKED HEADING NAMES ITSELF (review finding, 2026-08-28). The
+            accessible name of a heading is computed from its descendants, and
+            the anchor's aria-label REPLACES the anchor's contribution — so a
+            linked card's heading announced "Panasonic Avionics (opens in a new
+            tab)" as its own name, and the heading list a screen-reader user
+            navigates by turned into a list of tab warnings. Naming the heading
+            explicitly with the bare title puts each surface back in charge of
+            its own name: the heading says what the role is, the link inside it
+            still says where the press goes. Unlinked cards name themselves from
+            their text, exactly as they always have. -->
+          <svelte:element
+            this={`h${titleLevel}`}
+            class="feed-card-title"
+            aria-label={titleHref ? title : undefined}>
+            {#if titleHref}
+              <!-- The href reaches the DOM as the anchor's value and nothing
+                else; the title is TEXT, exactly as it is on an unlinked card.
+                New tab with the opener severed, like every other outbound link
+                on this page, and the accessible name says so — a reader using
+                assistive technology is told a new tab is coming rather than
+                discovering it. -->
+              <a
+                class="feed-card-title-link"
+                href={titleHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`${title} (opens in a new tab)`}>{title}</a
+              >
+            {:else}
+              {title}
+            {/if}
+          </svelte:element>
         {/if}
         {#if regions.meta}
           <p class="feed-card-meta">
@@ -163,6 +205,50 @@
     letter-spacing: var(--card-title-tracking);
     line-height: var(--card-title-leading);
     color: var(--card-title-ink);
+  }
+
+  /* A LINKED TITLE LOOKS EXACTLY LIKE AN UNLINKED ONE (issue 243). The owner's
+     instruction was "do not change the styling ... instead turn them into
+     links", so every visual property is inherited from the heading above:
+     the family, the size, the weight, the tracking and the INK, which is why
+     `color: inherit` is stated rather than a token — the token is already
+     resolved on the parent, and reading it again here would be a second place
+     for the two to disagree. The resting underline is removed for the page's
+     standing link doctrine (issue 203: nothing is underlined at rest) and
+     returns the moment intent is shown, which is what keeps the link
+     announced rather than hidden.
+
+     THE ONE THING THAT IS NOT INHERITED IS THE BOX, and it is not a style
+     choice. A link is a control, and every control on this page clears the
+     44px touch floor on both axes (AGENTS.md, rendering lanes stage 1) — an
+     inline anchor around a 17px line is 21px tall and fails it. So the anchor
+     takes the identical treatment .entry-link already gives the repo card
+     titles: an inline-flex box at the floor, with the text centred in it. The
+     visible consequence is that the card's title row is taller than it was
+     and the two title-bearing card families on this page now measure the
+     same; the visible TEXT is unchanged, which is what the instruction was
+     about. Waiving the floor for a control that happens to look like a
+     heading was the other option and is not one: the floor is about what a
+     finger can hit. */
+  .feed-card-title-link {
+    display: inline-flex;
+    align-items: center;
+    min-block-size: var(--card-link-target);
+    min-inline-size: var(--card-link-target);
+    color: inherit;
+    text-decoration: none;
+    text-underline-offset: var(--card-link-underline-offset);
+  }
+
+  .feed-card-title-link:hover,
+  .feed-card-title-link:focus-visible {
+    color: var(--color-brand);
+    text-decoration: underline;
+  }
+
+  .feed-card-title-link:focus-visible {
+    outline: var(--card-focus-ring-width) solid var(--color-accent);
+    outline-offset: var(--card-focus-ring-offset);
   }
 
   .feed-card-meta,

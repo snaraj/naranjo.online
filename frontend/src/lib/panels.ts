@@ -257,9 +257,27 @@ export function unavailablePanel(id: string, title = ''): PanelEnvelope<never> {
 
 export type PanelFetcher = (url: string) => Promise<Response>;
 
-/* The wrapper keeps fetch called as a plain global (never an unbound method)
- * and gives tests a seam to inject fakes without touching globals. */
-const defaultFetcher: PanelFetcher = (url) => globalThis.fetch(url);
+/* EVERY PANEL READ REVALIDATES, and it is stated on this side rather than
+ * assumed from the other (2026-08-28, alongside the pull-to-refresh repair).
+ *
+ * The origin already sends `Cache-Control: no-cache` on every panel envelope
+ * (internal/panels/handler.go, pinned by its own Go test), so a default fetch
+ * does revalidate today. That is a fact about the SERVER, and a refresh
+ * gesture whose honesty depends on a header written in another language, in
+ * another repository directory, is one deployment away from silently becoming
+ * a no-op: a stale-while-revalidate policy added upstream, or an edge that
+ * rewrites freshness, and the reader's pull would resolve out of a memory
+ * cache without a request ever leaving the page. `no-cache` on the REQUEST
+ * removes that dependency — the client refuses to reuse a stored response
+ * without asking.
+ *
+ * `no-cache` and NOT `no-store`, deliberately. Both would defeat a cache, but
+ * `no-store` also refuses to send the validators, so every read would download
+ * the whole envelope — MEASURED at up to 104,508 bytes for the token-usage
+ * panel (AGENTS.md, "Perf budgets are tests") against the 304 with no body
+ * that the panel API's digest ETags exist to produce. `no-cache` keeps the
+ * conditional GET and only removes the possibility of skipping it. */
+const defaultFetcher: PanelFetcher = (url) => globalThis.fetch(url, { cache: 'no-cache' });
 
 /* loadPanel performs exactly one same-origin request — no retries, no
  * backoff; the origin already serves prepared bytes and a failure simply

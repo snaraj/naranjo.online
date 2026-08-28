@@ -21,12 +21,10 @@
 
   The stage is reserved before any byte arrives — same box, same ratio,
   same place — through the --gallery-stage-* tokens in styles.css, so nothing
-  here computes a shape of its own. There are TWO pairs of those tokens and
-  the item's own kind picks one: a still keeps the square of the owner's
-  0.1.52 direction, and a film takes the wider, larger pair, because a 16:9
-  film inside a square is a small picture between two bands of dead ground.
-  The card around it is variant="flat": the framed --card-media-* treatment
-  retired with the container box.
+  here computes a shape of its own. There is ONE pair of those tokens and
+  every item takes it, whatever kind it is: see ISSUE 243 below, which
+  retired the second pair. The card around it is variant="flat": the framed
+  --card-media-* treatment retired with the container box.
 
   The enlarged frame's border is TOKENS ONLY — see the --gallery-frame-*
   block in styles.css; border-image's initial value is 'none', so a future
@@ -80,11 +78,16 @@
      removed; one is the same count as the one <img> a still mounts.
      The drawn play triangle that used to sit on a film's poster went with
      the change (owner: "remove the play icon from all videos, its just there
-     doing nothing") — it promised a press that happened somewhere else, and
-     the real control is now under the reader's finger.
-  2. NOTHING EVER AUTOPLAYS. The element carries `controls`, `playsinline`
-     and `preload="metadata"`, and it carries no `autoplay` attribute anywhere
-     in this file — not conditionally, not muted, not "just for the poster".
+     doing nothing") — it promised a press that happened somewhere else. A
+     triangle is back at issue 243, and the distinction is the whole reason
+     the owner objected to the first one: that mark was DECORATION over a
+     player that answered presses anywhere, this one IS the press, and it is
+     the only thing on a film's stage that answers one.
+  2. NOTHING EVER AUTOPLAYS. The element carries `playsinline`,
+     `preload="metadata"` and — since issue 243 — its native controls only
+     once the reader has pressed play, and it carries no `autoplay` attribute
+     anywhere in this file: not conditionally, not muted, not "just for the
+     poster". The one call to play() is in startFilm(), reached from a press.
      That is also how prefers-reduced-motion is honoured STRUCTURALLY rather
      than by a media query: there is no motion to suppress until a reader
      presses play, and a reader pressing play has asked for it. `preload` is
@@ -103,20 +106,8 @@
      <source> children under a live <video> does not re-run resource
      selection, so a reused element would keep playing the previous film's
      bytes under the new item's poster.
-  4. THE PLAYER OWNS ITS OWN SURFACE. A film's stage carries no swipe binding
-     and no enlarge button, because either would contest the presses the
-     native controls need — a horizontal drag along a seek bar is exactly the
-     shape lib/gesture.ts claims, and the action captures the pointer the
-     moment it claims, which turns a scrub into a page turn. Stopping the
-     gesture at the video element was considered and does not work: Svelte 5
-     DELEGATES pointerdown at the root, so a handler written there runs AFTER
-     the action's own listener on the stage and cannot stand it down. Binding
-     the gesture only to the still's stage is the honest form of the same
-     decision, and no reader loses a way through the gallery — the arrows,
-     the dots and their keyboard all still move the strip. Arrow keys inside
-     the player stay the player's for the same structural reason: the
-     gallery's frame keydown lives on the enlarge button, which a film has
-     not got.
+  4. THE SURFACE IS THE READER'S UNTIL THEY HAND IT OVER — see ISSUE 243,
+     which reversed what this rule used to say.
   5. THE LIGHTBOX IS FOR STILLS. There is nothing left to enlarge to for a
      film — the player IS the surface — so the dialog's video branch went
      with the change rather than being left unreachable. Navigating the
@@ -143,6 +134,81 @@
   5. THE PAGE DOES NOT SCROLL BEHIND THE LIGHTBOX, and the enlarged surface
      offers a phone the preview rather than the master.
 
+  ISSUE 243 — two owner rulings from a live review of 0.1.55, and the second
+  of them REVERSES a design this file argued for two releases running. The
+  old rationale is not deleted, because a reader who finds only the new rule
+  cannot tell whether the old problem was solved or forgotten.
+
+  1. ONE BLOCK, AND THE MEDIA REDUCES INSIDE IT. "The art box changes heights
+     depending on it being a video or art, I don't like the entire website
+     moving around because of that, make it one single block that doesn't
+     expand, reduce based on the media."
+     Issue 241 had already stopped the DOCUMENT moving: the reservation went
+     up to .gallery-frame, which holds the square both stages fitted inside,
+     so nothing below the gallery shifted on a kind change. What it did not
+     stop was the thing the owner is actually looking at. The two stages were
+     still different boxes — MEASURED at 1280px, a 448x448 still against a
+     768x432 film — so the visible object grew 320px wider and shrank 16px
+     shorter on every press of the next arrow, inside a frame the reader
+     cannot see. A reservation nobody can see is not an answer to "the box
+     changes size".
+     So the second pair of stage tokens is gone and there is ONE stage box.
+     A film is letterboxed inside it by the `object-fit: contain` its player
+     already carried, against the stage's own ground. That is the owner's
+     sentence made structural: the block cannot expand for a film, because
+     there is no longer any expression anywhere that says a film's box is
+     different.
+     What this gives up is real and was the whole of issue 233's case: a 16:9
+     film in a square stage is smaller than it was, with ground above and
+     below it. The owner has weighed that against the page moving and chosen;
+     restoring a per-kind size means reintroducing a token pair here, not
+     editing a number.
+  2. A FILM IS SWIPEABLE, AND ONLY ITS PLAY CONTROL IS NOT. "You cannot swipe
+     out of a video, it instead starts to play immediately... the sensitive
+     area should only be the button and not the entire video."
+     Rule 4 above used to say the opposite, and its reasoning was sound as far
+     as it went: a horizontal drag along a seek bar is exactly the shape
+     lib/gesture.ts claims, so a gesture bound over live native controls turns
+     a scrub into a page turn. What it got wrong was the SCOPE — it protected
+     the controls by disarming the whole stage for the whole life of the item,
+     including the entire time before the reader has shown any interest in
+     playing anything. Four films in nine items became four dead ends in the
+     strip's only direct gesture.
+     The repair is to make the surface's ownership a STATE rather than a
+     property of the item's kind, and to express that state as an element
+     rather than as a condition inside the gesture. Before play, a veil covers
+     the player: it carries the identical swipe binding a still's stage does,
+     it holds the one play control, and the player beneath it renders its
+     poster with no `controls` attribute at all — so there is no seek bar to
+     scrub and nothing for the drag to contest. The reader presses play, the
+     veil unmounts and `controls` appears, and from that moment the player
+     owns its surface exactly as rule 4 wanted. No branch in lib/gesture.ts
+     knows any of this: the binding is simply on an element that exists for
+     precisely as long as the swipe should be available.
+     PAUSE DOES NOT BRING THE VEIL BACK; ENDED DOES. The asymmetry is the
+     point. Pause is how a reader REACHES the scrubber — restoring the veil
+     there would put a swipe surface over the controls the reader just
+     stopped the film to use, and every pause would cost them their position.
+     Ended is different: there is nothing left to control, the player has
+     returned to its poster, and handing the surface back is what lets the
+     reader keep moving through the strip without going to the arrows.
+     NAVIGATING AWAY HANDS IT BACK AS WELL, and the first cut of this change
+     got that wrong in a way worth recording, because the error is an easy one
+     to repeat. It derived `playing` from the playing key matching the current
+     item and called the derivation a reset. A derivation is not a reset: it
+     SUPPRESSED the handover while the reader was away and the key survived, so
+     returning to a film played once re-armed it with no press — REPRODUCED in
+     chromium as {"veils":0,"controls":true,"paused":true}, a veil-less paused
+     poster with native controls and no swipe binding, which is exactly the
+     owner's complaint restored for every film played once. The key is now
+     CLEARED by the one function that moves the index (goTo), so the handover
+     lasts one visit; the derivation stays because it is still what keeps a
+     render from ever showing two films' state at once.
+     Arrow keys reach the strip from the play control (the same handler the
+     still's enlarge button carries), so a film is no worse off by keyboard
+     than a still. Once the player has the surface the arrows are the
+     player's, which is the same structural answer rule 4 gave.
+
   Each is stated again beside the declaration that carries it. -->
 <script lang="ts">
   import { tick } from 'svelte';
@@ -159,6 +225,17 @@
   let enlarged = $state(false);
 
   const item = $derived(items[index]);
+
+  /* WHICH FILM THE READER HANDED THE SURFACE TO (issue 243). It is the item's
+     KEY rather than a boolean, and the key buys ONE thing precisely: no render
+     can ever show a film carrying another film's surface state, whatever order
+     the elements mount and unmount in.
+     It does NOT reset anything, and reading it as a reset was the defect the
+     review caught — a suppressed key is still a set key, and it comes back the
+     moment the reader does. goTo() clears it; see the note there. Both halves
+     are needed and neither substitutes for the other. */
+  let playingKey = $state<string | undefined>(undefined);
+  const playing = $derived(playingKey !== undefined && playingKey === item.key);
 
   /* WHAT AN ITEM IS CALLED (issue 241). Every accessible name this component
      writes used to say "photograph", including on the four films the volume
@@ -205,12 +282,32 @@
   const itemWidth = $derived(item.width ?? width);
   const itemHeight = $derived(item.height ?? height);
 
+  /* EVERY MOVE THROUGH THE STRIP GOES THROUGH HERE, and the reason is a defect
+     the first cut of issue 243 shipped: `playing` was DERIVED from the key
+     matching the current item, and the derivation alone was mistaken for a
+     reset. It is not one. Moving away only SUPPRESSED the handover — the key
+     survived — so coming back to a film the reader had played once re-armed it
+     with no press: REPRODUCED in chromium as {"veils":0,"controls":true,
+     "paused":true}, which is a veil-less paused poster carrying native
+     controls and no swipe binding. That is the owner's "you cannot swipe out
+     of a video" restored for every film played once, and it is the exact state
+     this design calls mutually exclusive.
+     So the handover is per VISIT rather than per item, and clearing it is an
+     assignment beside the one that moves the index rather than a rule spread
+     across five call sites. `index` is assigned in exactly one place in this
+     file — pinned in tests/sections.test.mjs — so a future control that moves
+     the strip cannot forget to hand the surface back. */
+  function goTo(at: number): void {
+    index = at;
+    playingKey = undefined;
+  }
+
   function next(): void {
-    index = (index + 1) % total;
+    goTo((index + 1) % total);
   }
 
   function previous(): void {
-    index = (index - 1 + total) % total;
+    goTo((index - 1 + total) % total);
   }
 
   /* THE SWIPE (issue 219). The owner's report was "I can't swipe/motion
@@ -255,6 +352,27 @@
     atStart: () => false,
     atEnd: () => false
   };
+
+  /* THE HANDOVER (issue 243), and the one place it happens. `playing` is not
+     assigned anywhere else, and the element is never told to play anywhere
+     else, so rule 2's absence claim above stays a property of the file rather
+     than of a review — and it is swept for by name over everything below the
+     opening comment, which is why that claim is worded there and not here.
+     A rejected play() is left alone deliberately: the reader is by then
+     looking at the real controls, which is strictly more than the veil gave
+     them, and reverting would snatch those controls back at exactly the
+     moment an interrupted play resolves — a reader who pressed play and then
+     immediately pressed the native pause would have the surface pulled out
+     from under them by their own second press. */
+  function startFilm(): void {
+    playingKey = item.key;
+    void playerEl?.play().catch(() => {});
+  }
+
+  /* Ended, never paused — see rule 2 of the issue 243 block above. */
+  function onFilmEnded(): void {
+    playingKey = undefined;
+  }
 
   /* Arrow keys on the frame itself, so the gesture's keyboard equivalent is
      on the same control rather than only inside the lightbox. */
@@ -303,7 +421,7 @@
     /* The arrows belong to the group once focus is inside it, so the page
        must not scroll underneath the reader as well. */
     event.preventDefault();
-    index = target;
+    goTo(target);
     /* Focus follows selection: in a radio group the checked control IS the
        tab stop, so leaving focus behind would strand it on a dot that just
        became untabbable. */
@@ -357,6 +475,12 @@
      markup below is built from, stated once here so the focus restore does
      not have to ask which kind of item it is looking at. */
   let playerEl: HTMLVideoElement | undefined = $state();
+
+  /* A film's own control (issue 243), and the focus target that should be
+     preferred over the player while the veil is up: it is the thing a reader
+     on a film can actually press, and landing focus on a player whose
+     controls are not rendered yet would be landing it nowhere. */
+  let playButtonEl: HTMLButtonElement | undefined = $state();
 
   /* THE LIGHTBOX IS FOR STILLS, enforced rather than promised. A film has no
      enlarge button, so `enlarged` cannot be set from a film's stage at all;
@@ -429,7 +553,7 @@
   async function onDialogClose(): Promise<void> {
     enlarged = false;
     await tick();
-    (frameButtonEl ?? playerEl)?.focus();
+    (frameButtonEl ?? playButtonEl ?? playerEl)?.focus();
   }
 
   function onDialogKeydown(event: KeyboardEvent): void {
@@ -452,24 +576,38 @@
     {#snippet media()}
       <div class="gallery-frame">
         {#if item.video}
-          <!-- A FILM'S STAGE. Same reserved box arithmetic as the still's,
-            different token pair (data-gallery-kind picks it), and no gesture
-            binding and no button on it at all — the player is the interactive
-            surface and rule 4 in this file's opening comment is why. The
+          <!-- A FILM'S STAGE. The SAME box arithmetic and the SAME tokens as
+            the still's (issue 243): data-gallery-kind now selects the ground a
+            film is letterboxed against and nothing about its size. The
             element is keyed on the item so moving between two films remounts
             it; a reused <video> keeps the resource it already selected. -->
-          <div class="gallery-stage" data-gallery-kind="video">
+          <div
+            class="gallery-stage"
+            data-gallery-kind="video"
+            bind:this={stageEl}
+            data-gallery-settling={settling ? 'true' : undefined}
+            style:--gallery-drag={`${dragX}px`}
+          >
             {#key item.key}
+              <!-- CONTROLS ARE HANDED OVER, NOT DECLARED (issue 243). Before
+                the reader presses play there is no control bar to contest, so
+                the veil's swipe cannot turn a scrub into a page turn; after
+                it, the native controls are the surface. Nothing here ever
+                starts itself — see startFilm() and rule 2 of the MOVING ITEMS
+                block above, whose absence pin sweeps this markup for the
+                attribute by name and would fail on this comment mentioning
+                it. -->
               <!-- svelte-ignore a11y_media_has_caption -->
               <video
                 class="gallery-player"
-                controls
+                controls={playing}
                 playsinline
                 preload="metadata"
                 poster={item.video.posterSrc}
                 aria-label={item.alt}
                 width={itemWidth}
                 height={itemHeight}
+                onended={onFilmEnded}
                 bind:this={playerEl}
               >
                 {#each item.video.sources as source (source.src)}
@@ -477,6 +615,38 @@
                 {/each}
               </video>
             {/key}
+            {#if !playing}
+              <!-- THE VEIL: the swipe surface a film has until the reader asks
+                for the player instead. It carries the identical binding the
+                still's stage carries, and it exists for exactly as long as the
+                swipe should — so nothing in lib/gesture.ts has to know what a
+                video is. The play control is its only child, which is the
+                whole of the owner's "the sensitive area should only be the
+                button and not the entire video": a press anywhere else on the
+                film is a press on a swipe surface that does nothing, and a
+                drag anywhere on it turns the strip. -->
+              <div class="gallery-film-veil" use:swipeHorizontal={swipe}>
+                <button
+                  type="button"
+                  class="gallery-play"
+                  bind:this={playButtonEl}
+                  onkeydown={onFrameKeydown}
+                  onclick={startFilm}
+                  aria-label={`Play ${item.alt}`}
+                >
+                  <!-- Named apart from the decorative mark issue 233 deleted,
+                    and deliberately: that one was DECORATION drawn on a
+                    poster, promising a press that happened somewhere else, and
+                    the pin on its absence still holds by its own name. This is
+                    the press. -->
+                  <span class="gallery-play-disc">
+                    <svg class="gallery-glyph" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                      <path d="M9 6.5l9 5.5-9 5.5z" fill="currentColor" />
+                    </svg>
+                  </span>
+                </button>
+              </div>
+            {/if}
           </div>
         {:else}
           <!-- The gesture surface is the STAGE, not the button inside it: the
@@ -575,7 +745,7 @@
               aria-checked={at === index}
               tabindex={at === index ? 0 : -1}
               aria-label={positionLabel(at)}
-              onclick={() => (index = at)}
+              onclick={() => goTo(at)}
             ><span class="gallery-dot-mark" aria-hidden="true"></span></button>
           {/each}
         </div>
@@ -767,18 +937,17 @@
     overflow: hidden;
   }
 
-  /* THE SECOND SHAPE (issue 233). A film gets a wider, larger stage than a
-     drawing does, and it gets it by REDECLARING the same two custom
-     properties the three declarations above already read — so there is one
-     piece of stage arithmetic on this page, not two, and the reservation
-     stays byte-independent exactly as it was. The values themselves are
-     global tokens (--gallery-stage-*-video, styles.css) like every other
-     dimension here; only the CHOICE between the two pairs lives in the
-     component, because only the component knows an item's kind. */
+  /* THE SECOND SHAPE IS GONE (issue 243). This block used to redeclare the
+     two stage tokens for a film — a wider, larger box than a drawing's — and
+     the owner's ruling retired it: "make it one single block that doesn't
+     expand, reduce based on the media". What is left here is the GROUND,
+     which is about paint and not about size, so a film now takes the identical
+     box a still does and letterboxes inside it against this colour. There is
+     no expression anywhere in this component or in styles.css that gives a
+     film a different box, which is what makes the owner's sentence structural
+     rather than a value somebody could nudge back. */
   .gallery-stage[data-gallery-kind='video'] {
-    --gallery-stage-size: var(--gallery-stage-size-video, 27rem);
-    --gallery-stage-aspect: var(--gallery-stage-aspect-video, 1.7778);
-    /* The reserved box is now a VISIBLE box (issue 239). Without this the
+    /* The reserved box is a VISIBLE box (issue 239). Without this the
        stage was transparent, so a player whose poster had not landed showed
        the page's near-white ground through the reservation and read as a
        broken rectangle rather than as a film that has not arrived. The value
@@ -794,15 +963,85 @@
   /* The player fills the reserved stage the same way the enlarge button
      does — absolutely, by insets plus an explicit 100% on both axes, because
      a replaced element with `inset: 0` and auto sizing keeps its INTRINSIC
-     box rather than stretching. `contain` for the same reason the still uses
-     it: a film is letterboxed inside its stage rather than cropped, and with
-     the 16:9 pair above there is nothing to letterbox in the common case. */
+     box rather than stretching. `contain` is what now carries the owner's
+     "reduce based on the media" (issue 243): the element is the whole block,
+     and the film reduces inside it against the ground above rather than the
+     block growing to the film's shape. It applies to the poster as well as to
+     the decoded frames, so the letterbox is the same before and after a
+     single byte of film arrives. */
   .gallery-player {
     position: absolute;
     inset: 0;
     inline-size: 100%;
     block-size: 100%;
     object-fit: contain;
+  }
+
+  /* THE VEIL (issue 243): the film's swipe surface before the reader hands the
+     stage to the player. It covers the block exactly, so a drag anywhere on
+     the film turns the strip, and it holds the ONE control that is sensitive
+     to a press. It paints nothing — the poster underneath is the picture —
+     which is why it needs no ground and no border of its own.
+     `place-items: center` puts the control in the middle of the block rather
+     than over any particular part of the film, and the control is the only
+     thing in here: an empty veil would be a swipe surface with no visible
+     affordance, and a veil with chrome would be a box drawn over the art. */
+  .gallery-film-veil {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    /* STATED HERE TOO, though the engine would reach the same answer without
+       it: touch-action is not inherited, but the effective value for a touch
+       is the INTERSECTION of the hit element's and its ancestors', so the
+       stage's pan-y already constrains a touch that lands here. It is
+       declared anyway because this is the element the gesture is BOUND to,
+       and the rule the whole layer rests on should be readable beside the
+       binding rather than one element up. Same base-then-upgrade shape as the
+       stage's: an unsupported touch-action value drops the whole declaration,
+       so the plain value goes first. */
+    touch-action: pan-y;
+    touch-action: pan-y pinch-zoom;
+  }
+
+  /* The press itself, at the touch floor on both axes (rendering lanes stage
+     1) with a small painted disc inside it — the same trade every other
+     control in this component makes: the hit box is about a finger, the ink
+     is about the artwork it sits on. */
+  .gallery-play {
+    display: grid;
+    place-items: center;
+    min-inline-size: 2.75rem;
+    min-block-size: 2.75rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    color: var(--gallery-play-button-ink, white);
+  }
+
+  .gallery-play-disc {
+    display: grid;
+    place-items: center;
+    inline-size: var(--gallery-play-button-size, 3rem);
+    block-size: var(--gallery-play-button-size, 3rem);
+    border-radius: 999px;
+    background: var(--gallery-play-button-surface, rgba(0, 0, 0, 0.55));
+    opacity: var(--gallery-play-button-rest-opacity, 0.9);
+    /* The triangle is optically centred rather than geometrically: a
+       right-pointing glyph in a circle reads left-heavy at its true centre. */
+    padding-inline-start: var(--gallery-play-button-nudge, 0.1875rem);
+  }
+
+  .gallery-play:hover .gallery-play-disc,
+  .gallery-play:focus-visible .gallery-play-disc {
+    opacity: 1;
+  }
+
+  .gallery-play:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -4px;
+    border-radius: 999px;
   }
 
   /* Filling the stage by INSETS, not by a size: a size on a control is a
@@ -997,8 +1236,13 @@
      re-laid-out, and it changes no box — the reserved frame is exactly where
      it was, which is what keeps a drag from costing layout stability. The
      fallback is the un-transformed frame, which is the correct degradation:
-     no movement rather than a broken one. */
-  .gallery-stage :global(.gallery-image-button) {
+     no movement rather than a broken one.
+     A film moves its PLAYER and its veil by the same offset (issue 243), so
+     the picture and the control the reader's finger is on travel together
+     rather than the poster sliding out from under the press. */
+  .gallery-stage :global(.gallery-image-button),
+  .gallery-stage .gallery-player,
+  .gallery-stage .gallery-film-veil {
     transform: translateX(var(--gallery-drag, 0px));
   }
 
@@ -1015,7 +1259,9 @@
      either way, so the surface is never left displaced; only the journey to
      zero is skipped. */
   @media (prefers-reduced-motion: no-preference) {
-    .gallery-stage[data-gallery-settling='true'] :global(.gallery-image-button) {
+    .gallery-stage[data-gallery-settling='true'] :global(.gallery-image-button),
+    .gallery-stage[data-gallery-settling='true'] .gallery-player,
+    .gallery-stage[data-gallery-settling='true'] .gallery-film-veil {
       transition: transform var(--gallery-settle-duration, 200ms) cubic-bezier(0.22, 1, 0.36, 1);
     }
   }

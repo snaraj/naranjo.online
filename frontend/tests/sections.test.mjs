@@ -353,6 +353,41 @@ test('the card renders every region behind its own decision', () => {
   assert.match(feedCard, /this=\{`h\$\{titleLevel\}`\}/);
 });
 
+test('a linked card title is an anchor, and the heading around it still names itself', () => {
+  /* THE OWNER'S CONSTRAINT FIRST (issue 243): "Do not change the styling...
+     instead turn them into links." So the title's TEXT is unchanged — the
+     anchor renders `{title}` and nothing else — and the branch is conditional,
+     which is what keeps every unlinked card in the repository exactly as it
+     was. */
+  assert.match(feedCard, /\{#if titleHref\}/, 'the linked title is unconditional; every card grew an anchor');
+  const linked = /\{#if titleHref\}([\s\S]*?)\{:else\}/.exec(feedCard)?.[1];
+  assert.ok(
+    linked !== undefined && linked.includes('<a'),
+    'the linked title branch is not where this pin expects it; the scope below would prove nothing'
+  );
+  assert.match(linked, /href=\{titleHref\}/, 'the card assembles a href instead of rendering the one it was handed');
+  assert.match(linked, /target="_blank"/, 'an employer link replaces the page the reader was on');
+  assert.match(linked, /rel="noopener noreferrer"/, 'the opened tab can reach back into this page');
+  assert.match(linked, /aria-label=\{`\$\{title\} \(opens in a new tab\)`\}/);
+  assert.match(linked, />\{title\}<\/a/, 'the anchor renders something other than the plain title');
+
+  /* AND THE HEADING NAMES ITSELF (review finding, 2026-08-28). A heading's
+     accessible name is computed from its descendants, and an `aria-label` on a
+     descendant REPLACES that descendant's contribution — so without this the
+     heading's own name became "<employer> (opens in a new tab)" and the heading
+     list a screen-reader user navigates by turned into a list of tab warnings.
+     The condition is load-bearing in both directions: an unlinked card must
+     name itself from its text exactly as it always has, so the label is
+     `undefined` there rather than a second copy of the title. The engine half —
+     the name as assistive technology actually computes it — is measured in the
+     experience lane of e2e/rendering-lanes.spec.mjs. */
+  assert.match(
+    feedCard,
+    /aria-label=\{titleHref \? title : undefined\}/,
+    'the heading no longer names itself, so a linked title renames the heading around it'
+  );
+});
+
 test('every variant the card admits is a variant it styles', () => {
   const cardStyles = styleBlock(feedCard);
   const [base, ...others] = feedCardVariants;
@@ -502,9 +537,18 @@ test('every content component renders through the card primitive', () => {
 test('the experience section carries four complete real entries, newest first', () => {
   assert.equal(workEntries.length, 4, 'the owner supplied exactly four roles');
   for (const entry of workEntries) {
-    for (const field of ['company', 'role', 'dates', 'location']) {
+    for (const field of ['company', 'role', 'dates', 'location', 'site']) {
       assert.ok(entry[field].trim().length > 0, `an experience entry has an empty ${field}`);
     }
+    /* The employer's own home on the web (issue 243), and it is checked rather
+       than merely present: an absolute https origin, no credentials, no query,
+       no path pretending to be one. A relative or http value would render an
+       anchor the reader could press and the site could not honour. */
+    const site = new URL(entry.site);
+    assert.equal(site.protocol, 'https:', `${entry.company} links over ${site.protocol}`);
+    assert.equal(site.username, '', `${entry.company}'s link carries credentials`);
+    assert.equal(site.search, '', `${entry.company}'s link carries a query string`);
+    assert.ok(site.hostname.includes('.'), `${entry.company} links to ${site.hostname}`);
     assert.ok(entry.points.length > 0, `${entry.company} lists no accomplishments`);
     for (const point of entry.points) {
       assert.ok(point.trim().length > 0, `${entry.company} carries an empty accomplishment`);
@@ -569,8 +613,20 @@ test('the experience section carries four complete real entries, newest first', 
   // card renders, so a composition that silently dropped the location or the
   // dates fails rather than merely looking different.
   assert.deepEqual(
-    workHistoryProps.entries.map((entry) => [entry.key, entry.title, entry.byline, entry.points]),
-    workEntries.map((entry) => [entry.company, entry.company, workByline(entry), entry.points])
+    workHistoryProps.entries.map((entry) => [
+      entry.key,
+      entry.title,
+      entry.titleHref,
+      entry.byline,
+      entry.points
+    ]),
+    workEntries.map((entry) => [
+      entry.company,
+      entry.company,
+      entry.site,
+      workByline(entry),
+      entry.points
+    ])
   );
   for (const entry of workEntries) {
     const parts = workByline(entry).split(workBylineSeparator);
@@ -578,7 +634,17 @@ test('the experience section carries four complete real entries, newest first', 
   }
   assert.equal(workHistoryProps.titleLevel, 3, 'experience entries head straight under the section h2');
   assert.equal(workHistoryProps.variant, undefined, 'experience entries keep the framed default card');
-  assert.match(entryLog, /<FeedCard \{variant\} title=\{entry\.title\} byline=\{entry\.byline\} \{titleLevel\}>/);
+  /* The unlinked branch, now also forwarding titleHref (issue 243). Every
+     prop is named individually rather than as one string so a dropped
+     forward is a failure rather than a reformat, and `byline` is the one that
+     carries the whole point: the OTHER way to link a title — EntryLog's
+     `href` branch — replaces the header region and would take the role, the
+     span and the place with it. */
+  const unlinkedCard = /<FeedCard\s+\{variant\}\s+title=([\s\S]*?)>/.exec(entryLog)?.[1] ?? '';
+  assert.ok(unlinkedCard.length > 0, 'the unlinked card is not where this pin expects it');
+  for (const prop of ['{entry.title}', 'titleHref={entry.titleHref}', 'byline={entry.byline}', '{titleLevel}']) {
+    assert.ok(unlinkedCard.includes(prop), `the unlinked entry card no longer passes ${prop}`);
+  }
 });
 
 test('an entry draws only the body regions it has, and every shipped entry has one', () => {
@@ -972,8 +1038,13 @@ test('prev/next are icon-only, and both wrap around the eight photographs', () =
   // accessible name, never visible label prose.
   assert.doesNotMatch(mediaGallery, />Next</);
   assert.doesNotMatch(mediaGallery, />Previous</);
-  assert.match(mediaGallery, /index = \(index \+ 1\) % total/, 'next must wrap forward');
-  assert.match(mediaGallery, /index = \(index - 1 \+ total\) % total/, 'previous must wrap backward');
+  /* The wrap arithmetic is unchanged; what moved is where it lands (issue 243
+     review finding 1): both moves now hand their target to goTo, which clears
+     the film handover on the way. The modulo is still asserted here, because
+     the wrap is this pin's subject and a move that stopped wrapping would be a
+     different defect from one that skipped the reset. */
+  assert.match(mediaGallery, /goTo\(\(index \+ 1\) % total\)/, 'next must wrap forward');
+  assert.match(mediaGallery, /goTo\(\(index - 1 \+ total\) % total\)/, 'previous must wrap backward');
 });
 
 test('every position label says what KIND of item it names (issue 241)', () => {
@@ -1065,6 +1136,17 @@ function stripComments(markup) {
 
 const galleryMarkup = stripComments(mediaGallery).markup;
 
+/* PROSE-FREE SOURCE, for the walks that decide something from a POSITION in
+ * the text rather than from a pattern anywhere in it. stripComments above only
+ * removes HTML comments, which is right for the markup pins — but this
+ * component explains itself at length in `/* *​/` blocks inside <script> and
+ * <style> too, and three of those blocks contain the literal `<button>` while
+ * one contains `index = at`. A walk that asks "what is the nearest enclosing
+ * element" or "how many times is this assigned" reads those as code and is
+ * wrong in the direction that lets a real regression through. Both comment
+ * forms go, so the walks below see only what the compiler sees. */
+const galleryCode = stripComments(mediaGallery).markup.replace(/\/\*[\s\S]*?\*\//g, ' ');
+
 test('the comment strip these pins depend on runs to a fixed point (issue 207)', () => {
   // Non-vacuity for the loop above, stated as the regression it prevents.
   // This input needs TWO effective passes: the first removes the inner
@@ -1102,7 +1184,7 @@ test('a moving item PLAYS in the strip — exactly one video, the current item�
   );
   assert.match(
     galleryMarkup,
-    /\{#if item\.video\}[\s\S]*?<div class="gallery-stage" data-gallery-kind="video">[\s\S]*?<video/,
+    /\{#if item\.video\}[\s\S]*?data-gallery-kind="video"[\s\S]*?<video/,
     'the player is not inside the current item’s own video stage'
   );
   // Name-blind about the LOOP for the same reason the .gallery-image count
@@ -1140,79 +1222,255 @@ test('a moving item PLAYS in the strip — exactly one video, the current item�
      branch would keep the previous film's bytes under the new poster. */
   assert.match(galleryMarkup, /\{#key item\.key\}/, 'the player is reused across items');
 
-  /* THE PLAY MARK IS GONE (owner: "remove the play icon from all videos, its
-     just there doing nothing"). An ABSENCE pin at the strength the presence
-     pin had: neither the class, nor the drawn triangle, nor a token only it
-     ever read may come back. */
-  assert.doesNotMatch(mediaGallery, /gallery-play-mark/, 'the decorative play mark is back');
-  assert.doesNotMatch(mediaGallery, /M9 7\.5l8 4\.5-8 4\.5z/, 'the play triangle is drawn again');
+  /* NO PLAY TRIANGLE IS DECORATION — RE-AIMED, and the re-aim is stated
+     because the letter of the old pin would have been satisfiable without
+     honouring it (issue 243).
+     What the owner objected to in 0.1.53 was a mark that PROMISED a press
+     happening somewhere else: "remove the play icon from all videos, its just
+     there doing nothing". The old pin expressed that as an absence — no
+     class, no triangle path, no token — and issue 243 puts a triangle back,
+     because the same owner then asked for a play control that is the ONLY
+     sensitive area on a film. Renaming the class and redrawing the path would
+     pass the old assertions while restoring exactly the object they were
+     written against, so the assertion moves to the property that actually
+     distinguishes the two: every play triangle in this file is inside a
+     <button> that starts the film, and no drawn mark sits loose on a poster.
+     The retired names stay retired below, so the old shape cannot come back
+     under its own identity either.
+
+     COMMENT-BLIND, and that is load-bearing rather than tidiness: this walk
+     decides enclosure from the NEAREST PRECEDING `<button` in the text, and
+     three of this component's own explanatory comments contain the literal
+     `<button>` in prose. Against the raw source a loose triangle inserted just
+     after `{#if !playing}` found one of those as its "enclosing" control and
+     survived green — a real surviving mutant, caught by review rather than by
+     this pin, and repaired by reading the same bytes the compiler does. */
+  const playGlyphs = [...galleryCode.matchAll(/<svg[\s\S]*?<\/svg>/g)].filter(([svg]) =>
+    /<path d="M\d[^"]*"\s+fill="currentColor"/.test(svg)
+  );
+  assert.ok(playGlyphs.length > 0, 'the film has no play glyph at all; the control has no visible mark');
+  for (const [glyph] of playGlyphs) {
+    const at = galleryCode.indexOf(glyph);
+    const enclosing = galleryCode.slice(0, at);
+    const opened = [...enclosing.matchAll(/<button\b|<\/button>/g)].at(-1)?.[0];
+    assert.equal(
+      opened,
+      '<button',
+      'a filled glyph is painted outside any control; a mark that promises a press happening elsewhere is the defect issue 233 removed'
+    );
+  }
+  assert.doesNotMatch(mediaGallery, /gallery-play-mark/, 'the decorative play mark is back under its own name');
+  assert.doesNotMatch(mediaGallery, /M9 7\.5l8 4\.5-8 4\.5z/, 'the retired decorative triangle is drawn again');
   for (const token of ['--gallery-play-size', '--gallery-play-inset', '--gallery-play-surface', '--gallery-play-ink']) {
     assert.ok(!mediaGallery.includes(token), `${token} outlived the mark it sized`);
     assert.ok(!styles.includes(token), `styles.css still declares ${token}`);
   }
 });
 
-test('a film’s stage takes the video token pair; a still keeps the square (issue 233)', () => {
+test('ONE stage box: no expression anywhere gives a film a different one (issue 243)', () => {
+  /* SUPERSEDES 'a film’s stage takes the video token pair' (issue 233), and
+     the reversal is the owner's own: "make it one single block that doesn't
+     expand, reduce based on the media". The retired pin required a film to be
+     sized by --gallery-stage-*-video, a 768x432 stage against a still's
+     448x448 — which answered a real complaint (a 16:9 film inside a square
+     sits between two bands of ground) by changing the size of the one object
+     on the page the owner watches, on every press of the next arrow.
+     What replaces it is an ABSENCE pin, because that is the only form that
+     makes the owner's sentence structural: if no expression anywhere sizes a
+     film differently, the block cannot expand for one. */
   const style = styleBlock(mediaGallery);
-  /* The stage's arithmetic is stated ONCE and reads two custom properties;
-     the kind rule redeclares those same two rather than restating the
-     arithmetic, so a film and a still cannot end up sized by two different
-     pieces of code. */
+  // The arithmetic is stated ONCE and reads the two custom properties, exactly
+  // as before — that half is unchanged and still the reason there is one
+  // piece of stage geometry on this page.
   assert.match(
     style,
     /inline-size: min\(100%, calc\(var\(--gallery-stage-size, 28rem\) \* \(var\(--gallery-stage-aspect, 1\)\)\)\)/
   );
   assert.match(style, /aspect-ratio: var\(--gallery-stage-aspect, 1\)/);
   assert.match(style, /max-block-size: var\(--gallery-stage-size, 28rem\)/);
-  const kindRule = /\.gallery-stage\[data-gallery-kind='video'\]\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.ok(kindRule.length > 0, 'a film’s stage is not switched by its kind at all');
-  assert.match(kindRule, /--gallery-stage-size: var\(--gallery-stage-size-video, 27rem\);/);
-  assert.match(kindRule, /--gallery-stage-aspect: var\(--gallery-stage-aspect-video, 1\.7778\);/);
-  /* Both halves of the pair are GLOBAL tokens, declared in styles.css beside
-     the square's own pair rather than left as component fallbacks — the
-     frontend floor every other dimension of this card already holds to. A
-     component-only default would make the widescreen stage the one dimension
-     of this gallery the token layer could not tune. */
-  for (const token of ['--gallery-stage-size-video: 27rem;', '--gallery-stage-aspect-video: 1.7778;']) {
-    assert.ok(styles.includes(token), `styles.css does not declare ${token}`);
-  }
-  // The still's own pair is untouched; a film changing the square would be
-  // this change escaping its own scope.
   assert.ok(styles.includes('--gallery-stage-size: 28rem;'));
   assert.ok(styles.includes('--gallery-stage-aspect: 1;'));
-  // And a film's stage is genuinely the LARGER of the two: 27rem x 1.7778 is
-  // 768x432 against the square's 448x448 — wider, and more area.
-  const videoInline = 27 * 1.7778;
-  assert.ok(videoInline > 28, `a film’s stage is ${videoInline}rem wide against the square’s 28rem`);
-  assert.ok(videoInline * 27 > 28 * 28, 'a film’s stage covers no more area than the square it replaces');
+
+  /* THE SIZE MAY NOT BE SELECTED BY KIND. The kind rule survives — it picks
+     the GROUND a film is letterboxed against — so this is not "no kind rule"
+     but the narrower and correct "no kind rule that touches the box". Each of
+     the four properties is named, because redeclaring the tokens and setting
+     the resulting lengths directly are different mutations with the identical
+     visible effect. */
+  const kindRule = /\.gallery-stage\[data-gallery-kind='video'\]\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(kindRule.length > 0, 'the film stage rule is not where this pin expects it');
+  for (const property of [
+    '--gallery-stage-size',
+    '--gallery-stage-aspect',
+    'aspect-ratio',
+    'inline-size',
+    'block-size',
+    'max-block-size',
+    'max-inline-size'
+  ]) {
+    assert.doesNotMatch(
+      kindRule,
+      new RegExp(`(?:^|[;\\s])${property}\\s*:`),
+      `a film's stage sets ${property} of its own; the block expands for a film again`
+    );
+  }
+
+  /* And the retired tokens are GONE from the token layer, not merely unread.
+     A default left declared in styles.css is one component edit away from
+     bringing the second shape back, and this pin would not see that edit. */
+  for (const token of ['--gallery-stage-size-video', '--gallery-stage-aspect-video']) {
+    assert.ok(!styles.includes(`${token}:`), `styles.css still declares ${token}, so the second stage shape is one edit away`);
+    assert.ok(!mediaGallery.includes(token), `the gallery still reads ${token}`);
+  }
+
+  /* THE MEDIA REDUCES INSIDE THE BOX, which is the other half of the owner's
+     sentence and the reason a constant block is not a crop. `contain` letters
+     a film inside the stage; `cover` would fill the same box by cutting the
+     film, and a cropped film is a different film. */
+  const player = /\.gallery-player\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(player.length > 0, 'the player rule is not where this pin expects it');
+  assert.match(player, /object-fit:\s*contain;/, 'the film is cropped to the block instead of reduced inside it');
+  assert.match(player, /inline-size:\s*100%;/);
+  assert.match(player, /block-size:\s*100%;/);
 });
 
-test('the player owns its own surface: no swipe binding, no button, no gallery arrow keys (issue 233)', () => {
-  /* The delicate half of playing in place. lib/gesture.ts claims a horizontal
-     drag and CAPTURES the pointer the moment it does, which is exactly the
-     gesture a reader makes scrubbing a seek bar — so the film's stage carries
-     no binding at all, and the still's carries the one it always had. */
-  const videoStage = /<div class="gallery-stage" data-gallery-kind="video">([\s\S]*?)\n          <\/div>/.exec(
-    galleryMarkup
-  )?.[1] ?? '';
+test('a film is swipeable until the reader hands the surface to the player (issue 243)', () => {
+  /* SUPERSEDES 'the player owns its own surface: no swipe binding, no button,
+     no gallery arrow keys' (issue 233), on the owner's ruling: "you cannot
+     swipe out of a video, it instead starts to play immediately... the
+     sensitive area should only be the button and not the entire video".
+     The retired pin refused a swipe binding on a film's stage outright, and
+     its reasoning was sound — a horizontal drag along a seek bar is exactly
+     what lib/gesture.ts claims, and the action captures the pointer the moment
+     it claims. What it got wrong was SCOPE: it disarmed the whole stage for
+     the whole life of the item, including all the time before the reader has
+     shown any interest in playing anything.
+     So the protection is now expressed as a STATE — an element that exists
+     for exactly as long as the swipe should be available — and this pin holds
+     both ends of it: the veil swipes, and the veil is gone the moment there
+     are native controls to contest. */
+  const videoStage = /data-gallery-kind="video"([\s\S]*?)\n          <\/div>/.exec(galleryMarkup)?.[1] ?? '';
   assert.ok(videoStage.length > 0, 'the film’s stage is not where this pin expects it');
-  assert.doesNotMatch(videoStage, /use:swipeHorizontal/, 'the swipe binding sits over the player’s own controls');
-  assert.doesNotMatch(videoStage, /<button/, 'a film’s stage carries a control that would eat the player’s presses');
+
+  // THE VEIL SWIPES, exactly as the still's stage does.
+  assert.match(
+    videoStage,
+    /<div class="gallery-film-veil" use:swipeHorizontal=\{swipe\}>/,
+    'a film’s swipe surface is gone; the owner’s "you cannot swipe out of a video" is back'
+  );
   assert.match(
     galleryMarkup,
     /<div\s+class="gallery-stage"\s+data-gallery-kind="image"[\s\S]*?use:swipeHorizontal=\{swipe\}/,
     'the still’s stage lost the swipe it has always had'
   );
-  // Exactly one binding on the page, so this is a MOVE rather than an
-  // addition that left a second gesture surface behind.
-  assert.equal([...galleryMarkup.matchAll(/use:swipeHorizontal/g)].length, 1);
-  /* The keyboard half is structural rather than a guard: the gallery's arrow
-     handler lives on the enlarge button, and a film has none — so there is no
-     ancestor between the player and the document that would answer a left or
-     right press the player wants for itself. */
+
+  /* THE VEIL AND THE CONTROLS ARE MUTUALLY EXCLUSIVE, which is what keeps the
+     retired pin's real concern satisfied. Both halves read the same one piece
+     of state, so there is no arrangement of the markup in which a swipe
+     surface sits over a live seek bar. */
+  assert.match(videoStage, /\{#if !playing\}/, 'the veil is not gated on the play state at all');
+  assert.match(
+    videoStage,
+    /controls=\{playing\}/,
+    'the player declares controls unconditionally, so a seek bar exists under the veil'
+  );
+
+  /* THE ONLY SENSITIVE AREA IS THE BUTTON — the owner's exact requirement.
+     The veil holds precisely one control, and it is the play control.
+
+     The extraction really is the veil now, and the review is why it says so:
+     the first cut had no capture group at all, so `?.[1]` was always undefined
+     and the whole video stage stood in for it. That was stricter than
+     advertised rather than weaker — nothing outside the veil carries a button
+     either — but a scope the comment claims and the code does not have is a
+     pin nobody can reason about. */
+  const veil = /<div class="gallery-film-veil"[^>]*>([\s\S]*?)\n {14}<\/div>/.exec(videoStage)?.[1];
+  assert.ok(
+    veil !== undefined && veil.trim().length > 0,
+    'the veil block is not where this pin expects it; the scope below would silently widen to the whole stage'
+  );
+  assert.doesNotMatch(veil, /<video/, 'the extracted veil swallowed the player, so its scope is not the veil');
+  assert.equal(
+    [...veil.matchAll(/<button/g)].length,
+    1,
+    'a film’s swipe surface carries a number of controls other than exactly the one play button'
+  );
+  assert.match(veil, /class="gallery-play"/, 'the film’s one control is not the play control');
+
+  /* PLAY IS STARTED FROM ONE PLACE, and only from a press. There is no other
+     call to play() in the file, which is what keeps "nothing autoplays" a
+     property of the source rather than of a review. */
+  assert.equal(
+    [...mediaGallery.matchAll(/\.play\(\)/g)].length,
+    1,
+    'the player is started from more than one place'
+  );
+  assert.match(
+    mediaGallery,
+    /function startFilm\(\): void \{\s*playingKey = item\.key;\s*void playerEl\?\.play\(\)/,
+    'the handover is not the single press-driven start this pin expects'
+  );
+
+  /* ENDED HANDS THE SURFACE BACK; PAUSE DOES NOT. The asymmetry is deliberate
+     (see the issue 243 block in the component): restoring the veil on pause
+     would put a swipe surface over the controls the reader stopped the film
+     to use, and cost them their position on every pause. */
+  assert.match(videoStage, /onended=\{onFilmEnded\}/, 'a finished film never gets its swipe surface back');
+  assert.doesNotMatch(videoStage, /onpause=/, 'pausing snatches the controls back from a reader who is using them');
+
+  /* AND NO FILM INHERITS ANOTHER'S SURFACE STATE. Two independent halves, and
+     the first cut of issue 243 shipped only one of them — which is why the
+     second is pinned here rather than trusted.
+
+     Half one, the DERIVATION: `playing` is true only while the key names the
+     current item, so no mount/unmount ordering can render a film carrying
+     another film's state. */
+  assert.match(
+    mediaGallery,
+    /const playing = \$derived\(playingKey !== undefined && playingKey === item\.key\)/,
+    'the play state is not bound to the item it belongs to'
+  );
+  /* Half two, the RESET, and the review finding it exists for: a derivation
+     SUPPRESSES a stale key, it does not clear one, so returning to a film
+     played once re-armed it with no press. The key is cleared where the index
+     moves — and `index` is assigned in exactly ONE place in the component, so
+     a control added later cannot move the strip without handing the surface
+     back. That count is the pin: routing every caller through goTo is what
+     makes the reset structural rather than five call sites somebody has to
+     remember. */
+  assert.match(
+    mediaGallery,
+    /function goTo\(at: number\): void \{\s*index = at;\s*playingKey = undefined;\s*\}/,
+    'the one function that moves the strip does not hand the film surface back'
+  );
+  const indexWrites = [...galleryCode.matchAll(/(?<![\w$.])index\s*=(?!=)/g)];
+  assert.equal(
+    indexWrites.length,
+    2,
+    `the component assigns \`index\` ${indexWrites.length} times; it must be exactly twice — its $state declaration and the assignment inside goTo — or a move through the strip can skip the reset`
+  );
+  assert.match(galleryCode, /let index = \$state\(0\);/, 'the index declaration moved');
+  /* And every control that moves the strip calls it, named individually so a
+     silent revert of any one of them is a failure rather than a count that
+     still happens to add up. */
+  for (const caller of [
+    /function next\(\): void \{\s*goTo\(\(index \+ 1\) % total\);/,
+    /function previous\(\): void \{\s*goTo\(\(index - 1 \+ total\) % total\);/,
+    /event\.preventDefault\(\);\s*goTo\(target\);/,
+    /onclick=\{\(\) => goTo\(at\)\}/
+  ]) {
+    assert.match(galleryCode, caller, `a control moves the strip without going through goTo: ${caller}`);
+  }
+
+  /* The keyboard equivalence, which the retired design left a film without:
+     the strip's arrow handler is on the play control as well as on the
+     enlarge button, so a film is no worse off by keyboard than a still. Once
+     the player has the surface the arrows are the player's, exactly as
+     before — the veil, and the handler with it, is gone by then. */
   assert.match(galleryMarkup, /class="gallery-image-button"[\s\S]*?onkeydown=\{onFrameKeydown\}/);
-  assert.equal([...galleryMarkup.matchAll(/onkeydown=\{onFrameKeydown\}/g)].length, 1);
-  assert.doesNotMatch(videoStage, /onkeydown/, 'the film’s stage answers keys the player should get');
+  assert.match(galleryMarkup, /class="gallery-play"[\s\S]*?onkeydown=\{onFrameKeydown\}/);
+  assert.equal([...galleryMarkup.matchAll(/onkeydown=\{onFrameKeydown\}/g)].length, 2);
+
   /* And the invariant that keeps the retired lightbox branch unreachable
      rather than merely unused: the dialog cannot be left open on a film. */
   assert.match(
@@ -1272,7 +1530,12 @@ test('nothing in the gallery ever autoplays, and reduced motion is structural (i
   // then honoured by construction rather than by a media query — there is no
   // motion until a reader presses play, and a reader pressing play asked.
   assert.doesNotMatch(galleryMarkup, /autoplay/i, 'no autoplay attribute may exist anywhere in the gallery markup');
-  assert.match(galleryMarkup, /<video[\s\S]*?\n\s+controls\n/, 'the video must carry native controls');
+  /* RE-AIMED (issue 243): the attribute is now `controls={playing}`, so the
+     native controls are HANDED OVER on a press rather than declared up front.
+     The claim this half makes is unchanged — a reader who plays a film gets
+     real controls — and it is strictly narrower, because the value must be
+     the play state rather than any truthy expression somebody could write. */
+  assert.match(galleryMarkup, /<video[\s\S]*?\n\s+controls=\{playing\}\n/, 'the video must hand over native controls');
   assert.match(
     galleryMarkup,
     /<video[\s\S]*?\n\s+playsinline\n/,
@@ -1670,28 +1933,30 @@ test('the frame reserves ONE box, so changing kind moves nothing (issue 241)', (
     /<div class="gallery-frame"[^>]*data-gallery-kind/,
     'the frame declares a kind, so the box the page is laid out from can change with the item'
   );
-  /* And the film's own stage still cannot be taller than that reservation,
-     which is what makes "centred inside it" true rather than "overflowing
-     it". A film's block size is its own size token (27rem = 432px, the ×1.7778
-     goes to the INLINE axis), and the frame's is the square's (28rem = 448px).
+  /* And the stage inside it cannot exceed the reservation — which since issue
+     243 is a stronger statement than it was, because there is now exactly ONE
+     stage box and it is built from the same token the frame is. The old form
+     of this compared a film's own block token against the square's; with the
+     film's token retired, what is left to prove is that the two boxes are
+     built from the SAME source, so they cannot disagree at any value.
 
-     Read from the stylesheet rather than written here. The first form of this
-     assertion compared two literals — `assert.ok(27 < 28, …)` — which no
-     mutation of any source file could turn red: a decorative check, and the
-     protocol names those findings for a reason. The geometry was never
-     unguarded (the issue-233 pin dies on either token moving), but a pin that
-     claims to hold something must be able to fail. */
-  const remToken = (name) => {
-    const declared = new RegExp(`${name}:\\s*([0-9.]+)rem;`).exec(styles);
-    assert.ok(declared, `styles.css declares no ${name}, so the frame's reservation cannot be checked`);
-    return Number(declared[1]);
-  };
-  const filmBlockRem = remToken('--gallery-stage-size-video');
-  const frameBlockRem = remToken('--gallery-stage-size');
-  assert.ok(
-    filmBlockRem < frameBlockRem,
-    `a film’s stage is ${filmBlockRem}rem tall inside a frame reserving ${frameBlockRem}rem; it overflows the box the page was laid out from`
+     Read from the stylesheet rather than written here, for the reason the
+     retired form recorded: the first version of this assertion compared two
+     literals — `assert.ok(27 < 28, …)` — which no mutation of any source file
+     could turn red. A pin that claims to hold something must be able to
+     fail. */
+  const stageRule = /\.gallery-stage\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(stageRule.length > 0, 'the stage rule is not where this pin expects it');
+  const frameCap = /max-block-size:\s*var\((--[\w-]+),/.exec(frame)?.[1];
+  const stageCap = /max-block-size:\s*var\((--[\w-]+),/.exec(stageRule)?.[1];
+  assert.ok(frameCap, 'the frame states no block cap this pin can read');
+  assert.equal(
+    stageCap,
+    frameCap,
+    `the stage is capped by ${stageCap} inside a frame reserving ${frameCap}; the two can disagree and the stage can overflow the box the page was laid out from`
   );
+  const declared = new RegExp(`${frameCap}:\\s*([0-9.]+)rem;`).exec(styles);
+  assert.ok(declared, `styles.css declares no ${frameCap}, so the reservation resolves to nothing`);
 });
 
 test('the position marks are one scrolling row, and the artwork accepts a pinch (issue 241)', () => {
@@ -1789,9 +2054,14 @@ test('Escape closes the lightbox and hands focus back to the frame it came from 
      player rather than the button. Focusing the outgoing button would land
      the reader on the body, which is the exact defect this pin was written
      for, arriving by a new route. */
+  /* The play control joins the fall-through at issue 243, and it is placed
+     BEFORE the player deliberately: while the veil is up the player renders no
+     controls, so focusing it would land a keyboard reader on an element they
+     cannot operate. The order is the order of what a reader can actually
+     press — enlarge button, play control, player. */
   assert.match(
     mediaGallery,
-    /async function onDialogClose\(\): Promise<void> \{\s*enlarged = false;\s*await tick\(\);\s*\(frameButtonEl \?\? playerEl\)\?\.focus\(\);/,
+    /async function onDialogClose\(\): Promise<void> \{\s*enlarged = false;\s*await tick\(\);\s*\(frameButtonEl \?\? playButtonEl \?\? playerEl\)\?\.focus\(\);/,
     'closing the lightbox does not return focus to the surface it came from'
   );
   assert.match(mediaGallery, /import \{ tick \} from 'svelte';/, 'the restore cannot wait for the DOM it restores into');

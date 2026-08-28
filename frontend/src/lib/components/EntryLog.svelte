@@ -124,7 +124,19 @@
           {@render body(entry)}
         </FeedCard>
       {:else}
-        <FeedCard {variant} title={entry.title} byline={entry.byline} {titleLevel}>
+        <!-- titleHref is NOT the linked branch above (issue 243). That branch
+          replaces the whole header region — a title, its counters, no byline —
+          which is right for a repo card and wrong for a role, whose byline
+          carries the span and the place. This one keeps the ordinary card and
+          only makes its heading navigable. An entry with neither renders
+          exactly what it always did. -->
+        <FeedCard
+          {variant}
+          title={entry.title}
+          titleHref={entry.titleHref}
+          byline={entry.byline}
+          {titleLevel}
+        >
           {@render body(entry)}
         </FeedCard>
       {/if}

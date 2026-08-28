@@ -41,15 +41,13 @@ const touchFloorPx = 44;
  * derive from the one (mutated) token. */
 const galleryStageCapPx = 448;
 
-/* The film's stage, which is a different shape and a bigger one (issue 233,
- * owner directive 2026-08-28: a film "should be enlarged"). 27rem block edge
- * at this page's unmodified 16px root, times the 16:9 the item's kind selects
- * — 432px tall inside 768px wide, against the still's 448 square. Literals
- * here for exactly the reason the constant above is one: an expectation read
- * back off the page moves with the token it is supposed to be checking. */
-const galleryVideoStageBlockPx = 432;
-const galleryVideoStageInlinePx = 768;
-const galleryVideoAspect = 1.7778;
+/* THE FILM'S STAGE IS THE SAME STAGE (owner directive, 2026-08-28, issue 243:
+ * "make it one single block that doesn't expand, reduce based on the media").
+ * The three constants that lived here — a 432x768 widescreen box and its
+ * 1.7778 aspect — are gone with the token pair that produced them, and the
+ * film is now measured against galleryStageCapPx like everything else. The
+ * shape the film itself has is the ITEM's, and it is answered by letterboxing
+ * inside the block rather than by resizing it. */
 
 /* One gallery/v1 manifest carrying a still and a film, served from the media
  * volume's own mutable path so the page takes the route it takes in
@@ -2365,14 +2363,25 @@ test('the nav link is quiet at rest and marks itself the moment intent shows (is
      very Tab press it used to check the nav link's OWN reachability, so a
      regression that broke just the nav link's tabbability would look
      identical to a genuine engine limitation. The nav link cannot probe
-     itself, so this walks PAST every nav link instead — Work carries zero
-     focusable elements of its own and Coding Projects now sits directly
-     after it (issue 176 moved Art, whose prev/next/enlarge controls ARE
-     focusable, after Coding Projects instead) between the nav and the
-     feed (a fact this exploits rather than assumes: if that ever stops
-     being true, this walk lands somewhere unexpected and the assertion
-     below fails loudly rather than skipping quietly) — to the feed's first
-     entry link: a plain anchor with nothing to do with the nav. */
+     itself, so this walks PAST every nav link to the first plain anchor
+     after them — an anchor with nothing to do with the nav.
+
+     WHICH anchor that is has moved (issue 243), and how it moved is worth
+     recording because the old shape promised something it did not deliver.
+     It said Work carried zero focusable elements of its own, so navCount + 1
+     tabs landed on the Coding Projects feed's first `.entry-link`, and that
+     "if that ever stops being true, this walk lands somewhere unexpected and
+     the assertion below fails loudly rather than skipping quietly". It did
+     stop being true — the owner asked for the four Professional Experience
+     employers to become links — and the walk did NOT fail loudly: it landed
+     on a `.feed-card-title-link`, `engineTabsLinks` went false, and this lane
+     skipped on all five projects while reporting nothing. A capability probe
+     that cannot tell "this engine does not tab links" from "the tab order
+     changed underneath me" is the same self-derived-skip defect Daybreak Blue
+     found here, wearing a different costume.
+     So the two questions are asked separately now: whether an ANCHOR was
+     reached at all is the engine's capability and may legitimately skip,
+     while WHICH anchor it is, is ASSERTED. */
   const navCount = await page.locator('.section-link').count();
   await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
   for (let step = 0; step < navCount + 1; step += 1) {
@@ -2380,9 +2389,23 @@ test('the nav link is quiet at rest and marks itself the moment intent shows (is
   }
   const probe = await page.evaluate(() => {
     const el = window.document.activeElement;
-    return { tag: el.tagName, isEntryLink: el.classList.contains('entry-link') };
+    return {
+      tag: el.tagName,
+      classes: typeof el.className === 'string' ? el.className : '',
+      isSectionLink: el.classList.contains('section-link'),
+    };
   });
-  const engineTabsLinks = probe.tag === 'A' && probe.isEntryLink;
+  const engineTabsLinks = probe.tag === 'A';
+  if (engineTabsLinks) {
+    expect(
+      probe.isSectionLink,
+      `the walk past ${navCount} nav links landed back on a nav link; the probe would be measuring the very element it exists to avoid`
+    ).toBe(false);
+    expect(
+      /\b(entry-link|feed-card-title-link)\b/.test(probe.classes),
+      `the walk landed on an anchor carrying "${probe.classes}", which is neither plain-anchor class this page renders; the tab order moved and this probe no longer knows where it is`
+    ).toBe(true);
+  }
 
   /* Keyboard focus keeps the site's own ring — a real Tab from a throwaway
      starting point, the same pattern this file uses everywhere else it
@@ -2472,6 +2495,28 @@ test('the experience section renders four complete roles, and no placeholder sur
   expect(observed.placeholders, 'a real role is still marked placeholder in the DOM').toBe(0);
   expect(observed.notes, 'the placeholder disclaimer is still printed over real roles').toBe(0);
   expect(observed.text, 'the filler copy is still on the page').not.toContain('lorem');
+
+  /* EACH SURFACE NAMES ITSELF (issue 243; review finding, 2026-08-28). Turning
+     the employer into a link put an `aria-label` inside the heading, and a
+     heading's accessible name is computed from its descendants — with an
+     `aria-label` REPLACING the labelled node's contribution. So the heading
+     briefly announced "Panasonic Avionics (opens in a new tab)" as its own
+     name, and the heading list a screen-reader user navigates by became a list
+     of tab warnings. Measured here rather than read off the source, because
+     the name is something the ENGINE computes and only an engine can settle:
+     `getByRole` resolves it exactly as assistive technology would. The heading
+     must be reachable by the bare employer, and the link inside it by the
+     employer plus the warning — two roles, two names, neither borrowed. */
+  for (const entry of observed.entries) {
+    await expect(
+      page.getByRole('heading', { name: entry.title, exact: true }),
+      `the "${entry.title}" heading does not answer to its own employer name; something inside it renamed it`
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole('link', { name: `${entry.title} (opens in a new tab)`, exact: true }),
+      `the "${entry.title}" title link no longer tells the reader a new tab is coming`
+    ).toHaveCount(1);
+  }
 });
 
 /* The trackers stack, in the order the owner asked for on 2026-08-25: the
@@ -2856,21 +2901,41 @@ test('opening and closing the enlarged media leaves the reader exactly where the
   }
 });
 
-/* THE FILM PLAYS WHERE IT SITS (issue 233, owner directive 2026-08-28:
- * "remove the play icon from all videos, its just there doing nothing.
- * Instead develop the ability to treat them like youtube videos where I can
- * just play it in this small minimal version, which should be enlarged").
+/* A FILM MOUNTS INLINE, IN THE BLOCK A STILL GETS, BEHIND ONE CONTROL
+ * (issue 233; re-aimed under issue 243).
  *
- * Every half of that sentence is a measurement here, in a real engine, on a
- * real gallery whose items came down a manifest exactly as the operator's own
- * would: the mark is gone, the player is real and inline, it has not started
- * itself, its stage is the wider and larger of the two shapes, and the still
- * beside it is untouched.
+ * The header this lane carried described the design the owner reversed, and a
+ * comment that describes retired intent is worse than none — a reader trusts
+ * it and reasons from a shape the code no longer has. So it is rewritten to
+ * the shape actually measured below, and the history is stated rather than
+ * quietly dropped.
+ *
+ * WHAT IT USED TO SAY: the film's stage was to be "the wider and larger of the
+ * two shapes" — 768x432 against a still's 448 square — under the 0.1.54
+ * directive to "treat them like youtube videos... in this small minimal
+ * version, which should be enlarged", and the decorative play mark was to be
+ * gone because the native controls stood in for it.
+ *
+ * WHAT IT PROVES NOW, in a real engine, on a gallery whose items came down a
+ * manifest exactly as the operator's own would:
+ *   - the film mounts as one real inline <video> inside the CURRENT item's own
+ *     stage — never in a dialog, never eight at once;
+ *   - the retired decorative mark stays retired, and the ONE control a film
+ *     carries is the play control inside the veil (owner, 2026-08-28: "the
+ *     sensitive area should only be the button and not the entire video");
+ *   - native controls are NOT declared yet — they arrive on the handover, which
+ *     the gesture walk at the end of this file drives and measures;
+ *   - nothing autoplays, measured (no attribute, still paused, time 0);
+ *   - the source ladder is the manifest's own order, sizes and poster;
+ *   - the stage is the IDENTICAL box the still's was — one block that does not
+ *     resize with its media (owner, 2026-08-28: "make it one single block that
+ *     doesn't expand, reduce based on the media"), with the film reduced inside
+ *     it by `object-fit: contain`.
  *
  * Both items ride one navigation so the two stages are compared as two states
  * of ONE page rather than against numbers this file states — the same
  * discipline the reservation lane below uses. */
-test('a film plays inline on an enlarged widescreen stage, and the play mark is gone (issue 233)', async ({
+test('a film mounts inline in the same block a still gets, behind one play control (issue 233, 243)', async ({
   page,
 }) => {
   await serveGalleryManifest(page);
@@ -2972,9 +3037,17 @@ test('a film plays inline on an enlarged widescreen stage, and the play mark is 
   expect(film.videos, 'the strip mounts a number of players other than exactly one').toBe(1);
   expect(film.dialogVideos, 'the lightbox mounts a player again').toBe(0);
   expect(film.buttons, 'a film’s stage still carries the enlarge button that would eat its presses').toBe(0);
+  /* The one control a film DOES carry, and the owner's "the sensitive area
+     should only be the button": exactly one play control, inside the veil. */
+  await expect(page.locator('.gallery-film-veil .gallery-play')).toHaveCount(1);
   expect(film.player.tag).toBe('VIDEO');
   expect(film.player.inStage, 'the player is not inside the stage it is supposed to fill').toBe(true);
-  expect(film.player.controls, 'the player offers the reader no controls').toBe(true);
+  /* THE CONTROLS ARE NOT DECLARED YET — re-aimed (issue 243). They arrive when
+     the reader presses play; before that the veil owns the surface so a swipe
+     can cross the film without contesting a seek bar. The lane that drives the
+     handover and measures the controls appearing is at the end of this file
+     with the other gesture walks. */
+  expect(film.player.controls, 'a film shows native controls under its own swipe surface').toBe(false);
   expect(film.player.playsinline, 'the player would go fullscreen on a phone instead of playing in place').toBe(true);
   expect(film.player.preload).toBe('metadata');
 
@@ -3011,52 +3084,44 @@ test('a film plays inline on an enlarged widescreen stage, and the play mark is 
     'the smallest rung is gated behind a query, so a narrow viewport can be offered nothing'
   ).toBe(true);
 
-  /* THE STAGE IS WIDESCREEN AND ENLARGED. The ratio holds at every viewport
-     this lane runs, because it is the item's own aspect; the SIZE comparison
-     is gated on a track wide enough to show it, exactly as the still's own
-     cap assertion is — on a 320px phone both stages are the track's width and
-     the film is correctly the shorter of the two. */
-  expect(
-    film.width / film.height,
-    `the film’s stage is ${film.width.toFixed(1)}x${film.height.toFixed(1)}, not the widescreen shape it asks for`
-  ).toBeCloseTo(galleryVideoAspect, 1);
+  /* ONE BLOCK — RE-AIMED (issue 243). This used to require the film's stage to
+     be WIDESCREEN AND ENLARGED, 768x432 against the still's 448 square, and
+     the owner reversed it after seeing it live: "the art box changes heights
+     depending on it being a video or art... make it one single block that
+     doesn't expand, reduce based on the media."
+     So the measurement inverts. The film's stage must be the IDENTICAL box the
+     still's was, at whatever this project's viewport allows, and the film
+     reduces inside it. Measured rather than read off a token, and compared
+     against the box measured earlier in this same run, so a mutation to
+     either side of the comparison shows up as a difference. */
   expect(
     film.width,
-    'the film’s stage is narrower than the square it replaces'
-  ).toBeGreaterThanOrEqual(still.width - subPixel);
-  if (still.width >= galleryStageCapPx - subPixel) {
-    expect(
-      film.width,
-      `the film’s stage is ${film.width.toFixed(1)}px against the still’s ${still.width.toFixed(1)}px; it was not enlarged`
-    ).toBeGreaterThan(still.width);
-    expect(
-      film.width * film.height,
-      'the film’s stage covers no more area than the square it replaces'
-    ).toBeGreaterThan(still.width * still.height);
-    // And it is the token's own box rather than whatever the track allowed.
-    expect(film.width).toBeCloseTo(galleryVideoStageInlinePx, 0);
-    expect(film.height).toBeCloseTo(galleryVideoStageBlockPx, 0);
-  }
-  // The player fills the stage it was given, so the reserved box is the box.
+    `a film’s stage is ${film.width.toFixed(1)}px wide against a still’s ${still.width.toFixed(1)}px; the block changes size with the media`
+  ).toBeCloseTo(still.width, 1);
+  expect(
+    film.height,
+    `a film’s stage is ${film.height.toFixed(1)}px tall against a still’s ${still.height.toFixed(1)}px; the block changes size with the media`
+  ).toBeCloseTo(still.height, 1);
+  // The player fills the stage it was given, so the reserved box is the box —
+  // and `object-fit: contain` is what reduces the film inside it.
   expect(film.player.width).toBeCloseTo(film.width, 0);
   expect(film.player.height).toBeCloseTo(film.height, 0);
+  expect(
+    await page.locator('.gallery-player').evaluate((node) => getComputedStyle(node).objectFit),
+    'the film fills the block by being cropped rather than by being reduced'
+  ).toBe('contain');
 
-  /* AND ON A PHONE IT USES THE WHOLE FRAME (issue 241). The arrows used to
+  /* AND THE BLOCK IS STILL THE WHOLE FRAME (issue 241). The arrows used to
      flank the stage inside this row and took 116px of a 288px card with them,
-     which left a film 172px wide and 97px tall — smaller than the ~48px
-     control bar the player draws inside itself, so half the picture was
-     chrome. With the arrows in the control row the stage is the frame, and on
-     any viewport too narrow for the film's own token width that is exactly
-     what it measures. */
+     which left a film 172px wide and 97px tall. With the arrows in the control
+     row the stage takes the frame's inline size, up to the shared cap. */
   const frameWidth = await page.evaluate(
     () => window.document.querySelector('.gallery-frame').getBoundingClientRect().width
   );
-  if (frameWidth < galleryVideoStageInlinePx) {
-    expect(
-      film.width,
-      `the film stage is ${film.width.toFixed(1)}px inside a ${frameWidth.toFixed(1)}px frame; something else is taking its width`
-    ).toBeCloseTo(frameWidth, 0);
-  }
+  expect(
+    film.width,
+    `the film stage is ${film.width.toFixed(1)}px inside a ${frameWidth.toFixed(1)}px frame`
+  ).toBeCloseTo(Math.min(frameWidth, galleryStageCapPx), 0);
 
   /* THE CONTROLS SHRANK AND THE TARGETS DID NOT (owner: reduce "left, right,
      current media"). Both halves, because a shrink that took the touch target
@@ -3234,13 +3299,22 @@ test('moving between a still and a film shifts the document by nothing (issue 24
   await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
   const back = await shape();
 
-  /* Non-vacuity, and it is the point rather than a formality: the two stages
-     really are different shapes. If they were not, this lane would be
-     measuring a page that cannot shift and proving nothing. */
+  /* NON-VACUITY, RE-AIMED (issue 243). This used to demand that the two
+     stages be DIFFERENT SHAPES — the film shorter than the still — because
+     that difference was what the lane existed to absorb. The owner then ruled
+     the difference itself out: "make it one single block that doesn't expand".
+     So the shapes are now identical by design, and the old guard would refuse
+     the very fix it was written to protect.
+     What replaces it is the stronger statement the new design supports: the
+     kind really did change (already asserted above, image then video then
+     image), and the block did not change WITH it. A mutation that gives a film
+     its own box again is caught by the frame and stage comparisons below, and
+     by the dedicated one-block lane earlier in this file. */
   expect(
-    film.stage.height,
-    `both kinds render a ${film.stage.width}x${film.stage.height} stage, so there is no kind change to measure`
-  ).toBeLessThan(still.stage.height - 1);
+    film.stage,
+    `a film renders a ${film.stage.width}x${film.stage.height} stage against a still's ${still.stage.width}x${still.stage.height}; the visible block changes size with the media`
+  ).toEqual(still.stage);
+  expect(back.kind, 'the strip did not come back to the still it started on').toBe('image');
 
   for (const [label, state] of [
     ['the film', film],
@@ -7262,6 +7336,187 @@ test('the gallery advances on a swipe and settles back on a fidget (issue 219)',
   expect(Math.abs(resting), 'the gallery did not settle back to its resting position').toBeLessThan(1);
 });
 
+/* THE MOTION BATTERY, LAYER 2 (issue 243). The layer scheme is written out in
+ * tests/gesture.test.mjs's header; the short of it is that layer 1 owns every
+ * DECISION the gesture layer makes, exhaustively and in microseconds, and this
+ * layer owns only what an engine has to answer: did a real cascade let the
+ * touch through, did the real transform come back to zero, did the real
+ * document hold still. Everything added here is multiplied by five projects,
+ * so each of these is ONE walk and no walk repeats a layer-1 case. */
+test('a film swipes like a still until the reader presses play (issue 243)', async ({ page }) => {
+  /* The owner's report, driven end to end: "you cannot swipe out of a video,
+     it instead starts to play immediately... the sensitive area should only be
+     the button and not the entire video." */
+  await serveGalleryManifest(page);
+  await visit(page);
+  const stage = page.locator('.gallery-stage');
+  await stage.scrollIntoViewIfNeeded();
+
+  // Onto the film, by the control that names it.
+  await page.getByRole('button', { name: 'Next film' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  await expect(page.locator('.gallery-film-veil')).toHaveCount(1);
+
+  const box = await stage.boundingBox();
+  const drag = (offsets) =>
+    page.evaluate(
+      ([xs, y]) => {
+        const surface = window.document.querySelector('.gallery-film-veil') ?? window.document.querySelector('.gallery-stage');
+        const send = (type, x) =>
+          surface.dispatchEvent(
+            new PointerEvent(type, { pointerId: 31, pointerType: 'touch', clientX: x, clientY: y, bubbles: true })
+          );
+        send('pointerdown', xs[0]);
+        for (const x of xs.slice(1)) send('pointermove', x);
+        send('pointerup', xs.at(-1));
+      },
+      [offsets, box.y + box.height / 2]
+    );
+
+  /* A DRAG ACROSS THE FILM TURNS THE STRIP. This is the whole reversal: on
+     0.1.55 the film's stage carried no binding at all and this walk left the
+     counter exactly where it was. */
+  await drag([0.8, 0.65, 0.45, 0.25].map((at) => box.x + box.width * at));
+  await page.waitForTimeout(320);
+  await expect(
+    page.locator('.gallery-count'),
+    'a swipe across a film did not move the strip'
+  ).toHaveText('Photograph 1 of 2');
+
+  // Back to the film, and check the film is still paused after all that: a
+  // drag must never have started anything.
+  await page.getByRole('button', { name: 'Next film' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  expect(
+    await page.locator('video').evaluate((node) => node.paused),
+    'dragging across a film started it playing'
+  ).toBe(true);
+
+  /* AND THE PRESS IS THE ONE SENSITIVE AREA. Pressing the play control hands
+     the surface over: the veil goes, and the native controls arrive with it.
+     The film itself may or may not decode here — the lane's origin serves no
+     media volume and the sources 404 — so what is measured is the HANDOVER,
+     which is the part the owner reported and the part this component owns. */
+  await page.locator('.gallery-play').click();
+  await expect(
+    page.locator('.gallery-film-veil'),
+    'the swipe surface stayed over the player after the reader asked for the controls'
+  ).toHaveCount(0);
+  await expect
+    .poll(async () => page.locator('video').evaluate((node) => node.controls), {
+      message: 'the player never received the controls the press handed it',
+      timeout: 5_000,
+    })
+    .toBe(true);
+
+  /* AND LEAVING THE FILM TAKES THE HANDOVER BACK (review finding, 2026-08-28).
+     A played film used to be a one-way door: `playingKey` was only cleared on
+     `ended`, so a reader who pressed play, moved to the still, and came back
+     found the controls still declared and the veil gone — the swipe dead end
+     the owner reported, reachable again two navigations later. The repair is
+     structural (every index move runs through `goTo`, which clears the key),
+     and this walk is the exact sequence, in a real engine: play, leave, return,
+     and the film must be back behind its veil with no controls declared. */
+  await page.getByRole('button', { name: 'Previous photograph' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
+  await page.getByRole('button', { name: 'Next film' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  await expect(
+    page.locator('.gallery-film-veil'),
+    'a film played once never gets its swipe surface back; the strip is a dead end there'
+  ).toHaveCount(1);
+  expect(
+    await page.locator('video').evaluate((node) => node.controls),
+    'the returned film still declares the native controls it was handed two navigations ago'
+  ).toBe(false);
+  // ...and the returning film has not started itself either, which is the
+  // absence pin the handover must not be allowed to smuggle past.
+  expect(
+    await page.locator('video').evaluate((node) => node.paused),
+    'the returned film is playing without the reader pressing anything'
+  ).toBe(true);
+
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+test('a dragged gallery writes its offset once a frame, not once an event (issue 243)', async ({
+  page,
+}) => {
+  /* The owner's "swiping is NOT very smooth on the phone", measured in an
+     engine. A finger reports far more moves than a display draws, and each one
+     used to write a custom property on the stage — which invalidates style for
+     its whole subtree. The moves are dispatched in SEPARATE tasks on purpose:
+     a synchronous burst is coalesced by the framework's own batching and would
+     measure nothing about this repair. */
+  await visit(page);
+  const stage = page.locator('.gallery-stage').first();
+  await stage.scrollIntoViewIfNeeded();
+  const box = await stage.boundingBox();
+
+  const swept = await page.evaluate(
+    async ([left, width, midY]) => {
+      const node = window.document.querySelector('.gallery-stage');
+      const writes = [];
+      let frames = 0;
+      const original = CSSStyleDeclaration.prototype.setProperty;
+      CSSStyleDeclaration.prototype.setProperty = function patched(name, value, priority) {
+        if (name === '--gallery-drag') writes.push(value);
+        return original.call(this, name, value, priority);
+      };
+      let counting = true;
+      const count = () => {
+        frames += 1;
+        if (counting) window.requestAnimationFrame(count);
+      };
+      window.requestAnimationFrame(count);
+      const send = (type, x) =>
+        node.dispatchEvent(
+          new PointerEvent(type, { pointerId: 41, pointerType: 'touch', clientX: x, clientY: midY, bubbles: true })
+        );
+      send('pointerdown', left + width * 0.85);
+      // Prove the gesture horizontal first, then a flood of small steps, each
+      // in its own task.
+      send('pointermove', left + width * 0.7);
+      const moves = 30;
+      for (let step = 1; step <= moves; step += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        send('pointermove', left + width * 0.7 - step);
+      }
+      send('pointerup', left + width * 0.7 - moves);
+      counting = false;
+      CSSStyleDeclaration.prototype.setProperty = original;
+      return { writes: writes.length, frames, moves };
+    },
+    [box.x, box.width, box.y + box.height / 2]
+  );
+
+  /* One write per painted frame, plus the release's own flush home. An
+     uncoalesced handler writes once per EVENT, which is `moves` — several
+     times the frame count over the same span. */
+  expect(
+    swept.writes,
+    `${swept.moves} pointer moves across ${swept.frames} frames produced ${swept.writes} style writes`
+  ).toBeLessThanOrEqual(swept.frames + 2);
+  /* ...and the measurement is not vacuous in either direction: frames really
+     did run (so the ceiling is a real one), and the flood really did outnumber
+     them (so there was something to coalesce). */
+  expect(swept.frames, 'no frame ran during the drag; the ceiling above is meaningless').toBeGreaterThan(1);
+  expect(
+    swept.moves,
+    'the flood produced no more events than frames; this lane cannot see a lost throttle'
+  ).toBeGreaterThan(swept.frames);
+  /* And the surface came home, which is the property no optimisation may cost.
+     The wait is the settle's own token duration plus slack — the offset is
+     handed back to zero synchronously on release, and what takes time is the
+     CSS transition drawing it there. */
+  await page.waitForTimeout(320);
+  const resting = await page.evaluate(() => {
+    const button = window.document.querySelector('.gallery-image-button');
+    return new DOMMatrixReadOnly(window.getComputedStyle(button).transform).m41;
+  });
+  expect(Math.abs(resting), 'the coalesced drag left the surface displaced').toBeLessThan(1);
+});
+
 test('the gallery is reachable without a gesture, and says where it is (issue 219)', async ({
   page,
 }) => {
@@ -7650,6 +7905,104 @@ test('the page is never left displaced by a pull, and the native bounce stays su
   expect(settledState.pulling, 'the pulling attribute outlived the pull').toBe(false);
   expect(settledState.phase).toBe('idle');
   expect(settledState.scrollY, 'the page was left scrolled by its own refresh gesture').toBe(0);
+});
+
+test('a completed pull is held long enough to be seen, and says it finished (issue 243)', async ({
+  page,
+}) => {
+  /* The owner's "pull to refresh feels broken" (2026-08-28), measured as the
+     thing that was actually wrong: refreshPanels() resolves against a
+     same-origin endpoint in tens of milliseconds, so the armed hold collapsed
+     before its own 260ms settle had finished drawing. The reader saw the mark
+     flash and vanish, which is indistinguishable from a gesture the site
+     ignored. */
+  await visit(page);
+  await page.evaluate(() => window.scrollTo(0, 0));
+
+  const walk = await page.evaluate(async () => {
+    const indicator = window.document.querySelector('.pull-indicator');
+    const seen = [];
+    const note = () => {
+      const phase = indicator.dataset.pullPhase;
+      if (seen.at(-1)?.phase !== phase) seen.push({ phase, at: performance.now() });
+    };
+    note();
+    const observer = new MutationObserver(note);
+    observer.observe(indicator, { attributes: true, attributeFilter: ['data-pull-phase'] });
+
+    const send = (type, y) =>
+      window.document.body.dispatchEvent(
+        new PointerEvent(type, { pointerId: 61, pointerType: 'touch', clientX: 100, clientY: y, bubbles: true })
+      );
+    send('pointerdown', 100);
+    for (const y of [130, 190, 260, 340]) {
+      send('pointermove', y);
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    }
+    send('pointerup', 340);
+
+    // Wait for the cycle to come all the way home rather than for a duration:
+    // the assertions below are about the timing, so the wait must not be.
+    const deadline = performance.now() + 8000;
+    while (performance.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      note();
+      if (
+        indicator.dataset.pullPhase === 'idle' &&
+        window.document.documentElement.style.getPropertyValue('--page-pull') === '0px' &&
+        seen.some((entry) => entry.phase === 'complete')
+      ) {
+        break;
+      }
+    }
+    observer.disconnect();
+    return {
+      phases: seen.map((entry) => entry.phase),
+      caption: indicator.querySelector('.pull-caption').textContent.trim(),
+      held: seen,
+      pull: window.document.documentElement.style.getPropertyValue('--page-pull'),
+      pulling: window.document.documentElement.hasAttribute('data-pulling'),
+    };
+  });
+
+  /* THE ORDER, and the acknowledgement that did not exist before: refreshing,
+     then a state that says it finished, then home. */
+  expect(walk.phases, `the pull walked ${walk.phases.join(' -> ')}`).toContain('refreshing');
+  expect(
+    walk.phases,
+    'a completed refresh never told the reader it had finished; the gesture is indistinguishable from one that was ignored'
+  ).toContain('complete');
+  expect(walk.phases.at(-1)).toBe('idle');
+  expect(walk.phases.indexOf('complete')).toBeGreaterThan(walk.phases.indexOf('refreshing'));
+
+  /* Timestamps are read from the walk's own transition log. `idle` is looked
+     up AFTER the acknowledgement rather than by first occurrence, because the
+     control starts idle and the first entry is that resting state — measuring
+     from it would report the acknowledgement as having lasted a negative
+     length of time, which is how this lane first failed. */
+  const at = (phase) => walk.held.find((entry) => entry.phase === phase)?.at;
+  const completedAt = walk.held.findIndex((entry) => entry.phase === 'complete');
+  const heldFor = at('complete') - at('refreshing');
+  /* The floor is 700ms. The bound asserted is 500 rather than 700 because a
+     loaded machine's timer can fire late but never early, and because the
+     regression this is written for — no floor at all — lands two orders of
+     magnitude below it at the tens of milliseconds the work itself takes. */
+  expect(
+    heldFor,
+    `the refreshing state was held for ${heldFor.toFixed(0)}ms; the reader cannot see a state that brief`
+  ).toBeGreaterThan(500);
+  const returnedHome = walk.held.slice(completedAt + 1).find((entry) => entry.phase === 'idle');
+  expect(returnedHome, 'the cycle never returned to rest after acknowledging').toBeDefined();
+  const acknowledged = returnedHome.at - at('complete');
+  expect(
+    acknowledged,
+    `the completed state was held for ${acknowledged.toFixed(0)}ms`
+  ).toBeGreaterThan(200);
+
+  // And every settle guarantee the gesture already owed is untouched.
+  expect(walk.pull, 'the page was left displaced after the cycle').toBe('0px');
+  expect(walk.pulling, 'the pulling attribute outlived the cycle').toBe(false);
+  expect(walk.caption).toBe('Pull to refresh');
 });
 
 test('an upward drag from the top is the page’s scroll, never a pull (issue 219)', async ({

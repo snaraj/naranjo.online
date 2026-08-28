@@ -35,13 +35,22 @@
  *   - It ALWAYS returns to zero. Every exit — committed, abandoned, or
  *     cancelled by the browser — runs through the same settle, because a
  *     surface left displaced is the original defect.
+ *   - AND IT IS LEGIBLE (owner report, 2026-08-28: "pull to refresh feels
+ *     broken"). A gesture whose whole visible life is shorter than its own
+ *     settle animation has not communicated anything; the reader sees a
+ *     flicker and concludes the site ignored them. So the refreshing hold has
+ *     a MINIMUM dwell and ends in a brief acknowledgement — see PullMetrics
+ *     and refreshCycle. This adds no delay to the reader's data, which has
+ *     already landed by then; it adds the time it takes to see that it did.
  */
 
-import { claimsHorizontal, rubberBand } from './gesture.ts';
+import { claimsHorizontal, frameCoalescer, rubberBand, type FrameView } from './gesture.ts';
 
-/* How far the surface may ever travel, and how far it must travel to arm.
- * Both are absolute pixels rather than ratios: a pull is a thumb's reach, and
- * a thumb is the same size on a phone and a tablet. */
+/* How far the surface may ever travel, how far it must travel to arm, and how
+ * long the reader is shown the answer. The distances are absolute pixels
+ * rather than ratios — a pull is a thumb's reach, and a thumb is the same size
+ * on a phone and a tablet — and the durations are absolute milliseconds for
+ * the same kind of reason: they are about human perception, not about layout. */
 export interface PullMetrics {
   /* The asymptote of the resistance curve — the distance the pull approaches
      but never reaches, however hard it is dragged. */
@@ -52,9 +61,32 @@ export interface PullMetrics {
      reader can see that something is happening rather than watching it snap
      back and hoping. */
   rest: number;
+  /* THE FLOOR UNDER THE HOLD, and the whole of the owner's "pull to refresh
+     feels broken" (2026-08-28). The work this gesture triggers is
+     `refreshPanels()`, five same-origin conditional GETs that the origin
+     answers from prepared bytes — MEASURED at tens of milliseconds. So the
+     armed hold at `rest` collapsed before it had rendered: the mark appeared,
+     the settle animation was cut off partway, and the surface snapped home.
+     A reader saw a flicker and concluded nothing had happened.
+     The floor is a MINIMUM, never a delay added to a slow refresh: the hold
+     ends when BOTH the work and this have elapsed, so a slow origin is still
+     shown for exactly as long as it takes. 700ms is chosen against the
+     260ms settle this state has to outlive twice over, plus enough dwell for
+     the caption to be read. */
+  dwell: number;
+  /* And then it SAYS SO. A refresh that ends by silently going home is
+     indistinguishable from one that never ran; a brief completed state is the
+     acknowledgement. Short on purpose — it is a receipt, not a dialog. */
+  done: number;
 }
 
-export const pullMetrics: PullMetrics = { limit: 160, threshold: 64, rest: 48 };
+export const pullMetrics: PullMetrics = {
+  limit: 160,
+  threshold: 64,
+  rest: 48,
+  dwell: 700,
+  done: 350
+};
 
 /* How far the surface has actually moved for a given raw drag. The curve is
  * lib/gesture.ts's, shared with the gallery's ends, so the two rubber-bands on
@@ -83,11 +115,52 @@ export function pullProgress(distance: number, metrics: PullMetrics = pullMetric
   return Math.min(1, Math.max(0, distance / metrics.threshold));
 }
 
-/* The four states the control is ever in, in the order a completed pull walks
+/* The five states the control is ever in, in the order a completed pull walks
  * through them. Named rather than derived from a pile of booleans, because the
  * indicator's copy, its aria-live announcement and the settle all branch on the
- * same one thing. */
-export type PullPhase = 'idle' | 'pulling' | 'armed' | 'refreshing';
+ * same one thing.
+ *
+ * `complete` is the state the 0.1.55 gesture had no way to express, which is
+ * why it read as broken: it went from `refreshing` straight back to `idle` in
+ * the same tens of milliseconds the work took, so the only thing a reader
+ * could perceive was the mark disappearing again. */
+export type PullPhase = 'idle' | 'pulling' | 'armed' | 'refreshing' | 'complete';
+
+/* A clock, injectable for the same reason the frame view is: a test that
+ * waited 700 real milliseconds per case would make layer 1 of the motion
+ * battery exactly the slow, flaky thing it exists not to be. */
+export type PullWait = (ms: number) => Promise<void>;
+
+const defaultWait: PullWait = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+/* THE REFRESH CYCLE, in one place, because there are TWO ways to ask for a
+ * refresh — the gesture and the keyboard control — and a reader who presses
+ * the control deserves the identical acknowledgement a reader who pulled gets.
+ * Splitting the timing across the two call sites is how they drift.
+ *
+ * It never rejects and never leaves the caller mid-phase: `refresh` failing is
+ * caught here, so `idle` is reached on every path. That is the settle
+ * guarantee stated at the top of this file, extended to cover the phase as
+ * well as the offset. */
+export async function refreshCycle(
+  refresh: () => Promise<void>,
+  enter: (phase: PullPhase) => void,
+  wait: PullWait = defaultWait,
+  metrics: PullMetrics = pullMetrics
+): Promise<void> {
+  enter('refreshing');
+  /* BOTH, not either: the hold lasts as long as the slower of the work and
+     the floor. A settled promise still resolves through Promise.all, so a
+     refresh that finishes in 12ms waits out the floor, and one that takes two
+     seconds is shown for two seconds. */
+  await Promise.all([refresh().catch(() => {}), wait(metrics.dwell)]);
+  enter('complete');
+  await wait(metrics.done);
+  enter('idle');
+}
 
 export interface PullBinding {
   /* True when the surface is at the very top and a pull may begin. Injected
@@ -104,6 +177,11 @@ export interface PullBinding {
      reason atTop is: this file reads no media query and no DOM. */
   reduced?: () => boolean;
   metrics?: PullMetrics;
+  /* The clock the dwell floor and the completion hold are measured on, and
+     the frame clock the live drag is coalesced against. Injected for tests;
+     production takes the platform's own. */
+  wait?: PullWait;
+  view?: FrameView;
 }
 
 /* The settle, in one place, because "it did not slingshot back" is the defect
@@ -166,6 +244,7 @@ export function settleTo(
 export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
   const metrics = binding.metrics ?? pullMetrics;
   const reduced = () => binding.reduced?.() ?? false;
+  const wait = binding.wait ?? defaultWait;
 
   let pointer = -1;
   let startX = 0;
@@ -174,11 +253,58 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
   let distance = 0;
   let phase: PullPhase = 'idle';
   let cancelSettle: (() => void) | null = null;
+  /* BUSY IS ONE FLAG, not a phase comparison, and the difference is a real
+     defect avoided. The cycle now spans two phases — `refreshing` and
+     `complete` — and a second gesture starting inside the completion hold
+     would drive the surface while a queued `enter('idle')` was still on its
+     way to settle it home. Asking "is a cycle in flight" instead of "which
+     phase is showing" makes that unrepresentable rather than handled.
+
+     IT IS CHECKED IN EXACTLY ONE PLACE, and the invariant that allows that is
+     worth stating because a later edit could quietly break it: `busy` is set
+     only in onUp, which has just set `pointer` to -1, and onDown is the only
+     thing that sets `pointer` back. So while a cycle is in flight NO pointer
+     is tracked, and every handler below already returns on the pointer id it
+     does not recognise. The 0.1.55 shape needed a second check inside onMove
+     because its onDown admitted a gesture mid-refresh; refusing at the door
+     instead means the downstream checks would be guards no input can reach,
+     and this repository does not keep those. */
+  let busy = false;
+  /* Nothing renders after the action is destroyed. The cycle is asynchronous
+     and outlives an unmount by up to a dwell plus a completion hold, and a
+     render into a torn-down component is a defect the previous, synchronous
+     shape could not have. One check, in `show`, for the same reason: every
+     path that renders — the drag, each settle frame, each phase change — goes
+     through it. */
+  let alive = true;
+
+  /* One visible drag update per frame (see frameCoalescer in lib/gesture.ts).
+     The DRAG only: every settle frame and every terminal position goes
+     through `show` directly, because those are already frame-paced or are the
+     final word. */
+  const frames = frameCoalescer<{ next: number; phase: PullPhase }>(
+    ({ next, phase: nextPhase }) => binding.render(next, nextPhase),
+    binding.view
+  );
 
   function show(next: number, nextPhase: PullPhase): void {
     distance = next;
     phase = nextPhase;
-    binding.render(next, nextPhase);
+    /* The coalescer holds at most one queued drag frame; a direct show is the
+       newer truth and must not be overtaken by it. */
+    frames.cancel();
+    if (alive) {
+      binding.render(next, nextPhase);
+    }
+  }
+
+  /* The live drag: internal state updates NOW — every decision below reads
+     `distance` and `phase` synchronously — and only the visible consequence
+     waits for the frame. */
+  function showLive(next: number, nextPhase: PullPhase): void {
+    distance = next;
+    phase = nextPhase;
+    frames.push({ next, phase: nextPhase });
   }
 
   function settle(to: number, nextPhase: PullPhase): void {
@@ -191,7 +317,7 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
        control below the fold; claiming the mouse here would mean a drag on the
        page selecting text stopped working, which is a real regression to trade
        for nothing. */
-    if (event.pointerType !== 'touch' || pointer !== -1 || !binding.atTop()) {
+    if (event.pointerType !== 'touch' || pointer !== -1 || busy || !binding.atTop()) {
       return;
     }
     cancelSettle?.();
@@ -204,7 +330,10 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
   }
 
   function onMove(event: PointerEvent): void {
-    if (event.pointerId !== pointer || phase === 'refreshing') {
+    /* No `busy` check here: while a cycle is in flight no pointer is tracked,
+       so this one already rejects every event a busy cycle could see. See the
+       invariant beside `busy`. */
+    if (event.pointerId !== pointer) {
       return;
     }
     const dx = event.clientX - startX;
@@ -243,7 +372,7 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
       claimed = true;
     }
     const next = pullDistance(dy, metrics);
-    show(next, pullArmed(next, metrics) ? 'armed' : 'pulling');
+    showLive(next, pullArmed(next, metrics) ? 'armed' : 'pulling');
   }
 
   /* THE NATIVE-TOUCH HALF, and the reason the pull works on a physical phone
@@ -294,7 +423,7 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
     }
     node.removeEventListener('touchmove', onTouchMove);
     pointer = -1;
-    if (!claimed || phase === 'refreshing') {
+    if (!claimed) {
       return;
     }
     claimed = false;
@@ -305,13 +434,36 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
       settle(0, 'idle');
       return;
     }
-    /* Armed: hold at the rest offset while the work runs, then settle home
-       whether it succeeded or not. */
-    settle(metrics.rest, 'refreshing');
-    void binding
-      .refresh()
-      .catch(() => {})
-      .finally(() => settle(0, 'idle'));
+    /* Armed: hold at the rest offset for as long as the work AND the dwell
+       floor take, acknowledge, and then settle home — whether the work
+       succeeded or not, and whether or not this action is still mounted. */
+    busy = true;
+    void refreshCycle(binding.refresh, enterPhase, wait, metrics).finally(() => {
+      busy = false;
+    });
+  }
+
+  /* What each phase of the cycle DOES to the surface. The cycle owns the
+     timing; this owns the pixels, which is why the keyboard control in
+     PullToRefresh.svelte can run the identical cycle without inheriting a
+     gesture's displacement. */
+  function enterPhase(next: PullPhase): void {
+    if (next === 'refreshing') {
+      settle(metrics.rest, 'refreshing');
+      return;
+    }
+    if (next === 'complete') {
+      /* HOLD, do not travel: the acknowledgement is shown at the same offset
+         the work was, so the reader reads a state change rather than watching
+         the surface move twice. The in-flight settle is cancelled first —
+         otherwise its own queued frames would write `refreshing` back over
+         the phase that just changed. */
+      cancelSettle?.();
+      cancelSettle = null;
+      show(distance, 'complete');
+      return;
+    }
+    settle(0, 'idle');
   }
 
   function onCancel(event: PointerEvent): void {
@@ -321,9 +473,7 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
     node.removeEventListener('touchmove', onTouchMove);
     pointer = -1;
     claimed = false;
-    if (phase !== 'refreshing') {
-      settle(0, 'idle');
-    }
+    settle(0, 'idle');
   }
 
   node.addEventListener('pointerdown', onDown, { passive: true });
@@ -333,6 +483,8 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
 
   return {
     destroy() {
+      alive = false;
+      frames.cancel();
       cancelSettle?.();
       node.removeEventListener('pointerdown', onDown);
       node.removeEventListener('pointermove', onMove);
