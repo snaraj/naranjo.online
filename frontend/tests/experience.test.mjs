@@ -1281,8 +1281,15 @@ test('an open modal stops the document scrolling behind it, without moving it (i
   const gallery = componentSources['lib/components/MediaGallery.svelte'];
   assert.ok(gallery, 'the gallery component is not where this pin expects it');
   assert.match(gallery, /root\.setAttribute\('data-modal-open', 'true'\)/);
-  assert.match(gallery, /root\.removeAttribute\('data-modal-open'\)/);
-  assert.match(gallery, /root\.style\.removeProperty\('--modal-scrollbar-giveback'\)/);
+  /* BOTH halves of the release inside the effect's own teardown, matched as
+     one block: a removal written into a close handler instead would leave the
+     document locked forever when the component unmounts with the dialog open,
+     which is the case no pair of handlers can reach. */
+  assert.match(
+    gallery,
+    /return \(\) => \{\s*root\.removeAttribute\('data-modal-open'\);\s*root\.style\.removeProperty\('--modal-scrollbar-giveback'\);\s*\};/,
+    'the lock and its giveback are not both released by the effect teardown'
+  );
   /* The measurement reads the viewport against the root's own client box, and
      it must happen BEFORE the attribute goes up — after it, the scrollbar is
      already gone and the difference it measures is zero. */
