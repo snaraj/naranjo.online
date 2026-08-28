@@ -34,8 +34,11 @@ container plus a Helm chart, and deployed by digest onto a self-hosted
 Kubernetes platform. The origin speaks standard HTTP (RFC 9110/9111) only
 and is provider-neutral per the deployment-provider contract below. A
 fail-closed media subsystem — rooted filesystem capability, reserved
-operator namespaces, bounded transfer concurrency — is fully wired but
-disabled, awaiting platform deployment and storage discovery. The current
+operator namespaces, bounded transfer concurrency — is fully wired and, since
+2026-08-27, ENABLED by default in the chart: the storage evidence and the
+provisioned claim it was waiting on both landed, so the shipped values state
+that answer while every refusal that made the answer meaningful stays exactly
+as it was. The current
 hello-world shell is temporary: the site is becoming a media-rich visual
 experience (music, high-quality video, graphics — a music player and
 visual blog hybrid), and the test suite is built so that growth is a
@@ -258,9 +261,12 @@ Build and test, in this order (the same gate CI enforces):
    enforces the coverage floor on the scaffolding-filtered profile.
 3. `helm lint chart && helm template smoke chart --kube-version v1.36.0`
    then the chart pin scripts — `./scripts/ci/chart-ingress-pin.sh`,
-   `./scripts/ci/chart-egress-pin.sh`, `./scripts/ci/chart-media-pin.sh` —
-   for chart changes (the chart requires the platform's Kubernetes target;
-   plain `helm template` defaults to older capabilities).
+   `./scripts/ci/chart-egress-pin.sh`, `./scripts/ci/chart-storage-pin.sh`,
+   `./scripts/ci/chart-media-pin.sh` — for chart changes (the chart requires
+   the platform's Kubernetes target; plain `helm template` defaults to older
+   capabilities). All FOUR run in CI's `chart` job; an earlier revision of
+   this list named only three and left the storage pin discoverable solely
+   from the workflow.
 4. `docker build .` when the Dockerfile or build inputs change.
 
 Releases: every artifact-classified PR advances numeric `VERSION`, chart
@@ -320,14 +326,21 @@ conscious edits, never fights:
   and every pinned test value move in the same commit.
 - Media enablement after the platform deploys: the fail-closed media
   plumbing (reserved namespaces, root validation, concurrency budget) IS
-  the future music/video path and stays fail-closed until the reviewed
-  root and measured concurrency budget exist. Enabling media is chart
-  configuration plus discovery evidence — never code weakening. The chart
-  now DESCRIBES that enabled deployment (issue #207) without being one: the
-  values schema admits `media.enabled: true` only together with a reviewed
-  profile, a named claim, a mount path, and a measured transfer budget, the
-  defaults remain the refusal, and `scripts/ci/chart-media-pin.sh` pins all
-  three directions. The gallery reads its items from a runtime `gallery/v1`
+  the music/video path and stayed fail-closed until the reviewed root and
+  measured concurrency budget existed. Enabling media is chart
+  configuration plus discovery evidence — never code weakening. Issue #207
+  made the chart able to DESCRIBE an enabled deployment: the values schema
+  admits `media.enabled: true` only together with a reviewed profile, a named
+  claim, a mount path, and a measured transfer budget. On 2026-08-27 the
+  evidence landed (issue #182 — a Bound claim on a `local` volume, the tree
+  published, the delivery contract proven against the running binary, the
+  transfer budget measured) and the owner directed enablement, so the shipped
+  defaults now SATISFY that conditional rather than decline it. The
+  conditional itself is unchanged, and `scripts/ci/chart-media-pin.sh` still
+  pins three directions — the default render as exactly one read-only media
+  volume, every incomplete enablement refused by name, and an explicit
+  `media.enabled=false` rendering no media at all. Turning media off stays a
+  values override, never a code change. The gallery reads its items from a runtime `gallery/v1`
   manifest on that volume when one is served and falls back to the vendored
   bootstrap set when it is not, so publishing media becomes an operator file
   copy with no git, CI, or release consequence (`docs/media-manifest.md`).
@@ -764,6 +777,7 @@ included; it is the same battery CI enforces:
       --kube-version v1.36.0                    # chart changes
     ./scripts/ci/chart-ingress-pin.sh           # chart changes
     ./scripts/ci/chart-egress-pin.sh            # chart changes
+    ./scripts/ci/chart-storage-pin.sh           # chart changes
     ./scripts/ci/chart-media-pin.sh             # chart changes
     docker build .                              # Dockerfile/build-input changes
     gitleaks git --no-banner --redact --max-target-megabytes=2 .
@@ -841,8 +855,10 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   coverage floor), `chart` (the ingress peer-identity pin,
   `scripts/ci/chart-ingress-pin.sh`; the whole-render outbound-deny census,
   `scripts/ci/chart-egress-pin.sh`; the media enablement pin,
-  `scripts/ci/chart-media-pin.sh` — media off by default, an incompletely
-  specified enablement unrepresentable, and a read-only mount when enabled;
+  `scripts/ci/chart-media-pin.sh` — media on by default as exactly one
+  read-only volume at both levels, an incompletely specified enablement
+  unrepresentable, and no media at all when it is explicitly disabled;
+  the panels storage pin, `scripts/ci/chart-storage-pin.sh`;
   helm lint + render at
   `--kube-version v1.36.0`; the numeric VERSION ↔ numeric chart `version` ↔
   numeric `appVersion` ↔ plain-v chart `image.tag` four-way lock, plus a render

@@ -324,14 +324,25 @@ EXPECTED_INVENTORY = (
     ("networking.k8s.io/v1", "NetworkPolicy"),
     ("v1", "Service"),
     ("v1", "ServiceAccount"),
-    # The panels data root (issue #142) is deliberately ABSENT here: since
-    # the 2026-08-24 security review (finding M6) panels.data.enabled
-    # defaults to false, so the default render carries neither of its two
-    # statically bound PersistentVolumeClaims (the read-only data claim and
-    # the writable replay-floor state claim of finding H2) — a fresh install
-    # must never render claims against volumes only an admin ceremony can
-    # provide. The enabled, with-pv, and disabled directions are all pinned
-    # by scripts/ci/chart-storage-pin.sh.
+    # The panels data root's two statically bound PersistentVolumeClaims
+    # (issue #142): the read-only data claim carrying the pushed sealed
+    # series, and the writable replay-floor state claim of the 2026-08-24
+    # security review's finding H2. They were deliberately ABSENT from this
+    # inventory while panels.data.enabled defaulted to false under that
+    # review's finding M6 — a fresh install must never render claims against
+    # volumes only an admin ceremony can provide. Both PersistentVolumes are
+    # now applied and Available with claimRefs pre-pinned to these names
+    # (issue #182), so the default is on and the default render carries the
+    # pair. The claims' own semantics — storage class, access modes,
+    # volumeName pinning, read-only/writable mounts — stay owned by
+    # scripts/ci/chart-storage-pin.sh; what this line adds is that their
+    # PRESENCE in the installable render is counted rather than assumed.
+    ("v1", "PersistentVolumeClaim"),
+    ("v1", "PersistentVolumeClaim"),
+    # The media volume is deliberately NOT here even though media is on: the
+    # media claim is operator-provisioned and this chart never renders it
+    # (chart/values.yaml media.claimName only points at the result), so the
+    # render gains a pod volume, not a document.
 )
 
 # A list wrapper may nest, but not indefinitely; a render that needs more

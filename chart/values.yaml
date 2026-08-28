@@ -84,48 +84,76 @@ ingress:
   peerAppName: cloudflare-public
   peerInstance: naranjo-online-tunnel
 
-# Persistent media stays OFF in every deployment this repository describes,
-# and turning it on is an operator decision that needs ADR 0012's Pi storage,
-# backup, reclaim, and saturation evidence AND the platform lane's own
-# provisioning receipt for the claim named below. Nothing here asserts that
-# either exists; the defaults are the refusal.
+# Persistent media is ON. It was off in every deployment this repository
+# described until 2026-08-27, and the reason was never preference: enabling it
+# is an operator decision that needs ADR 0012's Pi storage, backup, reclaim,
+# and saturation evidence AND the platform lane's own provisioning receipt for
+# the claim named below. Both now exist, so the defaults state the answer the
+# evidence supports instead of continuing to state the refusal.
 #
-# What issue 207 changed is the SHAPE of the decision, never the answer. The
-# schema used to pin `enabled: false` and the sentinel profile as the only
-# representable values, which made the chart unable to DESCRIBE an enabled
-# deployment even after the evidence lands. It now describes one — and
-# describes it strictly: enabling requires a real profile, a named claim, a
+# WHAT ISSUE 207 PREPARED AND WHAT LANDED NOW. #207 changed the SHAPE of the
+# decision without answering it: the schema had pinned `enabled: false` and the
+# sentinel profile as the only representable values, which made the chart unable
+# to DESCRIBE an enabled deployment even after the evidence landed. It has since
+# described one strictly — enabling requires a real profile, a named claim, a
 # mount path, and a measured transfer budget, all four together, or the render
-# fails validation. `scripts/ci/chart-media-pin.sh` proves the default render
-# still carries no volume, no mount, and no media environment at all.
+# fails validation. That conditional is UNCHANGED and still refuses every
+# half-specified enablement; what changed here is only that the shipped defaults
+# now SATISFY it rather than decline it.
+#
+# THE EVIDENCE THE ANSWER RESTS ON (receipts on issue #182, not restated as
+# claims this file cannot back):
+#
+#   * the claim named below is Bound, against a 50Gi `local` PersistentVolume
+#     on the platform's own enumerated StorageClass, populated with the real
+#     media tree;
+#   * the delivery contract was proven against the REAL binary rather than a
+#     render — the runtime manifest served 200 with no-store, ranged reads
+#     answered 206 carrying the digest ETag, and all 30 published files
+#     resolved;
+#   * the transfer budget below is measured, not chosen (see maxConcurrent).
+#
+# `scripts/ci/chart-media-pin.sh` pins the inverted truth in all three
+# directions: the DEFAULT render now carries exactly one media volume,
+# read-only at both levels; every incomplete enablement is still refused by
+# name; and an explicit `media.enabled=false` still renders no media at all.
 media:
-  enabled: false
-  # The reviewed storage arrangement an enabled deployment runs under.
-  # UNRESOLVED_PI_MEDIA_STORAGE is not a profile: it is the NAME OF THE
-  # UNANSWERED QUESTION, and the schema refuses it the moment `enabled` is
-  # true. So the sentinel keeps doing exactly what it did before — an enabled
-  # deployment cannot inherit it by forgetting to choose.
-  profile: UNRESOLVED_PI_MEDIA_STORAGE
+  enabled: true
+  # The reviewed storage arrangement this deployment runs under. The other
+  # admissible value, UNRESOLVED_PI_MEDIA_STORAGE, is not a profile: it is the
+  # NAME OF THE UNANSWERED QUESTION, and the schema refuses it the moment
+  # `enabled` is true. It keeps doing exactly what it always did — an enabled
+  # deployment cannot inherit the sentinel by forgetting to choose — and it is
+  # now the value a deployment must deliberately set to express "not decided",
+  # which the schema then refuses beside `enabled: true`.
+  profile: pi-local-static
   # The operator-provisioned PersistentVolumeClaim the read-only media tree
-  # lives on. Empty is the honest value while media is off; the schema
+  # lives on. This chart never creates the claim: provisioning the volume is
+  # the platform lane's step, and this value only points at its result — which
+  # is why naming it was pointless until that result existed. The schema
   # requires it non-empty when enabled is true, so no render can mount a claim
-  # nobody named. This chart never creates the claim: provisioning the volume
-  # is the platform lane's step, and this value only points at its result.
-  claimName: ""
-  # Where that tree appears inside the container. Declared HERE rather than in
-  # the template because it is two facts that must agree — the volumeMount's
-  # path and the MEDIA_ROOT the process reads — and one value cannot disagree
-  # with itself.
-  mountPath: /data/media
-  # The measured transfer budget (MEDIA_MAX_CONCURRENT). 0 is the same kind of
-  # sentinel the profile above uses — "no budget has been measured" — and the
-  # schema refuses it whenever enabled is true, so an enabled deployment must
-  # state a real figure. This chart deliberately offers no default: the number
-  # comes from saturation measurement against the actual storage, and inventing
-  # one here would be a guess wearing an operator's authority. (It is a
-  # sentinel rather than `null` because Helm strips null values out of
-  # values.yaml entirely, which would delete the key a reader came to read.)
-  maxConcurrent: 0
+  # nobody named.
+  claimName: naranjo-online-media
+  # Where that tree appears inside the container, and the exact MEDIA_ROOT the
+  # process reads. Declared HERE rather than in the template because it is two
+  # facts that must agree — the volumeMount's path and MEDIA_ROOT — and one
+  # value cannot disagree with itself. The owner directed this specific path
+  # (2026-08-27) in place of the earlier /data/media default: the tree is the
+  # site's own published media, not a generic data area, and a name that says
+  # so is what an operator reads in `kubectl describe pod`.
+  mountPath: /naranjo-online-media
+  # The measured transfer budget (MEDIA_MAX_CONCURRENT), and the number is
+  # measured rather than chosen: saturation testing against this actual storage
+  # put the knee at 16 concurrent transfers holding roughly 489 MB/s, and
+  # throughput stayed flat from there to 128 concurrent with zero errors. 32 is
+  # twice the knee — enough headroom that a burst is absorbed rather than
+  # queued, while still bounding the process well below the flat region's far
+  # end. 0 remains the "no budget has been measured" sentinel the schema
+  # refuses whenever enabled is true, so a future deployment cannot regress to
+  # an unmeasured figure by clearing this one. (It is a sentinel rather than
+  # `null` because Helm strips null values out of values.yaml entirely, which
+  # would delete the key a reader came to read.)
+  maxConcurrent: 32
 
 # The panel API's background refresh loops, off in every deployment this
 # repository describes. Off means NO loop is started at all, so egress is
@@ -149,24 +177,28 @@ panels:
   # workstation that records the usage, decrypted in-process with a key fed
   # from a Secret, and re-read on a TTL.
   #
-  # OFF by default, like `refresh` above, and the lifecycle is EXPLICIT
-  # (2026-08-24 security review, finding M6, both halves):
+  # ON as of 2026-08-27, and the lifecycle is EXPLICIT (2026-08-24 security
+  # review, finding M6, both halves):
   #
-  #   * enabled=false — the DEFAULT and the fresh-install state — serves the
-  #     token-usage panel from its embedded release-time snapshot: honest
-  #     recorded data, as of the release that shipped it, with the
-  #     envelope's own generatedAt saying exactly how old it is. That is a
-  #     DOCUMENTED DECISION an operator reads here before making, not a
-  #     silent fallback discovered after flipping a value off; disabling a
-  #     running deployment means choosing as-of-release data again, and the
-  #     live sealed feed stops being read.
+  #   * enabled=false serves the token-usage panel from its embedded
+  #     release-time snapshot: honest recorded data, as of the release that
+  #     shipped it, with the envelope's own generatedAt saying exactly how
+  #     old it is. That is a DOCUMENTED DECISION an operator reads here
+  #     before making, not a silent fallback discovered after flipping a
+  #     value off; disabling a running deployment means choosing
+  #     as-of-release data again, and the live sealed feed stops being read.
   #   * enabled=true requires the storage ceremony FIRST (docs/
   #     usage-export.md: both host directories, both admin-applied PVs, the
   #     key Secret) because the claims it renders bind statically to
-  #     pre-provisioned volumes. The earlier default — claims on, PVs off —
-  #     left a FRESH cluster's pod Pending on an unbindable claim; defaults
-  #     must never wedge an install, so the capability defaults off and is
-  #     enabled deliberately, last.
+  #     pre-provisioned volumes. THAT IS WHY THIS DEFAULTED OFF UNTIL NOW,
+  #     and the condition is what changed rather than the rule: both
+  #     PersistentVolumes below are applied and Available with claimRefs
+  #     already pinned to this namespace and these two claim names, and the
+  #     key Secret exists (receipts on issue #182). A fresh install therefore
+  #     binds instead of waiting — the M6 hazard was a pod Pending on an
+  #     UNBINDABLE claim, and there is no longer an unbindable claim to
+  #     render. Flipping this back to false stays fully supported and is the
+  #     documented as-of-release-snapshot decision.
   #
   # Once enabled, every runtime absence still fails closed -- no volume, no
   # file, no key, or a tampered file each leave the panel serving its
@@ -188,12 +220,12 @@ panels:
   # the claim, with bounded required nodeAffinity. Shipping the old shape
   # would have meant shipping something the platform would refuse on arrival.
   #
-  # THIS ALIGNMENT IS NOT YET CONFIRMED BY THE PLATFORM. The dependency is
-  # unlanded: this work stays Draft until website-infrastructure #212 merges
-  # and releases AND the #141/#189 live convergence receipt posts on the
-  # naranjo PR. What changed is the direction of the gap — the chart now
-  # renders what the platform design says it will admit, so the receipt
-  # confirms rather than contradicts it.
+  # THAT ALIGNMENT IS NOW CONFIRMED ON THE LIVE PLATFORM, which is the other
+  # half of why this capability may default on: both PersistentVolumes exist
+  # in the enumerated StorageClass, Available with claimRefs pre-pinned to the
+  # two claim names below, so the shape this chart renders is the shape the
+  # platform actually admitted rather than the shape its design said it would
+  # (receipts on issue #182).
   #
   # The PV template stays CLUSTER-scoped and default-off: the release
   # identity (the least-privilege helm reconciler) deliberately holds no
@@ -203,7 +235,7 @@ panels:
   # the object in git. The claim pins `volumeName` and the PV pins
   # `claimRef`, so neither side can be captured by a stranger.
   data:
-    enabled: false
+    enabled: true
     # The platform StorageClass, named on BOTH the volume and the claim. It
     # provisions nothing (kubernetes.io/no-provisioner); naming it is what
     # binds this pair to the enumerated class instead of leaving an empty

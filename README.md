@@ -94,11 +94,13 @@ no Makefile-side code can intercept that. The environment-variable form is
 not subject to it and is the only form this repository documents or
 supports.
 
-Panels serve their embedded snapshot data egress-free by default; live
-refresh (`PANELS_REFRESH`) stays a production opt-in, never a local default
-(see "Enabling live refresh" below). Media stays disabled unless
+Locally the app serves egress-free and media-free, and that is a property of
+the unset environment rather than a build flag: live refresh (`PANELS_REFRESH`)
+starts no loop unless it is switched on, and media stays disabled unless
 `MEDIA_ENABLED`, `MEDIA_ROOT`, and `MEDIA_MAX_CONCURRENT` are all supplied
-together — unset locally, the app serves with media off.
+together. What the deployed chart supplies is a separate question, answered in
+"Enabling live refresh" and "Media" below; the local default path is unchanged
+either way.
 
 ## Development
 
@@ -332,11 +334,15 @@ compare-and-swap in the origin and by a render that refuses more than one
 replica while the capability is on — not by the access mode: the state claim
 is `ReadWriteOnce`, and the mode that would enforce it in the storage layer,
 `ReadWriteOncePod`, is supported for CSI volumes only and this target runs
-none. The capability defaults OFF in the chart
-(`panels.data.enabled=false`): a fresh install schedules with no storage
-ceremony and serves the embedded release-time snapshot — an explicit,
-documented as-of-release state — and enabling the sealed feed is the
-deliberate last step of the storage ceremony. The end-to-end operator
+none. The capability defaults ON in the chart
+(`panels.data.enabled=true`) since 2026-08-27. It defaulted off for as long as
+the storage ceremony was outstanding, because claims rendered against absent
+volumes leave a fresh install's pod Pending; both PersistentVolumes are now
+applied and Available with claimRefs pre-pinned to these claim names, so the
+claims bind rather than wait. Setting `panels.data.enabled=false` remains
+fully supported and serves the embedded release-time snapshot — an explicit,
+documented as-of-release state, still rendered and still checked on every pull
+request. The end-to-end operator
 manual — key generation, the forced-command push identity, the
 cluster-side directory and PV ceremonies, enablement order, verification,
 and the deliberate failure modes — is `docs/usage-export.md`; the chart
@@ -471,15 +477,20 @@ carve-out with provenance recorded in its `SOURCES.md`, an exact-file
 allowlist plus size ceiling pinned by test, and replacement by the real
 media pipeline tracked in issue #182.
 
-Media is still **disabled**, and enabling it remains an operator decision
-that needs ADR 0012's storage evidence and a provisioned claim. What is
-prepared (issue #207) is everything on this side of that decision: the chart
-can now DESCRIBE an enabled deployment — `media.enabled: true` is
-representable only together with a reviewed profile, a named claim, a mount
+Media is **enabled** as of 2026-08-27. It was an operator decision needing
+ADR 0012's storage evidence and a provisioned claim, and both landed: the
+claim is Bound against a `local` PersistentVolume on the platform's own
+StorageClass and populated with the real tree, and the delivery contract was
+proven against the running binary rather than a render. What issue #207 had
+prepared was everything on this side of that decision — `media.enabled: true`
+is representable only together with a reviewed profile, a named claim, a mount
 path and a measured transfer budget, all four, and the mount it renders is
-read-only — while the shipped defaults stay off and
-`scripts/ci/chart-media-pin.sh` proves the default render carries no media
-volume, no mount and no media environment. On the frontend, the gallery reads
+read-only. That conditional is unchanged; only the answer is. The shipped
+defaults now satisfy it, and `scripts/ci/chart-media-pin.sh` pins the inverted
+truth in all three directions: the default render carries exactly one media
+volume read-only at both levels, every incomplete enablement is still refused
+by name, and `media.enabled=false` still renders no media at all. On the
+frontend, the gallery reads
 a `gallery/v1` manifest from the media volume when one is served and falls
 back to the vendored set above when it is not, and it renders film as well as
 photography: poster in the strip, click-to-play in the lightbox, never
