@@ -42,6 +42,7 @@ import {
   pendingWeeks,
   calendarColumns,
   type GridCell,
+  type SeriesView,
   type ValueFormat
 } from './grid.ts';
 
@@ -87,7 +88,7 @@ export const rangeDays: Readonly<Record<SeriesRange, number | null>> = {
  * answers March 2nd. MEASURED: this function returned a valid day number for
  * February 30th until this test row was written. Re-serialising and demanding
  * the identical string back is what refuses a day that does not exist. */
-function dayNumber(date: string): number | null {
+export function dayNumber(date: string): number | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return null;
   }
@@ -265,19 +266,117 @@ export function seriesReading(columns: readonly GridCell[][]): SeriesReading | n
  *
  * A refused reading says so rather than falling silent or rounding: an
  * unstated figure and a missing line are different claims, and only one of
- * them is honest about arithmetic it declined to do. */
+ * them is honest about arithmetic it declined to do.
+ *
+ * The VIEW changes what the sentence says, never where its figures come from
+ * (issue #170). Every figure below is still taken from the windowed DAILY
+ * cells — the lens' own output repeats one aggregate across every day it
+ * covers, so a total read from it would count each week seven times and each
+ * month thirty-one — and what the view selects is the PERIOD those cells are
+ * grouped into. A reader looking at weekly columns is asking a question about
+ * weeks, and "peaking at 2.1B" answering with a day's figure was the sentence
+ * quietly describing a graph nobody was looking at. */
 export function activityReading(
   columns: readonly GridCell[][],
   noun: string,
-  format: ValueFormat = formatWhole
+  format: ValueFormat = formatWhole,
+  view: SeriesView = 'daily'
 ): string {
   const reading = seriesReading(columns);
   if (reading === null) {
     return `exact ${noun} figures unavailable for this range`;
   }
   const counted = `${format(reading.total)} ${reading.total === 1 ? noun : `${noun}s`}`;
-  const over = `${reading.days} ${reading.days === 1 ? 'day' : 'days'}`;
-  return `${counted} over ${over}, peaking at ${format(reading.peak)}`;
+  if (view === 'daily') {
+    const over = `${reading.days} ${reading.days === 1 ? 'day' : 'days'}`;
+    return `${counted} over ${over}, peaking at ${format(reading.peak)}`;
+  }
+  if (view === 'cumulative') {
+    /* No peak: the peak of a running total IS the total, so stating it would
+       repeat the figure the sentence opens with. What the cumulative lens
+       actually adds is the rate the total was reached at. */
+    const over = `${reading.days} ${reading.days === 1 ? 'day' : 'days'}`;
+    return `${counted} accumulated over ${over}, averaging ${format(
+      Math.round(reading.total / reading.days)
+    )} per day`;
+  }
+  const periods = periodTotals(columns, view);
+  if (periods === null || periods.length === 0) {
+    return `exact ${noun} figures unavailable for this range`;
+  }
+  const unit = view === 'weekly' ? 'week' : 'month';
+  const over = `${periods.length} ${periods.length === 1 ? unit : `${unit}s`}`;
+  const average = Math.round(reading.total / periods.length);
+  const peak = periods.reduce((highest, total) => (total > highest ? total : highest), 0);
+  return `${counted} over ${over}, averaging ${format(average)} per ${unit}, peaking at ${format(
+    peak
+  )} in one ${unit}`;
+}
+
+/* periodTotals folds the window's REAL daily cells into one total per period
+ * the active lens groups by, and is the reason the sentence above can be
+ * per-view at all.
+ *
+ * It reads the DAILY cells, never the lens' output, for the reason stated on
+ * seriesReading: a weekly or monthly lens repeats one aggregate across every
+ * day it covers, so a total taken from it counts each period once per day in
+ * it — seven and thirty-one times over. The grouping is therefore recomputed
+ * here from the same cells the graph draws: a column IS a calendar week, and
+ * a month is the cell's own YYYY-MM, exactly the two groupings lib/grid.ts
+ * paints. A period with no captured day in it contributes no entry, so the
+ * average states a real denominator rather than one padded with holes.
+ *
+ * Refuses (null) on any sum it cannot compute exactly, like everything else
+ * in this module. */
+export function periodTotals(
+  columns: readonly GridCell[][],
+  view: SeriesView
+): number[] | null {
+  if (view === 'weekly') {
+    const totals: number[] = [];
+    for (const column of columns) {
+      let total = 0;
+      let real = false;
+      for (const cell of column) {
+        if (cell.absent) {
+          continue;
+        }
+        const sum = checkedAdd(total, cell.value);
+        if (sum === null) {
+          return null;
+        }
+        total = sum;
+        real = true;
+      }
+      if (real) {
+        totals.push(total);
+      }
+    }
+    return totals;
+  }
+  if (view !== 'monthly') {
+    return null;
+  }
+  const months = new Map<string, number>();
+  const order: string[] = [];
+  for (const column of columns) {
+    for (const cell of column) {
+      if (cell.absent || cell.date.length < 7) {
+        continue;
+      }
+      const month = cell.date.slice(0, 7);
+      const carried = months.get(month);
+      if (carried === undefined) {
+        order.push(month);
+      }
+      const sum = checkedAdd(carried ?? 0, cell.value);
+      if (sum === null) {
+        return null;
+      }
+      months.set(month, sum);
+    }
+  }
+  return order.map((month) => months.get(month) ?? 0);
 }
 
 /* coverageReading is the second half of the same honesty, and the half a

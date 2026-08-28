@@ -30,6 +30,7 @@ import {
   formatDateRange,
   isSafeCount,
   isSeriesRange,
+  periodTotals,
   rangeColumns,
   rangeDays,
   rangeWeeks,
@@ -268,6 +269,109 @@ test('a reading is window-scoped, so the sentence under a graph describes that g
     coverageReading(rangeColumns(cells, '90d')),
     'May 31 – Aug 29, 2026 · every day in range captured'
   );
+});
+
+test('the reading describes the PERIOD the active lens groups by', () => {
+  /* Twenty-eight consecutive days of exactly 1, starting on a Sunday, so the
+     weekly grouping is four full columns and the monthly grouping is two
+     calendar months with a known split — 16 days of August and 12 of
+     September. Every figure below is therefore derivable by hand. */
+  const cells = seriesCells('2026-08-16', Array.from({ length: 28 }, () => 1));
+  const columns = rangeColumns(cells, '30d');
+
+  assert.equal(
+    activityReading(columns, 'token', formatMagnitude, 'daily'),
+    '28 tokens over 28 days, peaking at 1'
+  );
+  assert.equal(
+    activityReading(columns, 'token', formatMagnitude, 'weekly'),
+    '28 tokens over 4 weeks, averaging 7 per week, peaking at 7 in one week'
+  );
+  assert.equal(
+    activityReading(columns, 'token', formatMagnitude, 'monthly'),
+    '28 tokens over 2 months, averaging 14 per month, peaking at 16 in one month'
+  );
+  /* Cumulative states no peak, and that is not an omission: the peak of a
+     running total IS the total, so naming it would repeat the figure the
+     sentence opens with. What the lens actually adds is the rate. */
+  assert.equal(
+    activityReading(columns, 'token', formatMagnitude, 'cumulative'),
+    '28 tokens accumulated over 28 days, averaging 1 per day'
+  );
+
+  /* The default is daily, so every caller that predates the view argument
+     keeps the sentence it had. */
+  assert.equal(
+    activityReading(columns, 'token', formatMagnitude),
+    activityReading(columns, 'token', formatMagnitude, 'daily')
+  );
+
+  /* THE FIGURES COME FROM THE DAILY CELLS, and this is the assertion that
+     proves it rather than asserting it. viewColumns' own output repeats one
+     aggregate across every day it covers, so a reading taken from it would
+     count each week seven times: 196 tokens over 28 days instead of 28. */
+  const weekly = viewColumns(columns, 'weekly');
+  assert.equal(seriesReading(weekly).total, 196);
+  assert.equal(seriesReading(columns).total, 28);
+  assert.match(activityReading(columns, 'token', formatMagnitude, 'weekly'), /^28 tokens/);
+
+  /* Singular units, in the sentence a reader sees. */
+  const week = rangeColumns(seriesCells('2026-08-16', [1, 1]), '30d');
+  assert.equal(
+    activityReading(week, 'token', formatMagnitude, 'weekly'),
+    '2 tokens over 1 week, averaging 2 per week, peaking at 2 in one week'
+  );
+  assert.equal(
+    activityReading(week, 'token', formatMagnitude, 'monthly'),
+    '2 tokens over 1 month, averaging 2 per month, peaking at 2 in one month'
+  );
+});
+
+test('a period with no captured day is no period at all', () => {
+  /* Two real days three weeks apart. The window draws every week between
+     them, and a per-period average that counted the empty weeks would divide
+     by a denominator the capture never measured — the same hole-versus-zero
+     rule the daily reading follows, one grouping up. */
+  const cells = [
+    { value: 4, date: '2026-08-16' },
+    ...Array.from({ length: 21 }, (_, index) => ({
+      value: 0,
+      date: addDays('2026-08-17', index),
+      absent: true
+    })),
+    { value: 6, date: '2026-09-07' }
+  ];
+  const columns = rangeColumns(cells, '90d');
+  assert.deepEqual(periodTotals(columns, 'weekly'), [4, 6]);
+  assert.equal(
+    activityReading(columns, 'token', formatMagnitude, 'weekly'),
+    '10 tokens over 2 weeks, averaging 5 per week, peaking at 6 in one week'
+  );
+  /* A measured ZERO is a period, exactly as it is a day: it was captured. */
+  const withZero = rangeColumns(seriesCells('2026-08-16', [0, 0, 0, 0, 0, 0, 0, 5]), '30d');
+  assert.deepEqual(periodTotals(withZero, 'weekly'), [0, 5]);
+});
+
+test('a period total that cannot be computed exactly refuses the whole sentence', () => {
+  const overflowing = rangeColumns(
+    seriesCells('2026-08-16', [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]),
+    '30d'
+  );
+  assert.equal(periodTotals(overflowing, 'weekly'), null);
+  assert.equal(periodTotals(overflowing, 'monthly'), null);
+  for (const view of ['daily', 'weekly', 'monthly', 'cumulative']) {
+    assert.equal(
+      activityReading(overflowing, 'token', formatMagnitude, view),
+      'exact token figures unavailable for this range',
+      `${view} reported a figure it could not compute`
+    );
+  }
+  /* periodTotals answers only for the two lenses that GROUP; the other two
+     have no period to fold into and say so rather than returning an empty
+     list a caller could mistake for "no periods". */
+  const columns = rangeColumns(seriesCells('2026-08-16', [1]), '30d');
+  assert.equal(periodTotals(columns, 'daily'), null);
+  assert.equal(periodTotals(columns, 'cumulative'), null);
 });
 
 test('figures are checked, and a figure that cannot be computed exactly is stated as unavailable', () => {

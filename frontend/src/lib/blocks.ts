@@ -388,7 +388,15 @@ export type UsageSection = {
   /* Present exactly when there is a series to draw: a heading and a lens
    * toggle over nothing would be the hole the owner's ruling removed. */
   readonly activity?: UsageActivity;
-  readonly insights?: { readonly heading: string; readonly rows: readonly UsageInsight[] };
+  readonly insights?: {
+    readonly heading: string;
+    /* The range the proportions were measured over, when they were measured
+       at all: a live-derived set covers a declared window of the series and
+       says which, and a frozen release-time set carries no note because there
+       is no window it can honestly name. */
+    readonly note?: string;
+    readonly rows: readonly UsageInsight[];
+  };
 };
 
 export type UsageTrackerProps = {

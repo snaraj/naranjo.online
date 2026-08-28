@@ -13,6 +13,9 @@ import {
   formatUtilization,
   meterFillPct,
   meterSeverity,
+  modelLabel,
+  modelShares,
+  modelSlot,
   provenanceIsMixed,
   resetsIn,
   tokenUsagePanelId,
@@ -33,7 +36,7 @@ const [component, helper, manifest, binding] = await Promise.all([
 const envelopeFor = (data, overrides = {}) => ({
   schema: 'panel/v1',
   id: tokenUsagePanelId,
-  kind: 'token-usage/v1',
+  kind: 'token-usage/v2',
   title: 'Fixture Usage',
   status: 'ok',
   generatedAt: '2026-08-11T03:00:00Z',
@@ -41,7 +44,7 @@ const envelopeFor = (data, overrides = {}) => ({
   ...overrides
 });
 
-// The exact payload shape internal/panels serves for token-usage/v1. The two
+// The exact payload shape internal/panels serves. The two
 // source labels are DATA — they appear here exactly as the origin ships them,
 // and the component itself is asserted vendor-free below.
 const shippedPayload = {
@@ -921,6 +924,330 @@ describe('category lens helpers', () => {
       }),
       []
     );
+  });
+});
+
+describe('the model breakdown (token-usage/v2)', () => {
+  const withModels = (models, overrides = {}) => ({
+    sources: [
+      {
+        label: 'alpha',
+        windows: [],
+        series: { startDate: '2026-08-10', totals: [10, 20, 30], models, ...overrides }
+      }
+    ]
+  });
+
+  const modelsOf = (payload) => tokenUsageSources(payload)[0]?.series?.models;
+
+  it('admits an aligned partition and preserves the served order', () => {
+    const models = modelsOf(
+      withModels([
+        { key: 'opus-5', totals: [6, 12, 18] },
+        { key: 'sonnet-5', totals: [4, 8, 12] }
+      ])
+    );
+    assert.deepEqual(
+      models.map((model) => model.key),
+      ['opus-5', 'sonnet-5']
+    );
+    // An aligned breakdown declares no window, which is the ONE spelling of
+    // aligned: a row carrying the series' own start date is refused below.
+    assert.equal(models[0].startDate, undefined);
+  });
+
+  it('admits a declared trailing window and carries it on every row', () => {
+    const models = modelsOf(
+      withModels([
+        { key: 'opus-5', startDate: '2026-08-11', totals: [12, 18] },
+        { key: 'fable-5', startDate: '2026-08-11', totals: [8, 12] }
+      ])
+    );
+    assert.deepEqual(
+      models.map((model) => [model.key, model.startDate, model.totals]),
+      [
+        ['opus-5', '2026-08-11', [12, 18]],
+        ['fable-5', '2026-08-11', [8, 12]]
+      ]
+    );
+  });
+
+  it('refuses every way a window can be a claim the series cannot back', () => {
+    // Restating the series start is a SECOND spelling of aligned, and two
+    // spellings of one state is how the same document renders two ways.
+    assert.deepEqual(
+      modelsOf(withModels([{ key: 'opus-5', startDate: '2026-08-10', totals: [10, 20, 30] }])),
+      undefined
+    );
+    // Before the series: days the series has no totals for.
+    assert.deepEqual(
+      modelsOf(withModels([{ key: 'opus-5', startDate: '2026-08-09', totals: [0, 10, 20, 30] }])),
+      undefined
+    );
+    // Past its end.
+    assert.deepEqual(
+      modelsOf(withModels([{ key: 'opus-5', startDate: '2026-08-13', totals: [] }])),
+      undefined
+    );
+    // Rows that disagree about which window they cover are several
+    // breakdowns wearing one section.
+    assert.deepEqual(
+      modelsOf(
+        withModels([
+          { key: 'opus-5', startDate: '2026-08-11', totals: [20, 30] },
+          { key: 'fable-5', startDate: '2026-08-12', totals: [30] }
+        ])
+      ),
+      undefined
+    );
+    // And a partly-declared breakdown is the same fault by omission.
+    assert.deepEqual(
+      modelsOf(
+        withModels([
+          { key: 'opus-5', startDate: '2026-08-11', totals: [20, 30] },
+          { key: 'fable-5', totals: [0, 0, 0] }
+        ])
+      ),
+      undefined
+    );
+    // A window whose date is not a real calendar day at all — the same
+    // February-30th class lib/periods.ts refuses, reached through the one
+    // implementation both share.
+    assert.deepEqual(
+      modelsOf(withModels([{ key: 'opus-5', startDate: '2026-02-30', totals: [20, 30] }])),
+      undefined
+    );
+  });
+
+  it('refuses a partition that disagrees with the days it claims', () => {
+    assert.deepEqual(
+      modelsOf(withModels([{ key: 'opus-5', startDate: '2026-08-11', totals: [20, 31] }])),
+      undefined
+    );
+    assert.deepEqual(
+      modelsOf(withModels([{ key: 'opus-5', startDate: '2026-08-11', totals: [20] }])),
+      undefined
+    );
+    assert.deepEqual(modelsOf(withModels([{ key: 'opus-5', totals: [10, 20, 29] }])), undefined);
+  });
+
+  it('refuses a key outside the closed model vocabulary, in either direction', () => {
+    // The vocabulary is closed against real-looking strings...
+    assert.deepEqual(modelsOf(withModels([{ key: 'opus-9', totals: [10, 20, 30] }])), undefined);
+    // ...and against the OTHER vocabulary. A category name is not a model
+    // name, and admitting one here would let a document claim a partition of
+    // a thing it never measured.
+    assert.deepEqual(modelsOf(withModels([{ key: 'input', totals: [10, 20, 30] }])), undefined);
+    // The same closure in reverse, through the shared admission.
+    assert.deepEqual(
+      tokenUsageSources({
+        sources: [
+          {
+            label: 'alpha',
+            windows: [],
+            series: {
+              startDate: '2026-08-10',
+              totals: [10, 20, 30],
+              categories: [{ key: 'opus-5', totals: [10, 20, 30] }]
+            }
+          }
+        ]
+      }),
+      []
+    );
+  });
+
+  it('refuses a duplicate row and more rows than the bound allows', () => {
+    assert.deepEqual(
+      modelsOf(
+        withModels([
+          { key: 'opus-5', totals: [5, 10, 15] },
+          { key: 'opus-5', totals: [5, 10, 15] }
+        ])
+      ),
+      undefined
+    );
+    assert.deepEqual(
+      modelsOf(Array.from({ length: 9 }, () => ({ key: 'opus-5', totals: [10, 20, 30] }))),
+      undefined
+    );
+  });
+
+  it('binds model color slots to the entity, and keeps the fallback unreachable', () => {
+    assert.equal(modelSlot('other'), 1);
+    assert.equal(modelSlot('fable-5'), 2);
+    assert.equal(modelSlot('opus-5'), 3);
+    assert.equal(modelSlot('sonnet-5'), 4);
+    assert.equal(modelSlot('opus-4-8'), 5);
+    assert.equal(modelSlot('opus-9'), 0);
+  });
+
+  it('writes a model name rather than humanizing its key', () => {
+    // The reason the labels are a table and the categories are a
+    // transformation: `opus-4-8` humanizes to "opus 4 8", which is not the
+    // product's name. Keys stay machine-shaped on the wire because the
+    // producer's emission guard admits nothing else.
+    assert.equal(modelLabel('opus-4-8'), 'Opus 4.8');
+    assert.equal(modelLabel('fable-5'), 'Fable 5');
+    assert.equal(modelLabel('other'), 'Other');
+    // Every member of the vocabulary has a written form. The fallback returns
+    // the key, so a member missing from the label table would render a
+    // machine identifier in public copy — this is the assertion that makes
+    // the fallback defense rather than a supported spelling.
+    for (const key of ['other', 'fable-5', 'opus-5', 'sonnet-5', 'opus-4-8']) {
+      assert.notEqual(modelLabel(key), key, `${key} has no written name`);
+    }
+    assert.equal(modelLabel('opus-9'), 'opus-9');
+  });
+
+  it('takes shares over the window the models cover, never the whole series', () => {
+    // The distinction that makes the percentages mean anything: the window
+    // holds 50 of the series' 60 tokens, and shares over the series would sum
+    // to 83% while describing nothing anybody asked about.
+    const series = {
+      startDate: '2026-08-10',
+      totals: [10, 20, 30],
+      models: [
+        { key: 'opus-5', startDate: '2026-08-11', totals: [20, 20] },
+        { key: 'fable-5', startDate: '2026-08-11', totals: [0, 10] }
+      ]
+    };
+    const shares = modelShares(series);
+    assert.deepEqual(
+      shares.map((share) => [share.key, share.total]),
+      [
+        ['opus-5', 40],
+        ['fable-5', 10]
+      ]
+    );
+    assert.ok(Math.abs(shares[0].pct - 80) < 1e-9);
+    assert.ok(Math.abs(shares[1].pct - 20) < 1e-9);
+    assert.ok(Math.abs(shares[0].pct + shares[1].pct - 100) < 1e-9);
+  });
+
+  it('reports a zero share for an empty window instead of dividing by zero', () => {
+    assert.deepEqual(
+      modelShares({ startDate: '2026-08-10', totals: [0], models: [{ key: 'other', totals: [0] }] }),
+      [{ key: 'other', total: 0, pct: 0 }]
+    );
+    assert.deepEqual(modelShares({ startDate: '2026-08-10', totals: [1] }), []);
+  });
+});
+
+describe('activity insights provenance', () => {
+  const sourceWith = (extra) => ({
+    label: 'alpha',
+    windows: [],
+    series: {
+      startDate: '2026-08-10',
+      totals: [10, 20, 30],
+      recorded: true,
+      models: [
+        { key: 'opus-5', startDate: '2026-08-11', totals: [20, 20] },
+        { key: 'fable-5', startDate: '2026-08-11', totals: [0, 10] }
+      ]
+    },
+    ...extra
+  });
+
+  it('reads the rows from the live series when the payload carries models', () => {
+    const props = tokenUsageProps(
+      envelopeFor({
+        sources: [
+          sourceWith({
+            insights: [{ label: 'Frozen', pct: 99, recorded: true }]
+          })
+        ]
+      })
+    );
+    const insights = props.sections[0].insights;
+    assert.deepEqual(
+      insights.rows.map((row) => [row.label, row.reading]),
+      [
+        ['Opus 5', '80%'],
+        ['Fable 5', '20%']
+      ]
+    );
+    // The frozen release-time set is not merged in beside the measured one:
+    // two answers to one question is worse than the older answer alone.
+    assert.equal(
+      insights.rows.find((row) => row.label === 'Frozen'),
+      undefined
+    );
+    // And the range is stated, because a percentage with no stated range
+    // invites the reader to assume the widest one.
+    assert.equal(insights.note, 'share of tokens · Aug 11–12, 2026');
+  });
+
+  it('falls back to the shipped insights when no model partition exists', () => {
+    const props = tokenUsageProps(
+      envelopeFor({
+        sources: [
+          {
+            label: 'alpha',
+            windows: [],
+            series: { startDate: '2026-08-10', totals: [10] },
+            insights: [{ label: 'Frozen', pct: 99, recorded: true }]
+          }
+        ]
+      })
+    );
+    const insights = props.sections[0].insights;
+    assert.deepEqual(
+      insights.rows.map((row) => row.label),
+      ['Frozen']
+    );
+    // No note: the frozen set is not measured over any window this panel can
+    // name, and inventing one would be exactly the borrowed freshness the
+    // panel doctrine forbids.
+    assert.equal(insights.note, undefined);
+  });
+
+  it('weighs the DERIVED rows when it decides whether provenance is mixed', () => {
+    // The rows are resolved before the marks are, so a live-derived set is
+    // weighed exactly as a served one. Here the tiles are live and the
+    // derived rows inherit the series' recorded provenance, so the section is
+    // mixed and only the recorded figures carry the mark.
+    const props = tokenUsageProps(
+      envelopeFor({
+        sources: [
+          sourceWith({
+            stats: [{ key: 'lifetime', label: 'Lifetime', value: 7, unit: 'tokens' }]
+          })
+        ]
+      })
+    );
+    const section = props.sections[0];
+    assert.deepEqual(
+      section.insights.rows.map((row) => row.marked),
+      [true, true]
+    );
+    assert.equal(section.tiles[0].marked, false);
+  });
+
+  it('marks nothing when the derived rows and the tiles share one provenance', () => {
+    const props = tokenUsageProps(
+      envelopeFor({
+        sources: [
+          sourceWith({
+            stats: [
+              { key: 'lifetime', label: 'Lifetime', value: 7, unit: 'tokens', recorded: true }
+            ]
+          })
+        ]
+      })
+    );
+    const section = props.sections[0];
+    assert.deepEqual(
+      section.insights.rows.map((row) => row.marked),
+      [false, false]
+    );
+    assert.equal(section.tiles[0].marked, false);
+  });
+
+  it('renders the range note under the heading, gated on it existing', () => {
+    assert.match(component, /\{#if source\.insights\.note\}/);
+    assert.match(component, /<p class="usage-insights-note">\{source\.insights\.note\}<\/p>/);
   });
 });
 

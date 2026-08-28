@@ -1285,6 +1285,71 @@ class CategoryVocabularyParityTest(unittest.TestCase):
         )
 
 
+class ModelVocabularyParityTest(unittest.TestCase):
+    """The closed MODEL vocabulary is ONE fact spelled in three places.
+
+    scripts/capture_usage_series.py MODEL_KEYS (the capture-side guard and
+    the residual fold), internal/panels/types.go modelServeOrder (origin
+    admission and serve order), and frontend/src/lib/token-usage.ts modelSlots
+    (the fixed palette slots and the frontend's own admission). Exactly the
+    three seats the category vocabulary occupies, for exactly the same reason:
+    a key admitted by one side and refused by another is a pipeline that
+    disagrees with itself.
+
+    ORDER matters here as much as membership. modelServeOrder is the canonical
+    SERVE order — the origin walks it to emit rows deterministically, so every
+    replica's bytes and therefore its digest ETag stay identical — and the
+    palette slots are assigned down the same list, so a reordering on one side
+    alone would silently repaint every model (issue #170).
+    """
+
+    REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+    def test_matches_the_go_admission_vocabulary(self):
+        source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
+
+        match = required_match(
+            r"modelServeOrder = \[\]string\{([^}]*)\}",
+            source,
+            "internal/panels/types.go carries no modelServeOrder",
+        )
+        go_keys = tuple(re.findall(r'"([^"]+)"', match.group(1)))
+        self.assertEqual(
+            go_keys,
+            capture_usage_series.MODEL_KEYS,
+            "modelServeOrder in internal/panels/types.go and MODEL_KEYS in "
+            "scripts/capture_usage_series.py must stay identical, in order",
+        )
+
+    def test_matches_the_frontend_palette_slots(self):
+        source = (self.REPO_ROOT / "frontend/src/lib/token-usage.ts").read_text(encoding="utf-8")
+
+        match = required_match(
+            r"modelSlots[^(]*\(\[([^\]]*(?:\][^\]]*)*?)\]\);",
+            source,
+            "frontend/src/lib/token-usage.ts carries no modelSlots",
+        )
+        ts_keys = tuple(re.findall(r"\['([^']+)',\s*\d+\]", match.group(1)))
+        self.assertEqual(
+            ts_keys,
+            capture_usage_series.MODEL_KEYS,
+            "modelSlots in frontend/src/lib/token-usage.ts and MODEL_KEYS in "
+            "scripts/capture_usage_series.py must stay identical, in order",
+        )
+
+    def test_the_residual_member_leads_the_vocabulary(self):
+        # MODEL_KEYS[0] is the residual by RULE, not by convention: the
+        # producer folds an unrecognized identifier into it and counts the
+        # fold, so a vendor renaming a model mid-flight loses the split for
+        # those tokens rather than losing the tokens. A vocabulary edit that
+        # moved it would silently reassign every fold to a real model.
+        self.assertEqual(
+            capture_usage_series.MODEL_KEYS[0],
+            capture_usage_series.MODEL_OTHER,
+            "the residual member must lead MODEL_KEYS; the fold is keyed on it",
+        )
+
+
 class CapParityTest(unittest.TestCase):
     """The payload ceiling is ONE fact spelled in five places.
 

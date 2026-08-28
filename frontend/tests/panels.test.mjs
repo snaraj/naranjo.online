@@ -41,7 +41,7 @@ describe('panel URLs', () => {
 
   it('pins the versioned kind names against the Go registry', () => {
     assert.deepEqual(panelKinds, {
-      tokenUsage: 'token-usage/v1',
+      tokenUsage: 'token-usage/v2',
       vcsActivity: 'vcs-activity/v1',
       bossLog: 'boss-log/v1'
     });
