@@ -1170,6 +1170,110 @@ test('the page reserves the space above its name, derived from the chrome that s
   );
 });
 
+test('the column gives the fixed control its own lane wherever it would run into it (issue 241)', () => {
+  /* The defect, MEASURED on 0.1.54 in Chromium and WebKit alike: <main> ends
+     at exactly the reading-mode trigger's own end edge at every phone width
+     (at 320px the trigger box is x 260-304 and main[16,304]), so scrolling
+     put body text — bullets, card bylines, a card title — under a 44px
+     control 9 to 11 times per sweep at 320, 360, 390, 412 and 768. At 1280
+     and 1440 the count was zero, because there the capped column stops 116px
+     short of it.
+
+     The plate under the glyph answers a DIFFERENT half of the same collision
+     (text must not render through the icon) and cannot answer this one: text
+     a control is painted over is unreadable however opaque the control is.
+
+     Two ranges, and neither is left to chance. Above the handle breakpoint the
+     column's own ceiling already gives back two rail lanes, which puts its end
+     edge at or before the control's start edge — proven arithmetically below
+     rather than asserted. Below it, this reserve does the same job with the
+     same token. */
+  const token = (name) => {
+    const found = new RegExp(`--${name}:\\s*([^;]+);`).exec(stylesCode);
+    assert.ok(found, `--${name} is gone; the control lane is derived from it`);
+    return lengthInPx(found[1].trim());
+  };
+  const gutter = token('page-gutter');
+  const rail = token('page-rail-size');
+  const columnMax = token('page-column-max');
+  assert.ok(gutter !== null && rail !== null && columnMax !== null, 'the lane is built from a length this pin cannot read');
+  assert.equal(rail, 44, 'the reserved lane is no longer the 44px the control actually occupies');
+
+  // The reserve itself, in both branches of #app's padding — the plain one an
+  // engine without env() keeps, and the inset-aware upgrade over it.
+  assert.match(
+    stylesCode,
+    /@media not all and \(min-width: 67\.5rem\) \{\s*#app \{\s*padding-inline-end: calc\(var\(--page-gutter\) \+ var\(--page-rail-size\)\);/,
+    'the column reserves no lane for the fixed control below the handle breakpoint'
+  );
+  assert.match(
+    stylesCode,
+    /padding-inline-end: calc\(max\(var\(--page-gutter\), env\(safe-area-inset-right\)\) \+ var\(--page-rail-size\)\);/,
+    'the inset-aware reserve is gone, so a notched phone loses either its safe area or its control lane'
+  );
+  // The control's own placement is what the lane is measured against: it sits
+  // one gutter in from the viewport's end edge, so its start edge is a gutter
+  // plus its own width away — which is exactly the reserve above.
+  assert.match(stylesCode, /\.page-header \{[^}]*inset-inline-end: var\(--header-inset-inline, var\(--page-gutter\)\)/);
+  assert.match(stylesCode, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
+
+  /* And the breakpoint is the right one, derived rather than trusted. At and
+     above it the column is capped AND gives back two rail lanes, so its end
+     edge — half the viewport plus half the column — never passes the control's
+     start edge. The tightest case is the breakpoint itself; anything wider only
+     adds slack. Below it the column fills the screen, which is the range the
+     reserve above covers. */
+  const breakpointPx = 67.5 * 16;
+  const columnAt = (viewport) => Math.min(columnMax, viewport - 2 * gutter - 2 * rail);
+  for (const viewport of [breakpointPx, breakpointPx + 200, 1920]) {
+    const columnEnd = viewport / 2 + columnAt(viewport) / 2;
+    const controlStart = viewport - gutter - rail;
+    assert.ok(
+      columnEnd <= controlStart,
+      `at ${viewport}px the capped column ends at ${columnEnd}px, past the control's own ${controlStart}px start edge`
+    );
+  }
+  // Non-vacuity: WITHOUT the two-rail giveback the same arithmetic fails at the
+  // breakpoint, which is what makes the range split load-bearing rather than
+  // decorative.
+  const unreserved = Math.min(columnMax, breakpointPx - 2 * gutter);
+  assert.ok(
+    breakpointPx / 2 + unreserved / 2 > breakpointPx - gutter - rail,
+    'the column would clear the control even with no lane reserved at all; this pin proves nothing'
+  );
+});
+
+test('an open modal stops the document scrolling behind it, without moving it (issue 241)', () => {
+  /* MEASURED with the lightbox open on 0.1.54: +485px at an iPhone 13
+     viewport and +1400px at 1280x720. showModal() makes the page inert to
+     POINTER interaction only, so a wheel, a two-finger drag and PageDown all
+     still scrolled it — and closing then returned the reader to a place they
+     never chose, which is the same complaint issue 233 answered for the open
+     half. */
+  assert.match(
+    stylesCode,
+    /html\[data-modal-open\] \{\s*overflow: hidden;\s*\}/,
+    'nothing stops the document scrolling behind an open modal'
+  );
+  /* The zero-CLS half, and it is not decoration: taking `overflow` away takes
+     the scrollbar with it, so on a classic-scrollbar platform the viewport
+     would widen the instant the lightbox opened and snap back on close — a
+     layout shift caused by a control. The gutter is reserved unconditionally,
+     so there is nothing to give back. */
+  assert.match(
+    stylesCode,
+    /html \{\s*scrollbar-gutter: stable;\s*\}/,
+    'the scrollbar gutter is not reserved, so locking the scroll resizes the viewport'
+  );
+  // The state is raised by the component that opens the dialog, and released
+  // by an effect teardown rather than by a pair of handlers that a torn-down
+  // component would never reach.
+  const gallery = componentSources['lib/components/MediaGallery.svelte'];
+  assert.ok(gallery, 'the gallery component is not where this pin expects it');
+  assert.match(gallery, /root\.setAttribute\('data-modal-open', 'true'\)/);
+  assert.match(gallery, /return \(\) => root\.removeAttribute\('data-modal-open'\)/);
+});
+
 test('motion exists only where the reader has not asked for less of it (issue #26)', () => {
   const motion = /^(?:animation|transition)(?:-.+)?$/;
   const moving = sweptRules.filter(

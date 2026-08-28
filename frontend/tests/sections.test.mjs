@@ -939,14 +939,72 @@ test('exactly one frame is ever visible — never eight stacked', () => {
 });
 
 test('prev/next are icon-only, and both wrap around the eight photographs', () => {
-  assert.match(mediaGallery, /aria-label="Previous photograph"/);
-  assert.match(mediaGallery, /aria-label="Next photograph"/);
+  /* RE-AIMED, not relaxed (issue 241). The two labels used to be the literal
+     strings "Previous photograph" and "Next photograph", and on the volume's
+     own gallery four of nine items are films — so the only channel a reader
+     using assistive technology has was stating something false about them.
+     The names are now derived from the item each arrow will REACH, which is a
+     strictly stronger claim than the literals were: it still produces exactly
+     those two strings for a set of stills (the vendored bootstrap set, and
+     e2e/rendering-lanes.spec.mjs presses them by that name), and it cannot
+     produce them for a film. Both halves are pinned — the derivation, and the
+     absence of a hardcoded noun on either control. */
+  assert.match(mediaGallery, /aria-label=\{`Previous \$\{itemNoun\(items\[previousIndex\]\)\}`\}/);
+  assert.match(mediaGallery, /aria-label=\{`Next \$\{itemNoun\(items\[nextIndex\]\)\}`\}/);
+  assert.doesNotMatch(
+    mediaGallery,
+    /aria-label="(?:Previous|Next) \w+"/,
+    'an arrow names a kind literally again, so it will lie about half the strip'
+  );
+  /* The noun itself, and the field it reads: `video` is the same discriminator
+     the stage's own kind attribute is built from, so the word and the element
+     cannot disagree about what an item is. */
+  assert.match(
+    mediaGallery,
+    /function itemNoun\(candidate: MediaGalleryItem\): string \{\s*return candidate\.video === undefined \? 'photograph' : 'film';/,
+    'the label noun is no longer derived from the item’s own kind'
+  );
+  // The neighbours are derived with the same wrap-around arithmetic the moves
+  // are, so a label can never name an item the press will not reach.
+  assert.match(mediaGallery, /const previousIndex = \$derived\(\(index - 1 \+ total\) % total\)/);
+  assert.match(mediaGallery, /const nextIndex = \$derived\(\(index \+ 1\) % total\)/);
   // Text-free navigation affordance (issue 176): the controls carry an
   // accessible name, never visible label prose.
   assert.doesNotMatch(mediaGallery, />Next</);
   assert.doesNotMatch(mediaGallery, />Previous</);
   assert.match(mediaGallery, /index = \(index \+ 1\) % total/, 'next must wrap forward');
   assert.match(mediaGallery, /index = \(index - 1 \+ total\) % total/, 'previous must wrap backward');
+});
+
+test('every position label says what KIND of item it names (issue 241)', () => {
+  /* The other three surfaces the same false noun reached: each dot's own
+     accessible name, the live region that is the only thing announced on a
+     move, and the group's name. All three now read the item rather than
+     assuming it. */
+  assert.match(
+    mediaGallery,
+    /function positionLabel\(at: number\): string \{[\s\S]*?const noun = itemNoun\(items\[at\]\);/,
+    'the position label no longer derives its noun from the item'
+  );
+  assert.match(mediaGallery, /aria-label=\{positionLabel\(at\)\}/, 'a dot no longer names its own item');
+  assert.match(
+    mediaGallery,
+    /<p class="gallery-count" aria-live="polite">\{positionLabel\(index\)\}<\/p>/,
+    'the live region announces a bare ratio again, so a move says nothing about what it landed on'
+  );
+  assert.doesNotMatch(
+    mediaGallery,
+    /aria-label=\{`Photograph \$\{/,
+    'a dot names a kind it has not checked again'
+  );
+  /* The group is named over the SET, not the current item: a name that changed
+     underneath a reader as they arrowed through it would be worse than the
+     wrong noun. */
+  assert.match(
+    mediaGallery,
+    /items\.some\(\(candidate\) => candidate\.video !== undefined\) \? 'Choose a photograph or film' : 'Choose a photograph'/
+  );
+  assert.match(mediaGallery, /aria-label=\{chooseLabel\}/);
 });
 
 /* The enlarged branch, extracted whole. Issue 202 nested a further {#if}
@@ -1058,11 +1116,23 @@ test('a moving item PLAYS in the strip — exactly one video, the current item�
      surface can carry neither element. */
   const enlargedBlock = enlargedBranch(galleryMarkup);
   assert.ok(enlargedBlock.length > 0, 'the enlarged branch is not where this pin expects it');
-  assert.doesNotMatch(
-    enlargedBlock,
-    /<video|<source/,
-    'the lightbox mounts a player again; a film plays in the strip'
-  );
+  assert.doesNotMatch(enlargedBlock, /<video/, 'the lightbox mounts a player again; a film plays in the strip');
+  /* The <source> half, RE-AIMED rather than dropped (issue 241). The enlarged
+     surface now carries a <picture> so a phone is offered the preview instead
+     of the master, and a <picture> is built from <source> elements — so the
+     blanket ban would refuse the responsive image along with the player it was
+     written about. What it was actually protecting is the shape a VIDEO rung
+     has: `src` plus `type`. Every <source> in this branch must instead be an
+     image rendition — `srcset`, no `src`, no media type — which a video rung
+     can never satisfy, and which the ban's own subject therefore still fails. */
+  const enlargedSources = [...enlargedBlock.matchAll(/<source\b[^>]*>/g)].map(([tag]) => tag);
+  assert.ok(enlargedSources.length > 0, 'the enlarged surface offers no rendition choice at all');
+  for (const tag of enlargedSources) {
+    assert.match(tag, /\bsrcset=/, `the lightbox carries a non-image <source>: ${tag}`);
+    assert.doesNotMatch(tag, /\bsrc=/, `the lightbox carries a video-shaped <source>: ${tag}`);
+    assert.doesNotMatch(tag, /\btype=/, `the lightbox carries a media-typed <source>: ${tag}`);
+  }
+  assert.match(enlargedBlock, /<picture>/, 'the enlarged renditions are not inside a <picture>');
 
   /* The element is KEYED on the item, which is what makes "navigating away
      unmounts it" true between two FILMS as well: swapping <source> children
@@ -1158,8 +1228,11 @@ test('the gallery’s painted controls shrank while every target kept its 44px (
      smaller. This repository's established answer is a small mark inside a
      44px hit box, so the pin holds BOTH ends — a shrink that took the target
      with it would be the touch floor broken. */
-  const arrowRule = /\.gallery-frame > \.icon-button \.gallery-glyph\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.ok(arrowRule.length > 0, 'the frame’s arrow glyph is not sized by a rule of its own');
+  /* The arrows moved out of the frame and into the control row under the work
+     (issue 241); the rule that shrinks their ink moved with them, unchanged in
+     everything but the element it is scoped to. */
+  const arrowRule = /\.gallery-controls > \.icon-button \.gallery-glyph\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(arrowRule.length > 0, 'the control row’s arrow glyph is not sized by a rule of its own');
   assert.match(arrowRule, /inline-size: var\(--gallery-arrow-size, 0\.75rem\);/);
   assert.match(arrowRule, /block-size: var\(--gallery-arrow-size, 0\.75rem\);/);
   assert.ok(styles.includes('--gallery-arrow-size: 0.75rem;'), 'styles.css does not declare --gallery-arrow-size');
@@ -1260,10 +1333,19 @@ test('the source ladder renders in the manifest’s own order, never re-ranked (
   // preference. A sort, filter or reverse here would silently hand a reader
   // different bytes than the operator published.
   assert.match(mediaGallery, /\{#each item\.video\.sources as source \(source\.src\)\}/);
-  assert.match(mediaGallery, /<source src=\{source\.src\} type=\{source\.type\} \/>/);
+  /* The rung now also declares WHICH VIEWPORT may ask for it (issue 241), and
+     that is an addition to the ladder rather than a re-ranking of it: the
+     attribute is bound straight from the source the adapter built, so the
+     component still neither computes a breakpoint nor moves a rung. */
+  assert.match(mediaGallery, /<source src=\{source\.src\} type=\{source\.type\} media=\{source\.media\} \/>/);
   for (const forbidden of [/item\.video\.sources\.sort/, /item\.video\.sources\.filter/, /item\.video\.sources\.reverse/]) {
     assert.doesNotMatch(mediaGallery, forbidden, 'the component must not re-rank the manifest’s source ladder');
   }
+  assert.doesNotMatch(
+    mediaGallery,
+    /min-width:/,
+    'the component states a breakpoint of its own; the rung ladder’s breakpoints are the manifest’s own numbers'
+  );
 });
 
 test('the Art block renders the vendored set first and lets a runtime manifest replace it (issue 182/207)', () => {
@@ -1305,12 +1387,32 @@ test('the Art block renders the vendored set first and lets a runtime manifest r
   // that inserts anything between `item.sources` and `.map` is a diff.
   assert.match(
     artBinding,
-    /sources: item\.sources\.map\(\(source\) => \(\{ src: source\.url, type: source\.type \}\)\)/,
+    /sources: item\.sources\.map\(\(source, at\) => \{/,
     'the ladder must be mapped straight through, with nothing between the manifest order and the props'
+  );
+  assert.match(
+    artBinding,
+    /src: source\.url,\n\s+type: source\.type/,
+    'a rung’s url and media type must come straight off the admitted source'
   );
   for (const forbidden of [/\.reverse\(/, /\.sort\(/, /\.toSorted\(/, /\.toReversed\(/]) {
     assert.doesNotMatch(artBinding, forbidden, 'the adapter must not reorder items or renditions');
   }
+  /* The size question is DELEGATED, exactly as the poster choice above is: the
+     rule that decides which viewport may ask for which rung lives beside the
+     ladder it reads (galleryVideoSourceMedia, lib/galleryManifest.ts), where
+     gallery-manifest.test.mjs executes it against real admitted items. This
+     layer zips the answer positionally and computes nothing. */
+  assert.match(filmBranch, /const media = galleryVideoSourceMedia\(item\);/);
+  assert.match(filmBranch, /const query = media\[at\];/);
+  assert.doesNotMatch(
+    artBinding,
+    /min-width|source\.height/,
+    'the adapter derives a breakpoint of its own instead of reading the one the manifest module states'
+  );
+  /* And the preview's own width travels with the item, which is the one number
+     the enlarged surface needs to stop sending every reader the master. */
+  assert.match(artBinding, /previewWidth: item\.preview\.width/);
 });
 
 test('the runtime binding renders its fallback until a non-null replacement arrives', () => {
@@ -1512,10 +1614,96 @@ test('the visible frame is centred in its track, so no gutter is dead space (iss
     1,
     'the frame button declares `position` more than once; the last one wins and the reservation is decided by declaration order'
   );
-  // The track arrangement the centring depends on: a middle column that can
-  // be wider than the frame is exactly what makes the alignment matter.
+  /* The frame the stage is centred in, RE-AIMED (issue 241). It used to be a
+     three-column row — arrow, 1fr track, arrow — and the centring mattered
+     because the stage was narrower than that track. The arrows have left the
+     row, so the track IS the frame; the alignment still matters for exactly
+     the same reason (the stage's inline size is capped by its own token) and
+     is now stated as `place-items: center` beside the reservation. */
   const frame = /\.gallery-frame\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.match(frame, /grid-template-columns:\s*auto 1fr auto/);
+  assert.match(frame, /place-items:\s*center/, 'the stage is no longer centred in the frame');
+  assert.doesNotMatch(
+    frame,
+    /grid-template-columns/,
+    'the frame declares a track arrangement again; the arrows live in the control row now'
+  );
+});
+
+test('the frame reserves ONE box, so changing kind moves nothing (issue 241)', () => {
+  /* The zero-CLS defect this closes, measured: a still's stage is a square and
+     a film's is 16:9, so pressing next across the boundary resized the
+     document — -105.9px at a 390px viewport going still to film, +105.9px
+     coming back. Reserving on the STAGE can never fix that, because the stage
+     is the thing whose shape the kind changes. So the reservation moved up to
+     the frame, which is item-blind and kind-blind by construction: it names no
+     kind attribute, and it is built from the SAME size token the still's own
+     stage is, so the taller of the two shapes is what the page is laid out
+     from and neither stage can exceed it. */
+  const style = styleBlock(mediaGallery);
+  const frame = /\.gallery-frame\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(frame.length > 0, 'the frame rule is not where this pin expects it');
+  assert.match(frame, /inline-size:\s*100%/, 'the frame no longer fills the card, so its reservation follows content');
+  /* The semicolon is load-bearing: `aspect-ratio: 1` also matches "1.7778",
+     which is the film's own ratio and exactly the mutation this pin exists to
+     refuse — a frame shaped like one of the two kinds is the defect. */
+  assert.match(frame, /aspect-ratio:\s*1;/, 'the frame reserves no shape of its own, or reserves one kind’s shape');
+  assert.match(
+    frame,
+    /max-block-size:\s*var\(--gallery-stage-size, 28rem\)/,
+    'the frame’s reservation is not built from the same token the still’s stage is, so the two may disagree'
+  );
+  /* The reservation may not be selected by kind, in either direction: a rule
+     that gave a film a different frame would be this defect written twice. */
+  assert.doesNotMatch(
+    style,
+    /\.gallery-frame\[data-gallery-kind/,
+    'the frame’s box is chosen by the item’s kind again'
+  );
+  assert.doesNotMatch(
+    galleryMarkup,
+    /<div class="gallery-frame"[^>]*data-gallery-kind/,
+    'the frame declares a kind, so the box the page is laid out from can change with the item'
+  );
+  /* And the film's own stage still cannot be taller than that reservation:
+     27rem x 1.7778 is 432px of block against the square's 448, which is what
+     makes "centred inside it" true rather than "overflowing it". */
+  assert.ok(27 < 28, 'a film’s stage is taller than the frame reserved for it');
+});
+
+test('the position marks are one scrolling row, and the artwork accepts a pinch (issue 241)', () => {
+  const style = styleBlock(mediaGallery);
+  const dots = /\.gallery-dots\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(dots.length > 0, 'the dot row rule is not where this pin expects it');
+  /* ONE ROW. Nine 44px targets are 396px, so the old `wrap` put them on two
+     rows at every phone width and three at 250px. The surplus goes to the
+     scroll axis instead, which is this page's standing answer for wide
+     content. */
+  assert.match(dots, /flex-wrap:\s*nowrap;/, 'the dot row wraps again');
+  assert.match(dots, /overflow-x:\s*auto;/, 'the row has nowhere to put the marks that do not fit');
+  /* And the three declarations that let it shrink without taking the page
+     sideways: a scroll container's min-content is still its content's, so a
+     definite zero inline size is what stops 352px of marks propagating up to
+     the page column — MEASURED, `min-inline-size: 0` and a zero flex-basis
+     both leave it propagating. It is grown back to at most its own content, so
+     a row that fits stays exactly as wide as its marks. */
+  assert.match(dots, /inline-size:\s*0;/, 'the row’s minimum contribution is its content again');
+  assert.match(dots, /flex-grow:\s*1;/, 'the row cannot take the space the arrows leave');
+  assert.match(dots, /max-inline-size:\s*max-content;/, 'the row grows past its own marks, pushing the arrows away from them');
+  // A safe centring over a plain one, so an overflowing row is reachable at
+  // its start edge rather than clipped there.
+  assert.match(dots, /justify-content:\s*center;[\s\S]*justify-content:\s*safe center;/);
+
+  /* THE PINCH. `pan-y` alone refuses a two-finger zoom on the one element a
+     reader would ever try it on. The base declaration under it is not
+     decoration: an engine that does not know `pinch-zoom` drops the whole
+     declaration, and without a base that would hand the horizontal axis back
+     to the browser and leave the swipe fighting it. */
+  const stage = [...style.matchAll(/\.gallery-stage\s*\{([^}]*)\}/g)].map(([, body]) => body).join('\n');
+  assert.match(
+    stage,
+    /touch-action:\s*pan-y;[\s\S]*touch-action:\s*pan-y pinch-zoom;/,
+    'the artwork refuses a pinch, or upgrades to one with no base under it'
+  );
 });
 
 test('the lightbox close control paints a small mark, never a disc over the photograph (issue 202)', () => {

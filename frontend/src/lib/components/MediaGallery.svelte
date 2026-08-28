@@ -121,13 +121,35 @@
      film — the player IS the surface — so the dialog's video branch went
      with the change rather than being left unreachable. Navigating the
      lightbox onto a film therefore closes it, which is the one route that
-     could still have landed there. -->
+     could still have landed there.
+
+  ISSUE 241 — five measured defects from a responsiveness sweep of the live
+  0.1.54 origin, answered here and in styles.css:
+
+  1. THE FRAME RESERVES; THE STAGE DOES NOT. A still's stage and a film's are
+     different SHAPES, so moving between kinds resized the document under the
+     reader (-105.9px at 390px, and back again). The reservation moved up one
+     level to .gallery-frame, which holds the square both stages fit inside;
+     each stage is centred in it and a kind change now costs zero pixels.
+  2. ONE CONTROL ROW, UNDER THE WORK. The arrows left the frame. Beside the
+     stage they cost a phone 116px of a 288px card — which left a film
+     172x97, smaller than the control bar drawn inside it — and on a desktop
+     they sat 212px from the artwork at the far edges of their track. Below
+     it they are adjacent at every width and the stage keeps the whole frame.
+  3. THE DOTS ARE ONE ROW THAT SCROLLS, never two or three that wrap.
+  4. LABELS KNOW WHAT AN ITEM IS. "Photograph 7 of 9" on a film is a false
+     statement to the one reader who depends on it, so every accessible name
+     and the live region derive their noun from the item's own kind.
+  5. THE PAGE DOES NOT SCROLL BEHIND THE LIGHTBOX, and the enlarged surface
+     offers a phone the preview rather than the master.
+
+  Each is stated again beside the declaration that carries it. -->
 <script lang="ts">
   import { tick } from 'svelte';
   import FeedCard from './FeedCard.svelte';
   import { swipeHorizontal } from '../gesture.ts';
   import { isChord, ringTarget } from '../keys.ts';
-  import type { MediaGalleryProps } from '../blocks.ts';
+  import type { MediaGalleryItem, MediaGalleryProps } from '../blocks.ts';
 
   let { items, width, height }: MediaGalleryProps = $props();
 
@@ -137,6 +159,38 @@
   let enlarged = $state(false);
 
   const item = $derived(items[index]);
+
+  /* WHAT AN ITEM IS CALLED (issue 241). Every accessible name this component
+     writes used to say "photograph", including on the four films the volume
+     publishes — a label that is simply false, and the one channel a reader
+     using assistive technology has for knowing what they are on. The word is
+     derived from the same field the stage's own kind is (`video`), so the
+     label and the rendered element can never disagree about what an item is. */
+  function itemNoun(candidate: MediaGalleryItem): string {
+    return candidate.video === undefined ? 'photograph' : 'film';
+  }
+
+  /* One item's position, spoken. It is the dots' accessible name AND the live
+     region's whole text, so the announcement a reader gets on every move is
+     the same sentence the control they pressed already carried. */
+  function positionLabel(at: number): string {
+    const noun = itemNoun(items[at]);
+    return `${noun.charAt(0).toUpperCase()}${noun.slice(1)} ${at + 1} of ${total}`;
+  }
+
+  /* The arrows name the item they will REACH rather than the one on screen:
+     "Next film" is the true thing to say about a press that lands on a film,
+     and a reader hearing "next photograph" and getting a video player has been
+     told something wrong by the only label they had. */
+  const previousIndex = $derived((index - 1 + total) % total);
+  const nextIndex = $derived((index + 1) % total);
+
+  /* The group's own name, over the SET rather than the current item: a strip
+     of eight drawings is still a choice of photographs, and one carrying films
+     says so once instead of changing its name underneath a reader. */
+  const chooseLabel = $derived(
+    items.some((candidate) => candidate.video !== undefined) ? 'Choose a photograph or film' : 'Choose a photograph'
+  );
 
   /* Truthiness, not `!== undefined`: an empty string is as absent as a
      missing field for a reader, and rendering an empty row for one is the
@@ -256,6 +310,36 @@
     dotsEl?.querySelectorAll<HTMLElement>('[role="radio"]')[target]?.focus();
   }
 
+  /* THE ROW IS ONE ROW, AND IT SCROLLS (issue 241). Nine 44px targets are
+     396px of controls, so the row wrapped to two lines at every phone width
+     this site supports and to three at 250px — MEASURED — which turned a
+     position affordance into a block of chrome taller than some of the art it
+     indexes. Wrapping was the wrong axis to give: the floor that may not move
+     is the 44px target, the row is WIDE CONTENT, and this page's own rule for
+     wide content is that it scrolls inside its own container rather than
+     taking the page sideways with it (AGENTS.md, rendering lanes stage 1).
+
+     The scroller owes the reader one thing in return, and this is it: the
+     current dot is always brought into view, so "which one am I on" is never
+     a question answered off-screen. Written against the two boxes the engine
+     reports rather than offsetLeft — offsetLeft is measured from the nearest
+     positioned ancestor, which is not promised to be this row — and it moves
+     the ROW's own scrollLeft, never scrollIntoView, because scrollIntoView
+     walks every scrollable ancestor and would take the page with it. */
+  $effect(() => {
+    const row = dotsEl;
+    if (row === undefined) {
+      return;
+    }
+    const dot = row.querySelectorAll<HTMLElement>('[role="radio"]')[index];
+    if (dot === undefined) {
+      return;
+    }
+    const dotBox = dot.getBoundingClientRect();
+    const rowBox = row.getBoundingClientRect();
+    row.scrollLeft += dotBox.left - rowBox.left - (row.clientWidth - dotBox.width) / 2;
+  });
+
   let dialogEl: HTMLDialogElement | undefined = $state();
 
   /* The control that opens the lightbox, kept so closing can put focus back
@@ -287,6 +371,30 @@
     if (enlarged && item.video !== undefined) {
       enlarged = false;
     }
+  });
+
+  /* THE PAGE STAYS WHERE THE READER LEFT IT (issue 241). A modal <dialog>
+     makes the document inert to POINTER interaction, and nothing else: a
+     wheel, a two-finger drag, PageDown and the space bar all still scroll the
+     page underneath the scrim. MEASURED on 0.1.54 with the lightbox open —
+     +485px on an iPhone 13 viewport, +1400px at 1280x720 — after which
+     closing returned the reader to a place they never chose, which is the
+     same complaint issue 233 answered for the OPEN half and this is the other
+     half of.
+
+     The lock is one attribute on the document element, read by one rule in
+     styles.css (`overflow: hidden` plus the stable gutter that keeps the
+     switch free of layout shift). It is written by an effect rather than by
+     the open/close handlers so it cannot be left behind: an effect's teardown
+     runs when `enlarged` goes false AND when this component unmounts with the
+     dialog still open, which no pair of handlers can promise. */
+  $effect(() => {
+    if (!enlarged) {
+      return;
+    }
+    const root = document.documentElement;
+    root.setAttribute('data-modal-open', 'true');
+    return () => root.removeAttribute('data-modal-open');
   });
 
   // showModal()/close() are imperative; this is the one place the dialog's
@@ -329,18 +437,6 @@
   <FeedCard variant="flat">
     {#snippet media()}
       <div class="gallery-frame">
-        <button type="button" class="icon-button" onclick={previous} aria-label="Previous photograph">
-          <svg class="gallery-glyph" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
-            <path
-              d="M14.5 6l-6 6 6 6"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-        </button>
         {#if item.video}
           <!-- A FILM'S STAGE. Same reserved box arithmetic as the still's,
             different token pair (data-gallery-kind picks it), and no gesture
@@ -363,7 +459,7 @@
                 bind:this={playerEl}
               >
                 {#each item.video.sources as source (source.src)}
-                  <source src={source.src} type={source.type} />
+                  <source src={source.src} type={source.type} media={source.media} />
                 {/each}
               </video>
             {/key}
@@ -403,18 +499,6 @@
             </button>
           </div>
         {/if}
-        <button type="button" class="icon-button" onclick={next} aria-label="Next photograph">
-          <svg class="gallery-glyph" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
-            <path
-              d="M9.5 6l6 6-6 6"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-        </button>
       </div>
     {/snippet}
   </FeedCard>
@@ -433,30 +517,68 @@
     following the choice — see onDotsKeydown. A roving tabindex without that
     is not a keyboard affordance, it is seven controls taken away. -->
   <div class="gallery-position">
-    <p class="gallery-count" aria-live="polite">{index + 1} / {total}</p>
-    {#if total > 1}
-      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <div
-        class="gallery-dots"
-        role="radiogroup"
-        tabindex="-1"
-        aria-label="Choose a photograph"
-        bind:this={dotsEl}
-        onkeydown={onDotsKeydown}
-      >
-        {#each items as dot, at (dot.previewSrc)}
-          <button
-            type="button"
-            class="gallery-dot"
-            role="radio"
-            aria-checked={at === index}
-            tabindex={at === index ? 0 : -1}
-            aria-label={`Photograph ${at + 1} of ${total}`}
-            onclick={() => (index = at)}
-          ><span class="gallery-dot-mark" aria-hidden="true"></span></button>
-        {/each}
-      </div>
-    {/if}
+    <p class="gallery-count" aria-live="polite">{positionLabel(index)}</p>
+    <!-- ONE CONTROL ROW, UNDER THE WORK (issue 241). The arrows used to flank
+      the stage inside the frame, and both halves of that cost something the
+      owner reported. On a phone they took 116px of a 288px card — arrows,
+      gaps and nothing else — which left a film 172px wide and 97px tall,
+      SMALLER than the ~48px control bar the player draws inside it. On a
+      desktop they sat at the far edges of a 1fr track, 212px from the artwork
+      they belong to, which is the "content stopping short of its container"
+      shape the owner's no-dead-space rule names. Below the work they are
+      adjacent to it at every width, and the stage gets the frame's whole
+      inline size back. Nothing is taken away: the same two buttons, the same
+      44px targets, the same wrap-around, now beside the dots that already
+      carried the position. -->
+    <div class="gallery-controls">
+      <button type="button" class="icon-button" onclick={previous} aria-label={`Previous ${itemNoun(items[previousIndex])}`}>
+        <svg class="gallery-glyph" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
+          <path
+            d="M14.5 6l-6 6 6 6"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
+      {#if total > 1}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+        <div
+          class="gallery-dots"
+          role="radiogroup"
+          tabindex="-1"
+          aria-label={chooseLabel}
+          bind:this={dotsEl}
+          onkeydown={onDotsKeydown}
+        >
+          {#each items as dot, at (dot.previewSrc)}
+            <button
+              type="button"
+              class="gallery-dot"
+              role="radio"
+              aria-checked={at === index}
+              tabindex={at === index ? 0 : -1}
+              aria-label={positionLabel(at)}
+              onclick={() => (index = at)}
+            ><span class="gallery-dot-mark" aria-hidden="true"></span></button>
+          {/each}
+        </div>
+      {/if}
+      <button type="button" class="icon-button" onclick={next} aria-label={`Next ${itemNoun(items[nextIndex])}`}>
+        <svg class="gallery-glyph" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
+          <path
+            d="M9.5 6l6 6-6 6"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
+    </div>
   </div>
 
   {#if hasCaption}
@@ -498,13 +620,40 @@
              preview — already in cache, it IS the strip's visible frame —
              paints as this element's background so the enlargement opens onto
              the picture instead of a grey void (owner defect report, 0.1.52).
-             The decoded full image then covers it. -->
-        <img
-          class="gallery-lightbox-image"
-          src={item.fullSrc}
-          alt={item.alt}
-          style={`background-image: url("${item.previewSrc}")`}
-        />
+             The decoded full image then covers it.
+
+             WHICH DERIVATIVE, AND WHY IT IS A <picture> (issue 241). The
+             enlarged element used to load the master unconditionally: MEASURED
+             on the volume's own work, a 3840px 1.8 MiB still decoded into a
+             351px box on an iPhone 13 viewport, 5.2 megabytes of pixels for
+             one a reader can see. The rung that fits is already published —
+             every admitted item carries a preview — so the only missing thing
+             was permission to use it.
+
+             A MEDIA query rather than srcset/sizes, and the difference is the
+             whole point. `sizes` is multiplied by the device pixel ratio, so
+             on the 3x phones this defect was reported from a 90vw box asks for
+             ~1053px and would take the 3840px master anyway — the exact
+             behaviour being fixed, wearing a responsive-images costume. A
+             media query is a statement about the VIEWPORT, and the breakpoint
+             is the preview's own declared width: at or below it the preview
+             covers the box at better than 2x on a phone, above it the preview
+             would be upscaled and the master is the honest answer. An item
+             whose source declares no preview width (the vendored bootstrap
+             set) renders exactly the img below and nothing else, because a
+             breakpoint guessed from a file nobody measured is how a reader
+             gets a blurry enlargement. -->
+        <picture>
+          {#if item.previewWidth !== undefined}
+            <source media={`(max-width: ${item.previewWidth}px)`} srcset={item.previewSrc} />
+          {/if}
+          <img
+            class="gallery-lightbox-image"
+            src={item.fullSrc}
+            alt={item.alt}
+            style={`background-image: url("${item.previewSrc}")`}
+          />
+        </picture>
       </div>
       {#if hasMeta}
         <div class="gallery-lightbox-meta">
@@ -526,23 +675,41 @@
 {/if}
 
 <style>
+  /* THE RESERVATION, AND IT IS NOW THE FRAME'S (issue 241). Both stages used
+     to reserve their own box, and the two boxes are different SHAPES — a
+     square for a still, 16:9 for a film — so moving between the two kinds
+     resized the document under the reader: MEASURED at 390px, -105.9px going
+     still to film and +105.9px coming back, which is a zero-CLS floor broken
+     by an ordinary press of the next arrow.
+
+     The fix is that the box a kind can change is no longer the box the page
+     is laid out from. This element reserves the TALLER of the two — the
+     square, built from the same --gallery-stage-size token the still's own
+     stage is, so the two cannot disagree — and each stage is centred inside
+     it. A still fills it exactly (same token, same aspect). A film is the
+     shorter box it always was, now with page ground above and below it rather
+     than a document that shrank. The reservation is byte-independent exactly
+     as the stage's own was, and item-independent as well, which is the part
+     that makes a kind change cost nothing. */
   .gallery-frame {
     display: grid;
-    grid-template-columns: auto 1fr auto;
-    align-items: center;
-    gap: var(--card-meta-gap);
+    place-items: center;
+    inline-size: 100%;
+    aspect-ratio: 1;
+    max-block-size: var(--gallery-stage-size, 28rem);
   }
 
   .gallery-glyph {
     color: inherit;
   }
 
-  /* THE PAINTED ARROW, and only the frame's (owner directive, 2026-08-28:
-     the controls should be smaller). The hit box is .icon-button's own 44px
-     and is untouched — what shrinks is the ink inside it, which is the same
-     trade the lightbox close mark already made. Scoped to the frame's direct
-     children so the close mark, a .gallery-glyph too, keeps its own size. */
-  .gallery-frame > .icon-button .gallery-glyph {
+  /* THE PAINTED ARROW, and only the gallery's own (owner directive,
+     2026-08-28: the controls should be smaller). The hit box is
+     .icon-button's own 44px and is untouched — what shrinks is the ink
+     inside it, which is the same trade the lightbox close mark already made.
+     Scoped to the control row's direct children so the close mark, a
+     .gallery-glyph too, keeps its own size. */
+  .gallery-controls > .icon-button .gallery-glyph {
     inline-size: var(--gallery-arrow-size, 0.75rem);
     block-size: var(--gallery-arrow-size, 0.75rem);
   }
@@ -680,10 +847,63 @@
     white-space: nowrap;
   }
 
+  /* The control row: the two arrows with the position dots between them,
+     centred under the work. */
+  .gallery-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--gallery-controls-gap, 0.25rem);
+    inline-size: 100%;
+  }
+
+  /* ONE ROW, SCROLLED RATHER THAN WRAPPED (issue 241). nine 44px targets are
+     396px wide, so `flex-wrap: wrap` put them on two rows at every phone
+     width and three at 250px — MEASURED — which is a bigger object than the
+     caption it sits under. Nothing about the target moves: the floor is
+     44x44 and the dots below still declare it. What changes is the axis the
+     surplus goes to, which is this page's standing answer for wide content —
+     it scrolls inside its own container and never takes the document
+     sideways with it.
+
+     `safe center` is stated over a plain `center` base: a centred flex line
+     that overflows is unreachable at its START edge, and `safe` degrades that
+     to flex-start. An engine without it keeps the base, which is exactly
+     today's centring — the same base-then-upgrade shape every progressive
+     value on this page is written in.
+
+     The scrollbar is hidden because the dots ARE the affordance — nine marks,
+     one of them lit, kept in view by the effect above — and a 15px classic
+     scrollbar under a 4px dot is chrome about chrome. */
   .gallery-dots {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     justify-content: center;
+    justify-content: safe center;
+    /* THE THREE DECLARATIONS THAT MAKE IT SHRINKABLE, and none of them is
+       ceremony — MEASURED across all three engines while fixing this. A
+       scroll container's min-content size is still its CONTENT's, so a row
+       of nine 44px marks contributed 352px of minimum width all the way up
+       to the page column, which then overflowed the viewport by 144px at
+       320px. `min-inline-size: 0` does not touch that (it changes the
+       automatic minimum, not the contribution) and neither does a zero
+       flex-basis (engines read the WIDTH property for the contribution); a
+       definite zero inline size does, in every engine.
+       It is then grown back: flex-grow takes the space the arrows leave, and
+       the max-content ceiling stops it there — so a row that fits is exactly
+       as wide as its marks and the arrows stay beside them, while a row that
+       does not fit takes what there is and scrolls the rest. */
+    inline-size: 0;
+    flex-grow: 1;
+    max-inline-size: max-content;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+
+  .gallery-dots::-webkit-scrollbar {
+    display: none;
   }
 
   /* A 44px hit box around a small painted mark, exactly as the lightbox's
@@ -706,6 +926,10 @@
     border: 0;
     background: transparent;
     cursor: pointer;
+    /* In a scrolling row a dot must not be squeezed under its own floor by
+       flex, and it is the snap point the row settles on. */
+    flex: 0 0 auto;
+    scroll-snap-align: center;
   }
 
   /* The painted mark, at its own token (owner directive, 2026-08-28: the
@@ -740,9 +964,19 @@
      a reader scrolling the page through the photograph scrolls the page — the
      gesture layer never even sees that gesture. Only the horizontal axis is
      ours to claim, and lib/gesture.ts still refuses to claim it until a drag
-     has proven itself horizontal. */
+     has proven itself horizontal.
+
+     `pinch-zoom` joins it (issue 241): `pan-y` alone hands the compositor the
+     vertical axis and REFUSES everything else, including a two-finger zoom —
+     so a reader who put both fingers on the artwork to look closer at it was
+     told no by the one element they would ever try that on. The base
+     declaration is stated first for an engine that does not know the value:
+     an unsupported touch-action value drops the whole declaration, which
+     would hand the horizontal axis back to the browser and leave the swipe
+     fighting a scroll that has nothing to scroll. */
   .gallery-stage {
     touch-action: pan-y;
+    touch-action: pan-y pinch-zoom;
   }
 
   /* The drag itself: a plain translate, so it is composited rather than

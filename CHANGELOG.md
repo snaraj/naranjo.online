@@ -15,6 +15,18 @@ arrived painted a blank white rectangle, a boot that never completed rendered
 a bare heading with no explanation and no way out, and the site declared no
 icon at all.
 
+A responsiveness sweep of the same live origin through all three engines, at
+250 to 1920 CSS pixels, then found ten more (issue 241) — and the blocker
+among them has the same shape as the three above: the page was answering a
+question nobody had asked it. The published video ladder let codec support
+decide which rendition a reader gets, so a phone streamed the 874 MiB 4K
+master into a 242x136 box and the 720p rung was selected by no engine at any
+viewport. Beside it: a lightbox the page scrolled behind, a fixed control
+painted over body text at every phone width, a document that resized when the
+strip moved from a still to a film, a film smaller than its own control bar, a
+lightbox that loaded a 3840px master into a 351px box, a dot row that wrapped
+onto three lines, and labels calling four films photographs.
+
 ### Added
 
 - `frontend/public/favicon.svg`: the site's own "SN." mark, the one `og.png`
@@ -36,6 +48,30 @@ icon at all.
 - `--gallery-stage-ground` in `frontend/src/styles.css`: the letterbox a film
   is projected onto, mode-independent for the same reason `--gallery-scrim`
   is.
+- `galleryVideoSourceMedia` in `frontend/src/lib/galleryManifest.ts` (issue
+  241): which viewport may ask for which rung, decided beside the ladder that
+  declares them and executed by `tests/gallery-manifest.test.mjs`. Rungs are
+  grouped by height and each group above the smallest is offered from the next
+  smaller rung's own native width, derived through the item's declared box —
+  for a 3840x2160 item publishing 2160/1080/720 that is no query at all on
+  720p, `(min-width: 1280px)` on 1080p and `(min-width: 1920px)` on 2160p. The
+  floor never carries a query, so a film can never become unplayable by
+  arithmetic, and every rung of one height carries the same query, so codec
+  fallback inside a size class is untouched.
+- The page's own lane for the fixed reading-mode control, in
+  `frontend/src/styles.css`: below the handle breakpoint `#app` reserves
+  `--page-rail-size` on its inline end, so the column ends where the control
+  starts. Above that breakpoint the column's existing two-rail giveback
+  already clears it — proven arithmetically in `experience.test.mjs` rather
+  than assumed.
+- `html[data-modal-open] { overflow: hidden }` plus an unconditional
+  `scrollbar-gutter: stable`: the document no longer scrolls behind an open
+  lightbox, and the lock costs no layout shift because the gutter it would
+  otherwise reclaim was never given back. The attribute is raised by an effect
+  in `MediaGallery.svelte`, so its teardown covers an unmount with the dialog
+  still open.
+- `--gallery-controls-gap`: the space between the two arrows and the dot row
+  they now bracket.
 
 ### Changed
 
@@ -48,6 +84,38 @@ icon at all.
   `var(--gallery-stage-ground)`. The stage declared no background at all, so
   a poster still in flight showed the page's near-white surface through the
   reservation. The reservation itself is untouched: CLS stays zero.
+- **The gallery reserves on the FRAME, not on the stage** (issue 241). A
+  still's stage is a square and a film's is 16:9, so with each reserving its
+  own box a kind change resized the document under the reader — measured at
+  -105.9px going still to film at a 390px viewport, and +105.9px coming back.
+  `.gallery-frame` now holds the square both stages fit inside, built from the
+  same `--gallery-stage-size` token the still's stage is, and each stage is
+  centred in it. Neither stage's own arithmetic changed.
+- **The prev/next arrows moved out of the frame and under the work**, into one
+  control row with the position dots. Beside the stage they cost a 320px phone
+  116px of a 288px card — which left a film 172x97, smaller than the ~48px
+  control bar drawn inside it — and on a desktop they sat 212px from the
+  artwork at the far edges of their track. Measured after: the film stage is
+  the frame's full width at every phone size (288px at 320px, +67%), and each
+  arrow sits 4px from the marks it brackets on all three engines.
+- **The dot row is one row that scrolls**, never two or three that wrap. Nine
+  44px targets are 396px wide; the targets are untouched and the surplus goes
+  to the scroll axis inside the row's own container. A definite zero inline
+  size is what stops its 352px minimum propagating to the page column —
+  measured, `min-inline-size: 0` and a zero flex-basis both leave it
+  propagating in all three engines — and a `max-content` ceiling grows it back
+  no further than its own marks.
+- **Every accessible name and the live region derive their noun from the
+  item's kind**: "Film 7 of 9" rather than "Photograph 7 of 9", on the dots,
+  on both arrows (which name the item they will reach), and in the announcement
+  a reader gets on every move.
+- **The lightbox offers a phone the preview and a wide screen the master**,
+  through a `<picture>` whose breakpoint is the preview's own declared width.
+  A media query rather than `srcset`/`sizes` deliberately: `sizes` is
+  multiplied by device pixel ratio, so on the 3x phones this was reported from
+  a 90vw box asks for ~1053px and would take the 3840px master anyway.
+- `.gallery-stage` declares `touch-action: pan-y pinch-zoom` over its
+  `pan-y` base, so a two-finger zoom on the artwork is no longer refused.
 
 ### Tests
 
@@ -64,6 +132,25 @@ icon at all.
   the wire and requires a media type Go's built-in table supplies, so a
   development machine's richer MIME registry cannot vouch for an extension
   production would fail on.
+- `gallery-manifest.test.mjs` executes the rung rule against real admitted
+  items: the breakpoints, that the floor is never gated, that two rungs of one
+  height are offered together, that the item's own aspect (not an assumed
+  16:9) supplies the widths, and that the answer stays positional.
+- `experience.test.mjs` derives the control-lane breakpoint from the four
+  tokens it is made of and proves the arithmetic fails without the two-rail
+  giveback, so the range split is load-bearing rather than decorative; it also
+  pins the scroll lock and the stable gutter.
+- `sections.test.mjs` re-aims three pins rather than relaxing them — the
+  arrows' names are now derived and cannot produce a kind literal, the
+  lightbox's `<source>` ban is now "image renditions only" (`srcset`, no
+  `src`, no `type`), which a video rung still fails — and adds pins for the
+  frame's kind-blind reservation, the one-row dot scroller and the pinch.
+- `rendering-lanes.spec.mjs` adds five lanes measured in every engine: which
+  rung a viewport actually REQUESTS, zero document shift across a kind change,
+  the page held still behind an open lightbox and restored exactly on close,
+  one row of full-size marks at 250px and every phone width, and the enlarged
+  rendition a viewport selects. The occlusion lane now sweeps the widths the
+  defect was found at instead of only its project's own.
 
 ## [0.1.54] - 2026-08-28
 

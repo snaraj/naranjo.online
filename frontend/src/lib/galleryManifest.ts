@@ -452,6 +452,62 @@ export function galleryPosterAsset(item: GalleryItem): GalleryAsset {
   return item.poster ?? item.preview;
 }
 
+/* WHICH RUNG A VIEWPORT IS ALLOWED TO ASK FOR, decided here beside the ladder
+ * that declares them (issue 241). The `sources` comment above is true and was
+ * not enough: the browser takes the first source it can PLAY, and "can play"
+ * is a question about codecs alone. So on every engine that decodes the
+ * high-efficiency rung — WebKit and Gecko both do — a phone streamed the 4K
+ * master into a box a few hundred CSS pixels wide, and the smallest rung on
+ * the ladder was selected by nobody, ever. MEASURED on the live volume's own
+ * film at 0.1.54: a 874 MiB 2160p file into a 242x136 box on an iPhone 13
+ * viewport, with the 720p rung dead on the page.
+ *
+ * `media` on a <source> is the mechanism the resource selection algorithm
+ * already has for this: a source whose media query does not match is SKIPPED
+ * before its type is ever considered, so the ladder becomes two questions in
+ * the right order — how big a rendition may this viewport ask for, then which
+ * of the rungs that size can it decode.
+ *
+ * THE BREAKPOINTS ARE THE MANIFEST'S OWN NUMBERS, never a per-film literal.
+ * Rungs are grouped by height, and each group above the SMALLEST is offered
+ * from the viewport width at which the next smaller rung would start being
+ * upscaled — that rung's own native width, derived from its height through
+ * the item's declared aspect (`full`'s width and height, both admitted). For
+ * a 3840x2160 item publishing 2160/1080/720 that reads: 720p is the floor and
+ * carries no query at all, 1080p from 1280px, 2160p from 1920px. A phone gets
+ * the floor, a laptop the middle rung, a large display the master.
+ *
+ * Two properties fall out of it and both are deliberate. The floor NEVER
+ * carries a query, so some source always matches and a film can never become
+ * unplayable by arithmetic. And every rung of one height carries the SAME
+ * query, so codec fallback inside a size class is untouched — order still
+ * decides which of two equally sized renditions a browser takes, which is the
+ * rule the `sources` field already states.
+ *
+ * The answer is per-source and positional, so the caller can zip it against
+ * `item.sources` without this module reordering anything. A still, or a film
+ * whose rungs are all one height, gets undefined for every source: there is
+ * nothing to choose between, and an unnecessary query is one more way for a
+ * viewport to be told no. */
+export function galleryVideoSourceMedia(item: GalleryItem): readonly (string | undefined)[] {
+  const sources = item.sources;
+  if (sources === undefined) {
+    return [];
+  }
+  const heights = [...new Set(sources.map((source) => source.height))].sort((first, second) => first - second);
+  /* The native width a rung of height H covers, through the item's own
+     declared aspect. Rounded to a whole pixel because it becomes a media
+     query, and a query is a number a reader could check by hand. */
+  const nativeWidth = (height: number): number => Math.round((height * item.full.width) / item.full.height);
+  return sources.map((source) => {
+    const rung = heights.indexOf(source.height);
+    if (rung < 1) {
+      return undefined;
+    }
+    return `(min-width: ${nativeWidth(heights[rung - 1])}px)`;
+  });
+}
+
 export type GalleryManifestFetcher = (url: string) => Promise<Response>;
 
 /* The wrapper keeps fetch called as a plain global (never an unbound method)

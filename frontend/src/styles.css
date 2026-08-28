@@ -716,6 +716,36 @@ body {
   overscroll-behavior-y: none;
 }
 
+/* THE DOCUMENT DOES NOT SCROLL UNDER AN OPEN MODAL (issue 241).
+   showModal() makes the rest of the page inert to POINTER interaction and
+   nothing else, so a wheel, a two-finger drag, PageDown and the space bar
+   all still moved the page behind the scrim — MEASURED with the lightbox
+   open on 0.1.54: +485px at an iPhone 13 viewport and +1400px at 1280x720,
+   after which closing put the reader somewhere they never chose.
+
+   Written here rather than inside MediaGallery.svelte because the element it
+   applies to is the document itself, which a scoped component style cannot
+   reach; the component writes the attribute and nothing else, so the rule and
+   the state that raises it stay one thing.
+
+   The stable gutter is the zero-CLS half and it is NOT decoration. Taking
+   away `overflow` takes away the scrollbar with it, and on any platform with
+   a classic (space-taking) scrollbar the page would widen by its thickness
+   the instant the lightbox opened and snap back on close — a layout shift
+   caused by a control, which is the floor this page holds hardest. Reserving
+   the gutter unconditionally means there is nothing to give back: the
+   viewport measures the same open and closed. It costs nothing on the
+   overlay-scrollbar platforms (macOS, every phone), where the gutter is zero
+   wide, and nothing on this page even where it is not — the document is
+   always long enough to scroll, so the space was already spoken for. */
+html {
+  scrollbar-gutter: stable;
+}
+
+html[data-modal-open] {
+  overflow: hidden;
+}
+
 /* THE PULL'S OWN TRAVEL (issue 219). The declaration above is what makes this
    possible rather than what it fights: with the native boundary effect
    suppressed there is no browser animation competing for the same drag, so
@@ -807,6 +837,47 @@ textarea {
   #app {
     padding-inline: max(var(--page-gutter), env(safe-area-inset-left)) max(var(--page-gutter), env(safe-area-inset-right));
     padding-block: max(var(--page-top-space), env(safe-area-inset-top)) calc(2rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* THE FIXED CONTROL'S OWN LANE (issue 241). The reading-mode control is glued
+   to the viewport's top-end corner, and on any viewport where the column
+   reaches that corner the column and the control claim the same pixels.
+   MEASURED on 0.1.54, Chromium and WebKit alike: at 320px the trigger box is
+   x 260-304 and <main> ends at exactly 304, and scrolling the page put body
+   text under it 9 to 11 times per sweep at 320, 360, 390, 412 and 768 — bullet
+   items, card bylines and a card TITLE among them. At 1280 and 1440 the count
+   was zero, because there the capped column ends 116px short of the control.
+
+   The plate under the glyph (.page-header, below) is what keeps the text from
+   rendering THROUGH the icon, and it is the right answer to that half. It is
+   not an answer to this one: legible text a reader cannot read because a
+   control is painted over it is still unreadable. So the page reserves the
+   control's lane wherever the column would otherwise run into it, exactly the
+   way the column already gives back its two 44px rail lanes above the handle
+   breakpoint below — same token, same reasoning, the other side of the same
+   breakpoint.
+
+   The breakpoint is not a taste: above 67.5rem the ceiling below already
+   reserves two rail lanes from a capped column, which puts its end edge at or
+   before the control's start edge at every width (at exactly 67.5rem they
+   touch, and the gap only grows). Below it the column fills the screen and
+   nothing separates the two. So this states the SAME reserve for the range the
+   rule below does not cover, and neither range is left to chance.
+
+   Base then inset-aware, for the reason the pair above is written that way: an
+   engine without env() must be left with a real gutter rather than none. */
+@media not all and (min-width: 67.5rem) {
+  #app {
+    padding-inline-end: calc(var(--page-gutter) + var(--page-rail-size));
+  }
+}
+
+@supports (padding: env(safe-area-inset-right)) {
+  @media not all and (min-width: 67.5rem) {
+    #app {
+      padding-inline-end: calc(max(var(--page-gutter), env(safe-area-inset-right)) + var(--page-rail-size));
+    }
   }
 }
 
@@ -1299,6 +1370,11 @@ h1 {
      asked to be able to tune. */
   --gallery-dot-size: 0.25rem;
   --gallery-dot-active-scale: 1.5;
+  /* The space between the two arrows and the dot row they now bracket (issue
+     241). A token like every other dimension of this card, and a small one on
+     purpose: the arrows belong to the dots, and the whole row belongs under
+     the work rather than reading as three separate controls. */
+  --gallery-controls-gap: 0.25rem;
   --gallery-scrim: rgba(0, 0, 0, 0.7);
   --gallery-close-surface: rgba(0, 0, 0, 0.5);
   --gallery-close-ink: white;

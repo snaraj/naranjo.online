@@ -23,7 +23,12 @@
 
 import { runtimeBlock, type MediaGalleryItem, type MediaGalleryProps, type PageBlock } from '../blocks.ts';
 import { galleryHeight, galleryPhotos, galleryWidth } from '../gallery.ts';
-import { galleryPosterAsset, loadGalleryManifest, type GalleryItem } from '../galleryManifest.ts';
+import {
+  galleryPosterAsset,
+  galleryVideoSourceMedia,
+  loadGalleryManifest,
+  type GalleryItem
+} from '../galleryManifest.ts';
 import MediaGallery from '../components/MediaGallery.svelte';
 
 const galleryFiles = import.meta.glob('../../assets/images/gallery/*.webp', {
@@ -73,14 +78,20 @@ function toGalleryItem(item: GalleryItem): MediaGalleryItem {
     title?: string;
     description?: string;
     link?: { href: string; label: string };
-    video?: { posterSrc: string; sources: readonly { src: string; type: string }[] };
+    video?: { posterSrc: string; sources: readonly { src: string; type: string; media?: string }[] };
+    previewWidth?: number;
   } = {
     key: item.key,
     previewSrc: item.preview.url,
     fullSrc: item.full.url,
     alt: item.alt,
     width: item.full.width,
-    height: item.full.height
+    height: item.full.height,
+    /* The preview's own width travels with it (issue 241). A volume item always
+       has one — `preview` is a required admitted asset — so the enlarged
+       surface can offer the small rendition to the viewports it is enough for
+       instead of sending every reader the master. */
+    previewWidth: item.preview.width
   };
   if (item.title !== undefined) {
     rendered.title = item.title;
@@ -92,6 +103,10 @@ function toGalleryItem(item: GalleryItem): MediaGalleryItem {
     rendered.link = item.link;
   }
   if (item.kind === 'video' && item.sources !== undefined) {
+    /* Positional, and zipped rather than recomputed: which viewport each rung
+       is offered to is decided once, beside the ladder that declares them
+       (galleryVideoSourceMedia, lib/galleryManifest.ts). */
+    const media = galleryVideoSourceMedia(item);
     rendered.video = {
       /* Which file that is, and why, is stated once beside the manifest field
          it reads (galleryPosterAsset, lib/galleryManifest.ts). This layer only
@@ -99,8 +114,21 @@ function toGalleryItem(item: GalleryItem): MediaGalleryItem {
       posterSrc: galleryPosterAsset(item).url,
       /* Manifest order, untouched: the browser picks the first source it can
          play, so reordering here would silently change which rendition a
-         reader receives. */
-      sources: item.sources.map((source) => ({ src: source.url, type: source.type }))
+         reader receives. The size question is answered ALONGSIDE the order
+         rather than by rewriting it — a rung whose media query does not match
+         is skipped, and the rungs that do match are still taken in the
+         manifest's own preference order. */
+      sources: item.sources.map((source, at) => {
+        const rendition: { src: string; type: string; media?: string } = {
+          src: source.url,
+          type: source.type
+        };
+        const query = media[at];
+        if (query !== undefined) {
+          rendition.media = query;
+        }
+        return rendition;
+      })
     };
   }
   return rendered;
