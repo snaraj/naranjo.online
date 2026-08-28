@@ -44,7 +44,7 @@ import {
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
-const [app, styles, manifest, feedCard, sectionNav, pageSectionSource, blockHost, entryLog, mediaGallery, emptyNote] =
+const [app, styles, manifest, feedCard, sectionNav, pageSectionSource, blockHost, entryLog, mediaGallery] =
   await Promise.all([
     read('../src/App.svelte'),
     read('../src/styles.css'),
@@ -55,18 +55,16 @@ const [app, styles, manifest, feedCard, sectionNav, pageSectionSource, blockHost
     read('../src/lib/components/Block.svelte'),
     read('../src/lib/components/EntryLog.svelte'),
     read('../src/lib/components/MediaGallery.svelte'),
-    read('../src/lib/components/EmptyNote.svelte'),
   ]);
 
 /* The binding modules that introduce each block to the page; they import
  * components, so they are source-pinned rather than executed. */
 const workSource = await read('../src/lib/work.ts');
 
-const [workBinding, artBinding, projectsBinding, aboutBinding, galleryModule] = await Promise.all([
+const [workBinding, artBinding, projectsBinding, galleryModule] = await Promise.all([
   read('../src/lib/blocks/workHistory.ts'),
   read('../src/lib/blocks/artGallery.ts'),
   read('../src/lib/blocks/codingProjects.ts'),
-  read('../src/lib/blocks/about.ts'),
   /* The data module is executed above; its SOURCE is read too, because the
      optionality of a TypeScript field is erased before Node ever sees it —
      "this entry has no title" and "this field may be absent" are different
@@ -82,7 +80,6 @@ const introduced = {
   Block: blockHost,
   EntryLog: entryLog,
   MediaGallery: mediaGallery,
-  EmptyNote: emptyNote,
 };
 
 /* Every component in the tree, discovered by walking it rather than listed by
@@ -115,15 +112,15 @@ const manifestSections = [...manifest.matchAll(
 // The manifest, the nav, and the sections it points at
 // ---------------------------------------------------------------------------
 
-test('the manifest names the owner’s four sections, in the order the page stacks them', () => {
+test('the manifest names the owner’s three sections, in the order the page stacks them', () => {
   assert.deepEqual(
     manifestSections.map((entry) => entry.label),
-    ['Professional Experience', 'Projects', 'Trackers', 'About Me'],
+    ['Professional Experience', 'Projects', 'Trackers'],
     'the section labels are the owner’s words and their order is the page’s order'
   );
   assert.deepEqual(
     manifestSections.map((entry) => entry.id),
-    ['work', 'projects', 'trackers', 'about']
+    ['work', 'projects', 'trackers']
   );
   assert.deepEqual(
     manifestSections.map((entry) => entry.blocks),
@@ -131,13 +128,12 @@ test('the manifest names the owner’s four sections, in the order the page stac
       ['workHistory'],
       ['codingProjects', 'artGallery'],
       ['tokenUsage', 'vcsActivity', 'osrsStats'],
-      ['about'],
     ],
     'each section holds exactly its blocks; reordering the page is moving one name here'
   );
   assert.deepEqual(
     manifestSections.map((entry) => entry.layout),
-    ['flow', 'flow', 'stack', 'flow'],
+    ['flow', 'flow', 'stack'],
     'the trackers section is the one panel stack'
   );
   // The constructors the manifest is written in, executed with its own ids:
@@ -160,6 +156,33 @@ test('the manifest names the owner’s four sections, in the order the page stac
   assert.deepEqual(block.binding, { source: 'static', props: { note: 'x' } });
   assert.equal(block.heading, 'H');
   assert.equal(block.note, 'N');
+});
+
+/* The removal itself, pinned where it was DECIDED (owner directive,
+ * 2026-08-28: "ensure that the 'about me' section is removed"). The manifest
+ * is the page's one statement of what it is, so a section coming back is a
+ * line here — and the nav, which derives from this same array, cannot
+ * re-acquire a link this array does not carry. The two files below left with
+ * it rather than lingering unreferenced: the block adapter, and the EmptyNote
+ * primitive that adapter was the only caller of. */
+test('the empty About Me section is gone, and nothing renders in its place', async () => {
+  assert.equal(
+    manifestSections.some((entry) => entry.id === 'about'),
+    false,
+    'the About Me section is back in the manifest'
+  );
+  assert.doesNotMatch(
+    manifest,
+    /blocks\/about/,
+    'the manifest still imports the About Me block'
+  );
+  for (const path of ['../src/lib/blocks/about.ts', '../src/lib/components/EmptyNote.svelte']) {
+    await assert.rejects(
+      () => stat(new URL(path, import.meta.url)),
+      /ENOENT/,
+      `${path} survived the section it existed for`
+    );
+  }
 });
 
 test('every nav link lands on the section the manifest renders', () => {
@@ -436,7 +459,6 @@ test('every content component renders through the card primitive', () => {
   for (const [name, source] of Object.entries({
     EntryLog: entryLog,
     MediaGallery: mediaGallery,
-    EmptyNote: emptyNote,
   })) {
     assert.match(
       source,
@@ -1623,7 +1645,7 @@ test('the gallery frame cap is pinned at its literal value, independent of compu
 });
 
 // ---------------------------------------------------------------------------
-// The art and about bindings
+// The art binding
 // ---------------------------------------------------------------------------
 
 test('the art block introduces itself with its heading, and only its heading', () => {
@@ -1635,13 +1657,4 @@ test('the art block introduces itself with its heading, and only its heading', (
   // 167 already made for the Coding Projects capture note).
   assert.doesNotMatch(artBinding, /intro:|note:/);
   assert.match(pageSectionSource, /<h3 class="subsection-title">\{block\.heading\}<\/h3>/);
-});
-
-test('the about section says it is empty rather than inventing a biography', () => {
-  assert.match(aboutBinding, /has not been written yet/);
-  assert.match(emptyNote, /<FeedCard variant="flat">/);
-  // Nothing about the owner is asserted anywhere in it.
-  for (const [name, source] of Object.entries({ aboutBinding, EmptyNote: emptyNote })) {
-    assert.doesNotMatch(source, /\bI am\b|\byears of\b|\bspecialis|\bspecializ/i, `${name} invents a biography`);
-  }
 });
