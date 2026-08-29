@@ -210,11 +210,10 @@ export interface CodingProjectsData {
  * mediaUrl in media.ts so components never assemble API paths by hand.
  *
  * The origin also SERVES this path as a registry listing, but no client reads
- * it: every panel is mounted by hardcoded id from its binding module under
- * lib/blocks/, so the page never needs to ask which panels exist. The reading
- * half of that endpoint was removed rather than left as an unused import
- * surface; adding a discovery caller back means writing a parser again, which
- * is the honest cost of a listing nothing consumes today. */
+ * it — every panel is mounted by hardcoded id from its binding module under
+ * lib/blocks/. The reading half was removed rather than left as an unused
+ * import surface, so adding a discovery caller back means writing a parser
+ * again. */
 export const panelsIndexUrl = '/api/panels';
 
 /* Panel ids are lowercase hyphenated registry identifiers; anything else can
@@ -294,26 +293,17 @@ export function unavailablePanel(id: string, title = ''): PanelEnvelope<never> {
 
 export type PanelFetcher = (url: string) => Promise<Response>;
 
-/* EVERY PANEL READ REVALIDATES, and it is stated on this side rather than
- * assumed from the other (2026-08-28, alongside the pull-to-refresh repair).
+/* EVERY PANEL READ REVALIDATES, stated on this side rather than assumed from
+ * the other. The origin already sends `Cache-Control: no-cache` on every panel
+ * envelope (internal/panels/handler.go, pinned by its own Go test) — but that
+ * is a fact about the SERVER, and a refresh gesture depending on it is one
+ * upstream stale-while-revalidate policy or freshness-rewriting edge away from
+ * resolving out of a memory cache with no request leaving the page.
  *
- * The origin already sends `Cache-Control: no-cache` on every panel envelope
- * (internal/panels/handler.go, pinned by its own Go test), so a default fetch
- * does revalidate today. That is a fact about the SERVER, and a refresh
- * gesture whose honesty depends on a header written in another language, in
- * another repository directory, is one deployment away from silently becoming
- * a no-op: a stale-while-revalidate policy added upstream, or an edge that
- * rewrites freshness, and the reader's pull would resolve out of a memory
- * cache without a request ever leaving the page. `no-cache` on the REQUEST
- * removes that dependency — the client refuses to reuse a stored response
- * without asking.
- *
- * `no-cache` and NOT `no-store`, deliberately. Both would defeat a cache, but
- * `no-store` also refuses to send the validators, so every read would download
- * the whole envelope — MEASURED at up to 104,508 bytes for the token-usage
- * panel (AGENTS.md, "Perf budgets are tests") against the 304 with no body
- * that the panel API's digest ETags exist to produce. `no-cache` keeps the
- * conditional GET and only removes the possibility of skipping it. */
+ * `no-cache` and NOT `no-store`: `no-store` also refuses to send the
+ * validators, so every read would download the whole envelope — up to 104,508
+ * bytes for the token-usage panel — instead of the empty 304 the panel API's
+ * digest ETags exist to produce. */
 const defaultFetcher: PanelFetcher = (url) => globalThis.fetch(url, { cache: 'no-cache' });
 
 /* loadPanel performs exactly one same-origin request — no retries, no
@@ -352,21 +342,15 @@ export async function loadPanel<Data = unknown>(
 export const panelRefreshIntervalMs = 60_000;
 
 /* panelsPendingAttribute is where the page says how many mounted panels have
- * not yet received their FIRST envelope (issue 210).
+ * not yet received their FIRST envelope (issue 210). It is an honest state,
+ * not test scaffolding: between mount and arrival the document is genuinely
+ * mid-answer, and anything measuring the page must tell "nothing is happening
+ * yet" from "nothing is happening any more" — a paused height cannot, and the
+ * rendering lane that snapshotted in that gap blamed a reading-mode swap for a
+ * panel's own 1071px of growth.
  *
- * It is an honest state rather than test scaffolding, and the distinction
- * matters because the attribute is read by a lane. A panel-bound block renders
- * nothing at all until its envelope arrives, and two of the three render a
- * loading face and then replace it — so between mount and arrival the document
- * is genuinely mid-answer, and until now it had no way to say so. Anything
- * that measures this page has to know the difference between "nothing is
- * happening yet" and "nothing is happening any more", and a height that has
- * paused cannot tell them apart: the rendering lane that snapshotted in that
- * gap blamed a reading-mode swap for a panel's own 1071px of growth.
- *
- * FIRST envelope only. A background refresh an hour later is not the page
- * still loading, and counting it would make the attribute mean "a request is
- * open", which is a different and much less useful claim. */
+ * FIRST envelope only. Counting a later background refresh would make the
+ * attribute mean "a request is open", a different and much weaker claim. */
 export const panelsPendingAttribute = 'data-panels-pending';
 
 let panelsPending = 0;
@@ -426,14 +410,11 @@ export interface PanelWatchOptions {
 }
 
 /* PanelWatcher is what watchPanel hands back. Calling it stops the loop for
- * good — the whole contract every caller had before — and refresh() forces
- * one immediate read past both the cadence and the hidden-page check; the
- * watcher rides it itself for the visibility catch-up, and it is exposed so
- * any future caller with a reason to force a read can join the same
- * single-flight request rather than opening a second one. It is a callable
+ * good; refresh() forces one immediate read past both the cadence and the
+ * hidden-page check, and resolves only once that read has settled, so a caller
+ * can stay busy for exactly as long as the request is. It is a callable
  * carrying a method rather than an object so no existing call site changes
- * shape, and refresh() resolves only when the read it is riding has settled,
- * so a caller can stay busy for exactly as long as the request is. */
+ * shape. */
 export interface PanelWatcher {
   (): void;
   refresh(): Promise<void>;
@@ -523,26 +504,16 @@ export function watchPanel<Data = unknown>(
   return watcher;
 }
 
-/* THE LIVE REGISTRY, restored with a caller (issue 219).
+/* THE LIVE REGISTRY. Its one caller is the pull-to-refresh gesture (issue
+ * 219), which asks for the panels the reader is looking at to be re-read NOW.
+ * That does not make the site depend on a control — the minute loop still
+ * runs and a reader who never pulls sees what they saw before (the owner's
+ * issue-179 ruling); it is a reader declining to wait out the remaining
+ * interval, the same intent the visibility catch-up honours.
  *
- * This existed once and was deleted at issue 179 — correctly, because the only
- * thing that called it was the manual refresh button the owner had just had
- * removed, and a fan-out nothing fans out to is dead code. The owner's ruling
- * there was that the site must stay current ON ITS OWN rather than depending
- * on a visitor noticing a control, and the per-panel loop above is what keeps
- * that true; nothing below changes it.
- *
- * What is different now is that there IS a caller, and it is a gesture rather
- * than a button: a pull-to-refresh asks for the panels the reader is looking
- * at to be re-read NOW. That is not the site depending on a control — the
- * minute loop still runs, and a reader who never pulls sees exactly what they
- * saw before — it is a reader who has decided not to wait out the remaining
- * interval, which is the same intent the visibility catch-up already honours.
- *
- * Every live watcher registers itself and deregisters on stop, so a panel that
- * has unmounted can never be refreshed into a dead component: `stopped`
- * already refuses delivery, and leaving the set is what keeps the set from
- * growing across a long session. */
+ * Every live watcher registers here and deregisters on stop, so a panel that
+ * has unmounted can never be refreshed into a dead component and the set
+ * cannot grow across a long session. */
 const live = new Set<PanelWatcher>();
 
 /* refreshPanels forces one immediate read of every mounted panel and resolves
@@ -560,12 +531,10 @@ export async function refreshPanels(): Promise<void> {
  * is lib/activity.ts, which stamps each recent-commit row with how long ago
  * that commit landed.
  *
- * Coarse on purpose, and NOT ticked: an age is recomputed when the row it
- * sits in is rebuilt — which watchPanel already does once a minute, at the
- * same cadence a "3m ago" would need — so there is no second timer here and
- * no rendered age can outlive its own panel's data. The panel freshness badge
- * this once fed, and the shared wall clock that ticked it, went with the
- * manual refresh control at issue 179. */
+ * Coarse on purpose and NOT ticked: an age is recomputed when its row is
+ * rebuilt, which watchPanel already does once a minute — the same cadence a
+ * "3m ago" would need — so there is no second timer and no rendered age can
+ * outlive its own panel's data. */
 export function panelAge(generatedAt: string | undefined, now: Date = new Date()): string {
   if (!generatedAt) {
     return '';

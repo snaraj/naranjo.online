@@ -181,15 +181,17 @@ func TestRunFailsClosedOnBadConfiguration(t *testing.T) {
 // proven — while guaranteeing the loops exit before touching the network, so
 // this suite stays hermetic on a runner with no egress at all.
 //
-// The disabled path is the deployed default: no loop is launched, so egress
-// is impossible rather than merely unattempted.
+// The disabled path is the PROCESS default — an unset variable launches no
+// loop, so egress is impossible rather than merely unattempted. It is not the
+// deployed default: the chart has shipped panels.refresh.enabled: true
+// together with its egress allowance since 2026-08-27.
 func TestRunAcceptsBothPanelRefreshModes(t *testing.T) {
 	t.Parallel()
 	requireBuiltFrontend(t)
 	for name, environment := range map[string]map[string]string{
-		"refresh unset (the deployed default)": {},
-		"refresh explicitly disabled":          {"PANELS_REFRESH": "false"},
-		"refresh enabled":                      {"PANELS_REFRESH": "true"},
+		"refresh unset (the process default)": {},
+		"refresh explicitly disabled":         {"PANELS_REFRESH": "false"},
+		"refresh enabled":                     {"PANELS_REFRESH": "true"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

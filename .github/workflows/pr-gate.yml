@@ -260,11 +260,11 @@ jobs:
           helm template smoke chart --kube-version v1.36.0 >/dev/null
       - name: The ingress policy must pin one peer by its full identity
         run: ./scripts/ci/chart-ingress-pin.sh
-      - name: The application policy must deny every outbound connection
+      - name: The application policy must allow exactly two outbound rules
         run: ./scripts/ci/chart-egress-pin.sh
       - name: The panels data root must render read-only, pinned, and absent when disabled
         run: ./scripts/ci/chart-storage-pin.sh
-      - name: Media must stay off by default and read-only when enabled
+      - name: Media must render on by default, read-only, and absent when disabled
         run: ./scripts/ci/chart-media-pin.sh
       - name: Chart version must match VERSION
         run: |

@@ -183,8 +183,9 @@ func calendarPayload(daily []int, total int, first, last time.Time, coverage str
 		EndDate:            last.Format(dayLayout),
 		Streak:             int(contributionStreak(daily)),
 		// The calendar document carries no commit rows, and inventing them
-		// from a snapshot would attach recorded data to a live payload. An
-		// empty list is the honest answer until a commit producer exists.
+		// from a snapshot would attach recorded data to a live payload. The
+		// commit half is fetched separately, on its own cadence, and merged
+		// in; empty is this mapper's honest answer.
 		RecentCommits: []VCSCommit{},
 		Coverage:      coverage,
 	}

@@ -296,11 +296,21 @@ class SyntheticRepo:
         )
         return self.git(root, "rev-parse", "HEAD")
 
-    def repo(self, temporary: str) -> tuple[Path, str]:
-        """A main-branch repository seeded with one 0.1.9 release commit."""
+    def main_repo(self, temporary: str) -> Path:
+        """An EMPTY repository on main, for a test that seeds its own history.
+
+        Seven tests hand-rolled these two commands because `repo` below also
+        commits a 0.1.9 release and they each need a different first commit.
+        The seeding is what differs between them; being on `main` is not.
+        """
         root = Path(temporary)
         self.git(root, "init", "-q")
         self.git(root, "branch", "-m", "main")
+        return root
+
+    def repo(self, temporary: str) -> tuple[Path, str]:
+        """A main-branch repository seeded with one 0.1.9 release commit."""
+        root = self.main_repo(temporary)
         return root, self.release_commit(root, "0.1.9")
 
 
@@ -3439,9 +3449,7 @@ class GitTransitionTests(SyntheticRepo, unittest.TestCase):
 
     def test_three_sequential_main_commits_and_stale_base_rejection(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            self.git(root, "init", "-q")
-            self.git(root, "branch", "-m", "main")
+            root = self.main_repo(temporary)
             commits = [self.commit(root, version) for version in ("0.1.9", "0.1.10", "0.1.11", "0.1.12")]
             for index in range(1, len(commits)):
                 intent = RC.validate_transition(root, commits[index - 1], commits[index], first_parent=True)
@@ -3489,9 +3497,7 @@ class GitTransitionTests(SyntheticRepo, unittest.TestCase):
 
     def test_real_two_parent_commit_is_denied_in_pr_and_main_modes(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            self.git(root, "init", "-q")
-            self.git(root, "branch", "-m", "main")
+            root = self.main_repo(temporary)
             base = self.commit(root, "0.1.9")
             self.git(root, "checkout", "-q", "-b", "topic", base)
             self.commit(root, "0.1.10")
@@ -3537,9 +3543,7 @@ class GitTransitionTests(SyntheticRepo, unittest.TestCase):
         )
         for index, build in enumerate(builders):
             with self.subTest(history_mutant=index), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                self.git(root, "init", "-q")
-                self.git(root, "branch", "-m", "main")
+                root = self.main_repo(temporary)
                 base = self.commit(root, "0.1.9")
                 head = build(root)
                 for first_parent in (False, True):
@@ -3550,9 +3554,7 @@ class GitTransitionTests(SyntheticRepo, unittest.TestCase):
 
     def test_clean_endpoint_range_cannot_hide_a_poisoned_history_prefix(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            self.git(root, "init", "-q")
-            self.git(root, "branch", "-m", "main")
+            root = self.main_repo(temporary)
             self.commit(root, "0.1.9")
             self.commit(root, "0.1.10")
             base = self.commit(root, "0.1.9")
@@ -3791,9 +3793,7 @@ class ChangelogHistoryTests(SyntheticRepo, unittest.TestCase):
     def test_the_lift_is_read_from_the_head_commit_and_absence_denies(self):
         for carries_lift in (False, True):
             with self.subTest(lift_committed=carries_lift), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                self.git(root, "init", "-q")
-                self.git(root, "branch", "-m", "main")
+                root = self.main_repo(tmp)
                 base_files = dict(snapshot("0.1.9"))
                 base_files["CHANGELOG.md"] = HISTORY_BASE
                 base = self.paths_commit(root, base_files, "base")
@@ -3820,9 +3820,7 @@ class ChangelogHistoryTests(SyntheticRepo, unittest.TestCase):
 
     def test_a_release_range_that_deletes_history_is_refused_end_to_end(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            self.git(root, "init", "-q")
-            self.git(root, "branch", "-m", "main")
+            root = self.main_repo(tmp)
             base_files = dict(snapshot("0.1.9"))
             base_files["CHANGELOG.md"] = HISTORY_BASE
             base = self.paths_commit(root, base_files, "base")
@@ -4198,9 +4196,7 @@ class NoArtifactClassTests(SyntheticRepo, unittest.TestCase):
         # range would report a no-artifact verdict carrying a tag that
         # contradicts the chart.
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            self.git(root, "init", "-q")
-            self.git(root, "branch", "-m", "main")
+            root = self.main_repo(temporary)
             skewed = snapshot("0.1.9")
             skewed["chart/Chart.yaml"] = 'apiVersion: v2\nversion: 0.1.8\nappVersion: "0.1.8"\n'
             base = self.paths_commit(root, skewed, "skewed base")

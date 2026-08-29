@@ -155,6 +155,7 @@ the snapshot path it is given.
     scripts/capture_usage_series.py --transcripts DIR --source LABEL \
         [--format messages|running-totals] \
         [--activity-cache FILE] \
+        [--history-store FILE] \
         [--snapshot internal/panels/snapshots/token-usage.json]
 
 With no `--snapshot` the complete section prints to stdout as JSON, so the
@@ -308,12 +309,6 @@ CATEGORY_FIELDS = (
     ("cache_read_input_tokens", "cache-read"),
     ("cache_creation_input_tokens", "cache-write"),
 )
-
-# The usage fields that make up one message's contribution to its day, read
-# off the mapping above so the two can never name different sets. The SUM is
-# what internal/panels/mapping.go computes from the vendor usage document, so
-# a snapshot series and a live series are the same measurement.
-USAGE_FIELDS = tuple(field for field, _ in CATEGORY_FIELDS)
 
 # Where the message shape records which model produced it. The value is a
 # vendor-qualified identifier; model_key below reduces it to this file's own

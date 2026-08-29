@@ -18,7 +18,9 @@ spec:
       # The namespace quota is pods:2 / limits.memory 256Mi. At
       # replicaCount's schema maximum of 2 (values.schema.json allows 1..2;
       # the DEFAULT moved to 1 in the 2026-08-24 round-3 review so the
-      # replay-floor state is single-writer by construction — see
+      # replay-floor state has a single writer — held by the origin's locked
+      # monotonic compare-and-swap plus this replica policy, NOT "by
+      # construction", a phrase the 2026-08-25 round-4 review retired; see
       # chart/values.yaml, which states the availability tradeoff in full),
       # steady state already consumes the whole
       # quota, so any surge pod is quota-rejected and wedges the rollout
@@ -60,8 +62,9 @@ spec:
               value: {{ .Values.service.port | quote }}
             {{- /* Rendered ALWAYS, for the same reason PANELS_REFRESH is: the
             deployed decision must be readable off the manifest. The default is
-            false and enabling media needs ADR 0012's storage evidence plus the
-            platform lane's provisioning receipt for the claim. */}}
+            true since 2026-08-27, when ADR 0012's storage evidence and the
+            provisioned claim both landed (issue #182); turning media off stays
+            a values override, never a code change. */}}
             - name: MEDIA_ENABLED
               value: {{ .Values.media.enabled | quote }}
             {{- /* The panel API's background refresh loops. Rendered ALWAYS and
@@ -69,12 +72,12 @@ spec:
             reach the process identically today, but a template that emits the
             switch only when it is on is one edit away from emitting nothing at
             all, and the operator loses the ability to read the deployed state
-            off the manifest. The value defaults to false in values.yaml and the
-            schema requires the key, so a chart that forgot to decide cannot
-            render. Turning it on is an operational decision that needs the
-            egress allowance too (issue #79) -- without one the refresh attempts
-            simply fail and the panels keep serving their snapshots as stale,
-            which is the fail-soft outcome, not an outage. */}}
+            off the manifest. The schema requires the key, so a chart that
+            forgot to decide cannot render. The default is true since
+            2026-08-27, when the owner enabled refresh TOGETHER with its egress
+            allowance (issue #79) — the two move as one change or not at all,
+            because refresh without the allowance is a no-op and the allowance
+            without refresh is an opening nothing uses. */}}
             - name: PANELS_REFRESH
               value: {{ .Values.panels.refresh.enabled | quote }}
             {{- /* The version-control credential (issue #242). Rendered

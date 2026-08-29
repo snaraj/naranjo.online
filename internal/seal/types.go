@@ -61,30 +61,31 @@ const (
 	// test names this constant on failure, the repository's standard
 	// hand-duplication pin.
 	//
-	// The number is measured, not guessed, and the measurement was REDONE at
-	// the 2026-08-24 round-3 review because the figures below had gone stale
-	// against the document the producer now emits — finding 5 added a
-	// required per-source capturedAt, and the complete window and derived
-	// sections became mandatory rather than optional. The structural maximum
-	// the origin can admit is one document covering both shipped snapshot
-	// sources, each at the 732-day series bound with the complete five-key
-	// category vocabulary and every required section present; compact-encoded
-	// and sealed, that measures 98,958 bytes at ten-digit daily values — an
-	// order of magnitude above the shipped snapshot's own measured peak day.
-	// 131,072 leaves 32,114 bytes of headroom, which is three further decimal
-	// digits on every value in the document: the same maximum still seals to
-	// 125,340 bytes at thirteen digits and only passes the cap at fourteen,
-	// where it reaches 134,134.
+	// The number is measured, not guessed, and the measurement has been REDONE
+	// twice — at the 2026-08-24 round-3 review, when a required per-source
+	// capturedAt and mandatory window and derived sections made the printed
+	// figures stale, and again for issue #170, which added the per-model
+	// partition. The structural maximum the origin can admit is one document
+	// covering both shipped snapshot sources, each at the 732-day series bound
+	// with the complete five-key category vocabulary, the complete five-key
+	// model vocabulary over its own 92-day window, and every required section
+	// present; compact-encoded and sealed, that measures 109,280 bytes at
+	// ten-digit daily values. 131,072 leaves 21,792 bytes of headroom: the
+	// same maximum still seals to 128,708 bytes at twelve-digit values and
+	// only crosses the ceiling at thirteen, where it reaches 138,422.
 	//
 	// The numbers are no longer transcribed into an assertion. CapParityTest
 	// BUILDS that maximum document from the shipped snapshot's own labels and
 	// the producer's own vocabulary and measures it, so the class of drift
-	// that made this comment wrong cannot recur silently.
+	// that made this comment wrong cannot recur silently. docs/usage-export.md
+	// carries the same figures in full and is the canonical prose copy.
 	//
-	// A separate, tighter gate remains downstream: the merged payload must
-	// still fit the panels response budget before it is served, so this
-	// ceiling bounds allocation and transport, and never promises that
-	// everything under it can be served.
+	// A separate gate remains downstream: the merged payload must still fit
+	// the panels response budget before it is served. It is NOT the tighter
+	// one — MaxPanelResponseBytes holds this same value — and it bounds
+	// different bytes, the finished envelope rather than the sealed file, so
+	// a document under this ceiling is promised transport and parsing without
+	// truncation, never that it can be served.
 	MaxSealedBytes = 128 << 10
 
 	// MaxPlaintextBytes is the same ceiling expressed for the producing side:

@@ -16,10 +16,9 @@ requires the path under the enumerated local-volume root, requires the
 enumerated StorageClass on both objects, and requires bounded nodeAffinity
 (operator In, non-empty values). Shipping the old shape would have meant
 shipping something the platform rejects on arrival, so the chart adopts the
-platform design instead. The dependency is still UNLANDED and this stays
-Draft until website-infrastructure #212 merges and releases AND the
-#141/#189 live convergence receipt posts; what changed is that the receipt
-now confirms the chart rather than contradicting it.
+platform design instead. That dependency has since landed: the enumerated
+StorageClass exists on the target, both claims bind, and panels.data.enabled
+ships true.
 
 A `local` volume is node-bound by definition, so nodeAffinity is not
 decoration — Kubernetes requires it, and the node name is supplied at
@@ -45,8 +44,9 @@ COME FROM IT (2026-08-25 round-4 review, finding 1). Round 3 set
 ReadWriteOncePod here, reasoning that ReadWriteOnce is node-scoped and a
 one-node cluster makes that no restriction at all. The reasoning was right
 and the mechanism was wrong: Kubernetes supports ReadWriteOncePod for CSI
-volumes ONLY, and the target has zero CSI drivers and zero StorageClasses
-live. A native `local` PersistentVolume does not acquire a CSI-only
+volumes ONLY, and the target runs zero CSI drivers -- its enumerated
+StorageClass provisions nothing. A native `local` PersistentVolume does not
+acquire a CSI-only
 guarantee by naming the access mode — it names a promise nothing enforces,
 which is worse than the weaker mode, because a reader stops looking.
 

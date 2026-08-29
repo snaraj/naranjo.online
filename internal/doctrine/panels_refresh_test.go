@@ -46,7 +46,9 @@
 //   - the allowance is EXACTLY two bounded rules. An unported rule, a third
 //     rule, or a rule list emptied into the allow-everything shapes is refused
 //     here as well as by scripts/ci/chart-egress-pin.sh, which renders the
-//     chart and runs a 29-mutation battery. The two are deliberate duplicates:
+//     chart and runs a mutation battery over both the template text and the
+//     whole-render census (that script owns the exact counts, so they are not
+//     restated here to go stale). The two are deliberate duplicates:
 //     that gate lives in the CI chart job, this pin travels with the module
 //     and reads the template source itself.
 //   - the HOST bound stays in the process. A NetworkPolicy cannot express a

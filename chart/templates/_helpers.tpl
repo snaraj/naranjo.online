@@ -56,6 +56,12 @@ What it refuses, and why each one is a real hazard rather than tidiness:
     reason one level up: a writable mount inside a read-only mount point
     is a writable window into it.
 
+  * replicaCount above 1 while the capability is on. The replay floor has
+    exactly one writer, and this refusal is one half of what enforces it —
+    the other is the locked monotonic compare-and-swap in the origin. The
+    state claim is ReadWriteOnce, which is node-scoped and would NOT stop a
+    second pod here, so a second replica would simply race the floor marker.
+
 Sprig's `clean` is path.Clean: it collapses duplicate separators, resolves
 . and .. lexically, and drops a trailing separator. Comparing cleaned forms
 with an explicit trailing separator is what makes the ancestor test exact —
