@@ -32,7 +32,7 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   (`--entry-count-columns`), so column N starts at the identical x on every
   card whatever figures or words it holds, with the surplus distributed to
   the gaps so the row fills the card to its right edge. Below the new
-  `--breakpoint-entry-columns` (56rem) the counters are a single-column
+  `--breakpoint-entry-columns` (50rem) the counters are a single-column
   ledger, one counter per line, aligned across cards by construction; the
   30rem inline title/counters row and its `--breakpoint-card-meta` token
   retire with the layout that needed them.
