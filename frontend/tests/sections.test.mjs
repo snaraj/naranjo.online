@@ -1184,14 +1184,24 @@ const galleryMarkup = stripComments(mediaGallery).markup;
  * depends on nobody ever typing a tag differently is a pin resting on a
  * habit.
  *
- * The closing tag tolerates trailing whitespace for the same reason — HTML
- * permits `</script >` and a filter that does not know it stops early.
+ * The closing tag is loose for the same reason, and looser than a first
+ * reading suggests. HTML end tags may carry whitespace AND ignored junk
+ * before the `>`: `</script >`, `</script\t\n bar>` and `</script/>` are
+ * all the same end tag to a parser, which stops the script block at every
+ * one of them. `\s*` covers only the first of the three, so the strip would
+ * have run past the real end of a block spelled either of the other two
+ * ways and kept walking markup as if it were code. `\b[^>]*` accepts the
+ * whole family while still refusing `</scriptfoo>`, which is not an end tag
+ * at all — the word boundary is what keeps the tolerance from becoming a
+ * prefix match. CodeQL raised this as a SECOND js/bad-tag-filter alert
+ * after the casing repair closed the first two; it is the same class of
+ * defect one field over.
  *
  * It is a SOURCE STRING rather than a shared RegExp because a /g regex
  * carries lastIndex: handing one instance to both a replace and a matchAll
  * is a state bug waiting for a third caller, and building a fresh one per
  * site costs nothing in a test. */
-const scriptRegionSource = '(<script\\b[^>]*>)([\\s\\S]*?)(<\\/script\\s*>)';
+const scriptRegionSource = '(<script\\b[^>]*>)([\\s\\S]*?)(<\\/script\\b[^>]*>)';
 const scriptRegions = () => new RegExp(scriptRegionSource, 'gi');
 
 function stripLineComments(source) {
@@ -1248,13 +1258,23 @@ test('the prose-free source strips line comments only where // is a comment (iss
      lowercase spelling would hand this block straight through with its
      comment intact, reintroducing the defect above through the spelling of
      the tag rather than through the comment. Every casing that a browser
-     treats as one, this must treat as one; the trailing-space close is here
-     for the same reason, since HTML permits it and a filter that does not
-     know it stops early and strips nothing. */
+     treats as one, this must treat as one.
+
+     The last four rows are the end tag's own family, which is wider than
+     the casing question. A parser ends a script block at `</script >`, at
+     `</script\t\n bar>` and at `</script/>` alike — the junk before the `>`
+     is ignored, not disqualifying — so a strip that recognises only the
+     bare spelling runs PAST the real end of the block and keeps walking
+     markup as if it were code. Each row here is one spelling a browser
+     already accepts. */
   for (const [open, close] of [
     ['<SCRIPT>', '</SCRIPT>'],
     ['<Script>', '</script>'],
     ['<script>', '</SCRIPT >'],
+    ['<script>', '</script >'],
+    ['<script>', '</script\t\n bar>'],
+    ['<script>', '</script/>'],
+    ['<SCRIPT>', '</SCRIPT\tBAR>'],
   ]) {
     assert.doesNotMatch(
       stripLineComments([open, '  // <button that is prose, not a control', close].join('\n')),
@@ -1262,6 +1282,20 @@ test('the prose-free source strips line comments only where // is a comment (iss
       `a // comment inside ${open}…${close} still reaches the walks; the tag filter knows only one spelling`
     );
   }
+  /* …and the boundary that keeps that tolerance from turning into a prefix
+     match. `</scriptfoo>` is NOT an end tag — a parser reads a different
+     tag name and the script block continues — so the comment below it is
+     still inside the block and must still be stripped. Drop the `\b` and
+     the region ends at the impostor, the rest of the block is read as
+     markup, and the loose `<button` reaches the walks. */
+  assert.doesNotMatch(
+    stripLineComments(
+      ['<script>', '  let x = "</scriptfoo>";', '  // <button that is prose', '</script>'].join('\n')
+    ),
+    /<button/,
+    '</scriptfoo> ended the block; it names a different tag and ends nothing'
+  );
+
   /* And the other direction, so the casing tolerance cannot become a licence
      to strip outside script: markup is still markup whatever its case.
      Deliberately an UNQUOTED URL in an element's BODY, which is the only
