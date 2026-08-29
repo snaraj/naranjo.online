@@ -7,6 +7,56 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.60] - 2026-08-28
+
+### Removed
+- Two dead declarations, each proven by a whole-repository grep returning only
+  its own definition: the `ProjectCount` interface in
+  `frontend/src/lib/projects.ts`, referenced by no source, test, end-to-end
+  spec, Go file or script; and `USAGE_FIELDS` in
+  `scripts/capture_usage_series.py`, whose comment claimed it kept two sets
+  from disagreeing while nothing consumed it.
+- The duplicated rationale that had accumulated around the response budget and
+  the additive-field rule. The additive rule was restated in full on five
+  separate fields of `internal/panels/types.go`; it is now stated once at the
+  kind block and each field says what it is. The `MaxPanelResponseBytes`
+  rationale was told at length in three files at once, so `handler_test.go`
+  now points at the constant instead of retelling it, and the constant keeps
+  every constraint it recorded: the owner's raise, the 104,508-byte
+  measurement, that equality with `seal.MaxSealedBytes` is not equality of
+  SUBJECT, and refuse-never-truncate.
+- The hand-rolled `git init` preamble in `scripts/ci/test_release_contract.py`.
+  Seven tests repeated it because the existing `repo` helper also seeds a
+  0.1.9 release commit and each needed a different first commit; a seedless
+  `main_repo` now carries the part that never varied, and `repo` is built on
+  it.
+
+### Fixed
+- Fourteen comments that stated something untrue, each re-verified against the
+  code or values file beside it. `chart/templates/deployment.yaml` said media
+  and panels refresh both default to false and that the egress allowance was
+  still owed, all three false since 2026-08-27, and carried
+  `single-writer by construction`, a phrase `chart/values.yaml` explicitly
+  retires. `chart/templates/network-policy.yaml` cited four source line
+  numbers that were all wrong and undercounted the construction call sites as
+  four when there are six; it now cites symbols, which cannot rot.
+  `internal/seal/types.go` carried the pre-issue-#170 ceiling measurement
+  (98,958 bytes, 32,114 of headroom, crossing at fourteen digits) that
+  `docs/usage-export.md` had already superseded (109,280, 21,792, crossing at
+  thirteen), and called the downstream gate `tighter` when it holds the same
+  value. `chart/templates/panels-data.yaml` said its dependency was UNLANDED
+  and the work stays Draft while the capability ships enabled. Two files said
+  the target has zero StorageClasses when it names an enumerated one — the
+  zero-CSI-drivers half is true and load-bearing and stays.
+  `chart/templates/_helpers.tpl` listed four refusals while implementing five.
+  Two `pr-gate.yml` step names described the opposite of what their pins now
+  enforce. Also corrected: a `four stages` count that is five, two `future`
+  media descriptions of a shipped capability, an `invisible today because
+  refresh is off` claim, two `until a commit producer exists` claims against
+  three configured commit sources, a `deployed default` that is the process
+  default, a stale mutation count restated from a file that owns it, a usage
+  synopsis missing `--history-store`, and a `THREE RULES` heading above four.
+
 ## [0.1.59] - 2026-08-28
 
 ### Added
