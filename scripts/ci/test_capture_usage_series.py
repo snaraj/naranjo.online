@@ -990,10 +990,87 @@ class HistoryStoreTest(unittest.TestCase):
         self.assertFalse(self.store.exists())
         self.run_capture()
         self.assertEqual(sorted(self.stored_days()), ["2026-08-11"])
-        # And the write is atomic: no temporary residue beside the store.
+        # And the write left no temporary residue beside the store. This is
+        # the WEAK half of the atomicity claim and is kept only for what it
+        # says about cleanup — the mechanism itself is pinned below, because
+        # a direct write satisfies "no residue" trivially by never creating a
+        # temporary at all.
         self.assertEqual(
             [entry.name for entry in self.scratch.iterdir() if entry.name.startswith("store")],
             ["store.json"],
+        )
+
+    def test_the_store_is_only_ever_replaced_by_rename_from_a_sibling(self):
+        """The atomicity MECHANISM, not its residue (issue 237).
+
+        The adversarial review of #235 built a kill matrix in which a
+        non-atomic direct-write mutant of `write_history_store` survived the
+        whole battery: every other assertion here reads the store's CONTENT
+        afterwards, and a direct write produces byte-identical content. The
+        residue assertion above is satisfied by it too, since a writer that
+        never makes a temporary leaves none behind.
+
+        What a direct write actually costs is availability: a run killed
+        between truncate and flush leaves a torn document, the next run's
+        fail-closed validation refuses it, and the remembered history the
+        store exists to preserve is gone until an operator intervenes.
+        Integrity holds; the memory does not.
+
+        So this observes the two syscalls that carry the guarantee. The store
+        path must never be opened for writing at all, and the bytes must
+        arrive by a rename FROM A SIBLING — same directory, because rename is
+        only atomic within one filesystem, and a temporary in /tmp beside a
+        store on another mount is a copy wearing a rename's name.
+        """
+        writes = []
+        renames = []
+        real_open = open
+        real_replace = pathlib.Path.replace
+
+        def recording_open(file, mode="r", *args, **kwargs):
+            if any(flag in mode for flag in ("w", "a", "x", "+")):
+                writes.append(pathlib.Path(file).resolve())
+            return real_open(file, mode, *args, **kwargs)
+
+        def recording_replace(source, target):
+            renames.append((pathlib.Path(source).resolve(), pathlib.Path(target).resolve()))
+            return real_replace(source, target)
+
+        store = self.store.resolve()
+        self.write_tree(self.day_line("2026-08-11", "a", 10))
+        # `open` is patched as a module global, which shadows the builtin for
+        # the module under test and for nothing else in this process.
+        capture_usage_series.open = recording_open
+        pathlib.Path.replace = recording_replace
+        try:
+            self.run_capture()
+        finally:
+            del capture_usage_series.open
+            pathlib.Path.replace = real_replace
+
+        self.assertEqual(sorted(self.stored_days()), ["2026-08-11"])
+        self.assertNotIn(
+            store,
+            writes,
+            "the store was opened for writing directly; a run killed mid-write would tear it",
+        )
+        into_store = [pair for pair in renames if pair[1] == store]
+        self.assertEqual(
+            len(into_store),
+            1,
+            "the store was not put in place by exactly one rename: %r" % (renames,),
+        )
+        temporary, _ = into_store[0]
+        self.assertEqual(
+            temporary.parent,
+            store.parent,
+            "the store was renamed from %s, which is not its own directory; rename is only atomic within one filesystem"
+            % temporary.parent,
+        )
+        self.assertIn(
+            temporary,
+            writes,
+            "the renamed-in file was never written through this process; the store's bytes came from somewhere unobserved",
         )
 
     def test_two_identical_merges_write_identical_bytes(self):

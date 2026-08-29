@@ -357,6 +357,102 @@ function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
+// railsWatchFrames is how many frames the mount below will keep asking for
+// the token layer before it stops asking. Tokens are unreadable at mount for
+// exactly one reason — the stylesheet has not been applied yet — and that
+// window is a frame or two on an idle machine and longer only under load, so
+// two seconds at 60Hz is a budget with two orders of magnitude of headroom
+// over the mechanism it is waiting for. It is a bound rather than an infinity
+// because a document that genuinely carries no token layer must stop costing
+// a callback per frame for as long as the tab is open; when the budget is
+// spent, the component's resize listener remains as the durable recovery, and
+// that is a real one because a viewport change is what re-reads everything.
+export const railsWatchFrames = 120;
+
+// RailsWatchDeps is the browser this mount needs, as three operations, for
+// the same reason ColumnHost exists: a recovery path that could only be
+// exercised in a browser is a recovery path whose existence would rest on a
+// screenshot. It was exactly that, and issue 153 is what it cost.
+export interface RailsWatchDeps {
+  // media builds the live media-query object the sync listens to.
+  media(query: string): {
+    addEventListener(type: 'change', listener: () => void): void;
+    removeEventListener(type: 'change', listener: () => void): void;
+  };
+  // schedule asks for the next animation frame and returns a cancel handle.
+  schedule(run: () => void): number;
+  // cancel drops a scheduled frame.
+  cancel(handle: number): void;
+}
+
+/* watchRails is the whole mount sequence for the drag handles, and it is here
+ * rather than in the component because of what it got wrong while it was
+ * there (issue 153).
+ *
+ * The component used to read the token layer once at mount and RETURN when
+ * the read came back null, registering no media-query listener at all. Null
+ * is not a broken document — it is a document whose stylesheet has not been
+ * applied to the root element yet, which under a contended machine happens
+ * often enough that a full browser matrix caught it once in six runs: the
+ * handles were simply absent, permanently, with nothing left running that
+ * could ever bring them back. A viewport change would have recovered it, and
+ * a reader who never resizes their window never gets one.
+ *
+ * So an unreadable read is now a RETRY rather than a surrender: ask again on
+ * the next frame, up to the budget above, and register the listener the
+ * moment the tokens arrive. The returned teardown is total — it cancels a
+ * retry still pending as readily as it removes a listener already attached —
+ * because a component that unmounts mid-retry must leave nothing behind. */
+export function watchRails(
+  host: ColumnHost,
+  deps: RailsWatchDeps,
+  onTokens: (tokens: ColumnTokens) => void,
+  sync: () => void
+): () => void {
+  let frame = 0;
+  let attempts = 0;
+  let query: ReturnType<RailsWatchDeps['media']> | null = null;
+  const attempt = (): void => {
+    frame = 0;
+    const read = readColumnTokens(host);
+    if (read === null) {
+      attempts += 1;
+      if (attempts < railsWatchFrames) {
+        frame = deps.schedule(attempt);
+      }
+      return;
+    }
+    onTokens(read);
+    // The query is BUILT from the tokens, so the script and the stylesheet
+    // ask one question. A literal here would be a second copy free to
+    // disagree.
+    query = deps.media(railsMediaQuery(read));
+    query.addEventListener('change', sync);
+    sync();
+  };
+  attempt();
+  return () => {
+    if (frame !== 0) {
+      deps.cancel(frame);
+      frame = 0;
+    }
+    if (query !== null) {
+      query.removeEventListener('change', sync);
+      query = null;
+    }
+  };
+}
+
+// frameDeps is the real browser behind the watch seam, beside documentHost
+// below for the same reason: the DOM names live in one place.
+export function frameDeps(): RailsWatchDeps {
+  return {
+    media: (query) => window.matchMedia(query),
+    schedule: (run) => window.requestAnimationFrame(run),
+    cancel: (handle) => window.cancelAnimationFrame(handle)
+  };
+}
+
 // documentHost is the real browser behind the seam. It is the only place in
 // this module that names a DOM API, which is what keeps everything above it
 // executable without one.

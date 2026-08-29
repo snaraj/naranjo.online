@@ -415,18 +415,25 @@
        be a bar with no reading. */
     flex-basis: 100%;
     min-inline-size: 12rem;
-    --usage-meter-fill-color: var(--usage-meter-ok, var(--panel-status-ok, rgb(94, 171, 94)));
+    /* The severity ramp reads its three inks BARE — no fallback chain behind
+       any of them (issues 222 and 229). Every one is declared in the token
+       layer beside --panel-status-*, and carrying a fallback here would put a
+       palette value back inside a component (the floor's exact prohibition)
+       while also making the token's absence invisible: the fallback paints,
+       so nothing looks wrong and nothing goes red. --panel-status-stale spent
+       a release cycle read-but-never-declared for precisely that reason, and
+       critical was a bare rgb() literal. Bare reads are what let the family
+       pin in tests/experience.test.mjs insist the declarations exist, the
+       same trade --tip-x already makes for a length. */
+    --usage-meter-fill-color: var(--usage-meter-ok);
   }
 
   .usage-meter[data-severity='warning'] {
-    --usage-meter-fill-color: var(
-      --usage-meter-warning,
-      var(--panel-status-stale, var(--panel-accent, rgb(220, 138, 0)))
-    );
+    --usage-meter-fill-color: var(--usage-meter-warning);
   }
 
   .usage-meter[data-severity='critical'] {
-    --usage-meter-fill-color: var(--usage-meter-critical, rgb(208, 59, 59));
+    --usage-meter-fill-color: var(--usage-meter-critical);
   }
 
   /* The unfilled track is a faint step of the fill's own color — same-ramp,
@@ -667,7 +674,13 @@
     display: block;
     block-size: 100%;
     border-radius: inherit;
-    background: var(--usage-insight-fill, var(--panel-accent, rgb(220, 138, 0)));
+    /* Bare, for the same reason the severity ramp above is (issues 222, 229):
+       this read used to end at a raw rgb() literal through --panel-accent,
+       which is the same undeclared-token-behind-a-fallback shape both issues
+       name. The token is declared in the token layer and points at the same
+       accent it always painted, so nothing here looks different — what
+       changed is that its absence would now be visible. */
+    background: var(--usage-insight-fill);
   }
 
   .usage-insight-value {

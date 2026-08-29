@@ -1214,11 +1214,28 @@ type datedCommit struct {
 	row VCSCommit
 }
 
-// calendarDocument is the strict upstream grammar of the credentialed
-// calendar answer. Unlike the commit and repository documents below it is
-// closed with decodeStrict rather than read through a projection, and it can
-// be: the query asks for exactly these fields, so the answer carries exactly
-// these fields, and there is no personal-data field to have to decline.
+// calendarDocument is the TRANSPORT envelope of the credentialed calendar
+// answer, and it is deliberately the one shape in this file that is NOT read
+// strictly (issue 246, finding 2).
+//
+// The distinction is between the envelope and the payload, and it is the
+// whole point. The payload — everything under `data` — is a shape this
+// package MAPS, field by field, into a served panel; an unknown field there
+// is upstream drift this package has half-understood, and refusing is the
+// only honest answer. The envelope is not mapped at all: it is the protocol's
+// own wrapper, and the protocol reserves the right to add top-level siblings
+// to it. A GraphQL server may attach `extensions` at any time, for tracing or
+// cost accounting or anything else, and a strict gate here would refuse EVERY
+// credentialed document from the day one appeared — a fail-closed outcome for
+// a reason that has nothing to do with the data. It fails honestly (the
+// retained payload keeps serving, logged, nothing fabricated) which is why
+// this was a follow-up rather than a blocker; it is still the same
+// unverifiable-upstream-shape class the commit above was written to close.
+//
+// So Data is raw here and decodeStrict is applied to it in mapCalendarDocument
+// instead. Nothing is weakened: every byte this package reads a value out of
+// is still read through the strict gate, and the only thing newly tolerated is
+// a sibling of `data` that this package never looks at.
 //
 // Errors is held as raw messages on purpose. The upstream reports a refusal —
 // a bad credential, a revoked scope, a malformed query — as a 200 answer
@@ -1228,7 +1245,7 @@ type datedCommit struct {
 // never decodes upstream-authored prose into typed fields it would then have
 // to reason about.
 type calendarDocument struct {
-	Data   calendarData      `json:"data"`
+	Data   json.RawMessage   `json:"data"`
 	Errors []json.RawMessage `json:"errors"`
 }
 

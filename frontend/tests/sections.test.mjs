@@ -247,8 +247,8 @@ test('the page stacks the name, the nav and the sections in one column', () => {
   // the panel stack renders behind the manifest's one stack layout.
   assert.match(
     pageSectionSource,
-    /\{#if section\.layout === 'stack'\}\s*<div class="panel-stack">/,
-    'the stack layout must hold the panel stack'
+    /\{#if section\.layout === 'stack'\}(?:\s*<!--[\s\S]*?-->)?\s*<div class="panel-stack" data-block-count=\{section\.blocks\.length\}>/,
+    'the stack layout must hold the panel stack, and it must declare how many blocks it holds (issue 210)'
   );
   assert.match(
     pageSectionSource,
@@ -1152,9 +1152,206 @@ const galleryMarkup = stripComments(mediaGallery).markup;
  * <style> too, and three of those blocks contain the literal `<button>` while
  * one contains `index = at`. A walk that asks "what is the nearest enclosing
  * element" or "how many times is this assigned" reads those as code and is
- * wrong in the direction that lets a real regression through. Both comment
- * forms go, so the walks below see only what the compiler sees. */
-const galleryCode = stripComments(mediaGallery).markup.replace(/\/\*[\s\S]*?\*\//g, ' ');
+ * wrong in the direction that lets a real regression through.
+ *
+ * ALL THREE comment forms go now (issue 246, finding 3). The previous version
+ * removed HTML and block comments and claimed the result was "only what the
+ * compiler sees", which was not exact: a `//` line comment containing
+ * `<button` above a loose glyph made the enclosure walk find prose again and
+ * a real mutant survived green. The naive repair — delete everything after
+ * `//` — is worse than the defect, because it eats the `//` inside every
+ * `https://` this component's markup carries and truncates the lines that
+ * hold them.
+ *
+ * The narrower claim, and the one stripLineComments below actually delivers:
+ * a `//` line comment is removed WHERE `//` IS A COMMENT, which in a Svelte
+ * file is inside <script> and nowhere else. HTML has no line comments and
+ * neither does CSS, so a `//` in markup or in a <style> block is content and
+ * survives untouched — which is exactly what keeps `https://` intact, since
+ * every URL in this component lives in one of those two places. Inside the
+ * script the strip is delimiter-aware: it tracks quoted and template strings
+ * so a `//` inside a string literal is content there too. */
+/* The <script> region, written ONCE and matched case-insensitively.
+ *
+ * HTML tag names are case-insensitive, so a filter that knows only the
+ * lowercase spelling is a filter with a hole in it: an upper-case <SCRIPT>
+ * block would not be recognised as script at all, and every line comment
+ * inside it would survive into text these walks read as code — the exact
+ * failure the strip exists to prevent, reintroduced through the spelling of
+ * the tag rather than through the comment. CodeQL flags it as
+ * js/bad-tag-filter, and the alert is right even though this file's only
+ * real subject is one lowercase Svelte component: a pin whose correctness
+ * depends on nobody ever typing a tag differently is a pin resting on a
+ * habit.
+ *
+ * The closing tag is loose for the same reason, and looser than a first
+ * reading suggests. HTML end tags may carry whitespace AND ignored junk
+ * before the `>`: `</script >`, `</script\t\n bar>` and `</script/>` are
+ * all the same end tag to a parser, which stops the script block at every
+ * one of them. `\s*` covers only the first of the three, so the strip would
+ * have run past the real end of a block spelled either of the other two
+ * ways and kept walking markup as if it were code. `\b[^>]*` accepts the
+ * whole family while still refusing `</scriptfoo>`, which is not an end tag
+ * at all — the word boundary is what keeps the tolerance from becoming a
+ * prefix match. CodeQL raised this as a SECOND js/bad-tag-filter alert
+ * after the casing repair closed the first two; it is the same class of
+ * defect one field over.
+ *
+ * It is a SOURCE STRING rather than a shared RegExp because a /g regex
+ * carries lastIndex: handing one instance to both a replace and a matchAll
+ * is a state bug waiting for a third caller, and building a fresh one per
+ * site costs nothing in a test. */
+const scriptRegionSource = '(<script\\b[^>]*>)([\\s\\S]*?)(<\\/script\\b[^>]*>)';
+const scriptRegions = () => new RegExp(scriptRegionSource, 'gi');
+
+function stripLineComments(source) {
+  return source.replace(scriptRegions(), (whole, open, body, close) => {
+    let out = '';
+    let quote = null;
+    for (let at = 0; at < body.length; at += 1) {
+      const char = body[at];
+      if (quote !== null) {
+        out += char;
+        if (char === '\\') {
+          out += body[at + 1] ?? '';
+          at += 1;
+        } else if (char === quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (char === "'" || char === '"' || char === '`') {
+        quote = char;
+        out += char;
+        continue;
+      }
+      if (char === '/' && body[at + 1] === '/') {
+        // To the end of the line, and the newline itself is KEPT: the walks
+        // that read this text measure positions, and swallowing a line
+        // terminator would join two statements into one.
+        const end = body.indexOf('\n', at);
+        if (end < 0) return `${open}${out}${close}`;
+        at = end - 1;
+        continue;
+      }
+      out += char;
+    }
+    return `${open}${out}${close}`;
+  });
+}
+
+const galleryCode = stripLineComments(
+  stripComments(mediaGallery).markup.replace(/\/\*[\s\S]*?\*\//g, ' ')
+);
+
+test('the prose-free source strips line comments only where // is a comment (issue 246)', () => {
+  /* THE EXACT MUTANT the finding names: a `//` comment carrying `<button`
+     above a loose glyph. Against the previous strip the enclosure walk found
+     that prose and reported the glyph as enclosed — a surviving mutant. */
+  const mutant = stripLineComments(
+    ['<script>', '  // <button that is prose, not a control', '</script>', '<svg></svg>'].join('\n')
+  );
+  assert.doesNotMatch(mutant, /<button/, 'a // comment inside <script> still reaches the walks');
+
+  /* THE SAME COMMENT, IN A TAG SPELLED DIFFERENTLY. HTML tag names are
+     case-insensitive, so <SCRIPT> is script — and a strip that only knew the
+     lowercase spelling would hand this block straight through with its
+     comment intact, reintroducing the defect above through the spelling of
+     the tag rather than through the comment. Every casing that a browser
+     treats as one, this must treat as one.
+
+     The last four rows are the end tag's own family, which is wider than
+     the casing question. A parser ends a script block at `</script >`, at
+     `</script\t\n bar>` and at `</script/>` alike — the junk before the `>`
+     is ignored, not disqualifying — so a strip that recognises only the
+     bare spelling runs PAST the real end of the block and keeps walking
+     markup as if it were code. Each row here is one spelling a browser
+     already accepts. */
+  for (const [open, close] of [
+    ['<SCRIPT>', '</SCRIPT>'],
+    ['<Script>', '</script>'],
+    ['<script>', '</SCRIPT >'],
+    ['<script>', '</script >'],
+    ['<script>', '</script\t\n bar>'],
+    ['<script>', '</script/>'],
+    ['<SCRIPT>', '</SCRIPT\tBAR>'],
+  ]) {
+    assert.doesNotMatch(
+      stripLineComments([open, '  // <button that is prose, not a control', close].join('\n')),
+      /<button/,
+      `a // comment inside ${open}…${close} still reaches the walks; the tag filter knows only one spelling`
+    );
+  }
+  /* …and the boundary that keeps that tolerance from turning into a prefix
+     match. `</scriptfoo>` is NOT an end tag — a parser reads a different
+     tag name and the script block continues — so the comment below it is
+     still inside the block and must still be stripped. Drop the `\b` and
+     the region ends at the impostor, the rest of the block is read as
+     markup, and the loose `<button` reaches the walks. */
+  assert.doesNotMatch(
+    stripLineComments(
+      ['<script>', '  let x = "</scriptfoo>";', '  // <button that is prose', '</script>'].join('\n')
+    ),
+    /<button/,
+    '</scriptfoo> ended the block; it names a different tag and ends nothing'
+  );
+
+  /* And the other direction, so the casing tolerance cannot become a licence
+     to strip outside script: markup is still markup whatever its case.
+     Deliberately an UNQUOTED URL in an element's BODY, which is the only
+     placement that can tell this apart — a URL in an attribute rides in the
+     opening tag, which the replacer preserves verbatim, and a quoted one is
+     protected by the string tracking, so either would pass against a filter
+     that had stopped caring which tag it was in at all. That exact mutant
+     survived the first draft of this assertion. */
+  for (const [markup, kept] of [
+    ['<P>see https://example.invalid/d for more</P>', 'https://example.invalid/d for more'],
+    ['<div>https://example.invalid/e</div>', 'https://example.invalid/e'],
+  ]) {
+    assert.ok(
+      stripLineComments(markup).includes(kept),
+      `${markup} was scanned as script; only <script> regions may lose a //`
+    );
+  }
+
+  /* And the property the naive repair would destroy. Both of these are places
+     `//` is NOT a comment, so both must survive whole — the line as well as
+     the URL, because a truncated line loses whatever followed it. */
+  const kept = stripLineComments(
+    [
+      '<script>',
+      '  const href = "https://example.invalid/a";',
+      '</script>',
+      '<a href="https://example.invalid/b">x</a>',
+      '<style>.x { background: url("https://example.invalid/c"); }</style>',
+    ].join('\n')
+  );
+  for (const letter of ['a', 'b', 'c']) {
+    assert.match(
+      kept,
+      new RegExp(`https://example\\.invalid/${letter}`),
+      `a // that is not a comment was stripped (case ${letter}); the naive "cut after //" repair is what this must never become`
+    );
+  }
+  assert.match(kept, /<a href="[^"]*">x<\/a>/, 'markup after a URL was truncated');
+
+  // Non-vacuity against the REAL subject: the component's own script does
+  // carry line comments, and not one of them survives into what the walks
+  // below read. Both halves are needed — the first proves this strip has
+  // something to do here at all, the second that it did it.
+  const scriptBody = (source) =>
+    [...source.matchAll(scriptRegions())].map(([, , body]) => body).join('\n');
+  assert.match(
+    scriptBody(stripComments(mediaGallery).markup),
+    /(?:^|\n)\s*\/\//,
+    "MediaGallery's script no longer carries a line comment at all; this strip would be unexercised"
+  );
+  assert.doesNotMatch(
+    scriptBody(galleryCode),
+    /(?:^|\n)\s*\/\//,
+    'a line comment survived into the source the enclosure and assignment walks read'
+  );
+});
 
 test('the comment strip these pins depend on runs to a fixed point (issue 207)', () => {
   // Non-vacuity for the loop above, stated as the regression it prevents.
