@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import copy
+import datetime as dt
 import hashlib
 import importlib.util
 import io
@@ -30,12 +31,31 @@ sys.modules[SPEC.name] = RC
 SPEC.loader.exec_module(RC)
 
 
+def changelog(version: str) -> str:
+    """A complete released ladder ending at `version`, newest heading first.
+
+    Issue #105 made the changelog's own history part of the contract, so a
+    fixture carrying ONE heading no longer describes any real repository: the
+    append-only comparison reads a 0.1.9 -> 0.1.10 step whose head dropped
+    0.1.9 as exactly the deletion it exists to refuse. The ladder is generated
+    rather than listed so a synthetic release step is append-only by
+    construction, and every date is the same day, which the shape rule permits
+    (dates must not INCREASE downward) and which keeps the fixture free of an
+    invented release calendar.
+    """
+    major, minor, patch = (int(part) for part in version.split("."))
+    return "# Changelog\n\n## [Unreleased]\n\n" + "\n".join(
+        f"## [{major}.{minor}.{step}] - 2026-08-13\n\n- release\n"
+        for step in range(patch, -1, -1)
+    )
+
+
 def snapshot(version: str) -> dict[str, str]:
     return {
         "VERSION": version + "\n",
         "chart/Chart.yaml": f"apiVersion: v2\nversion: {version}\nappVersion: \"{version}\"\n",
         "chart/values.yaml": f"image:\n  tag: v{version}\n",
-        "CHANGELOG.md": f"# Changelog\n\n## [Unreleased]\n\n## [{version}] - 2026-08-13\n\n- release\n",
+        "CHANGELOG.md": changelog(version),
     }
 
 
@@ -1308,6 +1328,35 @@ class SettingsReceiptTests(unittest.TestCase):
             "signed-in owner UI transaction",
             "remains an external Ready blocker",
             "must remain Draft",
+            # Issue #221. Two paragraphs of this runbook decided whether a cold
+            # operator believes the repository can publish at all, and NEITHER
+            # was bound to anything: PR #217's reviewer inverted the first --
+            # "The owner has since provisioned both" to "has never provisioned
+            # either" -- and 148 tests stayed green. That is the same condition
+            # under which the two claims #217 corrected survived long enough to
+            # need correcting. Each token below is a load-bearing phrase of a
+            # claim this repository can re-derive: the App-provisioning claim
+            # from tagger identity, message form and descent (see
+            # `test_the_app_provisioning_claim_re_derives_from_git_alone`), and
+            # the audit-scan claim from the audit workflow's own invocation.
+            "The owner has since provisioned both",
+            "App-backed publication is live",
+            "git cat-file tag v0.1.46",
+            "tagger `github-actions[bot]",
+            "every release tag from `v0.1.15`",
+            "`v0.1.4` through\n`v0.1.9`, predate the `immutable_settings` job",
+            "with no fallback, no condition on",
+            "vars.PLATFORM_RELEASE_APP_ID",
+            "secrets.PLATFORM_RELEASE_APP_PRIVATE_KEY",
+            "This repository still contains no credential value",
+            "it carries no development-dependency scope",
+            "`--include-dev-deps` is a source/lockfile concept",
+            "rejects as an unknown flag on `trivy image`",
+            "the audit does not restate that",
+            # And the repair this change made, so the corrected clause cannot
+            # quietly revert to the superseded one.
+            "neither are the `platform-release` variables and secrets",
+            "the owner's own GET-only bypass-actor check below",
         ):
             if token not in text:
                 raise ValueError(f"release settings contract lost: {token}")
@@ -2123,6 +2172,22 @@ class SettingsReceiptTests(unittest.TestCase):
             "signed-in owner UI transaction",
             "remains an external Ready blocker",
             "must remain Draft",
+            "The owner has since provisioned both",
+            "App-backed publication is live",
+            "git cat-file tag v0.1.46",
+            "tagger `github-actions[bot]",
+            "every release tag from `v0.1.15`",
+            "`v0.1.4` through\n`v0.1.9`, predate the `immutable_settings` job",
+            "with no fallback, no condition on",
+            "vars.PLATFORM_RELEASE_APP_ID",
+            "secrets.PLATFORM_RELEASE_APP_PRIVATE_KEY",
+            "This repository still contains no credential value",
+            "it carries no development-dependency scope",
+            "`--include-dev-deps` is a source/lockfile concept",
+            "rejects as an unknown flag on `trivy image`",
+            "the audit does not restate that",
+            "neither are the `platform-release` variables and secrets",
+            "the owner's own GET-only bypass-actor check below",
         )
         for token in tokens:
             with self.subTest(deletion=token), self.assertRaises(ValueError):
@@ -2149,9 +2214,136 @@ class SettingsReceiptTests(unittest.TestCase):
                 '"secret_scanning_push_protection": true',
                 '"secret_scanning_push_protection": false',
             ),
+            # Issue #221's mutation M4, verbatim: the exact inversion that
+            # survived `Ran 148 tests ... OK` on PR #217's head.
+            (
+                "The owner has since provisioned both",
+                "The owner has never provisioned either",
+            ),
+            ("App-backed publication is live", "App-backed publication is blocked"),
+            (
+                "it carries no development-dependency scope",
+                "it carries the same development-dependency scope",
+            ),
+            (
+                "the audit does not restate that",
+                "the audit restates that",
+            ),
+            (
+                "neither are the `platform-release` variables and secrets",
+                "still unprovisioned are the `platform-release` variables and secrets",
+            ),
         ):
             with self.subTest(inversion=old), self.assertRaises(ValueError):
                 self.require_documented_contract(runbook.replace(old, new, 1))
+
+
+class AppProvisioningClaimTests(unittest.TestCase):
+    """Issue #221: re-derive the runbook's publication claim from git alone.
+
+    The token pins above make the App-provisioning paragraph un-deletable and
+    un-invertible, which kills mutation M4 -- but a pin on prose only proves
+    the prose is still there. This proves the prose is still TRUE, from the
+    same evidence the paragraph tells its reader to check: tagger identity,
+    message form, and descent from the single commit that introduced the
+    `immutable_settings` job. Nothing here calls an API or trusts a relay.
+
+    It needs the repository's tags, which the gate's `security` job has
+    (`fetch-depth: 0`). It FAILS rather than skips without them, on purpose: a
+    check that quietly steps aside when its evidence is missing is exactly the
+    decorative pin this issue was filed about.
+    """
+
+    PUBLISHER_TAGGER = "github-actions[bot]"
+    FIRST_PUBLISHED = RC.Version.parse("0.1.15")
+    IMMUTABLE_SETTINGS_JOB = "immutable_settings"
+    PUBLISHER_WORKFLOW = ".github/workflows/release-publisher.yml"
+
+    @classmethod
+    def git(cls, *args: str) -> str:
+        completed = subprocess.run(
+            ["git", "-C", str(ROOT), *args],
+            check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        if completed.returncode != 0:
+            raise AssertionError(
+                f"git {' '.join(args)} failed in {ROOT}: {completed.stderr.strip()}"
+            )
+        return completed.stdout.strip()
+
+    def release_tags(self) -> dict[RC.Version, str]:
+        listed = self.git(
+            "for-each-ref", "--format=%(refname:short) %(objecttype)", "refs/tags"
+        )
+        tags: dict[RC.Version, str] = {}
+        for line in listed.splitlines():
+            name, _, kind = line.partition(" ")
+            if not name.startswith("v"):
+                continue
+            self.assertEqual(
+                kind, "tag", f"{name} is not an annotated tag; releases are annotated"
+            )
+            tags[RC.Version.parse(name[1:])] = name
+        return tags
+
+    def test_the_app_provisioning_claim_re_derives_from_git_alone(self):
+        tags = self.release_tags()
+        self.assertGreaterEqual(
+            len(tags), 10,
+            "this pin needs the repository's release tags; fetch full history "
+            "(`fetch-depth: 0`) rather than letting it pass on an empty set",
+        )
+        self.assertIn(self.FIRST_PUBLISHED, tags, "v0.1.15 is the claim's own boundary")
+
+        introduced = self.git(
+            "log", "--format=%H", "-S", self.IMMUTABLE_SETTINGS_JOB, "--", self.PUBLISHER_WORKFLOW
+        ).split()
+        self.assertTrue(introduced, "no commit introduced the immutable_settings job")
+        origin = introduced[-1]
+
+        published, predating = 0, 0
+        for version, name in sorted(tags.items()):
+            body = self.git("cat-file", "tag", name)
+            tagger = [line for line in body.splitlines() if line.startswith("tagger ")]
+            self.assertEqual(len(tagger), 1, f"{name} carries no single tagger line")
+            commit = self.git("rev-parse", f"{name}^{{commit}}")
+            descends = subprocess.run(
+                ["git", "-C", str(ROOT), "merge-base", "--is-ancestor", origin, commit],
+                check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            ).returncode == 0
+            if version >= self.FIRST_PUBLISHED:
+                published += 1
+                with self.subTest(published=name):
+                    self.assertIn(f"tagger {self.PUBLISHER_TAGGER} ", tagger[0])
+                    self.assertIn(f"Release {name} from {commit}", body)
+                    self.assertTrue(
+                        descends,
+                        f"{name} does not descend from the commit that introduced "
+                        f"{self.IMMUTABLE_SETTINGS_JOB}",
+                    )
+                continue
+            predating += 1
+            with self.subTest(predating=name):
+                # The paragraph's named exception, held to its own claim: these
+                # are evidence about the App path in NEITHER direction, so they
+                # must carry neither the publisher's tagger nor its message
+                # form, and must not descend from that commit.
+                self.assertNotIn(f"tagger {self.PUBLISHER_TAGGER} ", tagger[0])
+                self.assertNotIn(f"Release {name} from {commit}", body)
+                self.assertFalse(descends)
+        self.assertGreaterEqual(published, 10, "too few published tags to prove anything")
+        self.assertEqual(predating, 6, "the runbook names exactly six predating tags")
+
+    def test_the_runbook_paragraph_states_the_facts_that_derivation_found(self):
+        runbook = (ROOT / "docs" / "release-governance.md").read_text(encoding="utf-8")
+        for token in (
+            f"tagger `{self.PUBLISHER_TAGGER}",
+            f"every release tag from `v{self.FIRST_PUBLISHED}`",
+            "the six older tags, `v0.1.4` through\n`v0.1.9`",
+            "created under three other",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, runbook)
 
 
 class ArtifactStateTests(unittest.TestCase):
@@ -3370,6 +3562,299 @@ class GitTransitionTests(SyntheticRepo, unittest.TestCase):
                     RC.validate_transition(root, base, head, first_parent=first_parent)
             with self.assertRaises(RC.ContractError):
                 RC.discover_transition_window(root, head)
+
+
+def ladder(*rows: tuple[str, str, str]) -> str:
+    """Build a changelog from explicit `(version, date, body)` rows.
+
+    The generated `changelog()` ladder above dates every release the same day,
+    which is right for the transition fixtures and wrong for these: a flat
+    ladder cannot express a date edit that leaves the ordering rule satisfied,
+    so a re-dating mutant would be refused by the SHAPE rule and the
+    append-only date branch would never run. These rows are dated apart on
+    purpose, so each mutant below reaches the guard it is aimed at.
+    """
+    return "# Changelog\n\n## [Unreleased]\n\n" + "\n".join(
+        f"## [{version}] - {date}\n\n{body}\n" for version, date, body in rows
+    )
+
+
+HISTORY_ROWS = (
+    ("0.1.9", "2026-08-19", "- ninth"),
+    ("0.1.8", "2026-08-18", "- eighth"),
+    ("0.1.7", "2026-08-17", "- seventh"),
+    ("0.1.6", "2026-08-16", "- sixth"),
+)
+HISTORY_BASE = ladder(*HISTORY_ROWS)
+HISTORY_HEAD = ladder(("0.1.10", "2026-08-20", "- tenth"), *HISTORY_ROWS)
+
+
+class ChangelogHistoryTests(SyntheticRepo, unittest.TestCase):
+    """Issue #105: released changelog history is append-only, and provably so.
+
+    Before this, `validate_snapshot` read exactly one heading -- the current
+    version's -- and everything below it was deletable with every release
+    control green. The gap was found by a mechanical edit, not an attack: an
+    insertion that overwrote the span down to and including the heading below
+    it, orphaning one shipped release's entries under the next version's name.
+    """
+
+    def test_a_pure_insertion_on_top_is_accepted(self):
+        RC.require_appended_changelog(HISTORY_BASE, HISTORY_HEAD)
+        # And several at once, which a rebase range legitimately produces.
+        RC.require_appended_changelog(
+            HISTORY_BASE,
+            ladder(
+                ("0.1.11", "2026-08-21", "- eleventh"),
+                ("0.1.10", "2026-08-20", "- tenth"),
+                *HISTORY_ROWS,
+            ),
+        )
+        # An untouched changelog is the documentation-only case.
+        RC.require_appended_changelog(HISTORY_BASE, HISTORY_BASE)
+
+    def test_every_edit_to_released_history_is_refused(self):
+        new = ("0.1.10", "2026-08-20", "- tenth")
+        for label, head, expected in (
+            ("deleted middle heading",
+             ladder(new, HISTORY_ROWS[0], *HISTORY_ROWS[2:]), "0.1.8"),
+            ("deleted tail heading",
+             ladder(new, *HISTORY_ROWS[:-1]), "lost 1 released heading"),
+            ("deleted every released heading",
+             ladder(new), "lost 4 released heading"),
+            ("one release added and one quietly deleted",
+             ladder(new, *HISTORY_ROWS[:2], HISTORY_ROWS[3]), "lost 1 released heading"),
+            ("reordered pair",
+             ladder(new, HISTORY_ROWS[0], HISTORY_ROWS[2], HISTORY_ROWS[1], HISTORY_ROWS[3]),
+             "descend"),
+            ("duplicated version",
+             ladder(new, HISTORY_ROWS[0], *HISTORY_ROWS), "more than once"),
+            ("mutated historical date",
+             ladder(new, HISTORY_ROWS[0], ("0.1.8", "2026-08-17", "- eighth"),
+                    *HISTORY_ROWS[2:]),
+             RC.CHANGELOG_CORRECTIONS_PATH),
+            ("rewritten historical entry",
+             ladder(new, HISTORY_ROWS[0], ("0.1.8", "2026-08-18", "- eighth, revised"),
+                    *HISTORY_ROWS[2:]),
+             "rewritten"),
+            ("historical entry silently appended to",
+             ladder(new, HISTORY_ROWS[0], ("0.1.8", "2026-08-18", "- eighth\n- and more"),
+                    *HISTORY_ROWS[2:]),
+             "rewritten"),
+            ("new version reusing a released number",
+             ladder(("0.1.8", "2026-08-20", "- impostor"), *HISTORY_ROWS), "descend"),
+        ):
+            with self.subTest(mutant=label), self.assertRaises(RC.ContractError) as denied:
+                RC.require_appended_changelog(HISTORY_BASE, head)
+            self.assertIn(expected, str(denied.exception))
+
+    def test_the_shape_rules_refuse_a_ladder_no_release_sequence_can_produce(self):
+        for label, text, expected in (
+            ("ascending order",
+             ladder(("0.1.8", "2026-08-18", "- x"), ("0.1.9", "2026-08-19", "- y")),
+             "must descend"),
+            ("duplicate version",
+             ladder(("0.1.9", "2026-08-19", "- x"), ("0.1.9", "2026-08-19", "- y")),
+             "more than once"),
+            ("date increasing downward",
+             ladder(("0.1.9", "2026-08-18", "- x"), ("0.1.8", "2026-08-19", "- y")),
+             "is later than"),
+            ("impossible calendar date",
+             ladder(("0.1.9", "2026-02-30", "- x")), "not a real ISO date"),
+            ("no released heading at all",
+             "# Changelog\n\n## [Unreleased]\n\n- nothing shipped\n", "no released"),
+            ("released heading respelled so the parse cannot see it",
+             HISTORY_BASE.replace("## [0.1.8] - 2026-08-18", "## [0.1.8] -- 2026-08-18"),
+             "is neither"),
+            ("aggregate tail heading floated above real history",
+             "# Changelog\n\n## [Unreleased]\n\n## [0.1.3] and earlier\n\n- imported\n\n"
+             + ladder(*HISTORY_ROWS).split("## [Unreleased]\n\n", 1)[1],
+             "only as the last"),
+        ):
+            with self.subTest(shape=label), self.assertRaises(RC.ContractError) as denied:
+                RC.require_changelog_history(text)
+            self.assertIn(expected, str(denied.exception))
+
+    def test_the_imported_aggregate_tail_is_ordinary_body_text(self):
+        tail = ladder(*HISTORY_ROWS) + "\n## [0.1.3] and earlier\n\nimported\n"
+        sections = RC.require_changelog_history(tail)
+        self.assertEqual([str(section.version) for section in sections],
+                         [row[0] for row in HISTORY_ROWS])
+        self.assertIn("## [0.1.3] and earlier", sections[-1].body)
+        RC.require_appended_changelog(tail, ladder(("0.1.10", "2026-08-20", "- tenth"),
+                                                  *HISTORY_ROWS)
+                                      + "\n## [0.1.3] and earlier\n\nimported\n")
+        with self.assertRaises(RC.ContractError):
+            RC.require_appended_changelog(tail, ladder(*HISTORY_ROWS))
+
+    def test_the_snapshot_check_reads_the_whole_ladder_not_only_the_top(self):
+        """`validate_snapshot` runs on every snapshot, so the shape rules bite
+        there too -- not only inside the base-to-head comparison.
+
+        Before issue #105 this function read exactly one heading, the current
+        version's, and every heading below it was unconstrained on a snapshot
+        nobody was diffing.
+        """
+        self.assertEqual(RC.validate_snapshot(snapshot("0.1.10")).tag, "v0.1.10")
+        for label, text in (
+            ("a duplicate republished at the bottom",
+             changelog("0.1.10") + "\n## [0.1.9] - 2026-08-13\n\n- again\n"),
+            ("a historical date later than the release above it",
+             changelog("0.1.10").replace(
+                 "## [0.1.5] - 2026-08-13", "## [0.1.5] - 2026-08-14", 1)),
+            ("a released heading respelled out of the ladder",
+             changelog("0.1.10").replace(
+                 "## [0.1.5] - 2026-08-13", "## [0.1.5] -- 2026-08-13", 1)),
+            ("a release block sitting ABOVE the Unreleased heading",
+             changelog("0.1.10").replace(
+                 "## [Unreleased]",
+                 "## [0.1.99] - 2026-08-14\n\n- stray\n\n## [Unreleased]", 1)),
+        ):
+            broken = dict(snapshot("0.1.10"))
+            broken["CHANGELOG.md"] = text
+            with self.subTest(ladder=label), self.assertRaises(RC.ContractError):
+                RC.validate_snapshot(broken)
+
+    def test_the_correction_lift_authorizes_one_date_and_nothing_else(self):
+        corrected = ladder(
+            ("0.1.10", "2026-08-20", "- tenth"),
+            HISTORY_ROWS[0],
+            ("0.1.8", "2026-08-17", "- eighth"),
+            *HISTORY_ROWS[2:],
+        )
+        exact = {RC.Version.parse("0.1.8"): (dt.date(2026, 8, 18), dt.date(2026, 8, 17), "why")}
+        RC.require_appended_changelog(HISTORY_BASE, corrected, exact)
+        for label, corrections in (
+            ("no lift at all", {}),
+            ("wrong old date",
+             {RC.Version.parse("0.1.8"): (dt.date(2026, 8, 19), dt.date(2026, 8, 17), "why")}),
+            ("wrong new date",
+             {RC.Version.parse("0.1.8"): (dt.date(2026, 8, 18), dt.date(2026, 8, 16), "why")}),
+            ("some other version",
+             {RC.Version.parse("0.1.7"): (dt.date(2026, 8, 18), dt.date(2026, 8, 17), "why")}),
+        ):
+            with self.subTest(lift=label), self.assertRaises(RC.ContractError):
+                RC.require_appended_changelog(HISTORY_BASE, corrected, corrections)
+        # And the lift reaches the DATE only: the same line cannot carry a
+        # deletion, a reorder, or a rewritten entry through with it.
+        for label, head in (
+            ("deletion", ladder(("0.1.10", "2026-08-20", "- tenth"), HISTORY_ROWS[0],
+                                *HISTORY_ROWS[2:])),
+            ("rewritten entry", ladder(("0.1.10", "2026-08-20", "- tenth"), HISTORY_ROWS[0],
+                                       ("0.1.8", "2026-08-17", "- eighth, revised"),
+                                       *HISTORY_ROWS[2:])),
+        ):
+            with self.subTest(unliftable=label), self.assertRaises(RC.ContractError):
+                RC.require_appended_changelog(HISTORY_BASE, head, exact)
+
+    def test_the_correction_allowlist_parser_refuses_a_line_it_cannot_read(self):
+        parsed = RC.parse_changelog_corrections(
+            "# a comment\n\n0.1.7 | 2026-08-11 | 2026-08-10 | the tag says so\n"
+        )
+        self.assertEqual(
+            parsed,
+            {RC.Version.parse("0.1.7"): (dt.date(2026, 8, 11), dt.date(2026, 8, 10),
+                                         "the tag says so")},
+        )
+        self.assertEqual(RC.parse_changelog_corrections(""), {})
+        for label, text in (
+            ("three fields", "0.1.7 | 2026-08-11 | 2026-08-10\n"),
+            ("five fields", "0.1.7 | 2026-08-11 | 2026-08-10 | why | extra\n"),
+            ("empty reason", "0.1.7 | 2026-08-11 | 2026-08-10 |\n"),
+            ("no reason but a space", "0.1.7 | 2026-08-11 | 2026-08-10 |   \n"),
+            ("unparseable version", "v0.1.7 | 2026-08-11 | 2026-08-10 | why\n"),
+            ("unparseable date", "0.1.7 | 2026-08-32 | 2026-08-10 | why\n"),
+            ("identical dates", "0.1.7 | 2026-08-10 | 2026-08-10 | why\n"),
+            ("one version corrected twice",
+             "0.1.7 | 2026-08-11 | 2026-08-10 | why\n0.1.7 | 2026-08-10 | 2026-08-09 | why\n"),
+        ):
+            with self.subTest(line=label), self.assertRaises(RC.ContractError):
+                RC.parse_changelog_corrections(text)
+
+    def test_the_shipped_allowlist_and_changelog_agree_with_each_other(self):
+        text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        sections = {section.version: section for section in RC.require_changelog_history(text)}
+        allowlist = ROOT / RC.CHANGELOG_CORRECTIONS_PATH
+        self.assertTrue(allowlist.is_file(), "the correction lift file must exist")
+        for version, (old, new, reason) in RC.parse_changelog_corrections(
+            allowlist.read_text(encoding="utf-8")
+        ).items():
+            with self.subTest(correction=str(version)):
+                self.assertIn(version, sections, "a correction names an unreleased version")
+                # The line must describe the state the repository is IN: the
+                # corrected date, never the one it replaced. A line pointing at
+                # a heading that never moved is a line describing a fiction.
+                self.assertEqual(sections[version].date, new)
+                self.assertNotEqual(old, new)
+                self.assertGreater(len(reason), 40, "a correction states its evidence")
+
+    def test_the_lift_is_read_from_the_head_commit_and_absence_denies(self):
+        for carries_lift in (False, True):
+            with self.subTest(lift_committed=carries_lift), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.git(root, "init", "-q")
+                self.git(root, "branch", "-m", "main")
+                base_files = dict(snapshot("0.1.9"))
+                base_files["CHANGELOG.md"] = HISTORY_BASE
+                base = self.paths_commit(root, base_files, "base")
+                head_files = dict(snapshot("0.1.10"))
+                head_files["CHANGELOG.md"] = ladder(
+                    ("0.1.10", "2026-08-20", "- tenth"),
+                    HISTORY_ROWS[0],
+                    ("0.1.8", "2026-08-17", "- eighth"),
+                    *HISTORY_ROWS[2:],
+                )
+                if carries_lift:
+                    head_files[RC.CHANGELOG_CORRECTIONS_PATH] = (
+                        "0.1.8 | 2026-08-18 | 2026-08-17 | the annotated tag says so\n"
+                    )
+                head = self.paths_commit(root, head_files, "0.1.10")
+                if carries_lift:
+                    verdict = RC.classify_transition(root, base, head, first_parent=True)
+                    self.assertEqual(verdict["class"], "artifact")
+                    self.assertEqual(verdict["tag"], "v0.1.10")
+                else:
+                    with self.assertRaises(RC.ContractError) as denied:
+                        RC.classify_transition(root, base, head, first_parent=True)
+                    self.assertIn(RC.CHANGELOG_CORRECTIONS_PATH, str(denied.exception))
+
+    def test_a_release_range_that_deletes_history_is_refused_end_to_end(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.git(root, "init", "-q")
+            self.git(root, "branch", "-m", "main")
+            base_files = dict(snapshot("0.1.9"))
+            base_files["CHANGELOG.md"] = HISTORY_BASE
+            base = self.paths_commit(root, base_files, "base")
+            head_files = dict(snapshot("0.1.10"))
+            head_files["CHANGELOG.md"] = ladder(
+                ("0.1.10", "2026-08-20", "- tenth"), HISTORY_ROWS[0], *HISTORY_ROWS[2:]
+            )
+            head = self.paths_commit(root, head_files, "0.1.10 minus one release")
+            with self.assertRaises(RC.ContractError) as denied:
+                RC.classify_transition(root, base, head, first_parent=True)
+            self.assertIn("append-only", str(denied.exception))
+            with self.assertRaises(RC.ContractError):
+                RC.validate_transition(root, base, head, first_parent=True)
+
+    def test_the_orphaning_edit_that_found_this_gap_is_refused(self):
+        """The exact mechanical failure of issue #105, replayed.
+
+        An edit that meant to INSERT a block above `## [0.1.8]` replaced the
+        span from `## [Unreleased]` down to and including that heading. The
+        result is well formed, reads like history, and leaves 0.1.8's entries
+        sitting under 0.1.10's name.
+        """
+        orphaned = HISTORY_BASE.replace(
+            "## [Unreleased]\n\n## [0.1.9] - 2026-08-19\n\n- ninth\n\n## [0.1.8] - 2026-08-18\n",
+            "## [Unreleased]\n\n## [0.1.10] - 2026-08-20\n",
+            1,
+        )
+        self.assertNotEqual(orphaned, HISTORY_BASE)
+        RC.require_changelog_history(orphaned)  # the shape rules alone say nothing
+        with self.assertRaises(RC.ContractError) as denied:
+            RC.require_appended_changelog(HISTORY_BASE, orphaned)
+        self.assertIn("append-only", str(denied.exception))
 
 
 class NoArtifactClassTests(SyntheticRepo, unittest.TestCase):
@@ -6881,8 +7366,15 @@ class GovernanceParityTests(unittest.TestCase):
                  "91e45327a9619c731f57835fd77dfc1b35d39acce828080020756a2602fcd42e"),
             ),
             "release runbook": (
+                # Re-pinned for issue #221: the closing clause of this block
+                # called the two `platform-release` frozen names unprovisioned
+                # and treated that as an outstanding external blocker, which
+                # the App-backed publication evidence above it in the same file
+                # had already superseded. PR #217 left it standing verbatim
+                # rather than weaken a guard to reach it; this recomputes the
+                # digest instead, which is the only correct way past a pin.
                 ("That same 2026-08-14 transaction recorded the `Protect-M",
-                 "461f11122e5d52df1dd1a937cbe51e1c4a82856daa1ae667e1bafa8e6a8b8ca9"),
+                 "216e95db87e1095c8a1ff3f31e174377ec0bb314d14b19d24709dc915868ea90"),
                 ("Missing, extra, duplicated, name-only, foreign-integration",
                  "2d6b738ab4bf9675eb30ce44edb02b22aa15eaaf2f2e2d542739b9908fe69a16"),
                 ("The property is returned only at ruleset write-access-level",

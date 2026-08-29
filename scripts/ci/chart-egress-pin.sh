@@ -113,7 +113,7 @@ census_module="${script_dir}/chart_render_census.py"
 # on 2026-08-27: the replacement contract has more moving parts, so it needs
 # more hostile shapes proven refused, not the same number aimed elsewhere.
 minimum_mutations=31
-minimum_census_mutations=63
+minimum_census_mutations=66
 
 fail() {
   printf 'chart-egress-pin: %s\n' "$1" >&2

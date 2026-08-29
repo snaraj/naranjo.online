@@ -1,8 +1,10 @@
-"""Three narrow refusals in `.github/workflows/` -- and deliberately no step
+"""Narrow refusals in `.github/workflows/` -- and deliberately no step
 inventory.
 
-WHAT THIS REFUSES. Each rule names ONE construct that silently changes what a
-gate means, rather than one that merely changes what a gate does:
+WHAT THIS REFUSES. Each of the first three rules names ONE construct that
+silently changes what a gate means, rather than one that merely changes what a
+gate does; the fourth refuses a workflow and the contract describing it
+disagreeing about the same number:
 
   1. `continue-on-error: true` on a job or step in the required-checks set.
      It converts a red gate into a green one with no other visible change. The
@@ -28,6 +30,16 @@ gate means, rather than one that merely changes what a gate does:
      `set -euo pipefail`. A custom shell changes failure semantics underneath
      that convention -- `shell: sh` drops `pipefail` support entirely, so a
      failing command mid-pipeline stops being a failing step.
+
+  4. A `GO_COVERAGE_FLOOR` the contract states differently from the value a
+     workflow enforces (issue #225). Requirement 7 calls the floor "ONE fact
+     recorded in three places" and nothing read both files, so the two could
+     drift silently and in either direction: raise the gate alone and AGENTS.md
+     understates what CI permits; lower it alone and AGENTS.md promises a
+     guarantee CI no longer makes. The number is found by SEARCH on both sides
+     -- every `env:` scope of every workflow, and every AGENTS.md paragraph
+     naming the variable next to a number -- so a new legitimate sentence
+     widens what is read rather than failing for being new.
 
 EVERY SCOPE, NOT THE FIRST ONE SOMEBODY THOUGHT OF. Three of the four review
 rounds on this file found the same defect in a different rule: the rule's own
@@ -230,6 +242,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import sys
+import tempfile
 import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -241,6 +254,19 @@ ROOT = HERE.parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 INSTALL_TOOLS = HERE / "install-tools.sh"
 ALLOWLIST = HERE / "workflow-integrity-allowlist.txt"
+AGENTS = ROOT / "AGENTS.md"
+
+# Issue #225. Requirement 7 calls the Go coverage floor "ONE fact recorded in
+# three places" -- this workflow variable and two sentences in AGENTS.md -- and
+# nothing read both, so the two could drift apart silently and in either
+# direction: a raised gate leaves the contract overstating what CI permits, a
+# lowered one leaves it promising a guarantee CI no longer makes.
+COVERAGE_FLOOR_KEY = "GO_COVERAGE_FLOOR"
+# A number stated NEXT TO the variable's own name, in the same paragraph, is a
+# claim about the floor. Deliberately a search rather than an inventory of
+# permitted locations: a new legitimate sentence about the floor widens what
+# this reads, and cannot fail the gate merely for being new.
+_FLOOR_NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)?")
 
 SPEC = importlib.util.spec_from_file_location("release_contract", HERE / "release_contract.py")
 assert SPEC and SPEC.loader
@@ -248,7 +274,7 @@ RC = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = RC
 SPEC.loader.exec_module(RC)
 
-RULES = ("continue-on-error", "env-shadow", "custom-shell")
+RULES = ("continue-on-error", "env-shadow", "custom-shell", "contract-floor")
 BLOCK_SCALAR = re.compile(r":\s*[|>][+-]?\d*\s*$")
 
 # THE RESOLUTION BOUNDARY, stated as what the reader UNDERSTANDS.
@@ -1188,6 +1214,18 @@ def stale_reason(
     workflow = next((w for w in workflows if w.name == workflow_name), None)
     if workflow is None:
         return None  # already refused by test_allowlist_entries_name_real_workflows
+    if rule == "contract-floor":
+        # The subject is a sentence in AGENTS.md, not a construct in any job,
+        # so it is settled before the `<job>/...` partition below. It is
+        # addressed by its TEXT for the same reason every other subject here
+        # is addressed by name: a line number is an inventory pin that an
+        # edit three paragraphs above invalidates.
+        if where not in {claim.text for claim in coverage_floor_claims(agents_text())}:
+            return (
+                f"exempts the coverage-floor claim {where!r}, which AGENTS.md no longer "
+                f"states"
+            )
+        return None
     if rule == "custom-shell" and where == DEFAULT_SHELL_SUBJECT:
         if workflow.default_shell is None:
             return (
@@ -1263,6 +1301,169 @@ def stale_reason(
     return None
 
 
+# --------------------------------------------------------------------------
+# Issue #225 -- the coverage floor is one fact in more than one file
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FloorDeclaration:
+    """Where a workflow declares the coverage floor, and what it declares."""
+
+    workflow: str
+    scope: str
+    line: int
+    value: str
+
+    @property
+    def where(self) -> str:
+        return f".github/workflows/{self.workflow}:{self.line} ({self.scope})"
+
+
+@dataclass(frozen=True)
+class FloorClaim:
+    """Where the contract states the coverage floor, and what it states."""
+
+    line: int
+    value: str
+    text: str
+
+    @property
+    def where(self) -> str:
+        return f"AGENTS.md:{self.line}"
+
+
+def _declared_scalar(path: Path, lineno: int, key: str) -> str:
+    """Resolve the value of `key` declared on one exact line, or REFUSE.
+
+    The structural reader records WHERE each `env:` key is declared, not what
+    it is set to, because no rule needed the value until this one. Reading it
+    back reuses the same comment stripping and the same allowlist of scalar
+    spellings, so an exotic value raises here exactly as it would there rather
+    than being compared as text nobody resolved.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines()
+    content = _strip_comment(lines[lineno - 1]).strip()
+    parsed = _key(content)
+    if not parsed or parsed[0] != key:
+        _refuse_unresolvable(
+            path, lineno, f"the `{key}` declaration",
+            "The line the structural reader recorded no longer reads as that key.",
+        )
+    value = parsed[1]
+    if SINGLE_QUOTED.match(value) or DOUBLE_QUOTED.match(value):
+        return value[1:-1]
+    if PLAIN_SCALAR.match(value):
+        return value
+    _refuse_unresolvable(
+        path, lineno, f"the `{key}` value, written as `{value}`",
+        "That is not one of the scalar spellings this reader resolves, and a "
+        "floor nobody resolved cannot be compared against the contract.",
+    )
+
+
+def coverage_floor_declarations(workflows: list[Workflow]) -> list[FloorDeclaration]:
+    """Every `GO_COVERAGE_FLOOR` a workflow declares, at any `env:` scope.
+
+    Scoped by SEARCH, never by a pinned job/step address: moving the coverage
+    step, renaming it, or declaring the floor at job level are all ordinary
+    edits, and a gate that pinned today's address would fail them for being
+    different rather than for being wrong.
+    """
+    found: list[FloorDeclaration] = []
+    for workflow in workflows:
+        scopes: list[tuple[str, dict[str, int]]] = [("workflow env", workflow.env)]
+        for job_name, job in workflow.jobs.items():
+            scopes.append((f"job {job_name} env", job.env))
+            scopes.append((f"job {job_name} container env", job.container_env))
+            for step in job.steps:
+                scopes.append((f"job {job_name}, step {step.name!r} env", step.env))
+        for scope, env in scopes:
+            line = env.get(COVERAGE_FLOOR_KEY)
+            if line is None:
+                continue
+            found.append(
+                FloorDeclaration(
+                    workflow=workflow.name,
+                    scope=scope,
+                    line=line,
+                    value=_declared_scalar(workflow.path, line, COVERAGE_FLOOR_KEY),
+                )
+            )
+    return found
+
+
+def coverage_floor_claims(text: str) -> list[FloorClaim]:
+    """Every place the contract states a number FOR the coverage floor.
+
+    A claim is the variable's own name followed, inside the same paragraph, by
+    a number. That keeps the historical figures beside it out of scope -- the
+    measured coverage when the floor was last raised is a different fact -- by
+    taking the FIRST number after the name and nothing else, which is how both
+    of requirement 7's sentences are written.
+    """
+    claims: list[FloorClaim] = []
+    for block in re.finditer(r"(?:(?!\n\s*\n).)+", text, flags=re.DOTALL):
+        paragraph = block.group(0)
+        for mention in re.finditer(re.escape(COVERAGE_FLOOR_KEY), paragraph):
+            number = _FLOOR_NUMBER.search(paragraph, mention.end())
+            if number is None:
+                continue
+            claims.append(
+                FloorClaim(
+                    line=text.count("\n", 0, block.start() + mention.start()) + 1,
+                    value=number.group(0),
+                    text=" ".join(paragraph[mention.start() : number.end()].split()),
+                )
+            )
+    return claims
+
+
+def coverage_floor_disagreements(
+    declarations: list[FloorDeclaration],
+    claims: list[FloorClaim],
+    allowlist: dict[tuple[str, str, str], str] | None = None,
+) -> list[str]:
+    """Report every way the enforced floor and the stated floor fail to be one fact.
+
+    Returns human-readable lines rather than raising, so the caller can print
+    ALL of them at once: a refusal that names one location and stops makes the
+    reader re-derive the parse to find the other.
+    """
+    allowed = {where for (_workflow, rule, where) in (allowlist or {}) if rule == "contract-floor"}
+    rendered_declarations = ", ".join(
+        f"{declaration.where} = {declaration.value}" for declaration in declarations
+    ) or "(none)"
+    problems: list[str] = []
+    if not declarations:
+        return [
+            "no workflow declares "
+            f"`{COVERAGE_FLOOR_KEY}`, so the enforced coverage floor cannot be read at all"
+        ]
+    values = {float(declaration.value) for declaration in declarations}
+    if len(values) != 1:
+        problems.append(
+            f"the workflows declare {len(values)} different `{COVERAGE_FLOOR_KEY}` values "
+            f"({rendered_declarations}); the floor is one fact"
+        )
+    enforced = declarations[0].value
+    if not claims:
+        problems.append(
+            f"AGENTS.md states no `{COVERAGE_FLOOR_KEY}` number at all, while CI enforces "
+            f"{rendered_declarations}. Requirement 7's contract must state the floor it "
+            "is enforcing; deleting the claim is not how the two are kept in step"
+        )
+    for claim in claims:
+        if claim.text in allowed:
+            continue
+        if float(claim.value) != float(enforced):
+            problems.append(
+                f"{claim.where} states {claim.value} for the coverage floor "
+                f"({claim.text!r}), while CI enforces {rendered_declarations}"
+            )
+    return problems
+
+
 def lift_instruction(workflow: str, rule: str, where: str) -> str:
     return (
         f"\n\nTo lift this refusal, add ONE line to "
@@ -1276,6 +1477,10 @@ def lift_instruction(workflow: str, rule: str, where: str) -> str:
 
 def all_workflows() -> list[Workflow]:
     return [read_workflow(path) for path in sorted(WORKFLOWS.glob("*.yml"))]
+
+
+def agents_text() -> str:
+    return AGENTS.read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
@@ -2340,6 +2545,167 @@ class WorkflowIntegrityTests(unittest.TestCase):
             {("pr-gate.yml", "custom-shell", "security/Probe"): "a real reason"},
         )
 
+    # -- issue #225: the contract states the floor the gate enforces ---------
+
+    def test_the_contract_states_the_coverage_floor_ci_actually_enforces(self):
+        """Requirement 7's "ONE fact in three places", enforced rather than hoped.
+
+        Nothing read both files before this, and the drift is silent in both
+        directions: raise the gate alone and the contract understates what CI
+        permits; lower it alone and the contract promises a guarantee CI no
+        longer makes. The refusal names every location it read, with the value
+        found at each, so the repair needs no re-derivation of the parse.
+        """
+        declarations = coverage_floor_declarations(self.workflows)
+        claims = coverage_floor_claims(agents_text())
+        self.assertTrue(
+            declarations,
+            f"no workflow declares `{COVERAGE_FLOOR_KEY}`; requirement 7's floor is enforced "
+            f"nowhere",
+        )
+        self.assertTrue(
+            claims,
+            f"AGENTS.md states no `{COVERAGE_FLOOR_KEY}` number; requirement 7's contract must "
+            f"state the floor it claims is enforced",
+        )
+        problems = coverage_floor_disagreements(declarations, claims, self.allowlist)
+        self.assertEqual(
+            problems,
+            [],
+            "the coverage floor is not one fact:\n  "
+            + "\n  ".join(problems)
+            + lift_instruction("pr-gate.yml", "contract-floor", "<the exact claim text above>"),
+        )
+
+    def test_the_floor_pin_reddens_on_every_way_the_two_can_disagree(self):
+        """A guard that cannot fail is no guard: drive each branch.
+
+        The shipped files agree, so every row below is a synthetic disagreement
+        built from them -- which is also the vacuity demonstration the review
+        protocol asks for.
+        """
+        declarations = coverage_floor_declarations(self.workflows)
+        agents = agents_text()
+        claims = coverage_floor_claims(agents)
+        floor = declarations[0].value
+        self.assertEqual(coverage_floor_disagreements(declarations, claims), [])
+
+        raised = [
+            FloorDeclaration(d.workflow, d.scope, d.line, str(float(d.value) + 1.0))
+            for d in declarations
+        ]
+        problems = coverage_floor_disagreements(raised, claims)
+        self.assertTrue(problems, "a raised gate with an unchanged contract passed")
+        self.assertIn("AGENTS.md:", problems[0])
+        self.assertIn(".github/workflows/", problems[0])
+
+        lowered = coverage_floor_claims(agents.replace(floor, "1.0"))
+        self.assertTrue(lowered, "the mutant must still state a floor")
+        self.assertTrue(
+            coverage_floor_disagreements(declarations, lowered),
+            "a lowered contract claim with an unchanged gate passed",
+        )
+
+        self.assertTrue(
+            coverage_floor_disagreements(declarations, []),
+            "deleting every claim from AGENTS.md passed",
+        )
+        self.assertTrue(
+            coverage_floor_disagreements([], claims),
+            "deleting the floor from every workflow passed",
+        )
+        self.assertTrue(
+            coverage_floor_disagreements(
+                [*declarations, FloorDeclaration("pr-gate.yml", "job x env", 1, "1.0")], claims
+            ),
+            "two workflows declaring different floors passed",
+        )
+
+        # And the lift reaches exactly the claim it names, by text.
+        self.assertEqual(
+            coverage_floor_disagreements(
+                raised, claims, {("pr-gate.yml", "contract-floor", c.text): "r" for c in claims}
+            ),
+            [],
+        )
+        self.assertTrue(
+            coverage_floor_disagreements(
+                raised,
+                claims,
+                {("pr-gate.yml", "contract-floor", "some other sentence"): "r"},
+            ),
+            "a lift naming different text silenced the refusal",
+        )
+        # ONE claim, deliberately: with the whole set, a lift that wrongly
+        # silenced the first would still leave the second reported and this
+        # assertion would pass on a broken rule filter. Narrowing the input is
+        # what makes the row bite -- it survived the first kill matrix run.
+        self.assertTrue(
+            coverage_floor_disagreements(
+                raised, claims[:1], {("pr-gate.yml", "env-shadow", claims[0].text): "r"}
+            ),
+            "a lift under another rule silenced the refusal",
+        )
+        self.assertEqual(
+            coverage_floor_disagreements(
+                raised, claims[:1], {("pr-gate.yml", "contract-floor", claims[0].text): "r"}
+            ),
+            [],
+            "the positive control: the same subject under the right rule does lift",
+        )
+
+    def test_the_floor_search_widens_rather_than_pinning_where_the_number_may_appear(self):
+        """Per the liftable-gates directive: behaviour, not inventory.
+
+        A NEW sentence stating the enforced floor must pass without any edit
+        here, and the search must not mistake the historical measured figure
+        beside it for the floor itself.
+        """
+        declarations = coverage_floor_declarations(self.workflows)
+        floor = declarations[0].value
+        widened = agents_text() + (
+            f"\n\nA later section may also mention `{COVERAGE_FLOOR_KEY}` at {floor} "
+            f"(measured 99.9 when last raised), and that is not a new gate obligation.\n"
+        )
+        claims = coverage_floor_claims(widened)
+        self.assertGreater(len(claims), len(coverage_floor_claims(agents_text())))
+        self.assertEqual(coverage_floor_disagreements(declarations, claims), [])
+        self.assertNotIn("99.9", [claim.value for claim in claims])
+
+    def test_the_floor_declaration_is_found_by_search_at_every_env_scope(self):
+        text = (
+            "env:\n"
+            "  GO_COVERAGE_FLOOR: '11.1'\n"
+            "jobs:\n"
+            "  application:\n"
+            "    env:\n"
+            "      GO_COVERAGE_FLOOR: \"22.2\"\n"
+            "    steps:\n"
+            "      - name: Enforce\n"
+            "        env:\n"
+            "          GO_COVERAGE_FLOOR: 33.3\n"
+            "        run: true\n"
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
+            path = Path(temporary) / "pr-gate.yml"
+            path.write_text(text, encoding="utf-8")
+            found = coverage_floor_declarations([read_workflow(path)])
+        self.assertEqual(
+            [(declaration.value, declaration.line) for declaration in found],
+            [("11.1", 2), ("22.2", 6), ("33.3", 10)],
+        )
+        self.assertTrue(coverage_floor_disagreements(found, []))
+        # A spelling the reader does not resolve is refused, never compared.
+        with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
+            path = Path(temporary) / "pr-gate.yml"
+            path.write_text(
+                text.replace("GO_COVERAGE_FLOOR: 33.3", "GO_COVERAGE_FLOOR: !!str 33.3"),
+                encoding="utf-8",
+            )
+            workflow = read_workflow(path)
+            with self.assertRaises(AssertionError):
+                coverage_floor_declarations([workflow])
+
     def test_allowlist_entries_name_real_workflows(self):
         names = {workflow.name for workflow in self.workflows}
         for (workflow, rule, where) in sorted(self.allowlist):
@@ -2422,6 +2788,11 @@ class WorkflowIntegrityTests(unittest.TestCase):
             ("env-shadow", f"{WORKFLOW_ENV_SUBJECT}/IMAGE"),
             ("env-shadow", f"application/{JOB_ENV_SUBJECT}/GO_COVERAGE_FLOOR"),
             ("env-shadow", f"application/{CONTAINER_ENV_SUBJECT}/HELM_VERSION"),
+            # The contract-floor subject lives in AGENTS.md rather than in any
+            # job, so it is checked against the real contract text and the
+            # synthetic workflow above is irrelevant to it -- which is the
+            # point of taking it before the `<job>/...` partition.
+            ("contract-floor", coverage_floor_claims(agents_text())[0].text),
         )
         for rule, where in live:
             with self.subTest(live=f"{rule}|{where}"):
@@ -2442,6 +2813,7 @@ class WorkflowIntegrityTests(unittest.TestCase):
             ("env-shadow", f"chart/{CONTAINER_ENV_SUBJECT}/HELM_VERSION",
              "does not declare it"),
             ("env-shadow", f"application/{CONTAINER_ENV_SUBJECT}", "is missing the"),
+            ("contract-floor", "GO_COVERAGE_FLOOR` is 0.0", "no longer states"),
         )
         for rule, where, expected in stale:
             with self.subTest(stale=f"{rule}|{where}"):
