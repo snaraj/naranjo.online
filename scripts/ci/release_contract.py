@@ -247,6 +247,254 @@ def _direct_child_scalar(text: str, parent: str, key: str) -> str:
     return values[0]
 
 
+CHANGELOG_CORRECTIONS_PATH = "scripts/ci/changelog-correction-allowlist.txt"
+_CHANGELOG_BRACKET_HEADING_RE = re.compile(r"^## \[[^\]]*\].*$")
+_CHANGELOG_RELEASED_HEADING_RE = re.compile(
+    r"^## \[(?P<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))\]"
+    r" - (?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})$"
+)
+_CHANGELOG_AGGREGATE_HEADING_RE = re.compile(
+    r"^## \[(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\] and earlier$"
+)
+_CHANGELOG_UNRELEASED_HEADING = "## [Unreleased]"
+
+
+@dataclass(frozen=True)
+class ChangelogSection:
+    """One released block: its heading facts and every byte beneath it."""
+
+    version: Version
+    date: dt.date
+    heading: str
+    body: str
+
+
+def parse_changelog(text: str) -> list[ChangelogSection]:
+    """Return every released section, in file order, or refuse the file's shape.
+
+    A section runs from its own `## [X.Y.Z] - YYYY-MM-DD` heading to the next
+    one, so the undated `## [X.Y.Z] and earlier` tail this repository imported
+    is body text of the last dated section rather than a special case: the
+    append-only comparison retains it byte-for-byte like any other released
+    prose.
+
+    Every OTHER `## [...]` heading is refused by shape, and that half is what
+    makes the parse trustworthy rather than merely convenient. Without it,
+    respelling a released heading -- an en dash for the hyphen, a stray space --
+    would delete a release from this parse while leaving text on the page that
+    still reads like history.
+    """
+    lines = text.split("\n")
+    heading_indexes: list[int] = []
+    released_indexes: list[int] = []
+    for index, line in enumerate(lines):
+        if not _CHANGELOG_BRACKET_HEADING_RE.fullmatch(line):
+            continue
+        heading_indexes.append(index)
+        if _CHANGELOG_RELEASED_HEADING_RE.fullmatch(line):
+            released_indexes.append(index)
+        elif line != _CHANGELOG_UNRELEASED_HEADING and not (
+            _CHANGELOG_AGGREGATE_HEADING_RE.fullmatch(line)
+        ):
+            raise ContractError(
+                f"changelog heading {line!r} is neither {_CHANGELOG_UNRELEASED_HEADING!r}, a "
+                "released `## [X.Y.Z] - YYYY-MM-DD` heading, nor the imported "
+                "`## [X.Y.Z] and earlier` tail"
+            )
+    for index in heading_indexes:
+        if _CHANGELOG_AGGREGATE_HEADING_RE.fullmatch(lines[index]) and index != heading_indexes[-1]:
+            raise ContractError(
+                "the `## [X.Y.Z] and earlier` aggregate heading may appear only as the last "
+                "bracketed heading in the changelog"
+            )
+    sections: list[ChangelogSection] = []
+    for position, start in enumerate(released_indexes):
+        end = released_indexes[position + 1] if position + 1 < len(released_indexes) else len(lines)
+        match = _CHANGELOG_RELEASED_HEADING_RE.fullmatch(lines[start])
+        if match is None:  # pragma: no cover - released_indexes only holds matches
+            raise ContractError("changelog released heading stopped matching mid-parse")
+        try:
+            date = dt.date.fromisoformat(match.group("date"))
+        except ValueError as exc:
+            raise ContractError(
+                f"changelog release date {match.group('date')!r} is not a real ISO date"
+            ) from exc
+        sections.append(
+            ChangelogSection(
+                version=Version.parse(match.group("version")),
+                date=date,
+                heading=lines[start],
+                body="\n".join(lines[start + 1 : end]),
+            )
+        )
+    return sections
+
+
+def require_changelog_history(text: str) -> list[ChangelogSection]:
+    """Refuse a changelog whose released ladder is not a real release order.
+
+    Shape only -- this half reads ONE snapshot and therefore cannot see a
+    deletion. It denies a duplicated version, a reordered pair, an unparseable
+    date, and a date that moves FORWARD as the file moves DOWN: states no
+    sequence of releases can produce.
+    """
+    sections = parse_changelog(text)
+    if not sections:
+        raise ContractError("changelog carries no released `## [X.Y.Z] - YYYY-MM-DD` heading")
+    for earlier, later in zip(sections, sections[1:]):
+        if earlier.version == later.version:
+            raise ContractError(f"changelog names version {earlier.version} more than once")
+        if earlier.version < later.version:
+            raise ContractError(
+                f"changelog version {later.version} is listed below {earlier.version}; "
+                "released headings must descend"
+            )
+        if earlier.date < later.date:
+            raise ContractError(
+                f"changelog date {later.date.isoformat()} for {later.version} is later than "
+                f"{earlier.date.isoformat()} for {earlier.version} above it"
+            )
+    return sections
+
+
+def parse_changelog_corrections(text: str) -> dict[Version, tuple[dt.date, dt.date, str]]:
+    """Parse `<version> | <old date> | <new date> | <reason>` correction lines.
+
+    THE LIFT, AND EXACTLY HOW NARROW IT IS. The append-only guard below is
+    absolute about identity and order: no released version may be removed,
+    reordered, duplicated, or have one byte of its entries rewritten, and no
+    line in this file can permit any of that. The single thing a line here
+    authorizes is a released heading's DATE moving from one stated value to
+    another stated value, for one stated reason -- the correction issue #12
+    needed, and the only historical edit this repository has had cause to make.
+
+    An entry is spent the moment it lands: it names the exact old date, so once
+    the base carries the corrected heading there is nothing left for it to
+    authorize. That is why a spent entry is inert rather than an error -- unlike
+    the workflow allowlist, whose subjects can be reoccupied by a later step of
+    the same name, a consumed entry here is addressed to bytes that no longer
+    exist anywhere in the ladder.
+    """
+    corrections: dict[Version, tuple[dt.date, dt.date, str]] = {}
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) != 4 or not all(parts):
+            raise ContractError(
+                f"{CHANGELOG_CORRECTIONS_PATH}:{number}: expected exactly four non-empty "
+                "`|`-separated fields -- `<version> | <old date> | <new date> | <reason>`"
+            )
+        raw_version, raw_old, raw_new, _reason = parts
+        version = Version.parse(raw_version)
+        try:
+            old, new = dt.date.fromisoformat(raw_old), dt.date.fromisoformat(raw_new)
+        except ValueError as exc:
+            raise ContractError(
+                f"{CHANGELOG_CORRECTIONS_PATH}:{number}: both dates must be real ISO dates"
+            ) from exc
+        if old == new:
+            raise ContractError(
+                f"{CHANGELOG_CORRECTIONS_PATH}:{number}: the two dates are identical, so this "
+                "line authorizes nothing"
+            )
+        if version in corrections:
+            raise ContractError(
+                f"{CHANGELOG_CORRECTIONS_PATH}:{number}: version {version} is corrected twice"
+            )
+        corrections[version] = (old, new, parts[3])
+    return corrections
+
+
+def require_appended_changelog(
+    base_text: str,
+    head_text: str,
+    corrections: Mapping[Version, tuple[dt.date, dt.date, str]] | None = None,
+) -> None:
+    """Prove the head changelog only ADDED to the base changelog (issue #105).
+
+    The shape rules above constrain one file; only this base-to-head comparison
+    proves append-only, which is the property `CHANGELOG.md` needs as the
+    human-readable half of the release ledger. Every released section the base
+    carried must survive in the head, in the same order, with its entries
+    byte-identical; the only admissible difference is whole new sections added
+    ABOVE all of them. A deleted middle or tail heading, a reordered pair, a
+    rewritten historical entry, and a silently re-dated release all stop here.
+
+    The failure this closes was mechanical, not hostile: an edit meant to insert
+    a version block above a heading replaced the span down to and including it,
+    orphaning one shipped release's entries under the next version's name -- with
+    every release control still reporting success.
+    """
+    base_sections = require_changelog_history(base_text)
+    head_sections = require_changelog_history(head_text)
+    base_versions = {section.version for section in base_sections}
+    # The added prefix is found by IDENTITY, not by arithmetic: counting would
+    # read a range that adds one release and deletes another as an unchanged
+    # ladder and then report the mismatch as a reorder, sending the next reader
+    # to the wrong place. Everything from the first head section the base
+    # already released onward is the RETAINED region, and it must be exactly
+    # the base's own.
+    added = 0
+    while added < len(head_sections) and head_sections[added].version not in base_versions:
+        added += 1
+    retained = head_sections[added:]
+    if len(retained) != len(base_sections):
+        head_versions = {section.version for section in head_sections}
+        missing = [str(section.version) for section in base_sections
+                   if section.version not in head_versions]
+        verb, count = (
+            ("lost", len(base_sections) - len(retained))
+            if len(retained) < len(base_sections)
+            else ("inserted", len(retained) - len(base_sections))
+        )
+        raise ContractError(
+            f"changelog {verb} {count} released heading(s) below its newest release: the base "
+            f"carried {len(base_sections)} and the head retains {len(retained)}"
+            + (f"; gone from the head: {', '.join(missing)}" if missing else "")
+            + ". Released history is append-only, and a new release is added ABOVE every "
+            "retained one"
+        )
+    corrections = dict(corrections or {})
+    for base_section, head_section in zip(base_sections, retained):
+        if base_section.version != head_section.version:
+            raise ContractError(
+                f"changelog released order changed: the base has {base_section.version} where the "
+                f"head has {head_section.version}. Released history is append-only"
+            )
+        if base_section.body != head_section.body:
+            raise ContractError(
+                f"changelog entries under {base_section.version} were rewritten; a released block "
+                "is retained byte-for-byte, never edited"
+            )
+        if base_section.date == head_section.date:
+            continue
+        authorized = corrections.get(base_section.version)
+        if authorized is None or authorized[:2] != (base_section.date, head_section.date):
+            raise ContractError(
+                f"changelog re-dated {base_section.version} from {base_section.date.isoformat()} "
+                f"to {head_section.date.isoformat()} with no matching line in "
+                f"{CHANGELOG_CORRECTIONS_PATH}. Correcting a released date is a stated, reviewed "
+                f"edit -- add `{base_section.version} | {base_section.date.isoformat()} | "
+                f"{head_section.date.isoformat()} | <the record the new date comes from>` -- and "
+                "nothing lifts a deletion, a reorder, or a rewritten entry"
+            )
+
+
+def _changelog_corrections(
+    repository: Path, head_sha: str
+) -> dict[Version, tuple[dt.date, dt.date, str]]:
+    """Read the correction lift from the HEAD revision, fail-closed when absent.
+
+    From the head because the authorization must ride in the same reviewed diff
+    as the correction it authorizes; an absent file is no corrections at all,
+    which denies rather than permits.
+    """
+    text = _git_file_optional(repository, head_sha, CHANGELOG_CORRECTIONS_PATH)
+    return parse_changelog_corrections(text or "")
+
+
 def validate_snapshot(files: Mapping[str, str]) -> ReleaseIntent:
     required = {"VERSION", "chart/Chart.yaml", "chart/values.yaml", "CHANGELOG.md"}
     missing = sorted(required.difference(files))
@@ -274,6 +522,15 @@ def validate_snapshot(files: Mapping[str, str]) -> ReleaseIntent:
     top = re.compile(rf"^## \[Unreleased\]\s*\n+## \[{escaped}\] - {re.escape(headings[0])}$", re.MULTILINE)
     if not top.search(files["CHANGELOG.md"]):
         raise ContractError("current release must immediately follow an empty Unreleased heading")
+    # Everything ABOVE was about the current version's heading alone, which left
+    # every heading below it unguarded (issue #105). The ladder below it is now
+    # constrained too, on every snapshot this contract reads.
+    sections = require_changelog_history(files["CHANGELOG.md"])
+    if sections[0].version != version:
+        raise ContractError(
+            f"changelog's topmost released heading is {sections[0].version}, not the "
+            f"released version {version}"
+        )
     return ReleaseIntent(source_sha="", version=version)
 
 
@@ -623,6 +880,15 @@ def validate_transition(repository: Path, base_sha: str, head_sha: str, *, first
         for path in ("VERSION", "chart/Chart.yaml", "chart/values.yaml", "CHANGELOG.md")
     }
     head = validate_snapshot(head_files)
+    # Released changelog history is append-only (issue #105). The snapshot half
+    # above cannot see a deletion -- a file missing three releases is a
+    # perfectly well-formed file -- so the ledger's retention is proven here,
+    # against the protected base this range actually advances from.
+    require_appended_changelog(
+        _git_file(repository, base_sha, "CHANGELOG.md"),
+        head_files["CHANGELOG.md"],
+        _changelog_corrections(repository, head_sha),
+    )
     # A squash merge is a one-commit range; GitHub's enabled rebase merge can
     # install several commits atomically. The source identity is the complete
     # final tree, while the exact base -> head patch step remains one release

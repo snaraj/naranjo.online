@@ -23,7 +23,23 @@
 # or flow style, fails the gate. The parser is stdlib Python (these repos are
 # stdlib-only): no PyYAML, no yq, so it runs anywhere helm does.
 #
-# Three assertions, all failing closed:
+# AND WHY THAT WAS NOT ENOUGH ON ITS OWN (issue #95). Everything above reads
+# ONE template through `--show-only`, and finds the spec by a raw line exactly
+# equal to `spec:`. YAML allows whitespace before a key colon, allows the key
+# to be quoted, resolves escapes inside a double-quoted key, and lets a
+# document sit inside a List wrapper — so run ALONE this gate exited 0 on all
+# four hostile charts PR #94 proved red: a second policy in the SAME file
+# spelled `kind :` / `spec :`, one in a NEW template file, one with quoted or
+# escaped keys, and one inside a List. Ingress rules are ADDITIVE, so any of
+# them admits a peer this gate still reports as the only one. Nothing shipped
+# weaker — the sibling census in chart-egress-pin.sh refuses those renders in
+# the same CI job — but this gate should not borrow its blindness coverage from
+# a sibling, so assertions (d) and (e) give it census-backed extraction of its
+# own: the COMPLETE render, read by scripts/ci/chart_render_census.py through a
+# real document reader, with the byte-for-byte canonical text pin kept exactly
+# as the assertion over what that reader returns.
+#
+# Five assertions, all failing closed:
 #   a. the DEFAULT render — no flags, shipped values — is exactly one rule
 #      pinning namespace + app name + instance, compared in full;
 #   b. a blank instance and an absent instance are BOTH refused by schema
@@ -31,7 +47,13 @@
 #   c. a different instance moves the pin: the render is again exactly one
 #      rule, now carrying the overridden instance and none of the default,
 #      with app name and namespace unchanged — which is why app name alone
-#      cannot tell two connectors apart.
+#      cannot tell two connectors apart;
+#   d. the COMPLETE render — every template, CRDs included, no --show-only —
+#      holds exactly one NetworkPolicy, and the ingress sub-tree it carries
+#      equals, byte for byte, the canonical text built from chart values;
+#   e. every hostile whole-render shape below is REFUSED by (d) ALONE. Each is
+#      applied to the real render and fed back through (d)'s own extraction,
+#      which must exit non-zero. A gate that cannot fail is not a gate.
 #
 # Expectations come from chart/values.yaml, the provider binding point, so the
 # peer identity is stated in exactly one place and this file names no provider.
@@ -40,7 +62,32 @@ set -euo pipefail
 chart_dir="${CHART_DIR:-chart}"
 kube_version="${KUBE_VERSION:-v1.36.0}"
 release_name=ingress-pin
+release_namespace=ingress-pin-namespace
 values_file="${chart_dir}/values.yaml"
+script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+census_module="${script_dir}/chart_render_census.py"
+
+# The hostile whole-render shapes assertion (e) drives, named in the census
+# module's own battery. The first four are PR #94's matrix — the exact shapes
+# this gate exited 0 on before — and the rest are the same attack spelled other
+# ways a real YAML reader resolves. Named rather than counted, because the
+# point is which BLINDNESS is covered, not how many rows run.
+hostile_whole_render=(
+  shadow-same-file-spaced-keys
+  shadow-new-file-spaced-keys
+  shadow-double-quoted-keys
+  shadow-single-quoted-keys
+  shadow-escaped-quoted-kind
+  shadow-generic-list-wrapper
+  shadow-typed-list-wrapper
+  shadow-nested-list-wrapper
+  shadow-flow-style-document
+  shadow-literal-block-scalar-kind
+  shadow-folded-block-scalar-kind
+  shadow-uninspectable-list-wrapper
+  policy-second-ingress-rule
+  policy-drop-peer-instance
+)
 
 # Stands in for any other connector sharing the peer namespace. Deliberately
 # not the default.
@@ -55,7 +102,9 @@ fail() {
 # single-quote character, so it embeds cleanly here. Modes:
 #   read-values <values.yaml>                 prints ns, app, instance, port
 #   assert-one-rule <ns> <app> <inst> <port>  reads a render on stdin, asserts
+#   expected-ingress <ns> <app> <inst> <port> prints the canonical ingress text
 py_core='
+import json
 import sys
 
 def die(msg):
@@ -166,11 +215,33 @@ def cmd_assert(ns, app, inst, port):
             "in values.\nexpected:\n%s\n\nrendered:\n%s"
             % ("\n".join(expected), "\n".join(block)))
 
+def cmd_expected_ingress(ns, app, inst, port):
+    """The one ingress rule the chart values declare, canonically serialized.
+
+    Built HERE, from values, never read out of the render it will judge: an
+    expectation derived from the render would match whatever the render said.
+    The serialization is the census module none of this file imports, so both
+    sides must independently agree on the same bytes.
+    """
+    rule = {
+        "from": [{
+            "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": ns}},
+            "podSelector": {"matchLabels": {
+                "app.kubernetes.io/name": app,
+                "app.kubernetes.io/instance": inst,
+            }},
+        }],
+        "ports": [{"port": int(port), "protocol": "TCP"}],
+    }
+    sys.stdout.write(json.dumps([rule], sort_keys=True, indent=2) + "\n")
+
 mode = sys.argv[1]
 if mode == "read-values":
     cmd_read_values(sys.argv[2])
 elif mode == "assert-one-rule":
     cmd_assert(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
+elif mode == "expected-ingress":
+    cmd_expected_ingress(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
 else:
     die("unknown mode " + mode)
 '
@@ -180,7 +251,25 @@ else:
 render() {
   helm template "${release_name}" "${chart_dir}" \
     --kube-version "${kube_version}" \
+    --namespace "${release_namespace}" \
     --show-only templates/network-policy.yaml "$@"
+}
+
+# render_all prints the COMPLETE installable render instead: every template
+# file, plus `crds/` — the same set `helm install` would apply. No
+# --show-only, because --show-only is exactly the blindfold assertions (d) and
+# (e) exist to remove.
+render_all() {
+  helm template "${release_name}" "${chart_dir}" \
+    --kube-version "${kube_version}" \
+    --namespace "${release_namespace}" \
+    --include-crds
+}
+
+# The census-backed extraction: canonical text of the single policy's
+# spec.ingress, read from the complete render through a real document reader.
+census_ingress() {
+  python3 -I -B "${census_module}" ingress-text
 }
 
 # The peer identity comes from values (the single binding point), never from
@@ -229,5 +318,52 @@ echo "chart-ingress-pin: (b) blank and absent instance both refused by schema va
 render --set "ingress.peerInstance=${probe_instance}" | python3 -c "${py_core}" assert-one-rule \
   "${peer_namespace}" "${peer_app_name}" "${probe_instance}" "${service_port}"
 echo "chart-ingress-pin: (c) the instance discriminates peers sharing one app name"
+
+# (d) The COMPLETE render — not one --show-only extract — holds exactly one
+# NetworkPolicy, and its ingress sub-tree equals the canonical text built from
+# values. Documents are recognised by their parsed, canonically spelled keys,
+# so `kind :`, a quoted `"kind"`, an escaped `"\x6bind"`, a flow-style
+# document, and a policy tucked inside a List wrapper are all just
+# NetworkPolicies to this extraction.
+[ -f "${census_module}" ] || fail "the whole-render census module is missing at ${census_module}"
+
+work="$(mktemp -d)"
+trap 'rm -rf "${work}"' EXIT
+
+if ! expected_ingress="$(python3 -c "${py_core}" expected-ingress \
+    "${peer_namespace}" "${peer_app_name}" "${peer_instance}" "${service_port}")"; then
+  fail "could not build the canonical ingress expectation from ${values_file}"
+fi
+render_all >"${work}/whole-render.yaml"
+if ! rendered_ingress="$(census_ingress <"${work}/whole-render.yaml")"; then
+  fail "the complete render carries no single readable NetworkPolicy to pin"
+fi
+if [ "${rendered_ingress}" != "${expected_ingress}" ]; then
+  fail "the complete render does not carry the one ingress rule declared in values.
+expected:
+${expected_ingress}
+rendered:
+${rendered_ingress}"
+fi
+echo "chart-ingress-pin: (d) the complete render carries exactly the one ingress rule values declare"
+
+# (e) Every hostile whole-render shape is refused by (d) alone. Each mutant is
+# built from the REAL render, and a mutant that survives is a hole this file
+# would otherwise hide behind its sibling gate.
+[ "${#hostile_whole_render[@]}" -ge 12 ] ||
+  fail "the hostile shape list was shrunk below its floor of 12 — shapes are added, never removed"
+hostile_count=0
+for mutation in "${hostile_whole_render[@]}"; do
+  python3 -I -B "${census_module}" mutate \
+    --chart "${chart_dir}" --release "${release_name}" \
+    --namespace "${release_namespace}" --name "${mutation}" \
+    <"${work}/whole-render.yaml" >"${work}/mutant.yaml"
+  if mutant_ingress="$(census_ingress <"${work}/mutant.yaml" 2>/dev/null)" &&
+     [ "${mutant_ingress}" = "${expected_ingress}" ]; then
+    fail "the hostile whole-render shape '${mutation}' was ACCEPTED by this gate alone — the very blindness issue #95 is about"
+  fi
+  hostile_count=$((hostile_count + 1))
+done
+echo "chart-ingress-pin: (e) ${hostile_count} hostile whole-render shapes all refused by this gate alone"
 
 echo "chart-ingress-pin: the rendered policy admits exactly one connector"

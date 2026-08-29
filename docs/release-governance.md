@@ -128,21 +128,26 @@ commit, and `git merge-base --is-ancestor` settles the descent.
 This repository still contains no credential value and grants no authority to
 provision one.
 
-One known stale sentence survives below, and it is left standing deliberately
-rather than quietly: the closing clause of the `Protect-Main` paragraph two
-paragraphs down still calls those two names unprovisioned and treats that as an
-outstanding external blocker. Read it as the 2026-08-14 state it records, not as
-present tense — the evidence above supersedes it. It is retained verbatim
-because the governance parity suite digest-pins each block of this file that the
-case-insensitive pattern `\bready\b` selects — a word filter, not a
-merge-authority filter, and the guard's own docstring states that honest limit.
-Prose about merge authority that avoids the word is not pinned at all: the
-settings-receipt sentence near the top of this file, the one saying the receipt
-grants no merge authority, carries no digest. Those digests live in
-`scripts/ci/test_release_contract.py`, which sits outside requirement 10's
-closed documentation allowlist. Editing the sentence therefore reclassifies the
-change as artifact and consumes a release slot, so it is tracked as its own
-artifact-class change instead of being smuggled into a documentation-only fix.
+The stale clause that used to close the `Protect-Main` paragraph below is now
+REPAIRED rather than retained (issue #221). It called those two frozen names
+unprovisioned and treated that as an outstanding external blocker, which the
+evidence above supersedes; repairing it recomputed the normalized SHA-256 the
+governance parity suite pins for that block, in the same commit, because that
+suite digest-pins each block of this file its case-insensitive word filter
+selects. The filter is a word filter, not a merge-authority filter, and that
+honest limit is unchanged: prose about merge authority which avoids the word is
+not digest-pinned at all — the settings-receipt sentence near the top of this
+file, the one saying the receipt grants no merge authority, carries no digest.
+Widening the selector was evaluated and DECLINED: every newly selected block
+becomes an enumerated digest recomputed by hand on every edit, which turns
+ordinary prose maintenance into digest bookkeeping and teaches the next editor
+to update a hash instead of reading what changed. The closed token pins in
+`require_documented_contract` reach the same sentences at a fraction of that
+cost, and they are what this change extended — including the App-provisioning
+and audit-scan paragraphs, whose inversion survived 148 tests before it. Those
+pins live in `scripts/ci/test_release_contract.py`, which sits outside
+requirement 10's closed documentation allowlist, so editing any of this
+reclassifies the change as artifact and consumes a release slot.
 
 The same owner-observed transaction proves immutable releases enabled, Actions
 full-SHA pinning enabled, Actions otherwise enabled/allowed-all unchanged, and
@@ -159,9 +164,13 @@ happened. Owner-observed GET-only state on 2026-08-18 refutes all five clauses:
 the full preflight below returns `exact`, the bypass check below returns `[]`,
 and the live `rules[]` carries required status checks, pull request, linear
 history, signatures, code scanning, code quality, code coverage, creation,
-deletion, and non-fast-forward. The ruleset is no longer the open blocker; the
-`platform-release` variables and secrets above are still unprovisioned, and
-that gap remains an external Ready blocker.
+deletion, and non-fast-forward. The ruleset is no longer the open blocker, and
+neither are the `platform-release` variables and secrets: the App-backed
+publication evidence above proves both frozen names resolve, re-derived from
+git and these workflow definitions rather than asserted. What still
+remains an external Ready blocker is the one observation no CI credential can
+make — the owner's own GET-only bypass-actor check below, which must print
+exactly `[]`.
 
 `workflow_dispatch` remains callable through GitHub's normal interfaces, but
 callability is not publication authority: an unmerged branch, pull-request

@@ -7,6 +7,90 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.59] - 2026-08-28
+
+### Added
+- The released changelog ladder is append-only, and the gate proves it
+  (issue #105). `validate_snapshot` used to read exactly one heading — the
+  current version's — so every heading below it could be deleted, reordered,
+  duplicated or rewritten with the four-way lock, the transition contract, the
+  full PR gate and the publisher all green. `release_contract.py` now parses
+  the whole ladder and refuses a snapshot whose released versions do not
+  strictly descend, repeat a version, carry an unparseable date, date a
+  release later than the one above it, or spell a released heading in a shape
+  the parse cannot see; and `validate_transition` compares the protected base
+  against the head, requiring every released section to survive in the same
+  order with its entries byte-identical. The gap it closes is a plausible
+  mechanical edit, not an attack: an insertion that overwrote the heading
+  below it, orphaning one shipped release's entries under the next version's
+  name.
+- Exactly one narrow lift on that guard,
+  `scripts/ci/changelog-correction-allowlist.txt`: a released heading's DATE
+  may move from one stated value to another for one written reason. An entry
+  names the exact old date, so it is spent the moment it lands and can never
+  pre-authorise a later edit. Nothing lifts a deletion, a reorder, or a
+  rewritten entry.
+- The Go coverage floor is one fact in more than one file, enforced rather
+  than hoped (issue #225). `test_workflow_integrity.py` gains a fourth rule,
+  `contract-floor`: it reads `GO_COVERAGE_FLOOR` from every `env:` scope of
+  every workflow and every AGENTS.md paragraph that names the variable beside
+  a number, and refuses any disagreement — naming each location it read and
+  the value it found there. Both sides are searched, never enumerated, so a
+  new legitimate sentence about the floor widens what is read instead of
+  failing the gate, and the number itself is hardcoded nowhere.
+- `check_installable` walks `matchExpressions` (issue #97). The API server
+  holds a selector requirement's `key` to label-key rules and every entry of
+  its `values` to label-value rules; the census walked past the construct
+  entirely, because it is a sequence and every other selector check reads a
+  mapping. `operator` is deliberately not validated and the reason is
+  recorded: the same spelling is a LabelSelectorRequirement or a
+  NodeSelectorRequirement, whose operator sets and value types differ, and a
+  walk that cannot tell them apart would either accept everything or refuse a
+  node affinity a real cluster installs.
+- `chart-ingress-pin.sh` extracts the sub-tree it pins through the whole-render
+  census reader (issue #95), and proves fourteen hostile whole-render shapes
+  refused by the ingress gate ALONE. Run by itself the gate used to exit 0 on
+  all four hostile charts PR #94 proves red — a second policy in the same file
+  spelled `kind :`, one in a new template file, one with quoted or escaped
+  keys, and one inside a List wrapper — because `--show-only` cannot see
+  another file and a raw `spec:` line cannot see another spelling. Ingress
+  rules are additive, so each of those admits a peer the gate still reported as
+  the only one. Nothing shipped weaker: the sibling census refused those
+  renders in the same CI job. This gate no longer borrows its blindness
+  coverage from a sibling.
+- The release runbook's publication claim is now re-derivable rather than
+  merely written down (issue #221): a new suite proves from git alone that
+  every release tag from `v0.1.15` onward carries tagger `github-actions[bot]`
+  and the exact `Release vX.Y.Z from <SHA>` message and descends from the
+  single commit that introduced the `immutable_settings` job, and that the six
+  older tags carry none of those marks.
+
+### Fixed
+- `## [0.1.7]` was dated 2026-08-11; it released on 2026-08-10 (issue #12).
+  Every independent record agrees, in UTC and in the repository's local zone
+  alike: the release merge commit at 2026-08-10T21:21:14Z, the annotated tag
+  `v0.1.7` created at 2026-08-10T21:24:23Z, and the GitHub Release published
+  at 2026-08-10T21:34:55Z. `## [0.1.8]` was re-examined and left alone: its
+  merge, tag and Release all fall on 2026-08-11 in UTC, matching its heading,
+  and it reads as an offset only against local commit time.
+- The agent contract described the binary as `cmd/server`, `internal/server`
+  and `internal/web` (issue #12). It also holds `internal/panels`,
+  `internal/seal`, `cmd/usageseal`, `internal/doctrine` and
+  `internal/testsupport`, and now says so.
+- `docs/release-governance.md` no longer calls the two `platform-release`
+  frozen names unprovisioned (issue #221). That clause was superseded by the
+  App-backed publication evidence three paragraphs above it, and PR #217 left
+  it standing verbatim rather than weaken a guard to reach it; repairing it
+  recomputes the governance parity suite's normalized digest for that block in
+  the same commit. The corrected publication and audit-scan claims are now
+  token-pinned, so the reviewer's mutation M4 — inverting "The owner has since
+  provisioned both" — is red rather than green.
+- The census C1-control refusal claimed a render it could read would be one
+  "nothing can install" (issue #97). Measured on Kubernetes v1.36.3 that is a
+  partial apply: objects are created and the command then exits 1, leaving a
+  workload up with part of its configuration missing. The correction makes the
+  refusal's case stronger, not weaker.
+
 ## [0.1.58] - 2026-08-28
 
 Eight tracked defects, none of which had ever turned a build red. That is the
@@ -3695,7 +3779,7 @@ that were behaviour are closed with tests that fail against the original code:
   entrypoint seam the lidersea.com sibling uses, so both repos test
   configuration, bind, serve, and drain identically and hermetically.
 
-## [0.1.7] - 2026-08-11
+## [0.1.7] - 2026-08-10
 
 ### Changed
 - Serve the application shell as `no-cache` instead of `no-store`, so the

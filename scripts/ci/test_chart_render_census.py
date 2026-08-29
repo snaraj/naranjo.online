@@ -35,6 +35,7 @@ Two rules shape every test here, both taken from AGENTS.md:
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 import tempfile
@@ -222,6 +223,10 @@ metadata:
   name: {chart}
 spec:
   replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {chart}
+      app.kubernetes.io/instance: {release}
 """
 
 # The number of installable objects the fixture render carries, and therefore
@@ -721,8 +726,11 @@ class ReaderFailsClosed(unittest.TestCase):
 
     def test_c1_control_characters(self):
         # PyYAML's reader rejects the WHOLE STREAM for any of U+0080-U+009F
-        # (they are outside its printable set), so a render this gate read
-        # happily would be a render nothing can install.
+        # (they are outside its printable set). Measured on Kubernetes v1.36.3,
+        # that is not "installs nothing": `kubectl apply` creates the objects it
+        # could read and THEN exits 1, so a render this gate read happily would
+        # install PART of itself -- a workload up with part of its configuration
+        # missing, which is why the stream is refused rather than read.
         for code in (0x80, 0x81, 0x84, 0x86, 0x8A, 0x90, 0x9B, 0x9F):
             ch = chr(code)
             self.reject("kind: Network%sPolicy\n" % ch, "C1 control character U+%04X" % code)
@@ -1759,6 +1767,76 @@ class CensusRefusesWhatKubernetesRefuses(CensusFixture):
                                     "metadata": {"name": "s"},
                                     "spec": {"selector": "elsewhere"}}])
 
+    def test_every_selector_expression_is_held_to_the_same_rules(self):
+        """Issue #97: the half of a selector the walk used to step over.
+
+        `matchExpressions` is a SEQUENCE, so none of the label-map machinery
+        saw it, while the API server holds its `key` to label-key rules and
+        every entry of `values` to label-value rules.
+        """
+        def deployment(selector: dict) -> list[dict]:
+            return [{"apiVersion": "apps/v1", "kind": "Deployment",
+                     "metadata": {"name": "d"}, "spec": {"selector": selector}}]
+
+        for label, selector, expected in (
+            ("value is not a label value",
+             {"matchExpressions": [{"key": "k", "operator": "In", "values": ["a b"]}]},
+             "not a valid label value"),
+            ("value is over the byte ceiling",
+             {"matchExpressions": [{"key": "k", "operator": "In", "values": ["v" * 64]}]},
+             "longer than 63 bytes"),
+            ("value is not a string",
+             {"matchExpressions": [{"key": "k", "operator": "In", "values": [None]}]},
+             "not a string"),
+            ("values are not a sequence",
+             {"matchExpressions": [{"key": "k", "operator": "In", "values": {"a": "b"}}]},
+             "not a sequence"),
+            ("key is not a label key",
+             {"matchExpressions": [{"key": "a/b/c", "operator": "Exists"}]},
+             "more than one"),
+            ("key is empty",
+             {"matchExpressions": [{"key": "", "operator": "Exists"}]},
+             "empty name part"),
+            ("requirement declares no key",
+             {"matchExpressions": [{"operator": "Exists"}]},
+             "declares no key"),
+            ("requirement is not a mapping",
+             {"matchExpressions": ["k Exists"]},
+             "not a mapping"),
+            ("the list is not a list",
+             {"matchExpressions": {"key": "k"}},
+             "not a sequence"),
+        ):
+            with self.subTest(hostile=label):
+                with self.assertRaises(CRC.CensusError) as caught:
+                    CRC.check_installable(deployment(selector))
+                self.assertIn(expected, str(caught.exception))
+        # At ANY depth, exactly like the label-map walk: a pod template's
+        # affinity is as installable-or-not as the top-level selector.
+        with self.assertRaises(CRC.CensusError):
+            CRC.check_installable([{
+                "apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "d"},
+                "spec": {"template": {"spec": {"affinity": {"nodeAffinity": {
+                    "requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": [
+                        {"matchExpressions": [
+                            {"key": "kubernetes.io/hostname", "operator": "In",
+                             "values": ["a node"]}]}]}}}}}},
+            }])
+        # And the acceptance companion: legitimate expressions still install.
+        for selector in (
+            {"matchExpressions": [{"key": "app.kubernetes.io/name", "operator": "In",
+                                   "values": ["naranjo-online", "other"]}]},
+            {"matchExpressions": [{"key": "app.kubernetes.io/name", "operator": "Exists"}]},
+            {"matchExpressions": [{"key": "a.b/c-d_e.f", "operator": "NotIn", "values": [""]}]},
+            {"matchExpressions": []},
+            {"matchLabels": {"app.kubernetes.io/name": "naranjo-online"},
+             "matchExpressions": [{"key": "tier", "operator": "DoesNotExist"}]},
+        ):
+            CRC.check_installable(deployment(selector))
+        # An expression spelled inside ObjectMeta is a LABEL, not a selector,
+        # for the same reason `matchLabels` is there.
+        CRC.check_installable(self.object_with(labels={"matchExpressions": "v"}))
+
     def test_a_label_spelled_matchLabels_is_still_a_label(self):
         # The companion that keeps the selector walk from over-reaching:
         # ObjectMeta is checked and then not descended into, so a label whose
@@ -1774,6 +1852,109 @@ class CensusRefusesWhatKubernetesRefuses(CensusFixture):
         # render carries `app.kubernetes.io/*` keys, a quoted version value,
         # matchLabels on both selector sides and a namespace -- and it passes.
         self.assertEqual(self.census(render())["objects"], FIXTURE_OBJECTS)
+
+
+class IngressTextExtraction(CensusFixture):
+    """Issue #95: the ingress gate's own census-backed document extraction.
+
+    `chart-ingress-pin.sh` keeps the byte-for-byte canonical TEXT pin as its
+    assertion; what moved here is how the sub-tree is FOUND. Run alone, the old
+    raw-line extraction — `--show-only` plus a line exactly equal to `spec:` —
+    exited 0 on all four hostile charts PR #94 proves red.
+    """
+
+    EXPECTED = json.dumps(
+        [{
+            "from": [{
+                "namespaceSelector": {
+                    "matchLabels": {"kubernetes.io/metadata.name": FIXTURE_PEER_NAMESPACE}},
+                "podSelector": {"matchLabels": {
+                    "app.kubernetes.io/name": FIXTURE_PEER_APP,
+                    "app.kubernetes.io/instance": FIXTURE_PEER_INSTANCE,
+                }},
+            }],
+            "ports": [{"port": FIXTURE_PORT, "protocol": "TCP"}],
+        }],
+        sort_keys=True,
+        indent=2,
+    ) + "\n"
+
+    def test_the_pinned_render_yields_the_canonical_ingress_text(self):
+        self.assertEqual(CRC.ingress_text(render()), self.EXPECTED)
+
+    def test_the_text_is_over_SEMANTICS_not_over_one_spelling(self):
+        """The accept direction of the same property.
+
+        A render that says the same thing in another legal spelling must
+        produce identical bytes, or the pin is a pin on formatting.
+        """
+        flow = render().replace(
+            "        - port: %d\n          protocol: TCP\n" % FIXTURE_PORT,
+            "        - {port: %d, protocol: TCP}\n" % FIXTURE_PORT,
+        )
+        self.assertNotEqual(flow, render())
+        self.assertEqual(CRC.ingress_text(flow), self.EXPECTED)
+
+    def test_every_shape_the_raw_line_extraction_missed_is_refused(self):
+        for name in (
+            "shadow-same-file-spaced-keys",
+            "shadow-new-file-spaced-keys",
+            "shadow-double-quoted-keys",
+            "shadow-single-quoted-keys",
+            "shadow-escaped-quoted-kind",
+            "shadow-generic-list-wrapper",
+            "shadow-typed-list-wrapper",
+            "shadow-nested-list-wrapper",
+            "shadow-flow-style-document",
+            "shadow-literal-block-scalar-kind",
+            "shadow-folded-block-scalar-kind",
+        ):
+            with self.subTest(shape=name), self.assertRaises(CRC.CensusError) as caught:
+                CRC.ingress_text(CRC.mutate(render(), self.facts, name))
+            self.assertIn("NetworkPolicy objects", str(caught.exception))
+
+    def test_a_changed_ingress_rule_changes_the_text(self):
+        # Non-vacuity for the gate's own comparison: if no render could produce
+        # different bytes, the byte comparison would be decoration.
+        widened = CRC.mutate(render(), self.facts, "policy-second-ingress-rule")
+        self.assertNotEqual(CRC.ingress_text(widened), self.EXPECTED)
+        unpinned = CRC.mutate(render(), self.facts, "policy-drop-peer-instance")
+        self.assertNotEqual(CRC.ingress_text(unpinned), self.EXPECTED)
+
+    def test_it_refuses_a_render_it_cannot_reduce_to_one_ingress(self):
+        no_policy = render().replace("kind: NetworkPolicy", "kind: ConfigMap", 1)
+        with self.assertRaises(CRC.CensusError) as caught:
+            CRC.ingress_text(no_policy)
+        self.assertIn("0 NetworkPolicy objects", str(caught.exception))
+        # A policy with no ingress key at all says so, rather than reporting an
+        # empty answer that reads like "no peers admitted".
+        no_ingress = (
+            "apiVersion: networking.k8s.io/v1\n"
+            "kind: NetworkPolicy\n"
+            "metadata:\n"
+            "  name: p\n"
+            "spec:\n"
+            "  podSelector: {}\n"
+            "  policyTypes: [Egress]\n"
+        )
+        with self.assertRaises(CRC.CensusError) as caught:
+            CRC.ingress_text(no_ingress)
+        self.assertIn("declares no spec.ingress", str(caught.exception))
+        with self.assertRaises(CRC.CensusError) as caught:
+            CRC.ingress_text(
+                "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\n"
+                "metadata:\n  name: p\nspec: elsewhere\n"
+            )
+        self.assertIn("no spec mapping", str(caught.exception))
+
+    def test_an_uninstallable_render_never_reaches_the_text_pin(self):
+        # The same ordering `census` uses: an object a real API server refuses
+        # is not one this gate reports on, whichever gate is asking.
+        hostile = CRC.mutate(render(), self.facts,
+                             "render-with-an-uninstallable-selector-expression-value")
+        with self.assertRaises(CRC.CensusError) as caught:
+            CRC.ingress_text(hostile)
+        self.assertIn("INSTALLABLE", str(caught.exception))
 
 
 class MutationBattery(CensusFixture):

@@ -28,8 +28,11 @@ the owner. In order:
 ## Purpose and architecture
 
 naranjo.online is the owner's personal corner of the internet: a Svelte
-frontend embedded into a single dependency-free Go binary (`cmd/server`,
-`internal/server`, `internal/web`), shipped as a distroless multi-arch
+frontend embedded into a single dependency-free Go binary — `cmd/server` over
+`internal/server` and `internal/web`, with `internal/panels` serving the panel
+envelopes, `internal/seal` and `cmd/usageseal` sealing the data they carry,
+`internal/doctrine` holding the repo-doctrine pins, and `internal/testsupport`
+the shared test harness — shipped as a distroless multi-arch
 container plus a Helm chart, and deployed by digest onto a self-hosted
 Kubernetes platform. The origin speaks standard HTTP (RFC 9110/9111) only
 and is provider-neutral per the deployment-provider contract below. A
@@ -207,7 +210,14 @@ connector deployed there. `values.schema.json` requires the instance
 non-empty — a blank or absent value fails validation instead of rendering a
 wide policy — and `scripts/ci/chart-ingress-pin.sh` renders the chart and
 proves the pin holds (default render, refusal of an unpinned instance, and
-that the instance is what separates one connector from another).
+that the instance is what separates one connector from another). Since issue
+#95 it proves two more, over the COMPLETE render rather than one `--show-only`
+extract: the single policy's ingress sub-tree, extracted through
+`chart_render_census.py`'s document reader and compared byte for byte against
+the canonical text built from values, and fourteen hostile whole-render shapes
+refused by that extraction ALONE — including the four PR #94 proved this gate
+used to exit 0 on, where a second policy spelled `kind :`, quoted, escaped, or
+wrapped in a List admitted a peer the raw-line extraction never saw.
 
 ## Testing doctrine (v0.1.8+)
 
@@ -858,7 +868,7 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   `scripts/ci/chart-ingress-pin.sh`; the whole-render outbound-allowance
   census, `scripts/ci/chart-egress-pin.sh` — exactly two egress rules
   (TCP/443, and cluster DNS over UDP+TCP/53), pinned as whole sub-trees and
-  proven refusable against 31 text and 63 census mutations, replacing the
+  proven refusable against 31 text and 66 census mutations, replacing the
   total deny the owner retired on 2026-08-27; the media enablement pin,
   `scripts/ci/chart-media-pin.sh` — media on by default as exactly one
   read-only volume at both levels, an incompletely specified enablement
@@ -1059,7 +1069,17 @@ Structural promises of the panels subsystem, pinned by
   next-version and ISO date, matching every source lock; a documentation-only
   PR leaves `CHANGELOG.md` untouched (the file sits outside the documentation
   allowlist precisely so a no-release range can never claim one). There is no
-  later release PR.
+  later release PR. Released history below that new heading is APPEND-ONLY and
+  the gate proves it (issue #105): `release_contract.py` refuses a snapshot
+  whose released ladder is not strictly descending with non-increasing dates,
+  and refuses any base-to-head range that removes, reorders, duplicates, or
+  rewrites one byte of a released block. The gap it closes is a plausible
+  mechanical edit — an insertion that overwrites the heading below it, orphaning
+  a shipped release's entries under the next version's name, with every release
+  control still green. Exactly one narrow lift exists: a released heading's
+  DATE may move from one stated value to another through a reasoned line in
+  `scripts/ci/changelog-correction-allowlist.txt`, which is spent the moment it
+  lands. Nothing lifts a deletion, a reorder, or a rewritten entry.
 - **Truthful README.** Badges and claims report only what CI actually
   measured or the repository can demonstrate — the coverage badges
   publish the gate's own numbers, and prose never advertises a

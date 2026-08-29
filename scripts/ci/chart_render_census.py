@@ -272,6 +272,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
 import re
 import sys
 from pathlib import Path
@@ -714,8 +715,10 @@ class Reader:
                     # review measured that; the claim is narrowed to what the
                     # refusal actually promises -- this range, and no more.
                     self.fail("the C1 control character U+%04X is refused; a real YAML reader "
-                              "rejects the entire stream for it, so a render this gate could "
-                              "read would be a render nothing can install" % code, lineno)
+                              "rejects the stream carrying it, and `kubectl apply` creates the "
+                              "objects it could read before exiting 1 -- so a render this gate "
+                              "read happily would install PART of itself, leaving a workload up "
+                              "with part of its configuration missing" % code, lineno)
             if raw[:1] == "%":
                 self.fail("YAML directives are refused; they can change how the rest of the "
                           "stream is interpreted", lineno)
@@ -1656,6 +1659,13 @@ _DNS_LABEL_NAME_KINDS = frozenset({"Service"})
 # Mappings that are label maps wherever they appear, at any depth.
 _LABEL_MAP_KEYS = ("matchLabels", "nodeSelector")
 
+# The OTHER half of a selector, and the half this gate used to walk past
+# (issue #97). `matchExpressions` is a SEQUENCE of requirements rather than a
+# mapping, so none of the label-map machinery above sees it, while the API
+# server holds its `key` to the label-key rules and every entry of its
+# `values` to the label-value rules exactly as it holds `matchLabels`.
+_MATCH_EXPRESSIONS_KEY = "matchExpressions"
+
 
 def _too_long(text: str, ceiling: int) -> bool:
     # Kubernetes counts BYTES, not characters, and says so in its own error
@@ -1744,6 +1754,58 @@ def _check_annotations(mapping: object, where: str) -> None:
             % (total, ANNOTATIONS_MAX_BYTES))
 
 
+def _check_match_expressions(node: object, where: str) -> None:
+    """Hold a selector's expression list to the API server's own rules.
+
+    WHAT IS CHECKED, AND WHAT IS DELIBERATELY NOT. The `key` and each entry of
+    `values` are label key/value syntax wherever this construct appears, so
+    both are checked at any depth exactly like `matchLabels`. The `operator` is
+    NOT, and that omission is measured rather than forgotten: the same spelling
+    carries two different types. A LabelSelectorRequirement admits In, NotIn,
+    Exists and DoesNotExist; a NodeSelectorRequirement -- the same key under
+    `nodeAffinity` -- additionally admits Gt and Lt, and their values are
+    integers. A walk that cannot tell the two apart would either accept every
+    operator (proving nothing) or refuse a node affinity a real cluster
+    installs, and a gate that refuses what Kubernetes accepts trains its next
+    reader to route around it. The honest residual is small and stated: an
+    unknown operator still passes here, and an `Exists` requirement that
+    carries values -- which the API server refuses -- passes too.
+
+    One narrower limit belongs on the record for the same reason: a
+    NodeSelectorRequirement using Gt or Lt against a NEGATIVE integer is a
+    legal value that is not a legal label value, so this walk would refuse it.
+    The chart renders no node affinity at all, and the safe direction here is
+    refusal, so it is left as a refusal a future node-affinity change lifts
+    deliberately rather than as a hole left open for it in advance.
+    """
+    if not isinstance(node, list):
+        raise _uninstallable(
+            where, "%s is %s, not a sequence" % (_MATCH_EXPRESSIONS_KEY, _describe(node)))
+    for position, item in enumerate(node, start=1):
+        label = "%s[%d]" % (_MATCH_EXPRESSIONS_KEY, position)
+        if not isinstance(item, dict):
+            raise _uninstallable(where, "%s is %s, not a mapping" % (label, _describe(item)))
+        if "key" not in item:
+            raise _uninstallable(
+                where, "%s declares no key, so it selects nothing a real API server "
+                "can evaluate" % label)
+        problem = _label_key_problem(item["key"])
+        if problem is not None:
+            raise _uninstallable(
+                where, "the %s key %s %s" % (label, _describe(item["key"]), problem))
+        if "values" not in item:
+            continue
+        values = item["values"]
+        if not isinstance(values, list):
+            raise _uninstallable(
+                where, "the %s values are %s, not a sequence" % (label, _describe(values)))
+        for value in values:
+            problem = _label_value_problem(value)
+            if problem is not None:
+                raise _uninstallable(
+                    where, "the %s value %s %s" % (label, _describe(value), problem))
+
+
 def _check_metadata_maps(metadata: dict, where: str) -> None:
     if "labels" in metadata:
         _check_label_map(metadata["labels"], where, "metadata.labels")
@@ -1752,11 +1814,13 @@ def _check_metadata_maps(metadata: dict, where: str) -> None:
 
 
 def _walk_installable(node: object, where: str) -> None:
-    """Every label map in the object, at any depth.
+    """Every label map AND every selector expression list, at any depth.
 
     ObjectMeta is checked and then NOT descended into: a label whose KEY
     happens to be spelled `matchLabels` is an ordinary label, not a selector,
-    and descending would refuse a render Kubernetes installs happily.
+    and descending would refuse a render Kubernetes installs happily. That
+    exemption covers `matchExpressions` for the same reason and by the same
+    `continue`.
     """
     if isinstance(node, dict):
         for key, value in node.items():
@@ -1765,6 +1829,9 @@ def _walk_installable(node: object, where: str) -> None:
                 continue
             if key in _LABEL_MAP_KEYS:
                 _check_label_map(value, where, key)
+                continue
+            if key == _MATCH_EXPRESSIONS_KEY:
+                _check_match_expressions(value, where)
                 continue
             _walk_installable(value, where)
     elif isinstance(node, list):
@@ -1952,6 +2019,53 @@ def census(text: str, facts: ChartFacts, origin: str = "<render>") -> dict:
                           "expected:\n%s\n\nrendered:\n%s" % (_describe(expected), _describe(actual)))
 
     return {"objects": len(objects), "policy": policy}
+
+
+def ingress_text(text: str, origin: str = "<render>") -> str:
+    """Return the one policy's `spec.ingress` as canonical text (issue #95).
+
+    WHY THIS EXISTS, AND WHAT IT DELIBERATELY DOES NOT DO. `chart-ingress-pin.sh`
+    owns the byte-for-byte canonical text of the ingress sub-tree, and it used
+    to FIND that sub-tree by `--show-only` plus a raw line exactly equal to
+    `spec:`. Run alone, that extraction exits 0 on all four hostile charts PR
+    #94's matrix proves red: a second policy in the same file spelled `kind :`
+    and `spec :`, one in a new template file, one whose keys are quoted or carry
+    escapes, and one tucked inside a List wrapper. NetworkPolicy rules are
+    additive, so a second policy grants what the first withholds -- and
+    `--show-only` is the blindfold, because a policy in another file is simply
+    not in the extract.
+
+    So the EXTRACTION moves here, onto the same reader the whole-render census
+    uses: documents recognised by parsed, canonically spelled keys, list
+    wrappers flattened, every counted object required to be installable, and
+    exactly one NetworkPolicy in the complete render. The ASSERTION stays where
+    it was -- the gate compares this canonical text against an expectation it
+    builds from chart values, so no expectation is ever read out of the render
+    it judges.
+
+    This is deliberately NOT `census()`: the ingress gate must not inherit the
+    egress gate's pinned expectation, its document inventory, or its policy
+    identity. It asks one question -- which ingress sub-tree does the single
+    policy in this complete render carry -- and the caller judges the answer.
+    """
+    objects = flatten(parse_documents(text, origin))
+    check_installable(objects)
+    policies = [o for o in objects if o.get("kind") == POLICY_KIND]
+    if len(policies) != 1:
+        names = [o.get("metadata", {}).get("name") if isinstance(o.get("metadata"), dict) else None
+                 for o in policies]
+        raise CensusError(
+            "the complete render carries %d NetworkPolicy objects (%s); exactly one is "
+            "required before any ingress rule can be pinned, because ingress rules are "
+            "ADDITIVE and a second policy admits what the first one does not."
+            % (len(policies), names))
+    spec = policies[0].get("spec")
+    if not isinstance(spec, dict):
+        raise CensusError("the policy carries no spec mapping")
+    if "ingress" not in spec:
+        raise CensusError("the policy declares no spec.ingress at all, so it admits nothing "
+                          "this gate can compare -- and says so rather than passing")
+    return json.dumps(spec["ingress"], sort_keys=True, indent=2) + "\n"
 
 
 # --- Hostile mutations ------------------------------------------------------
@@ -2400,6 +2514,30 @@ _SHADOW_UNINSTALLABLE_LABEL_KEY = [
 # wrong half.
 _SHADOW_UNINSTALLABLE_NAME_SUFFIX = "_shadow"
 
+# Issue #97: the other half of a selector. These land on the DEPLOYMENT's
+# selector rather than the policy's, deliberately -- the policy is compared as
+# a whole object against a literal expectation, so a smuggled expression there
+# is refused by the equality check whatever `check_installable` does, and a
+# mutation refused by the wrong guard proves nothing about the new one. The
+# Deployment is counted and not pinned, so only the installability walk stands
+# between it and a green census.
+_SHADOW_UNINSTALLABLE_EXPRESSION_VALUE = [
+    "    matchExpressions:",
+    "      - key: app.kubernetes.io/component",
+    "        operator: In",
+    "        values:",
+    "          - not a valid label value",
+]
+_SHADOW_UNINSTALLABLE_EXPRESSION_KEY = [
+    "    matchExpressions:",
+    "      - key: not a valid label key",
+    "        operator: Exists",
+]
+_SHADOW_UNINSTALLABLE_EXPRESSION_SHAPE = [
+    "    matchExpressions:",
+    "      - operator: Exists",
+]
+
 _SHADOW_UNINSTALLABLE_ANNOTATION_KEY = [
     "  annotations:",
     "    shadow.example/marker/extra: enabled",
@@ -2500,6 +2638,15 @@ def mutations(facts: PolicyFacts) -> list[tuple[str, Rewriter]]:
     # pin, so a mutation of its metadata reaches the installability check
     # rather than tripping the pinned-policy assertions first.
     account_anchor = ["kind: ServiceAccount", "metadata:", "  name: " + name]
+    # The Deployment's own pod selector: another object the census COUNTS and
+    # does not pin. `matchLabels:` at this indentation appears nowhere else in
+    # the render, which is what makes the four-line run unique.
+    workload_selector_anchor = [
+        "  selector:",
+        "    matchLabels:",
+        "      app.kubernetes.io/name: " + name,
+        "      app.kubernetes.io/instance: " + facts.release,
+    ]
     # The whole egress sub-tree as the template renders it. Anchoring on the
     # COMPLETE block rather than a single line is what lets a mutation rewrite
     # any part of the two-rule allowance while still requiring exactly one
@@ -2606,6 +2753,18 @@ def mutations(facts: PolicyFacts) -> list[tuple[str, Rewriter]]:
         ("render-with-an-uninstallable-annotation-key",
          lambda text: _replace_block(text, account_anchor,
                                      account_anchor + _SHADOW_UNINSTALLABLE_ANNOTATION_KEY)),
+        ("render-with-an-uninstallable-selector-expression-value",
+         lambda text: _replace_block(
+             text, workload_selector_anchor,
+             workload_selector_anchor + _SHADOW_UNINSTALLABLE_EXPRESSION_VALUE)),
+        ("render-with-an-uninstallable-selector-expression-key",
+         lambda text: _replace_block(
+             text, workload_selector_anchor,
+             workload_selector_anchor + _SHADOW_UNINSTALLABLE_EXPRESSION_KEY)),
+        ("render-with-a-keyless-selector-expression",
+         lambda text: _replace_block(
+             text, workload_selector_anchor,
+             workload_selector_anchor + _SHADOW_UNINSTALLABLE_EXPRESSION_SHAPE)),
         # --- the pinned allowance itself, widened ----------------------------
         #
         # The allowance replaced a total deny on 2026-08-27 (owner directive),
@@ -2746,6 +2905,10 @@ def main(argv: list[str]) -> int:
     census_parser = sub.add_parser("census", help="assert the whole render on stdin")
     _add_facts_arguments(census_parser)
     sub.add_parser("mutations", help="print every hostile mutation name")
+    sub.add_parser(
+        "ingress-text",
+        help="print the one policy's spec.ingress from the whole render, canonically",
+    )
     mutate_parser = sub.add_parser("mutate", help="rewrite the render on stdin into a hostile one")
     _add_facts_arguments(mutate_parser)
     mutate_parser.add_argument("--name", required=True, help="mutation to apply")
@@ -2755,6 +2918,11 @@ def main(argv: list[str]) -> int:
         if args.mode == "mutations":
             names = [n for n, _ in mutations(_STATIC_FACTS)]
             sys.stdout.write("\n".join(names) + "\n")
+            return 0
+        if args.mode == "ingress-text":
+            # No chart facts: this mode reports what the render CARRIES and
+            # judges nothing, so it takes no expectation to be wrong about.
+            sys.stdout.write(ingress_text(_read_stdin_utf8()))
             return 0
         facts = ChartFacts(Path(args.chart), args.release, args.namespace, args.peer_instance)
         if args.mode == "census":
