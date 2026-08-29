@@ -4050,10 +4050,12 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
 /* Every repo card's title/counters row, measured (issue 188). The owner's
  * screenshot showed the SAME viewport rendering two cards differently: short
  * titles (naranjo.online, lidersea.com) left room for the commits/stars
- * counters on the title's own line, while long titles
- * (website-infrastructure, the foobar2000-* trio) pushed them below —
- * content deciding the layout instead of the viewport. This lane measures
- * every one of the six cards at once, at both a narrow and a wide viewport,
+ * counters on the title's own line, while a long one
+ * (website-infrastructure) pushed them below — content deciding the layout
+ * instead of the viewport. That spread still exists in the narrowed set
+ * (issue 254): `dotfiles` is the shortest title the section has ever
+ * carried, so the range this lane needs did not shrink with the set.
+ * This lane measures every one of the four cards at once, at a narrow and a wide viewport,
  * and requires the SAME placement for every card at a given width: no
  * overlap (stacked, two rows) below the breakpoint, real overlap (one row)
  * at or above it — proving the fix by what a real engine painted, not by
@@ -4068,7 +4070,7 @@ test('every repo card places its counters the same way relative to its title, re
     .filter({ has: page.locator('h3.subsection-title', { hasText: 'Coding Projects' }) });
   const heads = codingProjects.locator('.entry-head');
   const cardCount = await heads.count();
-  expect(cardCount, 'the seven repo cards are not all on the page').toBe(7);
+  expect(cardCount, 'the four repo cards are not all on the page').toBe(4);
 
   const overlapsVertically = (a, b) => a.y < b.y + b.height && b.y < a.y + a.height;
 

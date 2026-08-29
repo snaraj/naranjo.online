@@ -683,8 +683,13 @@ test('an entry draws only the body regions it has, and every shipped entry has o
 // Projects: the coding half
 // ---------------------------------------------------------------------------
 
-test('the seven repositories are the owner’s, at the addresses the owner gave', () => {
-  assert.equal(projects.length, 7);
+test('the four repositories are the owner’s, at the addresses the owner gave', () => {
+  // FOUR, exactly, and the equality is the pin (issue 254, owner ruling): this
+  // section is a curated set rather than a sweep of an account, so a
+  // repository appearing here that the owner did not put here is the failure
+  // this test exists to catch. Relaxing it to a floor would let exactly that
+  // through.
+  assert.equal(projects.length, 4);
   // The exact URLs, verbatim from the owner's list. The host is written once
   // and the row supplies its name, so this pin proves the derivation as well
   // as the addresses.
@@ -693,9 +698,6 @@ test('the seven repositories are the owner’s, at the addresses the owner gave'
     'https://github.com/snaraj/website-infrastructure',
     'https://github.com/snaraj/lidersea.com',
     'https://github.com/snaraj/dotfiles',
-    'https://github.com/snaraj/foobar2000-lyricsbuddy',
-    'https://github.com/snaraj/foobar2000-library-visualizer',
-    'https://github.com/snaraj/foobar2000-album-visualizer',
   ]);
   for (const project of projects) {
     assert.ok(project.description.trim().length > 0, `${project.name} has no description`);
@@ -740,9 +742,13 @@ test('the seven repositories are the owner’s, at the addresses the owner gave'
 });
 
 test('a count of one is a count of one thing', () => {
-  // Two of the repositories genuinely carry a single commit, and several a
-  // single star. "1 commits" is the small lie a page tells when nobody
-  // executes its labels. The clock is FIXED here so the third count — how
+  // "1 commits" is the small lie a page tells when nobody executes its
+  // labels. Three of the four tracked repositories genuinely carry a single
+  // star; none currently carries a single commit, which is why every case
+  // below is driven from a SYNTHETIC row — the derivation has to be proven
+  // against the figures it must handle, not against whichever figures the
+  // tracked repositories happen to hold this week. The clock is FIXED so the
+  // third count — how
   // long since the last push (0.1.52) — is executed as arithmetic rather
   // than asserted around a moving now.
   const noon = Date.parse('2026-08-27T12:00:00Z');
@@ -965,7 +971,7 @@ test('projectsCapturedOn is a well-formed date, and formatIsoDate renders every 
   // ("Counts captured from … on …; this page fetches nothing" — capture
   // provenance is a maintainer/reviewer fact, not something a visitor came
   // here to read), but projectsCapturedOn remains the maintenance record for
-  // when the six counts below were captured, and formatIsoDate is the same
+  // when the captured counts were read, and formatIsoDate is the same
   // general date renderer the work/art feed cards use (feed.ts), so both
   // still deserve direct coverage independent of any one caller.
   assert.match(projectsCapturedOn, /^\d{4}-\d{2}-\d{2}$/);
