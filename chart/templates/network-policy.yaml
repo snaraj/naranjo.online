@@ -65,25 +65,26 @@ spec:
   of the boundary that matters most on a single-node cluster: the Pod may
   speak HTTPS to the internet, and never to its neighbours.
 
-  The host bound lives in the process instead, which is where it can be exact:
+  The host bound lives in the process instead, which is where it can be exact.
+  Named by SYMBOL, never by line number, so this list cannot rot silently --
+  every one of these lives in internal/panels/fetch.go:
 
-    * internal/panels/fetch.go:190 validateEndpoint admits only absolute https
-      URLs whose host is on the allowlist, and it runs at CONSTRUCTION over
-      every configured endpoint (fetch.go:129, :141, :153, :164), so a config
-      naming an unlisted host refuses to build rather than failing later;
-    * internal/panels/fetch.go:848 re-checks the same admitURL against
-      s.config.Hosts on every request, after the URL has been rebuilt, so a
-      redirect, a rewritten window parameter or in-memory tampering cannot
-      reach a host construction approved for nobody;
-    * admitURL (fetch.go:211) additionally refuses any non-https scheme and any
-      userinfo, and guardedDial refuses a resolved address in private, loopback
-      or link-local space -- so an allowlisted NAME resolved to a LAN address by
-      a hostile answer still cannot be dialled.
+    * validateEndpoint admits only absolute https URLs whose host is on the
+      allowlist, and runs at CONSTRUCTION over every configured endpoint, so a
+      config naming an unlisted host refuses to build rather than failing later;
+    * the request path re-checks admitURL against s.config.Hosts on every
+      request, after the URL has been rebuilt, so a redirect, a rewritten
+      window parameter or in-memory tampering cannot reach a host construction
+      approved for nobody;
+    * admitURL additionally refuses any non-https scheme and any userinfo, and
+      guardedDial refuses a resolved address in private, loopback or link-local
+      space -- so an allowlisted NAME resolved to a LAN address by a hostile
+      answer still cannot be dialled.
 
   Two layers, two different jobs: the policy bounds what the POD may open, the
   process bounds where it may open it. Neither substitutes for the other, and
-  the reason this comment is long is that a reader who sees 0.0.0.0/0 here and
-  stops reading would conclude the opposite of what is true.
+  a reader who sees 0.0.0.0/0 here and stops reading would conclude the
+  opposite of what is true.
 
   RULE 2 IS NOT A CONVENIENCE. Name resolution is what makes rule 1 usable at
   all, and it is scoped as narrowly as a policy can scope anything: the cluster

@@ -195,12 +195,14 @@ var (
 	}
 )
 
-// MediaOptions names the future read-only delivery root and its measured
-// concurrency budget. There are no production defaults because both values
-// depend on Pi discovery and administration-path saturation tests.
+// MediaOptions names the read-only delivery root and its measured concurrency
+// budget. Neither carries an in-process default: both are deployment facts the
+// chart supplies (enabled by default since 2026-08-27, once the reviewed
+// storage profile and the measured saturation budget existed), and inventing
+// one here would let media serve from somewhere nobody reviewed.
 type MediaOptions struct {
-	// Root is the absolute container-visible derivative boundary; the chart does
-	// not supply it until the storage profile is reviewed.
+	// Root is the absolute container-visible derivative boundary, supplied by
+	// the chart as the media volume's mount path.
 	Root string
 	// MaxConcurrent comes from measured saturation acceptance and bounds open
 	// files plus active response goroutines without an invented default.

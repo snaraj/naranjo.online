@@ -16,7 +16,7 @@
 // may accept only as much plaintext as still fits the ceiling once the AEAD
 // overhead is added, and an open may accept only a sealed payload the
 // ceiling admits. Before the 2026-08-24 review this stage carried its own
-// 1 MiB bound, four stages disagreed about the ceiling, and a valid export
+// 1 MiB bound, five stages disagreed about the ceiling, and a valid export
 // could be sealed and pushed that the origin would never admit (finding 4).
 package main
 

@@ -46,7 +46,7 @@ func NewWithMedia(assets fs.FS, media MediaOptions, options ...Option) (*Site, e
 }
 
 // newSite wires the shared response policy after optional capabilities have
-// been validated, keeping the disabled and future media-enabled paths identical
+// been validated, keeping the media-disabled and media-enabled paths identical
 // for health probes and embedded frontend behavior.
 func newSite(assets fs.FS, media *mediaHandler, logger *slog.Logger) (*Site, error) {
 	h, err := newHandler(assets)

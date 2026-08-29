@@ -44,82 +44,64 @@ const (
 	// test pins the shipped index far below it.
 	MaxIndexResponseBytes = 4 << 10
 	// MaxPanelResponseBytes is the owner's performance budget for one panel
-	// envelope. Construction refuses larger bodies by degrading the panel to
-	// unavailable, and the refresh path refuses oversized live payloads by
-	// keeping the last good response, so the budget is structural.
+	// envelope, and this is the canonical record of it — handler_test and
+	// dataroot_test point here rather than restating it.
 	//
-	// RAISED from 32 KiB to 128 KiB by the owner on 2026-08-24: "expand the
-	// response gate if thats the case, we can't be blocked over a gate we
-	// added before we even started developing the real websites."
+	// Raised from 32 KiB to 128 KiB by the owner on 2026-08-24. Full-depth
+	// token-usage history structurally maxes at 104,508 bytes SERVED, measured
+	// with the v2 models section by TestTheMaximalDocumentFitsTheRaisedBudget;
+	// the 32 KiB gate, chosen before any real content existed, would have
+	// refused exactly the documents the sealed-data pipeline exists to deliver.
 	//
-	// The measurement behind it: full-depth token-usage history structurally
-	// maxes at 104,508 bytes served, MEASURED with the v2 models section by
-	// TestTheMaximalDocumentFitsTheRaisedBudget. (The figures that stood here
-	// before issue #170 were 98,853 without that section and 115,981 with it;
-	// the second was a projection made before the section existed, and the
-	// real one is smaller because the models partition is windowed rather
-	// than covering the whole series.) The 32 KiB gate would therefore
-	// have refused exactly the full-history documents the sealed-data
-	// pipeline exists to deliver — a serve-time outage waiting for real depth
-	// to arrive, produced by a budget chosen before any real content existed.
+	// It is the same VALUE as seal.MaxSealedBytes, so the serve step no longer
+	// hides a smaller ceiling than the transport steps. That is NOT the
+	// stronger claim that a transportable document is a servable one, which
+	// the 2026-08-25 round-4 review found stated here and false: the two bound
+	// different bytes — this one the finished envelope, seal.MaxSealedBytes
+	// the sealed FILE — and the envelope adds the embedded snapshot and its
+	// own scaffolding on top. Measured at +875 bytes for the maximal
+	// admissible document (103,633 sealed, 104,508 served), and unbounded
+	// above that as the snapshot grows, so a file sealed at exactly 131,072
+	// bytes serves OVER budget and is refused.
 	//
-	// 128 KiB is not an arbitrary bigger number: it is the SAME value the
-	// sealed-payload pipeline already enforces at five stages
-	// (seal.MaxSealedBytes), so the last step no longer hides a SMALLER
-	// ceiling than the four before it.
-	//
-	// Read that claim exactly as written, because the 2026-08-25 round-4
-	// review found the stronger version of it — "a document that can be
-	// transported can now also be served" — stated here and it is FALSE. The
-	// two ceilings are equal in value and different in SUBJECT: this one
-	// bounds the finished envelope the handler writes, seal.MaxSealedBytes
-	// bounds the sealed FILE. The envelope is the payload merged onto the
-	// embedded snapshot plus the envelope scaffolding, so it is strictly
-	// larger than the file it came from — measured at +875 bytes for the
-	// maximal admissible document (103,633 sealed, 104,508 served;
-	// TestTheMaximalDocumentFitsTheRaisedBudget logs both), and larger still
-	// by however much the snapshot contributes. A file sealed at exactly
-	// 131,072 bytes therefore serves OVER this budget and is refused.
-	//
-	// What is true, and is what the equality buys: both ceilings are real,
-	// both refuse rather than truncate, and neither is now the surprising
-	// one. What guarantees safety is not the arithmetic — it is the refusal
-	// path, which keeps the last good response serving whenever the envelope
-	// does not fit (TestDataRootRefusesAnOverBudgetEnvelope).
-	//
-	// This is a budget revision by the budget's owner, not a weakening of a
-	// gate. The bound stays REFUSE-not-truncate at construction and refresh,
-	// stays pinned by TestResponsesStayWithinTheOwnerBudgets, and
-	// MaxIndexResponseBytes is untouched at 4 KiB.
+	// The guarantee rests on that refusal, not on the arithmetic: construction
+	// degrades an over-budget panel to unavailable and refresh keeps the last
+	// good response (TestDataRootRefusesAnOverBudgetEnvelope). Refuse, never
+	// truncate; pinned by TestResponsesStayWithinTheOwnerBudgets.
 	MaxPanelResponseBytes = 128 << 10
 )
 
 // Panel kinds are versioned independently of the envelope. A breaking payload
 // change mints a new kind version; it never mutates an existing one.
+//
+// THE ADDITIVE RULE, stated once for every payload type below. A field marked
+// optional here arrived after its kind shipped: a payload written before it
+// existed still decodes and still renders, so adding it did NOT move the kind.
+// Minting a new kind version is reserved for a breaking reshape, and an
+// optional field is not one — contrast TokenUsageSeries.Models, whose
+// cross-field integrity rules a consumer cannot skip and still be telling the
+// truth, which is exactly what did mint token-usage/v2.
 const (
 	// KindTokenUsage reports model token consumption per source. Source labels
 	// are data supplied by snapshots and config — never Go identifiers — so a
 	// new tool or vendor appears by shipping data, not by editing code.
 	KindTokenUsage = "token-usage/v1"
 	// KindTokenUsageV2 is the same payload plus a per-day MODEL partition of
-	// each source's series (issue #170), and it is a new KIND rather than
-	// another optional v1 section for one reason: the section binds
-	// CROSS-FIELD integrity rules — a declared window contained in the
-	// aggregate's, and an exact per-day partition of the aggregate's totals.
-	// Every other section added to v1 since it shipped (tiles, the series,
-	// insights, the category partition, the capture instant) could be ignored
-	// by a consumer without the rest becoming untrue. This one cannot: a
-	// consumer that admitted v1's shape and skipped these rules would render
-	// a v2 payload while silently failing to verify what makes it true.
-	// Minting the kind is what forces every consumer through the new
-	// admission. The breaking change is not the shape — v2 is a strict
-	// superset — it is what a compliant consumer must CHECK.
+	// each source's series (issue #170). It is a new KIND rather than another
+	// optional v1 section because that section binds CROSS-FIELD rules — a
+	// declared window contained in the aggregate's, and an exact per-day
+	// partition of the aggregate's totals — that a consumer cannot skip and
+	// still be telling the truth about what it renders. Every earlier v1
+	// addition could be ignored without the rest becoming untrue. Minting the
+	// kind forces every consumer through the new admission: v2 is a strict
+	// superset, so the breaking change is what a compliant consumer must
+	// CHECK, not the shape.
 	//
-	// The panel/v1 ENVELOPE is untouched, as it is forever by design; only
-	// the kind moves. v1 stays decodable, and its admission stays exactly as
-	// strict as it was: tokenUsageDataV1 below is a decode-only mirror with
-	// no models field anywhere in it, so a document claiming v1 while
-	// carrying a models section is refused rather than quietly upgraded.
+	// The panel/v1 ENVELOPE is untouched, as it is forever by design. v1's
+	// admission stays exactly as strict as it was: tokenUsageDataV1 below is a
+	// decode-only mirror carrying no models field anywhere, so a document
+	// claiming v1 while carrying a models section is refused rather than
+	// quietly upgraded.
 	KindTokenUsageV2 = "token-usage/v2"
 	// KindVCSActivity reports contribution activity: weekly counts, totals,
 	// the current streak, and recent commits.
@@ -206,10 +188,8 @@ type TokenUsageData struct {
 }
 
 // TokenUsageSource is one labeled origin of token-usage windows. Label and
-// Windows are the original v1 fields; Account, Stats, Series, and Insights
-// were added later and are all optional, so a payload written before they
-// existed still decodes and still renders — an additive extension inside the
-// same kind version, never a breaking reshape.
+// Windows are the original v1 fields; everything below them is optional under
+// the additive rule.
 type TokenUsageSource struct {
 	// Label is the display name of the source, supplied as data.
 	Label string `json:"label"`
@@ -226,17 +206,9 @@ type TokenUsageSource struct {
 	Insights []TokenUsageInsight `json:"insights,omitempty"`
 	// CapturedAt is the RFC 3339 instant THIS source's figures were captured,
 	// present only on a source refreshed from the sealed runtime document
-	// (2026-08-24 round-3 review, finding 5). One envelope carries one
-	// `generatedAt` for the whole payload, and the whole payload is only as
-	// fresh as its oldest constituent — so the envelope reports that oldest
-	// instant and every source says, here, when it was actually measured. A
-	// reader can then see which half of a two-source panel is the older one
-	// instead of inferring a freshness neither field ever promised.
-	//
-	// Additive, exactly like Account, Stats, Series, Insights and the
-	// series' Recorded flag before it: a payload written before this field
-	// existed still decodes and still renders, so this field did not move
-	// the kind either.
+	// (2026-08-24 round-3 review, finding 5). The envelope's one `generatedAt`
+	// reports the whole payload's oldest constituent, so without this a reader
+	// could not see which half of a two-source panel is the older one.
 	CapturedAt string `json:"capturedAt,omitempty"`
 }
 
@@ -291,21 +263,12 @@ type TokenUsageSeries struct {
 	// this series came from a dated out-of-band capture rather than the live
 	// feed, and says so instead of borrowing a freshness it does not have.
 	// The live mapping never sets it, so the flag is also the mechanical
-	// difference between a shipped series and a fetched one — which is the
-	// property registry_test's narrowed pin now guards.
-	//
-	// Additive, exactly like Account, Stats, Series and Insights before it: a
-	// payload written before this field existed still decodes and still
-	// renders, so this field did not move the kind. Minting a new kind
-	// version is for a BREAKING reshape, and an optional flag is not one —
-	// contrast Models below, whose cross-field integrity rules a consumer
-	// cannot skip, which is exactly what did mint token-usage/v2.
+	// difference between a shipped series and a fetched one — the property
+	// registry_test's narrowed pin guards.
 	Recorded bool `json:"recorded,omitempty"`
 	// Categories optionally breaks every day of Totals down by accounting
 	// category (input, output, cache reads, ...), in a canonical served
-	// order. Additive exactly like Recorded above: absent for every series
-	// produced before it existed, and an absent section renders the plain
-	// single-series grid it always did.
+	// order. An absent section renders the plain single-series grid.
 	Categories []TokenUsageCategory `json:"categories,omitempty"`
 	// Models optionally breaks the same days down by MODEL instead — the
 	// same labelled-sub-series shape over a different closed vocabulary, and
@@ -413,9 +376,8 @@ type TokenUsageWindow struct {
 }
 
 // VCSActivityData is the vcs-activity/v1 payload: contribution-graph weeks,
-// totals, the current streak, and the latest commits. EndDate was added
-// later and is optional, so a payload written before it existed still
-// decodes — an additive extension inside the same kind version.
+// totals, the current streak, and the latest commits. EndDate, CommitsAt and
+// Coverage are optional under the additive rule.
 type VCSActivityData struct {
 	// TotalContributions is the count across the covered weeks.
 	TotalContributions int `json:"totalContributions"`
@@ -440,22 +402,15 @@ type VCSActivityData struct {
 	// The envelope's status still carries the whole payload's provenance;
 	// this says which half of it is the older one.
 	CommitsAt string `json:"commitsAt,omitempty"`
-	// Coverage names WHICH calendar producer answered, and it exists because
-	// the two producers count different things while both being live and both
-	// being true.
-	//
-	// The anonymous public document reports only what an anonymous reader may
-	// see; the credentialed API reports the account holder's own complete
-	// record, private repositories included. Serving either under one
-	// unlabelled "totalContributions" would make the panel quietly change its
-	// meaning the day a credential is added or expires — a figure that moved
-	// by four hundred with nothing on the page to say why. So the payload says
-	// which one it is, and the frontend words the figure accordingly.
-	//
-	// Additive and optional, exactly like EndDate and CommitsAt before it: a
-	// payload written before this field existed still decodes and still
-	// renders, so this field did not move the kind. Empty means the producer
-	// declared no coverage, which is what the embedded snapshot says.
+	// Coverage names WHICH calendar producer answered, because the two count
+	// different things while both being live and both being true: the
+	// anonymous public document reports what an anonymous reader may see, the
+	// credentialed API the account holder's complete record with private
+	// repositories included. Serving either under one unlabelled
+	// "totalContributions" would let the figure move by hundreds the day a
+	// credential is added or expires with nothing on the page to say why.
+	// Empty means the producer declared none, which is what the embedded
+	// snapshot says.
 	Coverage string `json:"coverage,omitempty"`
 }
 
@@ -530,10 +485,8 @@ type VCSCommit struct {
 }
 
 // BossLogData is the boss-log/v1 payload: one game account's skill table and
-// boss tallies. The kind version stays v1 because Skills is ADDITIVE — a
-// payload written before it existed still decodes and still renders, exactly
-// like the token-usage tiles and the activity end date before it. A breaking
-// reshape would mint a new kind; adding an optional section never does.
+// boss tallies. Skills is optional under the additive rule, which is why the
+// kind stays v1.
 type BossLogData struct {
 	// Account is the public account name.
 	Account string `json:"account"`

@@ -296,8 +296,9 @@ func TestALiveRefreshReplacesTheRecordedSeries(t *testing.T) {
 // keyed "peak" and a live tile keyed "peak-day" are two different figures as
 // far as the merge can tell — it keeps the recorded one and appends the live
 // one, and the panel renders the same figure twice under the same caption.
-// That is invisible today only because live refresh is off; it would appear on
-// the first refreshed load, which is the worst moment to discover it.
+// The chart has shipped panels.refresh.enabled: true since 2026-08-27, so a
+// mismatch introduced here reaches readers on the next refreshed load rather
+// than waiting for an enablement to expose it.
 //
 // The pin runs the merge production runs — the shipped snapshot against every
 // tile mapUsage can produce, with mapUsage's own labels — and demands that the
@@ -383,8 +384,9 @@ func TestVCSActivityPanelShipsARenderableGraph(t *testing.T) {
 		t.Errorf("totals = %d, streak = %d; both must be positive in the sample", payload.TotalContributions, payload.Streak)
 	}
 	// The contribution calendar carries no commit rows, and the previous
-	// sample's rows were invented. An empty list is the honest answer until a
-	// commit producer exists; rows that DO appear must be complete and dated.
+	// sample's rows were invented. Empty is the honest answer from the
+	// calendar alone; rows that DO appear — the live commit half merges its
+	// own — must be complete and dated.
 	for _, commit := range payload.RecentCommits {
 		if commit.Repo == "" || commit.Message == "" {
 			t.Errorf("commit row incomplete: %+v", commit)

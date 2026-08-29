@@ -29,8 +29,9 @@ WHAT CHANGED IN THE 2026-08-25 ROUND-4 REVIEW (finding 1). Round 3 also moved
 the state pair to ReadWriteOncePod and this module REQUIRED that mode. The
 reasoning was right — ReadWriteOnce is node-scoped, and on a one-node cluster
 it restricts nothing — but the mechanism was not: Kubernetes supports
-ReadWriteOncePod for CSI volumes only, and the live target has zero CSI
-drivers and zero StorageClasses. Requiring it here made this gate enforce a
+ReadWriteOncePod for CSI volumes only, and the live target runs zero CSI
+drivers — its enumerated StorageClass provisions nothing. Requiring it here
+made this gate enforce a
 promise the target cannot keep, which is the worse failure: a reader who sees
 the mode stops looking for the real mechanism. The state pair is
 ReadWriteOnce again, and this module now does three things instead of one — it
@@ -193,8 +194,8 @@ def _refuse_unsupported_access_modes(kind: str, name: str, modes) -> None:
     """No rendered object may CLAIM ReadWriteOncePod on this target.
 
     2026-08-25 round-4 finding 1. Kubernetes supports ReadWriteOncePod for CSI
-    volumes only, and this target has zero CSI drivers and zero StorageClasses;
-    a native `local` volume that names the mode does not become single-writer,
+    volumes only, and this target runs zero CSI drivers; a native `local`
+    volume that names the mode does not become single-writer,
     it becomes a manifest that READS as if it were. The check is explicit
     rather than implied by the expected-mode comparison below, so a regression
     fails with the reason rather than with a string mismatch that invites

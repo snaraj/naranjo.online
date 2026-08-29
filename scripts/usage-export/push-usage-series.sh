@@ -63,25 +63,21 @@
 #                   fresh at the top of every run — inside the same sandbox
 #                   the export runs in — and merged from the private scratch,
 #                   so a second tool's half of the panel is exactly as current
-#                   as the first tool's.
-#                   This exists because the alternative was a file somebody
-#                   maintained by hand. A hand-written merge source ages
-#                   silently between edits, and it can be WRONG in a way no
-#                   schedule ever repairs: the one on this machine was missing
-#                   the window and derived sections the loader requires, so
-#                   every scheduled export refused for as long as it took a
-#                   human to look (2026-08-27).
+#                   as the first tool's. It replaces a hand-maintained merge
+#                   file, which ages silently between edits and can be wrong
+#                   in a way no schedule repairs: the one on this machine was
+#                   missing sections the loader requires, so every scheduled
+#                   export refused until a human looked (2026-08-27).
 #   HISTORY_DIR     directory for the durable per-source history stores
-#                   (issue #234). Every source this pipeline reads is
-#                   volatile — transcript trees are retention-pruned and the
-#                   roll-up cache has been measured discarding a month in one
-#                   recompute — so without a store the served series silently
-#                   gets SHORTER as evidence is deleted. When set, the walked
-#                   source and every MERGE_CAPTURES source each read and
-#                   rewrite "$HISTORY_DIR/<key>.json", so a day a capture has
-#                   measured survives its sources forever after. Optional so
-#                   an unconfigured workstation still exports; configuring it
-#                   is what the depth guarantee rests on.
+#                   (issue #234). Every source here is volatile — transcript
+#                   trees are retention-pruned and the roll-up cache has been
+#                   measured discarding a month in one recompute — so without
+#                   a store the served series silently gets SHORTER as evidence
+#                   is deleted. When set, the walked source and every
+#                   MERGE_CAPTURES source read and rewrite
+#                   "$HISTORY_DIR/<key>.json", so a measured day survives its
+#                   sources. Optional so an unconfigured workstation still
+#                   exports; the depth guarantee rests on configuring it.
 #
 # Exit status is nonzero on any failure; diagnostics never include payload
 # content. Stage names and byte counts only.

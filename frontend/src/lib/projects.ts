@@ -150,18 +150,6 @@ export function projectLinkLabel(project: Project): string {
   return `${project.name} on ${projectHostLabel}, opens in a new tab`;
 }
 
-/* One count beside a project: the figure, and the words that carry it when the
- * icon cannot. A value is never encoded by icon alone (dataviz floor) — the
- * number is always rendered, and this label is what a screen reader hears
- * instead of a decorative glyph. */
-export interface ProjectCount {
-  /* Which glyph the card draws; also the keyed-each key. */
-  readonly kind: 'commits' | 'stars' | 'updated';
-  /* The visible text: the grouped figure and the word it counts, singular
-   * where the figure genuinely is one. */
-  readonly label: string;
-}
-
 /* How long ago an instant was, as the coarse sentence a project card carries
  * ("updated 3 days ago"). Coarse on purpose: the capture is a maintenance
  * record, not a clock, so hours would claim a precision the data does not

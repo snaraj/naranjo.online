@@ -2,30 +2,17 @@
  * lib/tooltip.ts and lib/gesture.ts are, so the behaviour is executable by a
  * test rather than inferred from markup.
  *
- * WHAT WAS HERE BEFORE, AND WHY IT WENT. Nothing — and that is the point. This
- * site never had a custom pull-to-refresh. It had two separate things, both
- * removed in the same commit:
+ * `overscroll-behavior-y: none` ON html AND body STAYS. It suppressed the
+ * BROWSER'S own pull-to-refresh at issue 187, where the owner reported the
+ * page left "stuck dragged-down" on iOS Safari — the native rubber-band
+ * overshoot never settled flush and the document stayed translated below its
+ * own top edge. Removing it reintroduces that exactly. It is also what makes
+ * this implementation possible rather than what it fights: with the native
+ * boundary effect suppressed, no browser animation competes for the same drag,
+ * so the offset below is the only thing moving the surface and the settle is
+ * ours to guarantee.
  *
- *   1. A manual refresh BUTTON (RefreshAll.svelte), deleted at issue 179 on
- *      the owner's ruling that the page must stay current on its own rather
- *      than depend on a visitor pressing something.
- *   2. The BROWSER'S OWN pull-to-refresh, suppressed at issue 187 by
- *      `html, body { overscroll-behavior-y: none }`, because the owner
- *      reported the page left "stuck dragged-down" after the gesture on iOS
- *      Safari: the native rubber-band overshoot never settled flush and the
- *      document stayed translated below its own top edge. That is precisely
- *      the "it did not slingshot back to place" this replacement has to fix.
- *
- * THE DECLARATION STAYS. `overscroll-behavior-y: none` is a defended fix, and
- * removing it would reintroduce issue 187 exactly. It is also what makes this
- * implementation POSSIBLE rather than what it has to fight: with the native
- * boundary effect suppressed there is no browser animation competing for the
- * same drag, so the offset below is the only thing moving the surface and the
- * settle is ours to guarantee. A custom pull layered on TOP of a live native
- * bounce is the thing that cannot be made to settle, and it is what the
- * removed behaviour actually was.
- *
- * THE THREE RULES THIS OWES.
+ * THE FOUR RULES THIS OWES.
  *
  *   - It engages ONLY at the top. A drag that begins with the document
  *     scrolled is the page's, and is never claimed.
