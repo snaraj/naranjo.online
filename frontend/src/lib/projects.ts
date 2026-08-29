@@ -1,5 +1,6 @@
 /* The Projects section's information module (owner directive, issue 134; live
- * since issue 242): the owner's six public repositories.
+ * since issue 242): the owner's seven public repositories, most recently
+ * pushed first.
  *
  * IT IS NO LONGER A CAPTURE. It was one, deliberately: `PANELS_REFRESH` was
  * default-off, so a live count would have been a promise the deployment could
@@ -86,31 +87,46 @@ export const codingProjectsPanelId = 'coding-projects';
  * stays truthful without display: this constant exists so the date is
  * recorded somewhere durable, and the no-fetch guarantee it used to
  * accompany on the page is enforced structurally, not by announcing it. */
-export const projectsCapturedOn = '2026-08-27';
+export const projectsCapturedOn = '2026-08-29';
 
-/* The six public repositories, in the order the owner listed them. */
+/* The owner's public repositories. The order here is a MAINTENANCE order — the
+ * order these rows are written down in — and it is no longer the order the
+ * section renders (issue 252). The feed sorts by last push, most recent first,
+ * derived from the instants below and from the panel's when it has one, so a
+ * repository the owner pushed to five minutes ago leads the section without an
+ * edit to this file. What this list still fixes is WHICH repositories the
+ * section may show and what each one's link, key and accessible name are; a
+ * payload can reorder the rows and it can never introduce, rename or relink
+ * one. */
 export const projects: readonly Project[] = [
   {
     name: 'naranjo.online',
-    description: 'Welcome to my personal website',
-    commits: 118,
+    description: 'Personal Website & Media Gallery',
+    commits: 127,
     stars: 1,
-    pushedAt: '2026-08-28T02:36:21Z'
+    pushedAt: '2026-08-29T07:02:14Z'
   },
   {
     name: 'website-infrastructure',
     description:
       'My infrastructure for self-hosting scalable and secure applications using Kubernetes',
-    commits: 95,
+    commits: 105,
     stars: 1,
-    pushedAt: '2026-08-28T02:58:56Z'
+    pushedAt: '2026-08-29T08:12:06Z'
   },
   {
     name: 'lidersea.com',
     description: 'The home of lidersea.com',
-    commits: 89,
+    commits: 92,
     stars: 1,
-    pushedAt: '2026-08-27T23:20:26Z'
+    pushedAt: '2026-08-29T07:01:55Z'
+  },
+  {
+    name: 'dotfiles',
+    description: 'My dotfiles',
+    commits: 9,
+    stars: 0,
+    pushedAt: '2026-08-29T10:13:44Z'
   },
   {
     name: 'foobar2000-lyricsbuddy',
@@ -174,7 +190,7 @@ export function updatedLabel(pushedAt: string, now: number = Date.now()): string
   return `updated ${years} ${years === 1 ? 'year' : 'years'} ago`;
 }
 
-/* projectCounts renders one row's three figures against whatever the panel
+/* projectCounts renders one row's five figures against whatever the panel
  * could actually vouch for.
  *
  * `live` is the panel's row when one arrived and was admitted; absent means
@@ -198,7 +214,7 @@ export function projectCounts(
 ): EntryCount[] {
   const recorded = live === undefined || live.recorded === true;
   const stars = recorded ? project.stars : live.stars;
-  const pushedAt = recorded ? project.pushedAt : (live.pushedAt ?? project.pushedAt);
+  const pushedAt = effectivePushedAt(project, live);
   return [
     {
       key: 'commits',
@@ -214,20 +230,81 @@ export function projectCounts(
         stars === null ? 'stars unknown' : `${formatWhole(stars)} ${stars === 1 ? 'star' : 'stars'}`,
       marked: recorded
     },
-    /* Third and last (owner directive, 0.1.52): how long since the last
-     * update, computed from the instant against the reader's own clock rather
-     * than shipped as frozen words — see pushedAt above. */
+    /* How long since the last update (owner directive, 0.1.52), computed from
+     * the instant against the reader's own clock rather than shipped as frozen
+     * words — see pushedAt above. */
     {
       key: 'updated',
       glyph: 'clock',
       label: updatedLabel(pushedAt, now),
       marked: recorded
-    }
+    },
+    /* The two open-work counters (owner directive, issue 252). They render
+     * TERSELY — glyph and figure, no words — because the owner asked for
+     * exactly that and because "open issues"/"open pull requests" spelled out
+     * four times per card is noise on a card whose subject is a repository.
+     * The words are still there for anyone who needs them, in the accessible
+     * name EntryLog clips; see the `value` field on EntryCount.
+     *
+     * Both come from the panel or from nowhere. There is no captured fallback
+     * for them and there should not be: these are the fastest-moving figures
+     * on the card — an issue closes and the number is wrong — so a frozen one
+     * would be the least true thing in the section. Nothing to report renders
+     * as a dash, which says "not known"; a reported zero renders as 0, which
+     * says "nothing open". Those are different claims and the card makes only
+     * the one it can support. */
+    openWorkCount('issues', 'issue', live?.openIssues, recorded),
+    openWorkCount('pulls', 'pull', live?.openPulls, recorded)
   ];
+}
+
+/* One open-work counter: the terse glyph-and-figure pair, or a dash when the
+ * panel reported no figure. The accessible sentence is always complete and
+ * always plural-correct, because "1 open issues" is the kind of small lie a
+ * page tells when nobody reads its labels out loud. */
+function openWorkCount(
+  key: string,
+  glyph: 'issue' | 'pull',
+  tally: number | undefined,
+  recorded: boolean
+): EntryCount {
+  const noun = glyph === 'issue' ? 'issue' : 'pull request';
+  if (tally === undefined) {
+    return { key, glyph, label: `open ${noun}s not reported`, value: '—' };
+  }
+  return {
+    key,
+    glyph,
+    label: `${formatWhole(tally)} open ${tally === 1 ? noun : `${noun}s`}`,
+    value: formatWhole(tally),
+    marked: recorded
+  };
+}
+
+/* The instant a row is ORDERED and dated by: the panel's when it vouched for
+ * one, the captured one otherwise. It is the one place that choice is made, so
+ * the sentence a card shows ("updated 3 days ago") and the position it holds
+ * in the feed can never disagree about which push they mean. */
+function effectivePushedAt(project: Project, live?: CodingProjectRow): string {
+  if (live === undefined || live.recorded === true) {
+    return project.pushedAt;
+  }
+  return live.pushedAt ?? project.pushedAt;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/* An open-work tally is absent or a non-negative whole number. Absent is the
+ * only "unknown" this field has: the producer omits the key rather than
+ * writing null, which is what makes the pair additive, so an explicit null is
+ * drift and refused with everything else. */
+function isOptionalTally(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)
+  );
 }
 
 /* parseCodingProjects admits only payloads carrying the exact shape the feed
@@ -249,7 +326,7 @@ export function parseCodingProjects(document: unknown): CodingProjectsData | nul
     if (!isRecord(entry)) {
       return null;
     }
-    const { name, description, stars, pushedAt, recorded } = entry;
+    const { name, description, stars, pushedAt, openIssues, openPulls, recorded } = entry;
     if (typeof name !== 'string' || name.length === 0 || typeof description !== 'string') {
       return null;
     }
@@ -262,12 +339,21 @@ export function parseCodingProjects(document: unknown): CodingProjectsData | nul
     if (pushedAt !== undefined && typeof pushedAt !== 'string') {
       return null;
     }
+    if (!isOptionalTally(openIssues) || !isOptionalTally(openPulls)) {
+      return null;
+    }
     if (recorded !== undefined && typeof recorded !== 'boolean') {
       return null;
     }
     const row: CodingProjectRow = { name, description, stars };
     if (typeof pushedAt === 'string') {
       row.pushedAt = pushedAt;
+    }
+    if (typeof openIssues === 'number') {
+      row.openIssues = openIssues;
+    }
+    if (typeof openPulls === 'number') {
+      row.openPulls = openPulls;
     }
     if (recorded === true) {
       row.recorded = true;
@@ -308,16 +394,33 @@ function projectEntry(project: Project, live: CodingProjectRow | undefined, now?
  * and the page says so with the provenance mark — not a placeholder pretending
  * to be data. It also means the section's first paint is already true, so
  * nothing is reserved for late content and the panel's arrival shifts no
- * layout. */
+ * layout.
+ *
+ * The ORDER is derived here rather than declared anywhere (issue 252): most
+ * recently pushed first, against each row's effective instant, so the section
+ * answers "what has the owner been working on" instead of "what order was this
+ * file written in". Sorting at this layer rather than in the producer is what
+ * lets it hold in all three states — a live payload, a payload whose rows fell
+ * back to the shipped snapshot, and no payload at all — because this is the
+ * only layer where the live and captured instants are both in hand.
+ *
+ * `toSorted` rather than `sort`: `projects` is a module-level constant that
+ * every other consumer reads, and sorting it in place would reorder theirs
+ * too, once, at whichever render happened first. */
 export function codingProjectsProps(envelope: PanelEnvelope | null, now?: number): EntryLogProps {
   const payload =
     envelope !== null && envelope.kind === panelKinds.codingProjects
       ? parseCodingProjects(envelope.data)
       : null;
   const byName = new Map((payload?.repos ?? []).map((row) => [row.name, row]));
+  const ordered = projects.toSorted(
+    (left, right) =>
+      Date.parse(effectivePushedAt(right, byName.get(right.name))) -
+      Date.parse(effectivePushedAt(left, byName.get(left.name)))
+  );
   return {
     variant: 'compact',
     titleLevel: 4,
-    entries: projects.map((project) => projectEntry(project, byName.get(project.name), now))
+    entries: ordered.map((project) => projectEntry(project, byName.get(project.name), now))
   };
 }

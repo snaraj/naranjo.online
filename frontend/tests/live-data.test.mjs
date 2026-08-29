@@ -140,7 +140,13 @@ describe('the Coding Projects feed follows the host', () => {
       [
         ['commits', true],
         ['stars', false],
-        ['updated', false]
+        ['updated', false],
+        // These fixture rows carry no tallies, which is the ADDITIVE path: the
+        // exact shape a payload written before the two counters existed still
+        // has. A figure that is not there renders as a dash, and a dash has no
+        // provenance to mark.
+        ['issues', undefined],
+        ['pulls', undefined]
       ]
     );
   });
@@ -149,25 +155,33 @@ describe('the Coding Projects feed follows the host', () => {
     // The origin degrades per row — five repositories read and one refused is
     // five live rows beside one that says it is not — and the page has to
     // render that mixture legibly rather than flattening it.
+    // A recorded row is the origin serving its shipped snapshot for that
+    // repository, tallies included — so this fixture carries them, exactly as
+    // the snapshot does.
     const rows = projects.map((project, index) =>
       index === 1
-        ? { ...liveRow(project.name), recorded: true }
+        ? { ...liveRow(project.name), recorded: true, openIssues: 3, openPulls: 1 }
         : liveRow(project.name)
     );
     const props = codingProjectsProps(projectsEnvelope(rows), noon);
+    // Entries are looked up BY NAME rather than by position, because the feed
+    // is ordered by push instant now (issue 252) and a recorded row is ordered
+    // by its captured one — so position is a property of the data here, not an
+    // index into the module list.
+    const entryFor = (name) => props.entries.find((entry) => entry.key === name);
     assert.deepEqual(
-      props.entries[1].counts.map((count) => count.marked),
-      [true, true, true],
+      entryFor(projects[1].name).counts.map((count) => count.marked),
+      [true, true, true, true, true],
       'a recorded row left a figure unmarked'
     );
     assert.equal(
-      props.entries[1].summary,
+      entryFor(projects[1].name).summary,
       projects[1].description,
       'a recorded row served the payload description instead of the captured one'
     );
     assert.deepEqual(
-      props.entries[0].counts.map((count) => count.marked),
-      [true, false, false],
+      entryFor(projects[0].name).counts.map((count) => count.marked),
+      [true, false, false, undefined, undefined],
       'a live row inherited the recorded row’s marks'
     );
   });
@@ -195,7 +209,9 @@ describe('the Coding Projects feed follows the host', () => {
     // on the date the module records, and the page marks them — rather than a
     // placeholder pretending to be data. It is also why this block has no
     // loading face and reserves nothing.
-    const capturedSummaries = projects.map((project) => project.description);
+    const capturedSummaries = projects
+      .toSorted((left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt))
+      .map((project) => project.description);
     for (const envelope of [
       null,
       projectsEnvelope([], { kind: 'vcs-activity/v1' }),
@@ -209,6 +225,13 @@ describe('the Coding Projects feed follows the host', () => {
       );
       for (const entry of props.entries) {
         for (const count of entry.counts) {
+          // A captured figure is marked; the two open-work counters have no
+          // captured figure at all and render as an unmarked dash, which is
+          // the same honesty by a different route.
+          if (count.value === '—') {
+            assert.equal(count.marked, undefined, `${entry.key}/${count.key} marked a figure it does not have`);
+            continue;
+          }
           assert.equal(count.marked, true, `${entry.key}/${count.key} claimed freshness it does not have`);
         }
       }
@@ -228,7 +251,19 @@ describe('the Coding Projects feed follows the host', () => {
       { name: 'x', description: 'x', stars: 1.5 },
       { name: 'x', description: 'x', stars: Number.MAX_SAFE_INTEGER + 2 },
       { name: 'x', description: 'x', stars: 1, pushedAt: 7 },
-      { name: 'x', description: 'x', stars: 1, recorded: 'yes' }
+      { name: 'x', description: 'x', stars: 1, recorded: 'yes' },
+      // The open-work tallies (issue 252) are admitted only as absent or as a
+      // non-negative whole number. NULL is refused rather than read as
+      // "unknown": the producer signals unknown by omitting the key, so a null
+      // is drift, and reading it as unknown would make a drifted payload
+      // indistinguishable from an honest one.
+      { name: 'x', description: 'x', stars: 1, openIssues: null },
+      { name: 'x', description: 'x', stars: 1, openPulls: null },
+      { name: 'x', description: 'x', stars: 1, openIssues: -1 },
+      { name: 'x', description: 'x', stars: 1, openPulls: -1 },
+      { name: 'x', description: 'x', stars: 1, openIssues: 1.5 },
+      { name: 'x', description: 'x', stars: 1, openPulls: '3' },
+      { name: 'x', description: 'x', stars: 1, openIssues: Number.MAX_SAFE_INTEGER + 2 }
     ]) {
       assert.equal(
         parseCodingProjects({ repos: [{ name: 'ok', description: 'ok', stars: 0 }, bad] }),
@@ -240,6 +275,14 @@ describe('the Coding Projects feed follows the host', () => {
     assert.deepEqual(
       parseCodingProjects({ repos: [{ name: 'x', description: '', stars: null }] }),
       { repos: [{ name: 'x', description: '', stars: null }] }
+    );
+    // A reported zero on either tally is data and is carried through, which is
+    // what keeps the refusals above from being a blanket "no tallies".
+    assert.deepEqual(
+      parseCodingProjects({
+        repos: [{ name: 'x', description: '', stars: null, openIssues: 0, openPulls: 2 }]
+      }),
+      { repos: [{ name: 'x', description: '', stars: null, openIssues: 0, openPulls: 2 }] }
     );
   });
 });

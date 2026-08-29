@@ -194,8 +194,17 @@ export interface CodingProjectRow {
   /* Null means the host reported no tally, rendered as a dash. */
   stars: number | null;
   /* The last push, as an ISO instant; absent when unreported. The page turns
-   * it into a sentence against the reader's own clock. */
+   * it into a sentence against the reader's own clock, and ORDERS the feed by
+   * it (issue 252). */
   pushedAt?: string;
+  /* Open issues and open pull requests. ABSENT rather than null when unknown,
+   * because the producer omits the keys — which is exactly what makes them
+   * additive: a payload written before they existed decodes here unchanged and
+   * renders unchanged. Absent draws a dash; a reported zero is a figure and
+   * draws as one. They arrive and leave together, because the issue tally
+   * exists only as a subtraction against the pull-request one. */
+  openIssues?: number;
+  openPulls?: number;
   /* True when this row came from the shipped snapshot rather than a live
    * read, exactly as `recorded` marks a token-usage tile. */
   recorded?: boolean;

@@ -716,6 +716,8 @@ func TestVisitorReadsTheProjectFeed(t *testing.T) {
 				Description string `json:"description"`
 				Stars       *int64 `json:"stars"`
 				PushedAt    string `json:"pushedAt"`
+				OpenIssues  *int64 `json:"openIssues"`
+				OpenPulls   *int64 `json:"openPulls"`
 				Recorded    bool   `json:"recorded"`
 			} `json:"repos"`
 		}
@@ -742,6 +744,15 @@ func TestVisitorReadsTheProjectFeed(t *testing.T) {
 			// and every row says so rather than passing as fresh.
 			if !repo.Recorded {
 				t.Errorf("%s claims a freshness this boot cannot have", repo.Name)
+			}
+			// The open-work pair (issue 252) arrives and leaves TOGETHER, so a
+			// row carrying one figure and not the other is the state this
+			// producer refuses to construct — and one it must never serve.
+			if (repo.OpenIssues == nil) != (repo.OpenPulls == nil) {
+				t.Errorf("%s serves half of a derived pair: issues=%v pulls=%v", repo.Name, repo.OpenIssues, repo.OpenPulls)
+			}
+			if repo.OpenIssues == nil {
+				t.Errorf("%s serves no open-work tallies where the snapshot records both", repo.Name)
 			}
 			if repo.Stars == nil {
 				t.Errorf("%s serves a null tally where the snapshot records one", repo.Name)

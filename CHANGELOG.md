@@ -7,6 +7,37 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.61] - 2026-08-29
+
+### Added
+- `snaraj/dotfiles` joins the tracked repository set — a configured source with
+  its own snapshot row and captured fallback row — so the section can name the
+  repository the owner had just pushed to and it could not.
+- Open-issue and open-pull-request tallies per repository, told with icons.
+  Both are OPTIONAL additions inside `coding-projects/v1`, so the kind version
+  is unchanged and a payload written before them still decodes and renders.
+  They are derived rather than reported: the repository document's open tally
+  counts pull requests as issues, so a second bounded document supplies the
+  pull-request count and the issue figure is the difference. The pair is
+  refused together — no second read, an out-of-range figure, or a subtraction
+  that goes negative under read skew leaves both absent — and an absent tally
+  renders as a dash, never as a zero. The second read cannot cost a row: it
+  fails to two dashes beside a live description.
+- The terse counter rendering (`EntryCount.value`): a glyph and a bare figure
+  on the card, with the complete sentence ("3 open pull requests") in a clipped
+  span every screen reader still reads. The figure is always drawn, so no value
+  is carried by glyph or colour alone.
+
+### Changed
+- The Coding Projects feed is ordered by last push, most recent first, derived
+  at render time from each row's instant — live where the panel vouched for
+  one, captured otherwise — rather than from the order the rows happen to be
+  written in. The order therefore holds for a live payload, for a payload whose
+  rows fell back to the shipped snapshot, and for no payload at all.
+- The captured fallback rows and the shipped snapshot were re-read on
+  2026-08-29: commit totals, star tallies, push instants, and one description
+  the owner had changed on the host.
+
 ## [0.1.60] - 2026-08-28
 
 ### Removed
