@@ -37,6 +37,33 @@
         "openIssues": 0,
         "openPulls": 0,
         "recorded": true
+      },
+      {
+        "name": "foobar2000-lyricsbuddy",
+        "description": "LyricsBuddy is a native x64 lyrics panel for foobar2000. It combines a Spotify-inspired reading experience with local-first lyric discovery, precise LRC synchronization, safe customization, and an extensible provider model.",
+        "stars": 2,
+        "pushedAt": "2026-08-07T00:19:49Z",
+        "openIssues": 0,
+        "openPulls": 0,
+        "recorded": true
+      },
+      {
+        "name": "foobar2000-library-visualizer",
+        "description": "Library Visualizer is a highly customizable Foobar2000 Component that renders and displays selected music library.",
+        "stars": 2,
+        "pushedAt": "2026-08-07T00:16:32Z",
+        "openIssues": 0,
+        "openPulls": 0,
+        "recorded": true
+      },
+      {
+        "name": "foobar2000-album-visualizer",
+        "description": "Album Visualizer is a highly customizable foobar2000 component that displays the complete track list for either the album currently playing or the album selected in a playlist or Media Library view.",
+        "stars": 2,
+        "pushedAt": "2026-08-02T05:49:53Z",
+        "openIssues": 0,
+        "openPulls": 0,
+        "recorded": true
       }
     ]
   }

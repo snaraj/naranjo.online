@@ -7,6 +7,26 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.63] - 2026-08-29
+
+### Fixed
+- The three `foobar2000-*` repositories return to the Coding Projects panel.
+  0.1.62 removed them on a misread of the owner's ruling; the owner has
+  corrected it — "thats not what I said, I wanted the previous foobar ones
+  there" (issue #256) — so the roster is the previous seven again. The rows
+  are restored byte-for-byte from the 0.1.61 tree in all three places the
+  roster is written down: the configured sources (seven sources, fourteen
+  endpoints — a refresh round is 14 requests again), the shipped snapshot,
+  and the frontend's captured fallback rows. Everything else 0.1.61 and
+  0.1.62 added stays: the live open-work tallies with their glyphs,
+  push-instant ordering, and the three-way roster parity pin — which is
+  roster-agnostic and now pins seven. The counts and prose 0.1.62 swept to
+  four follow the set back to seven, and the commit-slug validator's
+  digits-inside-a-word case returns from the synthetic
+  `slug2000-with-digits` to the real `foobar2000-lyricsbuddy`. 0.1.62's
+  changelog entry above is left exactly as written: that release really did
+  ship the removal.
+
 ## [0.1.62] - 2026-08-29
 
 ### Removed

@@ -1,12 +1,12 @@
 /* The Projects section's information module (owner directive, issue 134; live
- * since issue 242): the four repositories this section tracks, most recently
+ * since issue 242): the seven repositories this section tracks, most recently
  * pushed first.
  *
- * FOUR, and not "the owner's public repositories" — the distinction is the
- * owner's ruling of 2026-08-29 (issue 254) and it is the reason this list is
- * curated rather than derived. The account holds more than these; the ones
- * that belong here are the ones this section is about. Adding a repository is
- * an owner decision expressed as a row below AND a source in
+ * SEVEN, and curated rather than derived: the roster is the owner's call, not
+ * a query that sweeps an account. PR #255 read the owner's 2026-08-29 ruling
+ * as dropping the foobar2000-* trio; the owner corrected that reading (issue
+ * 256) — those three stay. Adding or removing a repository is an owner
+ * decision expressed as a row below AND a source in
  * `internal/panels/config/fetch.json`, never a query that sweeps an account.
  *
  * IT IS NO LONGER A CAPTURE. It was one, deliberately: `PANELS_REFRESH` was
@@ -134,6 +134,30 @@ export const projects: readonly Project[] = [
     commits: 9,
     stars: 0,
     pushedAt: '2026-08-29T10:13:44Z'
+  },
+  {
+    name: 'foobar2000-lyricsbuddy',
+    description:
+      'LyricsBuddy is a native x64 lyrics panel for foobar2000. It combines a Spotify-inspired reading experience with local-first lyric discovery, precise LRC synchronization, safe customization, and an extensible provider model.',
+    commits: 1,
+    stars: 2,
+    pushedAt: '2026-08-07T00:19:49Z'
+  },
+  {
+    name: 'foobar2000-library-visualizer',
+    description:
+      'Library Visualizer is a highly customizable Foobar2000 Component that renders and displays selected music library.',
+    commits: 20,
+    stars: 2,
+    pushedAt: '2026-08-07T00:16:32Z'
+  },
+  {
+    name: 'foobar2000-album-visualizer',
+    description:
+      'Album Visualizer is a highly customizable foobar2000 component that displays the complete track list for either the album currently playing or the album selected in a playlist or Media Library view.',
+    commits: 1,
+    stars: 2,
+    pushedAt: '2026-08-02T05:49:53Z'
   }
 ];
 
@@ -186,10 +210,9 @@ export function updatedLabel(pushedAt: string, now: number = Date.now()): string
  * monochrome render or a screen reader has to convey the same thing the icon
  * does (dataviz floor). The plural is derived rather than assumed — "1
  * commits" is the kind of small lie a page tells when nobody executes its
- * labels. No row in the narrowed set of four happens to be one today (issue
- * 254), which is exactly why the derivation stays and is executed by test
- * against synthetic rows rather than resting on whichever figures the tracked
- * repositories carry this week.
+ * labels, and two of the seven rows genuinely are one commit today. The
+ * derivation is still executed by test against synthetic rows rather than
+ * resting on whichever figures the tracked repositories carry this week.
  *
  * A star tally the host did not report renders as an explicit unknown, never
  * as a zero: those are different claims, and only one of them is true. */
