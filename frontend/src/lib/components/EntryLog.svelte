@@ -222,29 +222,36 @@
     gap: var(--feed-gap);
   }
 
-  /* Deterministic by viewport, never by content (issue 188). The previous
-     rule was flex-wrap: a short title happened to leave room for the
-     counters on the same line while a long title pushed them below — the
-     identical card shape reading differently card to card, which is what
-     the owner's screenshot caught (naranjo.online/lidersea.com inline,
-     website-infrastructure/foobar2000-* wrapped, same viewport). Below
-     --breakpoint-card-meta the row is a column outright: title, then
-     counters, always two rows. At or above it the row is flex, nowrap,
-     always one row. No title's length enters the decision either side. */
+  /* Deterministic by viewport, never by content (issue 188), and since the
+     owner's 2026-08-29 alignment ruling ("even if the information presented
+     is different it should not differ in the layout") ONE shape at every
+     width: the title on its own line, the counters on the line below. The
+     inline title/counters row this rule used to flip to above
+     --breakpoint-card-meta is gone, because it is what made cross-card
+     alignment impossible — each card's counters started wherever its own
+     title ended, so the same five columns landed at seven different x
+     positions (MEASURED at 1440px: first cells at 474..509px across the
+     seven cards, one card's fifth cell wrapped to a second line). With the
+     counters on their own full-width line, the columns below can align
+     card to card, and no title's length enters any placement decision. */
   .entry-head {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: var(--card-meta-gap);
-  }
-
-  @media (min-width: 30rem) {
-    .entry-head {
-      flex-direction: row;
-      flex-wrap: nowrap;
-      align-items: center;
-      justify-content: space-between;
-    }
+    /* The head is the counters' SIZE CONTAINER, and this declaration does
+       two load-bearing jobs at once. It lets the table below switch on the
+       width the card actually has — the reader can narrow the reading
+       column far under any viewport breakpoint (ColumnHandles), and a
+       viewport query rendered the 788px table into a 288px card — and its
+       inline-size containment is what stops the five fixed tracks
+       propagating as min-content into the page column itself: MEASURED
+       before it, a 20rem column was forced out to 806px and the document
+       scrolled sideways in every engine, WebKit surviving every other
+       cure. An engine without container queries never matches the block
+       below and keeps the ledger, which is degradation to less, not to
+       broken. */
+    container-type: inline-size;
   }
 
   .entry-heading {
@@ -343,14 +350,50 @@
     font-style: italic;
   }
 
+  /* THE COUNTERS ARE A TABLE THAT HAPPENS TO SIT ON SEVEN CARDS (owner,
+     2026-08-29: "the columns of information are not aligned... it should not
+     differ in the layout, makes it look uneven"). Cards are separate DOM
+     containers, so cross-card alignment has to be deliberate: every card's
+     row is a grid over the SAME fixed tracks — --entry-count-columns, one
+     token, sized in styles.css from the widest realistic content per column —
+     stretched to the card's full width, so column N starts at the identical
+     x on every card whatever figures or words it holds ("105" against "9",
+     a dash against a zero, "today" against "27 days ago"). space-between
+     hands the leftover to the gaps BETWEEN columns, identically on every
+     card, so the row also fills the card to its right edge (the no-dead-space
+     rule) without any track depending on its own content.
+
+     Below --breakpoint-entry-columns the tracks do not fit, and the fallback
+     is the same answer stacked cards already give: a single-column ledger,
+     one counter per line, every line starting at the card's edge — aligned
+     across cards by construction, no wrap deciding anything. The one row
+     that outgrows a narrowed reading column scrolls inside itself (the
+     page's standing rule for wide content) rather than bending the card. */
   .entry-counts {
     margin: 0;
     padding: 0;
     list-style: none;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
+    /* A PERCENTAGE, and it is the load-bearing declaration (MEASURED): the
+       row's five fixed tracks total 788px with their gaps, and a grid's
+       min-content contribution is its tracks', so a plain stretch forced
+       the whole page column out to 806px whenever the reader narrowed it
+       below the table — the document scrolled sideways by the difference
+       (1286 against a 1280 viewport at a 20rem column token). A percentage
+       size contributes ZERO to intrinsic sizing, so the column keeps
+       whatever width its own token says and the row scrolls inside itself
+       instead — the same trap the gallery's dot row records in
+       MediaGallery.svelte, met on the other axis. */
+    inline-size: 100%;
+    display: grid;
     gap: var(--card-meta-gap);
+  }
+
+  @container (min-width: 50rem) {
+    .entry-counts {
+      grid-template-columns: var(--entry-count-columns, 10.5rem 8.25rem 14rem 6.75rem 6.25rem);
+      justify-content: space-between;
+      overflow-x: auto;
+    }
   }
 
   /* Wrapping, so the provenance mark above has somewhere to go on a narrow
@@ -368,6 +411,21 @@
     font-size: var(--card-meta-size);
     font-variant-numeric: tabular-nums;
     color: var(--card-meta-ink);
+  }
+
+  /* Inside a fixed track a counter holds ONE line — a provenance mark
+     wrapping under its figure on one card is the unevenness coming back by
+     another route (MEASURED before this override: "updated 22 days ago ·
+     recorded" dropped its mark to a second line at 1440px). Below the
+     breakpoint the wrap above stays: a ledger line has the whole card and
+     never needs it, but an enlarged base font still gets a second line
+     rather than a clipped one. Declared AFTER the base rule because the two
+     are equal in specificity and order is what decides — an earlier draft
+     put this above it and the base won. */
+  @container (min-width: 50rem) {
+    .entry-count {
+      flex-wrap: nowrap;
+    }
   }
 
   .entry-count-text {

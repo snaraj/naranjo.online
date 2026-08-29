@@ -7,6 +7,36 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.64] - 2026-08-29
+
+### Fixed
+- The gallery's prev/next buttons return for the web browser (owner report:
+  "on the web browser, I lost the ability to move through the images/videos,
+  only on full screen I can do it. bring back the buttons but chose to hide
+  them by default in mobile"). Diagnosis, measured on the live origin and the
+  local binary: the row chevrons still fired, but a mouse has no working drag
+  on a still — the native image drag takes the gesture after one pointermove
+  and the browser sends `pointercancel` — and the one remaining control was a
+  12px chevron between the dots. The pair is now two 44px disc buttons on the
+  stage itself, above whichever surface the item mounts (a playing film
+  included, so leaving a film never requires the lightbox), wired through the
+  same `goTo()` every other control uses so paging away from a playing film
+  still hands its surface back. Hidden by default and shown only where
+  `(hover: hover) and (pointer: fine)` matches, so a phone keeps swipe plus
+  dots; the retired row chevrons and their token leave with the change.
+- The Coding Projects stat columns align across all seven cards (owner
+  report: "the columns of information are not aligned, even if the
+  information presented is different it should not differ in the layout,
+  makes it look uneven"). Every card's counters now hold their own full-width
+  line under the title and render as a grid over one shared five-track token
+  (`--entry-count-columns`), so column N starts at the identical x on every
+  card whatever figures or words it holds, with the surplus distributed to
+  the gaps so the row fills the card to its right edge. Below the new
+  `--breakpoint-entry-columns` (56rem) the counters are a single-column
+  ledger, one counter per line, aligned across cards by construction; the
+  30rem inline title/counters row and its `--breakpoint-card-meta` token
+  retire with the layout that needed them.
+
 ## [0.1.63] - 2026-08-29
 
 ### Fixed

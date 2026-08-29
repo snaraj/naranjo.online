@@ -209,6 +209,39 @@
      than a still. Once the player has the surface the arrows are the
      player's, which is the same structural answer rule 4 gave.
 
+  OWNER 2026-08-29 — "on the web browser, I lost the ability to move through
+  the images/videos, only on full screen I can do it. bring back the buttons
+  but chose to hide them by default in mobile."
+
+  The diagnosis first, because the obvious reading — broken handlers — is
+  wrong, MEASURED against the live 0.1.63 origin and the local binary alike:
+  the control row's two chevrons still fired on every click, including from a
+  film and while one was playing. What a desktop reader actually has is an
+  affordance hole with three measured sides. A mouse drag across a still is
+  taken by the browser's native image drag before the gesture can prove
+  itself horizontal (pointerdown, one move, dragstart, pointercancel — and
+  lib/gesture.ts is RIGHT to treat that cancel as authoritative), so the
+  strip's one direct gesture does not exist on a mouse. The arrow keys work
+  only once focus is inside the gallery, and the click that puts it there
+  opens the lightbox — which has its own arrow keys, hence "only on full
+  screen I can do it". And the one control that remained was a 12px chevron
+  (owner directive 2026-08-28, aimed at a phone's control row) tucked between
+  the dots, which the owner's own report demonstrates no longer reads as a
+  button at all.
+
+  So the buttons come back where they were before issue 241 moved them — ON
+  the work, flanking the stage — and the phone half of that issue's case is
+  answered by capability rather than relocation: the pair is hidden by
+  default and shown only where hover and a fine pointer are both reported
+  (lib/tooltip.ts's finePointerQuery, the site's one capability split), so a
+  phone keeps swipe plus dots and never pays the 116px the old flanking
+  arrows cost it. The control row's own chevrons leave with the change —
+  two pairs of the same control on a desktop is chrome about chrome, and on
+  a phone the owner already ruled "I only like the dots". Navigation is the
+  same one path everything else uses: the pair calls previous()/next(),
+  which run through goTo(), so paging away from a playing film still takes
+  the surface back exactly as the issue-243 block above requires.
+
   Each is stated again beside the declaration that carries it. -->
 <script lang="ts">
   import { tick } from 'svelte';
@@ -321,9 +354,11 @@
      never stolen: the stage declares `touch-action: pan-y`, the binding claims
      nothing until a drag has proven itself horizontal, and a `pointercancel`
      from the browser ends the gesture rather than contesting it. And every
-     gesture owes a non-gesture equivalent, so the arrows stay, the dots below
-     are real buttons, and arrow keys drive the frame — the swipe is an
-     ADDITION to the ways through this gallery, never the only one. */
+     gesture owes a non-gesture equivalent: the dots below are real buttons
+     on every device, arrow keys drive the frame, and a fine-pointer device —
+     where this drag structurally does not exist, see the 2026-08-29 header
+     block — gets the stage pair as well. The swipe is an ADDITION to the
+     ways through this gallery, never the only one. */
   let dragX = $state(0);
   let settling = $state(false);
   let stageEl: HTMLDivElement | undefined = $state();
@@ -683,6 +718,63 @@
             </button>
           </div>
         {/if}
+        {#if total > 1}
+          <!-- THE DESKTOP PAIR (owner, 2026-08-29): real prev/next controls on
+            the work itself, for the reader whose device has no working drag.
+            Hidden by default and shown only where hover and a fine pointer are
+            both reported — the same capability split lib/tooltip.ts draws — so
+            a phone keeps swipe and dots. They sit at the STAGE's own edges,
+            not the frame's: the offset is the same one expression the stage's
+            width is built from, so the pair cannot drift away from the work
+            the way the pre-241 arrows drifted 212px from it. Rendered after
+            both stages so they paint above whichever surface the item mounts —
+            including a playing film's, because navigating away from one must
+            never require the lightbox or the player's own chrome. Both go
+            through previous()/next(), so a press pages away from a playing
+            film AND hands its surface back (goTo clears the key). -->
+          <button
+            type="button"
+            class="gallery-nav"
+            data-gallery-nav="previous"
+            onclick={previous}
+            onkeydown={onFrameKeydown}
+            aria-label={`Previous ${itemNoun(items[previousIndex])}`}
+          >
+            <span class="gallery-nav-disc">
+              <svg class="gallery-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <path
+                  d="M14.5 6l-6 6 6 6"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </span>
+          </button>
+          <button
+            type="button"
+            class="gallery-nav"
+            data-gallery-nav="next"
+            onclick={next}
+            onkeydown={onFrameKeydown}
+            aria-label={`Next ${itemNoun(items[nextIndex])}`}
+          >
+            <span class="gallery-nav-disc">
+              <svg class="gallery-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <path
+                  d="M9.5 6l6 6-6 6"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </span>
+          </button>
+        {/if}
       </div>
     {/snippet}
   </FeedCard>
@@ -702,31 +794,17 @@
     is not a keyboard affordance, it is seven controls taken away. -->
   <div class="gallery-position">
     <p class="gallery-count" aria-live="polite">{positionLabel(index)}</p>
-    <!-- ONE CONTROL ROW, UNDER THE WORK (issue 241). The arrows used to flank
-      the stage inside the frame, and both halves of that cost something the
-      owner reported. On a phone they took 116px of a 288px card — arrows,
-      gaps and nothing else — which left a film 172px wide and 97px tall,
-      SMALLER than the ~48px control bar the player draws inside it. On a
-      desktop they sat at the far edges of a 1fr track, 212px from the artwork
-      they belong to, which is the "content stopping short of its container"
-      shape the owner's no-dead-space rule names. Below the work they are
-      adjacent to it at every width, and the stage gets the frame's whole
-      inline size back. Nothing is taken away: the same two buttons, the same
-      44px targets, the same wrap-around, now beside the dots that already
-      carried the position. -->
+    <!-- THE ROW IS THE DOTS' ALONE (owner, 2026-08-29). Issue 241 put two
+      chevrons here, beside the dots, after they left the frame — and shrunk
+      to 12px by the 2026-08-28 directive they stopped reading as buttons at
+      all, which is the "bring back the buttons" report in the header. The
+      pair is back on the stage as .gallery-nav, desktop-only by capability;
+      what this row keeps is the position affordance the swipe owes (issue
+      219) — the dots, each a real button, the gesture's tap-and-keyboard
+      equivalent on every device — inside the same scrolling container issue
+      241 built, so nine 44px targets still never wrap or take the page
+      sideways. -->
     <div class="gallery-controls">
-      <button type="button" class="icon-button" onclick={previous} aria-label={`Previous ${itemNoun(items[previousIndex])}`}>
-        <svg class="gallery-glyph" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
-          <path
-            d="M14.5 6l-6 6 6 6"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
-      </button>
       {#if total > 1}
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <div
@@ -750,18 +828,6 @@
           {/each}
         </div>
       {/if}
-      <button type="button" class="icon-button" onclick={next} aria-label={`Next ${itemNoun(items[nextIndex])}`}>
-        <svg class="gallery-glyph" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
-          <path
-            d="M9.5 6l6 6-6 6"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
-      </button>
     </div>
   </div>
 
@@ -881,21 +947,93 @@
     inline-size: 100%;
     aspect-ratio: 1;
     max-block-size: var(--gallery-stage-size, 28rem);
+    /* The containing block for the desktop pair below (owner, 2026-08-29),
+       and the ONE expression of the stage's inline size. It is a custom
+       property here rather than a length in .gallery-stage because two
+       elements now need the identical number — the stage to BE that wide,
+       and each nav button to sit at the edge of that width — and two copies
+       of the expression is how the pair would drift off the work the way the
+       pre-241 arrows did. `100%` resolves against this element for every
+       consumer, since stage and buttons are all its children. */
+    position: relative;
+    --gallery-stage-inline: min(100%, calc(var(--gallery-stage-size, 28rem) * var(--gallery-stage-aspect, 1)));
   }
 
   .gallery-glyph {
     color: inherit;
   }
 
-  /* THE PAINTED ARROW, and only the gallery's own (owner directive,
-     2026-08-28: the controls should be smaller). The hit box is
-     .icon-button's own 44px and is untouched — what shrinks is the ink
-     inside it, which is the same trade the lightbox close mark already made.
-     Scoped to the control row's direct children so the close mark, a
-     .gallery-glyph too, keeps its own size. */
-  .gallery-controls > .icon-button .gallery-glyph {
-    inline-size: var(--gallery-arrow-size, 0.75rem);
-    block-size: var(--gallery-arrow-size, 0.75rem);
+  /* THE DESKTOP PAIR (owner, 2026-08-29): hidden by DEFAULT — that is the
+     owner's "hide them by default in mobile" made structural, since a device
+     that matches no media query gets no buttons and loses nothing it had —
+     and shown only where hover and a fine pointer are both reported, the
+     same split lib/tooltip.ts's finePointerQuery draws. On such a device the
+     strip's drag does not exist (the native image drag takes a mouse's
+     before it can prove itself horizontal — MEASURED, see the header), so
+     this pair is the primary navigation there, not decoration: vertically
+     centred on the stage, at its edges, above whichever surface the item
+     mounts, playing film included. */
+  .gallery-nav {
+    display: none;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .gallery-nav {
+      display: grid;
+      place-items: center;
+      position: absolute;
+      inset-block-start: 50%;
+      transform: translateY(-50%);
+      /* The stage and the frame share a vertical centre — the stage is the
+         centred grid item — so half the frame is half the stage, and the
+         pair rides the work, not the track. */
+      min-inline-size: 2.75rem;
+      min-block-size: 2.75rem;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      cursor: pointer;
+      color: var(--gallery-nav-ink, white);
+    }
+
+    /* At the STAGE's edge, not the frame's: the frame's surplus is split
+       evenly by the auto margins that centre the stage, so half of
+       (100% − stage) IS the stage's start edge, from the same expression
+       the stage is sized by. The inset token nudges the disc inward so it
+       overlaps the work the way every inline-player control does. */
+    .gallery-nav[data-gallery-nav='previous'] {
+      inset-inline-start: calc((100% - var(--gallery-stage-inline)) / 2 + var(--gallery-nav-inset, 0.375rem));
+    }
+
+    .gallery-nav[data-gallery-nav='next'] {
+      inset-inline-end: calc((100% - var(--gallery-stage-inline)) / 2 + var(--gallery-nav-inset, 0.375rem));
+    }
+  }
+
+  /* The painted disc inside the 44px target — the same trade the play
+     control makes, in the same token grammar, and for the same reason it is
+     not branched by reading mode: it sits on the artwork's own ground in
+     every mode. Translucent at rest so it never becomes the picture; full
+     strength under the pointer or keyboard focus. */
+  .gallery-nav-disc {
+    display: grid;
+    place-items: center;
+    inline-size: var(--gallery-nav-size, 2.25rem);
+    block-size: var(--gallery-nav-size, 2.25rem);
+    border-radius: 999px;
+    background: var(--gallery-nav-surface, rgba(0, 0, 0, 0.55));
+    opacity: var(--gallery-nav-rest-opacity, 0.7);
+  }
+
+  .gallery-nav:hover .gallery-nav-disc,
+  .gallery-nav:focus-visible .gallery-nav-disc {
+    opacity: 1;
+  }
+
+  .gallery-nav:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -4px;
+    border-radius: 999px;
   }
 
   /* Issue 202, the owner's "large dead gap on the right". The frame is
@@ -921,8 +1059,10 @@
        (the old cover fit cut the signature off) or drowned them in dead
        side space. A square-ish stage sized by its own token holds portrait
        and landscape work alike; the reservation stays byte-independent
-       exactly as before, just built from the gallery's own two tokens. */
-    inline-size: min(100%, calc(var(--gallery-stage-size, 28rem) * (var(--gallery-stage-aspect, 1))));
+       exactly as before. The expression itself moved up to the frame
+       (2026-08-29) because the desktop pair positions against the same
+       number — one source, two consumers, no drift. */
+    inline-size: var(--gallery-stage-inline, 100%);
     margin-inline: auto;
     /* The reserved box, and the reason nothing on this page moves when the
        photograph lands: the ratio and ceiling are the gallery's own two
@@ -1100,13 +1240,14 @@
     white-space: nowrap;
   }
 
-  /* The control row: the two arrows with the position dots between them,
-     centred under the work. */
+  /* The control row, now the dots' scrolling container alone (owner,
+     2026-08-29): still a full-width centred flex row, because the dot row's
+     own shrink arithmetic below is written against exactly this shape. The
+     gap token left with the arrows it separated. */
   .gallery-controls {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: var(--gallery-controls-gap, 0.25rem);
     inline-size: 100%;
   }
 
@@ -1142,10 +1283,11 @@
        automatic minimum, not the contribution) and neither does a zero
        flex-basis (engines read the WIDTH property for the contribution); a
        definite zero inline size does, in every engine.
-       It is then grown back: flex-grow takes the space the arrows leave, and
-       the max-content ceiling stops it there — so a row that fits is exactly
-       as wide as its marks and the arrows stay beside them, while a row that
-       does not fit takes what there is and scrolls the rest. */
+       It is then grown back: flex-grow takes the row's whole space now that
+       the chevrons have left it (2026-08-29), and the max-content ceiling
+       stops it there — so a row that fits is exactly as wide as its marks,
+       while a row that does not fit takes what there is and scrolls the
+       rest. */
     inline-size: 0;
     flex-grow: 1;
     max-inline-size: max-content;
