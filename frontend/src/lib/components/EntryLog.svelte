@@ -227,7 +227,7 @@
      counters on the same line while a long title pushed them below — the
      identical card shape reading differently card to card, which is what
      the owner's screenshot caught (naranjo.online/lidersea.com inline,
-     website-infrastructure/foobar2000-* wrapped, same viewport). Below
+     website-infrastructure wrapped, same viewport). Below
      --breakpoint-card-meta the row is a column outright: title, then
      counters, always two rows. At or above it the row is flex, nowrap,
      always one row. No title's length enters the decision either side. */

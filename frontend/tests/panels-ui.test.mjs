@@ -24,6 +24,7 @@ import {
   tally,
   unrankedLabel,
 } from '../src/lib/bossLog.ts';
+import { projects } from '../src/lib/projects.ts';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
@@ -836,6 +837,62 @@ test('the boss list is derived from the upstream, never enumerated in config', {
       fetchConfig.bossLog.excludeActivities.length > 0,
     'config must name the NON-bosses, so an unrecognized upstream entry is preserved'
   );
+});
+
+/* The Coding Projects roster is written down in THREE places that can drift
+ * apart in silence, and the owner's ruling of 2026-08-29 (issue 254) is about
+ * exactly that set — so this is the pin that makes "exactly these four,
+ * everywhere" enforceable rather than a thing somebody remembered:
+ *
+ *   - `internal/panels/config/fetch.json` decides which repositories are READ;
+ *   - `internal/panels/snapshots/coding-projects.json` decides which rows are
+ *     SERVED on a cold boot or a failed round;
+ *   - `frontend/src/lib/projects.ts` decides which are RENDERED, and its list
+ *     fixes each row's identity, so a name only it lacks is a repository the
+ *     origin fetches every cycle and no reader ever sees.
+ *
+ * That asymmetry is why the drift is silent: removing a repository from two of
+ * the three files leaves no visible trace. A leftover source costs a request
+ * per round forever; a missing frontend row costs the reader the repository
+ * entirely. Neither turns anything red without this.
+ *
+ * The check is SET equality in both directions and the failure names the file
+ * that has to change, in the parity-pin style AGENTS.md asks for. ORDER is
+ * deliberately not compared: the feed sorts by push instant (issue 252), so
+ * pinning the three files to one order would pin a fact none of them owns. */
+test('the tracked repository set is the same in config, snapshot and frontend', {
+  skip: reducedContextNote,
+}, async () => {
+  const fetchConfig = await read('../../internal/panels/config/fetch.json').then(JSON.parse);
+  const snapshot = await read('../../internal/panels/snapshots/coding-projects.json').then(
+    JSON.parse
+  );
+  const configured = fetchConfig.codingProjects.sources.map((source) => source.name).sort();
+  const shipped = snapshot.data.repos.map((repo) => repo.name).sort();
+  const rendered = projects.map((project) => project.name).toSorted();
+
+  assert.deepEqual(
+    configured,
+    rendered,
+    'config/fetch.json and frontend/src/lib/projects.ts disagree about which repositories this panel tracks; a name only the config carries is fetched every round and rendered to nobody'
+  );
+  assert.deepEqual(
+    shipped,
+    rendered,
+    'snapshots/coding-projects.json and frontend/src/lib/projects.ts disagree; a snapshot row with no frontend row is dead weight in the served payload, and a frontend row with no snapshot row falls back to nothing'
+  );
+  // Non-vacuity: three empty lists would satisfy both assertions above.
+  assert.equal(rendered.length, 4, 'the owner-ruled set is four repositories');
+  // Every source carries BOTH documents. A source that lost its pullsEndpoint
+  // in an edit still serves a live row — with two permanent dashes where the
+  // open-work counts belong — which is the quietest way this panel can
+  // degrade, so it is pinned rather than left to be noticed.
+  for (const source of fetchConfig.codingProjects.sources) {
+    assert.ok(
+      typeof source.pullsEndpoint === 'string' && source.pullsEndpoint.length > 0,
+      `${source.name} names no pullsEndpoint, so its open-work counts would be a permanent dash`
+    );
+  }
 });
 
 test('the origin serves the complete boss table', { skip: reducedContextNote }, async () => {

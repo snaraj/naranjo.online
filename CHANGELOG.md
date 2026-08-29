@@ -7,6 +7,35 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.62] - 2026-08-29
+
+### Removed
+- The three `foobar2000-*` repositories leave the Coding Projects panel (owner
+  ruling): the section tracks exactly `naranjo.online`,
+  `website-infrastructure`, `lidersea.com` and `dotfiles`. Removed from the
+  configured sources — six endpoints, since each source names a repository
+  document and a pull-request tally document — from the shipped snapshot, and
+  from the frontend's captured fallback rows. A round is now 8 requests rather
+  than 14. Changelog history above still names them, and is left alone: those
+  releases really did track them.
+
+### Added
+- A parity pin over the three files that each write the roster down —
+  configured sources, shipped snapshot, frontend fallback rows. They could
+  drift apart in silence: only the frontend list is rendered, so a repository
+  left in the config alone is fetched every round and shown to nobody, and one
+  left in the frontend alone falls back to nothing. Set equality in both
+  directions, with each failure naming the file that has to change.
+
+### Changed
+- The prose that reached for a `foobar2000-*` title as its example of a long
+  one, and the counts that assumed a seven-row section: the rendering lane's
+  card count, the repository-address pin, and two comments whose arithmetic
+  ("two of the six rows carry a single commit") stopped being true with the
+  set. The commit-slug validator keeps a digits-inside-a-word case, written
+  synthetically now, because its subject is the character set rather than the
+  roster.
+
 ## [0.1.61] - 2026-08-29
 
 ### Added
