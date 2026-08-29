@@ -351,6 +351,41 @@ export async function loadPanel<Data = unknown>(
  * ETags. */
 export const panelRefreshIntervalMs = 60_000;
 
+/* panelsPendingAttribute is where the page says how many mounted panels have
+ * not yet received their FIRST envelope (issue 210).
+ *
+ * It is an honest state rather than test scaffolding, and the distinction
+ * matters because the attribute is read by a lane. A panel-bound block renders
+ * nothing at all until its envelope arrives, and two of the three render a
+ * loading face and then replace it — so between mount and arrival the document
+ * is genuinely mid-answer, and until now it had no way to say so. Anything
+ * that measures this page has to know the difference between "nothing is
+ * happening yet" and "nothing is happening any more", and a height that has
+ * paused cannot tell them apart: the rendering lane that snapshotted in that
+ * gap blamed a reading-mode swap for a panel's own 1071px of growth.
+ *
+ * FIRST envelope only. A background refresh an hour later is not the page
+ * still loading, and counting it would make the attribute mean "a request is
+ * open", which is a different and much less useful claim. */
+export const panelsPendingAttribute = 'data-panels-pending';
+
+let panelsPending = 0;
+
+/* Reflected onto the document root, or nowhere at all outside a browser —
+ * this module is executed by the dependency-free runner, which has no
+ * document and needs none. Stamped once at module scope so the attribute
+ * EXISTS from the moment the bundle runs: an absent attribute and a zero one
+ * mean opposite things, and a reader that cannot tell them apart would treat
+ * a page whose panels have not started as a page whose panels have finished. */
+function reflectPanelsPending(): void {
+  if (typeof document === 'undefined') {
+    return;
+  }
+  document.documentElement.setAttribute(panelsPendingAttribute, String(panelsPending));
+}
+
+reflectPanelsPending();
+
 /* PanelWatchHost is the seam between the polling loop and the browser: the
  * transport, the timer, and the page's visibility state. Production binds it
  * to the globals; tests inject fakes and drive the loop by hand, so nothing
@@ -428,6 +463,22 @@ export function watchPanel<Data = unknown>(
   let stopped = false;
   let inFlight = false;
   let pending: Promise<void> = Promise.resolve();
+  /* This panel joins the pending count the moment it is watched and leaves it
+     on its first delivery — or on stop(), because a panel torn down before it
+     ever answered is no longer something the page is waiting for. `settled`
+     makes both exits idempotent, so the count can never drift below zero or
+     be decremented twice by a stop that races its own delivery. */
+  let settled = false;
+  const settle = (): void => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    panelsPending -= 1;
+    reflectPanelsPending();
+  };
+  panelsPending += 1;
+  reflectPanelsPending();
   const read = (force: boolean): Promise<void> => {
     if (stopped) {
       return Promise.resolve();
@@ -443,6 +494,12 @@ export function watchPanel<Data = unknown>(
       .catch(() => unavailablePanel(id) as PanelEnvelope<Data>)
       .then((envelope) => {
         inFlight = false;
+        // Settled on ARRIVAL, whatever arrived: a refused fetch delivers an
+        // unavailable envelope, the block renders it, and the page has
+        // finished waiting for this panel exactly as much as if it had
+        // succeeded. Counting only successes would leave a broken origin
+        // looking like a page that never finished loading.
+        settle();
         if (!stopped) {
           onEnvelope(envelope);
         }
@@ -455,6 +512,7 @@ export function watchPanel<Data = unknown>(
   const watcher: PanelWatcher = Object.assign(
     () => {
       stopped = true;
+      settle();
       live.delete(watcher);
       host.cancel(handle);
       unsubscribe();

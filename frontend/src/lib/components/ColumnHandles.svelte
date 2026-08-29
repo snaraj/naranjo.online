@@ -11,9 +11,10 @@
     columnWidthValue,
     documentHost,
     dragColumnRem,
+    frameDeps,
     railsFit,
-    railsMediaQuery,
     readColumnTokens,
+    watchRails,
     writeStoredColumn,
     type ColumnBounds,
     type ColumnDrag,
@@ -79,21 +80,21 @@
     bounds = columnBounds(read, host.viewportPx());
   }
 
-  onMount(() => {
-    const read = readColumnTokens(host);
-    if (read === null) {
-      return;
-    }
-    tokens = read;
-    // The query is BUILT from the tokens, so the script and the stylesheet ask
-    // one question. A literal here would be a second copy free to disagree.
-    const query = window.matchMedia(railsMediaQuery(read));
-    query.addEventListener('change', sync);
-    sync();
-    return () => {
-      query.removeEventListener('change', sync);
-    };
-  });
+  // The whole mount sequence — including what to do when the token layer is
+  // not readable yet — lives in columnWidth.ts and is executed by the
+  // dependency-free runner (issue 153). What used to be here returned early on
+  // an unreadable read and registered nothing, so a starved mount left the
+  // handles permanently absent with no path back.
+  onMount(() =>
+    watchRails(
+      host,
+      frameDeps(),
+      (read) => {
+        tokens = read;
+      },
+      sync
+    )
+  );
 
   // A resize changes the ceiling (the viewport gives the column less room) and
   // can cross the breakpoint in either direction. Re-running the one apply

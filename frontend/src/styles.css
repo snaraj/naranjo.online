@@ -47,7 +47,18 @@
   --palette-light-surface-raised: #efefe8;
   --palette-light-surface-overlay: #e6e6dd;
   --palette-light-border: #d8d8cd;
-  --palette-light-border-strong: #9a9a8e;
+  /* Repainted at issue 138. border-strong is a non-text UI boundary, so WCAG
+     2.2 SC 1.4.11 sets its floor at 3:1 against the surface it sits on, and
+     three of the four palettes were below it — measured against each mode's
+     own card AND its page: light 2.46/2.65, slate 2.77/2.96, sepia 2.79/3.19,
+     with only the neutral dark (3.17/3.57) clearing. Each failing value was
+     re-derived along its OWN channel ratios rather than replaced, so the hue
+     and the temperature of every palette are untouched and only the lightness
+     moved: light steps darker toward its card, the two dark palettes step
+     lighter away from theirs. The four now land in one tight band — 3.14,
+     3.17, 3.22, 3.14 on their cards — which is the point: a card seam that is
+     equally perceivable in every reading mode rather than in one of them. */
+  --palette-light-border-strong: #87877c;
   --palette-light-accent: #3d434f;
   --palette-light-text: #10131a;
 
@@ -70,14 +81,16 @@
   --palette-dark-accent: #a0a0a0;
   --palette-dark-text: #e0e0e0;
 
-  /* Slate: the cool, desaturated navy this site shipped as its only dark.
-     Not one value here is new — it keeps its own id precisely so that
-     replacing the dark mode costs a visitor who preferred it nothing. */
+  /* Slate: the cool, desaturated navy this site shipped as its only dark. It
+     keeps its own id precisely so that replacing the dark mode costs a
+     visitor who preferred it nothing. Exactly ONE value here is no longer the
+     one it shipped with: border-strong, lifted at issue 138 to clear 1.4.11's
+     3:1 (see the note above). Everything else is untouched. */
   --palette-slate-surface: #10131a;
   --palette-slate-surface-raised: #161a23;
   --palette-slate-surface-overlay: #1d222d;
   --palette-slate-border: #2a3040;
-  --palette-slate-border-strong: #566078;
+  --palette-slate-border-strong: #5f6a84;
   --palette-slate-accent: #b9c2d4;
   --palette-slate-text: #f7f7f2;
 
@@ -86,7 +99,7 @@
   --palette-sepia-surface-raised: #28221d;
   --palette-sepia-surface-overlay: #312a25;
   --palette-sepia-border: #3e362f;
-  --palette-sepia-border-strong: #736559;
+  --palette-sepia-border-strong: #7b6d60;
   --palette-sepia-accent: #b79d7e;
   --palette-sepia-text: #f4eaea;
 
@@ -99,15 +112,46 @@
   --palette-brand-orange: #dc8a00;
   --palette-brand-orange-on-light: #8a5600;
 
-  /* Panel status. Shape already distinguishes these states, so color is the
-     redundant channel — it still has to clear 1.4.11's 3:1 as a non-text
-     indicator, which the green does not do on a light surface until it is
-     darkened. Only the OK ink is a token: it is what the usage meter's own
-     fill reads (--usage-meter-ok, UsageTracker.svelte). The unavailable
-     state carries no ink of its own — it is rendered as an explicit
-     unavailable STATE, per the honest-states floor, not as a grey dot. */
+  /* Panel status: the WHOLE traffic-light family, not one third of it
+     (issues 222 and 229). Shape and text already distinguish these states —
+     the meter always prints its own percentage beside the bar — so color is
+     the redundant channel; it still has to clear 1.4.11's 3:1 as a non-text
+     indicator, which is why each ink carries a darkened `-on-light` twin.
+     The three dark palettes share one value per state because their card
+     surfaces sit within a whisker of each other in luminance, and the worst
+     of the three is what was measured.
+
+     Every one of these six was measured against BOTH surfaces a status ink
+     can land on — the panel card (--panel-surface) and the usage tile
+     (--usage-tile-surface, which is the page surface) — and the figure quoted
+     is the worse of the two. Values are named rather than restated, because a
+     hex written twice in this file is a hex that can drift into two, and the
+     dedup pin in tests/experience.test.mjs counts every one of them:
+
+       ok        5.58:1 across the darks   4.43:1 on its own light twin
+       stale     7.00:1 across the darks   4.69:1 on its own light twin
+       critical  4.32:1 across the darks   4.87:1 on its own light twin
+
+     Stale and critical are NEW here, and they exist because the component
+     that needed them was carrying them as raw literals instead. The warning
+     ink used to fall through to --panel-accent — the brand orange, which is
+     a brand mark and not a status — and the critical ink was a bare
+     rgb(208, 59, 59) inside UsageTracker's style block, a palette value in
+     the one place the token floor says a palette value may never live. The
+     stale gold is deliberately a step off that brand orange rather than the
+     same ink: they are close in luminance (1.22:1 between them) and separated
+     by hue, so the redundant channels do the distinguishing exactly as the
+     dataviz floor requires.
+
+     The unavailable state still carries no ink of its own — it is rendered as
+     an explicit unavailable STATE, per the honest-states floor, not as a grey
+     dot. */
   --palette-status-ok: #5eab5e;
   --palette-status-ok-on-light: #2f7d32;
+  --palette-status-stale: #d9a521;
+  --palette-status-stale-on-light: #8f6100;
+  --palette-status-critical: #e05a5a;
+  --palette-status-critical-on-light: #c62828;
 
   /* The contribution ramp: one hue, monotone lightness, five steps. The
      DIRECTION is per-palette and that is the whole point — "steps brighter"
@@ -465,6 +509,26 @@
   --panel-muted: var(--color-accent);
   --panel-accent: var(--color-brand);
   --panel-status-ok: var(--color-status-ok);
+  --panel-status-stale: var(--color-status-stale);
+  --panel-status-critical: var(--color-status-critical);
+  /* The usage meter's three fills, declared HERE rather than left to a
+     var() fallback inside the component (issues 222 and 229). A fallback
+     chain hides a missing token indefinitely — the value still paints, so
+     nothing looks wrong and nothing goes red — which is how --panel-status-
+     stale went a whole release cycle read-but-never-declared and how a raw
+     rgb() literal survived inside a component style block. The meter names
+     its own three slots so a reading mode could repaint the severity ramp
+     without the component learning anything, and so the family pin in
+     tests/experience.test.mjs has a declaration to insist on. */
+  --usage-meter-ok: var(--panel-status-ok);
+  --usage-meter-warning: var(--panel-status-stale);
+  --usage-meter-critical: var(--panel-status-critical);
+  /* The insight bar's own fill. Not a status — it is a SHARE, so it wears the
+     brand accent rather than a severity — but it arrived here by the same
+     route as the three above: read from the component with a fallback chain
+     that ended at a raw rgb() literal. Pointing it at the accent keeps the
+     bar exactly the colour it has always been. */
+  --usage-insight-fill: var(--panel-accent);
   --grid-cell-0: var(--color-grid-0);
   --grid-cell-1: var(--color-grid-1);
   --grid-cell-2: var(--color-grid-2);
@@ -527,6 +591,8 @@
   --color-text: var(--palette-light-text);
   --color-brand: var(--palette-brand-orange-on-light);
   --color-status-ok: var(--palette-status-ok-on-light);
+  --color-status-stale: var(--palette-status-stale-on-light);
+  --color-status-critical: var(--palette-status-critical-on-light);
   --color-grid-0: var(--palette-light-grid-0);
   --color-grid-1: var(--palette-light-grid-1);
   --color-grid-2: var(--palette-light-grid-2);
@@ -606,6 +672,8 @@
     --color-text: var(--palette-dark-text);
     --color-brand: var(--palette-brand-orange);
     --color-status-ok: var(--palette-status-ok);
+    --color-status-stale: var(--palette-status-stale);
+    --color-status-critical: var(--palette-status-critical);
     --color-grid-0: var(--palette-dark-grid-0);
     --color-grid-1: var(--palette-dark-grid-1);
     --color-grid-2: var(--palette-dark-grid-2);
@@ -631,6 +699,8 @@
   --color-text: var(--palette-dark-text);
   --color-brand: var(--palette-brand-orange);
   --color-status-ok: var(--palette-status-ok);
+  --color-status-stale: var(--palette-status-stale);
+  --color-status-critical: var(--palette-status-critical);
   --color-grid-0: var(--palette-dark-grid-0);
   --color-grid-1: var(--palette-dark-grid-1);
   --color-grid-2: var(--palette-dark-grid-2);
@@ -661,6 +731,8 @@
   --color-text: var(--palette-slate-text);
   --color-brand: var(--palette-brand-orange);
   --color-status-ok: var(--palette-status-ok);
+  --color-status-stale: var(--palette-status-stale);
+  --color-status-critical: var(--palette-status-critical);
   --color-grid-0: var(--palette-slate-grid-0);
   --color-grid-1: var(--palette-slate-grid-1);
   --color-grid-2: var(--palette-slate-grid-2);
@@ -685,6 +757,8 @@
   --color-text: var(--palette-sepia-text);
   --color-brand: var(--palette-brand-orange);
   --color-status-ok: var(--palette-status-ok);
+  --color-status-stale: var(--palette-status-stale);
+  --color-status-critical: var(--palette-status-critical);
   --color-grid-0: var(--palette-sepia-grid-0);
   --color-grid-1: var(--palette-sepia-grid-1);
   --color-grid-2: var(--palette-sepia-grid-2);

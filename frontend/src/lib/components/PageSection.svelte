@@ -32,7 +32,18 @@
 <section class="page-section" id={section.id} aria-labelledby={`${section.id}-title`}>
   <h2 class="section-title" id={`${section.id}-title`}>{section.label}</h2>
   {#if section.layout === 'stack'}
-    <div class="panel-stack">
+    <!-- The stack states how many blocks it was given (issue 210). A
+      panel-bound block renders NOTHING until its first envelope arrives, so
+      the difference between this number and the stack's actual child count is
+      the page's own answer to "is anything still on its way" — which is a
+      question the document could not previously be asked. The rendering lanes
+      settle on it instead of on a height that stopped changing for one poll:
+      a height is satisfied by a page that has not started arriving as readily
+      as by one that has finished, and a lane that snapshotted in that gap
+      blamed a reading-mode swap for a panel's own growth. It is inert to
+      layout and to the zero-CLS floor, which is the other reason it is an
+      attribute rather than a class. -->
+    <div class="panel-stack" data-block-count={section.blocks.length}>
       {#each section.blocks as block (block.key)}
         <Block {block} />
       {/each}

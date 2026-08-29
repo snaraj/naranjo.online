@@ -146,7 +146,11 @@ test('the panels are one centered column, not a rail', () => {
   // The stack owns the column width and the gap; panels own neither, so a
   // panel added later cannot pick a width that disagrees with its siblings.
   // The stack renders in PageSection, behind the manifest's one stack layout.
-  assert.match(pageSection, /\{#if section\.layout === 'stack'\}\s*<div class="panel-stack">/);
+  // The stack also STATES how many blocks it holds (issue 210): a panel-bound
+  // block renders nothing until its envelope arrives, so the gap between this
+  // number and the child count is the page's own "still arriving" answer, and
+  // the rendering lanes settle on it instead of on a height that paused.
+  assert.match(pageSection, /\{#if section\.layout === 'stack'\}(?:\s*<!--[\s\S]*?-->)?\s*<div class="panel-stack" data-block-count=\{section\.blocks\.length\}>/);
   assert.match(styles, /\.panel-stack\s*\{[^}]*display:\s*grid/);
   assert.match(styles, /\.panel-stack\s*\{[^}]*gap:\s*var\(--page-stack-gap\)/);
   // The header no longer shares this rule (owner directive, issue 168): it

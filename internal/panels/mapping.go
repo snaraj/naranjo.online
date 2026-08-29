@@ -207,8 +207,16 @@ func calendarPayload(daily []int, total int, first, last time.Time, coverage str
 // payload; serving either number would be picking which of two disagreeing
 // claims to publish.
 func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, error) {
+	// Two decodes, and which one is strict is the point (issue 246, finding
+	// 2). The ENVELOPE is read leniently, because it is the protocol's own
+	// wrapper and the protocol may add top-level siblings to it — `extensions`
+	// above all — that this package never reads a value out of. The PAYLOAD is
+	// read strictly, because it is the shape this package maps field by field
+	// and an unknown field there is drift it has half-understood. Refusing the
+	// whole document for a sibling of `data` would have taken out every
+	// credentialed calendar from the day the upstream added one.
 	var document calendarDocument
-	if err := decodeStrict(raw, &document); err != nil {
+	if err := json.Unmarshal(raw, &document); err != nil {
 		return nil, fmt.Errorf("contribution calendar: %w", err)
 	}
 	if len(document.Errors) > 0 {
@@ -218,7 +226,18 @@ func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, error) {
 		// enter this process's narrative.
 		return nil, fmt.Errorf("contribution calendar: the upstream refused the query with %d error(s)", len(document.Errors))
 	}
-	calendar := document.Data.Viewer.Contributions.Calendar
+	// An answer carrying neither errors nor data is not a calendar. Raw is nil
+	// there and decodeStrict refuses nil, which is the FIRST refusal that
+	// reaches it rather than the only one — the minimum-days floor below
+	// catches an empty calendar too, and a mutation that skipped this decode
+	// for a nil payload still failed there. Both are kept: this one names the
+	// real fault where it happened instead of reporting a calendar that is
+	// merely too short.
+	var data calendarData
+	if err := decodeStrict(document.Data, &data); err != nil {
+		return nil, fmt.Errorf("contribution calendar: %w", err)
+	}
+	calendar := data.Viewer.Contributions.Calendar
 	counts := make(map[string]int, maxCalendarDays)
 	var first, last time.Time
 	dated := 0

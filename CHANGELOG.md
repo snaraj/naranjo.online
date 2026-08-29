@@ -7,6 +7,74 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.58] - 2026-08-28
+
+Eight tracked defects, none of which had ever turned a build red. That is the
+thread running through all of them: a `var()` fallback still paints, so a
+token declared nowhere looks exactly like a token declared correctly; a
+contrast failure looks like a design choice; a settle poll that agrees with
+itself looks like a page that has finished loading; and an atomicity claim
+whose only evidence is the absence of a leftover file is satisfied by a writer
+that never made one. Each fix therefore lands with the assertion that would
+have caught it, and every one of those assertions was run against the exact
+regression it claims to prevent.
+
+### Fixed
+
+- **The card seam is perceivable in every reading mode.** `--color-border-strong`
+  is a non-text UI boundary, so WCAG 2.2 SC 1.4.11 sets its floor at 3:1, and
+  three of the four palettes sat below it — light 2.46:1, slate 2.77:1, sepia
+  2.79:1 against their own cards, with only the neutral dark clearing at
+  3.17:1. Each failing value is re-derived along its own channel ratios, so
+  hue and temperature are untouched and only lightness moved; the four now
+  land in one band at 3.14, 3.17, 3.22 and 3.14. (#138)
+- **A status colour is a declared token again, in all four modes.**
+  `--panel-status-stale` was read by the usage meter and declared nowhere, so
+  its fallback chain ended at the brand accent — a brand mark standing in for
+  a status — and `--usage-meter-critical` ended at a raw `rgb()` literal
+  inside a component, which is the one place the token floor forbids a palette
+  value. The traffic-light family is now complete in the palette layer, each
+  ink with a darkened light-surface twin, every one measured against both the
+  panel card and the usage tile. (#222, #229)
+- **A starved mount recovers instead of losing its handles for good.** The
+  column-handle mount read the token layer once and returned when the read
+  came back empty — registering no media-query listener at all, so a mount
+  that landed before the stylesheet was applied left the drag handles
+  permanently absent with no path back short of a window resize. The whole
+  mount sequence moved into the framework-free module, where an unreadable
+  read is a bounded retry rather than a surrender, and where the recovery is
+  executed by tests rather than described by them. (#153)
+- **The rendering lanes settle on arrival, not on a pause.** Two consecutive
+  agreeing page heights are satisfied by a page that has not started loading
+  as readily as by one that has finished, and a lane that snapshotted in that
+  gap blamed a reading-mode swap for a panel's own 1071px of growth. The page
+  now states how many panels are still waiting for their first envelope, and
+  each stack states how many blocks it holds. (#210)
+- **A probe waits for what it measures.** The full-width strip lane
+  dereferenced a container that can still be absent on a slow emulated
+  device, and the staged route it took down with it reported a second, louder
+  error beside the real one. (#201)
+- **The history store's atomicity is pinned as a mechanism.** The previous
+  assertion checked only that no temporary file was left behind — which a
+  direct, non-atomic write satisfies by never creating one. The store path is
+  now proven never to be opened for writing, and its bytes proven to arrive by
+  a rename from a same-directory sibling. (#237)
+- **An unmeasured share is proven to draw no bar.** The data half was pinned;
+  the render half was not, at any layer, so the width binding could have been
+  replaced by a constant with every suite still green. (#246)
+- **The calendar envelope tolerates what it never reads.** The strict gate
+  covered the whole upstream document, including the transport wrapper — so
+  the first top-level sibling a GraphQL server chose to add would have refused
+  every credentialed calendar from that day on. The wrapper is now read
+  leniently and the payload, which this package maps field by field, is still
+  read strictly. (#246)
+- **The prose-free source sees what the compiler sees.** The comment strip
+  behind the gallery's structural walks removed HTML and block comments but
+  not line comments, so a `//` comment mentioning an element was read as that
+  element. Line comments are now removed where `//` is actually a comment —
+  inside `<script>` — which is what leaves every `https://` in the markup
+  intact. (#246)
+
 ## [0.1.57] - 2026-08-28
 
 The owner's standing directive for this site is that it must not be static

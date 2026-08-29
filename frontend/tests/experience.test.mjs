@@ -2,12 +2,16 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-const [fallback, component, styles, themeRegistry, themeMenu] = await Promise.all([
+const [fallback, component, styles, themeRegistry, themeMenu, blocks] = await Promise.all([
   readFile(new URL('../index.html', import.meta.url), 'utf8'),
   readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/styles.css', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/themes.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/ThemeMenu.svelte', import.meta.url), 'utf8'),
+  // The block layer's own type declarations. The status-ink pin below derives
+  // the meter's severity names from the union declared there rather than
+  // restating them, so the two cannot drift.
+  readFile(new URL('../src/lib/blocks.ts', import.meta.url), 'utf8'),
 ]);
 
 /* Every component in the tree, keyed by file name — markup and scoped style
@@ -445,6 +449,126 @@ test('every reading mode paints panels at a legible contrast', () => {
   }
 });
 
+/* THE STATUS FAMILY, closed as a CLASS rather than as three names (issues
+ * 138, 222, 229).
+ *
+ * Three separate defects arrived by the same route and are answered together
+ * here. --panel-status-stale was READ by UsageTracker and DECLARED nowhere,
+ * so its var() chain fell through to --panel-accent and a status borrowed the
+ * brand mark's ink. --usage-meter-critical was read with a raw
+ * `rgb(208, 59, 59)` behind it, which is a palette value living in the one
+ * place the token floor forbids. And --color-border-strong, a non-text UI
+ * boundary, sat below 1.4.11's 3:1 in three of the four reading modes.
+ *
+ * What every one of them has in common is that NOTHING WENT RED. A var()
+ * fallback still paints, so a missing token looks exactly like a present one,
+ * and a contrast failure looks like a design choice. So this pin asserts two
+ * properties that no fallback can satisfy: every ink in the family RESOLVES
+ * to a literal in every reading mode (resolveToken fails loudly on a dangling
+ * name), and the literal it resolves to clears the floor on BOTH surfaces the
+ * ink can land on — the panel card and the usage tile, which are different
+ * surfaces and were never both measured before.
+ *
+ * The family is DERIVED, not listed. --panel-status-* and --color-status-*
+ * are matched by pattern; the meter's own inks are derived from the severity
+ * union the payload declares in lib/blocks.ts, so adding a fourth severity
+ * there makes this pin demand a fourth declared ink on the same day, with
+ * nobody remembering to extend an array here. The meter's non-color tokens
+ * (thickness, track strength) are deliberately outside the family: they are
+ * lengths and percentages, and a contrast floor over a length is nonsense. */
+const severityNames = (() => {
+  const union = /severity:\s*((?:'[a-z]+'\s*\|\s*)*'[a-z]+')\s*;/.exec(blocks);
+  assert.ok(union, 'lib/blocks.ts no longer declares a severity union this pin can read');
+  const names = [...union[1].matchAll(/'([a-z]+)'/g)].map(([, name]) => name);
+  assert.ok(names.length >= 2, 'the severity union collapsed to one state; the meter ramp is gone');
+  return names;
+})();
+
+const statusInkPattern = new RegExp(
+  // --usage-insight-fill is named rather than derived because there is nothing
+  // to derive it from: it is ONE bar, not a member of an enumerable family.
+  // It belongs here anyway — it arrived by the identical route, read from the
+  // component behind a fallback chain that ended at a raw rgb() literal.
+  `^--(?:(?:panel|color)-status-[a-z0-9-]+|usage-meter-(?:${severityNames.join('|')})|usage-insight-fill)$`
+);
+
+// Every token in the family that the TOKEN LAYER declares, which is the set
+// that must resolve and must be legible.
+const statusInkNames = [
+  ...new Set([...styles.matchAll(/(--[a-z0-9-]+)\s*:/g)].map(([, name]) => name)),
+].filter((name) => statusInkPattern.test(name));
+
+test('every status ink is declared, resolves, and clears 1.4.11 on both surfaces it lands on', () => {
+  assert.ok(
+    statusInkNames.length >= 2 * severityNames.length + 1,
+    `the token layer declares only ${statusInkNames.length} status inks; the family is one --panel-status-* and one --usage-meter-* per severity (${severityNames.join(', ')}), plus the insight bar's own fill`
+  );
+  // A non-text indicator's floor. Every one of these is redundant with shape
+  // or with a printed figure — the meter prints its own percentage beside the
+  // bar — so 3:1 is the correct floor and 4.5 would be the wrong one.
+  const nonTextFloor = 3;
+  for (const mode of ['light', 'auto-light', 'auto-dark', 'dark', 'slate', 'sepia']) {
+    const tokens = tokensFor(mode);
+    // BOTH surfaces. The panel card is what --panel-status-* paints on; the
+    // usage tile is the page surface, and it is what the meter's own fill
+    // paints on. They are different colors in every mode, and measuring only
+    // the first is how a legible-on-the-card ink can be illegible where it
+    // actually renders.
+    const surfaces = {
+      'the panel card': resolveToken('--panel-surface', tokens),
+      'the usage tile': resolveToken('--usage-tile-surface', tokens),
+    };
+    for (const name of statusInkNames) {
+      // Resolution itself is half the pin: a token read but never declared
+      // fails HERE rather than silently painting whatever its fallback said.
+      const ink = resolveToken(name, tokens);
+      for (const [where, background] of Object.entries(surfaces)) {
+        const ratio = contrastRatio(ink, background);
+        assert.ok(
+          ratio >= nonTextFloor,
+          `${mode}: ${name} (${ink}) on ${where} (${background}) is ${ratio.toFixed(2)}:1, below ${nonTextFloor}:1`
+        );
+      }
+    }
+    // The card seam (issue 138). Same floor, same two surfaces, and the same
+    // reason: below 3:1 the boundary is painted but not reliably perceivable,
+    // which matters most where a card sits against full-bleed media.
+    const border = resolveToken('--color-border-strong', tokens);
+    for (const [where, background] of Object.entries(surfaces)) {
+      const ratio = contrastRatio(border, background);
+      assert.ok(
+        ratio >= nonTextFloor,
+        `${mode}: --color-border-strong (${border}) on ${where} (${background}) is ${ratio.toFixed(2)}:1, below ${nonTextFloor}:1`
+      );
+    }
+  }
+});
+
+/* And the other half of the class: a component may not READ a status ink the
+ * token layer does not declare, and may not hide the question behind a
+ * fallback. Without this, the pin above is satisfiable by deleting the read —
+ * or by adding a new one that resolves to a literal nobody measured. */
+test('no component reads a status ink that is undeclared or fallback-shielded', () => {
+  const declared = new Set(statusInkNames);
+  let reads = 0;
+  for (const [name, source] of Object.entries(componentStyles)) {
+    for (const [, token, tail] of source.matchAll(/var\(\s*(--[a-z0-9-]+)\s*([,)])/g)) {
+      if (!statusInkPattern.test(token)) continue;
+      reads += 1;
+      assert.ok(
+        declared.has(token),
+        `${name} reads ${token}, which the token layer declares nowhere; its var() chain paints something the contrast guard never measured`
+      );
+      assert.equal(
+        tail,
+        ')',
+        `${name} reads ${token} with a fallback behind it; the token is declared, so the fallback can only hide the day it stops being`
+      );
+    }
+  }
+  assert.ok(reads > 0, 'no component reads a status ink at all; this sweep proves nothing');
+});
+
 // The contrast guard above resolves the TOKEN LAYER, not the DOM. That is a
 // deliberate limit — modelling which element a declaration reaches needs a
 // tree, and this suite is dependency-free by contract — but it leaves an
@@ -561,14 +685,14 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
   // light's text is SLATE's surface and vice versa — one occurrence per
   // palette slot, still zero per consumer.
   const uniqueValues = [
-    '#efefe8', '#e6e6dd', '#d8d8cd', '#9a9a8e', '#3d434f', // light ramp
+    '#efefe8', '#e6e6dd', '#d8d8cd', '#87877c', '#3d434f', // light ramp
     // The true dark. Every one of these is a grey — red, green and blue
     // equal — which is the whole claim the mode makes and the one a repaint
     // toward navy would have to break to get past here.
     '#121212', '#1e1e1e', '#2e2e2e', '#383838', '#6c6c6c', '#a0a0a0', '#e0e0e0',
     '#2a2a2a', '#545454', '#7f7f7f', '#aaaaaa', '#d9d9d9', // its hueless heatmap
-    '#161a23', '#1d222d', '#2a3040', '#566078', '#b9c2d4', // slate ramp
-    '#1b1612', '#28221d', '#312a25', '#3e362f', '#736559', '#b79d7e', '#f4eaea', // browntown seeds
+    '#161a23', '#1d222d', '#2a3040', '#5f6a84', '#b9c2d4', // slate ramp
+    '#1b1612', '#28221d', '#312a25', '#3e362f', '#7b6d60', '#b79d7e', '#f4eaea', // browntown seeds
     // The token-usage category sets (issue #142): four modes times six
     // slots, every value its own hex — including dark's neutral steps,
     // which the r==g==b sweep above also holds to the mode's no-hue rule.
@@ -576,6 +700,11 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
     '#565656', '#6f6f6f', '#868686', '#a2a2a2', '#bebebe', '#dadada', // dark category steps
     '#5a657e', '#3f81d9', '#b87e1f', '#1f9e7d', '#8a68d8', '#cf5585', // slate categories
     '#77685a', '#5c88d8', '#bb7d24', '#2f9e7d', '#8f6ad4', '#d15a88', // sepia categories
+    // The two status inks added at issues 222 and 229, each with its own
+    // darkened twin for the light card. They are enumerated here for the
+    // same reason every value above is: a status ink restated at a second
+    // consumer is a value that can drift into two.
+    '#d9a521', '#8f6100', '#e05a5a', '#c62828',
   ];
   // The neutrality claim, measured rather than asserted: a true dark whose
   // surfaces carry a hue is the exact defect this mode was added to fix, and

@@ -268,15 +268,38 @@ describe('UsageTracker source contract', () => {
     assert.equal(emptyStates.length, 2);
   });
 
-  it('reads every color from a custom property with dark-native defaults', () => {
+  it('reads every color from a custom property, and the severity ramp with no fallback at all', () => {
     assert.doesNotMatch(component, /#[0-9a-fA-F]{3,8}\b/, 'raw hex colors defeat theme overrides');
-    for (const token of ['--panel-', '--usage-meter-ok', '--usage-meter-warning', '--usage-meter-critical', '--panel-status-ok']) {
+    for (const token of ['--panel-', '--usage-meter-ok', '--usage-meter-warning', '--usage-meter-critical']) {
       assert.match(
         component,
         new RegExp(`var\\(\\s*${token}`),
         `component styles must read var(${token}…) so themes can override it`
       );
     }
+    /* RE-AIMED, not relaxed (issues 222 and 229). This list used to include
+       --panel-status-ok, because the OK fill reached it through a fallback
+       chain — and that chain is exactly the defect the two issues name: the
+       warning fill's chain ended at --panel-accent (a BRAND mark standing in
+       for a status) and the critical fill's ended at a bare rgb() literal
+       inside this component. All three severities now read one declared meter
+       token each, so the ramp is a palette decision in styles.css rather than
+       a chain that quietly repaints itself when a link is missing. The three
+       reads must therefore carry NO comma: a fallback here would restore the
+       hiding place, since a fallback paints and so a missing declaration
+       looks like nothing at all. */
+    for (const token of ['--usage-meter-ok', '--usage-meter-warning', '--usage-meter-critical']) {
+      assert.match(
+        component,
+        new RegExp(`var\\(${token}\\)`),
+        `${token} must be read bare; a fallback hides the token's absence instead of failing on it`
+      );
+    }
+    assert.doesNotMatch(
+      component,
+      /var\(\s*--panel-status-[a-z]+\s*,/,
+      'a --panel-status-* read carries a fallback again; the token layer declares all three, so a fallback can only hide a missing one'
+    );
   });
 
   it('stays local-origin like every shipped source file', () => {

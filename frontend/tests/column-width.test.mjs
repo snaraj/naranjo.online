@@ -19,8 +19,10 @@ import {
   railsFit,
   railsMediaQuery,
   readColumnTokens,
+  railsWatchFrames,
   readStoredColumn,
   storedColumnValue,
+  watchRails,
   writeStoredColumn
 } from '../src/lib/columnWidth.ts';
 
@@ -190,6 +192,151 @@ describe('the rails exist only where there is room for them', () => {
     // disagreeing would show.
     assert.equal(railsFit(tokens, railsBreakpointRem(tokens) * 16), true);
     assert.equal(railsFit(tokens, railsBreakpointRem(tokens) * 16 - 1), false);
+  });
+});
+
+/* A STARVED MOUNT RECOVERS (issue 153).
+ *
+ * The mount used to read the token layer once and return when the read came
+ * back null, registering no media-query listener at all — so a mount that
+ * landed before the stylesheet was applied to the root left the handles
+ * permanently absent, with nothing running that could bring them back. It was
+ * measured once in six full browser-matrix runs under load, and the only
+ * recovery was a window resize the reader had no reason to perform.
+ *
+ * The whole sequence is executed here against fakes, which is the point of
+ * having moved it out of the component: the failure mode is a RACE, and a
+ * race is exactly what a browser lane cannot be relied on to reproduce.
+ */
+describe('the mount survives a token layer that is not readable yet', () => {
+  // A host whose token layer stays blank for the first `blankFor` reads and
+  // is readable from then on — the arrival of the stylesheet, made explicit.
+  const starvedHost = (blankFor) => {
+    const real = fakeHost();
+    let reads = 0;
+    return {
+      ...real,
+      tokenValue: (name) => {
+        // One readColumnTokens call reads five names; count whole attempts.
+        if (name === '--page-column-base') reads += 1;
+        return reads <= blankFor ? '' : real.tokenValue(name);
+      }
+    };
+  };
+
+  // A scheduler that runs nothing until asked, so every frame is a step this
+  // test takes deliberately rather than a timing hope.
+  const manualFrames = () => {
+    const queued = new Map();
+    let next = 1;
+    const cancelled = [];
+    return {
+      cancelled,
+      pending: () => queued.size,
+      step: () => {
+        const [handle, run] = [...queued.entries()][0];
+        queued.delete(handle);
+        run();
+      },
+      deps: (media) => ({
+        media,
+        schedule: (run) => {
+          const handle = next;
+          next += 1;
+          queued.set(handle, run);
+          return handle;
+        },
+        cancel: (handle) => {
+          cancelled.push(handle);
+          queued.delete(handle);
+        }
+      })
+    };
+  };
+
+  const fakeMedia = () => {
+    const listeners = [];
+    const queries = [];
+    return {
+      listeners,
+      queries,
+      media: (query) => {
+        queries.push(query);
+        return {
+          addEventListener: (type, listener) => listeners.push([type, listener]),
+          removeEventListener: (type, listener) => {
+            const at = listeners.findIndex(([, held]) => held === listener);
+            if (at >= 0) listeners.splice(at, 1);
+          }
+        };
+      }
+    };
+  };
+
+  it('registers the listener on the first readable frame, not never', () => {
+    const host = starvedHost(3);
+    const frames = manualFrames();
+    const media = fakeMedia();
+    const seen = [];
+    let syncs = 0;
+    const stop = watchRails(host, frames.deps(media.media), (tokens) => seen.push(tokens), () => {
+      syncs += 1;
+    });
+    // Three starved attempts: nothing registered, but a retry is always
+    // pending — which is the whole repair. The old mount had neither.
+    assert.equal(media.listeners.length, 0, 'a listener was registered from an unreadable layer');
+    assert.equal(frames.pending(), 1, 'the starved mount scheduled no retry; the handles can never come back');
+    frames.step();
+    assert.equal(frames.pending(), 1);
+    frames.step();
+    assert.equal(frames.pending(), 1);
+    // The fourth read succeeds.
+    frames.step();
+    assert.equal(seen.length, 1, 'the tokens never reached the component');
+    assert.equal(syncs, 1, 'the mount read the tokens and never applied them');
+    assert.deepEqual(media.queries, [railsMediaQuery(seen[0])], 'the listener asks a query the tokens did not build');
+    assert.equal(media.listeners.length, 1);
+    assert.equal(frames.pending(), 0, 'the retry loop kept running after it succeeded');
+    stop();
+    assert.equal(media.listeners.length, 0, 'the teardown left the listener attached');
+  });
+
+  it('registers immediately when the layer is readable at mount', () => {
+    const frames = manualFrames();
+    const media = fakeMedia();
+    let syncs = 0;
+    watchRails(fakeHost(), frames.deps(media.media), () => {}, () => {
+      syncs += 1;
+    });
+    assert.equal(media.listeners.length, 1);
+    assert.equal(syncs, 1);
+    assert.equal(frames.pending(), 0, 'a readable mount scheduled a retry it does not need');
+  });
+
+  it('cancels a retry still pending when the component unmounts', () => {
+    const frames = manualFrames();
+    const media = fakeMedia();
+    const stop = watchRails(starvedHost(Infinity), frames.deps(media.media), () => {}, () => {});
+    assert.equal(frames.pending(), 1);
+    stop();
+    assert.equal(frames.pending(), 0, 'an unmounted component left a frame scheduled');
+    assert.equal(frames.cancelled.length, 1, 'the pending frame was dropped rather than cancelled');
+  });
+
+  it('stops asking once its frame budget is spent', () => {
+    // Bounded rather than infinite: a document that genuinely carries no
+    // token layer must stop costing a callback per frame for as long as the
+    // tab is open. The component's resize listener stays as the durable
+    // recovery, because a viewport change re-reads everything.
+    const frames = manualFrames();
+    const media = fakeMedia();
+    watchRails(starvedHost(Infinity), frames.deps(media.media), () => {}, () => {});
+    for (let attempt = 1; attempt < railsWatchFrames; attempt += 1) {
+      assert.equal(frames.pending(), 1, `the retry stopped early, at attempt ${attempt}`);
+      frames.step();
+    }
+    assert.equal(frames.pending(), 0, 'the retry outlived its own budget');
+    assert.equal(media.listeners.length, 0);
   });
 });
 
@@ -522,7 +669,26 @@ describe('the page cannot be broken by a width, whichever half is looking', () =
     // what makes losing one of them a red build rather than a silent regress.
     assert.match(styles, /\.column-handle\s*\{[^}]*display:\s*none;/);
     assert.match(styles, /@media \(min-width: [\d.]+rem\) \{[\s\S]*?\.column-handle \{\s*display: block;/);
-    assert.match(component, /railsMediaQuery\(read\)/);
+    /* RE-AIMED, not dropped (issue 153). This used to read
+       `railsMediaQuery(read)` out of the component's own text, because the
+       component built the query itself. The mount moved into columnWidth.ts
+       so its starved-read recovery could be EXECUTED rather than described,
+       and with it went the query construction — which is now proved by
+       execution instead of by text, in "registers the listener on the first
+       readable frame": the query the fake matchMedia is handed is compared
+       against railsMediaQuery of the tokens the same run read. What is left
+       to pin here is that the component still delegates rather than growing a
+       second mount of its own. */
+    assert.match(
+      component,
+      /watchRails\(/,
+      'the component no longer mounts through watchRails; a mount written inline is a mount whose recovery path nothing executes'
+    );
+    assert.doesNotMatch(
+      component,
+      /matchMedia/,
+      'the component asks matchMedia directly again; the query must be built from the tokens in one place'
+    );
     assert.match(component, /\{#if fits\}/, 'the component must not render a handle it has no room for');
   });
 

@@ -11,6 +11,7 @@
 package panels
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -383,6 +384,121 @@ func TestTheCalendarDocumentIsRefusedWhenItsOwnNumbersDisagree(t *testing.T) {
 				t.Fatalf("refusal = %v, want the disagreement named", err)
 			}
 		})
+	}
+}
+
+// TestTheCalendarEnvelopeToleratesWhatItNeverReads pins the one boundary the
+// calendar decode deliberately draws (issue 246, finding 2): the transport
+// ENVELOPE is read leniently and the PAYLOAD under "data" is read strictly.
+//
+// The envelope is the protocol's own wrapper, and GraphQL reserves the right
+// to add top-level siblings to it — "extensions", for tracing or cost
+// accounting — that this package never reads a value out of. Under the strict
+// gate that used to cover the whole document, the first such sibling would
+// have refused EVERY credentialed calendar from the day it appeared: honest
+// (the retained payload keeps serving, logged, nothing invented) but for a
+// reason that has nothing to do with the data.
+//
+// Both directions are asserted together, because either alone is satisfiable
+// by the wrong implementation. Tolerance alone is satisfiable by dropping the
+// strict gate entirely; strictness alone is what the finding reported.
+func TestTheCalendarEnvelopeToleratesWhatItNeverReads(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	start := firstSunday(now.AddDate(0, 0, -calendarWindowDays))
+	days := int(now.Sub(start)/(24*time.Hour)) + 1
+	full := calendarAnswer(start, days, 1, nil)
+
+	// The control: the same document, unaltered, must map. Without it a
+	// tolerance assertion could pass against a fixture that was never
+	// mappable in the first place.
+	baseline, err := mapCalendarDocument([]byte(full), now)
+	if err != nil {
+		t.Fatalf("the unaltered document does not map: %v", err)
+	}
+
+	// Re-encoded through a map so a sibling lands beside the payload at the
+	// TOP level, which is the only place this tolerance applies.
+	withSiblings := func(t *testing.T, siblings map[string]any) []byte {
+		t.Helper()
+		var document map[string]any
+		if err := json.Unmarshal([]byte(full), &document); err != nil {
+			t.Fatalf("reparse fixture: %v", err)
+		}
+		for name, value := range siblings {
+			document[name] = value
+		}
+		encoded, err := json.Marshal(document)
+		if err != nil {
+			t.Fatalf("re-encode fixture: %v", err)
+		}
+		return encoded
+	}
+
+	for _, testCase := range []struct {
+		name     string
+		siblings map[string]any
+	}{
+		{"the extensions sibling GraphQL servers may add at any time", map[string]any{
+			"extensions": map[string]any{"cost": map[string]any{"requestedQueryCost": 1}},
+		}},
+		{"a sibling nobody has invented yet", map[string]any{"somethingLater": []any{"x"}}},
+		{"several at once", map[string]any{
+			"extensions": map[string]any{"warnings": []any{}},
+			"tracing":    map[string]any{"version": 1},
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			mapped, err := mapCalendarDocument(withSiblings(t, testCase.siblings), now)
+			if err != nil {
+				t.Fatalf("a top-level sibling this package never reads refused the whole document: %v", err)
+			}
+			// And it changed nothing: the sibling is ignored, not absorbed.
+			if !bytes.Equal(mapped, baseline) {
+				t.Fatal("a top-level sibling changed the mapped payload; it must be ignored, not read")
+			}
+		})
+	}
+
+	// THE OTHER HALF, and the half that must not have moved. Inside the
+	// payload every byte is mapped, so an unknown field there is upstream
+	// drift this package has half-understood and the document is refused. The
+	// two cases sit at different depths on purpose: the strict gate covers
+	// the payload's whole tree, not merely its first level.
+	for _, testCase := range []struct {
+		name string
+		body string
+	}{
+		{
+			"an unknown field at the payload root",
+			"{\"data\":{\"viewer\":{\"contributionsCollection\":{\"contributionCalendar\":{\"totalContributions\":0,\"weeks\":[]}}},\"unexpected\":1}}",
+		},
+		{
+			"an unknown field deep inside the payload",
+			"{\"data\":{\"viewer\":{\"contributionsCollection\":{\"contributionCalendar\":{\"totalContributions\":0,\"weeks\":[],\"colors\":[]}}}}}",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := mapCalendarDocument([]byte(testCase.body), now); err == nil {
+				t.Fatal("an unknown field inside the mapped payload was admitted")
+			} else if !strings.Contains(err.Error(), "unknown field") {
+				t.Fatalf("refusal = %v, want it to name the unknown field", err)
+			}
+		})
+	}
+
+	// An answer carrying neither errors nor a payload is not a calendar, and
+	// a lenient envelope is what makes the case reachable at all — before,
+	// the unknown sibling refused it first. This pins the OUTCOME and not
+	// which guard delivers it, and the distinction is honest rather than
+	// pedantic: a mutation that skipped the payload decode for a nil payload
+	// SURVIVED this assertion, because the minimum-days floor further down
+	// refuses an empty calendar anyway. Two guards, one outcome; this is not
+	// evidence that the nil branch is load-bearing on its own.
+	if _, err := mapCalendarDocument([]byte("{\"extensions\":{}}"), now); err == nil {
+		t.Fatal("a document carrying no payload at all was admitted")
 	}
 }
 

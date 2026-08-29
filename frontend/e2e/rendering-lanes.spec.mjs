@@ -133,20 +133,76 @@ const subPixel = 0.01;
  * absence is the document's own statement that hydration finished. Nothing
  * any test asserts changed — what changed is that the wait now covers the
  * thing it always meant to cover, on the 15s budget it always had. */
+/* And height plus hydration is STILL not enough, which is what issue 210 was
+ * (found on the ios-safari lane of PR #208's browser-lanes run). Hydration
+ * only means the app mounted; a panel-bound block renders nothing at all
+ * until its own envelope arrives, so the moment after mount the page has its
+ * chrome and none of its data — and two consecutive scrollHeight reads agree
+ * happily in that window, because nothing is growing YET. The reading-mode
+ * lane snapshotted there, a panel landed 1071px of stack between the snapshot
+ * and the swap, and the swap was blamed for growth the fetch caused.
+ *
+ * Waiting longer would only make it rarer. What makes it impossible is asking
+ * the page two questions it can actually answer.
+ *
+ * `data-panels-pending` on the document root (panels.ts) counts the mounted
+ * panels that have not yet received their FIRST envelope. Zero is arrival,
+ * exactly, with no polling luck in it — and it covers the failure paths too,
+ * since a refused fetch delivers an unavailable envelope and the panel has
+ * finished arriving as surely as a successful one. It is required to EXIST as
+ * well as to be zero, because an absent attribute means the bundle has not
+ * run and a zero one means every panel has answered; treating those the same
+ * would restore the exact race, one step earlier.
+ *
+ * `data-block-count` on each `.panel-stack` (PageSection.svelte) answers the
+ * neighbouring question: every block the manifest declared has actually
+ * rendered. The two are not redundant — the first is about requests
+ * completing, the second about the page being whole, and a block whose
+ * adapter answers null forever would satisfy the first and fail the second.
+ *
+ * Height stability is kept alongside both rather than replaced: arrival is not
+ * the only thing that grows a page (a font, an image, a late layout pass),
+ * and the conditions are cheap to hold together — this costs three property
+ * reads per poll and no extra round trip. */
 async function settled(page) {
   let previous = -1;
   await expect
     .poll(
       async () => {
-        const measured = await page.evaluate(() => ({
-          height: window.document.documentElement.scrollHeight,
-          hydrated: window.document.querySelector('[data-static-fallback]') === null
-        }));
-        const stable = measured.height > 0 && measured.height === previous && measured.hydrated;
+        const measured = await page.evaluate(() => {
+          const stacks = [...window.document.querySelectorAll('.panel-stack')];
+          return {
+            height: window.document.documentElement.scrollHeight,
+            hydrated: window.document.querySelector('[data-static-fallback]') === null,
+            /* Read as a STRING and compared to '0'. Number('') is 0, so a
+               missing attribute would read as "every panel has answered" —
+               which is the one reading that must never be possible here. */
+            pending: window.document.documentElement.getAttribute('data-panels-pending'),
+            /* A stack that declares no count is a stack this lane cannot
+               reason about, and it must not read as "whole": NaN compares
+               false against everything, which would silently restore the old
+               behaviour. It is reported as a distinct falsehood instead. */
+            described: stacks.every((stack) => /^\d+$/.test(stack.dataset.blockCount ?? '')),
+            whole: stacks.every(
+              (stack) => stack.children.length === Number(stack.dataset.blockCount)
+            ),
+          };
+        });
+        const stable =
+          measured.height > 0 &&
+          measured.height === previous &&
+          measured.hydrated &&
+          measured.pending === '0' &&
+          measured.described &&
+          measured.whole;
         previous = measured.height;
         return stable;
       },
-      { message: 'the page never stopped growing, or never hydrated', timeout: 15_000 }
+      {
+        message:
+          'the page never stopped growing, never hydrated, still has a panel waiting for its first envelope, or has a stack short of the blocks it declares',
+        timeout: 15_000,
+      }
     )
     .toBe(true);
 }
@@ -900,7 +956,21 @@ test('every strip still holds all of its own rows once the engine has taken its 
  * any read-back see the identical bytes. */
 async function stageUsagePayload(page, edit) {
   await page.route('**/api/panels/token-usage', async (route) => {
-    const response = await route.fetch();
+    /* A request still in flight when the test ends is not a finding, and it
+       must not be reported as one (issue 201). When a probe fails, Playwright
+       tears the context down under whatever this handler was awaiting, and
+       `route.fetch()` rejects with "Test ended" — which surfaced as a second,
+       louder error beside the real one and sent the reader looking at the
+       route instead of at the failure. Swallowing it here is not tolerance of
+       a product fault: an aborted route serves nothing, so any assertion that
+       depended on this payload still fails, and it fails on its own terms. */
+    let response;
+    try {
+      response = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
     const envelope = await response.json();
     edit(envelope);
     const body = JSON.stringify(envelope);
@@ -958,6 +1028,21 @@ test('the full-width strip draws the identical fixed window at every series leng
       sources[0].series = syntheticSeries(days);
     });
     await visit(page);
+    /* WAIT FOR THE STRIP THE WAY A READER'S BROWSER DOES (issue 201). The
+       probe below dereferences `.usage-source .grid-block` and then reaches
+       three levels inside it; on the slow emulated android-chrome lane that
+       chain ran once before the strip existed and threw
+       "Cannot read properties of null", taking the staged route down with it.
+       A locator wait is not a tolerance — it does not widen anything the
+       assertions below check — it is the probe agreeing to measure the page
+       only once the page has the thing being measured. The wait is on the
+       CELL rather than on the block, because the block is the outermost of
+       the four elements the evaluate needs and the cell is the innermost:
+       waiting for the last one to exist is what makes the whole chain
+       safe. */
+    await expect(
+      page.locator('.usage-source .grid-block .grid-cells .grid-cell').first()
+    ).toBeAttached();
     measured.push({
       days,
       ...(await page.evaluate(() => {
@@ -1070,6 +1155,96 @@ test('the full-width strip draws the identical fixed window at every series leng
   expect(deep.drawn, 'the deep window drew a width it did not claim').toBe(deep.claimed);
   expect(deep.rows, 'the deep window stopped being seven days tall').toBe(7);
   expect(deep.block, 'the card stopped deciding the box once the capture outgrew the reserve').toBe(first.block);
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+/* AN UNMEASURED SHARE DRAWS NOTHING, MEASURED (issue 246, finding 1).
+ *
+ * The insight rows carry a proportion each, and a source may report one it
+ * never measured. The honest-states floor says such a figure serves null and
+ * renders as a dash rather than as a zero — and the row must draw NO FILL AT
+ * ALL, not a zero-width one, because a zero-width fill is pixel-identical to
+ * a measured 0% and the row would look like a measurement while the reading
+ * beside it says otherwise.
+ *
+ * The component states that in a guard (`{#if insight.fillPct !== null}`) and
+ * the data half is pinned in tests/token-usage.test.mjs — an unmeasured share
+ * becomes a null fillPct and a "--" reading. The RENDER half was pinned at no
+ * layer at all, which is the review finding: removing that guard and
+ * rendering the fill unconditionally left every suite green.
+ *
+ * So this lane asks a real engine what it actually painted. Both directions,
+ * because "no fill" alone is satisfied by a component that draws no bars for
+ * anybody. */
+test('an insight with no measured share draws no bar, and a measured one still does', async ({
+  page,
+}) => {
+  await stageUsagePayload(page, (envelope) => {
+    const sources = envelope?.data?.sources ?? [];
+    expect(sources.length, 'the origin serves no usage source to restage').toBeGreaterThan(0);
+    /* The frozen-insight path, which is the one that can carry a null: the
+       series' own model partition is what would otherwise derive the shares,
+       so it goes with it. */
+    delete sources[0].series;
+    sources[0].insights = [
+      { label: 'Unmeasured', pct: null },
+      { label: 'Measured', pct: 50 },
+    ];
+  });
+  await visit(page);
+  /* The FIRST source only: the panel serves more than one, each with insight
+     rows of its own, and only one of them was restaged. A page-wide selector
+     would count another source's real rows as this lane's staged ones. */
+  const rows = page.locator('.usage-source').first().locator('.usage-insight');
+  await expect(rows).toHaveCount(2);
+  const observed = await rows.evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const fill = node.querySelector('.usage-insight-fill');
+      const track = node.querySelector('.usage-insight-track');
+      const width = (box) => (box === null ? null : Math.round(box.getBoundingClientRect().width * 100) / 100);
+      return {
+        label: node.querySelector('.usage-insight-label').textContent.trim(),
+        reading: node.querySelector('.usage-insight-value').textContent.trim(),
+        /* Presence FIRST, and width only if it is there. A zero-width fill
+           and no fill are different renderings of different claims, and the
+           whole point of the guard is that the second is the honest one. */
+        drawn: fill !== null,
+        fill: width(fill),
+        // The track is always present — it is the groove — so it is the
+        // control that proves the row rendered at all.
+        track: width(track),
+      };
+    })
+  );
+  const [unmeasured, measured] = observed;
+  expect(unmeasured.label, 'the staged rows did not render in the order they were served').toBe(
+    'Unmeasured'
+  );
+  expect(unmeasured.reading, 'an unmeasured share printed a number instead of a dash').toBe('--');
+  expect(
+    unmeasured.track,
+    'the unmeasured row drew no track either; it must show its empty groove, not vanish'
+  ).toBeGreaterThan(0);
+  expect(
+    unmeasured.drawn,
+    'an unmeasured share painted a fill; a zero-width one is pixel-identical to a measured 0%, which is exactly the claim it must not make'
+  ).toBe(false);
+  expect(
+    measured.track,
+    'the insight track has no width to fill; this lane cannot tell a drawn bar from an undrawn one'
+  ).toBeGreaterThan(0);
+  expect(
+    measured.drawn,
+    'a measured share drew no fill either, so the assertion above proves nothing'
+  ).toBe(true);
+  expect(
+    measured.fill,
+    'a measured share painted no bar at all'
+  ).toBeGreaterThan(0);
+  expect(
+    measured.fill,
+    'a measured share painted past its own track'
+  ).toBeLessThanOrEqual(measured.track + subPixel);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 

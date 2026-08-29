@@ -335,3 +335,82 @@ test('the exported cadence stays inside its documented band', () => {
 // directive, issue 179): watchPanel's per-panel refresh() above is what
 // survives, and it is already fully exercised on its own. A page-wide fan-out
 // has no caller left to test.
+
+
+/* THE PAGE SAYS WHETHER IT IS STILL WAITING (issue 210).
+ *
+ * A panel-bound block renders nothing until its envelope arrives, and two of
+ * the three render a loading face and then replace it — so between mount and
+ * arrival the document is genuinely mid-answer and had no way to say so. The
+ * rendering lanes settle on this attribute; a lane that settled on a height
+ * instead once snapshotted a page mid-arrival and blamed a reading-mode swap
+ * for 1071px of panel growth.
+ *
+ * Executed against a document stub rather than pinned as source text, and the
+ * module is loaded through a distinct specifier so it evaluates fresh — the
+ * count is module state, and a second instance is the only way to observe it
+ * from zero. */
+test('the document states how many panels have not answered yet', async () => {
+  const attributes = new Map();
+  const priorDocument = globalThis.document;
+  globalThis.document = {
+    hidden: false,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    documentElement: {
+      setAttribute: (name, value) => attributes.set(name, value)
+    }
+  };
+  try {
+    const fresh = await import('../src/lib/panels.ts?panels-pending-probe');
+    const read = () => attributes.get(fresh.panelsPendingAttribute);
+    // Stamped at module scope: absent and zero mean opposite things, and a
+    // reader that saw nothing would call an unstarted page a finished one.
+    assert.equal(read(), '0', 'the attribute is not stamped before any panel mounts');
+
+    const host = fakeHost();
+    const first = fresh.watchPanel('token-usage', () => {}, { host });
+    assert.equal(read(), '1', 'a watched panel does not count as pending');
+    const second = fresh.watchPanel('vcs-activity', () => {}, { host });
+    assert.equal(read(), '2');
+    await flush();
+    assert.equal(read(), '0', 'the panels answered and the page still says it is waiting');
+
+    // A refresh an hour later is not the page still loading. Counting it
+    // would turn the attribute into "a request is open", which is a
+    // different and much weaker claim.
+    await first.refresh();
+    await flush();
+    assert.equal(read(), '0', 'a background refresh re-armed the first-load signal');
+
+    first();
+    second();
+    assert.equal(read(), '0', 'stopping a settled panel moved the count');
+
+    // A panel torn down before it ever answered is no longer something the
+    // page is waiting for — and the exit must not double-count when the stop
+    // races the delivery it was already owed.
+    const slow = fakeHost();
+    let release;
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    slow.respond = () => held.then(() => ({ ok: true, json: async () => envelopeBody('osrs-stats') }));
+    const third = fresh.watchPanel('osrs-stats', () => {}, { host: slow });
+    await flush();
+    assert.equal(read(), '1', 'a panel with a read still in flight is not pending');
+    third();
+    assert.equal(read(), '0', 'a panel stopped before answering left the page waiting forever');
+    release();
+    // Twice: once for the transport promise, once for the parse that follows.
+    await flush();
+    await flush();
+    assert.equal(read(), '0', 'the delivery decremented a count its own stop had already released');
+  } finally {
+    if (priorDocument === undefined) {
+      delete globalThis.document;
+    } else {
+      globalThis.document = priorDocument;
+    }
+  }
+});
