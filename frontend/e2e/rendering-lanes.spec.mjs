@@ -4068,7 +4068,7 @@ test('every repo card places its counters the same way relative to its title, re
     .filter({ has: page.locator('h3.subsection-title', { hasText: 'Coding Projects' }) });
   const heads = codingProjects.locator('.entry-head');
   const cardCount = await heads.count();
-  expect(cardCount, 'the six repo cards are not all on the page').toBe(6);
+  expect(cardCount, 'the seven repo cards are not all on the page').toBe(7);
 
   const overlapsVertically = (a, b) => a.y < b.y + b.height && b.y < a.y + a.height;
 

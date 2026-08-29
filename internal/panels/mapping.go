@@ -331,7 +331,13 @@ func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, error) {
 //
 // The name is the caller's, never the document's: an upstream that could name
 // the repository could put a stranger's project on the owner's page.
-func mapRepository(raw []byte, name string, now time.Time) (CodingProject, error) {
+//
+// openPulls is the separately read open pull-request tally, or nil when the
+// source named no such document or that read failed. It is what SPLITS the
+// upstream's one combined open tally into the two figures the card draws, and
+// splitOpenWork below refuses the pair outright rather than serving half of a
+// derived number.
+func mapRepository(raw []byte, name string, openPulls *int64, now time.Time) (CodingProject, error) {
 	var entry repositoryEntry
 	if err := json.Unmarshal(raw, &entry); err != nil {
 		return CodingProject{}, fmt.Errorf("repository document for %s: %w", name, err)
@@ -357,12 +363,62 @@ func mapRepository(raw []byte, name string, now time.Time) (CodingProject, error
 		}
 	}
 	stars := entry.Stars
+	issues, pulls := splitOpenWork(entry.OpenIssues, openPulls)
 	return CodingProject{
 		Name:        name,
 		Description: description,
 		Stars:       &stars,
 		PushedAt:    at.UTC().Format(time.RFC3339),
+		OpenIssues:  issues,
+		OpenPulls:   pulls,
 	}, nil
+}
+
+// splitOpenWork turns the upstream's ONE combined open tally into the two the
+// card draws. The repository document counts open pull requests as open
+// issues, so the issue figure is the combined tally minus the separately read
+// pull-request tally, and it exists only when that second read succeeded.
+//
+// Both figures are dropped together on anything that does not add up: no
+// pull-request tally, a negative or absurd figure on either side, or a
+// pull-request count exceeding the combined one — which is a real outcome, not
+// a hypothetical, because the two documents are read a moment apart and a
+// pull request opened between them lands in the later count only. Every one of
+// those refusals reaches the reader as a dash. That is the whole point: a dash
+// says "not known", a zero says "none open", and the second is a claim this
+// producer is in no position to make.
+//
+// Refusing the PAIR rather than the ROW is deliberate and it is the additive
+// rule doing its job. These fields arrived after the kind shipped; a payload
+// without them is valid, so a bad tally costs exactly the tallies and leaves a
+// perfectly good description, star count and push instant serving.
+func splitOpenWork(combined int64, openPulls *int64) (*int64, *int64) {
+	if openPulls == nil {
+		return nil, nil
+	}
+	pulls := *openPulls
+	if pulls < 0 || pulls > maxCountValue || combined < pulls || combined > maxCountValue {
+		return nil, nil
+	}
+	issues := combined - pulls
+	return &issues, &pulls
+}
+
+// mapOpenPullCount reads the open pull-request tally out of a search answer,
+// through the searchCountEntry projection and its bound. A document that
+// reports no count at all is refused rather than read as zero.
+func mapOpenPullCount(raw []byte, name string) (int64, error) {
+	var entry searchCountEntry
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		return 0, fmt.Errorf("pull-request tally for %s: %w", name, err)
+	}
+	if entry.Total == nil {
+		return 0, fmt.Errorf("pull-request tally for %s: the document reports no total", name)
+	}
+	if *entry.Total < 0 || *entry.Total > maxCountValue {
+		return 0, fmt.Errorf("pull-request tally for %s: %d is outside the admissible range", name, *entry.Total)
+	}
+	return *entry.Total, nil
 }
 
 // projectDescription reduces a repository's description to the single line a

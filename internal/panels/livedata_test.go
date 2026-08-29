@@ -625,16 +625,53 @@ func projectsSpec() *codingProjectsFetchSpec {
 	}
 }
 
-// repositoryAnswer is a realistic upstream document: the three fields the
-// panel reads, surrounded by the many it deliberately does not — including the
-// owner profile the projection exists to avoid holding.
+// repositoryAnswer is a realistic upstream document: the fields the panel
+// reads, surrounded by the many it deliberately does not — including the owner
+// profile the projection exists to avoid holding. The combined open tally is
+// zero here; repositoryAnswerOpen is the variant that sets it.
 func repositoryAnswer(description string, stars int, pushedAt string) string {
+	return repositoryAnswerOpen(description, stars, pushedAt, 0)
+}
+
+// repositoryAnswerOpen is the same document with the upstream's COMBINED open
+// tally set — the figure that counts pull requests as issues, and therefore
+// the one half of the subtraction that lives in this document.
+func repositoryAnswerOpen(description string, stars int, pushedAt string, open int) string {
 	return fmt.Sprintf(`{"id":1,"name":"ignored-by-design","full_name":"owner/ignored",`+
 		`"owner":{"login":"owner","id":2,"type":"User"},"private":false,`+
 		`"description":%s,"fork":false,"created_at":"2020-01-01T00:00:00Z",`+
 		`"pushed_at":%q,"stargazers_count":%d,"watchers_count":%d,"forks_count":0,`+
-		`"open_issues_count":0,"default_branch":"main"}`,
-		description, pushedAt, stars, stars)
+		`"open_issues_count":%d,"default_branch":"main"}`,
+		description, pushedAt, stars, stars, open)
+}
+
+// tallyAnswer is a realistic search answer: the aggregate the projection reads,
+// beside the result items and their account profiles it must never hold.
+func tallyAnswer(total int) string {
+	return fmt.Sprintf(`{"total_count":%d,"incomplete_results":false,`+
+		`"items":[{"id":9,"number":1,"title":"a pull request",`+
+		`"user":{"login":"somebody","id":3,"type":"User"},"state":"open"}]}`, total)
+}
+
+// projectsSpecWithTallies is projectsSpec with the optional second document
+// named on every source, which is the shipped configuration's shape.
+func projectsSpecWithTallies() *codingProjectsFetchSpec {
+	spec := projectsSpec()
+	for index := range spec.Sources {
+		spec.Sources[index].PullsEndpoint = "https://api.example.test/search/issues?q=" + spec.Sources[index].Name
+	}
+	return spec
+}
+
+// tallyingProjectsSource is projectsSource over that spec.
+func tallyingProjectsSource(t *testing.T) *FetchSource {
+	t.Helper()
+	source, err := NewFetchSource(SnapshotSource{Name: "snapshots/coding-projects.json"}, liveTestConfig(),
+		panelFetchSpecs{projects: projectsSpecWithTallies()})
+	if err != nil {
+		t.Fatalf("build source: %v", err)
+	}
+	return source
 }
 
 // projectsSource builds a coding-projects source over the shipped snapshot, so
@@ -804,7 +841,7 @@ func TestTheRepositoryDocumentFailsClosed(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := mapRepository([]byte(testCase.body), "alpha", now); err == nil {
+			if _, err := mapRepository([]byte(testCase.body), "alpha", nil, now); err == nil {
 				t.Fatal("a hostile or drifted document produced a row")
 			} else if !strings.Contains(err.Error(), testCase.want) {
 				t.Fatalf("refusal = %v, want it to name %q", err, testCase.want)
@@ -819,7 +856,7 @@ func TestTheRepositoryDocumentFailsClosed(t *testing.T) {
 func TestARepositoryNameIsNeverTheDocumentsToChoose(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
-	row, err := mapRepository([]byte(repositoryAnswer(`"x"`, 1, "2026-08-27T10:00:00Z")), "the-configured-name", now)
+	row, err := mapRepository([]byte(repositoryAnswer(`"x"`, 1, "2026-08-27T10:00:00Z")), "the-configured-name", nil, now)
 	if err != nil {
 		t.Fatalf("map: %v", err)
 	}
@@ -842,6 +879,193 @@ func TestALongDescriptionIsTruncatedRatherThanLost(t *testing.T) {
 	}
 	if length := len([]rune(got)); length != maxProjectDescriptionRunes+1 {
 		t.Errorf("truncated to %d runes, want %d plus the marker", length, maxProjectDescriptionRunes)
+	}
+}
+
+// TestOpenWorkIsSplitOutOfTheCombinedTally is the arithmetic the two new
+// figures rest on (issue 252): the repository document's open tally counts
+// pull requests as issues, so the issue figure is that tally MINUS the
+// separately read pull-request one. Getting this backwards, or skipping the
+// subtraction, publishes a wrong number that looks entirely plausible.
+func TestOpenWorkIsSplitOutOfTheCombinedTally(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	pulls := int64(2)
+	row, err := mapRepository([]byte(repositoryAnswerOpen(`"x"`, 1, "2026-08-29T10:00:00Z", 5)), "alpha", &pulls, now)
+	if err != nil {
+		t.Fatalf("map: %v", err)
+	}
+	if row.OpenIssues == nil || *row.OpenIssues != 3 {
+		t.Errorf("open issues = %v, want 3: five open things of which two are pull requests", row.OpenIssues)
+	}
+	if row.OpenPulls == nil || *row.OpenPulls != 2 {
+		t.Errorf("open pull requests = %v, want the tally as read", row.OpenPulls)
+	}
+	// A genuine zero is a figure, not an absence: a repository with nothing
+	// open reports nothing open, and the card is entitled to say so.
+	none := int64(0)
+	quiet, err := mapRepository([]byte(repositoryAnswerOpen(`"x"`, 1, "2026-08-29T10:00:00Z", 0)), "alpha", &none, now)
+	if err != nil {
+		t.Fatalf("map: %v", err)
+	}
+	if quiet.OpenIssues == nil || *quiet.OpenIssues != 0 || quiet.OpenPulls == nil || *quiet.OpenPulls != 0 {
+		t.Errorf("a quiet repository served %v/%v, want a reported zero on both", quiet.OpenIssues, quiet.OpenPulls)
+	}
+}
+
+// TestAnUnsplittableTallyServesNeitherFigure pins the refusal. Every case here
+// would produce a confident, wrong, entirely renderable number if the guard
+// were dropped — most dangerously the racing one, where a pull request opened
+// between the two reads makes the subtraction go negative.
+func TestAnUnsplittableTallyServesNeitherFigure(t *testing.T) {
+	t.Parallel()
+	overBound := int64(maxCountValue + 1)
+	negative := int64(-1)
+	two := int64(2)
+	for _, testCase := range []struct {
+		name     string
+		combined int64
+		pulls    *int64
+	}{
+		{"no tally was read at all", 4, nil},
+		{"more pull requests than open things, the read-skew race", 1, &two},
+		{"a negative tally", 4, &negative},
+		{"a tally past the bound", 4, &overBound},
+		{"a combined figure past the bound", maxCountValue + 1, &two},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			issues, pulls := splitOpenWork(testCase.combined, testCase.pulls)
+			if issues != nil || pulls != nil {
+				t.Fatalf("served %v/%v, want a dash on both: half a derived pair is a wrong number, not a smaller truth", issues, pulls)
+			}
+		})
+	}
+}
+
+// TestThePullRequestTallyDocumentFailsClosed drives the second projection's
+// value gate. The missing-total case is the one that matters most: an
+// unrelated JSON object projects to no count at all, and reading that as zero
+// would put "nothing open" on a card that knows nothing.
+func TestThePullRequestTallyDocumentFailsClosed(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{"an unrelated JSON object", `{"unrelated":true}`, "no total"},
+		{"a document that is not JSON at all", `<html>`, "pull-request tally"},
+		{"a negative count", `{"total_count":-1}`, "admissible range"},
+		{"a count past the bound", fmt.Sprintf(`{"total_count":%d}`, int64(maxCountValue)+1), "admissible range"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := mapOpenPullCount([]byte(testCase.body), "alpha"); err == nil {
+				t.Fatal("a hostile or drifted tally document produced a count")
+			} else if !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("refusal = %v, want it to name %q", err, testCase.want)
+			}
+		})
+	}
+	if total, err := mapOpenPullCount([]byte(tallyAnswer(0)), "alpha"); err != nil || total != 0 {
+		t.Fatalf("a reported zero was refused: %d, %v — the gate must admit real data too", total, err)
+	}
+}
+
+// TestTheServedRowsCarryBothOpenTallies is the end-to-end claim: two documents
+// per repository go in, one row carrying both figures comes out, and the
+// credential rides the tally request exactly as it rides the repository one.
+func TestTheServedRowsCarryBothOpenTallies(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	doer := newCapturingDoer(map[string]cannedAnswer{
+		"/repos/owner/alpha": {contentType: "application/json", body: repositoryAnswerOpen(`"alpha"`, 1, "2026-08-29T10:00:00Z", 9)},
+		"/repos/owner/beta":  {contentType: "application/json", body: repositoryAnswerOpen(`"beta"`, 1, "2026-08-28T10:00:00Z", 0)},
+		"/search/issues":     {contentType: "application/json", body: tallyAnswer(4)},
+	})
+	loaded, err := tallyingProjectsSource(t).refreshProjects(t.Context(), doer, func(name string) string {
+		if name == "FIXTURE_PROJECTS_TOKEN" {
+			return "fixture-token-value"
+		}
+		return ""
+	}, now)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	payload := decodeProjects(t, loaded)
+	if payload.Repos[0].OpenIssues == nil || *payload.Repos[0].OpenIssues != 5 {
+		t.Errorf("open issues = %v, want 5", payload.Repos[0].OpenIssues)
+	}
+	if payload.Repos[0].OpenPulls == nil || *payload.Repos[0].OpenPulls != 4 {
+		t.Errorf("open pull requests = %v, want 4", payload.Repos[0].OpenPulls)
+	}
+	tallies := doer.at("/search/issues")
+	if len(tallies) != 2 {
+		t.Fatalf("%d tally requests, want one per repository", len(tallies))
+	}
+	for _, request := range tallies {
+		if got := request.header.Get("Authorization"); got != "Bearer fixture-token-value" {
+			t.Errorf("tally Authorization header = %q, want the same prefixed credential the repository read carries", got)
+		}
+		if request.method != http.MethodGet {
+			t.Errorf("tally method = %s, want GET: counting is a read", request.method)
+		}
+	}
+}
+
+// TestAFailedTallyCostsTheTalliesAndNothingElse pins the failure granularity
+// the second request was designed around. Falling the whole ROW back because a
+// count went missing would tell the reader a perfectly current description is
+// stale — a worse lie than the dash it replaces.
+func TestAFailedTallyCostsTheTalliesAndNothingElse(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	doer := newCapturingDoer(map[string]cannedAnswer{
+		"/repos/owner/alpha": {contentType: "application/json", body: repositoryAnswerOpen(`"alpha lives"`, 1, "2026-08-29T10:00:00Z", 9)},
+		"/repos/owner/beta":  {contentType: "application/json", body: repositoryAnswerOpen(`"beta lives"`, 1, "2026-08-28T10:00:00Z", 0)},
+		"/search/issues":     {status: http.StatusInternalServerError, contentType: "application/json", body: "{}"},
+	})
+	loaded, err := tallyingProjectsSource(t).refreshProjects(t.Context(), doer, func(string) string { return "" }, now)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if loaded.status != StatusOK {
+		t.Errorf("status = %q, want ok: every repository answered; only an optional count did not", loaded.status)
+	}
+	payload := decodeProjects(t, loaded)
+	if payload.Repos[0].Recorded {
+		t.Error("a lost count fell the whole row back to the snapshot")
+	}
+	if payload.Repos[0].Description != "alpha lives" {
+		t.Errorf("description = %q, want the live text", payload.Repos[0].Description)
+	}
+	if payload.Repos[0].OpenIssues != nil || payload.Repos[0].OpenPulls != nil {
+		t.Errorf("served %v/%v, want a dash on both", payload.Repos[0].OpenIssues, payload.Repos[0].OpenPulls)
+	}
+	// The additive rule, proven on the wire rather than asserted: a payload
+	// with no tallies must carry no tally KEYS, so a consumer written before
+	// they existed sees the document it has always seen.
+	if bytes.Contains(loaded.data, []byte("openIssues")) || bytes.Contains(loaded.data, []byte("openPulls")) {
+		t.Errorf("an absent tally was serialized as a key: %s", loaded.data)
+	}
+}
+
+// TestTheTallyEndpointIsHostCheckedToo pins that "optional" describes whether
+// the document is CONFIGURED, never whether its URL is admitted. A second
+// reachable URL that skipped the allowlist would be a hole in the one rule
+// every outbound request passes.
+func TestTheTallyEndpointIsHostCheckedToo(t *testing.T) {
+	t.Parallel()
+	spec := projectsSpecWithTallies()
+	spec.Sources[1].PullsEndpoint = "https://elsewhere.example.net/search/issues"
+	_, err := NewFetchSource(SnapshotSource{Name: "snapshots/coding-projects.json"}, liveTestConfig(),
+		panelFetchSpecs{projects: spec})
+	if err == nil {
+		t.Fatal("an off-allowlist tally endpoint built a source")
+	}
+	if !strings.Contains(err.Error(), "allowlist") {
+		t.Fatalf("refusal = %v, want it to name the allowlist", err)
 	}
 }
 
@@ -1126,7 +1350,7 @@ func TestARepositoryDescriptionThatIsNotTextIsRefused(t *testing.T) {
 	// bytes are not valid UTF-8, which is not the same thing as one that spells
 	// the replacement character.
 	document := []byte(`{"description":"a` + string([]byte{0xff}) + `b","stargazers_count":1,"pushed_at":"2026-08-27T10:00:00Z"}`)
-	if _, err := mapRepository(document, "alpha", now); err == nil {
+	if _, err := mapRepository(document, "alpha", nil, now); err == nil {
 		t.Fatal("a description that is not valid UTF-8 produced a row")
 	} else if !strings.Contains(err.Error(), "UTF-8") && !strings.Contains(err.Error(), "invalid character") {
 		t.Fatalf("refusal = %v, want the encoding named", err)

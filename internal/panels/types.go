@@ -428,8 +428,14 @@ const (
 
 // CodingProjectsData is the coding-projects/v1 payload: one row per
 // repository the owner publishes, carrying what its host currently says about
-// it. Rows arrive in CONFIGURATION order, never in an order an upstream
-// chooses, so the section's layout is the owner's decision.
+// it. Rows arrive in CONFIGURATION order, which fixes WHICH repositories the
+// payload may describe — an upstream can neither add a row nor drop one. It no
+// longer fixes the order they are READ in: the owner's directive of 2026-08-29
+// is that the most recently pushed repository leads, and that is a property of
+// the DATA, so the frontend derives it from each row's push instant (issue
+// 252). Serving the rows in config order keeps this payload's own shape
+// stable and auditable against the config file; display order is decided where
+// the live and captured instants are both in hand.
 type CodingProjectsData struct {
 	// Repos holds one row per configured repository.
 	Repos []CodingProject `json:"repos"`
@@ -456,6 +462,20 @@ type CodingProject struct {
 	// PushedAt is the RFC 3339 instant of the repository's last push,
 	// normalized to UTC. Empty when unreported.
 	PushedAt string `json:"pushedAt,omitempty"`
+	// OpenIssues and OpenPulls are the repository's open issue and open
+	// pull-request tallies (issue 252). Both are ADDITIVE options inside the
+	// existing kind, which is why coding-projects stays v1: a payload written
+	// before they existed decodes and renders unchanged, and the frontend
+	// draws a dash for a tally it was not given rather than a confident zero.
+	//
+	// They arrive and leave TOGETHER, and that is the honest coupling rather
+	// than a convenience. The repository document reports one combined figure
+	// that counts pull requests as issues, so the issue tally only exists as
+	// the combined figure minus a separately read pull-request tally. Missing
+	// either one, or a pair whose subtraction is nonsense, leaves both nil:
+	// half of a derived pair is not a smaller truth, it is a wrong number.
+	OpenIssues *int64 `json:"openIssues,omitempty"`
+	OpenPulls  *int64 `json:"openPulls,omitempty"`
 	// Recorded marks a row served from the shipped snapshot rather than read
 	// live — the same provenance meaning it carries on a token-usage stat
 	// tile. A mixed payload is the normal degraded state: five rows read and
@@ -928,6 +948,17 @@ type codingProjectSourceSpec struct {
 	Name string `json:"name"`
 	// Endpoint is the full request URL.
 	Endpoint string `json:"endpoint"`
+	// PullsEndpoint optionally names a second literal URL answering with this
+	// repository's OPEN PULL-REQUEST tally and nothing else (issue 252). It is
+	// a separate document because the repository document has no such field:
+	// its open-issue figure counts pull requests, so the two tallies are only
+	// separable by reading a second count and subtracting.
+	//
+	// Optional in the same sense the credential is: a source that names none
+	// serves a row with no tallies, which the frontend dashes. That keeps this
+	// producer's failure mode per FIELD rather than per row — the second
+	// request going bad costs the two counts and nothing else.
+	PullsEndpoint string `json:"pullsEndpoint"`
 }
 
 // Bounds on the repository-metadata producer. Every one of them refuses rather
@@ -1268,6 +1299,26 @@ type repositoryEntry struct {
 	// the document was really parsed: an unrelated JSON object projects to an
 	// empty string here, and an empty string does not parse.
 	PushedAt string `json:"pushed_at"`
+	// OpenIssues is the upstream's COMBINED open tally: it counts open pull
+	// requests as open issues, which is why nothing renders it directly. It is
+	// one half of the subtraction that produces the two figures the card
+	// draws, and it costs no request — the document already carries it.
+	OpenIssues int64 `json:"open_issues_count"`
+}
+
+// searchCountEntry is the projection over the pull-request tally document, and
+// a projection for a sharper reason than repositoryEntry's: that answer
+// carries a full result item per match, complete with account profiles this
+// package must never hold, log, or serve (requirement 12). Reading the single
+// aggregate and discarding the items is the whole point of the shape.
+//
+// The count is a POINTER so an unrelated JSON object is distinguishable from a
+// genuine zero. A repository with no open pull requests reports 0 and that is
+// data; a document that never mentioned the field reports nothing, and the
+// panel must not read that as "none open".
+type searchCountEntry struct {
+	// Total is the number of matches the upstream counted.
+	Total *int64 `json:"total_count"`
 }
 
 // maxSeriesDays bounds a mapped activity series. The configured endpoints

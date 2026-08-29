@@ -187,6 +187,15 @@ func NewFetchSource(fallback SnapshotSource, config FetchConfig, specs panelFetc
 			if err := validateEndpoint(source.Endpoint, config.Hosts); err != nil {
 				return nil, err
 			}
+			// The tally document is a second reachable URL and gets the
+			// identical construction-time host check, because "optional" is
+			// about whether it is configured, never about whether it is
+			// checked.
+			if source.PullsEndpoint != "" {
+				if err := validateEndpoint(source.PullsEndpoint, config.Hosts); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	return &FetchSource{
@@ -726,13 +735,13 @@ func calendarRequestBody(query string, now time.Time) ([]byte, error) {
 // The degradation rule is the one mergeUsagePayload established, applied per
 // ROW: a repository whose document could not be read or admitted serves the
 // shipped snapshot's row for that name, marked recorded, and the envelope
-// reports stale. A mixed payload is therefore normal and legible — five live
-// rows beside one that says it is not — rather than an all-or-nothing panel
-// that blanks six repositories because one endpoint had a bad minute.
+// reports stale. A mixed payload is therefore normal and legible — live rows
+// beside one that says it is not — rather than an all-or-nothing panel that
+// blanks every repository because one endpoint had a bad minute.
 //
 // A round in which NOTHING could be read is an error, so the caller keeps
-// serving the payload it already has instead of replacing six live rows with
-// six recorded ones.
+// serving the payload it already has instead of replacing every live row with
+// a recorded one.
 func (s *FetchSource) refreshProjects(ctx context.Context, doer fetchDoer, env func(string) string, now time.Time) (loadedPayload, error) {
 	spec := s.specs.projects
 	if !s.reserve(roleCodingProjects, now, s.config.endpointInterval(spec.MinIntervalMinutes)) {
@@ -764,7 +773,7 @@ func (s *FetchSource) refreshProjects(ctx context.Context, doer fetchDoer, env f
 				slog.String("repo", source.Name), slog.Any("error", err))
 			continue
 		}
-		row, err := mapRepository(body, source.Name, now)
+		row, err := mapRepository(body, source.Name, s.openPullCount(ctx, doer, request, source, now), now)
 		if err != nil {
 			logger.LogAttrs(ctx, slog.LevelWarn, "repository source failed",
 				slog.String("repo", source.Name), slog.Any("error", err))
@@ -793,6 +802,43 @@ func (s *FetchSource) refreshProjects(ctx context.Context, doer fetchDoer, env f
 	// Marshaling the package-owned payload cannot fail.
 	data, _ := json.Marshal(merged)
 	return loadedPayload{generatedAt: now.Format(time.RFC3339), data: data, status: status}, nil
+}
+
+// openPullCount reads one repository's open pull-request tally, or returns nil
+// when the source names no such document or the read does not hold up.
+//
+// Nil is a first-class answer here rather than an error, and that is the whole
+// design of this second request: it can fail without costing the row. The
+// caller still serves a LIVE repository row — description, stars, push instant
+// — and the two derived tallies simply are not there, which the frontend draws
+// as a dash. Losing a count is not a reason to fall the whole row back to a
+// captured one and tell the reader its description is stale.
+//
+// The credential rides on this request exactly as it does on the repository
+// one, because it is the same host and the same rate budget; it is read from
+// the environment by the caller, flows into a header, and is neither stored
+// nor logged (requirement 12).
+func (s *FetchSource) openPullCount(ctx context.Context, doer fetchDoer, request fetchRequest, source codingProjectSourceSpec, now time.Time) *int64 {
+	if source.PullsEndpoint == "" {
+		return nil
+	}
+	attempt := request
+	attempt.endpoint = source.PullsEndpoint
+	body, err := s.fetchDocument(ctx, doer, attempt)
+	if err == nil {
+		var total int64
+		if total, err = mapOpenPullCount(body, source.Name); err == nil {
+			return &total
+		}
+	} else {
+		s.coolOnRateLimit(roleCodingProjects, now, err)
+	}
+	// Narrated HERE or nowhere, for the same reason the row failure is: this
+	// is the end of the line for the error. The repo name is configuration
+	// data and the chain names a host at most; no URL.
+	s.log().LogAttrs(ctx, slog.LevelWarn, "repository pull-request tally failed",
+		slog.String("repo", source.Name), slog.Any("error", err))
+	return nil
 }
 
 // commitSection returns the recent-commit rows to serve, the instant they

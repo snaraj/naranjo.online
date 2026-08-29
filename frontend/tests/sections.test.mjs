@@ -25,6 +25,7 @@ import { section, sectionHref, staticBlock } from '../src/lib/blocks.ts';
 import { feedCardRegions, feedCardVariants, formatIsoDate } from '../src/lib/feed.ts';
 import { workByline, workBylineSeparator, workEntries, workHistoryProps } from '../src/lib/work.ts';
 import {
+  codingProjectsPanelId,
   codingProjectsProps,
   projectCounts,
   updatedLabel,
@@ -682,8 +683,8 @@ test('an entry draws only the body regions it has, and every shipped entry has o
 // Projects: the coding half
 // ---------------------------------------------------------------------------
 
-test('the six repositories are the owner’s, at the addresses the owner gave', () => {
-  assert.equal(projects.length, 6);
+test('the seven repositories are the owner’s, at the addresses the owner gave', () => {
+  assert.equal(projects.length, 7);
   // The exact URLs, verbatim from the owner's list. The host is written once
   // and the row supplies its name, so this pin proves the derivation as well
   // as the addresses.
@@ -691,6 +692,7 @@ test('the six repositories are the owner’s, at the addresses the owner gave', 
     'https://github.com/snaraj/naranjo.online',
     'https://github.com/snaraj/website-infrastructure',
     'https://github.com/snaraj/lidersea.com',
+    'https://github.com/snaraj/dotfiles',
     'https://github.com/snaraj/foobar2000-lyricsbuddy',
     'https://github.com/snaraj/foobar2000-library-visualizer',
     'https://github.com/snaraj/foobar2000-album-visualizer',
@@ -711,9 +713,18 @@ test('the six repositories are the owner’s, at the addresses the owner gave', 
     'naranjo.online on GitHub, opens in a new tab'
   );
   const captured = codingProjectsProps(null);
+  // Compared against the feed's OWN order (issue 252) rather than the module
+  // list's, because they are no longer the same thing: the module list is a
+  // maintenance order and the feed is sorted by last push. Sorting the
+  // expectation the same way keeps this test about identity — every entry's
+  // title, address and accessible name derived from the captured row — and
+  // leaves the ordering claim to the test that exists for it.
+  const byPush = projects.toSorted(
+    (left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt)
+  );
   assert.deepEqual(
     captured.entries.map((entry) => [entry.title, entry.href, entry.linkLabel, entry.summary]),
-    projects.map((project) => [project.name, projectUrl(project), projectLinkLabel(project), project.description])
+    byPush.map((project) => [project.name, projectUrl(project), projectLinkLabel(project), project.description])
   );
   assert.equal(captured.variant, 'compact');
   assert.equal(captured.titleLevel, 4, 'project entries sit under the subsection h3');
@@ -729,26 +740,30 @@ test('the six repositories are the owner’s, at the addresses the owner gave', 
 });
 
 test('a count of one is a count of one thing', () => {
-  // Two of the six repositories genuinely carry a single commit, and several a
+  // Two of the repositories genuinely carry a single commit, and several a
   // single star. "1 commits" is the small lie a page tells when nobody
   // executes its labels. The clock is FIXED here so the third count — how
   // long since the last push (0.1.52) — is executed as arithmetic rather
   // than asserted around a moving now.
   const noon = Date.parse('2026-08-27T12:00:00Z');
   const row = { name: 'x', description: 'x', pushedAt: '2026-08-24T12:00:00Z' };
+  // The open-work pair reports nothing without a panel row, so the trailing
+  // two labels here are the honest not-reported sentence throughout; the
+  // singular/plural of THOSE is executed by the icon test below.
+  const unreported = ['open issues not reported', 'open pull requests not reported'];
   assert.deepEqual(
     projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon).map((count) => count.label),
-    ['1 commit', '1 star', 'updated 3 days ago']
+    ['1 commit', '1 star', 'updated 3 days ago', ...unreported]
   );
   assert.deepEqual(
     projectCounts({ ...row, commits: 0, stars: 20 }, undefined, noon).map((count) => count.label),
-    ['0 commits', '20 stars', 'updated 3 days ago']
+    ['0 commits', '20 stars', 'updated 3 days ago', ...unreported]
   );
   // Grouped through the same whole-number renderer every other figure on the
   // page uses, so a four-figure count does not suddenly read differently.
   assert.deepEqual(
     projectCounts({ ...row, commits: 1234, stars: 5678 }, undefined, noon).map((count) => count.label),
-    ['1,234 commits', '5,678 stars', 'updated 3 days ago']
+    ['1,234 commits', '5,678 stars', 'updated 3 days ago', ...unreported]
   );
   // Every band of the since-sentence, against the same fixed clock — and the
   // singular derived exactly as the other counts derive theirs.
@@ -760,19 +775,140 @@ test('a count of one is a count of one thing', () => {
   assert.equal(updatedLabel('2025-08-20T12:00:00Z', noon), 'updated 1 year ago');
   assert.equal(updatedLabel('2023-08-27T12:00:00Z', noon), 'updated 3 years ago');
   // The adapter carries the same labels into the log, with the glyph beside
-  // the words rather than instead of them.
+  // the words rather than instead of them. Against the feed's LEADING entry,
+  // which is the most recently pushed repository rather than the module list's
+  // first row (issue 252).
+  const leading = projects.toSorted(
+    (left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt)
+  )[0];
   assert.deepEqual(
     codingProjectsProps(null, noon).entries[0].counts.map((count) => count.label),
-    projectCounts(projects[0], undefined, noon).map((count) => count.label)
+    projectCounts(leading, undefined, noon).map((count) => count.label)
   );
   assert.deepEqual(
     codingProjectsProps(null).entries[0].counts.map((count) => count.glyph),
-    ['node', 'star', 'clock'],
+    ['node', 'star', 'clock', 'issue', 'pull'],
     'each count names its generic glyph; the drawing is the component’s'
   );
   // The figure is TEXT beside the glyph, never carried by the glyph alone.
   assert.match(entryLog, /\{count\.label\}/);
   assert.match(entryLog, /aria-hidden="true"/);
+});
+
+test('the feed leads with the repository pushed most recently (issue 252)', () => {
+  // The owner's report, reproduced: a push landed and the section still led
+  // with something else, because the order was the order this module's rows
+  // are WRITTEN in. Sorting must come from the data.
+  //
+  // The captured list's own order and its push order DISAGREE, which is what
+  // makes this fail when the sort is removed rather than pass by luck; the
+  // second assertion below refuses to let that stop being true silently.
+  const captured = codingProjectsProps(null).entries.map((entry) => entry.title);
+  const expected = projects
+    .toSorted((left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt))
+    .map((project) => project.name);
+  assert.deepEqual(captured, expected);
+  assert.notDeepEqual(
+    captured,
+    projects.map((project) => project.name),
+    'the captured list happens to be in push order, so this test proves nothing; reorder the fixture'
+  );
+
+  // And with a panel: the LIVE instants win, so a repository the module list
+  // records as quiet leads the moment the host says it was pushed.
+  const envelope = {
+    schema: 'panel/v1',
+    id: codingProjectsPanelId,
+    kind: 'coding-projects/v1',
+    title: 'Coding Projects',
+    generatedAt: '2026-08-29T12:00:00Z',
+    status: 'ok',
+    data: {
+      repos: projects.map((project, index) => ({
+        name: project.name,
+        description: project.description,
+        stars: 1,
+        // Exactly reversed against the captured order.
+        pushedAt: new Date(Date.UTC(2026, 0, 1 + (projects.length - index))).toISOString()
+      }))
+    }
+  };
+  assert.deepEqual(
+    codingProjectsProps(envelope).entries.map((entry) => entry.title),
+    projects.map((project) => project.name),
+    'the feed ordered by the captured instants while the panel carried newer ones'
+  );
+
+  // A row the origin fell back on serves its CAPTURED instant, and is ordered
+  // by that — a recorded row must not claim a live position any more than it
+  // claims a live description.
+  const stale = {
+    ...envelope,
+    data: {
+      repos: envelope.data.repos.map((row) => ({ ...row, recorded: true }))
+    }
+  };
+  assert.deepEqual(
+    codingProjectsProps(stale).entries.map((entry) => entry.title),
+    expected,
+    'a recorded row was ordered by an instant it was not vouching for'
+  );
+});
+
+test('open issues and open pull requests are told with icons and a number (issue 252)', () => {
+  const noon = Date.parse('2026-08-29T12:00:00Z');
+  const project = { name: 'x', description: 'x', commits: 1, stars: 1, pushedAt: '2026-08-29T09:00:00Z' };
+  const live = {
+    name: 'x',
+    description: 'x',
+    stars: 1,
+    pushedAt: '2026-08-29T09:00:00Z',
+    openIssues: 1,
+    openPulls: 4
+  };
+  const [, , , issues, pulls] = projectCounts(project, live, noon);
+  // The owner's instruction: the CARD does not read "open prs". The visible
+  // channel is the glyph and the figure...
+  assert.equal(issues.value, '1');
+  assert.equal(pulls.value, '4');
+  // ...and the words are in the accessible name, complete and plural-correct,
+  // so the icon is never the only thing carrying the meaning.
+  assert.equal(issues.label, '1 open issue');
+  assert.equal(pulls.label, '4 open pull requests');
+  assert.equal(
+    projectCounts(project, { ...live, openIssues: 2, openPulls: 1 }, noon)[4].label,
+    '1 open pull request'
+  );
+
+  // A tally the payload does not carry is a DASH, never a zero: those are
+  // different claims and only one of them is supported.
+  const [, , , unknownIssues, unknownPulls] = projectCounts(project, { ...live, openIssues: undefined, openPulls: undefined }, noon);
+  assert.equal(unknownIssues.value, '—');
+  assert.equal(unknownIssues.label, 'open issues not reported');
+  assert.equal(unknownPulls.value, '—');
+  // A REPORTED zero is a measurement and renders as one.
+  assert.equal(projectCounts(project, { ...live, openIssues: 0 }, noon)[3].value, '0');
+  assert.equal(projectCounts(project, { ...live, openIssues: 0 }, noon)[3].label, '0 open issues');
+
+  // The component draws both glyphs in the page's own language — one ink,
+  // bound to currentColor — so a forced-colours or monochrome render keeps
+  // them, and marks them decorative because the accessible name is the text.
+  for (const glyph of ["count.glyph === 'issue'", "count.glyph === 'pull'"]) {
+    assert.ok(entryLog.includes(glyph), `the entry log draws no ${glyph} branch`);
+  }
+  assert.equal(
+    [...entryLog.matchAll(/(?:fill|stroke)="(?!none)([^"]*)"/g)].every(
+      ([, paint]) => paint === 'currentColor'
+    ),
+    true,
+    'a glyph paints an ink that is not currentColor'
+  );
+  // The words are hidden by CLIPPING, never by display:none or hidden, both of
+  // which would take them out of the accessibility tree and leave the glyph
+  // carrying the figure alone.
+  assert.match(entryLog, /<span class="entry-count-words">\{count\.label\}<\/span>/);
+  assert.match(styleBlock(entryLog), /\.entry-count-words \{[^}]*clip-path: inset\(50%\)/s);
+  assert.doesNotMatch(styleBlock(entryLog), /\.entry-count-words \{[^}]*display: none/s);
 });
 
 test('the entry-head row stacks or inlines by viewport alone, never by title length (issue 188)', () => {

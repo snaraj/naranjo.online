@@ -414,8 +414,14 @@ together — which is also the list to re-read before changing any of them:
      answering it with staleness.
    - The **repository rows** (the Coding Projects feed) and the commit lists
      use the token only for rate headroom. Those documents are public: an
-     anonymous read returns the same description, tally and push instant, on
+     anonymous read returns the same description, tallies and push instant, on
      a smaller per-address budget. Nothing they serve depends on the token.
+     Each repository row is TWO reads rather than one — the repository
+     document, and a bounded count of that repository's open pull requests,
+     because the first reports a single open tally that counts pull requests
+     as issues. Both are public, so the second costs rate budget and nothing
+     else; when it fails, the row keeps its live description and serves a dash
+     for the two counts instead of falling back whole.
 
    Creating the token — fine-grained, read-only, minimal — and the Secret is
    an owner step taken at the owner's own timing. Nothing in this repository

@@ -82,12 +82,41 @@
     "contentType": "application/json",
     "minIntervalMinutes": 15,
     "sources": [
-      { "name": "naranjo.online", "endpoint": "https://api.github.com/repos/snaraj/naranjo.online" },
-      { "name": "website-infrastructure", "endpoint": "https://api.github.com/repos/snaraj/website-infrastructure" },
-      { "name": "lidersea.com", "endpoint": "https://api.github.com/repos/snaraj/lidersea.com" },
-      { "name": "foobar2000-lyricsbuddy", "endpoint": "https://api.github.com/repos/snaraj/foobar2000-lyricsbuddy" },
-      { "name": "foobar2000-library-visualizer", "endpoint": "https://api.github.com/repos/snaraj/foobar2000-library-visualizer" },
-      { "name": "foobar2000-album-visualizer", "endpoint": "https://api.github.com/repos/snaraj/foobar2000-album-visualizer" }
+      {
+        "name": "naranjo.online",
+        "endpoint": "https://api.github.com/repos/snaraj/naranjo.online",
+        "pullsEndpoint": "https://api.github.com/search/issues?q=repo%3Asnaraj%2Fnaranjo.online+is%3Apr+is%3Aopen&per_page=1"
+      },
+      {
+        "name": "website-infrastructure",
+        "endpoint": "https://api.github.com/repos/snaraj/website-infrastructure",
+        "pullsEndpoint": "https://api.github.com/search/issues?q=repo%3Asnaraj%2Fwebsite-infrastructure+is%3Apr+is%3Aopen&per_page=1"
+      },
+      {
+        "name": "lidersea.com",
+        "endpoint": "https://api.github.com/repos/snaraj/lidersea.com",
+        "pullsEndpoint": "https://api.github.com/search/issues?q=repo%3Asnaraj%2Flidersea.com+is%3Apr+is%3Aopen&per_page=1"
+      },
+      {
+        "name": "dotfiles",
+        "endpoint": "https://api.github.com/repos/snaraj/dotfiles",
+        "pullsEndpoint": "https://api.github.com/search/issues?q=repo%3Asnaraj%2Fdotfiles+is%3Apr+is%3Aopen&per_page=1"
+      },
+      {
+        "name": "foobar2000-lyricsbuddy",
+        "endpoint": "https://api.github.com/repos/snaraj/foobar2000-lyricsbuddy",
+        "pullsEndpoint": "https://api.github.com/search/issues?q=repo%3Asnaraj%2Ffoobar2000-lyricsbuddy+is%3Apr+is%3Aopen&per_page=1"
+      },
+      {
+        "name": "foobar2000-library-visualizer",
+        "endpoint": "https://api.github.com/repos/snaraj/foobar2000-library-visualizer",
+        "pullsEndpoint": "https://api.github.com/search/issues?q=repo%3Asnaraj%2Ffoobar2000-library-visualizer+is%3Apr+is%3Aopen&per_page=1"
+      },
+      {
+        "name": "foobar2000-album-visualizer",
+        "endpoint": "https://api.github.com/repos/snaraj/foobar2000-album-visualizer",
+        "pullsEndpoint": "https://api.github.com/search/issues?q=repo%3Asnaraj%2Ffoobar2000-album-visualizer+is%3Apr+is%3Aopen&per_page=1"
+      }
     ]
   },
   "tokenUsage": {

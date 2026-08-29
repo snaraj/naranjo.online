@@ -506,11 +506,25 @@ export type MediaGalleryProps = {
 /* --- EntryLog: a feed of titled entries ---------------------------------- */
 
 /* One counter beside a linked entry's title: a small drawn glyph and the
- * visible words that carry the figure (never the glyph alone). */
+ * figure it counts. `label` is the counter's whole meaning in words and is
+ * what a screen reader always hears — the glyph is never the only channel.
+ *
+ * `value` is the TERSE rendering (issue 252, owner directive): a counter that
+ * declares one draws the glyph and the bare figure, and moves the words behind
+ * it into the accessible name. It exists because two of these counters — open
+ * issues and open pull requests — are conventional enough to read as glyph and
+ * number, and spelling them out was the owner's explicit "don't write open
+ * prs". It is NOT a licence to hide a figure: `value` carries the NUMBER, so
+ * the value is still never encoded by glyph or colour alone, and `label` still
+ * carries the complete sentence for anyone who cannot see the glyph.
+ *
+ * A counter with no `value` renders `label` visibly, which is what every
+ * counter did before this one arrived and what most still do. */
 export type EntryCount = {
   readonly key: string;
-  readonly glyph: 'node' | 'star' | 'clock';
+  readonly glyph: 'node' | 'star' | 'clock' | 'issue' | 'pull';
   readonly label: string;
+  readonly value?: string;
   /* Marked figures carry the provenance-by-exception suffix, the same one the
    * usage tiles carry and worded identically, so a reader learns one mark for
    * "this was recorded out of band" across the whole page rather than one per

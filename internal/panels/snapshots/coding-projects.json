@@ -1,26 +1,41 @@
 {
-  "generatedAt": "2026-08-28T03:00:00Z",
+  "generatedAt": "2026-08-29T10:15:00Z",
   "data": {
     "repos": [
       {
         "name": "naranjo.online",
-        "description": "Welcome to my personal website",
+        "description": "Personal Website & Media Gallery",
         "stars": 1,
-        "pushedAt": "2026-08-28T02:36:21Z",
+        "pushedAt": "2026-08-29T07:02:14Z",
+        "openIssues": 2,
+        "openPulls": 0,
         "recorded": true
       },
       {
         "name": "website-infrastructure",
         "description": "My infrastructure for self-hosting scalable and secure applications using Kubernetes",
         "stars": 1,
-        "pushedAt": "2026-08-28T02:58:56Z",
+        "pushedAt": "2026-08-29T08:12:06Z",
+        "openIssues": 22,
+        "openPulls": 0,
         "recorded": true
       },
       {
         "name": "lidersea.com",
         "description": "The home of lidersea.com",
         "stars": 1,
-        "pushedAt": "2026-08-27T23:20:26Z",
+        "pushedAt": "2026-08-29T07:01:55Z",
+        "openIssues": 4,
+        "openPulls": 0,
+        "recorded": true
+      },
+      {
+        "name": "dotfiles",
+        "description": "My dotfiles",
+        "stars": 0,
+        "pushedAt": "2026-08-29T10:13:44Z",
+        "openIssues": 0,
+        "openPulls": 0,
         "recorded": true
       },
       {
@@ -28,6 +43,8 @@
         "description": "LyricsBuddy is a native x64 lyrics panel for foobar2000. It combines a Spotify-inspired reading experience with local-first lyric discovery, precise LRC synchronization, safe customization, and an extensible provider model.",
         "stars": 2,
         "pushedAt": "2026-08-07T00:19:49Z",
+        "openIssues": 0,
+        "openPulls": 0,
         "recorded": true
       },
       {
@@ -35,6 +52,8 @@
         "description": "Library Visualizer is a highly customizable Foobar2000 Component that renders and displays selected music library.",
         "stars": 2,
         "pushedAt": "2026-08-07T00:16:32Z",
+        "openIssues": 0,
+        "openPulls": 0,
         "recorded": true
       },
       {
@@ -42,6 +61,8 @@
         "description": "Album Visualizer is a highly customizable foobar2000 component that displays the complete track list for either the album currently playing or the album selected in a playlist or Media Library view.",
         "stars": 2,
         "pushedAt": "2026-08-02T05:49:53Z",
+        "openIssues": 0,
+        "openPulls": 0,
         "recorded": true
       }
     ]

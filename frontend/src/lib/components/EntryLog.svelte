@@ -31,6 +31,15 @@
   rendered as text beside it, so nothing on this card is carried by a picture
   alone.
 
+  A counter carrying `value` renders TERSELY — the glyph and the bare figure —
+  and that is the one place the words leave the visible surface (issue 252).
+  They do not leave the DOM: the complete sentence moves into a clipped span
+  that every screen reader still reads, the visible figure is marked
+  aria-hidden so it is not announced twice, and the FIGURE is still drawn. The
+  dataviz floor is intact — a value here is never carried by the glyph alone,
+  only ever by glyph plus number — and so is the accessible name. Hiding the
+  number instead of the words would have broken both.
+
   A placeholder entry says so in the DOM (`data-placeholder`), because the
   honest-states floor is what stops a page from presenting filler under a
   real heading as though it described a real record. -->
@@ -94,6 +103,36 @@
                             stroke-linecap="round"
                           />
                         </svg>
+                      {:else if count.glyph === 'issue'}
+                        <!-- An open issue: the ring-and-dot every code host
+                          draws for one. -->
+                        <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                          <circle cx="12" cy="12" r="8.4" fill="none" stroke="currentColor" stroke-width="2" />
+                          <circle cx="12" cy="12" r="2.6" fill="currentColor" />
+                        </svg>
+                      {:else if count.glyph === 'pull'}
+                        <!-- An open pull request: a branch leaving one line
+                          and arriving at another, arrowhead at the join. -->
+                        <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                          <circle cx="6.6" cy="6" r="2.6" fill="none" stroke="currentColor" stroke-width="2" />
+                          <circle cx="6.6" cy="18" r="2.6" fill="none" stroke="currentColor" stroke-width="2" />
+                          <circle cx="17.4" cy="18" r="2.6" fill="none" stroke="currentColor" stroke-width="2" />
+                          <path
+                            d="M6.6 8.6v6.8M17.4 15.4V6.6"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                          />
+                          <path
+                            d="M14.2 9.8l3.2-3.2 3.2 3.2"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          />
+                        </svg>
                       {:else if count.glyph === 'clock'}
                         <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
                           <circle cx="12" cy="12" r="8.4" fill="none" stroke="currentColor" stroke-width="2" />
@@ -114,7 +153,12 @@
                           />
                         </svg>
                       {/if}
-                      <span class="entry-count-text">{count.label}</span>
+                      {#if count.value === undefined}
+                        <span class="entry-count-text">{count.label}</span>
+                      {:else}
+                        <span class="entry-count-text" aria-hidden="true">{count.value}</span>
+                        <span class="entry-count-words">{count.label}</span>
+                      {/if}
                       {#if count.marked}
                         <span class="entry-recorded" title="recorded out of band, not fetched live"
                           >· recorded</span
@@ -313,6 +357,10 @@
      card. Without it the mark would be an unwrappable third item and the row
      would push the card wide again by another route. */
   .entry-count {
+    /* The containing block for the clipped words below, so a 1px out-of-flow
+       box is anchored inside the counter it belongs to rather than to whatever
+       positioned ancestor it would otherwise find. */
+    position: relative;
     display: inline-flex;
     flex-wrap: wrap;
     align-items: center;
@@ -323,6 +371,22 @@
   }
 
   .entry-count-text {
+    white-space: nowrap;
+  }
+
+  /* The words behind a terse counter (issue 252). HIDDEN BY CLIPPING, never by
+     `display: none` or `hidden`, both of which would take the text out of the
+     accessibility tree entirely and leave the glyph carrying the meaning alone
+     — which is the failure this span exists to prevent. It contributes no box:
+     absolutely positioned out of flow, so it adds nothing to the card's
+     min-content width and cannot reintroduce the sideways-scroll regression
+     `.entry-recorded` documents above. */
+  .entry-count-words {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
     white-space: nowrap;
   }
 
