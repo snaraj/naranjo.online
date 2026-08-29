@@ -1171,8 +1171,31 @@ const galleryMarkup = stripComments(mediaGallery).markup;
  * every URL in this component lives in one of those two places. Inside the
  * script the strip is delimiter-aware: it tracks quoted and template strings
  * so a `//` inside a string literal is content there too. */
+/* The <script> region, written ONCE and matched case-insensitively.
+ *
+ * HTML tag names are case-insensitive, so a filter that knows only the
+ * lowercase spelling is a filter with a hole in it: an upper-case <SCRIPT>
+ * block would not be recognised as script at all, and every line comment
+ * inside it would survive into text these walks read as code — the exact
+ * failure the strip exists to prevent, reintroduced through the spelling of
+ * the tag rather than through the comment. CodeQL flags it as
+ * js/bad-tag-filter, and the alert is right even though this file's only
+ * real subject is one lowercase Svelte component: a pin whose correctness
+ * depends on nobody ever typing a tag differently is a pin resting on a
+ * habit.
+ *
+ * The closing tag tolerates trailing whitespace for the same reason — HTML
+ * permits `</script >` and a filter that does not know it stops early.
+ *
+ * It is a SOURCE STRING rather than a shared RegExp because a /g regex
+ * carries lastIndex: handing one instance to both a replace and a matchAll
+ * is a state bug waiting for a third caller, and building a fresh one per
+ * site costs nothing in a test. */
+const scriptRegionSource = '(<script\\b[^>]*>)([\\s\\S]*?)(<\\/script\\s*>)';
+const scriptRegions = () => new RegExp(scriptRegionSource, 'gi');
+
 function stripLineComments(source) {
-  return source.replace(/(<script\b[^>]*>)([\s\S]*?)(<\/script>)/g, (whole, open, body, close) => {
+  return source.replace(scriptRegions(), (whole, open, body, close) => {
     let out = '';
     let quote = null;
     for (let at = 0; at < body.length; at += 1) {
@@ -1220,6 +1243,43 @@ test('the prose-free source strips line comments only where // is a comment (iss
   );
   assert.doesNotMatch(mutant, /<button/, 'a // comment inside <script> still reaches the walks');
 
+  /* THE SAME COMMENT, IN A TAG SPELLED DIFFERENTLY. HTML tag names are
+     case-insensitive, so <SCRIPT> is script — and a strip that only knew the
+     lowercase spelling would hand this block straight through with its
+     comment intact, reintroducing the defect above through the spelling of
+     the tag rather than through the comment. Every casing that a browser
+     treats as one, this must treat as one; the trailing-space close is here
+     for the same reason, since HTML permits it and a filter that does not
+     know it stops early and strips nothing. */
+  for (const [open, close] of [
+    ['<SCRIPT>', '</SCRIPT>'],
+    ['<Script>', '</script>'],
+    ['<script>', '</SCRIPT >'],
+  ]) {
+    assert.doesNotMatch(
+      stripLineComments([open, '  // <button that is prose, not a control', close].join('\n')),
+      /<button/,
+      `a // comment inside ${open}…${close} still reaches the walks; the tag filter knows only one spelling`
+    );
+  }
+  /* And the other direction, so the casing tolerance cannot become a licence
+     to strip outside script: markup is still markup whatever its case.
+     Deliberately an UNQUOTED URL in an element's BODY, which is the only
+     placement that can tell this apart — a URL in an attribute rides in the
+     opening tag, which the replacer preserves verbatim, and a quoted one is
+     protected by the string tracking, so either would pass against a filter
+     that had stopped caring which tag it was in at all. That exact mutant
+     survived the first draft of this assertion. */
+  for (const [markup, kept] of [
+    ['<P>see https://example.invalid/d for more</P>', 'https://example.invalid/d for more'],
+    ['<div>https://example.invalid/e</div>', 'https://example.invalid/e'],
+  ]) {
+    assert.ok(
+      stripLineComments(markup).includes(kept),
+      `${markup} was scanned as script; only <script> regions may lose a //`
+    );
+  }
+
   /* And the property the naive repair would destroy. Both of these are places
      `//` is NOT a comment, so both must survive whole — the line as well as
      the URL, because a truncated line loses whatever followed it. */
@@ -1246,7 +1306,7 @@ test('the prose-free source strips line comments only where // is a comment (iss
   // below read. Both halves are needed — the first proves this strip has
   // something to do here at all, the second that it did it.
   const scriptBody = (source) =>
-    [...source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map(([, body]) => body).join('\n');
+    [...source.matchAll(scriptRegions())].map(([, , body]) => body).join('\n');
   assert.match(
     scriptBody(stripComments(mediaGallery).markup),
     /(?:^|\n)\s*\/\//,
