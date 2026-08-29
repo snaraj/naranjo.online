@@ -168,7 +168,8 @@ complete string is a reference, never a tag. See
 ## Panels
 
 `/api/panels` serves small, versioned, read-only display panels — token
-usage, version-control activity, a boss log. Every response is the same
+usage, version-control activity, a boss log, and the owner's public
+repositories as their host currently describes them. Every response is the same
 `panel/v1` envelope, prepared in memory at construction so a request is a map
 lookup and one write, and every payload carries a `status` of `ok`, `stale`,
 or `unavailable` that describes where the data actually came from. A panel
@@ -181,13 +182,32 @@ once at startup. The second is a **background live fetch**, which is opt-in,
 disabled by default, and the only reason this process would ever make an
 outbound request.
 
-Most of the live producers need no credential at all — the game hiscores, the
-version-control contribution calendar, and the public per-repository commit
-lists are public documents — so they are gated by `PANELS_REFRESH` and an
-egress allowance alone. Their configuration has no field a credential could be
-written into, and the one general escape hatch left, the static request-header
-map, admits exactly one header name. The token-usage producers additionally
-need credentials, and a source whose credential is absent is simply skipped.
+Producers divide by what a credential actually buys them, and the division is
+worth reading rather than assuming.
+
+The game hiscores need none and have none: their configuration carries no
+field a credential could be written into, and the one general escape hatch —
+the static request-header map — admits exactly one header name.
+
+The **repository metadata** and the **public per-repository commit lists** are
+public documents that read perfectly well anonymously; a credential buys them
+only rate headroom, so an unset variable changes nothing about what they
+serve.
+
+The **contribution calendar** has two producers, and which one answers changes
+what the number MEANS. Anonymous, it reads the public contribution document,
+which reports only what an anonymous reader may see. Credentialed, it reads
+the account holder's own record through a query API — private repositories
+included, which is the whole point. Both are live, so the payload declares its
+coverage and the page words the figure accordingly rather than letting one
+number quietly stand in for the other. This is also the one producer that
+POSTs: the query travels in a request body this package builds from config
+data and its own clock, never from any part of any upstream answer, and the
+method follows the presence of that body rather than any configurable field.
+
+The **token-usage** producers need credentials outright. A source whose
+credential is absent is simply skipped — never an error, never a fabricated
+number.
 
 Mounted panels re-read their envelope roughly once a minute and stop entirely
 while the tab is hidden. Because each response carries a digest ETag, an
@@ -371,9 +391,35 @@ together — which is also the list to re-read before changing any of them:
    never stored, logged, or served. **No key, and no reference to a key,
    belongs in this repository** (requirement 12). A source whose variable is
    unset is simply skipped; it is never an error and never a fabricated
-   number. This applies to the token-usage producers ONLY — the game
-   hiscores, the contribution calendar, and the commit lists are zero-secret
-   by construction and need nothing from this step.
+   number. The game hiscores stay zero-secret by construction and need
+   nothing from this step. The **version-control producers** gained one on
+   2026-08-28 (issue 242), and it behaves differently from the token-usage
+   ones in a way worth stating rather than inferring:
+
+   - `GITHUB_PANELS_TOKEN` is wired by the chart from the Secret named by
+     `panels.refresh.tokenSecret`, **optionally** — a Secret that does not
+     exist yet leaves the variable unset, the pod schedules normally, and
+     nothing is an outage. That is the state this chart ships in.
+   - The **contribution calendar** is the producer the token actually
+     changes. Without it the panel reads the public contribution document,
+     which reports only what an anonymous reader may see; with it the panel
+     reads the account holder's own record, private repositories included.
+     Both are live and both are true, so the payload declares which one it
+     is and the page words the figure accordingly — "916 contributions"
+     against "499 public contributions", never one number quietly standing
+     in for the other. A credentialed read that FAILS does not fall back to
+     the public one: the round fails, the last good payload keeps serving as
+     stale, and the next round tries again, because answering a transient
+     fault by silently switching to a much smaller figure is worse than
+     answering it with staleness.
+   - The **repository rows** (the Coding Projects feed) and the commit lists
+     use the token only for rate headroom. Those documents are public: an
+     anonymous read returns the same description, tally and push instant, on
+     a smaller per-address budget. Nothing they serve depends on the token.
+
+   Creating the token — fine-grained, read-only, minimal — and the Secret is
+   an owner step taken at the owner's own timing. Nothing in this repository
+   grants it.
 3. An egress allowance for the hosts in that file's `hosts` allowlist. This is
    the one the chart itself used to withhold: its NetworkPolicy denied every
    outbound connection, so refresh alone bought nothing but failed attempts and

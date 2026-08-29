@@ -187,7 +187,7 @@ export function formatDuration(seconds: number): string {
  * dash — never as a zero, which would be a different claim. */
 export function formatStatValue(value: number | null, unit: TokenStatUnit): string {
   if (value === null) {
-    return '--';
+    return unknownFigure;
   }
   if (unit === 'days') {
     return `${value} ${value === 1 ? 'day' : 'days'}`;
@@ -628,10 +628,32 @@ export interface CategoryShare {
   key: string;
   /* The category's total across the whole series window. */
   total: number;
-  /* Its share of the window's grand total, in percent (0 when the window is
-   * empty); shares are computed from the same integers the grid draws, so
-   * the bar and the numbers can never disagree. */
-  pct: number;
+  /* Its share of the window's grand total, in percent, or NULL when the
+   * window recorded nothing at all — because a share of nothing is not zero
+   * percent, it is unknown, and the two are different claims (owner
+   * directive, 2026-08-28: "if its either 0 or unknown I rather it be
+   * Unknown").
+   *
+   * This used to be 0, and 0 was a lie with a bar drawn under it: an empty
+   * model window rendered five rows all reading "0%", each carrying a
+   * provenance mark, implying five measured proportions where the
+   * denominator had simply never existed. A share the data cannot support
+   * now reaches the same dash an unreported tile has always rendered.
+   *
+   * A share of a window that DID record tokens stays a number, zero
+   * included: a category that genuinely contributed nothing to a real
+   * window is 0%, and that is a measurement. */
+  pct: number | null;
+}
+
+/* unknownFigure is the one spelling of "this is not a number the data can
+ * vouch for", shared by every figure that can be absent so a reader learns one
+ * mark rather than three. */
+export const unknownFigure = '--';
+
+/* formatShare renders a proportion, or the unknown mark when there is none. */
+export function formatShare(pct: number | null): string {
+  return pct === null ? unknownFigure : formatUtilization(pct);
 }
 
 /* categoryShares summarizes the breakdown for the composition strip: one
@@ -646,7 +668,7 @@ export function categoryShares(series: TokenUsageSeries): CategoryShare[] {
     return {
       key: category.key,
       total,
-      pct: grand > 0 ? (total / grand) * 100 : 0
+      pct: grand > 0 ? (total / grand) * 100 : null
     };
   });
 }
@@ -742,7 +764,7 @@ export function modelShares(series: TokenUsageSeries): CategoryShare[] {
   return series.models.map((model, index) => ({
     key: model.key,
     total: totals[index],
-    pct: grand > 0 ? (totals[index] / grand) * 100 : 0
+    pct: grand > 0 ? (totals[index] / grand) * 100 : null
   }));
 }
 
@@ -842,8 +864,11 @@ function usageSection(source: TokenUsageSource): UsageSection {
               key: insight.label,
               label: insight.label,
               marked: mixed && insight.recorded === true,
-              fillPct: insight.pct === null ? 0 : meterFillPct(insight.pct),
-              reading: insight.pct === null ? '--' : formatUtilization(insight.pct)
+              /* A null draws NO bar rather than a zero-width one: a
+                 zero-width fill is visually identical to a measured zero,
+                 which is the exact confusion this change exists to remove. */
+              fillPct: insight.pct === null ? null : meterFillPct(insight.pct),
+              reading: formatShare(insight.pct)
             }))
           }
         : undefined
@@ -962,8 +987,8 @@ function usageComposition(series: TokenUsageSeries): UsageCompositionRow[] | und
     label: categoryLabel(share.key),
     slot: categorySlot(share.key),
     weight: share.total,
-    figure: `${formatTokenCount(share.total)} · ${formatUtilization(share.pct)}`,
-    tooltip: `${categoryLabel(share.key)}: ${formatTokenCount(share.total)} tokens (${formatUtilization(share.pct)})`
+    figure: `${formatTokenCount(share.total)} · ${formatShare(share.pct)}`,
+    tooltip: `${categoryLabel(share.key)}: ${formatTokenCount(share.total)} tokens (${formatShare(share.pct)})`
   }));
 }
 

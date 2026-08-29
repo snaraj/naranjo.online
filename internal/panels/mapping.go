@@ -154,19 +154,28 @@ func mapContributions(raw []byte) (json.RawMessage, error) {
 	if dated != span {
 		return nil, fmt.Errorf("contribution calendar: %d dated cells cover a %d day span; the document is missing days", dated, span)
 	}
-	// SUNDAY ALIGNMENT. Week columns are sliced seven days at a time from the
-	// first covered day, and the frontend derives the trailing padding from
-	// the end date's weekday. The two agree only if a column IS a calendar
-	// week, so an upstream that ever starts its grid on another weekday is
-	// refused rather than silently shifting every cell's date.
-	if first.Weekday() != time.Sunday {
-		return nil, fmt.Errorf("contribution calendar starts on %s, not Sunday; week columns would not line up", first.Weekday())
-	}
 	daily := make([]int, span)
 	total := 0
 	for offset := range daily {
 		daily[offset] = counts[first.AddDate(0, 0, offset).Format(dayLayout)]
 		total += daily[offset]
+	}
+	return calendarPayload(daily, total, first, last, CoveragePublic)
+}
+
+// calendarPayload assembles the served activity payload from a contiguous run
+// of daily counts. Both producers end here, which is what keeps the week
+// chunking, the streak rule, the end date and the empty commit list identical
+// no matter which document was read — the two mappers differ only in how they
+// get from bytes to days.
+func calendarPayload(daily []int, total int, first, last time.Time, coverage string) (json.RawMessage, error) {
+	if first.Weekday() != time.Sunday {
+		// SUNDAY ALIGNMENT. Week columns are sliced seven days at a time from
+		// the first covered day, and the frontend derives the trailing padding
+		// from the end date's weekday. The two agree only if a column IS a
+		// calendar week, so a window starting on another weekday is refused
+		// rather than silently shifting every cell's date.
+		return nil, fmt.Errorf("contribution calendar starts on %s, not Sunday; week columns would not line up", first.Weekday())
 	}
 	payload := VCSActivityData{
 		TotalContributions: total,
@@ -177,10 +186,221 @@ func mapContributions(raw []byte) (json.RawMessage, error) {
 		// from a snapshot would attach recorded data to a live payload. An
 		// empty list is the honest answer until a commit producer exists.
 		RecentCommits: []VCSCommit{},
+		Coverage:      coverage,
 	}
 	// Marshaling the package-owned payload cannot fail.
 	data, _ := json.Marshal(payload)
 	return data, nil
+}
+
+// mapCalendarDocument maps the CREDENTIALED calendar answer onto the same
+// vcs-activity/v1 payload the public document produces. The upstream is JSON
+// this package asked for by name, so it gets decodeStrict rather than a
+// scanner — but the admission is otherwise the identical contract, and one
+// check exists here that the public path has no way to make:
+//
+// The document reports its own total alongside the days, and the two MUST
+// agree. That is the cross-field integrity rule this producer's whole value
+// rests on: the figure the owner sees on their profile is the total, the
+// figure the grid draws is the sum of the days, and a document where those
+// differ is one this package has half-understood. Refusing keeps the last good
+// payload; serving either number would be picking which of two disagreeing
+// claims to publish.
+func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, error) {
+	var document calendarDocument
+	if err := decodeStrict(raw, &document); err != nil {
+		return nil, fmt.Errorf("contribution calendar: %w", err)
+	}
+	if len(document.Errors) > 0 {
+		// The upstream answers a refused credential, a missing scope, or a
+		// malformed query with a 200 carrying this array. The COUNT is the
+		// whole signal; the messages are upstream-authored prose and never
+		// enter this process's narrative.
+		return nil, fmt.Errorf("contribution calendar: the upstream refused the query with %d error(s)", len(document.Errors))
+	}
+	calendar := document.Data.Viewer.Contributions.Calendar
+	counts := make(map[string]int, maxCalendarDays)
+	var first, last time.Time
+	dated := 0
+	for _, week := range calendar.Weeks {
+		for _, day := range week.Days {
+			parsed, err := time.Parse(dayLayout, day.Date)
+			if err != nil {
+				return nil, fmt.Errorf("contribution calendar: cell date %q: %w", day.Date, err)
+			}
+			if day.Count < 0 {
+				return nil, fmt.Errorf("contribution calendar: %s reports a negative count", day.Date)
+			}
+			if _, repeated := counts[day.Date]; repeated {
+				return nil, fmt.Errorf("contribution calendar: %s appears twice", day.Date)
+			}
+			counts[day.Date] = day.Count
+			if dated == 0 || parsed.Before(first) {
+				first = parsed
+			}
+			if dated == 0 || parsed.After(last) {
+				last = parsed
+			}
+			dated++
+		}
+	}
+	if dated < minCalendarDays {
+		return nil, fmt.Errorf("contribution calendar: only %d dated cells found, want at least %d", dated, minCalendarDays)
+	}
+	// TRAILING WEEK PADDING. The window this package asks for ends today, but a
+	// calendar is drawn in whole week columns, so an upstream may legitimately
+	// close the final column with the rest of the current week — days that have
+	// not happened yet. Refusing those outright would mean the panel silently
+	// stopped updating the day a credential landed, which is exactly the
+	// failure this producer exists to prevent, so they are DROPPED and the
+	// window's real end is reported through EndDate — the field the payload
+	// already carries so the frontend can draw days past it as holes rather
+	// than as quiet ones.
+	//
+	// It is a narrow allowance, not a repair, and three things keep it narrow:
+	// only days strictly after today are dropped, only a ZERO one may be
+	// dropped (a contribution dated in the future is nonsense, not padding),
+	// and at most a week's worth may be dropped before the document is refused
+	// as describing a range nobody asked for.
+	today := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
+	dropped := 0
+	for last.After(today) {
+		key := last.Format(dayLayout)
+		if counts[key] != 0 {
+			return nil, fmt.Errorf("contribution calendar reports %d contributions on %s, which has not happened yet", counts[key], key)
+		}
+		delete(counts, key)
+		dated--
+		dropped++
+		if dropped >= daysPerWeek {
+			return nil, fmt.Errorf("contribution calendar runs %d days past the window that was requested", dropped)
+		}
+		last = last.AddDate(0, 0, -1)
+	}
+	if dated < minCalendarDays {
+		return nil, fmt.Errorf("contribution calendar: only %d dated cells remain inside the requested window, want at least %d", dated, minCalendarDays)
+	}
+	span := int(last.Sub(first)/(24*time.Hour)) + 1
+	if span > maxCalendarDays {
+		return nil, fmt.Errorf("contribution calendar spans %d days, over the %d day bound", span, maxCalendarDays)
+	}
+	// CONTIGUITY, for the identical reason the public path checks it: lose a
+	// day to an upstream change and the remaining cells still number in the
+	// hundreds and still span under a year, so the day would be zero-filled
+	// and the panel would serve a plausible, FRESH, WRONG total.
+	if dated != span {
+		return nil, fmt.Errorf("contribution calendar: %d dated cells cover a %d day span; the document is missing days", dated, span)
+	}
+	daily := make([]int, span)
+	total := 0
+	for offset := range daily {
+		daily[offset] = counts[first.AddDate(0, 0, offset).Format(dayLayout)]
+		total += daily[offset]
+	}
+	if total != calendar.Total {
+		return nil, fmt.Errorf("contribution calendar: the document reports %d contributions but its days sum to %d", calendar.Total, total)
+	}
+	return calendarPayload(daily, total, first, last, CoverageComplete)
+}
+
+// mapRepository maps ONE repository metadata document onto a served row. The
+// document is read through the repositoryEntry projection rather than
+// decodeStrict — see that type for why the exception is narrow and why it is
+// the stronger privacy posture — so the whole gate lives in the value checks
+// below, and any failure refuses the row rather than repairing it.
+//
+// The name is the caller's, never the document's: an upstream that could name
+// the repository could put a stranger's project on the owner's page.
+func mapRepository(raw []byte, name string, now time.Time) (CodingProject, error) {
+	var entry repositoryEntry
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		return CodingProject{}, fmt.Errorf("repository document for %s: %w", name, err)
+	}
+	// The instant check is what makes the projection fail closed. An unrelated
+	// JSON object decodes into a zero-valued entry without error; a parseable
+	// instant is the cheapest thing no unrelated document has.
+	at, err := time.Parse(time.RFC3339, entry.PushedAt)
+	if err != nil {
+		return CodingProject{}, fmt.Errorf("repository document for %s: push instant %q: %w", name, entry.PushedAt, err)
+	}
+	if at.After(now.Add(maxCommitFutureSkew)) || at.Before(now.Add(-maxProjectAge)) {
+		return CodingProject{}, fmt.Errorf("repository document for %s: push instant %s is outside the plausible window", name, at.UTC().Format(time.RFC3339))
+	}
+	if entry.Stars < 0 || entry.Stars > maxCountValue {
+		return CodingProject{}, fmt.Errorf("repository document for %s: a star tally of %d is outside the admissible range", name, entry.Stars)
+	}
+	description := ""
+	if entry.Description != nil {
+		description, err = projectDescription(*entry.Description)
+		if err != nil {
+			return CodingProject{}, fmt.Errorf("repository document for %s: %w", name, err)
+		}
+	}
+	stars := entry.Stars
+	return CodingProject{
+		Name:        name,
+		Description: description,
+		Stars:       &stars,
+		PushedAt:    at.UTC().Format(time.RFC3339),
+	}, nil
+}
+
+// projectDescription reduces a repository's description to the single line a
+// row renders, under exactly the rules commitSubject applies to a commit
+// subject: control characters and invalid UTF-8 are REFUSED rather than
+// stripped, because quietly repairing hostile input is how the repair becomes
+// the vulnerability, while mere length is TRUNCATED with a visible marker,
+// because length alone is not hostility.
+//
+// An empty description is admitted here and refused there, and the difference
+// is real: every commit has a subject, so an empty one means a document was
+// mis-parsed, while a repository with no description simply has none.
+func projectDescription(description string) (string, error) {
+	line, _, _ := strings.Cut(description, "\n")
+	line = strings.TrimSpace(line)
+	runes := make([]rune, 0, len(line))
+	for _, symbol := range line {
+		if symbol < 0x20 || symbol == 0x7f {
+			return "", errors.New("a description carries control characters")
+		}
+		if symbol == '�' {
+			return "", errors.New("a description is not valid UTF-8")
+		}
+		runes = append(runes, symbol)
+	}
+	if len(runes) > maxProjectDescriptionRunes {
+		return string(runes[:maxProjectDescriptionRunes]) + "…", nil
+	}
+	return string(runes), nil
+}
+
+// mergeProjectRows assembles the served payload in CONFIG order: the freshly
+// read row where a repository answered, that repository's shipped snapshot row
+// otherwise, marked recorded so a reader is told which is which. The result is
+// fresh only when every configured repository answered.
+//
+// A repository the snapshot has never heard of degrades to a row carrying its
+// name and nothing else — a null tally the frontend dashes, no description,
+// no instant — rather than to a row silently borrowing another's figures.
+func mergeProjectRows(spec *codingProjectsFetchSpec, fetched map[string]CodingProject, fallback CodingProjectsData) (CodingProjectsData, bool) {
+	fallbackByName := make(map[string]CodingProject, len(fallback.Repos))
+	for _, repo := range fallback.Repos {
+		fallbackByName[repo.Name] = repo
+	}
+	merged := CodingProjectsData{Repos: make([]CodingProject, 0, len(spec.Sources))}
+	allFresh := true
+	for _, source := range spec.Sources {
+		if live, ok := fetched[source.Name]; ok {
+			merged.Repos = append(merged.Repos, live)
+			continue
+		}
+		allFresh = false
+		recorded := fallbackByName[source.Name]
+		recorded.Name = source.Name
+		recorded.Recorded = true
+		merged.Repos = append(merged.Repos, recorded)
+	}
+	return merged, allFresh
 }
 
 // calendarCellMark is the class the upstream marks a calendar day cell with.

@@ -9,6 +9,7 @@ import {
   categorySlot,
   countBound,
   formatDuration,
+  formatShare,
   formatStatValue,
   formatTokenCount,
   formatUtilization,
@@ -538,12 +539,23 @@ describe('UsageTracker live surface', () => {
     );
     assert.deepEqual(mixed.sections[0].tiles.map((tile) => tile.marked), [true, false]);
     assert.equal(mixed.sections[0].insights.rows[0].marked, true);
-    // An unreported insight draws no fill and reads as the explicit dash.
+    // An unreported insight draws NO fill and reads as the explicit dash.
+    // Null rather than 0 is the whole point (owner directive, 2026-08-28): a
+    // zero-width bar is pixel-identical to a measured 0%, so a row whose
+    // denominator never existed used to draw the same picture as one that
+    // genuinely contributed nothing.
     const dashed = tokenUsageProps(
       envelopeFor({ sources: [{ label: 's', windows: [], insights: [{ label: 'i', pct: null }] }] })
     );
-    assert.equal(dashed.sections[0].insights.rows[0].fillPct, 0);
+    assert.equal(dashed.sections[0].insights.rows[0].fillPct, null);
     assert.equal(dashed.sections[0].insights.rows[0].reading, '--');
+    // ...and a MEASURED zero still draws its (empty) bar, because 0% of a real
+    // window is a measurement and must not be erased along with the unknowns.
+    const measured = tokenUsageProps(
+      envelopeFor({ sources: [{ label: 's', windows: [], insights: [{ label: 'i', pct: 0 }] }] })
+    );
+    assert.equal(measured.sections[0].insights.rows[0].fillPct, 0);
+    assert.equal(measured.sections[0].insights.rows[0].reading, '0%');
   });
 
   it('draws ONE graph client-side over the whole delivered series', () => {
@@ -883,14 +895,38 @@ describe('category lens helpers', () => {
     assert.ok(Math.abs(shares[1].pct - 90) < 1e-9);
   });
 
-  it('reports a zero share for an empty window instead of dividing by zero', () => {
+  it('reports an UNKNOWN share for an empty window, never a zero one', () => {
+    // Re-aimed by the owner's 2026-08-28 ruling: "if its either 0 or unknown I
+    // rather it be Unknown". A share of nothing is not zero percent — the
+    // denominator never existed — and 0 was a claim the data could not
+    // support, rendered with a bar under it.
     const empty = {
       startDate: '2026-08-10',
       totals: [0],
       categories: [{ key: 'input', totals: [0] }]
     };
-    assert.deepEqual(categoryShares(empty), [{ key: 'input', total: 0, pct: 0 }]);
+    assert.deepEqual(categoryShares(empty), [{ key: 'input', total: 0, pct: null }]);
     assert.deepEqual(categoryShares({ startDate: '2026-08-10', totals: [1] }), []);
+    // A category that genuinely contributed nothing to a REAL window is 0%,
+    // and stays 0%: that one is a measurement.
+    assert.deepEqual(
+      categoryShares({
+        startDate: '2026-08-10',
+        totals: [10],
+        categories: [
+          { key: 'input', totals: [10] },
+          { key: 'output', totals: [0] }
+        ]
+      }),
+      [
+        { key: 'input', total: 10, pct: 100 },
+        { key: 'output', total: 0, pct: 0 }
+      ]
+    );
+    // The composition strip renders the unknown as the shared dash rather
+    // than as "0%".
+    assert.equal(formatShare(null), '--');
+    assert.equal(formatShare(0), '0%');
   });
 
   it('binds color slots to the entity, never the payload position', () => {
@@ -1167,12 +1203,31 @@ describe('the model breakdown (token-usage/v2)', () => {
     assert.ok(Math.abs(shares[0].pct + shares[1].pct - 100) < 1e-9);
   });
 
-  it('reports a zero share for an empty window instead of dividing by zero', () => {
+  it('reports an UNKNOWN share for an empty window, never a zero one', () => {
+    // The same ruling as the category twin above, and this is the one the
+    // owner actually SAW: an empty model window rendered five insight rows all
+    // reading "0%", each carrying a provenance mark, implying five measured
+    // proportions where nothing had been measured at all.
     assert.deepEqual(
       modelShares({ startDate: '2026-08-10', totals: [0], models: [{ key: 'other', totals: [0] }] }),
-      [{ key: 'other', total: 0, pct: 0 }]
+      [{ key: 'other', total: 0, pct: null }]
     );
     assert.deepEqual(modelShares({ startDate: '2026-08-10', totals: [1] }), []);
+    // A model that contributed nothing to a real window is still 0%.
+    assert.deepEqual(
+      modelShares({
+        startDate: '2026-08-10',
+        totals: [10],
+        models: [
+          { key: 'opus-5', totals: [10] },
+          { key: 'other', totals: [0] }
+        ]
+      }),
+      [
+        { key: 'opus-5', total: 10, pct: 100 },
+        { key: 'other', total: 0, pct: 0 }
+      ]
+    );
   });
 });
 

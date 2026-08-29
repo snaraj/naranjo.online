@@ -12,7 +12,7 @@
 import type { ActivityLink, ActivityTrackerProps } from './blocks.ts';
 import { addDays, calendarColumns, formatWhole, type GridCell } from './grid.ts';
 import { panelAge, panelKinds } from './panels.ts';
-import type { PanelEnvelope, VCSActivityData } from './panels';
+import type { PanelEnvelope, VCSActivityData, VCSCoverage } from './panels';
 import { projectHost, projectHostLabel } from './projects.ts';
 
 /* The registry identifier the activity strip loads; the one place the id is
@@ -73,6 +73,17 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
   if (endDate !== undefined && (typeof endDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(endDate))) {
     return null;
   }
+  /* Coverage is admitted by MEMBERSHIP of the closed vocabulary, never by
+   * shape: it decides rendered COPY, and a free-text value here would let a
+   * payload put arbitrary words beside the owner's contribution total. A
+   * value outside the vocabulary refuses the payload rather than degrading
+   * quietly, because a coverage nobody recognises is a claim nobody can
+   * word. Absent is not a value — it is the rolling-compatibility state,
+   * normalized away below exactly as an absent sha is. */
+  const { coverage } = document;
+  if (coverage !== undefined && coverage !== 'public' && coverage !== 'complete') {
+    return null;
+  }
   for (const commit of recentCommits) {
     if (
       !isRecord(commit) ||
@@ -98,6 +109,9 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
   };
   if (typeof endDate === 'string') {
     activity.endDate = endDate;
+  }
+  if (coverage !== undefined) {
+    activity.coverage = coverage;
   }
   return activity;
 }
@@ -293,6 +307,24 @@ export const shownEntryRows = 5;
  * one — swapping where the data comes from stays a data edit. */
 export const activityFallbackTitle = 'Version-control activity';
 
+/* contributionsLabel words the headline figure against the coverage the
+ * payload declared, and it exists because the two producers count different
+ * things.
+ *
+ * An anonymous read of the public document reports only what an anonymous
+ * reader may see; a credentialed read reports the account holder's whole
+ * record. Serving either under one unlabelled "contributions" would make the
+ * figure change meaning — by hundreds — the day a credential is added or
+ * expires, with nothing on the page to say why. So the narrower one says it is
+ * narrow, and the complete one simply reads as the total it is.
+ *
+ * An absent coverage is the pre-field payload state and words the figure the
+ * way it has always been worded, so a mid-rollout replica renders no worse
+ * than it did before this existed. */
+export function contributionsLabel(coverage: VCSCoverage | undefined): string {
+  return coverage === 'public' ? ' public contributions' : ' contributions';
+}
+
 /* The three honest empty-state lines, verbatim from the retired component. */
 export const activityFiguresNote = 'no activity data';
 export const activityStripEmptyNote = 'activity data unavailable';
@@ -338,7 +370,11 @@ export function vcsActivityProps(envelope: PanelEnvelope | null): ActivityTracke
       activity === null
         ? []
         : [
-            { key: 'total', lead: formatWhole(activity.totalContributions), rest: ' contributions' },
+            {
+              key: 'total',
+              lead: formatWhole(activity.totalContributions),
+              rest: contributionsLabel(activity.coverage)
+            },
             { key: 'streak', lead: formatWhole(activity.streak), rest: '-day streak' }
           ],
     figuresNote: activityFiguresNote,

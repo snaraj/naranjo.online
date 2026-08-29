@@ -115,6 +115,11 @@
                         </svg>
                       {/if}
                       <span class="entry-count-text">{count.label}</span>
+                      {#if count.marked}
+                        <span class="entry-recorded" title="recorded out of band, not fetched live"
+                          >· recorded</span
+                        >
+                      {/if}
                     </li>
                   {/each}
                 </ul>
@@ -264,6 +269,36 @@
     letter-spacing: var(--card-title-tracking);
   }
 
+  /* The provenance-by-exception mark, worded and styled exactly as the usage
+     tiles' is: one visual vocabulary for "this figure was recorded out of
+     band" across the page. Scoped per component because Svelte scopes styles,
+     so the two declarations are twins rather than one shared rule.
+
+     It is a SIBLING of the count text rather than a child of it, and that
+     placement is load-bearing rather than incidental. `.entry-count-text` is
+     `white-space: nowrap` — a figure must never be split from the word it
+     counts — so a mark nested inside it joined that unbreakable run and added
+     its own 62px to the card's MIN-CONTENT width at every viewport. That is a
+     floor violation the engine expresses as horizontal overflow: the panel
+     column can no longer shrink to a 320px phone, so the grid track widens
+     past the screen and the document scrolls sideways. It was MEASURED red on
+     all five browser-lane projects (a 320px column 247.42px wide against the
+     244px it is given; the document scrolling at 250px) while passing on this
+     workstation, because the same string sets 3.4px narrower in macOS's UI
+     font than in the runner's — a reminder that a text-width-dependent floor
+     is only ever proven by the engines, never by one machine.
+
+     As a sibling it is its own flex item, so `flex-wrap: wrap` on the row lets
+     it drop to a second line on a narrow card while the figure and its word
+     stay welded together. The mark contributes its own width to min-content
+     and nothing to the label's. The margin this rule used to carry is gone
+     with the nesting: the row's own `gap` now separates the mark, which also
+     makes it a truer twin of `.usage-recorded`, whose only declaration is the
+     italic. */
+  .entry-recorded {
+    font-style: italic;
+  }
+
   .entry-counts {
     margin: 0;
     padding: 0;
@@ -274,8 +309,12 @@
     gap: var(--card-meta-gap);
   }
 
+  /* Wrapping, so the provenance mark above has somewhere to go on a narrow
+     card. Without it the mark would be an unwrappable third item and the row
+     would push the card wide again by another route. */
   .entry-count {
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.3125rem;
     font-size: var(--card-meta-size);
