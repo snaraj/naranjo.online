@@ -297,14 +297,7 @@ describe('isValidRepoSlug / commitRepoUrl', () => {
       'website-infrastructure',
       'lidersea.com',
       'dotfiles',
-      // Digits INSIDE a word beside a hyphen: the one character-class
-      // combination the real repository names above do not cover between
-      // them. It was a tracked repository's name until the set narrowed to
-      // four (issue 254), and is written synthetically now rather than
-      // dropped — the validator's job is the character set, not the roster,
-      // and losing the case with the roster would have quietly narrowed what
-      // this admits.
-      'slug2000-with-digits',
+      'foobar2000-lyricsbuddy',
       'a',
       '123',
       'A.b-C_d',

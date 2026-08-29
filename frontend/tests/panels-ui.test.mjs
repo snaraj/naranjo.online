@@ -840,9 +840,10 @@ test('the boss list is derived from the upstream, never enumerated in config', {
 });
 
 /* The Coding Projects roster is written down in THREE places that can drift
- * apart in silence, and the owner's ruling of 2026-08-29 (issue 254) is about
- * exactly that set — so this is the pin that makes "exactly these four,
- * everywhere" enforceable rather than a thing somebody remembered:
+ * apart in silence, and the owner's ruling of 2026-08-29 — as corrected in
+ * issue 256: the foobar2000-* trio stays — is about exactly that set. This is
+ * the pin that makes "exactly these seven, everywhere" enforceable rather
+ * than a thing somebody remembered:
  *
  *   - `internal/panels/config/fetch.json` decides which repositories are READ;
  *   - `internal/panels/snapshots/coding-projects.json` decides which rows are
@@ -882,7 +883,7 @@ test('the tracked repository set is the same in config, snapshot and frontend', 
     'snapshots/coding-projects.json and frontend/src/lib/projects.ts disagree; a snapshot row with no frontend row is dead weight in the served payload, and a frontend row with no snapshot row falls back to nothing'
   );
   // Non-vacuity: three empty lists would satisfy both assertions above.
-  assert.equal(rendered.length, 4, 'the owner-ruled set is four repositories');
+  assert.equal(rendered.length, 7, 'the owner-ruled set is seven repositories');
   // Every source carries BOTH documents. A source that lost its pullsEndpoint
   // in an edit still serves a live row — with two permanent dashes where the
   // open-work counts belong — which is the quietest way this panel can
