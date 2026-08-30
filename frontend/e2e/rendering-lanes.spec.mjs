@@ -212,6 +212,27 @@ async function visit(page) {
   await settled(page);
 }
 
+/* Whether this project's emulated device is one the gallery's stage pair is
+ * SHOWN on — the same query the stylesheet keys the pair's visibility to,
+ * which is lib/tooltip.ts's finePointerQuery. Capability, never project name
+ * (this file's own doctrine). */
+function finePointer(page) {
+  return page.evaluate(() => window.matchMedia('(hover: hover) and (pointer: fine)').matches);
+}
+
+/* Moves the strip to the item whose position label is `label`, through a
+ * control every device shows: each dot is a real button whose accessible name
+ * is the exact positionLabel the live region announces, so the label doubles
+ * as the arrival check. The stage's prev/next pair has its own lane (paging,
+ * adjacency, the touch-primary hiding); every OTHER walk only needs the strip
+ * to move, and one that navigated through the pair would silently stop
+ * running on the phone projects, where the pair is hidden by owner directive
+ * (2026-08-29). */
+async function goToItem(page, label) {
+  await page.getByRole('radio', { name: label }).click();
+  await expect(page.locator('.gallery-count')).toHaveText(label);
+}
+
 /* WCAG 2.2 relative luminance and contrast, over whatever spelling of a color
  * the engine computed. Twin of the source-side helper in
  * tests/experience.test.mjs: that one measures the palette the stylesheet
@@ -2876,14 +2897,122 @@ test('prev/next cycle the visible photograph without leaving the page', async ({
   await visit(page);
   const image = page.locator('img.gallery-image');
   const before = await image.getAttribute('src');
-  await page.getByRole('button', { name: 'Next photograph' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('Photograph 2 of 8');
+  /* The moving control is the device's own: the stage pair where a fine
+     pointer shows it, the dots where touch hides it (owner, 2026-08-29).
+     What this lane holds either way is the cycle itself — the visible
+     photograph changes and comes back, with no navigation, no lightbox. */
+  const fine = await finePointer(page);
+  if (fine) {
+    await page.getByRole('button', { name: 'Next photograph' }).click();
+    await expect(page.locator('.gallery-count')).toHaveText('Photograph 2 of 8');
+  } else {
+    await goToItem(page, 'Photograph 2 of 8');
+  }
   const after = await image.getAttribute('src');
   expect(after, 'next must actually change which photograph is visible').not.toBe(before);
-  await page.getByRole('button', { name: 'Previous photograph' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 8');
+  if (fine) {
+    await page.getByRole('button', { name: 'Previous photograph' }).click();
+    await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 8');
+  } else {
+    await goToItem(page, 'Photograph 1 of 8');
+  }
   const backToStart = await image.getAttribute('src');
   expect(backToStart).toBe(before);
+});
+
+/* THE STAGE PAIR (owner, 2026-08-29): "on the web browser, I lost the ability
+ * to move through the images/videos, only on full screen I can do it. bring
+ * back the buttons but chose to hide them by default in mobile."
+ *
+ * The desktop defect this answers is structural, MEASURED on this exact
+ * binary before the fix: a mouse drag across the still never became a swipe —
+ * the native image drag took it after one pointermove and the browser sent
+ * pointercancel — so a fine-pointer reader's only in-strip control was a 12px
+ * chevron. This lane drives the repair on both device classes, keyed on the
+ * same capability query the stylesheet uses, never on the project name:
+ * a hover-and-fine-pointer device gets two visible 44px buttons ON the work
+ * that page stills and films alike — a playing film included, with the
+ * handover taken back — and a touch-primary device gets no buttons at all
+ * while the dots and the swipe keep the strip fully navigable. */
+test('the stage pair pages every kind on a fine pointer, and hides where touch is primary (owner, 2026-08-29)', async ({
+  page,
+}) => {
+  await serveGalleryManifest(page);
+  await visit(page);
+  const stage = page.locator('.gallery-stage');
+  await stage.scrollIntoViewIfNeeded();
+  const previous = page.locator('.gallery-nav[data-gallery-nav="previous"]');
+  const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
+  // Both controls exist in the tree on every device; the CAPABILITY decides
+  // whether they are shown, so a device that matches no query loses nothing.
+  await expect(previous).toHaveCount(1);
+  await expect(next).toHaveCount(1);
+
+  if (!(await finePointer(page))) {
+    /* The owner's "hide them by default in mobile", measured: hidden from
+       rendering and the accessibility tree alike, and the strip is still
+       fully navigable without them — the dots here, the swipe in this file's
+       motion battery. */
+    await expect(previous).toBeHidden();
+    await expect(next).toBeHidden();
+    await goToItem(page, 'Film 2 of 2');
+    await goToItem(page, 'Photograph 1 of 2');
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    return;
+  }
+
+  /* Visible, at the touch floor, and ON the stage rather than adrift in the
+     track — each control's centre sits within the stage's own span, which is
+     the adjacency the pre-241 arrows lost by 212px. */
+  await expect(previous).toBeVisible();
+  await expect(next).toBeVisible();
+  const stageBox = await stage.boundingBox();
+  for (const control of [previous, next]) {
+    const box = await control.boundingBox();
+    expect(box.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+    expect(box.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+    const centre = box.x + box.width / 2;
+    expect(centre, 'a nav control sits off the work’s own span').toBeGreaterThanOrEqual(stageBox.x - subPixel);
+    expect(centre, 'a nav control sits off the work’s own span').toBeLessThanOrEqual(
+      stageBox.x + stageBox.width + subPixel
+    );
+  }
+
+  // Pages a still onto a film, a film onto a still, wrapping both ways...
+  await next.click();
+  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  await next.click();
+  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
+  await previous.click();
+  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+
+  /* ...and pages a PLAYING film, which is the owner's "only on full screen I
+     can do it" made impossible to reintroduce: the pair sits above the
+     player, so no fullscreen and no lightbox is ever required to leave a
+     film. Leaving through it runs goTo(), which takes the handover back —
+     the returning film is behind its veil with no native controls declared,
+     exactly as the issue-243 walk demands of every other route. */
+  await page.locator('.gallery-play').click();
+  await expect
+    .poll(async () => page.locator('video').evaluate((node) => node.controls), {
+      message: 'the play press never handed the player its controls',
+      timeout: 5_000,
+    })
+    .toBe(true);
+  await next.click();
+  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
+  await previous.click();
+  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  await expect(
+    page.locator('.gallery-film-veil'),
+    'paging away from a playing film did not hand its surface back'
+  ).toHaveCount(1);
+  expect(
+    await page.locator('video').evaluate((node) => node.controls),
+    'the returned film still declares the controls it was handed before the reader paged away'
+  ).toBe(false);
+
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
 test('clicking the photograph opens a real modal dialog with a larger, unframed image; Escape closes it', async ({
@@ -3142,20 +3271,23 @@ test('a film mounts inline in the same block a still gets, behind one play contr
     `the still’s stage is ${still.width.toFixed(1)}x${still.height.toFixed(1)}, not the square it keeps`
   ).toBeCloseTo(still.width, 0);
 
-  /* The arrow names the item it will REACH (issue 241), so the control that
-     moves onto a film says so — which is also this lane's proof that the
-     kind-aware naming reaches a real engine rather than only the source. */
-  await page.getByRole('button', { name: 'Next film' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  /* The control names the item it will REACH (issue 241). On a fine-pointer
+     device that control is the stage pair, and pressing it by that name is
+     this lane's proof the kind-aware naming reaches a real engine; a
+     touch-primary device hides the pair (owner, 2026-08-29) and moves by the
+     dot, whose own name carries the same kind-aware noun. */
+  if (await finePointer(page)) {
+    await page.getByRole('button', { name: 'Next film' }).click();
+    await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  } else {
+    await goToItem(page, 'Film 2 of 2');
+  }
 
   const film = await page.evaluate(() => {
     const node = window.document.querySelector('.gallery-stage');
     const box = node.getBoundingClientRect();
     const video = window.document.querySelector('video');
     const player = video === null ? null : video.getBoundingClientRect();
-    const arrow = window.document.querySelector('.gallery-controls > .icon-button');
-    const arrowGlyph = arrow.querySelector('svg').getBoundingClientRect();
-    const arrowBox = arrow.getBoundingClientRect();
     const dot = window.document.querySelector('.gallery-dot[aria-checked="true"]');
     const dotMark = dot.querySelector('.gallery-dot-mark').getBoundingClientRect();
     const dotBox = dot.getBoundingClientRect();
@@ -3197,7 +3329,6 @@ test('a film mounts inline in the same block a still gets, behind one play contr
               width: player.width,
               height: player.height,
             },
-      arrow: { glyph: arrowGlyph.width, hit: { width: arrowBox.width, height: arrowBox.height } },
       dot: { mark: dotMark.width, hit: { width: dotBox.width, height: dotBox.height } },
     };
   });
@@ -3298,15 +3429,11 @@ test('a film mounts inline in the same block a still gets, behind one play contr
     `the film stage is ${film.width.toFixed(1)}px inside a ${frameWidth.toFixed(1)}px frame`
   ).toBeCloseTo(Math.min(frameWidth, galleryStageCapPx), 0);
 
-  /* THE CONTROLS SHRANK AND THE TARGETS DID NOT (owner: reduce "left, right,
-     current media"). Both halves, because a shrink that took the touch target
-     with it is the stage-1 floor broken. */
-  expect(film.arrow.glyph, `the arrow glyph paints ${film.arrow.glyph}px; it did not shrink`).toBeLessThanOrEqual(
-    12 + subPixel
-  );
-  expect(film.arrow.hit.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-  expect(film.arrow.hit.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-  /* The current dot is the LARGEST of them (it is the scaled one), so bounding
+  /* THE MARKS SHRANK AND THE TARGETS DID NOT (owner: reduce the current-media
+     indicator). The prev/next half of that directive retired with the row
+     chevrons themselves (owner, 2026-08-29 — the pair lives on the stage now,
+     with its own lane above); what this still holds is the dots.
+     The current dot is the LARGEST of them (it is the scaled one), so bounding
      it bounds every dot on the row. Four CSS pixels, scaled by 1.5. */
   expect(film.dot.mark, `the position mark paints ${film.dot.mark}px; it did not shrink`).toBeLessThanOrEqual(
     6 + subPixel
@@ -3343,8 +3470,7 @@ test('a phone never pulls the 4K rung, and the smallest rung is reachable at all
   await serveGalleryManifest(page);
   await visit(page);
 
-  await page.getByRole('button', { name: 'Next film' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  await goToItem(page, 'Film 2 of 2');
   // preload="metadata" means the element goes and gets one, so this waits for
   // the selection to have happened rather than for a fixed time.
   await expect
@@ -3391,26 +3517,21 @@ test('the gallery frame is centred in its track, with no dead gutter (issue 202)
   const frame = page.locator('.gallery-image-button');
   await frame.scrollIntoViewIfNeeded();
   const observed = await page.evaluate(() => {
-    /* The gutters are measured against the FRAME's own edges since issue 241.
-       They used to be measured against the arrows that bounded the 1fr track,
-       and the arrows have moved into the control row under the work — where
-       they are adjacent to it at every width instead of floating 212px away
-       at a desktop one, which was the other half of the same dead-gutter
-       complaint. Two rendered boxes still, and an expectation derived from
-       neither the stylesheet nor a token. */
+    /* The gutters are measured against the FRAME's own edges since issue 241,
+       and the dots' row bounds the touch-floor half since 2026-08-29 — the
+       row chevrons this lane used to measure retired with the stage pair's
+       return, and that pair's own adjacency-to-the-work is measured in its
+       own lane rather than here. Two rendered boxes still, and an
+       expectation derived from neither the stylesheet nor a token. */
     const row = window.document.querySelector('.gallery-frame').getBoundingClientRect();
     const button = window.document.querySelector('.gallery-image-button').getBoundingClientRect();
-    const arrows = [...window.document.querySelectorAll('.gallery-controls > .icon-button')].map(
-      (control) => control.getBoundingClientRect()
+    const dots = [...window.document.querySelectorAll('.gallery-dot')].map((control) =>
+      control.getBoundingClientRect()
     );
-    const dots = window.document.querySelector('.gallery-dots').getBoundingClientRect();
     return {
       left: button.left - row.left,
       right: row.right - button.right,
-      arrows: arrows.map((arrow) => ({ width: arrow.width, height: arrow.height })),
-      /* How far each arrow sits from the position marks it brackets — the
-         proximity half of the same rule, and the number that was 212px. */
-      gaps: [dots.left - arrows[0].right, arrows[1].left - dots.right],
+      dots: dots.map((dot) => ({ width: dot.width, height: dot.height })),
     };
   });
   expect(observed.left, 'the frame sits against the start edge of its track').toBeGreaterThanOrEqual(0);
@@ -3418,20 +3539,13 @@ test('the gallery frame is centred in its track, with no dead gutter (issue 202)
     observed.left,
     `the gutters are ${observed.left.toFixed(1)}px and ${observed.right.toFixed(1)}px — the frame is off centre`
   ).toBeCloseTo(observed.right, 0);
-  /* Centring must not have been bought by shrinking the controls: both arrows
-     still clear the touch floor at every viewport this lane runs. */
-  expect(observed.arrows.length, 'the gallery lost one of its two arrows').toBe(2);
-  for (const arrow of observed.arrows) {
-    expect(arrow.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-    expect(arrow.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-  }
-  /* And they are BESIDE the marks they belong to rather than pushed to the far
-     edges of a track. The token that separates them is a quarter-rem; a whole
-     rem of allowance is generous and still an order of magnitude under the
-     212px this replaced. */
-  for (const gap of observed.gaps) {
-    expect(gap, `an arrow sits ${gap.toFixed(1)}px from the position marks`).toBeLessThanOrEqual(16);
-    expect(gap, 'an arrow overlaps the position marks').toBeGreaterThanOrEqual(-subPixel);
+  /* Centring must not have been bought by shrinking the controls that remain
+     in the row: every dot still clears the touch floor at every viewport this
+     lane runs. */
+  expect(observed.dots.length, 'the gallery lost its position dots').toBe(8);
+  for (const dot of observed.dots) {
+    expect(dot.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+    expect(dot.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
   }
 });
 
@@ -3466,12 +3580,10 @@ test('moving between a still and a film shifts the document by nothing (issue 24
 
   const still = await shape();
   expect(still.kind).toBe('image');
-  await page.getByRole('button', { name: 'Next film' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  await goToItem(page, 'Film 2 of 2');
   const film = await shape();
   expect(film.kind).toBe('video');
-  await page.getByRole('button', { name: 'Previous photograph' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
+  await goToItem(page, 'Photograph 1 of 2');
   const back = await shape();
 
   /* NON-VACUITY, RE-AIMED (issue 243). This used to demand that the two
@@ -3944,7 +4056,7 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
         };
       })
     );
-    await page.getByRole('button', { name: 'Next photograph' }).click();
+    await goToItem(page, `Photograph ${((step + 1) % 8) + 1} of 8`);
   }
   const [first] = geometry;
   for (const [index, state] of geometry.entries()) {
@@ -4047,18 +4159,20 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
   await expect(codingProjects.locator('h3.subsection-title')).toHaveText('Coding Projects');
 });
 
-/* Every repo card's title/counters row, measured (issue 188). The owner's
- * screenshot showed the SAME viewport rendering two cards differently: short
- * titles (naranjo.online, lidersea.com) left room for the commits/stars
- * counters on the title's own line, while long titles
- * (website-infrastructure, the foobar2000-* trio) pushed them below —
- * content deciding the layout instead of the viewport. This lane measures
- * every one of the seven cards at once, at a narrow and a wide viewport,
- * and requires the SAME placement for every card at a given width: no
- * overlap (stacked, two rows) below the breakpoint, real overlap (one row)
- * at or above it — proving the fix by what a real engine painted, not by
- * reading the rule back out of the stylesheet. */
-test('every repo card places its counters the same way relative to its title, regardless of title length (issue 188)', async ({
+/* Every repo card's counter columns, measured (issue 188; owner 2026-08-29:
+ * "the columns of information are not aligned, even if the information
+ * presented is different it should not differ in the layout, makes it look
+ * uneven"). Issue 188's determinism claim survives strengthened — no card's
+ * content decides any placement — and the owner's alignment ruling adds the
+ * cross-card half: the same five stat columns start at the IDENTICAL x on
+ * every card at a wide viewport, whatever figures or words each cell holds
+ * ("105" against "9", a dash against a zero, "today" against "27 days ago"),
+ * so the panel reads as one table drawn over seven cards. At every phone
+ * width the counters are a single-column ledger, one counter per line, every
+ * line starting at the same x on every card — stacked and aligned, never a
+ * content-driven wrap. Both device classes are measured in this one lane, in
+ * every engine, by what the engine painted. */
+test('the repo cards’ stat columns align across cards at desktop, and stack as one ledger on a phone (issue 188; owner 2026-08-29)', async ({
   page,
 }) => {
   await visit(page);
@@ -4080,17 +4194,20 @@ test('every repo card places its counters the same way relative to its title, re
       const counts = await head.locator('.entry-counts').boundingBox();
       expect(heading, `card ${index}'s title never rendered a box`).not.toBeNull();
       expect(counts, `card ${index}'s counters never rendered a box`).not.toBeNull();
-      rows.push({ heading, counts, inline: overlapsVertically(heading, counts) });
+      const cells = [];
+      const cellCount = await head.locator('.entry-count').count();
+      for (let cell = 0; cell < cellCount; cell += 1) {
+        cells.push(await head.locator('.entry-count').nth(cell).boundingBox());
+      }
+      rows.push({ heading, counts, cells, inline: overlapsVertically(heading, counts) });
     }
     return rows;
   };
 
-  // Narrow: 320, 375 and 412 are the owner's named widths for this issue —
-  // 375 is an iPhone SE/8 report the shared phoneWidths list does not
-  // otherwise cover, so it is added here rather than reused from that list.
-  for (const width of [320, 375, 412]) {
-    await page.setViewportSize({ width, height: 900 });
-    const rows = await measure();
+  /* THE ONE SHAPE, at every width this lane visits: the counters hold their
+     own line under the title on every card — that is what makes the columns
+     free to align to the card rather than to each title's end. */
+  const assertStacked = (rows, width) => {
     for (const [index, row] of rows.entries()) {
       expect(
         row.inline,
@@ -4100,17 +4217,74 @@ test('every repo card places its counters the same way relative to its title, re
         row.counts.y,
         `at ${width}px, card ${index}'s counters render above its title`
       ).toBeGreaterThanOrEqual(row.heading.y + row.heading.height - 1);
+      expect(row.cells.length, `card ${index} lost a stat column`).toBe(5);
+    }
+  };
+
+  // Narrow: 320, 375 and 412 are the owner's named widths for issue 188 —
+  // 375 is an iPhone SE/8 report the shared phoneWidths list does not
+  // otherwise cover, so it is added here rather than reused from that list.
+  for (const width of [320, 375, 412]) {
+    await page.setViewportSize({ width, height: 900 });
+    const rows = await measure();
+    assertStacked(rows, width);
+    for (const [index, row] of rows.entries()) {
+      /* The LEDGER: one counter per line — each cell strictly below the one
+         before it — and every line starting at the same x, on this card and
+         on every other card, so the stack reads as intentional alignment
+         rather than as a wrap that happened to land somewhere. */
+      for (let cell = 1; cell < row.cells.length; cell += 1) {
+        expect(
+          row.cells[cell].y,
+          `at ${width}px, card ${index}'s counter ${cell} shares a line with its neighbour`
+        ).toBeGreaterThanOrEqual(row.cells[cell - 1].y + row.cells[cell - 1].height - 1);
+        expect(
+          row.cells[cell].x,
+          `at ${width}px, card ${index}'s counter ${cell} does not start where its siblings do`
+        ).toBeCloseTo(row.cells[0].x, 0);
+      }
+      expect(
+        row.cells[0].x,
+        `at ${width}px, card ${index}'s ledger starts at a different x than card 0's`
+      ).toBeCloseTo(rows[0].cells[0].x, 0);
     }
   }
 
-  // Wide: an ordinary desktop width, comfortably above the breakpoint.
-  await page.setViewportSize({ width: 1280, height: 900 });
-  const wideRows = await measure();
-  for (const [index, row] of wideRows.entries()) {
-    expect(
-      row.inline,
-      `at 1280px, card ${index}'s counters wrapped below its title instead of sitting beside it`
-    ).toBe(true);
+  /* Wide: ordinary desktop widths above --breakpoint-entry-columns,
+     including ~1440 where the owner reviews (no-dead-space rule). PER
+     COLUMN, the x position is identical across all seven cards — the
+     owner's sentence as arithmetic — and the five columns span the card's
+     own row from its start edge to its end edge, so the table fills the
+     card instead of stopping short of it. */
+  for (const width of [1280, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    const rows = await measure();
+    assertStacked(rows, width);
+    for (let column = 0; column < 5; column += 1) {
+      const first = rows[0].cells[column].x;
+      for (const [index, row] of rows.entries()) {
+        expect(
+          row.cells[column].x,
+          `at ${width}px, column ${column} starts at ${row.cells[column].x.toFixed(1)}px on card ${index} against ${first.toFixed(1)}px on card 0`
+        ).toBeCloseTo(first, 0);
+        expect(
+          overlapsVertically(row.cells[column], row.cells[0]),
+          `at ${width}px, card ${index}'s column ${column} wrapped off the counter line`
+        ).toBe(true);
+      }
+    }
+    for (const [index, row] of rows.entries()) {
+      expect(
+        row.cells[0].x,
+        `at ${width}px, card ${index}'s first column does not start at the row's own start edge`
+      ).toBeCloseTo(row.counts.x, 0);
+      const rowEnd = row.counts.x + row.counts.width;
+      const lastCell = row.cells[4];
+      expect(
+        lastCell.x + lastCell.width,
+        `at ${width}px, card ${index}'s last column ends ${(rowEnd - lastCell.x - lastCell.width).toFixed(1)}px short of the card's right edge`
+      ).toBeGreaterThanOrEqual(rowEnd - 8);
+    }
   }
 });
 
@@ -7588,9 +7762,9 @@ test('a film swipes like a still until the reader presses play (issue 243)', asy
   const stage = page.locator('.gallery-stage');
   await stage.scrollIntoViewIfNeeded();
 
-  // Onto the film, by the control that names it.
-  await page.getByRole('button', { name: 'Next film' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  // Onto the film, by the dot that names it (the stage pair is hidden on the
+  // touch-primary projects this walk matters most on).
+  await goToItem(page, 'Film 2 of 2');
   await expect(page.locator('.gallery-film-veil')).toHaveCount(1);
 
   const box = await stage.boundingBox();
@@ -7621,8 +7795,7 @@ test('a film swipes like a still until the reader presses play (issue 243)', asy
 
   // Back to the film, and check the film is still paused after all that: a
   // drag must never have started anything.
-  await page.getByRole('button', { name: 'Next film' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  await goToItem(page, 'Film 2 of 2');
   expect(
     await page.locator('video').evaluate((node) => node.paused),
     'dragging across a film started it playing'
@@ -7653,10 +7826,8 @@ test('a film swipes like a still until the reader presses play (issue 243)', asy
      structural (every index move runs through `goTo`, which clears the key),
      and this walk is the exact sequence, in a real engine: play, leave, return,
      and the film must be back behind its veil with no controls declared. */
-  await page.getByRole('button', { name: 'Previous photograph' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
-  await page.getByRole('button', { name: 'Next film' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
+  await goToItem(page, 'Photograph 1 of 2');
+  await goToItem(page, 'Film 2 of 2');
   await expect(
     page.locator('.gallery-film-veil'),
     'a film played once never gets its swipe surface back; the strip is a dead end there'

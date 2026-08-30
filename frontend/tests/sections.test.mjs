@@ -919,52 +919,103 @@ test('open issues and open pull requests are told with icons and a number (issue
   assert.doesNotMatch(styleBlock(entryLog), /\.entry-count-words \{[^}]*display: none/s);
 });
 
-test('the entry-head row stacks or inlines by viewport alone, never by title length (issue 188)', () => {
+test('the counters are one aligned column geometry, decided by viewport alone (issue 188; owner 2026-08-29)', () => {
   const style = styleBlock(entryLog);
-  // No flex-wrap on .entry-head anywhere in this file: that property is
-  // exactly the old, content-dependent mechanism (a short title happened to
-  // leave room on the line; a long one did not) the fix replaces.
+  /* Issue 188's claim survives strengthened: no placement in the card head
+     depends on content. The head itself now has ONE shape at every width —
+     title line, then a full-width counter line — so there is nothing left
+     for a title's length to decide, and the old row/column toggle is gone
+     rather than pinned. */
   const entryHeadBlocks = [...style.matchAll(/\.entry-head\s*\{([^}]*)\}/g)].map(([, body]) => body);
-  assert.ok(entryHeadBlocks.length >= 2, 'expected a base rule and a min-width override for .entry-head');
-  for (const body of entryHeadBlocks) {
-    // "nowrap" is fine (and required below); the ambiguous value this test
-    // bans is a bare "wrap", which is what let content length decide.
-    assert.doesNotMatch(
-      body,
-      /flex-wrap:\s*wrap\b/,
-      'a wrap-based rule reintroduces content-dependent placement'
-    );
-  }
-  // The base (mobile-first) rule stacks the row in a column.
-  const [baseBody] = entryHeadBlocks;
-  assert.match(baseBody, /flex-direction:\s*column/);
-  // Exactly one min-width override flips it to an inline, non-wrapping row.
-  const overrides = [...style.matchAll(/@media \(min-width:\s*([^)]+)\)\s*\{\s*\.entry-head\s*\{([^}]*)\}/g)];
-  assert.equal(overrides.length, 1, 'expected exactly one viewport override for .entry-head');
+  assert.equal(entryHeadBlocks.length, 1, 'the head has grown a second shape again');
+  assert.match(entryHeadBlocks[0], /flex-direction:\s*column/);
+  assert.doesNotMatch(
+    entryHeadBlocks[0],
+    /flex-wrap:\s*wrap\b/,
+    'a wrap-based rule reintroduces content-dependent placement'
+  );
+  assert.equal(
+    [...style.matchAll(/@(?:media|container)[^{]*\{\s*\.entry-head\s*\{/g)].length,
+    0,
+    'the head is viewport-switched again; the owner’s one-layout ruling (2026-08-29) says it may not be'
+  );
+
+  /* THE ALIGNMENT MECHANISM (owner, 2026-08-29: the stat columns align
+     across every card). The counters are a grid over one shared track
+     token, so column N starts at the identical x on every card whatever
+     figures it holds; the base is a single-column ledger. Both are decided
+     by the width the CARD actually has (a container query through the
+     head's inline-size containment), never by any card's own content. */
+  const counts = /\.entry-counts\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.match(counts, /display:\s*grid/, 'the counter row is content-placed flex again');
+  assert.doesNotMatch(counts, /grid-template-columns/, 'the base (phone) rule must stay a single-column ledger');
+  /* The percentage is doing two jobs — spanning the card AND contributing
+     zero to intrinsic sizing, so a narrowed column is never forced wide by
+     the fixed tracks (the 20rem-column regression the column-range lane
+     catches in every engine). */
+  assert.match(counts, /inline-size:\s*100%/, 'the row no longer spans the card by a zero-contribution size');
+  const overrides = [
+    ...style.matchAll(/@container \(min-width:\s*([^)]+)\)\s*\{\s*\.entry-counts\s*\{([^}]*)\}/g)
+  ];
+  assert.equal(overrides.length, 1, 'expected exactly one container override for .entry-counts');
   const [, breakpoint, overrideBody] = overrides[0];
-  assert.match(overrideBody, /flex-direction:\s*row/);
-  assert.match(overrideBody, /flex-wrap:\s*nowrap/);
-  // The breakpoint used here is the same literal styles.css documents and
-  // justifies as --breakpoint-card-meta — a parity pin against silent drift
-  // between the two files, the same shape as the column breakpoint's own
-  // recomputation test.
-  const [, documentedValue] = /--breakpoint-card-meta:\s*([^;]+);/.exec(styles) ?? [];
-  assert.ok(documentedValue, 'styles.css must document --breakpoint-card-meta');
+  assert.match(
+    overrideBody,
+    /grid-template-columns:\s*var\(--entry-count-columns, 10\.5rem 8\.25rem 14rem 6\.75rem 6\.25rem\)/,
+    'the five tracks are not the one shared token, so cards can disagree about where a column starts'
+  );
+  assert.match(
+    overrideBody,
+    /justify-content:\s*space-between/,
+    'the surplus no longer goes to the gaps, so the row stops short of the card’s right edge (no-dead-space rule)'
+  );
+  assert.match(
+    overrideBody,
+    /overflow-x:\s*auto/,
+    'a narrowed reading column has nowhere to put the tracks that do not fit'
+  );
+  /* The token itself is declared in styles.css — the token layer, where the
+     owner tunes it — and the component's fallback is that declaration
+     verbatim, so an engine that never resolved the property paints the same
+     table. */
+  assert.ok(
+    styles.includes('--entry-count-columns: 10.5rem 8.25rem 14rem 6.75rem 6.25rem;'),
+    'styles.css does not declare --entry-count-columns'
+  );
+  /* Breakpoint parity with the documented token, exactly as the retired
+     30rem toggle was pinned; and every named phone width sits far below it,
+     so no phone lane can land on the table side by accident. */
+  const [, documentedValue] = /--breakpoint-entry-columns:\s*([^;]+);/.exec(styles) ?? [];
+  assert.ok(documentedValue, 'styles.css must document --breakpoint-entry-columns');
   assert.equal(
     breakpoint.trim(),
     documentedValue.trim(),
-    'EntryLog.svelte’s media query must match styles.css’s documented --breakpoint-card-meta'
+    'EntryLog.svelte’s media query must match styles.css’s documented --breakpoint-entry-columns'
   );
-  // Every phone width the rendering-lane suite tests sits below the
-  // breakpoint (480px), with headroom, so no real phone in that matrix can
-  // land on the wide side by accident.
   const breakpointPx = Number.parseFloat(documentedValue) * 16;
   for (const phoneWidth of [320, 360, 390, 412]) {
     assert.ok(
       phoneWidth < breakpointPx,
-      `phone width ${phoneWidth}px must sit below --breakpoint-card-meta (${breakpointPx}px)`
+      `phone width ${phoneWidth}px must sit below --breakpoint-entry-columns (${breakpointPx}px)`
     );
   }
+  /* Inside a fixed track a counter holds one line — a provenance mark
+     wrapping under its figure on one card is the unevenness coming back —
+     while the base keeps wrap as the enlarged-font safety valve (the
+     issue-242 lane measures that half in every engine). */
+  assert.match(
+    style,
+    /@container \(min-width:\s*[^)]+\)\s*\{[\s\S]*?\.entry-count\s*\{\s*flex-wrap:\s*nowrap;/,
+    'a counter inside a fixed track may not wrap its mark onto a second line'
+  );
+  /* And a digit may not jitter the column it sits in: the counters read
+     tabular figures. Anchored on the base rule (the one carrying the
+     counter's own layout) rather than the first `.entry-count` block in file
+     order, which is the one-line nowrap override above. */
+  assert.match(
+    /\.entry-count\s*\{([^}]*position:\s*relative[^}]*)\}/.exec(style)?.[1] ?? '',
+    /font-variant-numeric:\s*tabular-nums/
+  );
 });
 
 test('projectsCapturedOn is a well-formed date, and formatIsoDate renders every stated date honestly', () => {
@@ -1629,12 +1680,23 @@ test('ONE stage box: no expression anywhere gives a film a different one (issue 
      makes the owner's sentence structural: if no expression anywhere sizes a
      film differently, the block cannot expand for one. */
   const style = styleBlock(mediaGallery);
-  // The arithmetic is stated ONCE and reads the two custom properties, exactly
-  // as before — that half is unchanged and still the reason there is one
-  // piece of stage geometry on this page.
+  /* The arithmetic is stated ONCE and reads the two custom properties,
+     exactly as before — that half is unchanged and still the reason there is
+     one piece of stage geometry on this page. Since 2026-08-29 the ONE
+     statement is the --gallery-stage-inline property on the frame, because
+     the desktop nav pair positions against the same number the stage is
+     sized by; both consumers read the property, so a second copy of the
+     expression cannot appear on either side without this count going red. */
+  assert.equal(
+    [...style.matchAll(/--gallery-stage-inline:\s*min\(100%, calc\(var\(--gallery-stage-size, 28rem\) \* var\(--gallery-stage-aspect, 1\)\)\);/g)]
+      .length,
+    1,
+    'the stage-width expression must be declared exactly once, on the frame'
+  );
   assert.match(
     style,
-    /inline-size: min\(100%, calc\(var\(--gallery-stage-size, 28rem\) \* \(var\(--gallery-stage-aspect, 1\)\)\)\)/
+    /\.gallery-stage\s*\{[^}]*inline-size:\s*var\(--gallery-stage-inline, 100%\)/,
+    'the stage no longer takes its width from the one shared expression'
   );
   assert.match(style, /aspect-ratio: var\(--gallery-stage-aspect, 1\)/);
   assert.match(style, /max-block-size: var\(--gallery-stage-size, 28rem\)/);
@@ -1816,10 +1878,12 @@ test('a film is swipeable until the reader hands the surface to the player (issu
      the strip's arrow handler is on the play control as well as on the
      enlarge button, so a film is no worse off by keyboard than a still. Once
      the player has the surface the arrows are the player's, exactly as
-     before — the veil, and the handler with it, is gone by then. */
+     before — the veil, and the handler with it, is gone by then. The desktop
+     nav pair carries the same handler (2026-08-29), so all four are the
+     strip's keyboard surface and the count pins the roster. */
   assert.match(galleryMarkup, /class="gallery-image-button"[\s\S]*?onkeydown=\{onFrameKeydown\}/);
   assert.match(galleryMarkup, /class="gallery-play"[\s\S]*?onkeydown=\{onFrameKeydown\}/);
-  assert.equal([...galleryMarkup.matchAll(/onkeydown=\{onFrameKeydown\}/g)].length, 2);
+  assert.equal([...galleryMarkup.matchAll(/onkeydown=\{onFrameKeydown\}/g)].length, 4);
 
   /* And the invariant that keeps the retired lightbox branch unreachable
      rather than merely unused: the dialog cannot be left open on a film. */
@@ -1830,29 +1894,70 @@ test('a film is swipeable until the reader hands the surface to the player (issu
   );
 });
 
-test('the gallery’s painted controls shrank while every target kept its 44px (issue 233)', () => {
+test('the prev/next pair lives on the stage, desktop-only by capability, inside 44px targets (owner, 2026-08-29)', () => {
   const style = styleBlock(mediaGallery);
-  /* Owner directive, 2026-08-28: the arrows and the position marks should be
-     smaller. This repository's established answer is a small mark inside a
-     44px hit box, so the pin holds BOTH ends — a shrink that took the target
-     with it would be the touch floor broken. */
-  /* The arrows moved out of the frame and into the control row under the work
-     (issue 241); the rule that shrinks their ink moved with them, unchanged in
-     everything but the element it is scoped to. */
-  const arrowRule = /\.gallery-controls > \.icon-button \.gallery-glyph\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.ok(arrowRule.length > 0, 'the control row’s arrow glyph is not sized by a rule of its own');
-  assert.match(arrowRule, /inline-size: var\(--gallery-arrow-size, 0\.75rem\);/);
-  assert.match(arrowRule, /block-size: var\(--gallery-arrow-size, 0\.75rem\);/);
-  assert.ok(styles.includes('--gallery-arrow-size: 0.75rem;'), 'styles.css does not declare --gallery-arrow-size');
-  // The SVG's own attributes agree with the token, so an engine that never
-  // resolved the custom property still paints the smaller glyph rather than
-  // the retired 18px one.
-  assert.equal(
-    [...mediaGallery.matchAll(/width="12" height="12"/g)].length,
-    2,
-    'the two arrows do not both declare the shrunk box'
+  /* Owner, 2026-08-29: "bring back the buttons but chose to hide them by
+     default in mobile." The 12px control-row chevrons this test used to pin
+     (owner directive 2026-08-28) are the buttons that stopped reading as
+     buttons; the pair is now the .gallery-nav discs on the stage, and the
+     three claims that make the owner's sentence structural are each pinned
+     here: hidden by DEFAULT, shown only to a hover-and-fine-pointer device,
+     and never at the cost of the 44px target. */
+  assert.match(
+    style,
+    /\.gallery-nav\s*\{\s*display:\s*none;\s*\}/,
+    'the nav pair is not hidden by default, so a touch-primary device shows buttons the owner ruled out'
   );
-  assert.doesNotMatch(mediaGallery, /width="18" height="18"/, 'an arrow still declares the old 18px glyph');
+  const fineBlock = /@media \(hover: hover\) and \(pointer: fine\)\s*\{([\s\S]*?)\n  \}/.exec(style)?.[1] ?? '';
+  assert.ok(fineBlock.length > 0, 'the capability block that shows the pair is not where this pin expects it');
+  assert.match(fineBlock, /\.gallery-nav\s*\{[^}]*display:\s*grid;/, 'the capability block does not show the pair');
+  assert.match(fineBlock, /min-inline-size:\s*2\.75rem;/, 'the shown pair lost its 44px inline target');
+  assert.match(fineBlock, /min-block-size:\s*2\.75rem;/, 'the shown pair lost its 44px block target');
+  /* At the STAGE's edges, from the same one expression the stage is sized
+     by — see the ONE-stage-box pin above for the declaration count. */
+  assert.match(
+    fineBlock,
+    /inset-inline-start:\s*calc\(\(100% - var\(--gallery-stage-inline\)\) \/ 2 \+ var\(--gallery-nav-inset, 0\.375rem\)\)/,
+    'the previous control no longer sits at the stage’s own edge'
+  );
+  assert.match(
+    fineBlock,
+    /inset-inline-end:\s*calc\(\(100% - var\(--gallery-stage-inline\)\) \/ 2 \+ var\(--gallery-nav-inset, 0\.375rem\)\)/,
+    'the next control no longer sits at the stage’s own edge'
+  );
+  /* The painted disc reads the token family, styles.css declares it, and the
+     ink is smaller than the disc, which is smaller than the target — the
+     same shrink-the-ink-never-the-target trade every gallery control makes. */
+  const discRule = /\.gallery-nav-disc\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.match(discRule, /inline-size: var\(--gallery-nav-size, 2\.25rem\);/);
+  assert.match(discRule, /block-size: var\(--gallery-nav-size, 2\.25rem\);/);
+  assert.match(discRule, /background: var\(--gallery-nav-surface, rgba\(0, 0, 0, 0\.55\)\);/);
+  assert.match(discRule, /opacity: var\(--gallery-nav-rest-opacity, 0\.7\);/);
+  for (const token of [
+    '--gallery-nav-size: 2.25rem;',
+    '--gallery-nav-surface: rgba(0, 0, 0, 0.55);',
+    '--gallery-nav-ink: white;',
+    '--gallery-nav-rest-opacity: 0.7;',
+    '--gallery-nav-inset: 0.375rem;'
+  ]) {
+    assert.ok(styles.includes(token), `styles.css does not declare ${token}`);
+  }
+  // Both chevrons declare the same painted box, sized to sit inside the disc.
+  assert.equal(
+    [...mediaGallery.matchAll(/width="16" height="16"/g)].length,
+    2,
+    'the two nav chevrons do not both declare the disc-sized glyph'
+  );
+  /* And the pair NAVIGATES — through the same two functions everything else
+     uses, so goTo()'s handover reset covers a press on either button. The
+     one-index-write pin above is what makes this sufficient. */
+  assert.match(galleryMarkup, /data-gallery-nav="previous"\s+onclick=\{previous\}/);
+  assert.match(galleryMarkup, /data-gallery-nav="next"\s+onclick=\{next\}/);
+  /* The retired control-row chevrons stay retired: the row is the dots'.
+     Declaration-or-read forms only (name plus colon, or inside var()), so a
+     history note in prose does not count as the token coming back. */
+  assert.doesNotMatch(style, /--gallery-arrow-size\s*[:,)]/, 'the retired row-chevron token is read again');
+  assert.doesNotMatch(styles, /--gallery-arrow-size\s*[:,)]/, 'styles.css still declares the retired row-chevron token');
   // The dots, the same way, plus the scale that keeps the current one
   // distinguishable after the shrink — a value is never carried by opacity
   // alone.
@@ -1863,9 +1968,6 @@ test('the gallery’s painted controls shrank while every target kept its 44px (
   for (const token of ['--gallery-dot-size: 0.25rem;', '--gallery-dot-active-scale: 1.5;']) {
     assert.ok(styles.includes(token), `styles.css does not declare ${token}`);
   }
-  // Both painted marks are genuinely smaller than what they replace.
-  assert.ok(0.75 * 16 < 18, 'the arrow glyph did not shrink');
-  assert.ok(0.25 < 0.375, 'the position mark did not shrink');
   // The targets did NOT move: the marks sit inside their old 44px boxes.
   const dotButton = /\.gallery-dot\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
   assert.match(dotButton, /min-inline-size: 2\.75rem;/);
@@ -2188,10 +2290,14 @@ test('the visible frame is centred in its track, so no gutter is dead space (iss
   /* The gallery's box is its OWN token pair since 2026-08-28 (owner: the art
      stage is near-square, not the feed's 16:9) — same construction, so the
      width and the ratio still cannot drift apart, and the reservation stays
-     byte-independent. */
+     byte-independent. The expression itself lives on the frame since
+     2026-08-29 (the nav pair positions against the same number); what this
+     pin still holds is that the stage's width is DEFINITE — the shared
+     property, whose declaration the ONE-stage-box pin counts, with a
+     definite fallback — never content-sized. */
   assert.match(
     stage,
-    /inline-size:\s*min\(100%, calc\(var\(--gallery-stage-size, 28rem\) \* \(var\(--gallery-stage-aspect, 1\)\)\)\)/,
+    /inline-size:\s*var\(--gallery-stage-inline, 100%\)/,
     'the stage states no definite width, so the frame reserves nothing until the photograph loads'
   );
   for (const property of ['aspect-ratio: var(--gallery-stage-aspect, 1)', 'max-block-size: var(--gallery-stage-size, 28rem)']) {
