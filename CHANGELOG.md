@@ -14,7 +14,8 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   CodeQL bundle 2.26.4. Both `init` and `analyze` stay on the same immutable
   upstream commit, and the existing Dependabot group continues to update the
   version-locked pair together. A repository-wide integrity check now rejects
-  either role drifting to a different full SHA or version comment.
+  either role drifting to a different full SHA or version comment across both
+  GitHub-supported workflow extensions and case-insensitive action identity.
 
 ## [0.1.64] - 2026-08-29
 

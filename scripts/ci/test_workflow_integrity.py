@@ -268,7 +268,7 @@ COVERAGE_FLOOR_KEY = "GO_COVERAGE_FLOOR"
 # this reads, and cannot fail the gate merely for being new.
 _FLOOR_NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)?")
 CODEQL_ACTION_REFERENCE = re.compile(
-    r"^github/codeql-action/(init|analyze)@([0-9a-f]{40})$"
+    r"^github/codeql-action/(init|analyze)@([0-9a-f]{40})$", re.IGNORECASE
 )
 CODEQL_VERSION_COMMENT = re.compile(r"\s+#\s*(v[0-9]+\.[0-9]+\.[0-9]+)\s*$")
 
@@ -1479,8 +1479,13 @@ def lift_instruction(workflow: str, rule: str, where: str) -> str:
     )
 
 
+def workflow_paths() -> list[Path]:
+    """Return every workflow extension GitHub accepts."""
+    return sorted((*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")))
+
+
 def all_workflows() -> list[Workflow]:
-    return [read_workflow(path) for path in sorted(WORKFLOWS.glob("*.yml"))]
+    return [read_workflow(path) for path in workflow_paths()]
 
 
 def agents_text() -> str:
@@ -1489,9 +1494,11 @@ def agents_text() -> str:
 
 def codeql_lockstep_problems(workflow_texts: dict[Path, str] | None = None) -> list[str]:
     """Report any CodeQL init/analyze reference that leaves one shared release."""
-    texts = workflow_texts or {
-        path: path.read_text(encoding="utf-8") for path in sorted(WORKFLOWS.glob("*.yml"))
-    }
+    texts = (
+        workflow_texts
+        if workflow_texts is not None
+        else {path: path.read_text(encoding="utf-8") for path in workflow_paths()}
+    )
     references: list[tuple[str, str, str, Path, int]] = []
     problems: list[str] = []
     for path, text in texts.items():
@@ -1504,7 +1511,9 @@ def codeql_lockstep_problems(workflow_texts: dict[Path, str] | None = None) -> l
             value = parsed[1]
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                 value = value[1:-1]
-            if not value.startswith(("github/codeql-action/init@", "github/codeql-action/analyze@")):
+            if not value.casefold().startswith(
+                ("github/codeql-action/init@", "github/codeql-action/analyze@")
+            ):
                 continue
             action = CODEQL_ACTION_REFERENCE.fullmatch(value)
             version = CODEQL_VERSION_COMMENT.search(raw_lines[lineno - 1])
@@ -1514,7 +1523,7 @@ def codeql_lockstep_problems(workflow_texts: dict[Path, str] | None = None) -> l
                     "one full lowercase SHA and a trailing vX.Y.Z comment"
                 )
                 continue
-            references.append((action[1], action[2], version[1], path, lineno))
+            references.append((action[1].lower(), action[2], version[1], path, lineno))
     roles = {role for role, _sha, _version, _path, _line in references}
     if roles != {"init", "analyze"}:
         problems.append(f"CodeQL workflow roles resolved as {sorted(roles)!r}, expected init and analyze")
@@ -1593,7 +1602,7 @@ class WorkflowIntegrityTests(unittest.TestCase):
         original = codeql.read_text(encoding="utf-8")
         texts = {
             path: path.read_text(encoding="utf-8")
-            for path in sorted(WORKFLOWS.glob("*.yml"))
+            for path in workflow_paths()
         }
         old_sha = "db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28"
         for role in ("init", "analyze"):
@@ -1610,6 +1619,53 @@ class WorkflowIntegrityTests(unittest.TestCase):
                 candidate = dict(texts)
                 candidate[codeql] = mutated
                 self.assertTrue(codeql_lockstep_problems(candidate))
+
+    def test_codeql_lockstep_reads_the_yaml_extension(self):
+        """A second valid workflow extension cannot hide another release."""
+        texts = {path: path.read_text(encoding="utf-8") for path in workflow_paths()}
+        texts[WORKFLOWS / "codeql-shadow.yaml"] = (
+            "name: CodeQL shadow\n"
+            "on:\n"
+            "  workflow_dispatch:\n"
+            "permissions: {}\n"
+            "jobs:\n"
+            "  analyze:\n"
+            "    runs-on: ubuntu-24.04\n"
+            "    steps:\n"
+            "      - uses: github/codeql-action/init@"
+            "db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8\n"
+            "      - uses: github/codeql-action/analyze@"
+            "db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8\n"
+        )
+        self.assertTrue(codeql_lockstep_problems(texts), "the .yaml shadow survived")
+
+    def test_codeql_lockstep_normalizes_repository_case_and_sees_past_a_decoy(self):
+        """GitHub resolves owner/repository case-insensitively."""
+        codeql = WORKFLOWS / "codeql.yml"
+        texts = {path: path.read_text(encoding="utf-8") for path in workflow_paths()}
+        original = texts[codeql]
+        pattern = re.compile(
+            r"(?m)^(\s*)- name: Initialize CodeQL\n"
+            r"(\s*)uses: github/codeql-action/init@([0-9a-f]{40})"
+            r"\s+#\s*(v[0-9]+\.[0-9]+\.[0-9]+)\s*$"
+        )
+
+        def split_real_step(match: re.Match[str]) -> str:
+            item_indent, uses_indent, current_sha, current_version = match.groups()
+            return (
+                f"{item_indent}- name: Skipped current-release decoy\n"
+                f"{uses_indent}if: ${{{{ false }}}}\n"
+                f"{uses_indent}uses: github/codeql-action/init@{current_sha} "
+                f"# {current_version}\n"
+                f"{item_indent}- name: Initialize CodeQL\n"
+                f"{uses_indent}uses: GitHub/codeql-action/init@"
+                "db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8"
+            )
+
+        mutated, count = pattern.subn(split_real_step, original, count=1)
+        self.assertEqual(count, 1, "did not construct the case-variant decoy mutant")
+        texts[codeql] = mutated
+        self.assertTrue(codeql_lockstep_problems(texts), "the case-variant decoy survived")
 
     def test_the_reader_ignores_constructs_inside_a_run_block(self):
         """A `shell:` line inside a shell script is text, not a step key.
