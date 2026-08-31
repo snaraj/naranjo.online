@@ -31,7 +31,7 @@
  *     already landed by then; it adds the time it takes to see that it did.
  */
 
-import { claimsHorizontal, frameCoalescer, rubberBand, type FrameView } from './gesture.ts';
+import { claimsHorizontal, frameCoalescer, gestureSlop, rubberBand, type FrameView } from './gesture.ts';
 
 /* How far the surface may ever travel, how far it must travel to arm, and how
  * long the reader is shown the answer. The distances are absolute pixels
@@ -189,9 +189,16 @@ export function settleTo(
   to: number,
   reduced: boolean,
   step: (value: number) => void,
-  view: { requestAnimationFrame(fn: (t: number) => void): number } = globalThis
+  view: FrameView = globalThis
 ): () => void {
-  if (reduced || from === to) {
+  /* NO FRAME CLOCK, NO JOURNEY — and arriving immediately is the correct
+     degradation rather than a settle that never runs, exactly as
+     frameCoalescer's own header argues for the drag. A host with no
+     requestAnimationFrame (a server render, a bare Node context) cannot
+     animate; what it must not do is leave the surface displaced, which is the
+     one thing this function exists to prevent. */
+  const frames = view.requestAnimationFrame?.bind(view);
+  if (reduced || from === to || frames === undefined) {
     step(to);
     return () => {};
   }
@@ -216,10 +223,10 @@ export function settleTo(
     const eased = 1 - (1 - t) ** 3;
     step(from + (to - from) * eased);
     if (t < 1) {
-      view.requestAnimationFrame(frame);
+      frames(frame);
     }
   };
-  view.requestAnimationFrame(frame);
+  frames(frame);
   return () => {
     cancelled = true;
   };
@@ -237,6 +244,17 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
   let startX = 0;
   let startY = 0;
   let claimed = false;
+  /* WHICH FINGER THIS GESTURE IS (issue 265). A TouchList is every finger on
+     the screen, and the native-touch defence below used to read `touches[0]`
+     — the FIRST one down, which is not promised to be the one this binding is
+     tracking. A pointer that began while an earlier finger was already on the
+     page therefore defended itself against a stranger's coordinates.
+     It is ADOPTED rather than compared, because `Touch.identifier` and
+     `PointerEvent.pointerId` are unrelated counters that no specification
+     relates: the first touchmove of a tracked gesture names the touch, and
+     every later move is matched against that name. `null` means no touch has
+     been seen yet in this gesture, which is a state no identifier can wear. */
+  let touchId: number | null = null;
   let distance = 0;
   let phase: PullPhase = 'idle';
   let cancelSettle: (() => void) | null = null;
@@ -296,7 +314,62 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
 
   function settle(to: number, nextPhase: PullPhase): void {
     cancelSettle?.();
-    cancelSettle = settleTo(distance, to, reduced(), (value) => show(value, nextPhase));
+    /* The SAME frame clock the drag is coalesced against, which is what
+       PullBinding promises `view` is for. It defaulted to the platform's own
+       before, so an injected clock drove the drag and the real display drove
+       the settle — the one part of this gesture a test could not step
+       through, and the part the mid-settle strand above lives in. */
+    cancelSettle = settleTo(distance, to, reduced(), (value) => show(value, nextPhase), binding.view);
+  }
+
+  /* LETTING GO OF THE FINGER, and nothing else. Every path out of a gesture
+     ends here, and the INVARIANT is that `pointer` is never cleared anywhere
+     else: one place stops tracking, one place removes the non-passive
+     touchmove listener, one place forgets which touch this was. The listener
+     leak was a real defect (MEASURED: it survived on document.body for the
+     rest of the session after the first non-pull touch that began at the top,
+     making the whole page a scroll-blocking region), and it was a leak
+     precisely because three exits each did part of this by hand. */
+  function release(): void {
+    node.removeEventListener('touchmove', onTouchMove);
+    pointer = -1;
+    claimed = false;
+    touchId = null;
+  }
+
+  /* THE SURFACE IS NOT THE FINGER'S ANY MORE — and it goes home. This is rule
+     3 at the top of this file, made a function rather than a promise: every
+     exit that is not a committed refresh runs through it, so there is no path
+     left that can clear the pointer and leave the page displaced.
+     The defect it closes: a second touch during the 260ms snap-back cancels
+     the settle in flight (onDown), and if that touch then turns out to be a
+     scroll — an upward flick, a horizontal swipe, a tap — the old code simply
+     stopped tracking. The page stayed frozen wherever the cancelled settle had
+     reached (MEASURED at 39.98px, `data-pulling="true"` for the rest of the
+     session, the indicator pinned at the viewport top 1500px down the page).
+     The settle is restarted only when there is travel to undo, so an ordinary
+     touch that never moved the page renders nothing at all. */
+  function standDown(): void {
+    release();
+    if (distance > 0) {
+      settle(0, 'idle');
+    }
+  }
+
+  /* WHICH TOUCH IS OURS, adopted on first sight — see `touchId`. A gesture
+     whose first touchmove carries no touch at all names nothing and defends
+     nothing, which is the conservative direction: an unattributable touch is
+     the browser's. */
+  function trackedTouch(event: TouchEvent): Touch | undefined {
+    const touches = Array.from(event.touches);
+    if (touchId === null) {
+      const first = touches[0];
+      if (first === undefined) {
+        return undefined;
+      }
+      touchId = first.identifier;
+    }
+    return touches.find((candidate) => candidate.identifier === touchId);
   }
 
   function onDown(event: PointerEvent): void {
@@ -313,6 +386,7 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
     startX = event.clientX;
     startY = event.clientY;
     claimed = false;
+    touchId = null;
     node.addEventListener('touchmove', onTouchMove, { passive: false });
   }
 
@@ -330,7 +404,7 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
          down explicitly stops a later downward wobble in the same gesture
          from grabbing a scroll already in progress. */
       if (dy <= 0 || !binding.atTop()) {
-        pointer = -1;
+        standDown();
         return;
       }
       /* AND A GESTURE MUST PROVE ITSELF, which this one did not. The header
@@ -350,7 +424,7 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
          inside a gesture the reader is using to swipe something must not
          suddenly grab the page. */
       if (claimsHorizontal(dx, dy)) {
-        pointer = -1;
+        standDown();
         return;
       }
       if (dy < 12) {
@@ -392,14 +466,32 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
       return;
     }
     /* The proving window needs the same defence: Safari can claim the
-       gesture during the first 12 downward pixels, before `claimed` flips,
-       and a pull that only defends itself after proof still dies on a real
-       phone. An eligible, still-tracked touch moving DOWNWARD at the top is
-       defended; everything else — upward, horizontal stand-down (pointer is
-       already -1), a page no longer at its top — falls through to the
-       browser untouched. */
-    const touch = event.touches[0];
-    if (pointer !== -1 && touch !== undefined && touch.clientY - startY > 0 && binding.atTop()) {
+       gesture during the first downward pixels, before `claimed` flips, and a
+       pull that only defends itself after proof still dies on a real phone.
+       An eligible, still-tracked touch moving DOWNWARD PAST THE SLOP at the
+       top is defended; everything else — upward, inside the slop, a
+       horizontal stand-down (pointer is already -1), a page no longer at its
+       top — falls through to the browser untouched.
+       THE SLOP IS THE WHOLE OF THE OWNER'S "the flick sometimes does nothing"
+       (2026-08-31, real iPhone; not reproducible under emulation). This used
+       to defend any downward delta greater than ZERO, and a finger does not
+       start an upward flick with an upward pixel: the first sample of a real
+       flick drifts a few pixels DOWN, that sample was preventDefault'ed at
+       the top of the document, and the scroll the reader asked for was eaten.
+       It is lib/gesture.ts's own gestureSlop rather than a number of this
+       file's, so "a finger that has not gone anywhere yet" means the same
+       thing to both gestures on this page. The window it concedes is real and
+       narrow — a genuine pull's first 8 downward pixels are no longer
+       contested — and it is the correct side to be wrong on: a pull that
+       needs one more sample to engage is a gesture that works, while a scroll
+       that never happens is a page that is broken. */
+    const touch = trackedTouch(event);
+    if (
+      pointer !== -1 &&
+      touch !== undefined &&
+      touch.clientY - startY > gestureSlop &&
+      binding.atTop()
+    ) {
       event.preventDefault();
     }
   }
@@ -408,22 +500,27 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
     if (event.pointerId !== pointer) {
       return;
     }
-    node.removeEventListener('touchmove', onTouchMove);
-    pointer = -1;
-    if (!claimed) {
-      return;
-    }
-    claimed = false;
-    if (!pullArmed(distance, metrics)) {
+    /* An unclaimed release is an exit like any other, and it is an exit that
+       could be holding travel: the finger that just lifted may have been the
+       second touch of a strand — down inside a settle (which onDown cancels),
+       up again without ever proving itself a pull. Standing down restarts the
+       settle it interrupted instead of leaving the page where the cancelled
+       one stopped. */
+    if (!claimed || !pullArmed(distance, metrics)) {
       /* THE SNAP-BACK. Not armed, so nothing happens except the surface
          going back exactly where it was — which is the whole of what the
          removed behaviour failed to do. */
-      settle(0, 'idle');
+      standDown();
       return;
     }
     /* Armed: hold at the rest offset for as long as the work AND the dwell
        floor take, acknowledge, and then settle home — whether the work
-       succeeded or not, and whether or not this action is still mounted. */
+       succeeded or not, and whether or not this action is still mounted.
+       RELEASE, NEVER STAND DOWN: this is the one exit that must not settle to
+       zero, because the cycle below is about to settle it to `rest` and hold
+       it there. Both helpers clear the pointer, which is what keeps the `busy`
+       invariant below true on every path. */
+    release();
     busy = true;
     void refreshCycle(binding.refresh, enterPhase, wait, metrics).finally(() => {
       busy = false;
@@ -457,10 +554,7 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
     if (event.pointerId !== pointer) {
       return;
     }
-    node.removeEventListener('touchmove', onTouchMove);
-    pointer = -1;
-    claimed = false;
-    settle(0, 'idle');
+    standDown();
   }
 
   node.addEventListener('pointerdown', onDown, { passive: true });

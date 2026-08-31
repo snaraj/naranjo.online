@@ -62,6 +62,17 @@ const galleryStageCapPx = 448;
  * asserting the operator's pipeline rather than this build. Publishing a
  * fixture film into the repository to change that would also be exactly the
  * heavy media requirement 11 keeps out of git. */
+/* THE ITEMS CARRY CAPTIONS, and the fixture's blindness to them is why the
+ * zero-shift lane below passed against a site that visibly moved (issue 265).
+ * A gallery/v1 item may carry a title and a description; neither of these two
+ * did, so "moving between a still and a film shifts the document by nothing"
+ * measured a page with no caption to shift it — one added field flipped the
+ * same lane from 0 to 50px red.
+ * The two are DELIBERATELY UNEQUAL, and the taller one is deliberately
+ * SECOND: the reservation is the tallest caption in the CURRENT SET, so a
+ * mutation that reserved only the first item's caption, or only the current
+ * item's, is caught by moving onto the film rather than by the fixture
+ * happening to be symmetric. */
 const galleryManifestFixture = {
   schema: 'gallery/v1',
   items: [
@@ -69,6 +80,7 @@ const galleryManifestFixture = {
       kind: 'image',
       key: 'lane-still',
       alt: 'A still, served by the lane',
+      title: 'A still with a title',
       full: { path: 'gallery/still.webp', sha256: 'a'.repeat(64), width: 3840, height: 2160 },
       preview: { path: 'gallery/still-preview.webp', sha256: 'b'.repeat(64), width: 960, height: 540 },
     },
@@ -76,6 +88,9 @@ const galleryManifestFixture = {
       kind: 'video',
       key: 'lane-film',
       alt: 'A film, served by the lane',
+      title: 'A film with a title',
+      description:
+        'And a description long enough to wrap onto a second line on a phone, which is exactly what makes this the taller caption of the two at every width the matrix measures.',
       full: { path: 'gallery/film.webp', sha256: 'c'.repeat(64), width: 3840, height: 2160 },
       preview: { path: 'gallery/film-preview.webp', sha256: 'd'.repeat(64), width: 960, height: 540 },
       poster: { path: 'gallery/film-poster.webp', sha256: 'e'.repeat(64), width: 1920, height: 1080 },
@@ -3549,7 +3564,7 @@ test('the gallery frame is centred in its track, with no dead gutter (issue 202)
   }
 });
 
-/* ZERO SHIFT ACROSS A KIND CHANGE (issue 241).
+/* ZERO SHIFT ACROSS A KIND CHANGE (issue 241, re-aimed at issue 265).
  *
  * MEASURED on 0.1.54: a still's stage is a square and a film's is 16:9, and
  * each reserved its own box — so pressing next across the boundary resized the
@@ -3557,7 +3572,17 @@ test('the gallery frame is centred in its track, with no dead gutter (issue 202)
  * back. The reservation now sits on the frame, which knows nothing about kind,
  * and this measures the document itself rather than any box: the whole page's
  * scroll height, and the top of the section BELOW the gallery, which is what a
- * reader actually watches move. */
+ * reader actually watches move.
+ *
+ * AND IT PASSED WHILE THE SITE MOVED, which is the second thing this lane now
+ * records. The owner watched the section jump on every item change of the live
+ * 0.1.65 origin — 50px at 1440, 69px at 390 — and this lane was green
+ * throughout, because the fixture above carried no captions and the caption
+ * was the mover: a conditional sibling that existed only for the items that
+ * had something to say. The fixture now captions both items, unequally, so
+ * the same three measurements it always took are taken against a page that
+ * has something to shift; the caption's own box joins them, so a failure
+ * names the mover instead of only the movement. */
 test('moving between a still and a film shifts the document by nothing (issue 241)', async ({ page }) => {
   await serveGalleryManifest(page);
   await visit(page);
@@ -3569,11 +3594,18 @@ test('moving between a still and a film shifts the document by nothing (issue 24
       const frame = window.document.querySelector('.gallery-frame').getBoundingClientRect();
       const stage = window.document.querySelector('.gallery-stage').getBoundingClientRect();
       const below = window.document.querySelector('#trackers');
+      const caption = window.document.querySelector('.gallery-caption');
       return {
         document: window.document.documentElement.scrollHeight,
         frame: Math.round(frame.height * 10) / 10,
         stage: { width: Math.round(stage.width * 10) / 10, height: Math.round(stage.height * 10) / 10 },
         below: below === null ? null : Math.round(below.getBoundingClientRect().top + window.scrollY),
+        /* The lane the caption is rendered into (issue 265). It is reserved
+           for the whole SET rather than for the current item, so its height is
+           one number for every item — and a null here would mean the box went
+           back to being conditional. */
+        caption:
+          caption === null ? null : Math.round(caption.getBoundingClientRect().height * 10) / 10,
         kind: window.document.querySelector('.gallery-stage').getAttribute('data-gallery-kind'),
       };
     });
@@ -3603,6 +3635,13 @@ test('moving between a still and a film shifts the document by nothing (issue 24
   ).toEqual(still.stage);
   expect(back.kind, 'the strip did not come back to the still it started on').toBe('image');
 
+  /* NON-VACUITY, THE CAPTION HALF (issue 265): the fixture's two items carry
+     DIFFERENT captions, so the lane below is measuring a page that has
+     something to shift. A reservation that had gone back to the current
+     item's own caption would report a height of nothing here for the still. */
+  expect(still.caption, 'the caption box is conditional again, so this lane measures nothing').not.toBeNull();
+  expect(still.caption, 'the reserved caption lane has no height at all').toBeGreaterThan(0);
+
   for (const [label, state] of [
     ['the film', film],
     ['the still, coming back', back],
@@ -3619,6 +3658,10 @@ test('moving between a still and a film shifts the document by nothing (issue 24
       state.below,
       `${label} moved the section under the gallery from ${still.below} to ${state.below}`
     ).toBe(still.below);
+    expect(
+      state.caption,
+      `${label} resized the caption lane from ${still.caption}px to ${state.caption}px; the item is moving the box again`
+    ).toBeCloseTo(still.caption, 0);
   }
 });
 
@@ -4021,9 +4064,18 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
   const frame = page.locator('.gallery-image-button');
   await frame.scrollIntoViewIfNeeded();
 
-  // Absent, on the feed surface: no caption element exists at all — not an
-  // empty one, not a hidden one.
-  expect(await page.locator('.gallery-caption').count()).toBe(0);
+  /* Absent, on the feed surface: the BOX exists for every item and holds no
+     COPY for an item with nothing to say (issue 265). This used to require
+     that no caption element existed at all — issue 202's trade, which the
+     owner overruled after watching a captioned item push the document up and
+     down. What "absent" means is unchanged and still measured: no title, no
+     description, no dash, no fabricated line. What changed is that the empty
+     lane stays, so the item that follows cannot move the page. */
+  expect(await page.locator('.gallery-caption').count(), 'the caption box went back to being conditional').toBe(1);
+  expect(
+    await page.locator('.gallery-caption p').count(),
+    'a caption line rendered for a set whose items have nothing to say',
+  ).toBe(0);
 
   /* Zero CLS across the whole cycle: the frame and the counter occupy the
      identical box for every one of the eight items, so nothing an item does
@@ -4052,7 +4104,10 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
           reserved: round(row.height),
           counterHeight: round(counter.height),
           counterGap: round(counter.top - frame.bottom),
-          captions: window.document.querySelectorAll('.gallery-caption').length,
+          /* The caption's own CONTENT, item by item: the box is reserved for
+             every item now (issue 265), and what must still be absent for an
+             item with nothing to say is every line inside it. */
+          captionLines: window.document.querySelectorAll('.gallery-caption p').length,
         };
       })
     );
@@ -4060,7 +4115,7 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
   }
   const [first] = geometry;
   for (const [index, state] of geometry.entries()) {
-    expect(state.captions, `item ${index + 1} rendered a caption element with nothing to say`).toBe(0);
+    expect(state.captionLines, `item ${index + 1} rendered caption copy nobody wrote`).toBe(0);
     expect(state, `the gallery block reshaped between item 1 and item ${index + 1}`).toEqual(first);
   }
 
@@ -7746,6 +7801,79 @@ test('the gallery advances on a swipe and settles back on a fidget (issue 219)',
   expect(Math.abs(resting), 'the gallery did not settle back to its resting position').toBeLessThan(1);
 });
 
+/* THE TURN GOES FORWARD (issue 265, defect 5). Layer 1 owns the arithmetic —
+ * where the incoming item starts, and that the clamp keeps it on the right
+ * side — and this owns the one thing only an engine can answer: what the
+ * reader's own display actually painted in the frames after they let go.
+ * MEASURED on 0.1.65 in all five engines: 120-202px of travel in the wrong
+ * direction per swipe, over a 200ms settle, because the new item mounted at
+ * the OLD drag offset and eased home from there. */
+test('a committed swipe brings the new item in from its own side (issue 265)', async ({ page }) => {
+  await visit(page);
+  const stage = page.locator('.gallery-stage').first();
+  await stage.scrollIntoViewIfNeeded();
+  const counter = page.locator('.gallery-count').first();
+  const before = (await counter.innerText()).trim();
+
+  const box = await stage.boundingBox();
+  const walk = await page.evaluate(
+    async ([left, width, y]) => {
+      const stageNode = window.document.querySelector('.gallery-stage');
+      const send = (type, x) =>
+        stageNode.dispatchEvent(
+          new PointerEvent(type, {
+            pointerId: 61,
+            pointerType: 'touch',
+            clientX: x,
+            clientY: y,
+            bubbles: true,
+          }),
+        );
+      /* The PAINTED offset, read off the element the reader is looking at
+         rather than off the custom property that feeds it: a transition
+         resolves to its current animated value here, which is exactly the
+         travel this lane is about. */
+      const offset = () =>
+        new DOMMatrixReadOnly(
+          window.getComputedStyle(window.document.querySelector('.gallery-image-button')).transform,
+        ).m41;
+      const frame = () => new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+      send('pointerdown', left + width * 0.8);
+      for (const at of [0.7, 0.55, 0.4, 0.25]) {
+        send('pointermove', left + width * at);
+        await frame();
+      }
+      const dragged = offset();
+      send('pointerup', left + width * 0.25);
+      const painted = [];
+      for (let step = 0; step < 3; step += 1) {
+        await frame();
+        painted.push(offset());
+      }
+      return { dragged, painted };
+    },
+    [box.x, box.width, box.y + box.height / 2],
+  );
+
+  /* Non-vacuity, both halves: the drag really pulled the surface leftward,
+     and the release really turned the page. A gesture that committed nothing
+     would settle to zero and satisfy the assertion below for the wrong
+     reason. */
+  expect(walk.dragged, 'the drag never moved the surface, so nothing was released from anywhere').toBeLessThan(0);
+  await expect(counter, 'the swipe did not turn the page').not.toHaveText(before);
+
+  /* THE ASSERTION: not one painted frame after the turn sits on the side the
+     finger came FROM. The drag went left, so every frame of the arrival is at
+     or right of centre and travels toward it. */
+  for (const [step, at] of walk.painted.entries()) {
+    expect(
+      at + subPixel,
+      `frame ${step + 1} after a leftward turn painted the new item at ${at}px, on the side the gesture came from — it is sliding in backwards`,
+    ).toBeGreaterThanOrEqual(0);
+  }
+});
+
 /* THE MOTION BATTERY, LAYER 2 (issue 243). The layer scheme is written out in
  * tests/gesture.test.mjs's header; the short of it is that layer 1 owns every
  * DECISION the gesture layer makes, exhaustively and in microseconds, and this
@@ -8590,6 +8718,80 @@ test('a pull claims only a downward drag, and takes no open readout with it (iss
     .toBe(false);
 });
 
+/* THE STRAND (issue 265, defect 1), in a real engine. The state machine is
+ * exercised exhaustively in tests/gesture.test.mjs; what only an engine can
+ * say is whether the page itself came back — the custom property, the
+ * attribute that makes <main> a containing block, and the transform a reader
+ * is left looking at. MEASURED on the live 0.1.65 origin, all five engines:
+ * `--page-pull` frozen at 39.98px, `data-pulling="true"` for the rest of the
+ * session, and the indicator pinned at the top of the viewport 1500px down
+ * the page. */
+test('a second touch during the snap-back leaves the page nowhere but home (issue 265)', async ({
+  page,
+}) => {
+  await visit(page);
+  const walk = await page.evaluate(async () => {
+    const root = window.document.documentElement;
+    const body = window.document.body;
+    const send = (id, type, y) =>
+      body.dispatchEvent(
+        new PointerEvent(type, {
+          pointerId: id,
+          pointerType: 'touch',
+          clientX: 100,
+          clientY: y,
+          bubbles: true,
+        }),
+      );
+    const frame = () => new Promise((resolve) => window.requestAnimationFrame(resolve));
+    const pull = () => Number.parseFloat(root.style.getPropertyValue('--page-pull')) || 0;
+
+    window.scrollTo(0, 0);
+    /* A pull SHORT of the arming threshold, so releasing it starts the 260ms
+       snap-back rather than a refresh — the window the strand lives in. */
+    send(51, 'pointerdown', 100);
+    for (const y of [120, 135, 145]) {
+      send(51, 'pointermove', y);
+      await frame();
+    }
+    const dragged = pull();
+    send(51, 'pointerup', 145);
+    await frame();
+    /* The second touch, which cancels that settle simply by arriving — and
+       then turns out to be an upward flick, which is the page's gesture and
+       not this one's. Before the repair, the pull stopped tracking here and
+       nothing ever restarted the settle it had just cancelled. */
+    send(52, 'pointerdown', 300);
+    const interrupted = pull();
+    send(52, 'pointermove', 262);
+    send(52, 'pointerup', 262);
+    return { dragged, interrupted };
+  });
+
+  // Non-vacuity, both halves: a pull that never moved the page, or a settle
+  // that had already finished, would make the walk above prove nothing.
+  expect(walk.dragged, 'the setup pull never moved the page').toBeGreaterThan(0);
+  expect(
+    walk.interrupted,
+    'the snap-back had already finished when the second touch arrived; there was nothing to interrupt',
+  ).toBeGreaterThan(0);
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => ({
+          pull: window.document.documentElement.style.getPropertyValue('--page-pull'),
+          pulling: window.document.documentElement.hasAttribute('data-pulling'),
+          main: window.getComputedStyle(window.document.querySelector('main')).transform,
+        })),
+      {
+        message: `the page was stranded at ${walk.interrupted}px by a gesture that stood down mid-settle`,
+        timeout: 10_000,
+      },
+    )
+    .toEqual({ pull: '0px', pulling: false, main: 'none' });
+});
+
 test('the refresh gesture has a control a keyboard can reach (issue 219)', async ({ page }) => {
   await visit(page);
   const control = page.locator('.pull-control');
@@ -8702,10 +8904,9 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
   ).not.toBe('auto');
 
   /* HALF ONE — browser-driven scrolling no longer parks a target under the
-     control at all. This is the layout half of the fix and the stronger of
-     the two statements: scrollIntoView (and every focus move, which uses the
-     same machinery) now honours the scroll padding, so the segment the owner
-     could not read lands BELOW the control instead of beneath it. */
+     control at all: scrollIntoView (and every focus move, which uses the same
+     machinery) now honours the scroll padding, so the segment the owner could
+     not read lands BELOW the control instead of beneath it. */
   const landing = await page.evaluate(() => {
     /* The right-aligned panel content the owner's report was actually about.
        It used to be the last "cumulative" segment of an exposed pill row, then
@@ -8740,53 +8941,26 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
     `"${landing.text}" was scrolled to ${landing.segmentTop}, under a control whose bottom edge is ${landing.headerBottom}`,
   ).toBeGreaterThanOrEqual(landing.headerBottom);
 
-  /* HALF TWO — when a reader scrolls BY HAND, content genuinely does pass
-     under a fixed control; that is what "fixed" means and no layout can
-     prevent it. What must not happen is the owner's actual report: the label
-     rendering THROUGH the glyph because nothing was painted between them. So
-     the content is put deliberately under the control and the top-most
-     element at the centre of the overlap is measured — it must be the
-     control, not the text. */
-  const occlusion = await page.evaluate(() => {
-    const segments = [...window.document.querySelectorAll('.usage-insight-value')];
-    const segment = segments.at(-1);
-    const header = window.document.querySelector('.page-header');
-    const hb = header.getBoundingClientRect();
-    // Scroll by hand until this segment's own box is centred on the control.
-    const sb = segment.getBoundingClientRect();
-    window.scrollBy(0, sb.top + sb.height / 2 - (hb.top + hb.height / 2));
-    const nowSegment = segment.getBoundingClientRect();
-    const nowHeader = header.getBoundingClientRect();
-    const left = Math.max(nowSegment.left, nowHeader.left);
-    const right = Math.min(nowSegment.right, nowHeader.right);
-    const top = Math.max(nowSegment.top, nowHeader.top);
-    const bottom = Math.min(nowSegment.bottom, nowHeader.bottom);
-    if (right <= left || bottom <= top) {
-      return { overlaps: false };
-    }
-    // The CENTRE of the intersection, never a corner: a corner plus one pixel
-    // lands outside whichever box is thinner there, which is a hit test of
-    // the wrong element dressed up as a finding.
-    const hit = window.document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
-    return {
-      overlaps: true,
-      headerOnTop: hit !== null && (header === hit || header.contains(hit)),
-      hit: hit === null ? null : hit.className.toString(),
-    };
-  });
-  if (occlusion.overlaps) {
-    expect(
-      occlusion.headerOnTop,
-      `page text renders over the fixed control instead of behind its plate (topmost element was "${occlusion.hit}")`,
-    ).toBe(true);
-  }
+  /* HALF TWO IS GONE (issue 265), and it is worth saying why rather than
+     leaving a reader to wonder what happened to it. It scrolled the last
+     insight figure under the fixed control and hit-tested the centre of the
+     overlap, expecting the control to be on top — but its whole body sat
+     behind `if (occlusion.overlaps)`, and half three below is the reason that
+     guard is structurally FALSE at every viewport in this matrix: the column
+     ends where the control starts, so no descendant of it ever intersects the
+     control's box. A probe whose assertion no input in the matrix can reach
+     is decorative, and this repository does not keep those (AGENTS.md's own
+     vacuity rule). What it meant to protect — that the plate is painted
+     between the page and the glyph — is measured above, where the plate's
+     background alpha, blur and shadow are each pinned in the direction the
+     redesign chose.
 
-  /* HALF THREE — the column does not reach the control at all (issue 241),
-     which is the guarantee the two halves above could not give. Halves one and
-     two are about a target scrolled to a place and a plate painted under a
-     glyph; neither says anything about the ordinary case the owner was
-     actually reading, which is body text passing under a control on its way up
-     the screen. MEASURED on 0.1.54, and this half is why it was only ever a
+     HALF THREE — the column does not reach the control at all (issue 241),
+     which is the guarantee half one could not give. Half one is about a
+     target scrolled to a place; it says nothing about the ordinary case the
+     owner was actually reading, which is body text passing under a control on
+     its way up the screen. MEASURED on 0.1.54, and this half is why it was
+     only ever a
      phone defect: at 320px <main> ended at exactly 304 and the trigger box was
      x 260-304, so a scroll sweep found body text under the control 9 to 11
      times at 320, 360, 390, 412 and 768 — bullets, card bylines and a card
