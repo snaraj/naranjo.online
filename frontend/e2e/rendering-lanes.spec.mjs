@@ -4064,18 +4064,47 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
   const frame = page.locator('.gallery-image-button');
   await frame.scrollIntoViewIfNeeded();
 
-  /* Absent, on the feed surface: the BOX exists for every item and holds no
-     COPY for an item with nothing to say (issue 265). This used to require
-     that no caption element existed at all — issue 202's trade, which the
-     owner overruled after watching a captioned item push the document up and
-     down. What "absent" means is unchanged and still measured: no title, no
-     description, no dash, no fabricated line. What changed is that the empty
-     lane stays, so the item that follows cannot move the page. */
-  expect(await page.locator('.gallery-caption').count(), 'the caption box went back to being conditional').toBe(1);
+  /* Absent, on the feed surface, and this is the SET's answer rather than the
+     current item's (issue 265). The reserved lane is what stops an item change
+     moving the page — but this set is the vendored bootstrap gallery, in which
+     NOBODY has anything to say, so there is no lane to hold open and reserving
+     one would charge the page a constant empty band (MEASURED at +12px of
+     document height, one section row gap for a zero-height box).
+     The captioned half of the same contract is measured by the zero-shift lane
+     earlier in this file, which serves a manifest whose items DO carry
+     captions and holds the document to the pixel across every item change. */
+  expect(
+    await page.locator('.gallery-caption').count(),
+    'a set with nothing to say still reserved a caption band',
+  ).toBe(0);
   expect(
     await page.locator('.gallery-caption p').count(),
     'a caption line rendered for a set whose items have nothing to say',
   ).toBe(0);
+  /* AND THE BLOCK ENDS AT ITS DOTS. The count above would still pass if the
+     gallery had left some other empty box behind it, so the geometry says the
+     same thing independently: the last flow box inside the gallery's own
+     subsection is the position row, which is exactly the shape the page had
+     before anything was reserved. */
+  const trailing = await page.evaluate(() => {
+    const position = window.document.querySelector('.gallery-position');
+    const block = position.parentElement;
+    return {
+      blockBottom: block.getBoundingClientRect().bottom,
+      positionBottom: position.getBoundingClientRect().bottom,
+      /* Every box after the dots must take no part in layout — the lightbox
+         is `display: none` while closed and nothing else may be there. */
+      inFlowAfter: [...block.children]
+        .slice([...block.children].indexOf(position) + 1)
+        .filter((node) => window.getComputedStyle(node).display !== 'none')
+        .map((node) => node.className.toString()),
+    };
+  });
+  expect(trailing.inFlowAfter, 'the gallery left a box in flow after its dots').toEqual([]);
+  expect(
+    trailing.blockBottom,
+    `the gallery block runs ${trailing.blockBottom - trailing.positionBottom}px past its own dots`,
+  ).toBeCloseTo(trailing.positionBottom, 1);
 
   /* Zero CLS across the whole cycle: the frame and the counter occupy the
      identical box for every one of the eight items, so nothing an item does
