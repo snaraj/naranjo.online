@@ -1486,7 +1486,7 @@
        (styles.css, "BELOW THE HANDLE BREAKPOINT..."), so the feed stage grew
        to the full column and a 90vw enlargement MEASURED smaller than the
        frame it enlarged from: 353.7px against a 361px stage on a Pixel 5,
-       354.4 against 358 on an iPhone 13 — an "enlarge" that shrank the
+       351.0 against 358 on an iPhone 13 — an "enlarge" that shrank the
        photograph. Reading the dialog's own token instead of a second number
        is what stops the two disagreeing again: whatever the enlarged surface
        is allowed to be, the picture inside it is allowed to be exactly
