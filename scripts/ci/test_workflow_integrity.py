@@ -267,6 +267,10 @@ COVERAGE_FLOOR_KEY = "GO_COVERAGE_FLOOR"
 # permitted locations: a new legitimate sentence about the floor widens what
 # this reads, and cannot fail the gate merely for being new.
 _FLOOR_NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)?")
+CODEQL_ACTION_REFERENCE = re.compile(
+    r"^github/codeql-action/(init|analyze)@([0-9a-f]{40})$"
+)
+CODEQL_VERSION_COMMENT = re.compile(r"\s+#\s*(v[0-9]+\.[0-9]+\.[0-9]+)\s*$")
 
 SPEC = importlib.util.spec_from_file_location("release_contract", HERE / "release_contract.py")
 assert SPEC and SPEC.loader
@@ -1483,6 +1487,46 @@ def agents_text() -> str:
     return AGENTS.read_text(encoding="utf-8")
 
 
+def codeql_lockstep_problems(workflow_texts: dict[Path, str] | None = None) -> list[str]:
+    """Report any CodeQL init/analyze reference that leaves one shared release."""
+    texts = workflow_texts or {
+        path: path.read_text(encoding="utf-8") for path in sorted(WORKFLOWS.glob("*.yml"))
+    }
+    references: list[tuple[str, str, str, Path, int]] = []
+    problems: list[str] = []
+    for path, text in texts.items():
+        raw_lines = text.splitlines()
+        for lineno, _indent, content in structural_lines(text):
+            candidate = content[1:].lstrip() if _is_item(content) else content
+            parsed = _key(candidate)
+            if not parsed or parsed[0] != "uses":
+                continue
+            value = parsed[1]
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            if not value.startswith(("github/codeql-action/init@", "github/codeql-action/analyze@")):
+                continue
+            action = CODEQL_ACTION_REFERENCE.fullmatch(value)
+            version = CODEQL_VERSION_COMMENT.search(raw_lines[lineno - 1])
+            if not action or not version:
+                problems.append(
+                    f"{path.relative_to(ROOT)}:{lineno}: CodeQL init/analyze must use "
+                    "one full lowercase SHA and a trailing vX.Y.Z comment"
+                )
+                continue
+            references.append((action[1], action[2], version[1], path, lineno))
+    roles = {role for role, _sha, _version, _path, _line in references}
+    if roles != {"init", "analyze"}:
+        problems.append(f"CodeQL workflow roles resolved as {sorted(roles)!r}, expected init and analyze")
+    releases = {(sha, version) for _role, sha, version, _path, _line in references}
+    if len(releases) != 1:
+        rendered = ", ".join(
+            f"{role}={sha[:12]} {version}" for role, sha, version, _path, _line in references
+        ) or "(none)"
+        problems.append(f"CodeQL init/analyze do not share one immutable release: {rendered}")
+    return problems
+
+
 # --------------------------------------------------------------------------
 
 
@@ -1538,6 +1582,34 @@ class WorkflowIntegrityTests(unittest.TestCase):
         self.assertTrue(
             covered.get("codeql.yml"), "no required jobs resolved for codeql.yml"
         )
+
+    def test_codeql_init_and_analyze_share_one_immutable_release(self):
+        """The two security-action roles move together, independent of version."""
+        self.assertEqual(codeql_lockstep_problems(), [])
+
+    def test_codeql_lockstep_refuses_either_one_sided_update(self):
+        """Reverting either half to another valid release must turn the gate red."""
+        codeql = WORKFLOWS / "codeql.yml"
+        original = codeql.read_text(encoding="utf-8")
+        texts = {
+            path: path.read_text(encoding="utf-8")
+            for path in sorted(WORKFLOWS.glob("*.yml"))
+        }
+        old_sha = "db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28"
+        for role in ("init", "analyze"):
+            with self.subTest(reverted=role):
+                pattern = re.compile(
+                    rf"(github/codeql-action/{role}@)[0-9a-f]{{40}}(\s+#\s*)v[0-9]+\.[0-9]+\.[0-9]+"
+                )
+                mutated, count = pattern.subn(
+                    lambda match: f"{match[1]}{old_sha}{match[2]}v4.37.8",
+                    original,
+                    count=1,
+                )
+                self.assertEqual(count, 1, f"did not construct the {role}-old mutant")
+                candidate = dict(texts)
+                candidate[codeql] = mutated
+                self.assertTrue(codeql_lockstep_problems(candidate))
 
     def test_the_reader_ignores_constructs_inside_a_run_block(self):
         """A `shell:` line inside a shell script is text, not a step key.
