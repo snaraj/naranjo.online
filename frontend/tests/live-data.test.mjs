@@ -17,6 +17,7 @@ import { readFile } from 'node:fs/promises';
 import { describe, it, test } from 'node:test';
 
 import { contributionsLabel, parseVCSActivity, vcsActivityProps } from '../src/lib/activity.ts';
+import { recordedOutOfBand } from '../src/lib/blocks.ts';
 import {
   codingProjectsPanelId,
   codingProjectsProps,
@@ -297,25 +298,40 @@ test('the Coding Projects block is bound to the panel, not to a frozen props obj
   assert.equal(codingProjectsPanelId, 'coding-projects');
 });
 
-test('the entry log renders the provenance mark beside a figure, never instead of it', async () => {
+test('one wording says a figure was recorded out of band, wherever it appears', async () => {
+  /* THE CLAIM SURVIVES THE MOVE (issue 268). The entry log's half of it used
+     to be an inline italic mark on every counter, and this test pinned the two
+     components' source text against each other so the page could not grow two
+     vocabularies for one idea. The owner removed the visible mark from the
+     repo rows — "stale, static and ugly" — and provenance moved into the
+     counter's detail, so the two halves are no longer the same MARKUP and
+     pinning them as such would pin the arrangement rather than the property.
+
+     What is worth having is the claim it always was: a reader learns one
+     sentence for "this was recorded out of band" across the whole page. It is
+     pinned here as one exported CONSTANT plus the surviving literal — the
+     usage tiles' visible suffix, verbatim and unchanged — proved to be that
+     same string, and the entry log's half proved to reach the reader through
+     the constant rather than through a copy of it. */
   const entryLog = await read('../src/lib/components/EntryLog.svelte');
-  // The mark is an addition to the label, so the figure and its word survive.
-  // This used to pin the two as ADJACENT source text, which happened to also
-  // pin the mark INSIDE the nowrap run — the arrangement the browser lanes
-  // measured as a min-content regression on 0.1.56. The adjacency was never
-  // the property worth having; that the unbreakable run holds the label and
-  // NOTHING ELSE is, and this shape states it directly: the span closes on
-  // the label, so no conditional can ever be nested inside it.
-  assert.match(entryLog, /<span class="entry-count-text">\{count\.label\}<\/span>/);
-  assert.match(entryLog, /\{#if count\.marked\}/);
-  assert.match(entryLog, /· recorded/);
-  // Worded identically to the usage panel's, so a reader learns one mark for
-  // "recorded out of band" across the whole page rather than one per panel.
   const usage = await read('../src/lib/components/UsageTracker.svelte');
-  // Whitespace-tolerant between the attribute and the text: the two files
-  // are wrapped by the formatter at different columns, and where the closing
+  // The usage panel's half: unchanged, still the visible suffix beside a tile.
+  // Whitespace-tolerant between the attribute and the text — where the closing
   // angle bracket lands is the formatter's business. The WORDING is the pin.
-  const wording = /title="recorded out of band, not fetched live"\s*>·\s*recorded/;
-  assert.match(entryLog, wording);
-  assert.match(usage, wording);
+  assert.match(usage, /title="recorded out of band, not fetched live"\s*>·\s*recorded/);
+  // And it is the one constant, spelled once, that the literal above matches.
+  assert.equal(recordedOutOfBand, 'recorded out of band, not fetched live');
+  assert.ok(
+    usage.includes(recordedOutOfBand),
+    'the usage panel spells a provenance wording the shared constant does not carry'
+  );
+  // The entry log's half is DATA now: the mark, its class and its browser
+  // tooltip are gone from the component, and the wording reaches the reader
+  // through the counter's detail instead.
+  assert.doesNotMatch(entryLog, /entry-recorded/);
+  assert.doesNotMatch(entryLog, /title="recorded out of band/);
+  const commits = projectCounts({ ...projects[0], commits: 1, stars: 1 }, undefined, noon).find(
+    (count) => count.key === 'commits'
+  );
+  assert.deepEqual(commits.detail.rows, [{ label: '', value: recordedOutOfBand }]);
 });

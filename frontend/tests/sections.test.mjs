@@ -21,14 +21,14 @@ import assert from 'node:assert/strict';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import test from 'node:test';
 
-import { section, sectionHref, staticBlock } from '../src/lib/blocks.ts';
+import { relativeAge } from '../src/lib/age.ts';
+import { recordedOutOfBand, section, sectionHref, staticBlock } from '../src/lib/blocks.ts';
 import { feedCardRegions, feedCardVariants, formatIsoDate } from '../src/lib/feed.ts';
 import { workByline, workBylineSeparator, workEntries, workHistoryProps } from '../src/lib/work.ts';
 import {
   codingProjectsPanelId,
   codingProjectsProps,
   projectCounts,
-  updatedLabel,
   projectHost,
   projectLinkLabel,
   projects,
@@ -773,15 +773,24 @@ test('a count of one is a count of one thing', () => {
     projectCounts({ ...row, commits: 1234, stars: 5678 }, undefined, noon).map((count) => count.label),
     ['1,234 commits', '5,678 stars', 'updated 3 days ago', ...unreported]
   );
-  // Every band of the since-sentence, against the same fixed clock — and the
-  // singular derived exactly as the other counts derive theirs.
-  assert.equal(updatedLabel('2026-08-27T02:00:00Z', noon), 'updated today');
-  assert.equal(updatedLabel('2026-08-26T02:00:00Z', noon), 'updated 1 day ago');
-  assert.equal(updatedLabel('2026-07-30T12:00:00Z', noon), 'updated 28 days ago');
-  assert.equal(updatedLabel('2026-07-27T12:00:00Z', noon), 'updated 1 month ago');
-  assert.equal(updatedLabel('2026-02-27T12:00:00Z', noon), 'updated 6 months ago');
-  assert.equal(updatedLabel('2025-08-20T12:00:00Z', noon), 'updated 1 year ago');
-  assert.equal(updatedLabel('2023-08-27T12:00:00Z', noon), 'updated 3 years ago');
+  /* The freshness counter's own bands moved to lib/age.ts with the live clock
+     (issue 268) and tests/age.test.mjs executes every one of them from both
+     sides. What stays HERE is the seam: this adapter's third counter is that
+     module's sentence about this row's push instant, and nothing in between.
+     Pinned by reproduction rather than by restating a string, so the two
+     cannot drift into two answers about one instant. */
+  assert.equal(
+    projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[2].label,
+    relativeAge(row.pushedAt, noon).phrase
+  );
+  assert.equal(
+    projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[2].value,
+    relativeAge(row.pushedAt, noon).compact
+  );
+  /* And `since` is what keeps it alive: the component re-derives the figure
+     from THIS instant on every minute-aligned tick, so an adapter that stopped
+     carrying it would ship a counter frozen at whichever render caught it. */
+  assert.equal(projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[2].since, row.pushedAt);
   // The adapter carries the same labels into the log, with the glyph beside
   // the words rather than instead of them. Against the feed's LEADING entry,
   // which is the most recently pushed repository rather than the module list's
@@ -798,9 +807,51 @@ test('a count of one is a count of one thing', () => {
     ['node', 'star', 'clock', 'issue', 'pull'],
     'each count names its generic glyph; the drawing is the component’s'
   );
+  /* EVERY counter is terse now (issue 268): the glyph and a bare figure on the
+     visible line, the whole sentence in the clipped span and in the detail.
+     Both channels are checked, because dropping either one is the failure —
+     the figure alone leaves the glyph carrying the meaning for a screen
+     reader, and the words alone are the noise the owner removed. */
+  for (const count of codingProjectsProps(null, noon).entries[0].counts) {
+    assert.ok(
+      typeof count.value === 'string' && count.value.length > 0,
+      `${count.key} renders no visible figure`
+    );
+    assert.ok(count.label.length > 0, `${count.key} carries no sentence`);
+    assert.equal(count.detail.name, count.label, `${count.key}'s detail does not name its phrase`);
+  }
   // The figure is TEXT beside the glyph, never carried by the glyph alone.
+  assert.match(entryLog, /\{count\.value\}/);
   assert.match(entryLog, /\{count\.label\}/);
   assert.match(entryLog, /aria-hidden="true"/);
+});
+
+test('a figure the origin recorded says so in its detail, never on the visible line (issue 268)', () => {
+  /* The owner, of the inline italic mark repeated on every row: "stale, static
+     and ugly ... just remove it". Provenance did NOT go with it — it moved one
+     interaction away, into the same detail primitive the stat tiles use — so
+     this pin is in two halves and both matter. */
+  const noon = Date.parse('2026-08-27T12:00:00Z');
+  const captured = codingProjectsProps(null, noon).entries[0].counts;
+  const commits = captured.find((count) => count.key === 'commits');
+  assert.equal(commits.marked, true, 'the commit total is captured however fresh the row is');
+  assert.deepEqual(
+    commits.detail.rows,
+    [{ label: '', value: recordedOutOfBand }],
+    'a recorded figure carries no provenance row in its detail'
+  );
+  // The wording is the page's ONE constant, not a second copy of the sentence.
+  assert.equal(recordedOutOfBand, 'recorded out of band, not fetched live');
+  // And nothing on the visible line says it: the mark, its class and its
+  // browser tooltip are gone from the component rather than merely unused.
+  assert.doesNotMatch(entryLog, /entry-recorded/);
+  assert.doesNotMatch(entryLog, /·\s*recorded/);
+  /* A DASH gets no provenance row. "not reported" and "recorded out of band"
+     are different claims, and only one of them can be true of a figure that
+     does not exist. */
+  const unreported = captured.find((count) => count.key === 'issues');
+  assert.equal(unreported.value, '—');
+  assert.deepEqual(unreported.detail.rows, []);
 });
 
 test('the feed leads with the repository pushed most recently (issue 252)', () => {
@@ -961,13 +1012,18 @@ test('the counters are one aligned column geometry, decided by viewport alone (i
   const [, breakpoint, overrideBody] = overrides[0];
   assert.match(
     overrideBody,
-    /grid-template-columns:\s*var\(--entry-count-columns, 10\.5rem 8\.25rem 14rem 6\.75rem 6\.25rem\)/,
+    /grid-template-columns:\s*var\(--entry-count-columns, repeat\(5, minmax\(0, 1fr\)\)\)/,
     'the five tracks are not the one shared token, so cards can disagree about where a column starts'
   );
-  assert.match(
+  /* EQUAL FRACTIONS, and the negative is the load-bearing half (issue 268): a
+     track sized from its own content is a track that moves when the content
+     does, and one of these five now changes every minute. Five equal shares of
+     the card depend on nothing, which is what makes both the cross-card
+     alignment and the live counter's zero CLS structural. */
+  assert.doesNotMatch(
     overrideBody,
-    /justify-content:\s*space-between/,
-    'the surplus no longer goes to the gaps, so the row stops short of the card’s right edge (no-dead-space rule)'
+    /justify-content/,
+    'the row distributes a surplus again; equal-fraction tracks leave none, so this can only be a return to content-sized ones'
   );
   assert.match(
     overrideBody,
@@ -979,7 +1035,7 @@ test('the counters are one aligned column geometry, decided by viewport alone (i
      verbatim, so an engine that never resolved the property paints the same
      table. */
   assert.ok(
-    styles.includes('--entry-count-columns: 10.5rem 8.25rem 14rem 6.75rem 6.25rem;'),
+    styles.includes('--entry-count-columns: repeat(5, minmax(0, 1fr));'),
     'styles.css does not declare --entry-count-columns'
   );
   /* Breakpoint parity with the documented token, exactly as the retired
@@ -993,29 +1049,30 @@ test('the counters are one aligned column geometry, decided by viewport alone (i
     'EntryLog.svelte’s media query must match styles.css’s documented --breakpoint-entry-columns'
   );
   const breakpointPx = Number.parseFloat(documentedValue) * 16;
-  for (const phoneWidth of [320, 360, 390, 412]) {
+  for (const phoneWidth of [320, 360, 375, 390, 412]) {
     assert.ok(
       phoneWidth < breakpointPx,
       `phone width ${phoneWidth}px must sit below --breakpoint-entry-columns (${breakpointPx}px)`
     );
   }
-  /* Inside a fixed track a counter holds one line — a provenance mark
-     wrapping under its figure on one card is the unevenness coming back —
-     while the base keeps wrap as the enlarged-font safety valve (the
-     issue-242 lane measures that half in every engine). */
-  assert.match(
-    style,
-    /@container \(min-width:\s*[^)]+\)\s*\{[\s\S]*?\.entry-count\s*\{\s*flex-wrap:\s*nowrap;/,
-    'a counter inside a fixed track may not wrap its mark onto a second line'
-  );
+  /* THE CELL IS ITS TRACK (issue 268). With equal-fraction tracks a
+     shrink-to-fit counter ends wherever its two digits do — most of a track
+     short of the card's right edge, which is the no-dead-space rule broken by
+     the same change that fixed the alignment. A block-level flex cell fills
+     the track it was given, so the fifth column ends at the card's own edge
+     and the browser lanes measure it there. */
+  const countRule = /\.entry-count\s*\{([^}]*position:\s*relative[^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.match(countRule, /display:\s*flex;/, 'the counter shrinks to its content instead of filling its column');
+  assert.doesNotMatch(countRule, /display:\s*inline-flex/);
   /* And a digit may not jitter the column it sits in: the counters read
-     tabular figures. Anchored on the base rule (the one carrying the
-     counter's own layout) rather than the first `.entry-count` block in file
-     order, which is the one-line nowrap override above. */
-  assert.match(
-    /\.entry-count\s*\{([^}]*position:\s*relative[^}]*)\}/.exec(style)?.[1] ?? '',
-    /font-variant-numeric:\s*tabular-nums/
-  );
+     tabular figures. That is a LIVE requirement now rather than a precaution —
+     the freshness counter re-renders every minute, so "9m" becoming "10m"
+     would nudge its neighbours once a minute forever without it. */
+  assert.match(countRule, /font-variant-numeric:\s*tabular-nums/);
+  /* Every counter is a focus stop, so every counter wears the ring — the twin
+     of .stat-cell's, because the affordance the owner asked for ("like the
+     token count on the other trackers") is that one. */
+  assert.match(style, /\.entry-count:focus-visible\s*\{[^}]*outline:/);
 });
 
 test('projectsCapturedOn is a well-formed date, and formatIsoDate renders every stated date honestly', () => {
@@ -2125,7 +2182,7 @@ test('the source ladder renders in the manifest’s own order, never re-ranked (
   );
 });
 
-test('the Art block renders the vendored set first and lets a runtime manifest replace it (issue 182/207)', () => {
+test('the Media block renders the vendored set first and lets a runtime manifest replace it (issue 182/207)', () => {
   // The cutover's whole shape, pinned where it is decided: the build's own
   // props are the block's FALLBACK — they render before any request exists —
   // and the volume's manifest is a one-shot read that may replace them. A
@@ -2816,11 +2873,11 @@ test('the enlarged lightbox is anchored to the viewport, never to the document (
 });
 
 // ---------------------------------------------------------------------------
-// The art binding
+// The media binding
 // ---------------------------------------------------------------------------
 
-test('the art block introduces itself with its heading, and only its heading', () => {
-  assert.match(artBinding, /heading: 'Art'/);
+test('the media block introduces itself with its heading, and only its heading', () => {
+  assert.match(artBinding, /heading: 'Media'/);
   // The retired intro/note provenance lines do not come back (issue 176):
   // the gallery's whole content is the frame itself now, and the licence
   // lives in gallery.ts's own doc comment and SOURCES.md — a maintainer

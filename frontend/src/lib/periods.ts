@@ -165,32 +165,103 @@ export function rangeColumns(cells: GridCell[], range: SeriesRange): GridCell[][
   return calendarColumns(cells, rangeWeeks(cells, range));
 }
 
-/* fullDepthColumns is the ONE window the token panel draws since its display
- * menu was removed (issue 233, owner directive 2026-08-28): every captured
- * day, and never narrower than the grid's own reserve.
+/* ---------------------------------------------------------------------------
+ * THE PANEL'S OWN WINDOW (owner directive, issue 268). One window per panel,
+ * derived from what the panel actually CAPTURED, identical for every source
+ * inside it, capped at a year of trailing weeks.
  *
- * It is the WIDER of two windows rather than either alone, because either
- * alone is a defect this repository has already measured.
+ * It replaces a fixed fifty-three-week frame, and the owner's complaint is the
+ * whole argument: a panel holding a fortnight of history drew three columns of
+ * data against fifty of dated emptiness, so the graph read as a year that had
+ * mostly failed rather than as a fortnight that had entirely succeeded. The
+ * window is now the capture's, and the emptiness that remains inside it is
+ * real emptiness — the current week's unfinished days, and the days a shorter
+ * source in the same panel has no data for.
  *
- * The reserve alone is a CEILING the day a capture runs past a year — the
- * exact defect the range control was added for (issue 158) — and deleting
- * that control while keeping its default would have walked straight back into
- * it. The capture alone is a hole at the other end: a fifty-eight-day capture
- * measures ten columns (rangeWeeks' own floor), which a full-width strip
- * draws as a couple of hundred pixels of graph against most of a card, and
- * content stopping short of its container's edge is a defect by the owner's
- * own standing rule.
+ * THREE PROPERTIES, and each of them is a defect this repository has already
+ * measured once:
  *
- * So: it fills the card at every capture shorter than the reserve, drawing
- * the reserve's extra weeks as the dated holes they are — calendarColumns'
- * own contract, and the coverage line under the strip counts them, so the
- * width is never mistaken for data. And it grows without limit once the
- * capture is genuinely wider than the reserve, which is the ceiling removal.
+ *   ONE WINDOW PER PANEL, not per series. The truthful-axis half of issue
+ *   189's doctrine is exactly this: two strips stacked in one card are read
+ *   against each other, so a column at the same x must be the same week on
+ *   both. A per-series window puts a source that stopped capturing early a
+ *   week to the left of the one above it, with no mark saying so.
  *
- * An undated series measures pendingWeeks either way, so the max changes
- * nothing there and calendarColumns still chunks positionally. */
-export function fullDepthColumns(cells: GridCell[]): GridCell[][] {
-  return calendarColumns(cells, Math.max(pendingWeeks, rangeWeeks(cells, 'all')));
+ *   CAPPED AT THE RESERVE, trailing. Fifty-three columns is what the empty
+ *   chrome reserves and what the contribution calendar beside it draws, so a
+ *   capture that outgrows a year is shown from its newest end rather than
+ *   compressed — the strip scrolls, exactly as it always has.
+ *
+ *   FLOORED AT gridMinColumns. Below ten columns the graph's own less/more key
+ *   no longer fits beside it (lib/grid.ts records the measurement), so a very
+ *   young capture draws a legible short window with its lead-in days as the
+ *   dated holes they are, rather than a three-column sliver with its legend
+ *   spilling out of the block.
+ * ------------------------------------------------------------------------ */
+
+/* The window a panel draws, as the two facts that fix it: the day it ends on
+ * and how many whole weeks it spans. Both are needed — a width alone would let
+ * two sources of one panel draw the same NUMBER of columns ending on different
+ * days, which is the misalignment this type exists to make unrepresentable. */
+export interface CoverageWindow {
+  /* The last day the window draws: the Saturday closing the week that holds
+   * the newest captured day anywhere in the panel. */
+  readonly end: string;
+  /* Whole calendar weeks the window spans, floored at gridMinColumns and
+   * capped at pendingWeeks. */
+  readonly weeks: number;
+}
+
+/* coverageWindow measures the union of what a panel's sources captured.
+ *
+ * REAL DAYS ONLY. An absent cell is a day the capture did not cover, and a
+ * window sized from one would be a window sized from its own padding — the
+ * front-padded holes of a previous pass would widen the next one, without
+ * limit. Null when no source captured anything, which is a panel with no
+ * window to share; a caller falls back to the per-series answer. */
+export function coverageWindow(series: readonly (readonly GridCell[])[]): CoverageWindow | null {
+  let oldest = '';
+  let newest = '';
+  for (const cells of series) {
+    for (const cell of cells) {
+      if (cell.absent || dayNumber(cell.date) === null) {
+        continue;
+      }
+      if (oldest === '' || cell.date < oldest) {
+        oldest = cell.date;
+      }
+      if (newest === '' || cell.date > newest) {
+        newest = cell.date;
+      }
+    }
+  }
+  const oldestWeekday = weekdayOf(oldest);
+  const newestWeekday = weekdayOf(newest);
+  if (oldestWeekday === null || newestWeekday === null) {
+    return null;
+  }
+  const end = addDays(newest, gridRows - 1 - newestWeekday);
+  const start = dayNumber(addDays(oldest, -oldestWeekday));
+  const last = dayNumber(end);
+  if (start === null || last === null || last < start) {
+    return null;
+  }
+  const spanned = Math.ceil((last - start + 1) / gridRows);
+  return { end, weeks: Math.min(pendingWeeks, Math.max(gridMinColumns, spanned)) };
+}
+
+/* coverageColumns lays one source's cells onto the panel's window: the same
+ * weeks and the same last day for every source, so a shorter source is
+ * FRONT-PADDED into the panel's span rather than drawn against a calendar of
+ * its own. That padding is calendarColumns' own dated-absent contract, and the
+ * coverage line under each strip counts it, so the width is never mistaken for
+ * data.
+ *
+ * A null window is a panel that captured nothing to derive one from; the
+ * per-series answer is the honest fallback, and an undated series has no
+ * calendar to align to either way. */
+export function coverageColumns(cells: GridCell[], window: CoverageWindow | null): GridCell[][] {
+  return window === null ? calendarColumns(cells) : calendarColumns(cells, window.weeks, window.end);
 }
 
 /* isSafeCount is this module's numeric admission: a non-negative integer

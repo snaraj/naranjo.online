@@ -1169,14 +1169,21 @@ test('both panels opt the shared grid into full width; only the token panel take
  * component simply stopped offering a reader four ways to ask one question. */
 test('each usage source renders one fixed graph, and no display control survives', () => {
   /* The fixed reading: the source's own totals, laid on calendar weeks over
-     the window lib/periods.ts calls fullDepthColumns — every captured day,
-     floored at the grid's reserve. The component decides nothing about it,
-     which is the point: the window is arithmetic with its own executed tests,
-     not a literal a component could drift. */
+     the window lib/periods.ts derives from the PANEL's coverage (issue 268).
+     The component decides nothing about the window's arithmetic, which is the
+     point — that has its own executed tests — but it does decide the SCOPE,
+     and the scope is the half a per-source helper structurally could not
+     express: one window derived from every source's series, then handed to
+     each of them, so two strips in one card are read against one calendar. */
   assert.match(
     usageTracker,
-    /return fullDepthColumns\(seriesCells\(activity\.series\.startDate, activity\.series\.totals\)\);/,
-    'the graph is no longer built from the source’s own totals at full depth'
+    /return coverageColumns\(seriesOf\(activity\), panelWindow\);/,
+    'the graph is no longer laid onto the panel’s own window'
+  );
+  assert.match(
+    usageTracker,
+    /coverageWindow\(\s*sections\.flatMap\(\(source\) => \(source\.activity \? \[seriesOf\(source\.activity\)\] : \[\]\)\)\s*\)/,
+    'the window is derived from one source instead of from the whole panel'
   );
   assert.doesNotMatch(usageTracker, /rangeColumns/, 'the component parameterises its window again');
   assert.match(usageTracker, /\{@const columns = windowedColumns\(source\.activity\)\}/);

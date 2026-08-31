@@ -31,7 +31,12 @@
   adding a detail — a caller that had to remember a second step is a caller
   that eventually does not. -->
 <script lang="ts">
-  import { hoverDetail, type TipDetail, type TipPoint } from '../tooltip.ts';
+  import {
+    hoverDetail,
+    type TipDetail,
+    type TipPoint,
+    type TipPointerKind
+  } from '../tooltip.ts';
 
   let {
     detail,
@@ -57,7 +62,11 @@
        the call site so there is still exactly one component in the tree that
        knows this primitive exists. */
     host?: HTMLElement;
-    resolve?: (target: EventTarget | null, point: TipPoint) => HTMLElement | null;
+    resolve?: (
+      target: EventTarget | null,
+      point: TipPoint,
+      pointer: TipPointerKind
+    ) => HTMLElement | null;
     select?: (element: HTMLElement | null) => void;
     anchor?: HTMLElement | null;
   } = $props();

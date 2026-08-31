@@ -31,23 +31,94 @@
   rendered as text beside it, so nothing on this card is carried by a picture
   alone.
 
-  A counter carrying `value` renders TERSELY — the glyph and the bare figure —
-  and that is the one place the words leave the visible surface (issue 252).
-  They do not leave the DOM: the complete sentence moves into a clipped span
-  that every screen reader still reads, the visible figure is marked
-  aria-hidden so it is not announced twice, and the FIGURE is still drawn. The
-  dataviz floor is intact — a value here is never carried by the glyph alone,
-  only ever by glyph plus number — and so is the accessible name. Hiding the
-  number instead of the words would have broken both.
+  EVERY COUNTER RENDERS TERSELY — the glyph and the bare figure — and that is
+  the one place the words leave the visible surface (issue 252 for two of them,
+  issue 268 for all of them: the owner asked for icon and number, with the
+  sentence one interaction away). They do not leave the DOM: the complete
+  sentence moves into a clipped span that every screen reader still reads, the
+  visible figure is marked aria-hidden so it is not announced twice, and the
+  FIGURE is still drawn. The dataviz floor is intact — a value here is never
+  carried by the glyph alone, only ever by glyph plus number — and so is the
+  accessible name. Hiding the number instead of the words would have broken
+  both.
+
+  THE SENTENCE IS ONE INTERACTION AWAY, through the page's one detail
+  primitive (DetailTip, issue 136 rule 1) and with the stat tiles' exact
+  affordance: hover, touch and keyboard focus all reach the same readout, so
+  the counter is a focus stop the same way a stat tile is. That is also where a
+  figure's PROVENANCE now lives — the inline italic mark the owner removed from
+  every visible row ("stale, static and ugly") is a row inside the detail,
+  worded by the one constant both panels read (`recordedOutOfBand`,
+  lib/blocks.ts).
+
+  A COUNTER CAN BE ALIVE (issue 268). One that declares `since` is an age
+  rather than a tally, and this component re-derives its figure, its words and
+  its detail from that instant on a MINUTE-ALIGNED tick — msUntilNextMinute in
+  lib/age.ts, so every card on the page turns over together on the wall-clock
+  minute rather than each drifting by whenever its own timer started. One timer
+  serves the whole log, and only when the log actually holds a live counter.
+  Nothing moves when it fires: the counter row's tracks are equal fractions, so
+  a figure that grows from "9m" to "10m" widens no column and shifts no card.
 
   A placeholder entry says so in the DOM (`data-placeholder`), because the
   honest-states floor is what stops a page from presenting filler under a
   real heading as though it described a real record. -->
 <script lang="ts">
+  import { ageDetail, msUntilNextMinute, relativeAge } from '../age.ts';
+  import DetailTip from './DetailTip.svelte';
   import FeedCard from './FeedCard.svelte';
-  import type { EntryLogEntry, EntryLogProps } from '../blocks.ts';
+  import type { EntryCount, EntryLogEntry, EntryLogProps } from '../blocks.ts';
 
   let { entries, variant, titleLevel = 3 }: EntryLogProps = $props();
+
+  /* The clock the live counters read. State rather than a plain read, because
+     the whole point is that it MOVES while the page is open. */
+  let now = $state(Date.now());
+
+  /* Whether anything on this log is an age. A log of tallies alone — the work
+     history — arms no timer at all, so the cost of this feature is paid only
+     where the feature is used. */
+  const ticking = $derived(
+    entries.some((entry) => (entry.counts ?? []).some((count) => count.since !== undefined))
+  );
+
+  /* ONE timer for the log, re-armed to the next wall-clock minute each time.
+     `now` is written here and never read here, deliberately: reading it would
+     make this effect its own dependency, so every tick would tear the timer
+     down and build a new one — a self-restarting loop whose alignment drifts
+     by the time it takes to run. The dependency is `ticking` alone. */
+  $effect(() => {
+    if (!ticking) {
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      timer = setTimeout(() => {
+        now = Date.now();
+        schedule();
+      }, msUntilNextMinute());
+    };
+    schedule();
+    return () => clearTimeout(timer);
+  });
+
+  /* One counter as it should read RIGHT NOW. A counter with no `since` is
+     already exactly what its adapter built and passes through untouched; an
+     age is re-derived — figure, words and detail together, from the one module
+     that formats all three — so the three can never disagree about the same
+     instant. */
+  function liveCount(count: EntryCount, at: number): EntryCount {
+    if (count.since === undefined) {
+      return count;
+    }
+    const age = relativeAge(count.since, at);
+    return {
+      ...count,
+      label: age.phrase,
+      value: age.compact,
+      detail: ageDetail(count.since, at, count.marked)
+    };
+  }
 </script>
 
 <ol class="entry-log" data-variant={variant}>
@@ -90,81 +161,8 @@
               </svelte:element>
               {#if entry.counts && entry.counts.length > 0}
                 <ul class="entry-counts">
-                  {#each entry.counts as count (count.key)}
-                    <li class="entry-count">
-                      {#if count.glyph === 'node'}
-                        <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                          <circle cx="12" cy="12" r="3.4" fill="none" stroke="currentColor" stroke-width="2" />
-                          <path
-                            d="M3.5 12h5.1M15.4 12h5.1"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                            stroke-linecap="round"
-                          />
-                        </svg>
-                      {:else if count.glyph === 'issue'}
-                        <!-- An open issue: the ring-and-dot every code host
-                          draws for one. -->
-                        <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                          <circle cx="12" cy="12" r="8.4" fill="none" stroke="currentColor" stroke-width="2" />
-                          <circle cx="12" cy="12" r="2.6" fill="currentColor" />
-                        </svg>
-                      {:else if count.glyph === 'pull'}
-                        <!-- An open pull request: a branch leaving one line
-                          and arriving at another, arrowhead at the join. -->
-                        <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                          <circle cx="6.6" cy="6" r="2.6" fill="none" stroke="currentColor" stroke-width="2" />
-                          <circle cx="6.6" cy="18" r="2.6" fill="none" stroke="currentColor" stroke-width="2" />
-                          <circle cx="17.4" cy="18" r="2.6" fill="none" stroke="currentColor" stroke-width="2" />
-                          <path
-                            d="M6.6 8.6v6.8M17.4 15.4V6.6"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                            stroke-linecap="round"
-                          />
-                          <path
-                            d="M14.2 9.8l3.2-3.2 3.2 3.2"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                          />
-                        </svg>
-                      {:else if count.glyph === 'clock'}
-                        <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                          <circle cx="12" cy="12" r="8.4" fill="none" stroke="currentColor" stroke-width="2" />
-                          <path
-                            d="M12 7.6V12l3.2 2.2"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                          />
-                        </svg>
-                      {:else}
-                        <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                          <path
-                            d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"
-                            fill="currentColor"
-                          />
-                        </svg>
-                      {/if}
-                      {#if count.value === undefined}
-                        <span class="entry-count-text">{count.label}</span>
-                      {:else}
-                        <span class="entry-count-text" aria-hidden="true">{count.value}</span>
-                        <span class="entry-count-words">{count.label}</span>
-                      {/if}
-                      {#if count.marked}
-                        <span class="entry-recorded" title="recorded out of band, not fetched live"
-                          >· recorded</span
-                        >
-                      {/if}
-                    </li>
+                  {#each entry.counts as raw (raw.key)}
+                    {@render counter(liveCount(raw, now))}
                   {/each}
                 </ul>
               {/if}
@@ -192,6 +190,85 @@
     </li>
   {/each}
 </ol>
+
+<!-- ONE counter: the glyph, the bare figure, the clipped sentence behind it,
+  and the shared detail. It is a snippet rather than markup inside the each
+  block so the LIVE reading is substituted before anything is drawn — the
+  counter this renders is the one liveCount just derived, which is why nothing
+  below has to know whether its subject ticks.
+
+  Focusable, with the stat tiles' exact affordance: there is no action to
+  perform, so a button would be the wrong semantics, but a detail no keyboard
+  can reach is half the feature. -->
+{#snippet counter(count: EntryCount)}
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <li class="entry-count" tabindex="0">
+    {#if count.glyph === 'node'}
+      <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <circle cx="12" cy="12" r="3.4" fill="none" stroke="currentColor" stroke-width="2" />
+        <path
+          d="M3.5 12h5.1M15.4 12h5.1"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+        />
+      </svg>
+    {:else if count.glyph === 'issue'}
+      <!-- An open issue: the ring-and-dot every code host
+        draws for one. -->
+      <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <circle cx="12" cy="12" r="8.4" fill="none" stroke="currentColor" stroke-width="2" />
+        <circle cx="12" cy="12" r="2.6" fill="currentColor" />
+      </svg>
+    {:else if count.glyph === 'pull'}
+      <!-- An open pull request: a branch leaving one line
+        and arriving at another, arrowhead at the join. -->
+      <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <circle cx="6.6" cy="6" r="2.6" fill="none" stroke="currentColor" stroke-width="2" />
+        <circle cx="6.6" cy="18" r="2.6" fill="none" stroke="currentColor" stroke-width="2" />
+        <circle cx="17.4" cy="18" r="2.6" fill="none" stroke="currentColor" stroke-width="2" />
+        <path
+          d="M6.6 8.6v6.8M17.4 15.4V6.6"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+        />
+        <path
+          d="M14.2 9.8l3.2-3.2 3.2 3.2"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+    {:else if count.glyph === 'clock'}
+      <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <circle cx="12" cy="12" r="8.4" fill="none" stroke="currentColor" stroke-width="2" />
+        <path
+          d="M12 7.6V12l3.2 2.2"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+    {:else}
+      <svg class="entry-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <path
+          d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"
+          fill="currentColor"
+        />
+      </svg>
+    {/if}
+    <span class="entry-count-text" aria-hidden="true">{count.value}</span>
+    <span class="entry-count-words">{count.label}</span>
+    <DetailTip detail={count.detail} />
+  </li>
+{/snippet}
 
 <!-- One entry's body, shared by both card shapes above so the linked and the
   unlinked branch cannot grow different bodies. Each region is drawn only when
@@ -320,48 +397,26 @@
     letter-spacing: var(--card-title-tracking);
   }
 
-  /* The provenance-by-exception mark, worded and styled exactly as the usage
-     tiles' is: one visual vocabulary for "this figure was recorded out of
-     band" across the page. Scoped per component because Svelte scopes styles,
-     so the two declarations are twins rather than one shared rule.
-
-     It is a SIBLING of the count text rather than a child of it, and that
-     placement is load-bearing rather than incidental. `.entry-count-text` is
-     `white-space: nowrap` — a figure must never be split from the word it
-     counts — so a mark nested inside it joined that unbreakable run and added
-     its own 62px to the card's MIN-CONTENT width at every viewport. That is a
-     floor violation the engine expresses as horizontal overflow: the panel
-     column can no longer shrink to a 320px phone, so the grid track widens
-     past the screen and the document scrolls sideways. It was MEASURED red on
-     all five browser-lane projects (a 320px column 247.42px wide against the
-     244px it is given; the document scrolling at 250px) while passing on this
-     workstation, because the same string sets 3.4px narrower in macOS's UI
-     font than in the runner's — a reminder that a text-width-dependent floor
-     is only ever proven by the engines, never by one machine.
-
-     As a sibling it is its own flex item, so `flex-wrap: wrap` on the row lets
-     it drop to a second line on a narrow card while the figure and its word
-     stay welded together. The mark contributes its own width to min-content
-     and nothing to the label's. The margin this rule used to carry is gone
-     with the nesting: the row's own `gap` now separates the mark, which also
-     makes it a truer twin of `.usage-recorded`, whose only declaration is the
-     italic. */
-  .entry-recorded {
-    font-style: italic;
-  }
-
   /* THE COUNTERS ARE A TABLE THAT HAPPENS TO SIT ON SEVEN CARDS (owner,
      2026-08-29: "the columns of information are not aligned... it should not
      differ in the layout, makes it look uneven"). Cards are separate DOM
      containers, so cross-card alignment has to be deliberate: every card's
-     row is a grid over the SAME fixed tracks — --entry-count-columns, one
-     token, sized in styles.css from the widest realistic content per column —
-     stretched to the card's full width, so column N starts at the identical
-     x on every card whatever figures or words it holds ("105" against "9",
-     a dash against a zero, "today" against "27 days ago"). space-between
-     hands the leftover to the gaps BETWEEN columns, identically on every
-     card, so the row also fills the card to its right edge (the no-dead-space
-     rule) without any track depending on its own content.
+     row is a grid over the SAME tracks — --entry-count-columns, one token
+     declared in styles.css — stretched to the card's full width, so column N
+     starts at the identical x on every card whatever figure it holds.
+
+     EQUAL FRACTIONS since issue 268, and that is a simplification the terse
+     counters earned. The five tracks used to be five hand-measured widths,
+     each sized from the widest realistic content of its own column with every
+     provenance mark showing; with the words and the mark gone from the visible
+     row there is no content left for a track to be sized FROM, so the honest
+     answer is the one that depends on no content at all. `repeat(5, minmax(0,
+     1fr))` aligns every card by construction — five equal shares of whatever
+     width the card has — and it is also what makes the live age counter
+     zero-CLS: a figure that grows from "9m" to "10m" changes no track, because
+     no track is measured from a figure. The old `justify-content:
+     space-between` went with them: it distributed the surplus of fixed tracks,
+     and equal fractions leave no surplus to distribute.
 
      Below --breakpoint-entry-columns the tracks do not fit, and the fallback
      is the same answer stacked cards already give: a single-column ledger,
@@ -373,72 +428,83 @@
     margin: 0;
     padding: 0;
     list-style: none;
-    /* A PERCENTAGE, and it is the load-bearing declaration (MEASURED): the
-       row's five fixed tracks total 788px with their gaps, and a grid's
-       min-content contribution is its tracks', so a plain stretch forced
-       the whole page column out to 806px whenever the reader narrowed it
-       below the table — the document scrolled sideways by the difference
-       (1286 against a 1280 viewport at a 20rem column token). A percentage
-       size contributes ZERO to intrinsic sizing, so the column keeps
-       whatever width its own token says and the row scrolls inside itself
-       instead — the same trap the gallery's dot row records in
-       MediaGallery.svelte, met on the other axis. */
+    /* A PERCENTAGE, and it is the load-bearing declaration (MEASURED): a
+       grid's min-content contribution is its tracks', so a plain stretch
+       forced the whole page column out past its own token whenever the reader
+       narrowed it below the table — the document scrolled sideways by the
+       difference (1286 against a 1280 viewport at a 20rem column token, when
+       the tracks were five fixed widths totalling 788px). A percentage size
+       contributes ZERO to intrinsic sizing, so the column keeps whatever width
+       its own token says and the row scrolls inside itself instead — the same
+       trap the gallery's dot row records in MediaGallery.svelte, met on the
+       other axis. It stays load-bearing under the 1fr tracks: `minmax(0, 1fr)`
+       floors each track at zero, and a zero-minimum track set is exactly the
+       shape a reader can narrow into nothing. */
     inline-size: 100%;
     display: grid;
     gap: var(--card-meta-gap);
   }
 
-  @container (min-width: 50rem) {
+  @container (min-width: 28rem) {
     .entry-counts {
-      grid-template-columns: var(--entry-count-columns, 10.5rem 8.25rem 14rem 6.75rem 6.25rem);
-      justify-content: space-between;
+      grid-template-columns: var(--entry-count-columns, repeat(5, minmax(0, 1fr)));
       overflow-x: auto;
     }
   }
 
-  /* Wrapping, so the provenance mark above has somewhere to go on a narrow
-     card. Without it the mark would be an unwrappable third item and the row
-     would push the card wide again by another route. */
+  /* One counter: the glyph, the figure, and the shared detail hanging off the
+     whole cell. `display: flex` rather than `inline-flex` so the cell IS its
+     track — the last column then ends at the card's own right edge, which is
+     the owner's no-dead-space rule as the browser lanes measure it (a
+     shrink-to-fit cell would end wherever its two digits did, most of a track
+     short). The visible content still sits at the track's start, so the five
+     columns line up card to card exactly as before.
+
+     `flex-wrap: wrap` is the enlarged-base-font safety valve: a glyph and a
+     figure fit one line at every shipped size, but a reader who doubles their
+     text gets a second line rather than a clipped one. */
   .entry-count {
     /* The containing block for the clipped words below, so a 1px out-of-flow
        box is anchored inside the counter it belongs to rather than to whatever
-       positioned ancestor it would otherwise find. */
+       positioned ancestor it would otherwise find. It is NOT a containing
+       block for the detail beside it: DetailTip is `position: fixed`, which
+       `position: relative` does not capture, so the tip is still clamped to
+       the viewport by lib/tooltip.ts exactly as it is on a stat tile. */
     position: relative;
-    display: inline-flex;
+    display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 0.3125rem;
     font-size: var(--card-meta-size);
+    /* A digit may not jitter the column it sits in — and since the freshness
+       counter now ticks in real time, that is a live requirement rather than a
+       precaution: "9m" becoming "10m" every minute would nudge everything
+       beside it on every card, once a minute, forever. */
     font-variant-numeric: tabular-nums;
     color: var(--card-meta-ink);
   }
 
-  /* Inside a fixed track a counter holds ONE line — a provenance mark
-     wrapping under its figure on one card is the unevenness coming back by
-     another route (MEASURED before this override: "updated 22 days ago ·
-     recorded" dropped its mark to a second line at 1440px). Below the
-     breakpoint the wrap above stays: a ledger line has the whole card and
-     never needs it, but an enlarged base font still gets a second line
-     rather than a clipped one. Declared AFTER the base rule because the two
-     are equal in specificity and order is what decides — an earlier draft
-     put this above it and the base won. */
-  @container (min-width: 50rem) {
-    .entry-count {
-      flex-wrap: nowrap;
-    }
+  /* Every counter is a focus stop, so every counter wears the same ring —
+     the twin of .stat-cell's in StatTracker.svelte, because the affordance the
+     owner asked for ("like the token count on the other trackers") is that
+     one. Scoped per component because Svelte scopes styles, so the two are
+     twins rather than one shared rule. */
+  .entry-count:focus-visible {
+    outline: 1px solid var(--color-accent);
+    outline-offset: 2px;
   }
 
   .entry-count-text {
     white-space: nowrap;
   }
 
-  /* The words behind a terse counter (issue 252). HIDDEN BY CLIPPING, never by
-     `display: none` or `hidden`, both of which would take the text out of the
-     accessibility tree entirely and leave the glyph carrying the meaning alone
-     — which is the failure this span exists to prevent. It contributes no box:
-     absolutely positioned out of flow, so it adds nothing to the card's
-     min-content width and cannot reintroduce the sideways-scroll regression
-     `.entry-recorded` documents above. */
+  /* The words behind a terse counter (issue 252; every counter since issue
+     268). HIDDEN BY CLIPPING, never by `display: none` or `hidden`, both of
+     which would take the text out of the accessibility tree entirely and leave
+     the glyph carrying the meaning alone — which is the failure this span
+     exists to prevent. It contributes no box: absolutely positioned out of
+     flow, so it adds nothing to the card's min-content width and cannot push
+     the panel column past a 320px phone. */
   .entry-count-words {
     position: absolute;
     inline-size: 1px;

@@ -32,7 +32,8 @@ import {
   isSeriesRange,
   periodTotals,
   rangeColumns,
-  fullDepthColumns,
+  coverageColumns,
+  coverageWindow,
   rangeDays,
   rangeWeeks,
   seriesRanges,
@@ -546,76 +547,147 @@ test('the shipped fifteen-day snapshot renders identically under the default ran
   assert.equal(checked, 2, 'the snapshot no longer carries the two sources this pin names');
 });
 
-/* THE ONE WINDOW the token panel draws since its display menu was deleted
- * (issue 233, owner directive 2026-08-28). Executed, not pattern-matched:
- * this is arithmetic, and the two failures it exists to prevent are both
- * failures somebody has already shipped once.
+/* THE PANEL'S OWN WINDOW (owner directive, issue 268). Executed, not
+ * pattern-matched: this is arithmetic, and every failure it prevents is one
+ * somebody has already shipped or reported once.
  *
- * Neither half is decoration. Take the reserve alone and a capture past a
- * year is silently truncated — issue 158's ceiling, which the deleted control
- * was added to remove. Take the capture alone and a two-month history draws
- * ten columns into a full-width card, which is the owner's standing
- * no-dead-space rule broken by the graph that replaced the controls. */
-test('fullDepthColumns draws every captured day and never less than the reserve (issue 233)', () => {
-  // Shorter than the reserve: the reserve wins, so the strip still fills the
-  // card it is drawn into, and the extra weeks are the dated holes
-  // calendarColumns already draws.
-  for (const days of [1, 15, 58, 100, 300]) {
-    const cells = seriesCells('2026-01-01', new Array(days).fill(1));
-    const columns = fullDepthColumns(cells);
-    assert.equal(
-      columns.length,
-      pendingWeeks,
-      `a ${days}-day capture drew ${columns.length} columns instead of the reserve`
-    );
-    // Every column is a whole calendar week, exactly as every other window.
-    for (const column of columns) {
-      assert.equal(column.length, gridRows);
-    }
+ * RE-AIMED from "one fixed window at every series length" (issue 233). That
+ * rule drew fifty-three columns whatever the capture was, which the owner
+ * reported as a graph mostly made of nothing: a fortnight of real days against
+ * fifty weeks of dated emptiness reads as a year that failed rather than as a
+ * fortnight that worked. The truthful-axis half of issue 189's doctrine is
+ * what SURVIVES the re-aim, and it is what these assertions are now about —
+ * one window per panel, identical across its sources, so a column at the same
+ * x is the same week on every strip in the card. */
+test('the window is the panel’s coverage, week-aligned, floored and capped (issue 268)', () => {
+  // Week-aligned at BOTH ends: the window starts on the Sunday that opens the
+  // oldest captured week and ends on the Saturday that closes the newest, so
+  // the weekday gutter beside it is truthful for every column.
+  const fortnight = seriesCells('2026-08-10', new Array(15).fill(1));
+  const window = coverageWindow([fortnight]);
+  assert.equal(window.end, '2026-08-29', 'the window does not close on a Saturday');
+  const drawn = coverageColumns(fortnight, window);
+  assert.equal(drawn.length, window.weeks);
+  for (const column of drawn) {
+    assert.equal(column.length, gridRows);
   }
+  assert.equal(drawn.at(-1).at(-1).date, '2026-08-29');
+  assert.equal(drawn[0][0].date, addDays('2026-08-29', -(window.weeks * gridRows - 1)));
 
-  /* Wider than the reserve: the CAPTURE wins, without limit. This is the
-     ceiling removal, and it is checked at two very different depths so a
-     re-introduced clamp cannot hide at one of them. */
+  /* FLOORED at gridMinColumns, which is the width the graph's own less/more
+     key needs beside it (lib/grid.ts records the measurement). A capture
+     shorter than that draws its lead-in days as the dated holes they are. */
+  for (const days of [1, 15, 58]) {
+    const cells = seriesCells('2026-01-01', new Array(days).fill(1));
+    assert.equal(
+      coverageWindow([cells]).weeks,
+      gridMinColumns,
+      `a ${days}-day capture drew a window narrower than the legend fits in`
+    );
+  }
+  // And between the floor and the cap the window is the CAPTURE, which is the
+  // whole change: a hundred days is fifteen weeks, not fifty-three.
+  const hundred = seriesCells('2026-01-01', new Array(100).fill(1));
+  assert.equal(coverageWindow([hundred]).weeks, rangeWeeks(hundred, 'all'));
+  assert.ok(
+    coverageWindow([hundred]).weeks < pendingWeeks,
+    'a hundred-day capture still draws the full fixed frame; the re-aim did not land'
+  );
+
+  /* CAPPED at the reserve, TRAILING. A capture past a year is shown from its
+     newest end — the strip scrolls, exactly as it always has — rather than
+     compressed or cropped at the wrong end. */
   for (const days of [400, 800, 2000]) {
     const cells = seriesCells('2024-01-01', new Array(days).fill(2));
-    const columns = fullDepthColumns(cells);
+    const measured = coverageWindow([cells]);
+    assert.equal(measured.weeks, pendingWeeks, `a ${days}-day capture drew ${measured.weeks} columns`);
+    const real = coverageColumns(cells, measured)
+      .flat()
+      .filter((cell) => !cell.absent);
+    // The NEWEST captured day survives and the oldest does not: that is what
+    // makes the cap trailing rather than leading.
+    assert.equal(real.at(-1).date, addDays('2024-01-01', days - 1));
     assert.ok(
-      columns.length > pendingWeeks,
-      `a ${days}-day capture was clamped to ${columns.length} columns`
-    );
-    assert.equal(columns.length, rangeWeeks(cells, 'all'), `a ${days}-day capture drew a width it did not measure`);
-    assert.ok(
-      columns.length * gridRows >= days,
-      `a ${days}-day capture drew a window too narrow to hold it`
+      real[0].date > '2024-01-01',
+      `a ${days}-day capture kept its oldest day in a window narrower than itself`
     );
   }
 
-  /* NOT A CEILING, stated as the comparison that would have caught the
-     regression: the same long capture through the retired default loses days
-     off its old end, and through this window keeps them. */
-  const long = seriesCells('2024-01-01', new Array(800).fill(2));
-  const dated = (columns) => columns.flat().filter((cell) => !cell.absent).length;
-  assert.ok(
-    dated(fullDepthColumns(long)) > dated(rangeColumns(long, defaultSeriesRange)),
-    'the fixed window keeps no more captured days than the twelve-month default it replaced'
-  );
-  assert.equal(dated(fullDepthColumns(long)), 800, 'the fixed window dropped a captured day');
-
-  // Growth is monotone, so no capture length draws a narrower graph than a
+  // Monotone up to the cap: no capture length draws a narrower graph than a
   // shorter one — the property a reader watching history accrue depends on.
   let previous = 0;
   for (const days of [1, 100, 371, 372, 500, 1500]) {
-    const measured = fullDepthColumns(seriesCells('2026-01-01', new Array(days).fill(1))).length;
+    const measured = coverageWindow([seriesCells('2026-01-01', new Array(days).fill(1))]).weeks;
     assert.ok(measured >= previous, `${days} days drew fewer columns than the capture before it`);
     previous = measured;
   }
 
-  // An undated series has no calendar to measure; the max changes nothing
-  // there, and calendarColumns still chunks positionally.
+  // A panel with nothing captured has no window to share, and an undated
+  // series has no calendar to align to; both fall back rather than inventing
+  // a frame, and calendarColumns still chunks an undated series positionally.
+  assert.equal(coverageWindow([]), null);
+  assert.equal(coverageWindow([[]]), null);
   const undated = [
     { value: 1, date: '' },
     { value: 2, date: '' },
   ];
-  assert.deepEqual(fullDepthColumns(undated), calendarColumns(undated, pendingWeeks));
+  assert.equal(coverageWindow([undated]), null);
+  assert.deepEqual(coverageColumns(undated, null), calendarColumns(undated));
+
+  /* A window sized from its own PADDING would grow on every pass, without
+     limit: run the output back through and the front-padded absent cells must
+     not widen it. Only REAL days measure a window. */
+  const padded = coverageColumns(fortnight, window).flat();
+  assert.deepEqual(
+    coverageWindow([padded]),
+    window,
+    'the window grew when re-measured from its own output'
+  );
+});
+
+test('one window serves every source in the panel, whatever each one captured (issue 268)', () => {
+  /* THE NON-VACUITY OF THE RE-AIM. A per-series window would satisfy every
+     assertion above — each source would simply measure its own coverage — and
+     it is exactly what the owner's stacked strips must not do. So the claim is
+     stated where a per-series window FAILS it: two sources of one panel, one
+     of them both shorter AND ending earlier, drawing the identical calendar.
+     (Codex inside anthropic's span, as the shipped snapshot has it, with the
+     ends pulled apart so the two windows cannot coincide by luck.) */
+  const longer = seriesCells('2026-05-01', new Array(120).fill(3));
+  const shorter = seriesCells('2026-07-01', new Array(20).fill(1));
+  const panel = coverageWindow([longer, shorter]);
+  const drawnLong = coverageColumns(longer, panel);
+  const drawnShort = coverageColumns(shorter, panel);
+
+  const frame = (columns) => columns.flat().map((cell) => cell.date);
+  assert.deepEqual(
+    frame(drawnShort),
+    frame(drawnLong),
+    'the two sources of one panel drew different calendars'
+  );
+  assert.equal(drawnShort.length, drawnLong.length);
+
+  /* And the per-series answer genuinely differs, so the equality above is a
+     property of the panel window rather than a coincidence of these two
+     series. This is the assertion a re-introduced per-series window turns
+     red. */
+  assert.notDeepEqual(
+    frame(coverageColumns(shorter, coverageWindow([shorter]))),
+    frame(drawnShort),
+    'the shorter source measures the same window alone as it does in the panel; this lane proves nothing'
+  );
+
+  // FRONT-PAD SURVIVES: the shorter source keeps every day it captured and
+  // draws the panel's earlier weeks as the dated holes they are.
+  const realShort = drawnShort.flat().filter((cell) => !cell.absent);
+  assert.equal(realShort.length, 20, 'the shorter source lost a captured day to the panel window');
+  assert.equal(realShort[0].date, '2026-07-01');
+  assert.ok(
+    drawnShort.flat().filter((cell) => cell.absent && cell.date !== '').length > 0,
+    'the front pad is not drawn as dated absences'
+  );
+  // The window's span is the UNION: it opens on the older source's week and
+  // closes on the newer source's, so neither is cropped by the other.
+  assert.equal(panel.end, coverageWindow([longer]).end, 'the panel closed before its newest capture');
+  assert.equal(drawnLong.flat().filter((cell) => !cell.absent).length, 120);
 });
