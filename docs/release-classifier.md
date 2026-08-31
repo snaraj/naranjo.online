@@ -44,17 +44,6 @@ in place by `scripts/ci/test_release_contract.py` precisely so a restatement
 elsewhere — including this document — can never rescue a drifted original.
 Read them there, not here.
 
-## Tag creation and dispatch
-
-Successful main CI creates NO tag. It explicitly dispatches the protected-main
-publisher with that successful run's ID, and the publisher creates the
-annotated plain `vX.Y.Z` tag at the exact merged SHA from inside its
-privileged job, so no tag exists before authorization. The split is enforced
-by permissions, not convention: the orchestrator holds `actions: write` plus
-`contents: read` and therefore cannot create a ref at all. A token-created
-tag is never assumed to trigger another push workflow, which is exactly why
-the dispatch is explicit rather than tag-triggered.
-
 ## The CHANGELOG edit the append-only gate closes
 
 `AGENTS.md` "Docs and attribution conventions" states the append-only rule.
