@@ -1554,7 +1554,7 @@ def uses_references(text: str, path: Path) -> list[tuple[int, str]]:
 
 
 def local_action_entrypoint(root: Path, reference: str, path: Path, lineno: int) -> Path:
-    """Resolve a `./dir` reference to the file GitHub executes, or REFUSE.
+    """Resolve a `./` reference to the file GitHub executes, or REFUSE.
 
     A same-repository action lives at ANY repository-relative directory holding
     `action.yml` or `action.yaml`. `.github/actions` is a convention and
@@ -1563,15 +1563,27 @@ def local_action_entrypoint(root: Path, reference: str, path: Path, lineno: int)
     behind: a sweep of the convention read as complete and covered nothing that
     ran. Following the reference is what makes the surface below the executable
     namespace instead of a naming habit.
+
+    Both `./` spellings resolve here, because `uses:` carries both: a job-level
+    local REUSABLE WORKFLOW names its file (`./.github/workflows/x.yml`), while
+    a step-level local ACTION names the directory holding its metadata. Reading
+    only the second refused the first, which is a legitimate construct this
+    repository may add on any ordinary day -- a gate that reddens on new work
+    it never anticipated is the failure this file's own contract forbids.
     """
-    for name in ("action.yml", "action.yaml"):
-        entrypoint = root / reference[2:] / name
+    target = root / reference[2:]
+    candidates = (
+        (target,)
+        if target.suffix in (".yml", ".yaml")
+        else (target / "action.yml", target / "action.yaml")
+    )
+    for entrypoint in candidates:
         if entrypoint.is_file():
             return entrypoint
     _refuse_unresolvable(
-        path, lineno, f"the same-repository action reference `{reference}`",
-        "No `action.yml` or `action.yaml` sits at that path, so this reader "
-        "cannot see what the step runs.",
+        path, lineno, f"the same-repository reference `{reference}`",
+        "It names neither a workflow file nor a directory holding an "
+        "`action.yml` or `action.yaml`, so this reader cannot see what runs.",
     )
 
 
@@ -1803,6 +1815,32 @@ class WorkflowIntegrityTests(unittest.TestCase):
                     codeql_lockstep_problems(self.write_tree(Path(directory), files)),
                     f"the {label} bypass survived",
                 )
+
+    def test_codeql_lockstep_accepts_a_local_reusable_workflow(self):
+        """A legitimate `./…/x.yml` job reference is resolved, not refused.
+
+        The negative control for the sweep above. `uses:` names a file at job
+        level and a directory at step level, and reading only the directory
+        form turned an ordinary, correct workflow RED -- the exact "gate
+        reddens on work it never anticipated" failure this file forbids.
+        """
+        current = (WORKFLOWS / "codeql.yml").read_text(encoding="utf-8")
+        files = {
+            ".github/workflows/reusable.yml": current,
+            ".github/workflows/caller.yml": (
+                "name: Caller\n"
+                "on:\n"
+                "  workflow_dispatch:\n"
+                "permissions: {}\n"
+                "jobs:\n"
+                "  analyze:\n"
+                "    uses: ./.github/workflows/reusable.yml\n"
+            ),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(
+                codeql_lockstep_problems(self.write_tree(Path(directory), files)), []
+            )
 
     def test_codeql_lockstep_refuses_a_reference_it_cannot_resolve(self):
         """Fail closed on an unresolved `uses:`, rather than walking past it.
