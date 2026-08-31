@@ -575,14 +575,6 @@ const desktopWidths = [1440, 1920];
 // filled page is the viewport minus exactly this and nothing else.
 const gutterPx = 32;
 
-/* The lane the page reserves on its inline end for the fixed reading-mode
- * control, below the handle breakpoint (issue 241). It is the same 44px every
- * control on this page is, and it is why a phone's column is its viewport less
- * its two gutters AND this — the arrangement that stops body text from
- * scrolling under a control it cannot move. Above the breakpoint the column's
- * own ceiling reserves two rail lanes instead and this term does not apply. */
-const controlLanePx = 44;
-
 /* The width the arrangement before this one was rejected FOR: a 30rem ribbon
  * down the middle of a desktop. The owner asked for one centred container,
  * wider than that (issue 134), so a column that failed to clear it would be
@@ -717,16 +709,55 @@ test('a phone still renders the single full-width column it always did', async (
       observed.tracks,
       `a ${width}px phone lays out ${observed.tracks} columns of panels`
     ).toBe(1);
-    /* Full width MINUS the fixed control's own lane since issue 241: a phone's
-       column ends where the reading-mode control starts, because a column that
-       ran under it put body text beneath a 44px control at every phone width
-       (MEASURED on 0.1.54). The stack still fills every pixel it is given —
-       what changed is how many it is given, and by exactly one control. */
-    const expected = observed.viewport - gutterPx - controlLanePx;
+    /* THE FULL WIDTH, two gutters and nothing else (owner defect report, issue
+       264, 2026-08-31: on a phone the page showed a dead strip roughly 60px
+       wide down its inline end). Issue 241 had subtracted a third term here —
+       the 44px lane the page reserved for the fixed reading-mode control — and
+       that lane is retired: the control is glued to the document below the
+       handle breakpoint now, so it scrolls away with the page instead of
+       holding a corner over it, and nothing has to be held back from it. The
+       measured replacement for the lane's guarantee is the scroll check
+       below. */
+    const expected = observed.viewport - gutterPx;
     expect(observed.stack).toBeCloseTo(expected, 0);
     for (const card of observed.cards) {
       expect(card, `a card is ${card}px wide on a ${width}px phone`).toBeCloseTo(expected, 0);
     }
+    /* And the guarantee that replaces the lane, MEASURED rather than reasoned:
+       at rest the control is still in the viewport's own top-end corner, and
+       once the reader has scrolled it is entirely gone from the viewport — so
+       it holds no pixels over scrolled content at any offset, which is the
+       thing the lane existed to promise. A control that had stayed
+       viewport-glued reports the identical box at both offsets and fails the
+       second of these by its full height. */
+    const control = await page.evaluate(async () => {
+      const header = window.document.querySelector('.page-header');
+      const rest = header.getBoundingClientRect();
+      const at = { top: rest.top, right: rest.right, bottom: rest.bottom };
+      window.scrollTo(0, 600);
+      await new Promise((settle) => requestAnimationFrame(() => requestAnimationFrame(settle)));
+      const scrolledBottom = header.getBoundingClientRect().bottom;
+      const offset = window.scrollY;
+      // Later lanes in this file start from the top of the document.
+      window.scrollTo(0, 0);
+      return { rest: at, scrolledBottom, offset };
+    });
+    expect(
+      control.offset,
+      `the page could not be scrolled at ${width}px, so this check proves nothing`
+    ).toBeGreaterThan(control.rest.bottom);
+    expect(
+      control.rest.top,
+      `at rest the control sits ${control.rest.top}px down a ${width}px phone, not in its top corner`
+    ).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
+    expect(
+      observed.viewport - control.rest.right,
+      `at rest the control sits ${observed.viewport - control.rest.right}px from the end edge`
+    ).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
+    expect(
+      control.scrolledBottom,
+      `after scrolling ${control.offset}px the control's bottom edge is still ${control.scrolledBottom}px into the viewport, over the content below it`
+    ).toBeLessThanOrEqual(subPixel);
   }
 });
 
@@ -6502,11 +6533,13 @@ test('a phone gets no handle and the page it has always had', async ({ page }) =
     ).toHaveCount(0);
     const column = await columnBox(page);
     /* Byte for byte the arrangement the phone lanes above already prove: the
-       column is the screen less its two gutters and the fixed control's own
-       lane (issue 241), and nothing scrolls sideways. Every width in this list
-       sits below the handle breakpoint, which is exactly the range that lane
-       is reserved in. */
-    expect(column.width).toBeCloseTo(Math.min(60 * column.rem, width - gutterPx - controlLanePx), 0);
+       column is the screen less its two gutters and nothing else, and nothing
+       scrolls sideways. Issue 241 subtracted a third term here — the lane the
+       page reserved for the fixed reading-mode control — and issue 264 retired
+       it: below the handle breakpoint the control is document-glued, so it
+       costs the column nothing. Every width in this list sits below that
+       breakpoint, which is exactly the range the re-aim applies to. */
+    expect(column.width).toBeCloseTo(Math.min(60 * column.rem, width - gutterPx), 0);
     expect(column.scrollWidth).toBe(column.clientWidth);
   }
   /* And the boundary is where the stylesheet says it is, not near it. */
@@ -8639,10 +8672,12 @@ test('the refresh gesture has a control a keyboard can reach (issue 219)', async
 
 /* DEFECT 4. At iPhone width the fixed reading-mode control overlapped the
  * token panel's segmented control, rendering "cumulative" underneath the moon
- * icon. The header is fixed to the VIEWPORT while the column scrolls beneath
+ * icon. The header was fixed to the VIEWPORT while the column scrolled beneath
  * it, and at a phone width the column IS the viewport, so right-aligned panel
  * content passed through the corner the control owns — with nothing painted
- * behind it, the label showed straight through.
+ * behind it, the label showed straight through. (A phone's control is glued to
+ * the document since issue 264; the header is viewport-glued above the handle
+ * breakpoint, which is the range halves one and two below still measure.)
  *
  * MEASURED before the fix at 390x844 in WebKit: icon x 330-374 y 16-60,
  * "cumulative" x 283.19-360.0 y 26.98-70.98 — a 30x33px overlap. At 1440px
@@ -8740,13 +8775,15 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
     `"${landing.text}" was scrolled to ${landing.segmentTop}, under a control whose bottom edge is ${landing.headerBottom}`,
   ).toBeGreaterThanOrEqual(landing.headerBottom);
 
-  /* HALF TWO — when a reader scrolls BY HAND, content genuinely does pass
-     under a fixed control; that is what "fixed" means and no layout can
-     prevent it. What must not happen is the owner's actual report: the label
-     rendering THROUGH the glyph because nothing was painted between them. So
-     the content is put deliberately under the control and the top-most
-     element at the centre of the overlap is measured — it must be the
-     control, not the text. */
+  /* HALF TWO — where the control stays viewport-glued, content genuinely does
+     pass under it when a reader scrolls BY HAND; that is what "fixed" means and
+     no layout can prevent it. What must not happen is the owner's actual
+     report: the label rendering THROUGH the glyph because nothing was painted
+     between them. So the content is put deliberately under the control and the
+     top-most element at the centre of the overlap is measured — it must be the
+     control, not the text. Under the handle breakpoint the two boxes cannot
+     meet at all (half three), so this probe finds no overlap to measure and
+     says so rather than inventing one. */
   const occlusion = await page.evaluate(() => {
     const segments = [...window.document.querySelectorAll('.usage-insight-value')];
     const segment = segments.at(-1);
@@ -8781,34 +8818,59 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
     ).toBe(true);
   }
 
-  /* HALF THREE — the column does not reach the control at all (issue 241),
-     which is the guarantee the two halves above could not give. Halves one and
-     two are about a target scrolled to a place and a plate painted under a
-     glyph; neither says anything about the ordinary case the owner was
-     actually reading, which is body text passing under a control on its way up
-     the screen. MEASURED on 0.1.54, and this half is why it was only ever a
-     phone defect: at 320px <main> ended at exactly 304 and the trigger box was
-     x 260-304, so a scroll sweep found body text under the control 9 to 11
-     times at 320, 360, 390, 412 and 768 — bullets, card bylines and a card
-     title — and zero times at 1280 and 1440.
+  /* HALF THREE — below the handle breakpoint the control can never be over page
+     content at all (issues 241, 264), which is the guarantee the two halves
+     above could not give. Halves one and two are about a target scrolled to a
+     place and a plate painted under a glyph; neither says anything about the
+     ordinary case the owner was actually reading, which is body text passing
+     under a control on its way up the screen. MEASURED on 0.1.54, and this
+     half is why it was only ever a phone defect: at 320px <main> ended at
+     exactly 304 and the trigger box was x 260-304, so a scroll sweep found
+     body text under the control 9 to 11 times at 320, 360, 390, 412 and 768 —
+     bullets, card bylines and a card title — and zero times at 1280 and 1440.
 
-     The lane the page now reserves is what makes the answer geometric: below
-     the handle breakpoint the column ends where the control starts, so no
-     descendant of it can be under the control at any scroll offset. Every
-     width the sweep found the defect at is probed, in the engine this project
-     runs, rather than only the one this project's own viewport happens to
-     be. */
+     RE-AIMED, not relaxed. Issue 241 made the answer geometric by reserving
+     the control's lane, so the column ended where the control started — which
+     charged every row of the page for one corner and read on a phone as a dead
+     strip down its inline end (owner defect report, issue 264). The answer is
+     still geometric and now costs nothing: the control is glued to the
+     DOCUMENT in this range, so it travels with the page instead of holding a
+     corner over it, and the document rows it occupies are exactly the rows
+     --page-top-space already holds empty above #app's content. Both halves of
+     that are measured here — the travel, and the non-overlap — and together
+     they say no content of this page can be under the control at ANY scroll
+     offset, which is strictly what the lane was for. Every width the sweep
+     found the defect at is probed, in the engine this project runs, rather
+     than only the one this project's own viewport happens to be. */
   for (const width of [...phoneWidths, 768, 1024]) {
     await page.setViewportSize({ width, height: 800 });
     await settled(page);
-    const lane = await page.evaluate(() => {
-      const control = window.document.querySelector('.page-header').getBoundingClientRect();
-      const column = window.document.querySelector('#app > main').getBoundingClientRect();
+    const lane = await page.evaluate(async () => {
+      const header = window.document.querySelector('.page-header');
+      const app = window.document.getElementById('app');
+      const column = window.document.querySelector('#app > main');
+      window.scrollTo(0, 0);
+      const rest = header.getBoundingClientRect();
+      /* #app's CONTENT box, not the column's: every flow descendant of the page
+         lives inside it, so this is the whole page's first row rather than one
+         element's. */
+      const contentTop =
+        app.getBoundingClientRect().top +
+        Number.parseFloat(window.getComputedStyle(app).paddingBlockStart);
+      const columnWidth = column.getBoundingClientRect().width;
+      window.scrollTo(0, 400);
+      await new Promise((settle) => requestAnimationFrame(() => requestAnimationFrame(settle)));
+      const travelled = rest.top - header.getBoundingClientRect().top;
+      const offset = window.scrollY;
+      // Later lanes in this file start from the top of the document.
+      window.scrollTo(0, 0);
       return {
-        controlStart: control.left,
-        controlWidth: control.width,
-        columnEnd: column.right,
-        columnWidth: column.width,
+        controlWidth: rest.width,
+        controlBottom: rest.bottom,
+        contentTop,
+        columnWidth,
+        travelled,
+        offset,
       };
     });
     // Non-vacuity: a column that had collapsed would pass this trivially.
@@ -8817,9 +8879,18 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
       lane.controlWidth + subPixel,
       `the control shrank to ${lane.controlWidth}px to make room; the 44px target is the floor, not the variable`
     ).toBeGreaterThanOrEqual(touchFloorPx);
+    // Non-vacuity for the travel: an unscrollable page proves nothing about it.
+    expect(lane.offset, `the page could not be scrolled at ${width}px`).toBeGreaterThan(lane.controlBottom);
+    /* A whole pixel of tolerance, for the reason half one records: a scroll
+       offset is rounded to the device's pixel grid. It cannot hide a control
+       that stayed put, which reports zero travel against a 400px scroll. */
     expect(
-      lane.columnEnd,
-      `at ${width}px the column ends at ${lane.columnEnd}px, inside a control that starts at ${lane.controlStart}px`
-    ).toBeLessThanOrEqual(lane.controlStart + subPixel);
+      lane.travelled,
+      `at ${width}px the control moved ${lane.travelled}px against a ${lane.offset}px scroll; it is still glued to the viewport`
+    ).toBeCloseTo(lane.offset, 0);
+    expect(
+      lane.controlBottom,
+      `at ${width}px the control's document rows end at ${lane.controlBottom}px, inside page content that begins at ${lane.contentTop}px`
+    ).toBeLessThanOrEqual(lane.contentTop + subPixel);
   }
 });

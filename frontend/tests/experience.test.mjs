@@ -1327,50 +1327,83 @@ test('the page reserves the space above its name, derived from the chrome that s
   );
 });
 
-test('the column gives the fixed control its own lane wherever it would run into it (issue 241)', () => {
-  /* The defect, MEASURED on 0.1.54 in Chromium and WebKit alike: <main> ends
-     at exactly the reading-mode trigger's own end edge at every phone width
-     (at 320px the trigger box is x 260-304 and main[16,304]), so scrolling
-     put body text — bullets, card bylines, a card title — under a 44px
-     control 9 to 11 times per sweep at 320, 360, 390, 412 and 768. At 1280
-     and 1440 the count was zero, because there the capped column stops 116px
-     short of it.
+test('the control travels with the document under the breakpoint, so the column fills the phone (issues 241, 264)', () => {
+  /* RE-AIMED, not relaxed. Issue 241's measurement stands: on 0.1.54, in
+     Chromium and WebKit alike, <main> ended at exactly the reading-mode
+     trigger's own end edge at every phone width (at 320px the trigger box was
+     x 260-304 and main[16,304]), and scrolling put body text — bullets, card
+     bylines, a card title — under a 44px control 9 to 11 times per sweep at
+     320, 360, 390, 412 and 768. At 1280 and 1440 the count was zero, because
+     there the capped column stops 116px short of it.
 
-     The plate under the glyph answers a DIFFERENT half of the same collision
-     (text must not render through the icon) and cannot answer this one: text
-     a control is painted over is unreadable however opaque the control is.
+     What changed is the mechanism that answers it. 241 reserved the control's
+     lane on #app's inline end for the whole range below the breakpoint, which
+     charged EVERY row of the page 44px for one corner — the ~60px dead strip
+     the owner reported on a phone (issue 264, 2026-08-31). The control is now
+     glued to the DOCUMENT there instead of to the viewport, so the defect is
+     impossible by construction rather than held off by a reserve: the control
+     renders in the same corner at scroll zero (where --page-top-space already
+     clears it — pinned by the top-rhythm test above), and it leaves with the
+     page the moment the reader scrolls, so no scrolled row can pass under it
+     at any offset. Nothing holds text away from it because nothing has to.
 
-     Two ranges, and neither is left to chance. Above the handle breakpoint the
-     column's own ceiling already gives back two rail lanes, which puts its end
-     edge at or before the control's start edge — proven arithmetically below
-     rather than asserted. Below it, this reserve does the same job with the
-     same token. */
+     The plate under the glyph still answers the OTHER half of the same
+     collision (text must not render through the icon) wherever the control
+     stays viewport-glued, which is the range above the breakpoint.
+
+     Two ranges, and neither is left to chance. Above the breakpoint the
+     column's own ceiling gives back two rail lanes, which puts its end edge at
+     or before the control's start edge — proven arithmetically below rather
+     than asserted, and unchanged by this re-aim. */
   const token = (name) => {
     const found = new RegExp(`--${name}:\\s*([^;]+);`).exec(stylesCode);
-    assert.ok(found, `--${name} is gone; the control lane is derived from it`);
+    assert.ok(found, `--${name} is gone; the control's clearance is derived from it`);
     return lengthInPx(found[1].trim());
   };
   const gutter = token('page-gutter');
   const rail = token('page-rail-size');
   const columnMax = token('page-column-max');
-  assert.ok(gutter !== null && rail !== null && columnMax !== null, 'the lane is built from a length this pin cannot read');
-  assert.equal(rail, 44, 'the reserved lane is no longer the 44px the control actually occupies');
+  assert.ok(gutter !== null && rail !== null && columnMax !== null, 'the clearance is built from a length this pin cannot read');
+  assert.equal(rail, 44, 'the giveback is no longer the 44px the control actually occupies');
 
-  // The reserve itself, in both branches of #app's padding — the plain one an
-  // engine without env() keeps, and the inset-aware upgrade over it.
+  /* The retired reserve, in BOTH the shapes it shipped in — the plain one an
+     engine without env() kept, and the inset-aware upgrade over it. Matched by
+     their exact calc() text rather than by the property alone, because
+     padding-inline-end is a legitimate declaration elsewhere on this page (the
+     open-modal scrollbar giveback is one), and by the rail token because the
+     lane is the only thing that ever spent it here. */
+  assert.doesNotMatch(
+    stylesCode,
+    /padding-inline-end: calc\(var\(--page-gutter\) \+ var\(--page-rail-size\)\)/,
+    'the phone column is paying for the control lane again; the owner reported that strip as a defect'
+  );
+  assert.doesNotMatch(
+    stylesCode,
+    /padding-inline-end: calc\(max\(var\(--page-gutter\), env\(safe-area-inset-right\)\) \+ var\(--page-rail-size\)\)/,
+    'the inset-aware copy of the retired control lane is back'
+  );
+  assert.doesNotMatch(
+    stylesCode,
+    /#app \{[^}]*padding-inline-end[^}]*var\(--page-rail-size\)/,
+    'the page reserves a rail-sized lane on #app again, by some other spelling'
+  );
+
+  /* What replaces it: one declaration, in the range the reserve used to cover.
+     The base rule keeps position: fixed — it is the issue-168 directive and it
+     is what the range ABOVE the breakpoint still runs on — and the insets are
+     declared once for both ranges, so which corner they measure from is the
+     positioning scheme's business rather than a second set of numbers free to
+     disagree with the first. */
   assert.match(
     stylesCode,
-    /@media not all and \(min-width: 67\.5rem\) \{\s*#app \{\s*padding-inline-end: calc\(var\(--page-gutter\) \+ var\(--page-rail-size\)\);/,
-    'the column reserves no lane for the fixed control below the handle breakpoint'
+    /@media not all and \(min-width: 67\.5rem\) \{\s*\.page-header \{\s*position: absolute;\s*\}\s*\}/,
+    'the control is viewport-glued below the handle breakpoint again, so scrolled content can pass under it'
   );
-  assert.match(
-    stylesCode,
-    /padding-inline-end: calc\(max\(var\(--page-gutter\), env\(safe-area-inset-right\)\) \+ var\(--page-rail-size\)\);/,
-    'the inset-aware reserve is gone, so a notched phone loses either its safe area or its control lane'
-  );
-  // The control's own placement is what the lane is measured against: it sits
-  // one gutter in from the viewport's end edge, so its start edge is a gutter
-  // plus its own width away — which is exactly the reserve above.
+  const baseRule = stylesCode.indexOf('.page-header {');
+  const override = stylesCode.search(/@media not all and \(min-width: 67\.5rem\) \{\s*\.page-header \{/);
+  assert.ok(baseRule >= 0 && override > baseRule, 'the narrow-range override no longer follows the rule it overrides; at equal specificity the later one wins, so ordering is the whole mechanism');
+  assert.match(stylesCode, /\.page-header \{[^}]*position: fixed;/, 'the header is no longer viewport-glued above the breakpoint, where the drag handles live');
+  assert.match(stylesCode, /\.page-header \{[^}]*inset-block-start: var\(--header-inset-block, var\(--page-gutter\)\)/);
   assert.match(stylesCode, /\.page-header \{[^}]*inset-inline-end: var\(--header-inset-inline, var\(--page-gutter\)\)/);
   assert.match(stylesCode, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
 
@@ -1378,8 +1411,8 @@ test('the column gives the fixed control its own lane wherever it would run into
      above it the column is capped AND gives back two rail lanes, so its end
      edge — half the viewport plus half the column — never passes the control's
      start edge. The tightest case is the breakpoint itself; anything wider only
-     adds slack. Below it the column fills the screen, which is the range the
-     reserve above covers. */
+     adds slack. Below it the column fills the screen and the two boxes are kept
+     apart by the override above instead. */
   const breakpointPx = 67.5 * 16;
   const columnAt = (viewport) => Math.min(columnMax, viewport - 2 * gutter - 2 * rail);
   for (const viewport of [breakpointPx, breakpointPx + 200, 1920]) {
@@ -1396,7 +1429,7 @@ test('the column gives the fixed control its own lane wherever it would run into
   const unreserved = Math.min(columnMax, breakpointPx - 2 * gutter);
   assert.ok(
     breakpointPx / 2 + unreserved / 2 > breakpointPx - gutter - rail,
-    'the column would clear the control even with no lane reserved at all; this pin proves nothing'
+    'the column would clear the control even without the two-rail giveback; this pin proves nothing'
   );
 });
 

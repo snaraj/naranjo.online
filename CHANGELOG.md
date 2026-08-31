@@ -7,6 +7,38 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.66] - 2026-08-31
+
+### Fixed
+- A phone's page fills the full width of the screen again (owner defect
+  report: roughly 60px of dead strip down the inline end). Issue 241 had
+  reserved a permanent lane there for the reading-mode control, which is
+  glued to the viewport's top-end corner and therefore owns that corner at
+  every scroll offset — so the only way to keep body text out from under it
+  was to hold the whole column away from it, charging every row of the page
+  for one control. Below the handle breakpoint that control is now glued to
+  the document instead: it renders in the identical corner at rest, where the
+  page's own top reserve already clears it, and it leaves with the page the
+  moment the reader scrolls, so no scrolled row can pass under it at any
+  offset. The lane is retired and the column is the viewport less its two
+  gutters. Above the breakpoint nothing changes — the control stays
+  viewport-fixed, which is what keeps it still while the reader drags the
+  column, and the column's ceiling still gives back its two rail lanes. The
+  source pin and the browser lanes were re-aimed onto the new arrangement
+  rather than relaxed: they now measure that the control travels with the
+  document and that its document rows end where the page's content begins.
+  The reader pays for the width in reach: below the breakpoint the control
+  leaves the viewport with the page, so getting back to it from far down the
+  feed means scrolling to the top; keyboard focus still brings it into view
+  on its own, so tabbing to it works from any offset.
+- An enlarged photograph is measurably larger than the frame it was tapped
+  from on a phone again. The lightbox capped its picture at a 90vw literal of
+  its own, tuned when the feed column was narrower by the retired lane; with
+  the column at full width that cap MEASURED smaller than the stage it
+  enlarged from (353.7px against 361px on a Pixel 5, 351.0 against 358 on an
+  iPhone 13). The picture now reads the same `--gallery-lightbox-max-inline`
+  token the dialog around it already used, so the two cannot disagree again.
+
 ## [0.1.65] - 2026-08-31
 
 ### Changed
