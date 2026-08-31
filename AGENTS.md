@@ -35,17 +35,14 @@ envelopes, `internal/seal` and `cmd/usageseal` sealing the data they carry,
 the shared test harness — shipped as a distroless multi-arch
 container plus a Helm chart, and deployed by digest onto a self-hosted
 Kubernetes platform. The origin speaks standard HTTP (RFC 9110/9111) only
-and is provider-neutral per the deployment-provider contract below. A
+and is provider-neutral per the deployment-provider contract below. The
 fail-closed media subsystem — rooted filesystem capability, reserved
-operator namespaces, bounded transfer concurrency — is fully wired and, since
-2026-08-27, ENABLED by default in the chart: the storage evidence and the
-provisioned claim it was waiting on both landed, so the shipped values state
-that answer while every refusal that made the answer meaningful stays exactly
-as it was. The current
-hello-world shell is temporary: the site is becoming a media-rich visual
-experience (music, high-quality video, graphics — a music player and
-visual blog hybrid), and the test suite is built so that growth is a
-conscious edit, never a fight (see Sanctioned evolution).
+operator namespaces, bounded transfer concurrency — is ENABLED by default in
+the chart since 2026-08-27, and every refusal that made the answer meaningful
+stays exactly as it was. The site is becoming a media-rich visual experience
+(music, high-quality video, graphics — a music player and visual blog
+hybrid), and the test suite is built so that growth is a conscious edit,
+never a fight (see Sanctioned evolution).
 
 ## Requirements
 
@@ -67,11 +64,8 @@ Numbered for citation, repo-scoped, none negotiable in code:
    label in the roster below (`- Fable5` ↔ `fable5`, `- Sonnet5` ↔
    `sonnet5`, `- Opus5` ↔ `opus5`, `- 5.6 Sol` ↔ `5.6-sol`) — never a
    fixed lane. This supersedes the single-signature owner attribution
-   decision of 2026-08-10: the re-tiering directive of 2026-08-18 (routes
-   simple/dependabot work to lighter models) made a fixed signature false
-   on its face, and merged precedent #56 (signed `- Sonnet5`, labeled
-   `sonnet5`, owner-merged same day) is the first PR under the corrected
-   rule.
+   decision of 2026-08-10; `docs/agent-git-mechanics.md` records why it
+   was superseded and which merged PR is the first under the corrected rule.
 4. **Fail-closed doctrine — never weaken.** No security behavior may be
    made toggleable: no boolean, env var, build tag, or config field may
    silently disable signing, verification, probes, TLS, header policy, or
@@ -106,22 +100,12 @@ Numbered for citation, repo-scoped, none negotiable in code:
     closed documentation allowlist — root `AGENTS.md`, `README.md`,
     `.gitignore`, and Markdown files under `docs/` — classifies no-artifact:
     it advances nothing, and the orchestrator proves that class against
-    evidence the VERDICT CANNOT CHOOSE before skipping the publisher. Saying
-    it "re-derives the class from git" is not enough and was disproved by a
-    working attack: the re-derivation is parameterised by the verdict's
-    claimed base, so a base naming a commit inside the push re-derives a
-    genuine artifact merge as documentation. Three things make the outcome
-    trustworthy — the newest earlier successful protected-main gate run, read
-    from the Actions record, with all four release locks required
-    byte-identical between it and the merged head; an anchor-advance walk that
-    begins at the recovered release boundary and steps over that same already
-    released push's artifact commits, hard-capped at that gated head so a
-    lock-free artifact commit landing after it cannot be stepped over; and a
-    re-classification as documentation of the gap the walk leaves behind —
-    from the advanced anchor to the merged head, NOT from the boundary, since
-    the prefix the walk consumed is genuine artifact history that already
-    released. Only then is the publisher
-    skipped, with an explicit logged verdict instead of a dispatch. Removing the release from a documentation-only merge
+    evidence the VERDICT CANNOT CHOOSE before skipping the publisher, then
+    logs that verdict explicitly instead of dispatching. The anchor it proves
+    against, the anchor-advance walk, and the gap re-classification are
+    specified in `docs/release-classifier.md`, with the working attack that
+    retired "it re-derives the class from git" as a sufficient answer.
+    Removing the release from a documentation-only merge
     weakens nothing: the artifact is unchanged, so there is
     nothing to version, sign, scan, or attest. The classifier has exactly
     two verdicts and no flag, environment variable, or configuration input;
@@ -151,32 +135,20 @@ Numbered for citation, repo-scoped, none negotiable in code:
     release — but only the boundary denial requires an artifact merge to
     clear, and neither promises green on any particular next merge.
     Successful main CI publishes that exact SHA as one
-    server-locked plain `vX.Y.Z` release. The explicit workflow dispatch after
-    a token-created tag selects the publisher definition from protected `main`
-    and carries the completed main-run ID. A separate read-only job verifies
-    the authoritative Actions record, the closed successful PR-gate job
-    inventory, and the closed successful CodeQL run/job inventory for that
-    exact `main` SHA before the privileged job can start, so an ordinary
-    manual dispatch, skipped job, or aggregate-only success cannot publish.
-    Squash and
-    rebase are both supported: the protected-main
-    push must be one merge-free linear base-to-head range whose final snapshot
-    is the exact next patch, and that complete final SHA gets one release.
-    There is no skip or force path. The automatic-release PR remains Draft
-    until the repository owner's GET-only receipt proves GitHub immutable
-    releases enabled and exact GitHub-Actions-bound required checks enforced
-    against the current base with no update restriction, and the owner's
-    separate GET-only bypass check reports no bypass actor. The receipt cannot
-    prove that half: GitHub returns `bypass_actors` only to a ruleset-write
-    credential, so the preflight reads it for nobody; see
-    `docs/release-governance.md`. Every created or reused GitHub Release must
+    server-locked plain `vX.Y.Z` release, gated by the read-only
+    authorization job stated under Releases below, so an ordinary manual
+    dispatch, skipped job, or aggregate-only success cannot publish. Squash
+    and rebase are both supported: the protected-main push must be one
+    merge-free linear base-to-head range whose final snapshot is the exact
+    next patch, and that complete final SHA gets one release. There is no
+    skip or force path; the owner-observed release-control receipt and the
+    separate bypass check that gate the first Release under this path are
+    specified in `docs/release-governance.md` and required by Merge
+    readiness below. Every created or reused GitHub Release must
     report authoritative `immutable: true` and exactly one canonical evidence
     manifest whose digest and downloaded bytes are verified before and after
-    publication. Before manifest construction, both just-published semantic
-    aliases are re-resolved to the produced digests and each required raw
-    per-platform SBOM statement is schema- and subject-bound. Images deploy by digest;
-    `vX.Y.Z@sha256:<digest>` is a reference, never a tag, and publication is
-    never deployment or promotion.
+    publication. Images deploy by digest; `vX.Y.Z@sha256:<digest>` is a
+    reference, never a tag, and publication is never deployment or promotion.
 11. **Media stays out of the control plane.** Heavy media never enters
     git, the bundle, the embed, the image, or a ConfigMap/Secret. Small
     assets respect the documented category and size ceilings. Frontend
@@ -208,23 +180,18 @@ that carry the SAME app name and are told apart only by
 `app.kubernetes.io/instance`, so a namespace+app selector admits every
 connector deployed there. `values.schema.json` requires the instance
 non-empty — a blank or absent value fails validation instead of rendering a
-wide policy — and `scripts/ci/chart-ingress-pin.sh` renders the chart and
-proves the pin holds (default render, refusal of an unpinned instance, and
-that the instance is what separates one connector from another). Since issue
-#95 it proves two more, over the COMPLETE render rather than one `--show-only`
-extract: the single policy's ingress sub-tree, extracted through
-`chart_render_census.py`'s document reader and compared byte for byte against
-the canonical text built from values, and fourteen hostile whole-render shapes
-refused by that extraction ALONE — including the four PR #94 proved this gate
-used to exit 0 on, where a second policy spelled `kind :`, quoted, escaped, or
-wrapped in a List admitted a peer the raw-line extraction never saw.
+wide policy — and `scripts/ci/chart-ingress-pin.sh` proves the pin over the
+COMPLETE render, never one `--show-only` extract: the default render, refusal
+of an unpinned instance, the instance as the separator, the single policy's
+ingress sub-tree compared byte for byte against the canonical text built from
+values, and fourteen hostile whole-render shapes refused by that extraction
+ALONE. `docs/ci-map.md` records the four shapes this gate used to exit 0 on.
 
 ## Testing doctrine (v0.1.8+)
 
 - Coverage is enforced per requirement 7. `internal/testsupport` is test
-  scaffolding — it runs only inside test binaries — and is excluded from
-  the coverage denominator by the gate's profile filter; that exclusion
-  may never grow to cover production packages.
+  scaffolding — it runs only inside test binaries — and is the profile
+  filter's only exclusion (see "Quality gates").
 - Lifecycle bounds are proven under `testing/synctest` against
   hand-written fakes (the `httpRunner` seam), so the exact shutdown
   window is exercised in microseconds with no sockets and no sleeps.
@@ -261,23 +228,13 @@ wrapped in a List admitted a peer the raw-line extraction never saw.
 
 ## Build, test, and release flows
 
-Build and test, in this order (the same gate CI enforces):
-
-1. `cd frontend && npm ci --ignore-scripts --no-audit --no-fund &&
-   npm run check && npm test && npm run build` — the build lands in
-   `internal/web/dist`, which the Go embed test needs.
-2. `gofmt -l .` must be empty; `go vet ./...`;
-   `CGO_ENABLED=0 go test ./...`; `go test -race ./...`. CI additionally
-   enforces the coverage floor on the scaffolding-filtered profile.
-3. `helm lint chart && helm template smoke chart --kube-version v1.36.0`
-   then the chart pin scripts — `./scripts/ci/chart-ingress-pin.sh`,
-   `./scripts/ci/chart-egress-pin.sh`, `./scripts/ci/chart-storage-pin.sh`,
-   `./scripts/ci/chart-media-pin.sh` — for chart changes (the chart requires
-   the platform's Kubernetes target; plain `helm template` defaults to older
-   capabilities). All FOUR run in CI's `chart` job; an earlier revision of
-   this list named only three and left the storage pin discoverable solely
-   from the workflow.
-4. `docker build .` when the Dockerfile or build inputs change.
+Build and test in the exact order given under "Quality gates — exact
+commands and patterns" below; that battery is canonical and CI enforces the
+same one. Two facts belong beside it: the frontend build lands in
+`internal/web/dist`, which the Go embed test needs, and all FOUR chart pin
+scripts run in CI's `chart` job at `--kube-version v1.36.0`, because the
+chart requires the platform's Kubernetes target and plain `helm template`
+defaults to older capabilities.
 
 Releases: every artifact-classified PR advances numeric `VERSION`, chart
 `version`, `appVersion`, and changelog `X.Y.Z`, plus plain `vX.Y.Z`
@@ -334,26 +291,21 @@ conscious edits, never fights:
 - CSP changes happen in lockstep: `securityHeaders` in
   `internal/server/server.go`, `testsupport.SiteContentSecurityPolicy`,
   and every pinned test value move in the same commit.
-- Media enablement after the platform deploys: the fail-closed media
-  plumbing (reserved namespaces, root validation, concurrency budget) IS
-  the music/video path and stayed fail-closed until the reviewed root and
-  measured concurrency budget existed. Enabling media is chart
-  configuration plus discovery evidence — never code weakening. Issue #207
-  made the chart able to DESCRIBE an enabled deployment: the values schema
-  admits `media.enabled: true` only together with a reviewed profile, a named
-  claim, a mount path, and a measured transfer budget. On 2026-08-27 the
-  evidence landed (issue #182 — a Bound claim on a `local` volume, the tree
-  published, the delivery contract proven against the running binary, the
-  transfer budget measured) and the owner directed enablement, so the shipped
-  defaults now SATISFY that conditional rather than decline it. The
-  conditional itself is unchanged, and `scripts/ci/chart-media-pin.sh` still
-  pins three directions — the default render as exactly one read-only media
-  volume, every incomplete enablement refused by name, and an explicit
-  `media.enabled=false` rendering no media at all. Turning media off stays a
-  values override, never a code change. The gallery reads its items from a runtime `gallery/v1`
-  manifest on that volume when one is served and falls back to the vendored
-  bootstrap set when it is not, so publishing media becomes an operator file
-  copy with no git, CI, or release consequence (`docs/media-manifest.md`).
+- Media enablement: the fail-closed media plumbing (reserved namespaces,
+  root validation, concurrency budget) IS the music/video path. Enabling
+  media is chart configuration plus discovery evidence — never code
+  weakening: the values schema admits `media.enabled: true` only together
+  with a reviewed profile, a named claim, a mount path, and a measured
+  transfer budget, and the shipped defaults now SATISFY that conditional
+  rather than decline it. The conditional itself is unchanged, and
+  `scripts/ci/chart-media-pin.sh` still pins three directions — the default
+  render as exactly one read-only media volume, every incomplete enablement
+  refused by name, and an explicit `media.enabled=false` rendering no media
+  at all. Turning media off stays a values override, never a code change.
+  The gallery reads its items from a runtime `gallery/v1` manifest on that
+  volume when one is served and falls back to the vendored bootstrap set
+  when it is not, so publishing media becomes an operator file copy with no
+  git, CI, or release consequence (`docs/media-manifest.md`).
 - Ingress provider changes: a values override of the `ingress` block per
   the deployment-provider contract.
 
@@ -367,9 +319,7 @@ defaults, and the coverage floor only rises.
 Every substantive PR receives an independent adversarial review BEFORE it
 leaves draft. The mechanism is vendor-agnostic: any capable agent — or a
 human — runs it with git, a shell, and this repository's own gates; no
-step assumes a particular AI tool. (Claude sessions load this contract
-automatically through CLAUDE.md; other agents read AGENTS.md directly.
-Neither gets a different protocol.)
+step assumes a particular AI tool, and no vendor gets a different protocol.
 
 **Review depth is risk-based.** Not every PR earns identical depth:
 
@@ -399,11 +349,9 @@ than identity, so any current or future model name is valid there and
 this contract pins no model roster. No rule compares the reviewer's
 name to the author's: that textual same-lane denial retired with issue
 #64, because a reviewer satisfies it by writing a different-looking
-signature — evidence that the reviewer can type, and nothing else.
-Same-lane review is therefore permitted and stays legible, and the
-actor is what a reader verifies. The reviewer works in a disposable
-worktree at the PR head, stays read-only toward the author's workspace,
-reverts every experiment, and removes the worktree afterward.
+signature. Same-lane review is therefore permitted and stays legible, and
+the actor is what a reader verifies. The reviewer works disposably, per
+"Parallel agents in one checkout".
 
 **Exact-head receipt.** The receipt binds one exact head, and the bot
 actor above is what makes it a second party rather than a self-approval.
@@ -440,8 +388,8 @@ owner merges first, record a post-merge audit and classify—not erase—the gap
    finding.
 3. Probe for vacuity: a guard that cannot fail is no guard. For each new
    or changed assertion, demonstrate at least one input that turns it
-   red (the kill matrix usually supplies it); an assertion no input can
-   fail is decorative, and decorative checks are findings.
+   red; an assertion no input can fail is decorative, and decorative
+   checks are findings.
 4. Probe for flakes: run the focused checks the findings need, plus the
    race detector where the language has one, and re-run the full suite
    when there is specific cause. Any nondeterminism is a finding naming
@@ -518,10 +466,9 @@ merges. No third distinct-context pass is required.
   (Claude Opus 5), `opus4.8` (Claude Opus 4.8), `sonnet5` (Claude
   Sonnet 5, color `0EA5E9`). The body signature must match the label
   (`- Fable5` ↔ `fable5`), and adversarial-review verdicts carry the
-  same identity as `- <Agent> (adversarial reviewer)`.
-  These repositories are worked by several frontier models in parallel
-  lanes; labels plus signatures keep authorship auditable with no owner
-  relay. When a new model joins, its label — description "Authored by
+  same identity as `- <Agent> (adversarial reviewer)`. Labels plus
+  signatures keep authorship auditable across the parallel frontier-model
+  lanes with no owner relay. When a new model joins, its label — description "Authored by
   <model>" — is created in ALL THREE repositories before its first PR,
   per the one-taxonomy rule.
 - **PR budget.** At most 3 agent PRs open in this repository by default;
@@ -546,11 +493,10 @@ merges. No third distinct-context pass is required.
   Infrastructure/tool outages are reported as infrastructure failures; they do
   not waive a real product failure or justify lowering this repository's
   coverage floor. When Dependabot splits a version-locked pair into
-  separate PRs — precedents: `github/codeql-action` `init` + `analyze`
-  (#53/#54); `svelte` + `svelte-check` (#51/#52) — one agent PR
-  supersedes BOTH, bundling the pair AND fixing the root cause in the
-  same commit with a `dependabot.yml` `groups:` stanza scoped to that
-  pair, so the split cannot recur (merged precedents #56, #58).
+  separate PRs, one agent PR supersedes BOTH, bundling the pair AND fixing
+  the root cause in the same commit with a `dependabot.yml` `groups:` stanza
+  scoped to that pair, so the split cannot recur; the split and merged
+  precedents are listed in `docs/agent-git-mechanics.md`.
 - **Merge readiness.** Draft remains Draft until every check is successful at
   the exact head, the base equals current protected `main`, all discussions and
   findings are resolved, a fresh exact-head APPROVE receipt exists, the next patch
@@ -565,22 +511,18 @@ merges. No third distinct-context pass is required.
 
 Several agents — different models and vendors, executors and reviewers — work
 this repository at once, sometimes on one machine. Git worktrees are the
-isolation mechanism, and these rules are part of the contract: they bind every
-lane whether or not any vendor-specific tooling is present.
+isolation mechanism, and these rules bind every lane whether or not any
+vendor-specific tooling is present.
 
 - **The shared checkout is nobody's workspace.** It stays on `main`, clean, and
   is used only for coordination — `git fetch`, worktree creation and removal,
   ceremony reads. No agent builds, edits, or checks out a branch there. It may
   lag `origin/main` harmlessly: every actor works from `origin/main` after its
   own `git fetch origin`, never from a local `main`.
-- **One worktree per acting context, named for its lane.** The preferred
-  grammar for new branches is `<lane>-<effort>/<issue#>-<topic>` (e.g.
-  `sonnet5-med/155-rail-idle-ink`), carrying the dispatched reasoning effort
-  (`low | med | high | max`) and the tracking issue; `<lane>` is parsed by
-  longest match against the repository-registered label set, then the
-  `-<effort>` suffix. Executors run
+- **One worktree per acting context, named for its lane.** Branch names
+  follow the grammar in "Working a change end to end" step 2. Executors run
   `git worktree add .claude/worktrees/<lane>-<effort>-<issue#>-<topic> -b
-  <lane>-<effort>/<issue#>-<topic> origin/main`. The legacy
+  <lane>-<effort>/<issue#>-<topic> origin/main`; the legacy
   `git worktree add .claude/worktrees/<lane>-<topic> -b <lane>/<topic>
   origin/main` form remains accepted during the transition. Either way, the
   directory and the branch carry the SAME lane, because the
@@ -614,8 +556,8 @@ lane whether or not any vendor-specific tooling is present.
   stagger the heaviest batteries when many lanes run at once. Browser-lane runs
   on a shared machine must also set `SITE_PORT` to a private port, because
   `frontend/playwright.config.mjs` defaults to 8080 with `reuseExistingServer`
-  outside CI, and cross-lane servers were measured twice in one wave
-  (2026-08-24) answering another lane's probes.
+  outside CI, and cross-lane servers have been measured answering another
+  lane's probes.
 
 ## Working a change end to end
 
@@ -685,18 +627,16 @@ committer, on every outgoing commit — is exactly:
 
 - Agent commits are SSH-signed per command with the owner-registered
   signing key, never via `git config`. **Select that key explicitly.** The
-  obvious form is broken and an earlier revision of this contract taught
-  it:
+  obvious form is broken:
 
       # BROKEN whenever more than one ed25519 key is loaded
       -c user.signingkey="key::$(ssh-add -L | grep ssh-ed25519)"
 
   `grep` matches EVERY ed25519 line, so `key::` receives a multi-line
-  value and signing fails on a malformed key. This is not an exotic
-  setup — any agent that also loads a deploy or push key hits it, and
-  four sessions hit it in a single day. Ask GitHub which key is
-  registered for SIGNING, intersect that with what the agent actually
-  holds, and require exactly one match. That selection names no key
+  value and signing fails on a malformed key — not an exotic setup, and
+  `docs/agent-git-mechanics.md` records how often it has bitten. Ask GitHub
+  which key is registered for SIGNING, intersect that with what the agent
+  actually holds, and require exactly one match. That selection names no key
   comment, no hostname, and no ordering, so it works unchanged from any
   machine the owner signs on:
 
@@ -718,8 +658,7 @@ committer, on every outgoing commit — is exactly:
 
   Every agent commit must show as Verified. Signature enforcement on
   `main` is a protected-branch setting, not repository-wide, so it never
-  blocks the owner's own merges from a phone or another machine that
-  lacks this key.
+  blocks the owner's own merges from a machine without this key.
 - **Verifying a signature locally needs a SPACE-FREE principal — and the
   negative control lies when it is wrong.** Local verification reads an
   allowed-signers file whose first field is a principal:
@@ -729,17 +668,14 @@ committer, on every outgoing commit — is exactly:
       git -c gpg.ssh.allowedSignersFile="${allowed}" \
           log --format='%H %G? %GS' -1 <sha>
 
-  Use the BARE email. Writing `Samuel Naranjo <39077795+snaraj@…>` makes
-  ssh read the space as a field break, report `line 1: invalid key`, and
-  match nothing. That is the trap: a genuine WRONG-KEY negative control
-  also reports `No principal matched.`, so the two failures are
-  indistinguishable at the verdict line and a malformed file silently
-  false-passes the negative control while proving nothing at all. Run
-  BOTH controls and require them to DIFFER — the positive control must
-  print `G` (`Good "git" signature for <principal>`), and the negative
+  Use the BARE email: a name-plus-angle-brackets principal makes ssh read
+  the space as a field break and match nothing, and that failure is
+  indistinguishable from a genuine wrong key. Run BOTH controls and require
+  them to DIFFER — the positive control must print `G`, and the negative
   control, with only some OTHER key in the file, must print `U`. If the
   positive control is not `G`, the file is broken; repair it before
-  believing anything the negative one says.
+  believing anything the negative one says. `docs/agent-git-mechanics.md`
+  records the trap in full.
 - EVERY authorized commit runs under the same pinned environment. Agents do
   not amend, rebase, cherry-pick onto a published branch, or rewrite history;
   use additive commits or a fresh branch from current main.
@@ -812,39 +748,26 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   profile — the ONLY exclusion, and it may never grow to cover
   production packages. Ratchet only (requirement 7).
 - **Perf budgets are tests.** Payload caps ship as pinned suite
-  assertions, so a budget regression is a red build, never a
-  discussion: the panels API pins `MaxIndexResponseBytes` = 4096 and
-  `MaxPanelResponseBytes` = 131072 — raised from 32768 by the owner on
-  2026-08-24, because full-depth token-usage history structurally reaches
-  104,508 bytes served with the v2 models section (issue #170 measured it;
-  the 115,981 figure recorded here beforehand was a projection) and the old
-  gate,
-  chosen before any real content existed, would have refused exactly the
-  documents the sealed-data pipeline exists to deliver. It is now the same
-  NUMBER as `seal.MaxSealedBytes`, which means the serve step no longer hides
-  a smaller ceiling than the transport steps — it does NOT mean one ceiling
-  governs both, and reading it that way was a finding of the 2026-08-25
-  round-4 review. The two bound different bytes: the sealed FILE versus the
-  finished ENVELOPE, which also carries the embedded snapshot, measured at
-  +875 bytes for the maximal admissible document. A file at exactly the
-  transport ceiling is refused at serve time, and the refusal — never a
-  truncation — is what the guarantee actually rests on. A budget the owner
-  revises is still a budget: the bound
-  stays refuse-not-truncate and stays pinned
-  (`TestResponsesStayWithinTheOwnerBudgets`,
+  assertions, so a budget regression is a red build, never a discussion:
+  the panels API pins `MaxIndexResponseBytes` = 4096 and
+  `MaxPanelResponseBytes` = 131072. That second cap is the same NUMBER as
+  `seal.MaxSealedBytes` and NOT the same ceiling — the two bound different
+  bytes, the sealed FILE versus the finished ENVELOPE, so a file at exactly
+  the transport ceiling is refused at serve time. A budget the owner
+  revises is still a budget: the bound stays refuse-not-truncate and stays
+  pinned (`TestResponsesStayWithinTheOwnerBudgets`,
   `internal/panels/handler_test.go`), and construction/refresh refuse
   over-budget payloads instead of serving them. Every new surface lands
-  with its caps pinned the same way.
+  with its caps pinned the same way; `docs/panels-invariants.md` records
+  how the current numbers were measured and set.
 - **Ratchet pairs.** When a stated requirement and shipped behavior
   disagree across lanes, record the gap loudly instead of greenwashing
   it: one green test pins current behavior, and a paired
   expected-failure test asserts the pending contract, flipping the
   suite red the day the implementation tightens — which forces the
-  marker's removal and turns the note into an enforced rule. The
-  canonical exemplar lives in the platform repository
-  (`tests/security/test_containerd_cri_health_contract_matrix.py`); Go
-  suites here express the same pair as a behavior pin plus a named
-  pending-contract test documented in its comment.
+  marker's removal and turns the note into an enforced rule. Go suites here
+  express that pair as a behavior pin plus a named pending-contract test
+  documented in its comment.
 - **Secret scan, both modes.** `gitleaks git` (full history) AND
   `gitleaks dir` (working tree) run before every push — the same scans
   CI runs. Exceptions live only in `.gitleaksignore` as commit-scoped
@@ -864,52 +787,32 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   `dependency-review` (PRs only; fails on high severity), `application`
   (toolchain pinned AND verified — Node 24.19.0, npm 11.17.0,
   Go 1.26.6; frontend check/test/build; gofmt/vet/tests/race; the
-  coverage floor), `chart` (the ingress peer-identity pin,
-  `scripts/ci/chart-ingress-pin.sh`; the whole-render outbound-allowance
-  census, `scripts/ci/chart-egress-pin.sh` — exactly two egress rules
-  (TCP/443, and cluster DNS over UDP+TCP/53), pinned as whole sub-trees and
-  proven refusable against 31 text and 66 census mutations, replacing the
-  total deny the owner retired on 2026-08-27; the media enablement pin,
-  `scripts/ci/chart-media-pin.sh` — media on by default as exactly one
-  read-only volume at both levels, an incompletely specified enablement
-  unrepresentable, and no media at all when it is explicitly disabled;
-  the panels storage pin, `scripts/ci/chart-storage-pin.sh`;
-  helm lint + render at
-  `--kube-version v1.36.0`; the numeric VERSION ↔ numeric chart `version` ↔
-  numeric `appVersion` ↔ plain-v chart `image.tag` four-way lock, plus a render
-  assertion that the emitted reference still carries a full digest),
-  `container` (PRs only, like `dependency-review`; both production
-  architectures built, never published). `container` remains a REQUIRED
-  pull-request check: what it no longer does is rebuild the identical tree a
-  second time on the main push, where it gated nothing — squash/rebase-only
-  merges under strict required checks land the exact tree it already built,
-  and the released bytes are still built, scanned, signed and attested by
-  `release-publisher.yml`. `EXPECTED_MAIN_JOBS` in
-  `scripts/ci/release_contract.py` therefore expects `container` and
+  coverage floor), `chart` (the four chart pin scripts; helm lint + render
+  at `--kube-version v1.36.0`; the numeric VERSION ↔ numeric chart
+  `version` ↔ numeric `appVersion` ↔ plain-v chart `image.tag` four-way
+  lock, plus a render assertion that the emitted reference still carries a
+  full digest), `container` (PRs only, like `dependency-review`; both
+  production architectures built, never published). `container` remains a
+  REQUIRED pull-request check; `EXPECTED_MAIN_JOBS` in
+  `scripts/ci/release_contract.py` expects `container` and
   `dependency-review` `skipped` on a main push and the other four
-  successful, exact in both directions.
+  successful, exact in both directions. What each chart pin proves, and why
+  the two PR-only jobs carry no main trigger, is in `docs/ci-map.md`.
 - **coverage-badges** — `main` pushes only: recomputes both coverages
   with the gate's own recipe and force-updates the generated
   single-commit `badges` branch. Badge numbers are CI-computed, never
   hand-edited; the badge publishes the identical number the gate
   enforced.
 - **browser-lanes.yml** — pull requests and manual dispatch (no `main` push
-  trigger, for the same reason `container` has none: the merged tree is the
-  tree these engines already rendered, and this lane reads nothing outside
-  that tree, so a repeat run measures identical bytes after merge authority
-  has been exercised): the rendering-lane smoke matrix (issue #26 stage 2).
-  One job installs the
-  exact pinned `@playwright/test` from the committed lockfile, restores the
-  engine cache keyed on that version, and runs five projects against the real
-  Go binary on localhost. It holds `contents: read` and nothing else, receives
-  no secret, and publishes nothing. Deliberately NOT a job in `pr-gate.yml`:
-  the release publisher authorizes against that workflow's exact job
-  inventory. One honest limit: the engine builds arrive from Playwright's CDN
-  over TLS and are not checksum-verified the way
-  `scripts/ci/install-tools.sh` verifies every other third-party binary,
-  because no per-build digest is published to verify against — what is pinned
-  is the exact runner version, whose tarball integrity IS in the lockfile and
-  which selects the engine revisions.
+  trigger): the rendering-lane smoke matrix (issue #26 stage 2), five
+  projects against the real Go binary on localhost. It holds `contents:
+  read` and nothing else, receives no secret, and publishes nothing.
+  Deliberately NOT a job in `pr-gate.yml`: the release publisher authorizes
+  against that workflow's exact job inventory. One honest limit: the engine
+  builds are not checksum-verified the way `scripts/ci/install-tools.sh`
+  verifies every other third-party binary, because no per-build digest is
+  published — the exact pinned runner version, whose tarball integrity IS in
+  the lockfile, is what selects and bounds them (`docs/ci-map.md`).
 - **codeql.yml** — pull requests, `main` pushes, weekly cron.
 - **release-after-main.yml** — success-only exact-SHA main-CI completion;
   performs no publication mutation and explicitly dispatches the publisher
@@ -917,32 +820,24 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   It re-proves the gate's published transition class against an anchor the
   verdict cannot choose — not from the claimed base alone, which is
   forgeable — and gates every release-effect step on `artifact`; a
-  no-artifact range logs its verdict and dispatches nothing.
-  The release boundary is recovered for both squash and multi-commit rebase
-  pushes. Distinct main SHAs share no cancellation group.
-- **release-publisher.yml** — explicit dispatch on protected `main`; a
-  read-only authorization job GETs and validates the exact successful PR-gate
-  push run, its exact required job inventory, and the separate exact-SHA
-  successful CodeQL main run/jobs before the source checkout and privileged
-  publication job. Exact source/tag/lock checks, checksum-pinned vulnerability
-  gates including development dependencies, post-push image/chart alias
-  resolution, raw per-platform SBOM binding, exact one-asset manifest staging,
-  and terminal immutable Release/manifest/tag state remain;
-  an ordinary manual/unmerged dispatch, skip flag, or force path cannot
-  publish (requirement 10).
+  no-artifact range logs its verdict and dispatches nothing. Distinct main
+  SHAs share no cancellation group.
+- **release-publisher.yml** — explicit dispatch on protected `main`. Its
+  read-only authorization job, exact source/tag/lock checks, checksum-pinned
+  vulnerability gates including development dependencies, post-push
+  image/chart alias resolution, raw per-platform SBOM binding, exact
+  one-asset manifest staging, and terminal immutable Release/manifest/tag
+  state are stated under Releases above; an ordinary manual/unmerged
+  dispatch, skip flag, or force path cannot publish (requirement 10).
 - **release-audit.yml** — weekly and manual, read-only audit of the latest
   immutable Release. It re-binds the successful run, annotated tag, exact
   manifest bytes, image/chart semantic aliases and digests, signatures,
   per-platform provenance/SBOM, chart source tree, and final image scan.
-- **GitHub event basis.** GitHub documents that `GITHUB_TOKEN`-created refs
-  suppress recursive workflow events except explicit dispatch, that
-  `workflow_run` fires regardless of conclusion and uses default-branch
-  context, and that concurrency ordering is not a release ledger. Therefore
-  the success check, payload `head_sha`, tag-ref dispatch, and independent
-  per-SHA paths are load-bearing. See
-  <https://docs.github.com/en/actions/concepts/security/github_token>,
-  <https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run>,
-  and <https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency>.
+- **GitHub event basis.** Documented GitHub behaviour for
+  `GITHUB_TOKEN`-created refs, `workflow_run` context, and concurrency
+  ordering is why the success check, payload `head_sha`, tag-ref dispatch,
+  and independent per-SHA paths are load-bearing. `docs/ci-map.md` states
+  each documented behaviour and cites the three references.
 - **Zero-spend guardrails.** Workflows declare top-level
   `permissions: {}` with narrow per-job read grants;
   `persist-credentials: false` on every checkout; GitHub-hosted
@@ -981,12 +876,10 @@ and tests re-derive per repository (requirement 5):
   a progressive value (a dynamic viewport unit, `env()`, `color-mix()`)
   must have a fallback under it, either an earlier plain declaration of
   the same property or an `@supports` block whose base sits outside the
-  guard — because an unsupported value is DROPPED, so an unguarded one
-  degrades to nothing rather than to less; and a reading-mode block may
-  declare only custom properties and `color-scheme`, which is what makes
-  the zero-CLS theme switch structural instead of a promise.
-- **Rendering lanes, stage 2** (issue #26; owner-approved 2026-08-23
-  jointly with the sibling repository): `browser-lanes.yml` drives the
+  guard; and a reading-mode block may declare only custom properties and
+  `color-scheme`, which is what makes the zero-CLS theme switch structural
+  instead of a promise (`docs/panels-invariants.md`).
+- **Rendering lanes, stage 2** (issue #26): `browser-lanes.yml` drives the
   built binary through Chromium (Chrome and Edge), Firefox and WebKit
   (Safari and every iOS browser), each at a desktop viewport plus an
   Android and an iPhone one, asserting the same floors as MEASURED
@@ -994,10 +887,8 @@ and tests re-derive per repository (requirement 5):
   workflow on purpose: the publisher authorizes releases against
   `pr-gate.yml`'s exact job inventory, and a rendering smoke lane must
   not touch a release-authorization surface. The two halves answer
-  different questions and neither replaces the other — a source pin
-  binds the next build on every engine including the ones no runner
-  has, a lane proves this build survived a real cascade — so a floor
-  lands with both.
+  different questions and neither replaces the other, so a floor lands
+  with both.
 - **Zero CLS.** Theme switches and async data arrivals cause no layout
   shift; space for late content is reserved up front.
 - **Honest states.** Empty, loading, disabled, and unavailable states
@@ -1031,9 +922,8 @@ Structural promises of the panels subsystem, pinned by
   needs three things together — `PANELS_REFRESH=true`, the credential
   variables named by `keyEnvName` in `internal/panels/config/fetch.json`
   supplied as Secrets, and an egress allowance for that file's `hosts`
-  list — and that enablement was the SEPARATE owner-reviewed step of
-  standing audit item S2. The owner took it on 2026-08-27: the chart now
-  ships `panels.refresh.enabled: true` TOGETHER with the egress allowance,
+  list. Enablement is a separate owner-reviewed step, and the chart ships
+  `panels.refresh.enabled: true` TOGETHER with the egress allowance,
   because refresh without the allowance is a no-op and the allowance without
   refresh is an opening nothing uses, so the two move as one change or not at
   all. That allowance is EXACTLY two rules — TCP/443 to any address, and
@@ -1073,10 +963,8 @@ Structural promises of the panels subsystem, pinned by
   the gate proves it (issue #105): `release_contract.py` refuses a snapshot
   whose released ladder is not strictly descending with non-increasing dates,
   and refuses any base-to-head range that removes, reorders, duplicates, or
-  rewrites one byte of a released block. The gap it closes is a plausible
-  mechanical edit — an insertion that overwrites the heading below it, orphaning
-  a shipped release's entries under the next version's name, with every release
-  control still green. Exactly one narrow lift exists: a released heading's
+  rewrites one byte of a released block; `docs/release-classifier.md` records
+  the plausible mechanical edit this closes. Exactly one narrow lift exists: a released heading's
   DATE may move from one stated value to another through a reasoned line in
   `scripts/ci/changelog-correction-allowlist.txt`, which is spent the moment it
   lands. Nothing lifts a deletion, a reorder, or a rewritten entry.
@@ -1089,9 +977,5 @@ Structural promises of the panels subsystem, pinned by
   in `frontend/src/assets/fonts/` (currently a placeholder `.gitkeep` —
   no webfont has shipped yet). Where Jagex game art or intellectual property is
   used — the OSRS boss-log panel — the exact Fan Content Policy notice
-  accompanies it, word for word, pinned by a frontend test wherever it
-  renders:
-
-      Created using intellectual property belonging to Jagex Limited
-      under the terms of Jagex's Fan Content Policy. This content is
-      not endorsed by or affiliated with Jagex.
+  recorded in `ATTRIBUTION.md` accompanies it, word for word, pinned by a
+  frontend test wherever it renders.
