@@ -7,6 +7,14 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.65] - 2026-08-31
+
+### Changed
+- The grouped CodeQL workflow actions move from 4.37.8 to 4.37.9, carrying
+  CodeQL bundle 2.26.4. Both `init` and `analyze` stay on the same immutable
+  upstream commit, and the existing Dependabot group continues to update the
+  version-locked pair together.
+
 ## [0.1.64] - 2026-08-29
 
 ### Fixed
