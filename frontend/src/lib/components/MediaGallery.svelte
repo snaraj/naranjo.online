@@ -267,6 +267,11 @@
      so the lane is the tallest caption the CURRENT SET can render at the
      CURRENT width and an item change costs zero pixels. See the lane's own
      block in the markup and the stylesheet below.
+     The box asks the SET one question and the current item none: a set in
+     which nobody has anything to say reserves nothing, because an empty band
+     is dead space rather than a reservation (+12px of document height on the
+     vendored bootstrap gallery, MEASURED). Within one set the answer cannot
+     change, which is why the invariant above survives it.
 
   Each is stated again beside the declaration that carries it. -->
 <script lang="ts">
@@ -330,9 +335,31 @@
 
   /* Truthiness, not `!== undefined`: an empty string is as absent as a
      missing field for a reader, and rendering an empty row for one is the
-     "no blank fields" failure this exists to prevent. */
-  const hasCaption = $derived(Boolean(item.title) || Boolean(item.description));
+     "no blank fields" failure this exists to prevent.
+     It is a FUNCTION rather than a derivation because two different questions
+     now ask it — what THIS item has, and whether the SET has anything at all
+     (issue 265) — and two copies of "what counts as a caption" is how the
+     reserved lane and the rendered content drift apart. */
+  function hasCaptionCopy(candidate: MediaGalleryItem): boolean {
+    return Boolean(candidate.title) || Boolean(candidate.description);
+  }
+
+  const hasCaption = $derived(hasCaptionCopy(item));
   const hasMeta = $derived(hasCaption || item.link !== undefined);
+
+  /* WHETHER THERE IS A LANE TO RESERVE AT ALL (issue 265, coordinator ruling).
+     The reserved caption box is item-blind, and that is what stops an item
+     change moving the page — but a set in which NOBODY has anything to say
+     has nothing to hold open, and reserving for it charged the page a
+     constant empty band: MEASURED at +12px of document height on the vendored
+     bootstrap gallery, one section row gap for a zero-height box, which the
+     no-dead-space rule treats as a defect rather than as a rounding error.
+     This asks the SET, never the current item, so the D9 invariant is
+     untouched: within one set the answer cannot change, and the box either
+     exists for every item or for none of them. It moves only when the items
+     themselves are replaced — a manifest load, which is the one moment the
+     gallery is allowed to change shape. */
+  const captionedSet = $derived(items.some(hasCaptionCopy));
 
   /* An item's own intrinsic box when it declared one, the gallery's otherwise.
      This is the element's size HINT; the reserved frame comes from the
@@ -941,19 +968,26 @@
     width (a description wraps differently at 320px and at 1440px), so any
     length written down here would be right at one viewport and wrong at the
     next. Nothing is recomputed on an item change, because nothing about the
-    lane depends on which item is showing. -->
-  <div class="gallery-caption">
-    {#each items as shot, at (shot.key)}
-      <div
-        class="gallery-caption-lane"
-        data-current={at === index ? 'true' : undefined}
-        aria-hidden={at === index ? undefined : 'true'}
-      >
-        {#if shot.title}<p class="gallery-caption-title">{shot.title}</p>{/if}
-        {#if shot.description}<p class="gallery-caption-text">{shot.description}</p>{/if}
-      </div>
-    {/each}
-  </div>
+    lane depends on which item is showing.
+    THE ONE THING IT STILL ASKS is whether the SET has any caption at all: a
+    set in which nobody has anything to say has no lane to hold open, and
+    reserving an empty band for it is dead space rather than a reservation.
+    That question is the set's, never the current item's, so an item change
+    still moves nothing — see captionedSet. -->
+  {#if captionedSet}
+    <div class="gallery-caption">
+      {#each items as shot, at (shot.key)}
+        <div
+          class="gallery-caption-lane"
+          data-current={at === index ? 'true' : undefined}
+          aria-hidden={at === index ? undefined : 'true'}
+        >
+          {#if shot.title}<p class="gallery-caption-title">{shot.title}</p>{/if}
+          {#if shot.description}<p class="gallery-caption-text">{shot.description}</p>{/if}
+        </div>
+      {/each}
+    </div>
+  {/if}
 
   <dialog
     bind:this={dialogEl}

@@ -2656,6 +2656,29 @@ test("the caption's BOX is reserved for every item; content absent when the item
     /<div class="gallery-caption">\s*\{#each items as shot, at \(shot\.key\)\}/,
     'the caption box no longer holds one lane per item, so it is sized by whichever item is showing'
   );
+  /* THE ONE QUESTION THE BOX ASKS IS THE SET'S. A set nobody captioned has no
+     lane to hold open, and reserving one charged the page a constant empty
+     band (+12px on the vendored bootstrap gallery). The guard reads `items`,
+     never `item`, so within a set the answer cannot change and an item change
+     still moves nothing — a guard on the current item would be the defect
+     itself, which is what the assertion above refuses. */
+  assert.match(
+    mediaGallery,
+    /\{#if captionedSet\}\s*<div class="gallery-caption">/,
+    'the caption box is reserved for a set with nothing to say, which is an empty band'
+  );
+  assert.match(
+    galleryCode,
+    /const captionedSet = \$derived\(items\.some\(hasCaptionCopy\)\);/,
+    'whether a caption box exists is not derived from the set'
+  );
+  /* ONE DEFINITION of what counts as a caption, asked by both questions: two
+     copies is how the reserved lane and the rendered content drift apart. */
+  assert.match(
+    galleryCode,
+    /function hasCaptionCopy\(candidate: MediaGalleryItem\): boolean \{\s*return Boolean\(candidate\.title\) \|\| Boolean\(candidate\.description\);/,
+    'the caption rule is not stated in one place'
+  );
   assert.match(mediaGallery, /data-current=\{at === index \? 'true' : undefined\}/);
   assert.match(mediaGallery, /aria-hidden=\{at === index \? undefined : 'true'\}/, 'every item’s caption is announced at once');
   const captionStyle = styleBlock(mediaGallery);
@@ -2675,7 +2698,7 @@ test("the caption's BOX is reserved for every item; content absent when the item
   // The lightbox's container stays conditional: it is a modal surface with
   // nothing below it to move, so an item with no metadata renders no band.
   assert.match(mediaGallery, /\{#if hasMeta\}\s*<div class="gallery-lightbox-meta">/);
-  assert.match(mediaGallery, /const hasCaption = \$derived\(Boolean\(item\.title\) \|\| Boolean\(item\.description\)\)/);
+  assert.match(mediaGallery, /const hasCaption = \$derived\(hasCaptionCopy\(item\)\)/);
   assert.match(mediaGallery, /const hasMeta = \$derived\(hasCaption \|\| item\.link !== undefined\)/);
   /* No default anywhere on the path: a ?? or a literal placeholder is how an
      honest empty state becomes a fabricated one. Both names the component
