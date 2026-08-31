@@ -15,7 +15,10 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   upstream commit, and the existing Dependabot group continues to update the
   version-locked pair together. A repository-wide integrity check now rejects
   either role drifting to a different full SHA or version comment across both
-  GitHub-supported workflow extensions and case-insensitive action identity.
+  GitHub-supported workflow extensions, every local composite-action
+  entrypoint, and case-insensitive action identity. Its regression suite
+  exercises extension discovery and composite wrappers on real temporary
+  filesystem trees, so an in-memory decoy cannot make either boundary vacuous.
 
 ## [0.1.64] - 2026-08-29
 

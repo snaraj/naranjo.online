@@ -64,12 +64,16 @@ ALL of its own:
   rule 3  `jobs.<id>.steps[*].shell`, `jobs.<id>.defaults.run.shell`, and the
           workflow-level `defaults.run.shell`.
 
-One boundary is worth stating because it is a scope this gate does NOT cover:
-a composite action (`action.yml`) has its own `runs.steps[*]` carrying `shell:`
-and `continue-on-error:`. This gate's subject is `.github/workflows/*.yml`, and
-this repository ships no composite action. A repository that adds one is adding
-a surface these three rules do not read -- extend the sweep then, rather than
-assuming it is covered.
+One boundary is worth stating because most of this gate does NOT cover it: a
+composite action (`action.yml` or `action.yaml`) has its own `runs.steps[*]`
+carrying `shell:` and `continue-on-error:`. Rules 1-3 remain workflow rules,
+and this repository ships no composite action today. The CodeQL lockstep rule
+is deliberately broader: it scans every local composite entrypoint as well as
+both workflow extensions, because a local `uses:` wrapper can displace a direct
+CodeQL role while an unreachable direct call remains as a version-matched
+decoy. A repository that adds a composite action is still adding a surface
+rules 1-3 do not read -- extend those rules then, rather than assuming they are
+covered.
 
 WHAT THIS DELIBERATELY DOES NOT DO -- READ THIS BEFORE "COMPLETING" IT.
 
@@ -251,7 +255,9 @@ from typing import NoReturn
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
-WORKFLOWS = ROOT / ".github" / "workflows"
+GITHUB = ROOT / ".github"
+WORKFLOWS = GITHUB / "workflows"
+ACTIONS = GITHUB / "actions"
 INSTALL_TOOLS = HERE / "install-tools.sh"
 ALLOWLIST = HERE / "workflow-integrity-allowlist.txt"
 AGENTS = ROOT / "AGENTS.md"
@@ -1479,9 +1485,19 @@ def lift_instruction(workflow: str, rule: str, where: str) -> str:
     )
 
 
-def workflow_paths() -> list[Path]:
+def workflow_paths(workflows: Path = WORKFLOWS) -> list[Path]:
     """Return every workflow extension GitHub accepts."""
-    return sorted((*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")))
+    return sorted((*workflows.glob("*.yml"), *workflows.glob("*.yaml")))
+
+
+def local_action_paths(actions: Path = ACTIONS) -> list[Path]:
+    """Return every local composite-action entrypoint GitHub accepts."""
+    return sorted((*actions.rglob("action.yml"), *actions.rglob("action.yaml")))
+
+
+def codeql_surface_paths(github: Path = GITHUB) -> list[Path]:
+    """Return every repository file that can execute a CodeQL action role."""
+    return workflow_paths(github / "workflows") + local_action_paths(github / "actions")
 
 
 def all_workflows() -> list[Workflow]:
@@ -1492,12 +1508,15 @@ def agents_text() -> str:
     return AGENTS.read_text(encoding="utf-8")
 
 
-def codeql_lockstep_problems(workflow_texts: dict[Path, str] | None = None) -> list[str]:
-    """Report any CodeQL init/analyze reference that leaves one shared release."""
+def codeql_lockstep_problems(
+    action_texts: dict[Path, str] | None = None,
+    github: Path = GITHUB,
+) -> list[str]:
+    """Report any executable CodeQL role that leaves one shared release."""
     texts = (
-        workflow_texts
-        if workflow_texts is not None
-        else {path: path.read_text(encoding="utf-8") for path in workflow_paths()}
+        action_texts
+        if action_texts is not None
+        else {path: path.read_text(encoding="utf-8") for path in codeql_surface_paths(github)}
     )
     references: list[tuple[str, str, str, Path, int]] = []
     problems: list[str] = []
@@ -1620,10 +1639,9 @@ class WorkflowIntegrityTests(unittest.TestCase):
                 candidate[codeql] = mutated
                 self.assertTrue(codeql_lockstep_problems(candidate))
 
-    def test_codeql_lockstep_reads_the_yaml_extension(self):
-        """A second valid workflow extension cannot hide another release."""
-        texts = {path: path.read_text(encoding="utf-8") for path in workflow_paths()}
-        texts[WORKFLOWS / "codeql-shadow.yaml"] = (
+    def test_codeql_lockstep_discovers_the_yaml_extension_on_disk(self):
+        """Real filesystem discovery cannot omit GitHub's second extension."""
+        shadow = (
             "name: CodeQL shadow\n"
             "on:\n"
             "  workflow_dispatch:\n"
@@ -1637,7 +1655,19 @@ class WorkflowIntegrityTests(unittest.TestCase):
             "      - uses: github/codeql-action/analyze@"
             "db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8\n"
         )
-        self.assertTrue(codeql_lockstep_problems(texts), "the .yaml shadow survived")
+        with tempfile.TemporaryDirectory() as directory:
+            github = Path(directory) / ".github"
+            workflows = github / "workflows"
+            workflows.mkdir(parents=True)
+            (workflows / "codeql.yml").write_text(
+                (WORKFLOWS / "codeql.yml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (workflows / "codeql-shadow.yaml").write_text(shadow, encoding="utf-8")
+            self.assertTrue(
+                codeql_lockstep_problems(github=github),
+                "the on-disk .yaml shadow was not discovered",
+            )
 
     def test_codeql_lockstep_normalizes_repository_case_and_sees_past_a_decoy(self):
         """GitHub resolves owner/repository case-insensitively."""
@@ -1666,6 +1696,50 @@ class WorkflowIntegrityTests(unittest.TestCase):
         self.assertEqual(count, 1, "did not construct the case-variant decoy mutant")
         texts[codeql] = mutated
         self.assertTrue(codeql_lockstep_problems(texts), "the case-variant decoy survived")
+
+    def test_codeql_lockstep_reads_local_composites_behind_a_direct_decoy(self):
+        """A local action cannot hide the executed role behind a matched decoy."""
+        original = (WORKFLOWS / "codeql.yml").read_text(encoding="utf-8")
+        pattern = re.compile(
+            r"(?m)^(\s*)- name: Initialize CodeQL\n"
+            r"(\s*)uses: github/codeql-action/init@([0-9a-f]{40})"
+            r"\s+#\s*(v[0-9]+\.[0-9]+\.[0-9]+)\s*$"
+        )
+
+        def wrap_real_step(match: re.Match[str]) -> str:
+            item_indent, uses_indent, current_sha, current_version = match.groups()
+            return (
+                f"{item_indent}- name: Unreachable current-release decoy\n"
+                f"{uses_indent}if: ${{{{ github.repository == 'never/real' }}}}\n"
+                f"{uses_indent}uses: github/codeql-action/init@{current_sha} "
+                f"# {current_version}\n"
+                f"{item_indent}- name: Initialize CodeQL through a local action\n"
+                f"{uses_indent}uses: ./.github/actions/codeql-init"
+            )
+
+        mutated, count = pattern.subn(wrap_real_step, original, count=1)
+        self.assertEqual(count, 1, "did not construct the local-wrapper decoy mutant")
+        composite = (
+            "name: Initialize CodeQL\n"
+            "description: Exercise the complete executable action namespace\n"
+            "runs:\n"
+            "  using: composite\n"
+            "  steps:\n"
+            "    - uses: github/codeql-action/init@"
+            "db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            github = Path(directory) / ".github"
+            workflows = github / "workflows"
+            action = github / "actions" / "codeql-init"
+            workflows.mkdir(parents=True)
+            action.mkdir(parents=True)
+            (workflows / "codeql.yml").write_text(mutated, encoding="utf-8")
+            (action / "action.yml").write_text(composite, encoding="utf-8")
+            self.assertTrue(
+                codeql_lockstep_problems(github=github),
+                "the local composite's old executable CodeQL role survived",
+            )
 
     def test_the_reader_ignores_constructs_inside_a_run_block(self):
         """A `shell:` line inside a shell script is text, not a step key.
