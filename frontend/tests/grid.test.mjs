@@ -27,6 +27,7 @@ import {
   seriesCells,
   seriesViews,
   stripColumns,
+  stripIndexAt,
   toColumns,
   viewColumns,
   weekdayAxis,
@@ -997,4 +998,107 @@ test('the grid strip wires its keyboard to that one function and nothing else', 
     /ArrowLeft:\s*-gridRows/,
     'the component must not carry its own copy of the step table'
   );
+});
+
+/* THE HOVER MUST NOT BLEED (owner defect report, 2026-08-31: hovering near the
+ * edge of a cell showed the NEIGHBOUR cell's reading).
+ *
+ * The strip resolves a point by arithmetic rather than by hit-testing every
+ * box, and the slot it floors into is one cell PLUS the gap after it — so a
+ * point in the gap used to resolve to the cell before it, unconditionally.
+ * That forgiveness is the 44px reach a 10px cell cannot otherwise offer a
+ * finger, and it is a wrong answer for a mouse, which is pixel-exact and whose
+ * reader is looking straight at the cell they are not over.
+ *
+ * Both readers are executed below against ONE geometry, which is what makes
+ * this a real distinction rather than two restatements of one rule: the same
+ * gap point must answer differently depending on who asked. */
+const strip = {
+  left: 100,
+  top: 200,
+  // A 10px cell with a 3px gap after it: the shipped token pair.
+  pitchX: 13,
+  pitchY: 13,
+  cellWidth: 10,
+  cellHeight: 10,
+  columns: 4,
+  count: 4 * gridRows,
+};
+
+test('a point ON a cell names that cell for every pointer (issue 219)', () => {
+  // The unambiguous case, stated first so the two rules below are known to
+  // differ only where they are meant to.
+  for (const pointer of ['fine', 'coarse']) {
+    assert.equal(stripIndexAt({ x: 101, y: 201 }, strip, pointer), 0, `${pointer} lost cell 0`);
+    // Column-major: the child gridRows along is one column across.
+    assert.equal(stripIndexAt({ x: 114, y: 201 }, strip, pointer), gridRows);
+    assert.equal(stripIndexAt({ x: 109, y: 209 }, strip, pointer), 0, `${pointer} lost the cell's last pixel`);
+  }
+});
+
+test('a point in the GAP is forgiven for a finger and refused for a mouse (owner, 2026-08-31)', () => {
+  /* x 111 is 11px into the first slot: past the 10px cell, inside the 3px gap
+     before the next column. This is the exact point the owner's report
+     describes, and it is the assertion that is RED on the arithmetic that
+     shipped — which floored every pointer alike into cell 0. */
+  assert.equal(
+    stripIndexAt({ x: 111, y: 201 }, strip, 'fine'),
+    -1,
+    'a mouse in the gap was handed the neighbouring cell — the bleed the owner reported'
+  );
+  assert.equal(
+    stripIndexAt({ x: 111, y: 201 }, strip, 'coarse'),
+    0,
+    'a finger lost the reach that a 10px target depends on'
+  );
+  // The same distinction on the other axis: the gap between two rows.
+  assert.equal(stripIndexAt({ x: 101, y: 211 }, strip, 'fine'), -1);
+  assert.equal(stripIndexAt({ x: 101, y: 211 }, strip, 'coarse'), 0);
+});
+
+test('a point outside the strip clamps for a finger and resolves nothing for a mouse', () => {
+  // A finger a little past the last column is still reaching for the last
+  // column; a mouse there is simply not on the grid.
+  const lastColumn = (strip.columns - 1) * gridRows;
+  assert.equal(stripIndexAt({ x: 400, y: 201 }, strip, 'coarse'), lastColumn);
+  assert.equal(stripIndexAt({ x: 400, y: 201 }, strip, 'fine'), -1);
+  // BEFORE the strip: the floor of a negative offset is a negative slot, which
+  // must not fall back onto cell zero for the exact pointer.
+  assert.equal(stripIndexAt({ x: 90, y: 201 }, strip, 'coarse'), 0);
+  assert.equal(stripIndexAt({ x: 90, y: 201 }, strip, 'fine'), -1);
+  assert.equal(stripIndexAt({ x: 101, y: 100 }, strip, 'fine'), -1);
+});
+
+test('a slot past the last cell is no cell, and a degenerate geometry answers nothing', () => {
+  // A short final column leaves slots the strip has no cells for; both readers
+  // refuse them rather than indexing off the end.
+  const short = { ...strip, count: 3 * gridRows + 2 };
+  assert.equal(stripIndexAt({ x: 140, y: 240 }, short, 'coarse'), -1);
+  assert.equal(stripIndexAt({ x: 140, y: 240 }, short, 'fine'), -1);
+  // A grid nothing has measured yet: no pitch, no answer, for either reader.
+  for (const pointer of ['fine', 'coarse']) {
+    assert.equal(stripIndexAt({ x: 101, y: 201 }, { ...strip, pitchX: 0 }, pointer), -1);
+    assert.equal(stripIndexAt({ x: 101, y: 201 }, { ...strip, pitchY: 0 }, pointer), -1);
+    assert.equal(stripIndexAt({ x: 101, y: 201 }, { ...strip, columns: 0 }, pointer), -1);
+  }
+});
+
+test('the grid strip asks lib/grid.ts for the cell under a point, and asks who is pointing', () => {
+  // A second copy of this arithmetic inside the component is how the two
+  // drift — the same extraction gridCursorTarget already had — and the pointer
+  // kind is what the component cannot answer alone: it comes from the event,
+  // through the shared detail binding.
+  assert.match(
+    grid,
+    /stripIndexAt\(point, geometry, pointer\)/,
+    'the strip must ask lib/grid.ts which cell a point names'
+  );
+  assert.match(
+    grid,
+    /cellIndexAt\(point, pointer === 'fine' \? 'fine' : 'coarse'\)/,
+    'the strip must carry the asking pointer into the gap decision'
+  );
+  // And a DIRECT hit still wins for everyone: the element under the event IS
+  // the cell, and no arithmetic can improve on that.
+  assert.match(grid, /target\.closest\('\[data-grid-cell\]'\)/);
 });

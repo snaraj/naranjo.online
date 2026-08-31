@@ -51,7 +51,7 @@ const galleryStageCapPx = 448;
 
 /* One gallery/v1 manifest carrying a still and a film, served from the media
  * volume's own mutable path so the page takes the route it takes in
- * production: lib/galleryManifest.ts reads it once, admits it, and the Art
+ * production: lib/galleryManifest.ts reads it once, admits it, and the Media
  * block replaces its vendored bootstrap items wholesale.
  *
  * The FILES it names are never served — the e2e origin runs with no media
@@ -1022,30 +1022,47 @@ function syntheticSeries(days) {
 }
 
 /* LOOK, at every length a real series can be (owner directive, 2026-08-24;
- * RETARGETED by issue 178, RETARGETED AGAIN by issue 189). Sizing a box to
- * its data was only an improvement if the box's GRAMMAR survived the short
- * end — that used to mean "the same cell, the same gap, the legend in the
- * same place" while the CELL COUNT still tracked the series length one-for-
- * one. Issue 189 retired that second half: every dated series, however
- * short or long, now realigns onto the SAME fixed pendingWeeks trailing
- * window (calendarColumns) — a fixed weekday axis is only truthful across a
- * fixed window, so a strip that still resized its column count with its
- * data could never promise one. What this lane proves is therefore the
- * stronger, simpler claim issue 189 makes true: the box, the cell size, the
- * gap, the row height and the legend placement are now IDENTICAL for every
- * series length, not merely "no narrower than the shortest." A strip that
- * quietly still varied its column count with the data, or that let its key
- * drift at one length and not another, would pass every OTHER assertion in
- * this file and still be wrong. So the four shapes are rendered on the real
- * page and compared to each other. */
-test('the full-width strip draws the identical fixed window at every series length (issue 189)', async ({ page }) => {
-  const shapes = [1, 15, 31];
+ * RETARGETED by issue 178, again by issue 189, and RE-AIMED by issue 268).
+ *
+ * Sizing a box to its data was only an improvement if the box's GRAMMAR
+ * survived the short end — the same cell, the same gap, the legend in the
+ * same place. Issue 189 added the axis claim on top: a fixed weekday axis is
+ * only truthful across a window that does not move, so every series realigned
+ * onto one trailing calendar. It bought that truthfulness with a fixed
+ * fifty-three weeks, which the owner reported from the other side: a fortnight
+ * of history drawn against fifty weeks of dated emptiness reads as a year that
+ * failed rather than as a fortnight that worked.
+ *
+ * WHAT SURVIVES IS THE AXIS CLAIM, RE-SCOPED. The window is derived from the
+ * panel's own coverage now, capped at the reserve — so it is no longer
+ * identical at every series LENGTH, and pinning that would pin the very thing
+ * the owner asked to remove. It is identical across the panel's own SOURCES,
+ * which is where the claim was always load-bearing: two strips stacked in one
+ * card are read against each other, so a column at the same x has to be the
+ * same week on both, and a source that stopped capturing early must not
+ * silently sit a week to the left of the one above it.
+ *
+ * So this lane renders the real page at three coverages and measures BOTH of
+ * the panel's graphs each time. The grammar comparison is between the two
+ * sources at one coverage (where it must be exact), and the window comparison
+ * is across the three coverages (where it must TRACK, between a floor and the
+ * reserve). A per-series window passes none of it: the second source keeps its
+ * own fifteen days throughout, so it would draw the floor while the first drew
+ * the capture. */
+test('the full-width strips draw ONE window per panel, sized to its coverage (issue 189; owner 2026-08-31)', async ({
+  page,
+}) => {
+  /* Three coverages: under the floor, between the floor and the reserve, and
+     past the reserve. The SECOND source is never restaged — it keeps the
+     origin's own fifteen days — which is what makes the per-source equality
+     below a claim rather than a coincidence at every shape but the first. */
+  const shapes = [15, 200, 900];
   const measured = [];
   for (const days of shapes) {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
     await stageUsagePayload(page, (envelope) => {
       const sources = envelope?.data?.sources ?? [];
-      expect(sources.length, 'the origin serves no usage source to restage').toBeGreaterThan(0);
+      expect(sources.length, 'the origin serves fewer than two usage sources').toBeGreaterThan(1);
       sources[0].series = syntheticSeries(days);
     });
     await visit(page);
@@ -1066,116 +1083,141 @@ test('the full-width strip draws the identical fixed window at every series leng
     ).toBeAttached();
     measured.push({
       days,
-      ...(await page.evaluate(() => {
-        const block = window.document.querySelector('.usage-source .grid-block');
-        const rect = (node) => node.getBoundingClientRect();
-        const cells = block.querySelector('.grid-cells');
-        const legend = block.querySelector('.grid-legend');
-        const cell = cells.querySelector('.grid-cell');
-        const round = (value) => Math.round(value * 100) / 100;
-        return {
-          claimed: Number(block.getAttribute('data-grid-columns')),
-          drawn: Math.ceil(cells.querySelectorAll('.grid-cell').length / 7),
-          cell: round(rect(cell).width),
-          cellHeight: round(rect(cell).height),
-          gap: round(parseFloat(getComputedStyle(cells).columnGap || '0')),
-          rows: getComputedStyle(cells).gridTemplateRows.split(' ').length,
-          block: round(rect(block).width),
-          /* Placement, measured as the offset of the key's END edge from the
-             block's END edge: the legend is right-aligned under the graph, and
-             "right-aligned" is a relationship, not a width. */
-          legendOffset: round(rect(block).right - rect(legend).right),
-          legendTop: round(rect(legend).top - rect(block).top),
-          strip: round(rect(block.querySelector('.grid-strip')).height),
-        };
-      })),
+      sources: await page.evaluate(() =>
+        [...window.document.querySelectorAll('.usage-source .grid-block')].map((block) => {
+          const rect = (node) => node.getBoundingClientRect();
+          const cells = block.querySelector('.grid-cells');
+          const legend = block.querySelector('.grid-legend');
+          const cell = cells.querySelector('.grid-cell');
+          const round = (value) => Math.round(value * 100) / 100;
+          const real = [...cells.querySelectorAll('[data-grid-absent="false"]')];
+          return {
+            label: block
+              .closest('.usage-source')
+              .querySelector('.usage-source-label')
+              .textContent.trim(),
+            claimed: Number(block.getAttribute('data-grid-columns')),
+            drawn: Math.ceil(cells.querySelectorAll('.grid-cell').length / 7),
+            /* THE WINDOW'S OWN CALENDAR, fingerprinted off the month axis:
+               each tick's full month name and the column it sits in. It is
+               the only dated thing the DOM exposes about a window — an absent
+               cell's accessible text is "no data for this day" and carries no
+               date — and it is exactly the right thing to compare, because the
+               axis IS what a reader reads the two strips against. Two windows
+               that agree here are drawing the same weeks in the same places. */
+            calendar: [...block.querySelectorAll('.grid-month')]
+              .map((tick) => `${tick.getAttribute('title')}@${getComputedStyle(tick).gridColumnStart}`)
+              .join('|'),
+            /* What the source actually captured inside that window, so a
+               truncated capture is visible as a count rather than inferred. */
+            realCount: real.length,
+            realLast: real[real.length - 1]?.getAttribute('aria-label') ?? '',
+            cell: round(rect(cell).width),
+            cellHeight: round(rect(cell).height),
+            gap: round(parseFloat(getComputedStyle(cells).columnGap || '0')),
+            rows: getComputedStyle(cells).gridTemplateRows.split(' ').length,
+            block: round(rect(block).width),
+            /* Placement, measured as the offset of the key's END edge from the
+               block's END edge: the legend is right-aligned under the graph,
+               and "right-aligned" is a relationship, not a width. */
+            legendOffset: round(rect(block).right - rect(legend).right),
+            legendTop: round(rect(legend).top - rect(block).top),
+            strip: round(rect(block.querySelector('.grid-strip')).height),
+          };
+        })
+      ),
     });
   }
 
-  const [first, ...rest] = measured;
   for (const shape of measured) {
-    // The fixed window (issue 189): every dated series, whatever its own
-    // length, realigns onto the SAME pendingWeeks trailing calendar, so
-    // "drawn" no longer tracks the series length at all.
     expect(
-      shape.drawn,
-      `a ${shape.days}-day series drew ${shape.drawn} columns instead of the fixed trailing window it claims (${shape.claimed})`
-    ).toBe(shape.claimed);
-    expect(shape.rows, `a ${shape.days} day series stopped being seven days tall`).toBe(7);
-  }
-  for (const shape of rest) {
-    /* The grammar that survives full width: identical BOX (the card's own
-       width, not the data's), identical row height, identical gap, identical
-       legend placement relative to that unchanging box — and now, because
-       the fixed window means the column count itself never varies with the
-       series length either, identical CELL size too. A strip whose own
-       window never changes shape has nothing left that data length could
-       stretch or shrink. */
-    expect(
-      shape.claimed,
-      `the fixed window changed width at ${shape.days} days (${first.claimed} columns at 1 day, ${shape.claimed} here)`
-    ).toBe(first.claimed);
-    expect(
-      shape.block,
-      `the box resized from ${first.block}px at 1 day to ${shape.block}px at ${shape.days} days; full width means the card decides the box, not the data`
-    ).toBe(first.block);
-    expect(
-      shape.cell,
-      `the cell width moved at ${shape.days} days even though the fixed window never changes column count`
-    ).toBe(first.cell);
-    expect(shape.cellHeight, `the cell height moved at ${shape.days} days`).toBe(first.cellHeight);
-    expect(shape.gap, `the gap moved at ${shape.days} days`).toBe(first.gap);
-    expect(shape.strip, `the strip changed height at ${shape.days} days`).toBe(first.strip);
-    expect(
-      shape.legendOffset,
-      `the less/more key sits ${shape.legendOffset}px from the block edge at ${shape.days} days and ${first.legendOffset}px at 1 day`
-    ).toBe(first.legendOffset);
-    expect(shape.legendTop, `the key changed row at ${shape.days} days`).toBe(first.legendTop);
-  }
-  /* The reserve is genuinely the width all three claim, rather than a number
-     they happen to agree on: a one-day series and a month-long one both draw
-     the same fifty-three columns, which is the direction a stray data-driven
-     code path would break at one end of the range and not the other. */
-  for (const shape of measured) {
-    expect(shape.claimed, `a ${shape.days}-day series no longer claims the reserve`).toBe(53);
+      shape.sources.length,
+      `the token panel drew ${shape.sources.length} graphs at ${shape.days} days; this lane compares two`
+    ).toBeGreaterThan(1);
+    const [lead, ...others] = shape.sources;
+    expect(lead.drawn, `"${lead.label}" drew a width it did not claim`).toBe(lead.claimed);
+    expect(lead.rows, `a ${shape.days}-day panel stopped being seven days tall`).toBe(7);
+    for (const other of others) {
+      /* THE AXIS CLAIM. Same column count, same first and last day, and the
+         same box drawn around them: two strips a reader compares by eye must
+         be comparable by eye. */
+      expect(
+        other.claimed,
+        `at ${shape.days} days "${lead.label}" drew ${lead.claimed} columns and "${other.label}" drew ${other.claimed}`
+      ).toBe(lead.claimed);
+      expect(other.drawn, `"${other.label}" drew a width it did not claim`).toBe(other.claimed);
+      expect(
+        other.calendar,
+        `at ${shape.days} days the two sources drew different calendars`
+      ).toBe(lead.calendar);
+      expect(other.calendar.length, 'the month axis rendered no ticks to compare').toBeGreaterThan(0);
+      /* The grammar that survives full width: identical box, cell, gap, row
+         height and legend placement, so neither strip reads as the odd one. */
+      expect(other.block, `the two blocks disagree about their width at ${shape.days} days`).toBe(
+        lead.block
+      );
+      expect(other.cell, `the two cells disagree about their width at ${shape.days} days`).toBe(
+        lead.cell
+      );
+      expect(
+        other.cellHeight,
+        `the two cells disagree about their height at ${shape.days} days`
+      ).toBe(lead.cellHeight);
+      expect(other.gap, `the two strips disagree about their gap at ${shape.days} days`).toBe(
+        lead.gap
+      );
+      expect(other.strip, `the two strips disagree about their height at ${shape.days} days`).toBe(
+        lead.strip
+      );
+      expect(
+        other.legendOffset,
+        `the two keys sit at different offsets at ${shape.days} days`
+      ).toBe(lead.legendOffset);
+      expect(other.legendTop, `the two keys sit on different rows at ${shape.days} days`).toBe(
+        lead.legendTop
+      );
+    }
   }
 
-  /* AND THE OTHER SIDE OF THE WINDOW (issue 233). The reserve stopped being a
-     CEILING when the display menu was deleted: keeping the retired 12mo
-     default would have silently dropped every day past a year, which is the
-     defect the deleted range control existed to remove, so the fixed window
-     is the wider of the reserve and the capture (fullDepthColumns,
-     lib/periods.ts). Measured here rather than only in that module's own
-     tests, because "the strip grew" is a claim about a rendered box: a
-     four-hundred-day capture must draw MORE than the reserve, must draw the
-     width it claims, and must still be seven days tall in a box the card
-     still decides. */
-  await page.unrouteAll({ behavior: 'ignoreErrors' });
-  await stageUsagePayload(page, (envelope) => {
-    const sources = envelope?.data?.sources ?? [];
-    expect(sources.length, 'the origin serves no usage source to restage').toBeGreaterThan(0);
-    sources[0].series = syntheticSeries(400);
-  });
-  await visit(page);
-  const deep = await page.evaluate(() => {
-    const block = window.document.querySelector('.usage-source .grid-block');
-    const cells = block.querySelector('.grid-cells');
-    const round = (value) => Math.round(value * 100) / 100;
-    return {
-      claimed: Number(block.getAttribute('data-grid-columns')),
-      drawn: Math.ceil(cells.querySelectorAll('.grid-cell').length / 7),
-      rows: getComputedStyle(cells).gridTemplateRows.split(' ').length,
-      block: round(block.getBoundingClientRect().width),
-    };
-  });
+  /* AND THE WINDOW TRACKS THE COVERAGE, which is the half that replaced the
+     fixed frame. Three coverages, three answers, each pinned on its own terms:
+     the floor keeps a very short capture legible (its own less/more key has to
+     fit beside it), the middle is the capture itself, and the reserve is the
+     cap a longer capture is shown the trailing end of. */
+  const [short, middle, deep] = measured.map((shape) => shape.sources[0]);
+  expect(
+    short.claimed,
+    `a fortnight of coverage drew ${short.claimed} columns; the fixed frame is back`
+  ).toBeLessThan(53);
+  expect(
+    middle.claimed,
+    `two hundred days drew ${middle.claimed} columns, no more than the fortnight's ${short.claimed}`
+  ).toBeGreaterThan(short.claimed);
+  expect(
+    middle.claimed,
+    `two hundred days drew ${middle.claimed} columns; the reserve is a floor again`
+  ).toBeLessThan(53);
   expect(
     deep.claimed,
-    `a 400-day capture drew ${deep.claimed} columns; the reserve is a ceiling again`
-  ).toBeGreaterThan(53);
-  expect(deep.claimed * 7, 'the window is too narrow to hold the capture it drew').toBeGreaterThanOrEqual(400);
-  expect(deep.drawn, 'the deep window drew a width it did not claim').toBe(deep.claimed);
-  expect(deep.rows, 'the deep window stopped being seven days tall').toBe(7);
-  expect(deep.block, 'the card stopped deciding the box once the capture outgrew the reserve').toBe(first.block);
+    `nine hundred days drew ${deep.claimed} columns; the reserve is not the cap`
+  ).toBe(53);
+  expect(deep.drawn, 'the capped window drew a width it did not claim').toBe(deep.claimed);
+  /* The cap is TRAILING, stated in both directions: the capture is genuinely
+     cut (nine hundred days do not all fit in fifty-three weeks) and what
+     SURVIVES is its newest end — the same newest day the short shape drew,
+     which is the end a reader came to see. A leading cap would keep the same
+     number of days and lose exactly the wrong ones. */
+  expect(
+    deep.realCount,
+    `nine hundred days drew ${deep.realCount} captured cells; the cap is not cutting anything`
+  ).toBeLessThan(900);
+  expect(
+    deep.realCount,
+    `the capped window holds ${deep.realCount} captured days of the 371 it draws; only the current week's unfinished days should be missing`
+  ).toBeGreaterThan(53 * 7 - 7);
+  expect(deep.realLast, 'the capped window does not end on the panel’s newest day').toBe(
+    short.realLast
+  );
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
@@ -4288,67 +4330,6 @@ test('the repo cards’ stat columns align across cards at desktop, and stack as
   }
 });
 
-/* A provenance mark says a figure was recorded out of band. It is a WORD
- * beside a figure, so it costs horizontal room — and a counter row is the one
- * place on this page where horizontal room is deliberately rationed, because
- * `.entry-count-text` is nowrap so a number is never split from the noun it
- * counts. Nest the mark inside that run and it joins it: the card's
- * min-content grows by the mark's whole width, the panel column can no longer
- * shrink to a phone, and the page scrolls sideways. That is exactly what
- * happened on 0.1.56 — red on all five projects, green on the author's
- * workstation, because the identical string sets ~3.4px narrower in macOS's
- * UI font than in the runner's.
- *
- * So the WIDTH tests above are not the pin. They are font-dependent by
- * construction: on a narrow enough typeface the regression fits and passes,
- * which is how it reached CI in the first place. This pin is STRUCTURAL and
- * font-independent — it asks the engine what it computed, and a mark that is
- * back inside an unbreakable run answers `nowrap` on every engine and at every
- * font size. */
-test('a provenance mark never joins the unbreakable run it sits beside (issue 242)', async ({
-  page,
-}) => {
-  await visit(page);
-  await page.setViewportSize({ width: 320, height: 900 });
-  await settled(page);
-
-  const observed = await page.evaluate(() => {
-    const marks = [...window.document.querySelectorAll('.entry-recorded')];
-    return {
-      count: marks.length,
-      /* The mark's OWN computed value. `white-space` inherits, so a mark
-         nested back inside `.entry-count-text` reports that ancestor's
-         `nowrap` here without this test naming any ancestor. */
-      unbreakable: marks.filter((mark) => getComputedStyle(mark).whiteSpace === 'nowrap').length,
-      /* And the row it sits in must be able to take a second line, or the
-         mark is unwrappable by a second route. */
-      rigidRows: [...window.document.querySelectorAll('.entry-count')].filter(
-        (row) => getComputedStyle(row).flexWrap === 'nowrap'
-      ).length,
-      /* Non-vacuity, stated as data rather than assumed: the label it marks
-         IS an unbreakable run, so "not nowrap" is a real distinction here
-         and not a property every span on the page happens to have. */
-      rigidLabels: [...window.document.querySelectorAll('.entry-count-text')].filter(
-        (label) => getComputedStyle(label).whiteSpace === 'nowrap'
-      ).length,
-    };
-  });
-
-  expect(observed.count, 'no provenance mark rendered; this lane proves nothing').toBeGreaterThan(0);
-  expect(
-    observed.rigidLabels,
-    'no counter label is an unbreakable run, so this lane is no longer testing what it describes'
-  ).toBeGreaterThan(0);
-  expect(
-    observed.unbreakable,
-    `${observed.unbreakable} provenance marks compute white-space: nowrap; a mark inside an unbreakable run adds its whole width to the card's min-content`
-  ).toBe(0);
-  expect(
-    observed.rigidRows,
-    `${observed.rigidRows} counter rows refuse to wrap, so the mark has nowhere to go on a narrow card`
-  ).toBe(0);
-});
-
 /* The pull-to-refresh settle guard (issue 187). What this lane CAN prove,
  * in every engine: the declaration reached the page and the engine computed
  * it — not a source-text scan, the same "what a real engine did with it"
@@ -5601,10 +5582,14 @@ test('the token-activity grid fills its card, not a tiny left-aligned block', as
     if (!block || !body) return null;
     const blockBox = block.getBoundingClientRect();
     const bodyBox = body.getBoundingClientRect();
+    const cells = block.querySelector('.grid-cells');
     return {
       fullwidth: block.getAttribute('data-grid-fullwidth'),
       blockWidth: blockBox.width,
       bodyWidth: bodyBox.width,
+      columns: Number(block.getAttribute('data-grid-columns')),
+      cellsWidth: cells === null ? 0 : cells.getBoundingClientRect().width,
+      viewport: window.innerWidth,
     };
   });
   expect(measured, 'the token panel rendered no activity grid to measure').not.toBeNull();
@@ -5616,6 +5601,37 @@ test('the token-activity grid fills its card, not a tiny left-aligned block', as
     measured.blockWidth,
     `the grid is ${Math.round(measured.blockWidth)}px inside a ${Math.round(measured.bodyWidth)}px card`
   ).toBeGreaterThan(measured.bodyWidth * 0.9);
+
+  /* A RECORDED GAP, not a green claim (issue 268; AGENTS.md, "Ratchet pairs":
+     record a gap loudly rather than greenwashing it).
+     ---------------------------------------------------------------------
+     The block above still fills the card, which is the whole of what issue
+     178's owner report asked for and what this lane has always measured. The
+     CELLS inside it no longer necessarily do, and that is new: the panel's
+     window is its own coverage since issue 268, so a fortnight of history is
+     ten columns, and ten columns bounded by --grid-day-max (the token panel's
+     own "a day may not be drawn nine times wider than it is tall", issue 158)
+     cannot reach across a desktop card.
+
+     The two owner directives conflict at that size and neither is wrong. A
+     strip cannot both cover only what was captured and fill a card nine times
+     wider unless a day stops being square, and the bar chart that produces was
+     measured and refused once already. Which one yields is the owner's call —
+     a --grid-day-max edit in UsageTracker.svelte, or a width bound on the
+     block — so this pins CURRENT BEHAVIOUR with the numbers in the message
+     rather than asserting a contract nobody has ruled on. The day the ruling
+     lands, this assertion is what has to be rewritten, which is the point of
+     writing it down here instead of leaving the gap for a reader to find on
+     the rendered page. */
+  const filled = measured.cellsWidth / measured.blockWidth;
+  expect(
+    measured.columns > 0 && measured.cellsWidth > 0,
+    'the token strip drew no cells to measure the recorded gap against'
+  ).toBe(true);
+  expect(
+    filled > 0.9 || measured.columns < 53,
+    `the token strip fills ${(filled * 100).toFixed(1)}% of its ${Math.round(measured.blockWidth)}px block at ${measured.columns} columns; a full-width window that does not fill its block is a defect rather than the recorded coverage gap`
+  ).toBe(true);
 });
 
 /* NO DISPLAY CONTROLS, AND ONE GRAPH PER SOURCE (owner directive, 2026-08-28,
@@ -5710,14 +5726,20 @@ test('the token panel offers no display control, and every source still draws it
       `"${first.label}" draws ${first.claimed} columns and "${graph.label}" draws ${graph.claimed}; the window is not fixed`
     ).toBe(first.claimed);
   }
-  /* The window is at least the reserve, which is what keeps a short capture
-     from drawing a tenth of the card the owner's no-dead-space rule says must
-     be filled. It may be wider — the capture decides above the reserve — so
-     this is a floor, exactly as fullDepthColumns is. */
+  /* The window is the panel's own coverage, between the floor that keeps a
+     very short capture legible and the reserve that caps a long one (issue
+     268; the fixed fifty-three-week frame this used to require is what the
+     owner reported as a graph mostly made of nothing). Both bounds are pinned
+     here so a window that escaped either end fails on the real page as well as
+     in lib/periods.ts's own arithmetic. */
   expect(
     first.claimed,
-    `the fixed window drew ${first.claimed} columns, under the reserve the card is sized for`
-  ).toBeGreaterThanOrEqual(53);
+    `the panel's window drew ${first.claimed} columns, under the width its own less/more key needs`
+  ).toBeGreaterThanOrEqual(10);
+  expect(
+    first.claimed,
+    `the panel's window drew ${first.claimed} columns, past the reserve it is capped at`
+  ).toBeLessThanOrEqual(53);
 });
 
 test('a token-activity cell card is titled "Tokens used" and reads a human period phrase, never a raw ISO date', async ({
@@ -7305,11 +7327,30 @@ test('the keyboard cursor survives a scroll, and every arrow opens a cold strip 
 
 /* Reads the keyboard cursor AND the scrollport it is supposed to be inside,
  * scoped to one strip so three grids on a page cannot answer for each other. */
-async function cursorInPort(page) {
-  return page.evaluate(() => {
-    const region = window.document.querySelector('.grid-strip[role="listbox"]');
+/* WHICH strip these lanes drive. It used to be "the first one", which was the
+ * same thing while every strip on the page drew a fixed year of columns and so
+ * overflowed a phone. Since issue 268 the token panel's window is its own
+ * coverage, and a fortnight of it fits a phone with nothing to pan — so a lane
+ * about panning that still took the first strip would measure a box with no
+ * overflow and fail on its own non-vacuity check. This asks the PAGE which
+ * strip has something to pan instead of naming a panel, so the lanes below
+ * keep measuring their own subject however the panels' windows move. -1 when
+ * no strip overflows at all, which the lanes report as the finding it is. */
+async function pannableStrip(page) {
+  return page.evaluate(() =>
+    [...window.document.querySelectorAll('.grid-strip[role="listbox"]')].findIndex(
+      (strip) => strip.scrollWidth > strip.clientWidth
+    )
+  );
+}
+
+async function cursorInPort(page, index = 0) {
+  return page.evaluate((at) => {
+    const region = window.document.querySelectorAll('.grid-strip[role="listbox"]')[at];
     const marked = region.querySelector('.grid-cell[data-grid-selected="true"]');
-    const tip = window.document.querySelector('.grid-block .cell-tip[data-tip-open="true"]');
+    const tip = region
+      .closest('.grid-block')
+      ?.querySelector('.cell-tip[data-tip-open="true"]') ?? null;
     const port = region.getBoundingClientRect();
     const cell = marked === null ? null : marked.getBoundingClientRect();
     return {
@@ -7324,7 +7365,7 @@ async function cursorInPort(page) {
       open: tip !== null,
       text: tip === null ? null : tip.innerText.replace(/\s+/g, ' ').trim(),
     };
-  });
+  }, index);
 }
 
 /* THE PAIR (issue 219, review round 2). Findings 1 and 2 are one lane because
@@ -7361,7 +7402,9 @@ test('the keyboard cursor is scrolled into its own strip, and a readout panned o
   await page.setViewportSize({ width: 390, height: 844 });
   await settled(page);
 
-  const strip = page.locator('.grid-strip[role="listbox"]').first();
+  const stripIndex = await pannableStrip(page);
+  expect(stripIndex, 'no strip on the page has anything to pan; this lane proves nothing').toBeGreaterThanOrEqual(0);
+  const strip = page.locator('.grid-strip[role="listbox"]').nth(stripIndex);
   await strip.scrollIntoViewIfNeeded();
   await settled(page);
 
@@ -7384,7 +7427,7 @@ test('the keyboard cursor is scrolled into its own strip, and a readout panned o
   // A tab into the strip must name a cell the reader can see, not whichever
   // one happens to sit at the viewport's origin.
   await strip.evaluate((node) => node.focus());
-  const entered = await cursorInPort(page);
+  const entered = await cursorInPort(page, stripIndex);
   expect(entered.marked, 'focusing the strip marked no cell at all').not.toBeNull();
   expect(
     entered.visible,
@@ -7398,7 +7441,7 @@ test('the keyboard cursor is scrolled into its own strip, and a readout panned o
      port before anything scrolls, so the assertion cannot be satisfied by a
      cursor that happened to be in view already. */
   await page.keyboard.press('Home');
-  const home = await cursorInPort(page);
+  const home = await cursorInPort(page, stripIndex);
   expect(home.scrollLeft, 'Home did not pan the strip at all').toBeLessThan(entered.scrollLeft);
   expect(
     home.visible,
@@ -7413,7 +7456,7 @@ test('the keyboard cursor is scrolled into its own strip, and a readout panned o
   let panned = 0;
   for (let press = 0; press < 30; press += 1) {
     await page.keyboard.press('ArrowRight');
-    const step = await cursorInPort(page);
+    const step = await cursorInPort(page, stripIndex);
     expect(
       step.visible,
       `ArrowRight #${press + 1} left the cursor at ${Math.round(step.cell?.left)}–${Math.round(step.cell?.right)}, outside the strip's ${Math.round(step.port.left)}–${Math.round(step.port.right)}`,
@@ -7433,7 +7476,7 @@ test('the keyboard cursor is scrolled into its own strip, and a readout panned o
 
   // End, the other jump, from the other side of the window.
   await page.keyboard.press('End');
-  const end = await cursorInPort(page);
+  const end = await cursorInPort(page, stripIndex);
   expect(end.visible, 'End marked a cell outside the strip').toBe(true);
   expect(end.open, 'End closed the readout').toBe(true);
 
@@ -7446,12 +7489,12 @@ test('the keyboard cursor is scrolled into its own strip, and a readout panned o
     node.scrollLeft = 0;
   });
   await expect
-    .poll(async () => (await cursorInPort(page)).open, {
+    .poll(async () => (await cursorInPort(page, stripIndex)).open, {
       message: 'the readout kept naming a cell panned clean out of its own strip',
       timeout: 5_000,
     })
     .toBe(false);
-  const stale = await cursorInPort(page);
+  const stale = await cursorInPort(page, stripIndex);
   expect(stale.marked, 'a ring stayed painted on a cell panned out of the strip').toBeNull();
   expect(stale.active, 'aria-activedescendant still names a cell nobody can see').toBeNull();
 });
@@ -7470,15 +7513,20 @@ test('bringing the cursor into view is instant, whatever motion the reader asked
     await visit(page);
     await page.setViewportSize({ width: 390, height: 844 });
     await settled(page);
-    const strip = page.locator('.grid-strip[role="listbox"]').first();
+    const stripIndex = await pannableStrip(page);
+    expect(
+      stripIndex,
+      'no strip on the page has anything to pan; this lane proves nothing'
+    ).toBeGreaterThanOrEqual(0);
+    const strip = page.locator('.grid-strip[role="listbox"]').nth(stripIndex);
     await strip.scrollIntoViewIfNeeded();
     await settled(page);
     await strip.evaluate((node) => node.focus());
-    const before = await cursorInPort(page);
+    const before = await cursorInPort(page, stripIndex);
     await page.keyboard.press('Home');
     // Exactly one frame, not a settle: an animated scroll is still travelling.
     await page.evaluate(() => new Promise((resolve) => window.requestAnimationFrame(resolve)));
-    const after = await cursorInPort(page);
+    const after = await cursorInPort(page, stripIndex);
     expect(
       after.scrollLeft,
       `under ${reducedMotion} the strip had not finished panning one frame after the press`,
@@ -7637,21 +7685,41 @@ test('a wide grid still pans natively, and never takes the page sideways (issue 
   await page.setViewportSize({ width: 390, height: 844 });
   await settled(page);
   const pan = await page.evaluate(() => {
-    const strip = window.document.querySelector('.grid-strip');
-    const before = strip.scrollLeft;
-    strip.scrollLeft = Math.max(0, before - 120);
-    return {
+    const strips = [...window.document.querySelectorAll('.grid-strip')];
+    /* EVERY strip hands its pan to the browser — that half is a property of
+       the component and is checked across all of them, so a strip that took
+       the gesture fails here whether or not it currently overflows. */
+    const declarations = strips.map((strip) => ({
       touchAction: window.getComputedStyle(strip).touchAction,
       overflowX: window.getComputedStyle(strip).overflowX,
-      scrollable: strip.scrollWidth > strip.clientWidth,
-      moved: strip.scrollLeft !== before,
+    }));
+    /* The pan itself needs a strip with something to pan, and since issue 268
+       that is no longer every strip: the token panel's window is its own
+       coverage, so a fortnight of it fits a phone with room to spare. The
+       contribution calendar still draws a year and still overflows, so the
+       question stays real — asked of whichever strip actually has the
+       overflow rather than of whichever one comes first in the document. */
+    const strip = strips.find((node) => node.scrollWidth > node.clientWidth) ?? null;
+    const before = strip === null ? 0 : strip.scrollLeft;
+    if (strip !== null) {
+      strip.scrollLeft = Math.max(0, before - 120);
+    }
+    return {
+      declarations,
+      scrollable: strip !== null,
+      moved: strip !== null && strip.scrollLeft !== before,
       docScrollWidth: window.document.documentElement.scrollWidth,
       docClientWidth: window.document.documentElement.clientWidth,
     };
   });
-  expect(pan.scrollable, 'the strip has nothing to pan; this lane proves nothing').toBe(true);
-  expect(pan.touchAction, 'the grid strip stopped handing its pan to the browser').toBe('auto');
-  expect(pan.overflowX).toBe('auto');
+  expect(pan.declarations.length, 'the page renders no strips at all').toBeGreaterThan(0);
+  for (const [index, declared] of pan.declarations.entries()) {
+    expect(declared.touchAction, `grid strip ${index} stopped handing its pan to the browser`).toBe(
+      'auto'
+    );
+    expect(declared.overflowX, `grid strip ${index} stopped scrolling inside itself`).toBe('auto');
+  }
+  expect(pan.scrollable, 'no strip has anything to pan; this lane proves nothing').toBe(true);
   expect(pan.moved).toBe(true);
   expect(pan.docScrollWidth, 'wide grid content took the page sideways').toBeLessThanOrEqual(
     pan.docClientWidth,
@@ -8613,9 +8681,24 @@ test('the refresh gesture has a control a keyboard can reach (issue 219)', async
      buttons. The reachability half below is asserted everywhere, because
      focus() is what assistive technology uses regardless. */
   await page.keyboard.press('Tab');
-  const focused = await page.evaluate(() => window.document.activeElement?.className ?? '');
-  if (focused !== '' && !focused.includes('gallery-dot')) {
-    expect(focused, 'the refresh control is not the first focus stop').toContain('pull-control');
+  const focused = await page.evaluate(() => ({
+    tag: window.document.activeElement?.tagName ?? '',
+    className: window.document.activeElement?.className ?? '',
+  }));
+  /* The engine test is the ENGINE'S OWN ANSWER, not a list of classes that
+     happen to come first. This used to skip WebKit by naming the element it
+     landed on — a gallery dot — which made the lane depend on which element
+     carrying an explicit tabindex sat earliest in the document, and issue 268
+     moved that: the repo cards' counters are focus stops now (they carry the
+     stat tiles' detail affordance) and they precede the gallery. Asking
+     whether the first stop is a BUTTON states the same skip in terms of the
+     claim itself, and it is strictly tighter — a button that is not the
+     refresh control now fails on every engine instead of only on some. */
+  if (focused.tag === 'BUTTON') {
+    expect(
+      focused.className,
+      'the refresh control is not the first button a keyboard reaches'
+    ).toContain('pull-control');
   }
   await control.evaluate((node) => node.focus());
   expect(

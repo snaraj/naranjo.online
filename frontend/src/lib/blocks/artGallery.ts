@@ -1,4 +1,4 @@
-/* The Art block (issue 165, redesigned issue 176, cut over to the media
+/* The Media block (issue 165, redesigned issue 176, cut over to the media
  * volume in issue 207): the generic MediaGallery bound to whichever set of
  * items actually exists.
  *
@@ -153,5 +153,5 @@ export const artGallery: PageBlock = runtimeBlock(
       height: galleryHeight
     };
   },
-  { heading: 'Art' }
+  { heading: 'Media' }
 );

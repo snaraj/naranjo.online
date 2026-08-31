@@ -111,13 +111,15 @@
     peakValue,
     pendingColumns,
     stripColumns,
+    stripIndexAt,
     weekdayAxis,
     type GridCell,
     type SeriesView,
+    type StripGeometry,
     type ValueFormat
   } from '../grid';
   import { isChord } from '../keys.ts';
-  import type { TipPoint } from '../tooltip.ts';
+  import type { TipPoint, TipPointerKind } from '../tooltip.ts';
   import DetailTip from './DetailTip.svelte';
 
   let {
@@ -207,16 +209,9 @@
      same discipline on the same path — so the pitch is measured once and
      invalidated by the two things that can change it: the strip scrolling
      under the pointer, and the box resizing. */
-  interface CellGeometry {
-    left: number;
-    top: number;
-    pitchX: number;
-    pitchY: number;
-    columns: number;
-  }
-  let geometry: CellGeometry | null = null;
+  let geometry: StripGeometry | null = null;
 
-  function measureGeometry(): CellGeometry | null {
+  function measureGeometry(): StripGeometry | null {
     const host = cellsHost;
     if (host === undefined || host.children.length === 0) {
       return null;
@@ -227,7 +222,10 @@
        the token is only the floor. Cells are emitted column-major, so the
        next child is one row down and the child gridRows along is one column
        across; a grid too small to have either falls back to the cell's own
-       box, which is the correct pitch when there is no gap to add. */
+       box, which is the correct pitch when there is no gap to add. The cell's
+       OWN box comes from the same measurement, so the gap between them is the
+       difference between two numbers read in one pass rather than a token this
+       file would then have to keep in step with the stylesheet. */
     const down = host.children[1]?.getBoundingClientRect();
     const across = host.children[gridRows]?.getBoundingClientRect();
     return {
@@ -235,7 +233,10 @@
       top: first.top,
       pitchX: across ? across.left - first.left : first.width,
       pitchY: down ? down.top - first.top : first.height,
-      columns: Math.ceil(host.children.length / gridRows)
+      cellWidth: first.width,
+      cellHeight: first.height,
+      columns: Math.ceil(host.children.length / gridRows),
+      count: cells.length
     };
   }
 
@@ -243,25 +244,12 @@
     geometry = null;
   }
 
-  /* Which cell a viewport point names. Floor rather than round on purpose:
-     a slot is one cell plus the gap that follows it, so a point in the gap
-     resolves to the cell BEFORE it — the nearest one — instead of falling
-     through to nothing. Out-of-range points clamp into the strip, because a
-     finger a little past the last column is still reaching for the last
-     column. */
-  function cellIndexAt(point: TipPoint): number {
+  /* Which cell a viewport point names — the arithmetic is lib/grid.ts's
+     stripIndexAt, which is where the gap rule and its two readers are
+     explained and executed. */
+  function cellIndexAt(point: TipPoint, pointer: 'fine' | 'coarse'): number {
     geometry ??= measureGeometry();
-    const box = geometry;
-    if (box === null || box.pitchX <= 0 || box.pitchY <= 0) {
-      return -1;
-    }
-    const column = Math.min(
-      box.columns - 1,
-      Math.max(0, Math.floor((point.x - box.left) / box.pitchX))
-    );
-    const row = Math.min(gridRows - 1, Math.max(0, Math.floor((point.y - box.top) / box.pitchY)));
-    const index = column * gridRows + row;
-    return index < cells.length ? index : -1;
+    return geometry === null ? -1 : stripIndexAt(point, geometry, pointer);
   }
 
   function elementAt(index: number): HTMLElement | null {
@@ -274,17 +262,26 @@
      rather than anchoring it to the strip: a box that describes nothing is
      worse than no box. An undated cell is exactly that case — the pending
      chrome carries no count and no date and is hidden from assistive
-     technology, so there is nothing to say about it. */
-  function resolveCell(target: EventTarget | null, point: TipPoint): HTMLElement | null {
+     technology, so there is nothing to say about it.
+
+     A DIRECT HIT ALWAYS WINS, whoever is asking: the element under the event
+     IS the cell, and no arithmetic can improve on that. The coordinate path
+     below it is for the points that hit no cell at all — the gaps between
+     them — and it is the one that had to learn who was asking, because
+     forgiving a gap is a finger's 44px reach and a mouse's wrong answer. */
+  function resolveCell(
+    target: EventTarget | null,
+    point: TipPoint,
+    pointer: TipPointerKind
+  ): HTMLElement | null {
     if (columns.length === 0) {
       return null;
     }
-    const direct =
-      target instanceof Element ? target.closest('[data-grid-cell]') : null;
+    const direct = target instanceof Element ? target.closest('[data-grid-cell]') : null;
     const index =
       direct instanceof HTMLElement && cellsHost?.contains(direct)
         ? Number(direct.dataset.gridIndex)
-        : cellIndexAt(point);
+        : cellIndexAt(point, pointer === 'fine' ? 'fine' : 'coarse');
     if (!Number.isInteger(index) || index < 0 || index >= cells.length) {
       return null;
     }
@@ -751,11 +748,28 @@
     );
   }
 
-  /* Full-width call sites (issue 178) drop the content-sized cap and stretch
-     the cells to the container's own width instead: each column becomes a
-     flexible track floored at the token cell size, so a short series fills
-     the card the way every other tracker does and a long one still overflows
-     into the strip's own scroll exactly as it always has. */
+  /* Full-width call sites (issue 178) stretch the cells to the container's own
+     width instead of sizing them: each column becomes a flexible track floored
+     at the token cell size, so a short series fills the card the way every
+     other tracker does and a long one still overflows into the strip's own
+     scroll exactly as it always has.
+
+     A KNOWN, RECORDED GAP SITS UNDER THIS RULE (issue 268). The block still
+     takes its container whatever its data — that is issue 178's own owner
+     report, "a tiny left-aligned block beside a card every other tracker
+     fills", and the lane that measures it is unchanged. What changed under it
+     is that the token panel's window is its own COVERAGE now rather than a
+     fixed year, so a fortnight of history draws ten columns, and ten columns
+     bounded by that caller's --grid-day-max are 230px of cells inside a 914px
+     block (MEASURED at 1440px in all three engines). The two owner directives
+     genuinely conflict at that size and neither of them is wrong: a strip
+     cannot both cover only what was captured AND fill a card nine times wider,
+     unless a day is drawn nine times wider than it is tall — which is the bar
+     chart issue 158 measured and refused. The conflict is recorded here and
+     pinned as CURRENT BEHAVIOUR in e2e/rendering-lanes.spec.mjs's issue-178
+     lane rather than resolved by a lane author; resolving it is a token edit
+     (--grid-day-max in UsageTracker.svelte) or a block-width bound, and it is
+     the owner's call which. */
   .grid-block[data-grid-fullwidth='true'] {
     max-inline-size: none;
     inline-size: 100%;

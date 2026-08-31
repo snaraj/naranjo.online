@@ -399,32 +399,44 @@
   /* A linked card's counter columns (owner, 2026-08-29: the stat columns
      align across every card, "it should not differ in the layout"). The five
      tracks are ONE token so all seven cards read the identical geometry —
-     column N starts at the same x on every card — and each width is sized
-     from the widest realistic content of ITS column, measured on the live
-     rows with every provenance mark showing: "127 commits · recorded" 168px
-     -> 10.5rem, "2 stars · recorded" 130px -> 8.25rem, "updated 27 days ago
-     · recorded" 216px -> 14rem (224px, the one column sized with slack
-     because its widest text lands exactly on 13.5rem and fonts vary by
-     engine), "22 · recorded" 105px -> 6.75rem, and the terse pull figure
-     96px -> 6.25rem. Tabular figures in the component keep a digit from
-     jittering a column it cannot move.
+     column N starts at the same x on every card.
 
-     The breakpoint is a CONTAINER width, not a viewport one, and it is the
-     width the tracks genuinely fit at: tracks total 732px and the row's four
-     0.875rem column gaps add 56px, so 50rem (800px) of card is the first
-     named step past 788px. A container query rather than a media query
-     because the reading column is the reader's to narrow (ColumnHandles) far
-     below any viewport the media query could name — MEASURED, a viewport
-     switch rendered the 788px table into a 288px card — so the card itself
-     answers, through the head's inline-size containment in EntryLog.svelte.
-     Every named phone width (320/360/390/412,
-     e2e/rendering-lanes.spec.mjs's phoneWidths) gives a card far narrower
-     than 800px, so a phone always gets the single-column ledger. This
-     retires --breakpoint-card-meta (30rem) with the inline title/counters
-     row it gated: the counters hold their own full-width line at every
-     width now, which is what makes cross-card alignment possible at all. */
-  --entry-count-columns: 10.5rem 8.25rem 14rem 6.75rem 6.25rem;
-  --breakpoint-entry-columns: 50rem;
+     EQUAL FRACTIONS since issue 268. The tracks used to be five hand-measured
+     widths, each sized from the widest realistic content of its own column
+     with the inline "· recorded" mark showing, and that arrangement had one
+     structural weakness the owner's directive removed rather than patched: a
+     track sized from CONTENT has to be re-measured every time the content
+     changes, and one of the five now changes every minute. With the words and
+     the mark gone from the visible row — icon and bare figure, the sentence in
+     the detail — no track is measured from anything, so five equal shares
+     align every card by construction and the freshness counter can tick
+     without moving a pixel. */
+  --entry-count-columns: repeat(5, minmax(0, 1fr));
+  /* The width the five cells genuinely fit at, MEASURED in three engines
+     rather than named. A counter is a 16px glyph, a 0.3125rem gap and its
+     figure: the widest one the feed renders today is 45.34px ("127 commits" as
+     "127", identical in Chromium and WebKit, 45.30 in Firefox), and the widest
+     one it could plausibly grow into is 65.36px (a five-figure commit total,
+     "12,345"). Five of those plus the row's four 0.875rem column gaps come to
+     382.8px, so 28rem (448px) clears the growth case by 65px — headroom the
+     old content-sized tracks needed re-measuring to keep and equal fractions
+     no longer do, since nothing below this width is decided by content at all.
+     Over the breakpoint the row still carries `overflow-x: auto`, so a reader
+     who enlarges their text past even that headroom scrolls the row inside
+     itself rather than bending the card.
+
+     It is a CONTAINER width, not a viewport one, because the reading column is
+     the reader's to narrow (ColumnHandles) far below any viewport a media
+     query could name — MEASURED, a viewport switch rendered the wide table
+     into a 288px card — so the card itself answers, through the head's
+     inline-size containment in EntryLog.svelte. Every named phone width gives
+     a card far under 448px (MEASURED: 226px at 320, 281 at 375, 296 at 390,
+     318 at 412 — e2e/rendering-lanes.spec.mjs's phoneWidths plus the iPhone SE
+     report), so a phone always gets the single-column ledger. This retires
+     --breakpoint-card-meta (30rem) with the inline title/counters row it
+     gated: the counters hold their own full-width line at every width now,
+     which is what makes cross-card alignment possible at all. */
+  --breakpoint-entry-columns: 28rem;
   --card-title-family: var(--font-sans);
   --card-title-size: 1.0625rem;
   --card-title-weight: 650;
@@ -1262,7 +1274,7 @@ main {
   letter-spacing: -0.01em;
 }
 
-/* A section that holds more than one thing — Projects holds Art and Coding
+/* A section that holds more than one thing — Projects holds Media and Coding
    Projects (owner directive, issue 134) — stacks them the same way the page
    stacks sections, one level in. */
 .page-subsection {

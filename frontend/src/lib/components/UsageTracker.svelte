@@ -62,7 +62,7 @@
 <script lang="ts">
   import type { UsageActivity, UsageTrackerProps } from '../blocks.ts';
   import { formatMagnitude, seriesCells } from '../grid';
-  import { activityReading, coverageReading, fullDepthColumns } from '../periods.ts';
+  import { activityReading, coverageColumns, coverageReading, coverageWindow } from '../periods.ts';
   import ContributionGrid from './ContributionGrid.svelte';
   import PanelShell from './PanelShell.svelte';
 
@@ -75,20 +75,35 @@
      that asked for it. What replaces four choices is one honest answer: the
      source's own totals, read daily, over every day it has captured.
 
-     WHICH WINDOW that is, and why it is not simply 'all', lives in
-     lib/periods.ts beside the arithmetic (fullDepthColumns). The short of it:
-     deleting the control while keeping its 12mo default would have restored
-     the year-long CEILING issue 158 removed, and taking the bare capture
-     instead would draw a fifty-eight-day history as a tenth of the card the
-     owner's no-dead-space rule says must be filled. The window is the wider
-     of the two, so neither failure is reachable.
+     WHICH WINDOW that is lives in lib/periods.ts beside the arithmetic
+     (coverageWindow). The short of it, since issue 268: the window is the
+     panel's own COVERAGE — the union of what its sources actually captured,
+     week-aligned, floored at the width the legend needs and capped at the
+     reserve's trailing year — rather than a fixed frame a fortnight of history
+     sits in one corner of.
+
+     ONE window for the whole panel, derived here and handed to every source,
+     which is the half a per-source helper structurally could not do: two
+     strips stacked in one card are read against each other, so a column at the
+     same x has to be the same week on both. A source shorter than the panel's
+     span is front-padded into it and says so in its own coverage line.
 
      The daily reading needs no name at all: it is what activityReading and
      ContributionGrid both already default to, and passing it here would be a
      third statement of one default that could then disagree with the other
      two. */
+  function seriesOf(activity: UsageActivity) {
+    return seriesCells(activity.series.startDate, activity.series.totals);
+  }
+
+  const panelWindow = $derived(
+    coverageWindow(
+      sections.flatMap((source) => (source.activity ? [seriesOf(source.activity)] : []))
+    )
+  );
+
   function windowedColumns(activity: UsageActivity) {
-    return fullDepthColumns(seriesCells(activity.series.startDate, activity.series.totals));
+    return coverageColumns(seriesOf(activity), panelWindow);
   }
 </script>
 

@@ -590,8 +590,11 @@ describe('UsageTracker live surface', () => {
        no extra bytes — and it is the QUESTION that stopped being a choice. */
     assert.match(
       component,
-      /fullDepthColumns\(seriesCells\(activity\.series\.startDate, activity\.series\.totals\)\)/
+      /seriesCells\(activity\.series\.startDate, activity\.series\.totals\)/
     );
+    // ONE window, derived from the panel's whole coverage and handed to every
+    // source (issue 268), rather than each source measuring its own.
+    assert.match(component, /coverageColumns\(seriesOf\(activity\), panelWindow\)/);
     assert.doesNotMatch(component, /rangeColumns/);
     // The source's own totals, never a category slice: the category lens went
     // with the menu, so there is no branch left that could read anything else.
