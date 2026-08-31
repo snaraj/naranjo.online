@@ -39,7 +39,9 @@ import test from 'node:test';
 import {
   boundedDrag,
   claimsHorizontal,
+  entryOffset,
   frameCoalescer,
+  gestureSlop,
   rubberBand,
   swipeDecision,
   swipeHorizontal,
@@ -147,6 +149,19 @@ test('a bounded surface resists only at the end it has actually reached', () => 
   // A wrapping surface is at neither end and is never resisted, which is what
   // keeps the gallery's wrap from feeling like a fault.
   assert.equal(boundedDrag(120, false, false, span), 120);
+  /* ...but it is BOUNDED, which is a different statement (issue 265). A
+     wrapping strip has no end to resist at and still has nothing to show past
+     the item that is arriving: one span of travel puts the incoming item
+     exactly where the outgoing one was, and past that the stage is empty —
+     MEASURED at -552px past the edge before this clamp. Inside the span
+     nothing changes, which is the half above. */
+  assert.equal(boundedDrag(-span, false, false, span), -span, 'exactly one span is still travel that happened');
+  assert.equal(boundedDrag(-552, false, false, span), -span, 'the drag ran past the item it was bringing in');
+  assert.equal(boundedDrag(900, false, false, span), span, 'the drag ran past the item it was bringing in');
+  /* A span of zero is a surface nobody has measured yet — the stage's own
+     width, read at gesture start, before layout. Clamping to it would freeze
+     every drag at zero. */
+  assert.equal(boundedDrag(-120, false, false, 0), -120, 'an unmeasured surface refuses to move at all');
   // At the start, dragging FORWARD (positive) meets the curve; dragging away
   // from that end does not.
   assert.ok(Math.abs(boundedDrag(120, true, false, span)) < 120);
@@ -154,6 +169,42 @@ test('a bounded surface resists only at the end it has actually reached', () => 
   // ...and symmetrically at the end.
   assert.ok(Math.abs(boundedDrag(-120, false, true, span)) < 120);
   assert.equal(boundedDrag(120, false, true, span), 120);
+});
+
+test('the item a turn brings in enters from its own side, and never travels backwards', () => {
+  /* THE DEFECT (issue 265): a committed swipe mounted the new item at the OLD
+     drag offset and settled it to zero, so the picture slid in backwards from
+     the side it had just left — MEASURED at 120-202px of wrong-way travel per
+     swipe, into an otherwise empty stage.
+     The entry offset is the finger's own last position carried one span
+     forward, so the reader's eye is already where the new item starts. */
+  const span = 300;
+  // Dragged LEFT by 100 and released as a turn forward: the incoming item was
+  // sitting 200px to the right, and that is where it starts.
+  assert.equal(entryOffset(-100, 1, span), 200);
+  // ...and mirrored for a turn back.
+  assert.equal(entryOffset(100, -1, span), -200);
+  // A flick barely moves the surface, so the new item enters from nearly a
+  // full span away — the ordinary carousel slide.
+  assert.equal(entryOffset(-12, 1, span), 288);
+
+  /* NEVER BACKWARDS, and it is a property of the PAIR rather than of the line
+     above: boundedDrag clamps a drag to one span, so every offset a commit
+     can be reached with produces an entry on the side the item is coming
+     from. Separating the two changes reintroduces the defect, so the two are
+     swept together here. */
+  for (const raw of [-1, -50, -120, -299, -300, -552, -5000]) {
+    const dragged = boundedDrag(raw, false, false, span);
+    const entry = entryOffset(dragged, 1, span);
+    assert.ok(
+      entry >= 0,
+      `a forward turn released at ${dragged}px enters at ${entry}px — the wrong side, so it slides in backwards`
+    );
+    assert.ok(entry <= span, `a forward turn enters at ${entry}px, further out than the span it travels`);
+    const back = entryOffset(boundedDrag(-raw, false, false, span), -1, span);
+    assert.ok(back <= 0, `a backward turn enters at ${back}px — the wrong side`);
+    assert.ok(back >= -span, `a backward turn enters at ${back}px, further out than the span it travels`);
+  }
 });
 
 test('a pull resists, arms at its threshold, and never arms on an upward drag', () => {
@@ -327,9 +378,14 @@ function swipeHarness(overrides = {}) {
   const moves = [];
   const commits = [];
   const settles = [];
+  /* Every grab the binding reports, in order with the rest: the gallery ends
+     its armed settle from here (issue 265), so WHEN it is called is a claim
+     this file has to be able to check. */
+  const downs = [];
   const frames = fakeFrames();
   const binding = {
     span: () => 300,
+    down: () => downs.push(moves.length),
     move: (offset) => moves.push(offset),
     commit: (direction) => commits.push(direction),
     settle: () => settles.push(true),
@@ -348,7 +404,7 @@ function swipeHarness(overrides = {}) {
       timeStamp: extra.at ?? 0,
       ...extra
     });
-  return { node, moves, commits, settles, frames, bound, pointer };
+  return { node, moves, commits, settles, downs, frames, bound, pointer };
 }
 
 test('a swipe moves nothing until the drag has proven itself horizontal', () => {
@@ -554,6 +610,41 @@ test('a drag eats its own trailing click, and never a keyboard activation', () =
   swipe.pointer('pointerup', 60, 100, { at: 800 });
   assert.deepEqual(click(0), { prevented: false, stopped: false }, 'a keyboard activation was eaten by a drag');
   assert.deepEqual(click(1), { prevented: true, stopped: true }, 'the suppression owed to a pointer was spent by a keypress');
+});
+
+test('a settle cannot survive the next grab, and only a real grab ends one', () => {
+  /* THE DEFECT (issue 265): the gallery arms a CSS transition for the length
+     of its settle and had no way to hear that a new gesture had begun, so a
+     swipe started inside that window dragged THROUGH the armed transition —
+     MEASURED at 66-93px of lag between the finger and the picture. Nothing
+     but the next pointerdown knows the settle is over early, and pointerdown
+     is the one event every path into a gesture begins with. */
+  const swipe = swipeHarness();
+  swipe.pointer('pointerdown', 200, 100);
+  assert.deepEqual(swipe.downs, [0], 'the surface is never told a finger arrived');
+  /* BEFORE anything is delivered: the recorded value is the number of moves
+     that had happened when the grab was reported, so a hook fired after the
+     first drag frame would read 1 and the lag would be back. */
+  swipe.pointer('pointermove', 60, 100);
+  swipe.frames.tick();
+  swipe.pointer('pointerup', 60, 100, { at: 800 });
+  assert.deepEqual(swipe.downs, [0]);
+
+  // A second gesture reports its own grab, so the settle the first one armed
+  // is ended rather than left to a timer.
+  swipe.pointer('pointerdown', 200, 100);
+  assert.equal(swipe.downs.length, 2, 'the second gesture never announced itself');
+
+  /* AND ONLY A REAL GRAB. A second finger and a secondary button are not
+     gestures, and ending a settle for one of them would snap a surface home
+     that nobody had touched — which is why the hook is called after the
+     binding's own guards rather than at the top of the handler. */
+  const refused = swipeHarness();
+  refused.pointer('pointerdown', 200, 100, { pointerType: 'mouse', button: 2 });
+  assert.deepEqual(refused.downs, [], 'a right-button press ended a settle');
+  refused.pointer('pointerdown', 200, 100);
+  refused.pointer('pointerdown', 100, 100, { pointerId: 9 });
+  assert.equal(refused.downs.length, 1, 'a second finger ended the settle of the gesture already running');
 });
 
 test('a secondary button and a second finger are not drags', () => {
@@ -847,6 +938,90 @@ test('an unarmed release, and a cancel, settle to zero without refreshing anythi
   assert.equal(cancelled.refreshes, 0, 'a cancelled gesture refreshed anyway');
 });
 
+/* THE STRAND (issue 265, defect 1), and it is the whole reason this file's
+ * rule 3 is now a function. Reproduced here first, because a bug nobody can
+ * re-create is a bug nobody can prove fixed: a second touch during the 260ms
+ * snap-back cancels the settle in flight (onDown does that deliberately, so a
+ * new gesture can pick the surface up where the last one left it) — and if
+ * that touch then turns out to be a scroll, the old code simply stopped
+ * tracking. The page stayed frozen wherever the cancelled settle had reached:
+ * MEASURED on the live 0.1.65 origin at 39.98px of `--page-pull`,
+ * `data-pulling="true"` for the rest of the session, and the indicator pinned
+ * at the top of the viewport 1500px down the page. */
+function strandedMidSettle(overrides = {}) {
+  const pull = pullHarness({ reduced: () => false, ...overrides });
+  pull.touch('pointerdown', 100);
+  // Short of the arming threshold: this releases into the snap-back rather
+  // than into a refresh.
+  pull.touch('pointermove', 140);
+  pull.frames.tick();
+  assert.equal(pull.phase(), 'pulling', 'the setup pull armed; there is no snap-back to interrupt');
+  pull.touch('pointerup', 140);
+  // Two frames in: the settle is genuinely in flight and the surface is
+  // genuinely displaced, which is what makes the interruption below real.
+  pull.frames.tick();
+  pull.frames.tick();
+  assert.ok(pull.distance() > 0, 'the settle finished instantly; there is no mid-settle to interrupt');
+  // The second touch, which cancels that settle by arriving.
+  pull.touch('pointerdown', 100);
+  return pull;
+}
+
+/* Enough frames to drive any settle to its destination: 260ms at the fake
+ * clock's 16ms a frame is 17, and this is comfortably past it. */
+function settleFully(pull) {
+  for (let frame = 0; frame < 24; frame += 1) {
+    pull.frames.tick();
+  }
+}
+
+test('every exit from a pull settles the surface to zero, including mid-settle (issue 265)', () => {
+  /* The file's own rule 3 — "every exit, committed, abandoned or cancelled,
+     runs through the same settle" — as an executable table rather than a
+     sentence. Each row is a way the SECOND touch of a strand can end, and
+     before this change three of them cleared the pointer and left the page
+     displaced for the rest of the session. */
+  const exits = [
+    ['an upward flick', (pull) => pull.touch('pointermove', 90)],
+    ['a horizontal swipe', (pull) => pull.touch('pointermove', 102, { clientX: 220 })],
+    [
+      'a page that has left its top',
+      (pull, state) => {
+        state.atTop = false;
+        pull.touch('pointermove', 160);
+      }
+    ],
+    ['a touch that simply lifts', (pull) => pull.touch('pointerup', 100)],
+    ['a browser cancel', (pull) => pull.touch('pointercancel', 100)]
+  ];
+  for (const [name, exit] of exits) {
+    const state = { atTop: true };
+    const pull = strandedMidSettle({ atTop: () => state.atTop });
+    const frozen = pull.distance();
+    exit(pull, state);
+    settleFully(pull);
+    assert.equal(pull.distance(), 0, `${name} stranded the page at ${frozen}px`);
+    assert.equal(pull.phase(), 'idle', `${name} left the indicator reading "${pull.phase()}"`);
+  }
+});
+
+test('a stand-down releases the touch defence rather than leaking it (issue 265)', () => {
+  /* The same three exits leaked the non-passive touchmove listener onto
+     document.body — permanently, since only onUp and onCancel ever removed
+     it — so the first non-pull touch that began at the top of the page made
+     the whole document a scroll-blocking region for the rest of the session.
+     One helper removes it now, and it is the only place the pointer is
+     cleared. */
+  const pull = pullHarness();
+  pull.touch('pointerdown', 100);
+  assert.ok(pull.node.listeners.has('touchmove'), 'an eligible touch never attached the defence');
+  pull.touch('pointermove', 90);
+  assert.ok(
+    !pull.node.listeners.has('touchmove'),
+    'the non-passive touchmove listener outlived the gesture that attached it'
+  );
+});
+
 test('the pull renders once a frame while a finger is dragging it', () => {
   const pull = pullHarness();
   pull.touch('pointerdown', 100);
@@ -1000,11 +1175,14 @@ test('the pull contests the browser claim only while the touch could still be a 
     listeners.get('pointerdown').handler({ pointerType: type, pointerId: 7, clientX: 50, clientY: y });
   const move = (x, y) =>
     listeners.get('pointermove').handler({ pointerId: 7, clientX: x, clientY: y });
-  const touchMove = (y, cancelable = true) => {
+  /* The touches are a LIST with identifiers, because which finger a TouchList
+     entry belongs to is now part of the contract (issue 265): a gesture reads
+     the touch it adopted, never whichever one happens to be first. */
+  const touchMove = (y, options = {}) => {
     let prevented = false;
     listeners.get('touchmove')?.handler({
-      cancelable,
-      touches: [{ clientY: y }],
+      cancelable: options.cancelable ?? true,
+      touches: options.touches ?? [{ identifier: 1, clientY: y }],
       preventDefault: () => (prevented = true)
     });
     return prevented;
@@ -1021,13 +1199,50 @@ test('the pull contests the browser claim only while the touch could still be a 
   assert.ok(listeners.has('touchmove'), 'an eligible touch must attach the defence');
   assert.deepEqual(listeners.get('touchmove').options, { passive: false });
 
-  // The proving window: a downward move is contested before `claimed` flips,
-  // because Safari takes the gesture inside the first twelve pixels.
-  assert.equal(touchMove(106), true, 'a downward move in the proving window must be defended');
+  /* THE PROVING WINDOW, AND ITS FLOOR (issue 265). A downward move is
+     contested before `claimed` flips, because Safari takes the gesture inside
+     the first pixels — but only once the finger has gone somewhere. This used
+     to defend ANY downward delta greater than zero, and the owner's report
+     from a real iPhone is what that cost: "the top-of-page upward flick
+     sometimes does nothing until retried". A finger does not begin an upward
+     flick with an upward pixel; the first sample drifts a few pixels down,
+     that sample was preventDefault'ed at the top of the document, and the
+     scroll the reader asked for never happened.
+     The floor is lib/gesture.ts's own gestureSlop — the same number the swipe
+     decides a finger has gone somewhere at — so "still" means one thing to
+     both gestures on this page. */
+  assert.equal(
+    touchMove(100 + gestureSlop),
+    false,
+    'a touch still inside the slop is contested, so an upward flick can still be eaten at the top'
+  );
+  assert.equal(touchMove(100 + gestureSlop + 1), true, 'a downward move past the slop must be defended');
   // An upward move falls through: that is the page's scroll, not a pull.
   assert.equal(touchMove(94), false, 'an upward move belongs to the browser');
   // A move the browser already made uncancelable is never fought.
-  assert.equal(touchMove(106, false), false, 'an uncancelable move cannot be contested');
+  assert.equal(touchMove(130, { cancelable: false }), false, 'an uncancelable move cannot be contested');
+
+  /* THE TOUCH IS THE ONE THIS GESTURE ADOPTED. `Touch.identifier` and
+     `PointerEvent.pointerId` are unrelated counters no specification relates,
+     so the tracked touch is adopted on first sight and matched by name after
+     that — reading `touches[0]` meant a gesture that began while another
+     finger was already down defended itself against a stranger's
+     coordinates. */
+  assert.equal(
+    touchMove(200, { touches: [{ identifier: 9, clientY: 200 }] }),
+    false,
+    'a finger this gesture never adopted drove the defence'
+  );
+  assert.equal(
+    touchMove(200, {
+      touches: [
+        { identifier: 9, clientY: 40 },
+        { identifier: 1, clientY: 200 }
+      ]
+    }),
+    true,
+    'the adopted touch is no longer found once it stops being first in the list'
+  );
 
   // Once the drag proves itself a pull, every move is the pull's.
   move(50, 120);

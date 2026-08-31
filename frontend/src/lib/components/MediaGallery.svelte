@@ -55,14 +55,18 @@
      (scrollWidth 1194 against clientWidth 1154 at a 1280px viewport).
   3. OPTIONAL PER-ITEM METADATA. title, description and link are each
      independently optional, and ABSENT RENDERS NOTHING — no empty row, no
-     dash, no reserved band. Nothing here supplies a default, because a
+     dash, no fabricated copy. Nothing here supplies a default, because a
      default is how an honest empty state becomes a fabricated one. The
      caption sits AFTER the counter, the last thing in the block, so an item
      that carries one moves neither the photograph, the arrows nor the
-     counter; the deliberate trade (owner's own instruction: reserve space
-     only when the specific item has something to show) is that content
-     BELOW the gallery reflows when a captioned item comes round, which is
-     content arriving rather than a layout promise being broken.
+     counter.
+     The deliberate trade this originally carried — the owner's own "reserve
+     space only when the specific item has something to show", which let
+     content BELOW the gallery reflow when a captioned item came round — was
+     REVERSED at issue 265 after the owner watched it happen; see that block
+     below. What the absent state means is unchanged: an item with nothing to
+     say still renders nothing. What changed is that the BOX is no longer the
+     item's to move.
 
   MOVING ITEMS (issue 207, rebuilt for issue 233). An item carrying a `video`
   bag is a film; every other item is exactly the still it was before that
@@ -242,11 +246,33 @@
   which run through goTo(), so paging away from a playing film still takes
   the surface back exactly as the issue-243 block above requires.
 
+  ISSUE 265 — the gesture defects a five-engine sweep measured on 0.1.65, and
+  the two that live in this file.
+
+  1. A COMMITTED SWIPE MOVED THE ART BACKWARDS. The new item mounted at the
+     OLD drag offset and settled to zero, so it slid in from the side it had
+     just left — 120-202px of wrong-way travel per swipe. The strip now places
+     the incoming item at its own entry offset (lib/gesture.ts's entryOffset,
+     one span beyond where the finger let go), flushes that position, and only
+     then animates forward to zero. The drag is bounded to one span in the
+     same change, which is what makes "forward" a property rather than a hope.
+     A reduced-motion reader is handed the destination with no entry at all.
+  2. THE CAPTION IS A RESERVED LANE, NOT A CONDITIONAL SIBLING. Moving through
+     the strip pushed the whole document up and down — MEASURED at 50px on a
+     1440 viewport and 69px on a 390 one — and the mover was never the stage:
+     the frame and the stage are invariant to 0.0px, and the caption was a
+     sibling that existed only for the items that carried one. The owner's
+     ruling is that the frame must already hold the box. Every item's caption
+     now renders into one stacked grid cell, all but the current one hidden,
+     so the lane is the tallest caption the CURRENT SET can render at the
+     CURRENT width and an item change costs zero pixels. See the lane's own
+     block in the markup and the stylesheet below.
+
   Each is stated again beside the declaration that carries it. -->
 <script lang="ts">
   import { tick } from 'svelte';
   import FeedCard from './FeedCard.svelte';
-  import { swipeHorizontal } from '../gesture.ts';
+  import { entryOffset, swipeHorizontal } from '../gesture.ts';
   import { isChord, ringTarget } from '../keys.ts';
   import type { MediaGalleryItem, MediaGalleryProps } from '../blocks.ts';
 
@@ -363,27 +389,98 @@
   let settling = $state(false);
   let stageEl: HTMLDivElement | undefined = $state();
 
+  /* THE SETTLE IS OWNED (issue 265). `settling` is what arms the CSS
+     transition, and it used to be cleared by a free-running timeout nobody
+     held: a swipe started inside that window dragged through a still-armed
+     transition (MEASURED at 66-93px of lag between finger and picture), and
+     the timer from one settle could disarm the NEXT settle mid-flight. So
+     there is one handle, it is cancelled before it is re-armed, and the next
+     pointerdown ends it early through the binding's `down` hook. */
+  const settleMs = 240;
+  let settleTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function endSettle(): void {
+    clearTimeout(settleTimer);
+    settleTimer = undefined;
+    settling = false;
+  }
+
+  function armSettle(): void {
+    clearTimeout(settleTimer);
+    settling = true;
+    /* Long enough to cover the token duration below; re-armed rather than
+       stacked, so the flag belongs to the settle that is actually running. */
+    settleTimer = setTimeout(() => {
+      settling = false;
+      settleTimer = undefined;
+    }, settleMs);
+  }
+
+  /* Read at the moment it matters rather than stored: a reader can change
+     this preference while the page is open, and the pull's own binding reads
+     it the same way. */
+  const reducedMotion = (): boolean =>
+    typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* Where the item that is arriving starts from, in pixels, or 0 when nothing
+     is arriving. Set by the commit and spent by the settle that follows it in
+     the same gesture — see lib/gesture.ts's entryOffset for the arithmetic and
+     why it can never point backwards. */
+  let entering = 0;
+
   const swipe = {
     span: () => stageEl?.getBoundingClientRect().width ?? 0,
     move: (offset: number) => (dragX = offset),
-    commit: (direction: -1 | 1) => (direction === 1 ? next() : previous()),
+    /* A finger is down: whatever the last settle still had armed is over. The
+       trade this accepts is deliberate and small — a grab landing mid-settle
+       snaps the surface to its resting position first rather than easing the
+       rest of the way — because the alternative is the drag itself easing,
+       which is the lag the reader actually feels. */
+    down: () => endSettle(),
+    commit: (direction: -1 | 1) => {
+      /* THE INCOMING ITEM ENTERS FROM ITS OWN SIDE (issue 265). Recorded
+         BEFORE the index moves, because it is built from the offset the
+         finger left behind; the settle below is what spends it. */
+      entering = entryOffset(dragX, direction, swipe.span());
+      if (direction === 1) {
+        next();
+      } else {
+        previous();
+      }
+    },
     /* The transition is switched ON only for the settle, so the DRAG itself
        tracks the finger with no easing between it and the pixels — a
        transition during a drag is the lag that makes a carousel feel broken.
        It is switched off again after the settle so the next drag is direct.
        A reduced-motion reader gets no transition at all (the stylesheet
        decides that, not this file), and because the offset still lands on
-       zero either way the surface is never left displaced. */
-    settle: () => {
-      settling = true;
-      /* Long enough to cover the token duration below, and harmless if it
-         fires late: it only clears a flag that the next pointerdown would
-         otherwise leave set. */
-      setTimeout(() => (settling = false), 240);
+       zero either way the surface is never left displaced.
+       AFTER A TURN IT IS TWO WRITES, NOT ONE, and the order is the whole
+       repair: the new item is placed at its entry offset with the transition
+       OFF, that position is flushed to the engine, and only then does the
+       transition arm and the offset go to zero. Both writes in one style
+       recalc would animate from wherever the element already was — which is
+       the backwards slide this fixes — so the forced box read below is
+       load-bearing rather than defensive. */
+    settle: async (): Promise<void> => {
+      /* A reduced-motion reader is handed the destination and never the
+         journey: no entry offset, so no two-step jump to flicker through. */
+      if (entering !== 0 && !reducedMotion()) {
+        endSettle();
+        dragX = entering;
+        await tick();
+        stageEl?.getBoundingClientRect();
+      }
+      entering = 0;
+      armSettle();
+      dragX = 0;
     },
     /* The gallery WRAPS — the counter reads "1 / 8" and pressing previous at
        the first photograph goes to the last — so there is no end to resist
-       at, and pretending otherwise would make the wrap feel like a fault. */
+       at, and pretending otherwise would make the wrap feel like a fault.
+       The drag is still bounded at one span by lib/gesture.ts, because a
+       wrapping strip has no end to resist at and still has nothing to show
+       past the item that is arriving. */
     atStart: () => false,
     atEnd: () => false
   };
@@ -831,12 +928,32 @@
     </div>
   </div>
 
-  {#if hasCaption}
-    <div class="gallery-caption">
-      {#if item.title}<p class="gallery-caption-title">{item.title}</p>{/if}
-      {#if item.description}<p class="gallery-caption-text">{item.description}</p>{/if}
-    </div>
-  {/if}
+  <!-- THE CAPTION LANE, RESERVED FOR EVERY ITEM (issue 265, owner ruling:
+    "the frame must NOT move to accommodate the item — it must already reserve
+    the box that holds every kind"). Every item's caption is rendered into the
+    SAME grid cell and all but the current one is `visibility: hidden`, so the
+    lane's height is the tallest caption THIS SET can render and the current
+    item cannot change it. Nothing is fabricated and nothing is defaulted: an
+    item with no title renders no title, exactly as before — what changed is
+    that its lane is still there, empty, holding the box open.
+    The engine sizes the lane rather than a number this file computes, which
+    is the reason for the stack: a caption's height is a function of the LIVE
+    width (a description wraps differently at 320px and at 1440px), so any
+    length written down here would be right at one viewport and wrong at the
+    next. Nothing is recomputed on an item change, because nothing about the
+    lane depends on which item is showing. -->
+  <div class="gallery-caption">
+    {#each items as shot, at (shot.key)}
+      <div
+        class="gallery-caption-lane"
+        data-current={at === index ? 'true' : undefined}
+        aria-hidden={at === index ? undefined : 'true'}
+      >
+        {#if shot.title}<p class="gallery-caption-title">{shot.title}</p>{/if}
+        {#if shot.description}<p class="gallery-caption-text">{shot.description}</p>{/if}
+      </div>
+    {/each}
+  </div>
 
   <dialog
     bind:this={dialogEl}
@@ -1558,18 +1675,44 @@
     opacity: 1;
   }
 
-  /* Optional metadata, both surfaces (issue 202). Neither container exists
-     when its item has nothing to put in it, so an item without metadata
-     reserves no band and leaves no empty row — the absent state is the
-     absence of the element, not an element rendering blank. */
+  /* THE RESERVED CAPTION LANE (issue 265). Issue 202 made this container
+     conditional on the CURRENT item having something to say, and said so on
+     purpose: "reserve space only when the specific item has something to
+     show". The owner has now overruled that trade from a live review — a
+     captioned item arriving pushed the whole document up and down (MEASURED:
+     50px at 1440, 69px at 390, in both directions), and the frame must hold
+     the box before the item needs it.
+     The container is a one-cell grid; every lane below is placed in that one
+     cell, so the row is as tall as the TALLEST lane and the visible one
+     cannot move it. Nothing here states a height: the engine measures the set
+     at the live width, which is the only place the answer is correct at every
+     viewport. */
   .gallery-caption {
     display: grid;
-    gap: var(--gallery-caption-gap, 0.125rem);
     margin-block-start: var(--gallery-caption-space, 0.25rem);
     text-align: center;
     font-size: var(--card-meta-size);
     line-height: var(--card-meta-leading);
     color: var(--card-meta-ink);
+  }
+
+  /* One item's caption, stacked with every other item's. `visibility: hidden`
+     rather than `display: none` is the whole mechanism — a hidden lane still
+     takes its space in the grid, which is what holds the box open, while
+     taking no part in what a reader sees, reads out or searches for.
+     `align-content: start` is load-bearing: the default stretch would spread
+     one item's paragraphs down the height of the tallest lane, so a
+     one-line caption in a two-line box would sit apart from its own picture. */
+  .gallery-caption-lane {
+    grid-area: 1 / 1;
+    display: grid;
+    align-content: start;
+    gap: var(--gallery-caption-gap, 0.125rem);
+    visibility: hidden;
+  }
+
+  .gallery-caption-lane[data-current] {
+    visibility: visible;
   }
 
   .gallery-caption-title,

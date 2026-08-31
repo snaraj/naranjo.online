@@ -1894,6 +1894,68 @@ test('a film is swipeable until the reader hands the surface to the player (issu
   );
 });
 
+test('the strip owns its settle: a new grab ends it, and a turn enters forward (issue 265)', () => {
+  /* Three measured defects meet in this one binding, and each of them is a
+     line here rather than a behaviour a reader has to catch.
+
+     D6/D7 — `settling` arms the CSS transition, and it was cleared only by a
+     free-running setTimeout nobody held. A swipe begun inside that window
+     dragged through a still-armed transition (MEASURED at 66-93px of lag
+     between finger and picture), and one settle's timer could disarm the
+     NEXT settle mid-flight. The timer is owned now: cleared before it is
+     re-armed, and ended early by the one event that always comes first. */
+  assert.match(galleryCode, /down: \(\) => endSettle\(\)/, 'a new grab no longer ends the settle it interrupted');
+  assert.match(
+    galleryCode,
+    /function endSettle\(\): void \{\s*clearTimeout\(settleTimer\);\s*settleTimer = undefined;\s*settling = false;/,
+    'ending the settle leaves its timer running, so it can still disarm the next one'
+  );
+  assert.match(
+    galleryCode,
+    /function armSettle\(\): void \{\s*clearTimeout\(settleTimer\);/,
+    'a settle is armed without cancelling the timer already running'
+  );
+  assert.doesNotMatch(
+    galleryCode,
+    /setTimeout\(\(\) => \(settling = false\)/,
+    'the unowned free-running settle timer is back'
+  );
+
+  /* D5 — a committed turn used to mount the new item at the OLD drag offset,
+     so it slid in BACKWARDS from the side it had just left (120-202px of
+     wrong-way travel per swipe). The entry offset is the arithmetic in
+     lib/gesture.ts, taken BEFORE the index moves because it is built from the
+     offset the finger left behind. */
+  assert.match(
+    galleryCode,
+    /entering = entryOffset\(dragX, direction, swipe\.span\(\)\);/,
+    'the incoming item does not enter from its own side'
+  );
+  assert.match(galleryCode, /import \{ entryOffset, swipeHorizontal \} from '\.\.\/gesture\.ts';/);
+  /* And the ORDER, which is the whole repair: the entry position is written
+     with the transition off, flushed to the engine by a forced box read, and
+     only then does the transition arm and the offset go to zero. Both writes
+     inside one style recalc would animate from wherever the element already
+     was, which is the defect. */
+  assert.match(
+    galleryCode,
+    /endSettle\(\);\s*dragX = entering;\s*await tick\(\);\s*stageEl\?\.getBoundingClientRect\(\);/,
+    'the entry position is never flushed, so the turn animates from the old offset again'
+  );
+  assert.match(
+    galleryCode,
+    /entering = 0;\s*armSettle\(\);\s*dragX = 0;/,
+    'the settle does not arm the transition before travelling home'
+  );
+  // A reader who asked for less motion is handed the destination, not a
+  // two-step jump: no entry offset at all.
+  assert.match(
+    galleryCode,
+    /if \(entering !== 0 && !reducedMotion\(\)\) \{/,
+    'a reduced-motion reader is given the entry jump anyway'
+  );
+});
+
 test('the prev/next pair lives on the stage, desktop-only by capability, inside 44px targets (owner, 2026-08-29)', () => {
   const style = styleBlock(mediaGallery);
   /* Owner, 2026-08-29: "bring back the buttons but chose to hide them by
@@ -2195,6 +2257,12 @@ test('the lightbox scrim, close control and size caps are tokens too (coordinato
        tokens that had no home in the layer — the #204 review's finding 1 —
        so they join the list here rather than the obligation staying prose. */
     caption: /\.gallery-caption\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
+    /* The lane inside it (issue 265): the caption's own gap moved onto the
+       per-item lane when the box became a reserved stack, and the token
+       obligation moved with the declaration exactly as --gallery-close-surface
+       did at issue 202 — the rule that USES a dimension is the rule that owes
+       it a token. */
+    captionLane: /\.gallery-caption-lane\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
     meta: /\.gallery-lightbox-meta\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
     metaLink: /\.gallery-meta-link\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
   };
@@ -2213,7 +2281,7 @@ test('the lightbox scrim, close control and size caps are tokens too (coordinato
     ['lightbox', '--gallery-close-lane'],
     ['closeMark', '--gallery-close-size'],
     ['closeMark', '--gallery-close-rest-opacity'],
-    ['caption', '--gallery-caption-gap'],
+    ['captionLane', '--gallery-caption-gap'],
     ['caption', '--gallery-caption-space'],
     ['meta', '--gallery-meta-gap'],
     ['meta', '--gallery-meta-space'],
@@ -2552,28 +2620,72 @@ test('gallery metadata is optional in the data, and every row states only what S
   }
 });
 
-test('absent metadata renders NOTHING — no empty row, no default, no reserved band (issue 202)', () => {
-  /* The whole contract, pinned where it is decided. Each field is guarded on
+test("the caption's BOX is reserved for every item; content absent when the item has none (issue 265)", () => {
+  /* RE-AIMED, NOT RELAXED (issue 265). This pin used to enforce the caption's
+     CONTAINER being conditional on the current item — issue 202's deliberate
+     trade, "reserve space only when the specific item has something to show".
+     The owner overruled that from a live review: a captioned item arriving
+     pushed the whole document up and down (MEASURED at 50px on 1440 and 69px
+     on 390), and the ruling is that the frame must already hold the box.
+     Every assertion about CONTENT below is untouched and still exactly as
+     strict — nothing is fabricated, nothing is defaulted, an item with no
+     title still renders no title. What moved is the one assertion that was
+     enforcing the defect.
+     The whole contract, pinned where it is decided. Each field is guarded on
      its OWN {#if}: a single combined guard would render an empty <p> for a
      description-less item that happens to carry a title. */
-  for (const field of ['item.title', 'item.description', 'item.link']) {
+  for (const field of ['shot.title', 'shot.description', 'item.title', 'item.description', 'item.link']) {
     assert.ok(
       mediaGallery.includes(`{#if ${field}}`),
       `${field} is rendered without a guard of its own, so an item lacking it renders an empty row`
     );
   }
-  // Both containers are conditional too, so an item with no metadata at all
-  // contributes no element — the absent state is the absence of the box.
-  assert.match(mediaGallery, /\{#if hasCaption\}\s*<div class="gallery-caption">/);
+  /* THE BOX IS NOT CONDITIONAL, AND THE LANES ARE THE RESERVATION. Every
+     item's caption renders into one stacked grid cell — one lane per item,
+     all in `grid-area: 1 / 1` — so the row is as tall as the tallest caption
+     THIS SET can render and the current item cannot change it. Hiding by
+     VISIBILITY rather than by display is the mechanism: a `display: none`
+     lane would take no space and the reservation would be nothing at all. */
+  assert.doesNotMatch(
+    mediaGallery,
+    /\{#if hasCaption\}\s*<div class="gallery-caption">/,
+    'the caption box is conditional on the current item again, so an item change moves the document'
+  );
+  assert.match(
+    mediaGallery,
+    /<div class="gallery-caption">\s*\{#each items as shot, at \(shot\.key\)\}/,
+    'the caption box no longer holds one lane per item, so it is sized by whichever item is showing'
+  );
+  assert.match(mediaGallery, /data-current=\{at === index \? 'true' : undefined\}/);
+  assert.match(mediaGallery, /aria-hidden=\{at === index \? undefined : 'true'\}/, 'every item’s caption is announced at once');
+  const captionStyle = styleBlock(mediaGallery);
+  const lane = /\.gallery-caption-lane\s*\{([^}]*)\}/.exec(captionStyle)?.[1] ?? '';
+  assert.match(lane, /grid-area:\s*1 \/ 1/, 'the lanes are not stacked, so the box is the sum of every caption');
+  assert.match(lane, /visibility:\s*hidden/, 'a lane that is not current still paints');
+  assert.doesNotMatch(lane, /display:\s*none/, 'a display:none lane reserves nothing');
+  /* Stretch is the grid default and it would spread ONE item's paragraphs
+     down the height of the tallest lane — a one-line caption floating apart
+     from its own picture. */
+  assert.match(lane, /align-content:\s*start/, 'a short caption is stretched down the reserved lane');
+  assert.match(
+    captionStyle,
+    /\.gallery-caption-lane\[data-current\]\s*\{\s*visibility:\s*visible/,
+    'the current item’s caption is never revealed'
+  );
+  // The lightbox's container stays conditional: it is a modal surface with
+  // nothing below it to move, so an item with no metadata renders no band.
   assert.match(mediaGallery, /\{#if hasMeta\}\s*<div class="gallery-lightbox-meta">/);
   assert.match(mediaGallery, /const hasCaption = \$derived\(Boolean\(item\.title\) \|\| Boolean\(item\.description\)\)/);
   assert.match(mediaGallery, /const hasMeta = \$derived\(hasCaption \|\| item\.link !== undefined\)/);
   /* No default anywhere on the path: a ?? or a literal placeholder is how an
-     honest empty state becomes a fabricated one. */
+     honest empty state becomes a fabricated one. Both names the component
+     reads a row by are swept — `item` for the current one, `shot` for the
+     reserved lanes — so the reservation cannot become the place a dash is
+     quietly written. */
   for (const field of ['title', 'description', 'link']) {
     assert.doesNotMatch(
       mediaGallery,
-      new RegExp(`item\\.${field}\\s*(\\?\\?|\\|\\|)\\s*['"\`]`),
+      new RegExp(`(item|shot)\\.${field}\\s*(\\?\\?|\\|\\|)\\s*['"\`]`),
       `the component substitutes copy of its own for a missing ${field}`
     );
     assert.doesNotMatch(
@@ -2583,12 +2695,11 @@ test('absent metadata renders NOTHING — no empty row, no default, no reserved 
     );
     assert.match(artBinding, new RegExp(`${field}: photo\\.${field}`), `the adapter drops ${field} on the way through`);
   }
-  // The caption is the LAST thing in the block, after the counter: an item
-  // that carries one therefore moves neither the photograph nor the arrows
-  // nor the counter (zero-CLS floor).
+  // The caption is the LAST thing in the block, after the counter, so even
+  // the reserved lane sits below everything a reader is looking at.
   assert.ok(
     mediaGallery.indexOf('class="gallery-caption"') > mediaGallery.indexOf('class="gallery-count"'),
-    'the caption sits above the counter, so metadata arriving would move the frame'
+    'the caption sits above the counter, so the reserved lane pushes the frame down the page'
   );
 });
 
