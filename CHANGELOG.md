@@ -13,12 +13,15 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - The grouped CodeQL workflow actions move from 4.37.8 to 4.37.9, carrying
   CodeQL bundle 2.26.4. Both `init` and `analyze` stay on the same immutable
   upstream commit, and the existing Dependabot group continues to update the
-  version-locked pair together. A repository-wide integrity check now rejects
-  either role drifting to a different full SHA or version comment across both
-  GitHub-supported workflow extensions, every local composite-action
-  entrypoint, and case-insensitive action identity. Its regression suite
-  exercises extension discovery and composite wrappers on real temporary
-  filesystem trees, so an in-memory decoy cannot make either boundary vacuous.
+  version-locked pair together. An integrity check now rejects either role
+  drifting to a different full SHA or version comment anywhere GitHub can
+  execute it: both workflow extensions, and every same-repository action a
+  workflow reaches through a `./` reference, followed transitively rather than
+  swept from a directory convention. A `uses:` value the reader cannot resolve
+  is refused rather than skipped, so an explicitly tagged reference can no
+  longer walk past the rule. The regression suite builds each bypass as a real
+  repository tree on disk, and the check takes no injectable text mapping, so
+  discovery cannot be made vacuous by the test that exercises it.
 
 ## [0.1.64] - 2026-08-29
 

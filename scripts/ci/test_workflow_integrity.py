@@ -67,13 +67,19 @@ ALL of its own:
 One boundary is worth stating because most of this gate does NOT cover it: a
 composite action (`action.yml` or `action.yaml`) has its own `runs.steps[*]`
 carrying `shell:` and `continue-on-error:`. Rules 1-3 remain workflow rules,
-and this repository ships no composite action today. The CodeQL lockstep rule
-is deliberately broader: it scans every local composite entrypoint as well as
-both workflow extensions, because a local `uses:` wrapper can displace a direct
-CodeQL role while an unreachable direct call remains as a version-matched
-decoy. A repository that adds a composite action is still adding a surface
-rules 1-3 do not read -- extend those rules then, rather than assuming they are
-covered.
+and this repository ships no composite action today. A repository that adds one
+is adding a surface rules 1-3 do not read -- extend those rules then, rather
+than assuming they are covered.
+
+The CodeQL lockstep rule is deliberately not bounded that way. It starts at
+both workflow extensions and FOLLOWS every same-repository `uses: ./dir`
+reference into the action it executes, transitively, because the executable
+namespace is what GitHub can run and not a directory convention: the 0.1.65
+reviews got past a workflows-only sweep with a wrapper under
+`.github/actions`, and then past that sweep by moving the same wrapper one
+directory outside it, each time leaving a version-matched direct call behind
+as an unreachable decoy. Reachability is the reason a third path does not
+exist to find.
 
 WHAT THIS DELIBERATELY DOES NOT DO -- READ THIS BEFORE "COMPLETING" IT.
 
@@ -257,7 +263,6 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 GITHUB = ROOT / ".github"
 WORKFLOWS = GITHUB / "workflows"
-ACTIONS = GITHUB / "actions"
 INSTALL_TOOLS = HERE / "install-tools.sh"
 ALLOWLIST = HERE / "workflow-integrity-allowlist.txt"
 AGENTS = ROOT / "AGENTS.md"
@@ -301,6 +306,12 @@ BLOCK_SCALAR = re.compile(r":\s*[|>][+-]?\d*\s*$")
 PLAIN_SCALAR = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./+-]*$")
 SINGLE_QUOTED = re.compile(r"^'[^'\\]*'$")
 DOUBLE_QUOTED = re.compile(r'^"[^"\\]*"$')
+
+# A `uses:` value is a REFERENCE, not a scalar any rule compares: it needs `@`,
+# `:` and a leading `.`, which `PLAIN_SCALAR` excludes on purpose. Same
+# fail-closed default -- recognised spellings only, everything else RAISES --
+# with the character set this one position actually needs.
+USES_REFERENCE = re.compile(r"^[A-Za-z0-9_.][A-Za-z0-9_./@:+-]*$")
 
 # `container:` carries a scalar SHORTHAND whose value is an image reference
 # (`ubuntu:24.04`, `ghcr.io/owner/image@sha256:...`), or an expression naming
@@ -466,6 +477,20 @@ def _key(content: str) -> tuple[str, str] | None:
     return (match.group(1) or match.group(2) or match.group(3)), match.group(4).strip()
 
 
+def _display(path: Path) -> str:
+    """Repository-relative where that is meaningful, absolute otherwise.
+
+    The hostile suites below build whole mutant repositories under a temporary
+    directory, and those paths are not under `ROOT`; a bare `relative_to` there
+    raises `ValueError` from inside the refusal it was formatting, which reads
+    as a broken test rather than the refusal that actually fired.
+    """
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def _refuse_unresolvable(path: Path, lineno: int, construct: str, detail: str) -> NoReturn:
     """Fail the suite on a construct the reader cannot resolve.
 
@@ -486,7 +511,7 @@ def _refuse_unresolvable(path: Path, lineno: int, construct: str, detail: str) -
     otherwise, which sent a reader to a file that cannot help.
     """
     raise AssertionError(
-        f"{path.relative_to(ROOT)}:{lineno}: the structural reader cannot resolve "
+        f"{_display(path)}:{lineno}: the structural reader cannot resolve "
         f"{construct}. {detail} This reader is BLOCK-style only, and it refuses "
         f"what it cannot resolve rather than skipping it: a skipped construct is "
         f"invisible to every rule in this file, which is a silent pass on exactly "
@@ -1490,14 +1515,64 @@ def workflow_paths(workflows: Path = WORKFLOWS) -> list[Path]:
     return sorted((*workflows.glob("*.yml"), *workflows.glob("*.yaml")))
 
 
-def local_action_paths(actions: Path = ACTIONS) -> list[Path]:
-    """Return every local composite-action entrypoint GitHub accepts."""
-    return sorted((*actions.rglob("action.yml"), *actions.rglob("action.yaml")))
+def resolve_uses(value: str, path: Path, lineno: int) -> str:
+    """Resolve a `uses:` reference, or REFUSE. Never returns a guess.
+
+    `resolve_scalar`'s fail-closed default, in the one position whose character
+    set it cannot serve. The 0.1.65 review beat the previous inline
+    quote-stripping with `!!str github/codeql-action/init@<old sha>`: an
+    explicit tag is a spelling a real parser and `actionlint` both accept, the
+    tagged text does not START with `github/`, and a reader that skips what it
+    does not recognise made that spelling the silent pass. Recognising is now
+    the only way past this function, so a spelling nobody anticipated turns the
+    gate RED with no edit here.
+    """
+    if SINGLE_QUOTED.match(value) or DOUBLE_QUOTED.match(value):
+        value = value[1:-1]
+        if USES_REFERENCE.match(value):
+            return value
+    elif USES_REFERENCE.match(value):
+        return value
+    _refuse_unresolvable(
+        path, lineno, f"the `uses:` reference written as `{value}`",
+        "That is not one of the reference spellings this reader resolves (a "
+        "plain reference, or a quoted one without escapes). An action this "
+        "reader cannot name is an action it cannot hold to a release, which is "
+        "a silent pass on exactly the drift the rule below exists to refuse.",
+    )
 
 
-def codeql_surface_paths(github: Path = GITHUB) -> list[Path]:
-    """Return every repository file that can execute a CodeQL action role."""
-    return workflow_paths(github / "workflows") + local_action_paths(github / "actions")
+def uses_references(text: str, path: Path) -> list[tuple[int, str]]:
+    """Every `uses:` reference one workflow or action file declares."""
+    found: list[tuple[int, str]] = []
+    for lineno, _indent, content in structural_lines(text):
+        candidate = content[1:].lstrip() if _is_item(content) else content
+        parsed = _key(candidate)
+        if parsed and parsed[0] == "uses":
+            found.append((lineno, resolve_uses(parsed[1], path, lineno)))
+    return found
+
+
+def local_action_entrypoint(root: Path, reference: str, path: Path, lineno: int) -> Path:
+    """Resolve a `./dir` reference to the file GitHub executes, or REFUSE.
+
+    A same-repository action lives at ANY repository-relative directory holding
+    `action.yml` or `action.yaml`. `.github/actions` is a convention and
+    nothing more, which is what the 0.1.65 review proved by moving the executed
+    CodeQL role one directory outside it and leaving a version-matched decoy
+    behind: a sweep of the convention read as complete and covered nothing that
+    ran. Following the reference is what makes the surface below the executable
+    namespace instead of a naming habit.
+    """
+    for name in ("action.yml", "action.yaml"):
+        entrypoint = root / reference[2:] / name
+        if entrypoint.is_file():
+            return entrypoint
+    _refuse_unresolvable(
+        path, lineno, f"the same-repository action reference `{reference}`",
+        "No `action.yml` or `action.yaml` sits at that path, so this reader "
+        "cannot see what the step runs.",
+    )
 
 
 def all_workflows() -> list[Workflow]:
@@ -1508,28 +1583,33 @@ def agents_text() -> str:
     return AGENTS.read_text(encoding="utf-8")
 
 
-def codeql_lockstep_problems(
-    action_texts: dict[Path, str] | None = None,
-    github: Path = GITHUB,
-) -> list[str]:
-    """Report any executable CodeQL role that leaves one shared release."""
-    texts = (
-        action_texts
-        if action_texts is not None
-        else {path: path.read_text(encoding="utf-8") for path in codeql_surface_paths(github)}
-    )
+def codeql_lockstep_problems(github: Path = GITHUB) -> list[str]:
+    """Report any executable CodeQL role that leaves one shared release.
+
+    Reads from disk and expands as it goes: the workflows GitHub runs, then
+    every same-repository action they reach, transitively, because a composite
+    can call another composite. There is no injectable text mapping -- WHAT
+    THIS FINDS is half of what the rule asserts, and a dict handed in by a test
+    proves nothing about a tree on disk.
+    """
+    root = github.parent
+    texts = {
+        path: path.read_text(encoding="utf-8")
+        for path in workflow_paths(github / "workflows")
+    }
+    pending = list(texts)
     references: list[tuple[str, str, str, Path, int]] = []
     problems: list[str] = []
-    for path, text in texts.items():
-        raw_lines = text.splitlines()
-        for lineno, _indent, content in structural_lines(text):
-            candidate = content[1:].lstrip() if _is_item(content) else content
-            parsed = _key(candidate)
-            if not parsed or parsed[0] != "uses":
+    while pending:
+        path = pending.pop()
+        raw_lines = texts[path].splitlines()
+        for lineno, value in uses_references(texts[path], path):
+            if value.startswith("./"):
+                entrypoint = local_action_entrypoint(root, value, path, lineno)
+                if entrypoint not in texts:
+                    texts[entrypoint] = entrypoint.read_text(encoding="utf-8")
+                    pending.append(entrypoint)
                 continue
-            value = parsed[1]
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                value = value[1:-1]
             if not value.casefold().startswith(
                 ("github/codeql-action/init@", "github/codeql-action/analyze@")
             ):
@@ -1538,14 +1618,14 @@ def codeql_lockstep_problems(
             version = CODEQL_VERSION_COMMENT.search(raw_lines[lineno - 1])
             if not action or not version:
                 problems.append(
-                    f"{path.relative_to(ROOT)}:{lineno}: CodeQL init/analyze must use "
+                    f"{_display(path)}:{lineno}: CodeQL init/analyze must use "
                     "one full lowercase SHA and a trailing vX.Y.Z comment"
                 )
                 continue
             references.append((action[1].lower(), action[2], version[1], path, lineno))
     roles = {role for role, _sha, _version, _path, _line in references}
     if roles != {"init", "analyze"}:
-        problems.append(f"CodeQL workflow roles resolved as {sorted(roles)!r}, expected init and analyze")
+        problems.append(f"CodeQL action roles resolved as {sorted(roles)!r}, expected init and analyze")
     releases = {(sha, version) for _role, sha, version, _path, _line in references}
     if len(releases) != 1:
         rendered = ", ".join(
@@ -1611,36 +1691,77 @@ class WorkflowIntegrityTests(unittest.TestCase):
             covered.get("codeql.yml"), "no required jobs resolved for codeql.yml"
         )
 
+    OLD_CODEQL = ("db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28", "v4.37.8")
+    COMPOSITE = (
+        "name: Initialize CodeQL\n"
+        "description: A same-repository wrapper around the real action\n"
+        "runs:\n"
+        "  using: composite\n"
+        "  steps:\n"
+        "    - uses: github/codeql-action/init@"
+        "db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8\n"
+    )
+
+    @staticmethod
+    def write_tree(root: Path, files: dict[str, str]) -> Path:
+        """Write a whole mutant repository to disk; return its `.github`."""
+        for relative, text in files.items():
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        return root / ".github"
+
+    def displace_init(self, real: str) -> str:
+        """Leave the current release where a shallow reader looks; run `real`.
+
+        Every surviving bypass the 0.1.65 reviews found has this shape: a
+        syntactically perfect, version-matched CodeQL reference that never
+        executes, in front of the reference that does.
+        """
+        mutated, count = re.subn(
+            r"(?m)^(\s*)- name: Initialize CodeQL\n"
+            r"(\s*)uses: github/codeql-action/init@([0-9a-f]{40})"
+            r"\s+#\s*(v[0-9]+\.[0-9]+\.[0-9]+)\s*$",
+            lambda match: (
+                f"{match[1]}- name: Unreachable current-release decoy\n"
+                f"{match[2]}if: ${{{{ github.repository == 'never/real' }}}}\n"
+                f"{match[2]}uses: github/codeql-action/init@{match[3]} # {match[4]}\n"
+                f"{match[1]}- name: Initialize CodeQL\n"
+                f"{match[2]}{real}"
+            ),
+            (WORKFLOWS / "codeql.yml").read_text(encoding="utf-8"),
+            count=1,
+        )
+        self.assertEqual(count, 1, f"did not displace the real init with `{real}`")
+        return mutated
+
     def test_codeql_init_and_analyze_share_one_immutable_release(self):
         """The two security-action roles move together, independent of version."""
         self.assertEqual(codeql_lockstep_problems(), [])
 
-    def test_codeql_lockstep_refuses_either_one_sided_update(self):
-        """Reverting either half to another valid release must turn the gate red."""
-        codeql = WORKFLOWS / "codeql.yml"
-        original = codeql.read_text(encoding="utf-8")
-        texts = {
-            path: path.read_text(encoding="utf-8")
-            for path in workflow_paths()
-        }
-        old_sha = "db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28"
-        for role in ("init", "analyze"):
-            with self.subTest(reverted=role):
-                pattern = re.compile(
-                    rf"(github/codeql-action/{role}@)[0-9a-f]{{40}}(\s+#\s*)v[0-9]+\.[0-9]+\.[0-9]+"
-                )
-                mutated, count = pattern.subn(
-                    lambda match: f"{match[1]}{old_sha}{match[2]}v4.37.8",
-                    original,
-                    count=1,
-                )
-                self.assertEqual(count, 1, f"did not construct the {role}-old mutant")
-                candidate = dict(texts)
-                candidate[codeql] = mutated
-                self.assertTrue(codeql_lockstep_problems(candidate))
+    def test_codeql_lockstep_kills_every_known_displacement(self):
+        """Each bypass the reviews found, rebuilt as a real repository on disk.
 
-    def test_codeql_lockstep_discovers_the_yaml_extension_on_disk(self):
-        """Real filesystem discovery cannot omit GitHub's second extension."""
+        Real trees rather than an injected mapping, deliberately: discovery IS
+        half of this rule, and a dict handed to the function under test asserts
+        only about texts a test already chose to include. Two of these mutants
+        exist because a sweep that read as repository-wide was in fact a sweep
+        of `.github/workflows` and then of `.github/actions`.
+        """
+        old_sha, old_version = self.OLD_CODEQL
+        current = (WORKFLOWS / "codeql.yml").read_text(encoding="utf-8")
+
+        def rollback(role: str) -> str:
+            mutated, count = re.subn(
+                rf"(github/codeql-action/{role}@)[0-9a-f]{{40}}"
+                rf"(\s+#\s*)v[0-9]+\.[0-9]+\.[0-9]+",
+                lambda match: f"{match[1]}{old_sha}{match[2]}{old_version}",
+                current,
+                count=1,
+            )
+            self.assertEqual(count, 1, f"did not construct the {role}-old mutant")
+            return mutated
+
         shadow = (
             "name: CodeQL shadow\n"
             "on:\n"
@@ -1650,96 +1771,62 @@ class WorkflowIntegrityTests(unittest.TestCase):
             "  analyze:\n"
             "    runs-on: ubuntu-24.04\n"
             "    steps:\n"
-            "      - uses: github/codeql-action/init@"
-            "db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8\n"
-            "      - uses: github/codeql-action/analyze@"
-            "db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8\n"
+            f"      - uses: github/codeql-action/init@{old_sha} # {old_version}\n"
+            f"      - uses: github/codeql-action/analyze@{old_sha} # {old_version}\n"
         )
-        with tempfile.TemporaryDirectory() as directory:
-            github = Path(directory) / ".github"
-            workflows = github / "workflows"
-            workflows.mkdir(parents=True)
-            (workflows / "codeql.yml").write_text(
-                (WORKFLOWS / "codeql.yml").read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
-            (workflows / "codeql-shadow.yaml").write_text(shadow, encoding="utf-8")
-            self.assertTrue(
-                codeql_lockstep_problems(github=github),
-                "the on-disk .yaml shadow was not discovered",
-            )
+        mutants = {
+            "init-only rollback": {".github/workflows/codeql.yml": rollback("init")},
+            "analyze-only rollback": {".github/workflows/codeql.yml": rollback("analyze")},
+            "GitHub's second workflow extension": {
+                ".github/workflows/codeql.yml": current,
+                ".github/workflows/codeql-shadow.yaml": shadow,
+            },
+            "case-variant owner and repository": {
+                ".github/workflows/codeql.yml": self.displace_init(
+                    f"uses: GitHub/codeql-action/init@{old_sha} # {old_version}"
+                ),
+            },
+            "composite action at the conventional path": {
+                ".github/workflows/codeql.yml": self.displace_init(
+                    "uses: ./.github/actions/codeql-init"
+                ),
+                ".github/actions/codeql-init/action.yml": self.COMPOSITE,
+            },
+            "composite action outside every convention": {
+                ".github/workflows/codeql.yml": self.displace_init("uses: ./tools/codeql-init"),
+                "tools/codeql-init/action.yaml": self.COMPOSITE,
+            },
+        }
+        for label, files in mutants.items():
+            with self.subTest(bypass=label), tempfile.TemporaryDirectory() as directory:
+                self.assertTrue(
+                    codeql_lockstep_problems(self.write_tree(Path(directory), files)),
+                    f"the {label} bypass survived",
+                )
 
-    def test_codeql_lockstep_normalizes_repository_case_and_sees_past_a_decoy(self):
-        """GitHub resolves owner/repository case-insensitively."""
-        codeql = WORKFLOWS / "codeql.yml"
-        texts = {path: path.read_text(encoding="utf-8") for path in workflow_paths()}
-        original = texts[codeql]
-        pattern = re.compile(
-            r"(?m)^(\s*)- name: Initialize CodeQL\n"
-            r"(\s*)uses: github/codeql-action/init@([0-9a-f]{40})"
-            r"\s+#\s*(v[0-9]+\.[0-9]+\.[0-9]+)\s*$"
-        )
+    def test_codeql_lockstep_refuses_a_reference_it_cannot_resolve(self):
+        """Fail closed on an unresolved `uses:`, rather than walking past it.
 
-        def split_real_step(match: re.Match[str]) -> str:
-            item_indent, uses_indent, current_sha, current_version = match.groups()
-            return (
-                f"{item_indent}- name: Skipped current-release decoy\n"
-                f"{uses_indent}if: ${{{{ false }}}}\n"
-                f"{uses_indent}uses: github/codeql-action/init@{current_sha} "
-                f"# {current_version}\n"
-                f"{item_indent}- name: Initialize CodeQL\n"
-                f"{uses_indent}uses: GitHub/codeql-action/init@"
-                "db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8"
-            )
-
-        mutated, count = pattern.subn(split_real_step, original, count=1)
-        self.assertEqual(count, 1, "did not construct the case-variant decoy mutant")
-        texts[codeql] = mutated
-        self.assertTrue(codeql_lockstep_problems(texts), "the case-variant decoy survived")
-
-    def test_codeql_lockstep_reads_local_composites_behind_a_direct_decoy(self):
-        """A local action cannot hide the executed role behind a matched decoy."""
-        original = (WORKFLOWS / "codeql.yml").read_text(encoding="utf-8")
-        pattern = re.compile(
-            r"(?m)^(\s*)- name: Initialize CodeQL\n"
-            r"(\s*)uses: github/codeql-action/init@([0-9a-f]{40})"
-            r"\s+#\s*(v[0-9]+\.[0-9]+\.[0-9]+)\s*$"
-        )
-
-        def wrap_real_step(match: re.Match[str]) -> str:
-            item_indent, uses_indent, current_sha, current_version = match.groups()
-            return (
-                f"{item_indent}- name: Unreachable current-release decoy\n"
-                f"{uses_indent}if: ${{{{ github.repository == 'never/real' }}}}\n"
-                f"{uses_indent}uses: github/codeql-action/init@{current_sha} "
-                f"# {current_version}\n"
-                f"{item_indent}- name: Initialize CodeQL through a local action\n"
-                f"{uses_indent}uses: ./.github/actions/codeql-init"
-            )
-
-        mutated, count = pattern.subn(wrap_real_step, original, count=1)
-        self.assertEqual(count, 1, "did not construct the local-wrapper decoy mutant")
-        composite = (
-            "name: Initialize CodeQL\n"
-            "description: Exercise the complete executable action namespace\n"
-            "runs:\n"
-            "  using: composite\n"
-            "  steps:\n"
-            "    - uses: github/codeql-action/init@"
-            "db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8\n"
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            github = Path(directory) / ".github"
-            workflows = github / "workflows"
-            action = github / "actions" / "codeql-init"
-            workflows.mkdir(parents=True)
-            action.mkdir(parents=True)
-            (workflows / "codeql.yml").write_text(mutated, encoding="utf-8")
-            (action / "action.yml").write_text(composite, encoding="utf-8")
-            self.assertTrue(
-                codeql_lockstep_problems(github=github),
-                "the local composite's old executable CodeQL role survived",
-            )
+        An explicit tag and a dangling local reference are both spellings a
+        real parser accepts and this reader does not. Skipping either is the
+        silent pass: the step still runs, and nothing holds it to a release.
+        """
+        old_sha, old_version = self.OLD_CODEQL
+        for label, files in {
+            "explicitly tagged action reference": {
+                ".github/workflows/codeql.yml": self.displace_init(
+                    f"uses: !!str github/codeql-action/init@{old_sha} # {old_version}"
+                ),
+            },
+            "local action reference resolving to nothing": {
+                ".github/workflows/codeql.yml": self.displace_init("uses: ./tools/codeql-init"),
+            },
+        }.items():
+            with self.subTest(spelling=label), tempfile.TemporaryDirectory() as directory:
+                github = self.write_tree(Path(directory), files)
+                with self.assertRaises(AssertionError) as caught:
+                    codeql_lockstep_problems(github)
+                self.assertIn("cannot resolve", str(caught.exception))
 
     def test_the_reader_ignores_constructs_inside_a_run_block(self):
         """A `shell:` line inside a shell script is text, not a step key.
