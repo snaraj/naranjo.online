@@ -7,6 +7,69 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.67] - 2026-08-31
+
+### Fixed
+- Pulling the page down to refresh can no longer strand it. A second touch
+  during the 260ms snap-back used to cancel the settle and walk away, leaving
+  the page held at a fraction of a pull for the rest of the session, the
+  refresh indicator pinned to the top of the screen a thousand pixels down the
+  page, and the only escape a keyboard control that displaced the page further.
+  Every way out of the gesture now runs through the same settle, so the page
+  comes home from all of them.
+- A flick back up from the very top of the page no longer sometimes does
+  nothing (owner-confirmed on a real iPhone). The gesture defended the scroll
+  against any downward movement at all, and a finger does not begin an upward
+  flick with an upward pixel — the first stray sample was enough to eat the
+  scroll. The defence now asks for the same deliberate movement the swipe asks
+  for, and follows the finger it actually adopted rather than whichever touched
+  the screen first. It is narrower, not removed.
+- Scrolling no longer turns sticky after the first touch near the top of the
+  page: the listener that defends the pull used to be left attached to the
+  document permanently, blocking scrolling everywhere for the rest of the
+  session.
+- Swiping through the gallery moves forward. Each new picture used to be
+  mounted at the outgoing one's position and slide in backwards from the side
+  the finger had just left; it now enters from the correct side and travels to
+  its place, or arrives outright for a reader who prefers reduced motion. A
+  swipe begun immediately after another no longer drags through the previous
+  one's unfinished animation, and the picture can no longer be pushed off an
+  empty stage — the drag is bounded at one frame's width.
+- Moving through the gallery no longer pushes the page up and down. The caption
+  sat outside the reserved frame and existed only for items that carried one,
+  so changing picture moved everything below it. Every caption in a set now
+  shares one reserved lane as tall as the tallest of them, and the document
+  holds still across every change. A set in which nothing carries a caption
+  renders no caption box at all, so a gallery with nothing to say costs no
+  empty band.
+- Heatmap hover no longer opens the neighbouring day's readout: a mouse resting
+  in the gap between two cells now opens nothing, while a finger keeps the
+  reach it was given.
+
+### Changed
+- The Coding Projects rows read as figures rather than sentences. Each stat is
+  an icon and a bare number in fixed columns that line up across every card,
+  and the repeated italic "recorded" mark is gone from the visible row.
+  Nothing was dropped from the reading: hovering or touching any stat gives the
+  full phrase, and a figure captured out of band still says so there — one
+  interaction away instead of stamped on every line.
+- A repository's freshness is now a live relative age that ticks in place —
+  minutes under an hour — instead of a label fixed at the moment the page
+  rendered.
+- The Art section is now called Media.
+- The token panel's heatmaps draw the window they actually captured instead of
+  a fixed 371-day frame: one window per panel so its strips stay comparable to
+  each other, sized to the coverage behind them, and capped at 53 trailing
+  weeks. A panel that has captured a fortnight says so rather than drawing a
+  year of blanks around it.
+- A heatmap day in those strips is drawn square. Where the window is shorter
+  than the card, the strip now grows its days to a bounded maximum, stops, and
+  sits against the panel's left edge rather than stretching a fortnight into
+  bar-chart-shaped days. The width it leaves is deliberate and temporary: one
+  real column arrives per week of capture. On a phone the days still share the
+  strip and reach its edge, because there a bound and a full card cannot both
+  hold.
+
 ## [0.1.66] - 2026-08-31
 
 ### Fixed
