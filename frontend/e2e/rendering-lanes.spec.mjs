@@ -1371,6 +1371,18 @@ test('the strip survives the whole range of the page column token', async ({ pag
   );
   expect(declared, 'the page column token is not declared; this lane drives nothing').not.toBe('');
 
+  /* Each strip's own first measurement, kept per grid. The height claim below
+     is WIDTH-independence — one grid measured across the whole token range —
+     and it used to be written as "every grid matches the first grid on the
+     page", which is a different claim that happened to coincide while every
+     heatmap drew the same day. It stopped coinciding when the token panel
+     bounded and squared its day (issue 178 vs 268's ruling): its strip is
+     deliberately taller than the calendar's now, while each strip's own height
+     is still exactly as width-independent as it ever was. Measuring each grid
+     against itself says what the message has always said, and says it about
+     more: grids that all drifted together used to pass. */
+  const baseline = new Map();
+
   for (const width of ['20rem', '32rem', '48rem', '60rem', '90rem', '140rem']) {
     await page.evaluate((value) => {
       window.document.documentElement.style.setProperty('--page-column-width', value);
@@ -1410,10 +1422,11 @@ test('the strip survives the whole range of the page column token', async ({ pag
           `"${grid.label}" overflows its box at a ${width} page column without scrolling inside itself`
         ).toBe(true);
       }
+      if (!baseline.has(grid.label)) baseline.set(grid.label, grid.height);
       expect(
         grid.height,
         `"${grid.label}" changed height at a ${width} page column; the block-size reserve is not width-independent`
-      ).toBeCloseTo(observed.grids[0].height, 1);
+      ).toBeCloseTo(baseline.get(grid.label), 1);
     }
   }
   await page.evaluate(() =>
@@ -1847,14 +1860,26 @@ test('a source with no series renders no graph, and one with a series still rend
        only panel-wide so a control growing back beside one graph fails here
        too. */
     expect(shown.toggles, `"${source.label}" grew a display control back`).toBe(0);
-    /* MEASURED, not asserted: the graph that stayed renders in exactly the
-       box the shared component gives the other panel's calendar, so removing
-       the region beside it moved nothing about it. */
-    expect(observed.calendarStrip, 'no second heatmap to measure against').toBeGreaterThan(0);
+    /* MEASURED, not asserted: the graph that stayed renders in exactly the box
+       every other graph in this panel gets, so removing the region beside it
+       moved nothing about it.
+
+       The yardstick used to be the OTHER panel's calendar, and issue 178 vs
+       268's ruling retired that comparison rather than relaxed it: the token
+       panel now bounds its day and draws it square, the calendar does not, so
+       the two boxes are deliberately different heights and an equality between
+       them would be pinning the absence of the ruling. What the claim was
+       always about survives intact and is now measured where it lives — every
+       source inside this panel shares one box, which is what "removing the
+       region beside it moved nothing" actually means. The calendar is still
+       measured, as the non-vacuity guard it also was: a page with one heatmap
+       on it would make this whole comparison free. */
+    expect(observed.calendarStrip, 'the page rendered no second heatmap at all').toBeGreaterThan(0);
+    expect(shown.stripHeight, `"${source.label}" renders a graph with no box`).toBeGreaterThan(0);
     expect(
       shown.stripHeight,
-      `"${source.label}" renders its graph in a different box from the page's other heatmap`
-    ).toBe(observed.calendarStrip);
+      `"${source.label}" renders its graph in a different box from the other sources in its own panel`
+    ).toBe(observed.rendered[drawn[0].label].stripHeight);
   }
 
   /* Nothing anywhere in this panel is a placeholder. */
@@ -5698,12 +5723,22 @@ test('the token-activity grid fills its card, not a tiny left-aligned block', as
     const blockBox = block.getBoundingClientRect();
     const bodyBox = body.getBoundingClientRect();
     const cells = block.querySelector('.grid-cells');
+    const strip = block.querySelector('.grid-strip');
+    const cell = block.querySelector('.grid-cells .grid-cell');
+    const cellsBox = cells === null ? null : cells.getBoundingClientRect();
+    const stripBox = strip === null ? null : strip.getBoundingClientRect();
+    const cellBox = cell === null ? null : cell.getBoundingClientRect();
     return {
       fullwidth: block.getAttribute('data-grid-fullwidth'),
       blockWidth: blockBox.width,
       bodyWidth: bodyBox.width,
       columns: Number(block.getAttribute('data-grid-columns')),
-      cellsWidth: cells === null ? 0 : cells.getBoundingClientRect().width,
+      cellsWidth: cellsBox === null ? 0 : cellsBox.width,
+      cellsLeft: cellsBox === null ? 0 : cellsBox.left,
+      stripLeft: stripBox === null ? 0 : stripBox.left,
+      stripWidth: stripBox === null ? 0 : stripBox.width,
+      cellWidth: cellBox === null ? 0 : cellBox.width,
+      cellHeight: cellBox === null ? 0 : cellBox.height,
       viewport: window.innerWidth,
     };
   });
@@ -5717,36 +5752,67 @@ test('the token-activity grid fills its card, not a tiny left-aligned block', as
     `the grid is ${Math.round(measured.blockWidth)}px inside a ${Math.round(measured.bodyWidth)}px card`
   ).toBeGreaterThan(measured.bodyWidth * 0.9);
 
-  /* A RECORDED GAP, not a green claim (issue 268; AGENTS.md, "Ratchet pairs":
-     record a gap loudly rather than greenwashing it).
-     ---------------------------------------------------------------------
-     The block above still fills the card, which is the whole of what issue
-     178's owner report asked for and what this lane has always measured. The
-     CELLS inside it no longer necessarily do, and that is new: the panel's
-     window is its own coverage since issue 268, so a fortnight of history is
-     ten columns, and ten columns bounded by --grid-day-max (the token panel's
-     own "a day may not be drawn nine times wider than it is tall", issue 158)
-     cannot reach across a desktop card.
+  /* THE RULING, no longer a recorded gap (issue 178 vs issue 268). The owner
+     delegated this call to the coordinator on 2026-08-31 and the ruling is
+     that COVERAGE-WINDOW TRUTH OUTRANKS FILL at short coverage: the panel
+     draws only the days it captured, a day stays square and may scale up only
+     to the caller's bound, and the width the strip does not reach is accepted
+     because it closes itself — one real column per week. This lane used to pin
+     CURRENT BEHAVIOUR with the conflict written into its message; it now
+     asserts the ruled contract, and only for THIS surface. The version-control
+     calendar sets no bound, keeps the plain stretch, and is not measured here.
 
-     The two owner directives conflict at that size and neither is wrong. A
-     strip cannot both cover only what was captured and fill a card nine times
-     wider unless a day stops being square, and the bar chart that produces was
-     measured and refused once already. Which one yields is the owner's call —
-     a --grid-day-max edit in UsageTracker.svelte, or a width bound on the
-     block — so this pins CURRENT BEHAVIOUR with the numbers in the message
-     rather than asserting a contract nobody has ruled on. The day the ruling
-     lands, this assertion is what has to be rewritten, which is the point of
-     writing it down here instead of leaving the gap for a reader to find on
-     the rendered page. */
-  const filled = measured.cellsWidth / measured.blockWidth;
+     Three statements, because the ruling has three halves and any one of them
+     alone would let a defect through: the BLOCK still spans the card (issue
+     178's own report, unchanged and asserted above), the CELLS stop at the
+     bound instead of stretching into bar-chart days, and what stops is LEFT-
+     ALIGNED with the strip rather than centred in the space it declined. */
   expect(
-    measured.columns > 0 && measured.cellsWidth > 0,
-    'the token strip drew no cells to measure the recorded gap against'
+    measured.columns > 0 && measured.cellWidth > 0,
+    'the token strip drew no cells to measure the ruling against'
   ).toBe(true);
+
+  /* Left-aligned: the cells begin exactly where the strip's content begins.
+     A centred remainder would split the accepted gap in two and read as a
+     mistake rather than as a window that has not filled out yet. */
   expect(
-    filled > 0.9 || measured.columns < 53,
-    `the token strip fills ${(filled * 100).toFixed(1)}% of its ${Math.round(measured.blockWidth)}px block at ${measured.columns} columns; a full-width window that does not fill its block is a defect rather than the recorded coverage gap`
-  ).toBe(true);
+    measured.cellsLeft,
+    `the token strip's cells begin at ${measured.cellsLeft.toFixed(1)} inside a strip that begins at ${measured.stripLeft.toFixed(1)}: the remainder was distributed instead of left-aligned`
+  ).toBeCloseTo(measured.stripLeft, 0);
+
+  /* The token panel's own bound is 1.25rem, released below 30rem where the
+     columns share the strip instead (UsageTracker.svelte states both halves).
+     So the contract is range-dependent, and both ranges are asserted rather
+     than one being skipped — the desktop projects reach the first branch and
+     the two phone projects reach the second. */
+  const dayBoundPx = 20;
+  if (measured.viewport > 480) {
+    expect(
+      measured.cellWidth,
+      `a day is drawn ${measured.cellWidth.toFixed(2)}px wide against a ${dayBoundPx}px bound; the cap is not holding and the strip is stretching into bar-chart days again`
+    ).toBeLessThanOrEqual(dayBoundPx + subPixel);
+    /* SQUARE, which is the half a width cap alone does not give: capping the
+       width and leaving the row height at the base token drew a 20x10 day —
+       the same shape issue 158 refused, only smaller. */
+    expect(
+      measured.cellWidth,
+      `a day is ${measured.cellWidth.toFixed(2)}x${measured.cellHeight.toFixed(2)}: the bound stopped its width without squaring it`
+    ).toBeCloseTo(measured.cellHeight, 0);
+    // Non-vacuity: a day that never grew would satisfy both of the above.
+    expect(
+      measured.cellHeight,
+      `a day is ${measured.cellHeight.toFixed(2)}px tall; it did not scale up from the base cell at all`
+    ).toBeGreaterThan(10);
+  } else {
+    /* Below the bound's range the phone contract issue 268 measured still
+       holds: the columns share the strip and the cells reach its edge, which
+       is the owner's no-dead-space rule on a box too narrow for a bound and a
+       fill to coexist. */
+    expect(
+      measured.cellsWidth,
+      `the token strip's cells reach ${measured.cellsWidth.toFixed(1)} of a ${measured.stripWidth.toFixed(1)}px strip at ${measured.viewport}px`
+    ).toBeCloseTo(measured.stripWidth, 0);
+  }
 });
 
 /* NO DISPLAY CONTROLS, AND ONE GRAPH PER SOURCE (owner directive, 2026-08-28,

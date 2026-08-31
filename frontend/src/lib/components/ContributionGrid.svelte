@@ -717,6 +717,17 @@
     display: flex;
     flex-direction: column;
     gap: var(--grid-gap, 0.25rem);
+    /* THE DRAWN DAY, named once. Every box in the strip — the cell, the seven
+       rows, the weekday gutter beside them and .grid-strip's own height — is
+       derived from this one value, so the day and the box that holds it cannot
+       disagree the moment either moves. It is an ALIAS, not a token: the theme
+       layer still owns --grid-cell-size (styles.css), this only says which
+       value this subtree draws a day at, and the full-width rule below is the
+       only thing that ever changes it. Declared here rather than on :root
+       because it is scoped by construction — the legend is a child of this
+       box and a sibling of the strip, which is exactly why its swatches keep
+       the base size while the strip's days may grow. */
+    --grid-day: var(--grid-cell-size, 0.625rem);
     /* The block is exactly as wide as its two horizontal neighbors need,
        side by side: the weekday gutter, the row-gap beside it, and n cells
        plus their n-1 gaps. A CAP rather than a width, so the box still
@@ -743,7 +754,7 @@
        resizes one. */
     max-inline-size: calc(
       var(--grid-axis-width, 1.25rem) + var(--grid-gap, 0.25rem) + var(--grid-columns, 53) *
-        (var(--grid-cell-size, 0.625rem) + var(--grid-cell-gap, 0.1875rem)) -
+        (var(--grid-day) + var(--grid-cell-gap, 0.1875rem)) -
         var(--grid-cell-gap, 0.1875rem)
     );
   }
@@ -754,36 +765,65 @@
      other tracker does and a long one still overflows into the strip's own
      scroll exactly as it always has.
 
-     A KNOWN, RECORDED GAP SITS UNDER THIS RULE (issue 268). The block still
-     takes its container whatever its data — that is issue 178's own owner
-     report, "a tiny left-aligned block beside a card every other tracker
-     fills", and the lane that measures it is unchanged. What changed under it
-     is that the token panel's window is its own COVERAGE now rather than a
-     fixed year, so a fortnight of history draws ten columns, and ten columns
-     bounded by that caller's --grid-day-max are 230px of cells inside a 914px
-     block (MEASURED at 1440px in all three engines). The two owner directives
-     genuinely conflict at that size and neither of them is wrong: a strip
-     cannot both cover only what was captured AND fill a card nine times wider,
-     unless a day is drawn nine times wider than it is tall — which is the bar
-     chart issue 158 measured and refused. The conflict is recorded here and
-     pinned as CURRENT BEHAVIOUR in e2e/rendering-lanes.spec.mjs's issue-178
-     lane rather than resolved by a lane author; resolving it is a token edit
-     (--grid-day-max in UsageTracker.svelte) or a block-width bound, and it is
-     the owner's call which. */
+     THE RULING THAT CLOSED THE ISSUE-178 vs ISSUE-268 CONFLICT (the owner
+     delegated the call to the coordinator, 2026-08-31; coverage-window truth
+     wins). The block still takes its container whatever its data — that is
+     issue 178's own owner report, "a tiny left-aligned block beside a card
+     every other tracker fills", and it is unchanged. What changed under it is
+     that the token panel's window is its own COVERAGE now rather than a fixed
+     year, so a fortnight of history draws ten columns, and ten columns were
+     230px of cells inside a 914px block (MEASURED at 1440px in all three
+     engines). The two owner directives genuinely conflict at that size and
+     neither of them is wrong: a strip cannot both cover only what was captured
+     AND fill a card nine times wider, unless a day is drawn nine times wider
+     than it is tall — which is the bar chart issue 158 measured and refused.
+
+     The ruling is that the honest window outranks the full card. A day stays
+     SQUARE and may scale up only as far as the caller's own bound; the strip
+     stops there and left-aligns with the rest of the panel; and the width it
+     does not reach is an ACCEPTED gap that closes itself, one real column per
+     week of new capture. Nothing here is a cap on the BLOCK — the block still
+     spans the card, so issue 178's report stays answered — only on how wide a
+     single day may be drawn.
+
+     The square is made by moving --grid-day (above) rather than by writing the
+     row arithmetic out a second time: every box in the strip already derives
+     from that alias, so re-pointing it on .grid-body squares the cell, the
+     seven rows, the gutter and the strip's own height together, and none of
+     them can be left behind. Its default is the alias's own base, so a
+     full-width caller that names no bound renders byte for byte as it did —
+     the version-control calendar does exactly that.
+
+     .grid-body, NOT .grid-block, and the scope is the whole point: .grid-legend
+     is .grid-body's sibling, so the legend's swatches keep the base size in
+     every mode. That is the same scoping decision the stretch rule below
+     already makes, for the same reason. */
   .grid-block[data-grid-fullwidth='true'] {
     max-inline-size: none;
     inline-size: 100%;
   }
 
+  .grid-block[data-grid-fullwidth='true'] .grid-body {
+    --grid-day: var(--grid-day-size, var(--grid-cell-size, 0.625rem));
+  }
+
   .grid-block[data-grid-fullwidth='true'] .grid-cells,
   .grid-block[data-grid-fullwidth='true'] .grid-months {
-    /* The fallback is load-bearing, not decoration: --grid-cell-size has no
-       :root definition anywhere in this file, only fallback usages, so a
-       var() here without one is invalid at computed-value time — which does
-       not degrade, it drops this whole declaration to its initial value
-       (none) and silently falls through to the capped layout's fixed-size
-       columns. MEASURED: that is exactly what shipped here once already. */
-    grid-template-columns: repeat(var(--grid-columns), minmax(var(--grid-cell-size, 0.625rem), 1fr));
+    /* The track FLOOR is the drawn day, so a window too long for its card
+       overflows into the strip's own scroll at the size the day is actually
+       drawn rather than shrinking below it — which is what keeps a bounded
+       day square at 53 columns as well as at ten.
+
+       --grid-day carries no fallback here and needs none, which is a change
+       worth stating because the hazard it replaces is real: --grid-cell-size
+       has no :root definition anywhere, only fallback usages, so a bare
+       var() on IT is invalid at computed-value time — that does not degrade,
+       it drops the whole declaration to its initial value (none) and falls
+       silently through to the capped layout's fixed-size columns. MEASURED:
+       exactly that shipped here once already. --grid-day is declared outright
+       on .grid-block, so every descendant resolves it and the fallback that
+       used to be load-bearing has nothing left to carry. */
+    grid-template-columns: repeat(var(--grid-columns), minmax(var(--grid-day), 1fr));
     inline-size: 100%;
     /* An upper bound on how far a FEW columns may stretch (issue 158). A
        full-width strip divides its container between however many columns it
@@ -799,9 +839,20 @@
        the stretching behaviour it has today, byte for byte. --grid-columns is
        written by the component just above, so this arithmetic is over the
        columns actually drawn rather than an assumption about them; the month
-       axis shares the rule so the two can never disagree about their width. */
+       axis shares the rule so the two can never disagree about their width.
+
+       n columns carry n-1 gaps, and the trailing one is subtracted for the
+       same reason .grid-block's own cap subtracts it: without that term the
+       box is one gap wider than the columns need, and a bound that binds
+       hands the surplus straight back to the tracks. MEASURED, which is how
+       it was found: a 20px bound over ten columns drew 20.30px days inside a
+       230px box — square to the eye, and not the number the caller asked
+       for. At 227px the same ten columns draw exactly 20px. It mattered only
+       once a caller both bound the day AND drew it square, which is why it
+       survived the bound's own introduction. */
     max-inline-size: calc(
-      var(--grid-columns) * (var(--grid-day-max, 100vw) + var(--grid-cell-gap, 0.1875rem))
+      var(--grid-columns) * (var(--grid-day-max, 100vw) + var(--grid-cell-gap, 0.1875rem)) -
+        var(--grid-cell-gap, 0.1875rem)
     );
   }
 
@@ -841,9 +892,9 @@
      month-axis strip beside it. */
   .grid-weekday-axis {
     display: grid;
-    grid-template-rows: repeat(7, var(--grid-cell-size, 0.625rem));
+    grid-template-rows: repeat(7, var(--grid-day));
     row-gap: var(--grid-cell-gap, 0.1875rem);
-    block-size: calc(7 * var(--grid-cell-size, 0.625rem) + 6 * var(--grid-cell-gap, 0.1875rem));
+    block-size: calc(7 * var(--grid-day) + 6 * var(--grid-cell-gap, 0.1875rem));
     /* Fixed rather than intrinsic (issue 189): an un-sized flex child would
        shrink to whatever its widest label's glyphs happen to measure, which
        .grid-block's own cap (above) has no way to read back — the two would
@@ -898,7 +949,7 @@
      only. */
   .grid-strip {
     block-size: calc(
-      7 * var(--grid-cell-size, 0.625rem) + 6 * var(--grid-cell-gap, 0.1875rem) +
+      7 * var(--grid-day) + 6 * var(--grid-cell-gap, 0.1875rem) +
         var(--grid-month-gap, 0.1875rem) + var(--grid-month-size, 0.75rem) +
         var(--grid-scrollbar-size, 0.75rem)
     );
@@ -916,8 +967,8 @@
   .grid-cells {
     display: grid;
     grid-auto-flow: column;
-    grid-template-rows: repeat(7, var(--grid-cell-size, 0.625rem));
-    grid-auto-columns: var(--grid-cell-size, 0.625rem);
+    grid-template-rows: repeat(7, var(--grid-day));
+    grid-auto-columns: var(--grid-day);
     gap: var(--grid-cell-gap, 0.1875rem);
     inline-size: max-content;
   }
@@ -926,8 +977,8 @@
      near-surface neutral and levels 1..4 step brighter. The theme layer
      restyles or re-anchors the ramp by overriding these five properties. */
   .grid-cell {
-    inline-size: var(--grid-cell-size, 0.625rem);
-    block-size: var(--grid-cell-size, 0.625rem);
+    inline-size: var(--grid-day);
+    block-size: var(--grid-day);
     border-radius: var(--grid-cell-radius, 2px);
     background: var(--grid-cell-0, #383835);
   }
@@ -1001,7 +1052,7 @@
     margin: var(--grid-month-gap, 0.1875rem) 0 0;
     display: grid;
     grid-auto-flow: column;
-    grid-auto-columns: var(--grid-cell-size, 0.625rem);
+    grid-auto-columns: var(--grid-day);
     gap: var(--grid-cell-gap, 0.1875rem);
     inline-size: max-content;
     block-size: var(--grid-month-size, 0.75rem);

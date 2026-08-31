@@ -738,12 +738,41 @@ test('a full-width call site stretches to its container instead of its columns',
     grid
   );
   assert.ok(tracks, 'the full-width track rule is missing, or no longer covers both the cells and the month axis');
-  // The fallback is load-bearing: --grid-cell-size has no :root definition
-  // anywhere, only fallback usages, so a var() here without one is invalid
-  // at computed-value time and silently drops the whole declaration to
-  // `none` — which falls through to the capped layout's fixed-size columns
-  // rather than stretching. MEASURED: that regression shipped here once.
-  assert.match(tracks[1], /minmax\(var\(--grid-cell-size,\s*0\.625rem\),\s*1fr\)/);
+  /* The floor is the DRAWN day (--grid-day), not the theme's base cell. A
+     window too long for its card has to overflow at the size the day is
+     actually drawn, which is what keeps a bounded day square at 53 columns as
+     well as at ten; flooring at the base cell instead would draw tall
+     rectangles the moment a caller raised its bound. */
+  assert.match(tracks[1], /minmax\(var\(--grid-day\),\s*1fr\)/);
+
+  /* That bare var() carries no fallback and needs none — but ONLY because the
+     alias is declared outright, so this asserts the declaration rather than
+     assuming it. The hazard it replaces is real and shipped here once:
+     --grid-cell-size has no :root definition anywhere, only fallback usages,
+     so a bare var() on IT is invalid at computed-value time and silently drops
+     the whole declaration to `none`, falling through to the capped layout's
+     fixed-size columns rather than stretching. */
+  const block = /\.grid-block \{([^}]*)\}/.exec(grid);
+  assert.ok(block, 'the base .grid-block rule is missing');
+  assert.match(
+    block[1],
+    /--grid-day:\s*var\(--grid-cell-size,\s*0\.625rem\)/,
+    'the drawn-day alias is not declared on .grid-block, so every bare var(--grid-day) under it is invalid at computed-value time'
+  );
+
+  /* THE RULING (issue 178 vs 268, owner-delegated 2026-08-31): a bounded day
+     is drawn SQUARE, and the square is made by re-pointing the one alias every
+     box in the strip already derives from — the cell, its seven rows, the
+     weekday gutter and the strip's own height — so none of them can be left
+     behind at the old size. Scoped to .grid-body on purpose: .grid-legend is
+     its sibling, so the legend's swatches keep the base size in every mode. */
+  const body = /\.grid-block\[data-grid-fullwidth='true'\] \.grid-body \{([^}]*)\}/.exec(grid);
+  assert.ok(body, 'the full-width square-day rule is missing');
+  assert.match(
+    body[1],
+    /--grid-day:\s*var\(--grid-day-size,\s*var\(--grid-cell-size,\s*0\.625rem\)\)/,
+    'the full-width day no longer follows the caller bound, or lost the default that keeps an unbounded caller unchanged'
+  );
 });
 
 // The series arrives from a capture file on the owner's machine, through a

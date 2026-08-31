@@ -612,10 +612,17 @@ test('the strip owns fixed geometry and its own overflow', () => {
   // token the thing it measures is laid out with, so a box computed from one
   // set of numbers while its contents are drawn from another is no longer
   // expressible.
+  //
+  // The row term is --grid-day, the DRAWN day, which is the same alias the
+  // cells and the weekday gutter read (issue 178 vs 268's ruling let a
+  // full-width caller bound that day and draw it square). Reading the base
+  // cell token here instead would restore exactly the class of drift this pin
+  // exists to forbid: a caller raises its day, the cells and gutter grow, and
+  // the box that holds them stays the old height and clips them.
   const stripBox = /\.grid-strip \{[^}]*?block-size: calc\(([\s\S]*?)\);/.exec(grid);
   assert.ok(stripBox, 'the strip no longer derives its own block size from its rows');
   for (const term of [
-    '7 * var(--grid-cell-size, 0.625rem)',
+    '7 * var(--grid-day)',
     '6 * var(--grid-cell-gap, 0.1875rem)',
     'var(--grid-month-gap, 0.1875rem)',
     'var(--grid-month-size, 0.75rem)',
