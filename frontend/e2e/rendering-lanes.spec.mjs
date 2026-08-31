@@ -1795,14 +1795,6 @@ test('a source with no series renders no graph, and one with a series still rend
       rendered,
       pending: panel.querySelectorAll('[data-grid-pending]').length,
       notes: panel.querySelectorAll('.grid-empty').length,
-      /* The other heatmap on the page, and the geometry the shared component
-         guarantees. The graph that STAYED must render in exactly that box:
-         this is the height comparison the retired lane made between an empty
-         grid and a full one, made between two full ones instead. */
-      calendarStrip: (() => {
-        const block = window.document.querySelector('[data-activity-panel] .grid-block');
-        return block === null ? 0 : strip(block);
-      })(),
     };
   });
   expect(observed, 'the token panel never painted; this lane proves nothing').not.toBeNull();
@@ -1860,31 +1852,111 @@ test('a source with no series renders no graph, and one with a series still rend
        only panel-wide so a control growing back beside one graph fails here
        too. */
     expect(shown.toggles, `"${source.label}" grew a display control back`).toBe(0);
-    /* MEASURED, not asserted: the graph that stayed renders in exactly the box
-       every other graph in this panel gets, so removing the region beside it
-       moved nothing about it.
+    /* The graph that stayed still has a box at all — a source whose neighbour
+       lost its series must not come back as a zero-height strip.
 
-       The yardstick used to be the OTHER panel's calendar, and issue 178 vs
-       268's ruling retired that comparison rather than relaxed it: the token
-       panel now bounds its day and draws it square, the calendar does not, so
-       the two boxes are deliberately different heights and an equality between
-       them would be pinning the absence of the ruling. What the claim was
-       always about survives intact and is now measured where it lives — every
-       source inside this panel shares one box, which is what "removing the
-       region beside it moved nothing" actually means. The calendar is still
-       measured, as the non-vacuity guard it also was: a page with one heatmap
-       on it would make this whole comparison free. */
-    expect(observed.calendarStrip, 'the page rendered no second heatmap at all').toBeGreaterThan(0);
+       WHAT THIS LANE DELIBERATELY NO LONGER CLAIMS, and the correction is
+       worth writing down because the first attempt got it wrong. Until issue
+       178 vs 268's ruling this compared the surviving strip against the OTHER
+       panel's calendar; the ruling makes those two boxes different on purpose,
+       so that equality would now pin the absence of the ruling. The first
+       re-aim pointed the same comparison at `drawn[0]` instead — but this lane
+       STAGES one of exactly two sources seriesless, so `drawn` has one element
+       under every admitted input and the assertion compared a number with
+       itself. A tautology is not a weaker guard, it is no guard, and it hid
+       the fact that the advertised contract was measured nowhere.
+       "Every source in this panel shares one box" needs a page where two
+       sources actually draw, which this lane by construction is not, so it is
+       measured in the lane immediately below instead. */
     expect(shown.stripHeight, `"${source.label}" renders a graph with no box`).toBeGreaterThan(0);
-    expect(
-      shown.stripHeight,
-      `"${source.label}" renders its graph in a different box from the other sources in its own panel`
-    ).toBe(observed.rendered[drawn[0].label].stripHeight);
   }
 
   /* Nothing anywhere in this panel is a placeholder. */
   expect(observed.pending, 'the token panel renders placeholder cells somewhere').toBe(0);
   expect(observed.notes, 'the token panel renders an empty-grid note somewhere').toBe(0);
+});
+
+/* ONE PANEL, ONE BOX (issues 178/268). Every source in the token panel draws
+ * its graph at the same size, because the bound that decides that size
+ * (--grid-day-size / --grid-day-max) belongs to the PANEL and not to any one
+ * source. That is the guarantee "removing the region beside a graph moved
+ * nothing about it" was always leaning on, and until this lane existed it was
+ * measured nowhere: the lane above stages one of exactly two sources
+ * seriesless, so it can only ever have one drawn source to compare, and an
+ * earlier version of this contract lived there as a number compared with
+ * itself.
+ *
+ * So this lane stages NOTHING. It takes the origin's real payload, where both
+ * sources carry a series, and the guard below refuses to run at all on a page
+ * that offers fewer than two — which is what stops it degenerating back into a
+ * tautology the day the snapshot changes shape. The comparison is made on the
+ * boxes a reader actually sees: the strip's own height, the cell band inside
+ * it, and the drawn day itself, so a source given a different day by any route
+ * fails here by name. */
+test('every drawn source in the token panel shares one graph box (issues 178/268)', async ({
+  page,
+}) => {
+  await visit(page);
+  const sources = await page.evaluate(() => {
+    const panel = window.document.querySelector('[data-panel-id="token-usage"]');
+    if (panel === null) return null;
+    const box = (node) => {
+      const rect = node.getBoundingClientRect();
+      return `${Math.round(rect.width * 100) / 100}x${Math.round(rect.height * 100) / 100}`;
+    };
+    const drawn = [];
+    for (const source of panel.querySelectorAll('.usage-source')) {
+      const block = source.querySelector('.grid-block');
+      if (block === null) continue;
+      const cell = block.querySelector('.grid-cells .grid-cell');
+      if (cell === null) continue;
+      drawn.push({
+        label: source.querySelector('.usage-source-label').textContent.trim(),
+        strip: box(block.querySelector('.grid-strip')),
+        cells: box(block.querySelector('.grid-cells')),
+        day: box(cell),
+        columns: block.getAttribute('data-grid-columns'),
+      });
+    }
+    return drawn;
+  });
+  expect(sources, 'the token panel never painted; this lane proves nothing').not.toBeNull();
+
+  /* The guard that keeps this lane honest. One drawn source would make every
+     comparison below compare an element with itself, which is exactly the
+     failure this lane was written to repair — so it is refused outright rather
+     than passing quietly. */
+  expect(
+    sources.length,
+    `the token panel draws ${sources.length} source graph(s); a shared-box claim needs at least two to compare`
+  ).toBeGreaterThan(1);
+
+  const [first, ...rest] = sources;
+  // Non-vacuity: zero-sized boxes would satisfy any equality between them.
+  expect(first.day, `"${first.label}" draws a day of no size`).not.toBe('0x0');
+  expect(first.strip, `"${first.label}" draws a strip of no size`).not.toBe('0x0');
+
+  for (const source of rest) {
+    expect(
+      source.day,
+      `"${source.label}" draws a ${source.day} day where "${first.label}" draws ${first.day}; the day bound belongs to the panel, not to one source`
+    ).toBe(first.day);
+    expect(
+      source.strip,
+      `"${source.label}" renders its graph in a ${source.strip} box where "${first.label}" renders ${first.strip}`
+    ).toBe(first.strip);
+    expect(
+      source.cells,
+      `"${source.label}" draws a ${source.cells} cell band where "${first.label}" draws ${first.cells}`
+    ).toBe(first.cells);
+    /* The window is the panel's too (issue 268: one window per panel, derived
+       from the coverage of all its sources), so two sources drawing different
+       column counts would mean the same box holds two different windows. */
+    expect(
+      source.columns,
+      `"${source.label}" draws ${source.columns} columns where "${first.label}" draws ${first.columns}; the coverage window is the panel's, not each source's`
+    ).toBe(first.columns);
+  }
 });
 
 /* The other half of the ruling, and the reason the empty state was not simply
