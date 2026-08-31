@@ -62,7 +62,7 @@
 <script lang="ts">
   import type { UsageActivity, UsageTrackerProps } from '../blocks.ts';
   import { formatMagnitude, seriesCells } from '../grid';
-  import { activityReading, coverageReading, fullDepthColumns } from '../periods.ts';
+  import { activityReading, coverageColumns, coverageReading, coverageWindow } from '../periods.ts';
   import ContributionGrid from './ContributionGrid.svelte';
   import PanelShell from './PanelShell.svelte';
 
@@ -75,20 +75,35 @@
      that asked for it. What replaces four choices is one honest answer: the
      source's own totals, read daily, over every day it has captured.
 
-     WHICH WINDOW that is, and why it is not simply 'all', lives in
-     lib/periods.ts beside the arithmetic (fullDepthColumns). The short of it:
-     deleting the control while keeping its 12mo default would have restored
-     the year-long CEILING issue 158 removed, and taking the bare capture
-     instead would draw a fifty-eight-day history as a tenth of the card the
-     owner's no-dead-space rule says must be filled. The window is the wider
-     of the two, so neither failure is reachable.
+     WHICH WINDOW that is lives in lib/periods.ts beside the arithmetic
+     (coverageWindow). The short of it, since issue 268: the window is the
+     panel's own COVERAGE — the union of what its sources actually captured,
+     week-aligned, floored at the width the legend needs and capped at the
+     reserve's trailing year — rather than a fixed frame a fortnight of history
+     sits in one corner of.
+
+     ONE window for the whole panel, derived here and handed to every source,
+     which is the half a per-source helper structurally could not do: two
+     strips stacked in one card are read against each other, so a column at the
+     same x has to be the same week on both. A source shorter than the panel's
+     span is front-padded into it and says so in its own coverage line.
 
      The daily reading needs no name at all: it is what activityReading and
      ContributionGrid both already default to, and passing it here would be a
      third statement of one default that could then disagree with the other
      two. */
+  function seriesOf(activity: UsageActivity) {
+    return seriesCells(activity.series.startDate, activity.series.totals);
+  }
+
+  const panelWindow = $derived(
+    coverageWindow(
+      sections.flatMap((source) => (source.activity ? [seriesOf(source.activity)] : []))
+    )
+  );
+
   function windowedColumns(activity: UsageActivity) {
-    return fullDepthColumns(seriesCells(activity.series.startDate, activity.series.totals));
+    return coverageColumns(seriesOf(activity), panelWindow);
   }
 </script>
 
@@ -501,9 +516,20 @@
      thirty-day window still fills a legible block rather than a stamp in the
      corner, narrow enough that a cell stays a cell. The token is read by
      ContributionGrid's full-width rule, whose own default never binds, so
-     this is the token panel's decision and no other grid's. */
+     this is the token panel's decision and no other grid's.
+
+     And the day is drawn SQUARE at that bound rather than merely stopped at
+     it (issue 178 vs 268, owner-delegated ruling 2026-08-31). Capping the
+     width alone left a 20x10 cell — a day twice as wide as it is tall, the
+     same shape issue 158 refused, only smaller. --grid-day-size is the other
+     half of the same decision: the strip's rows, gutter and box all re-derive
+     from it inside ContributionGrid, so a capped day is 20x20 and the strip
+     simply stops and left-aligns. The width it leaves is the accepted gap the
+     ruling names, and it closes itself as capture grows. Both tokens are set
+     here, together, because either alone is a shape nobody chose. */
   .usage-activity {
     --grid-day-max: 1.25rem;
+    --grid-day-size: 1.25rem;
   }
 
   /* At a phone width the bound flips from protecting the graph to starving
@@ -514,10 +540,20 @@
      own "this cap can never bind" sentinel, so below 30rem the columns
      simply share the strip. The 88px absurdity issue 158 measured was a
      914px card; the worst a ≤480px viewport can produce is a fraction of
-     that, on a box too narrow for the bound and the fill to coexist. */
+     that, on a box too narrow for the bound and the fill to coexist.
+
+     The square bound is released with it, and for the same reason. Below this
+     width the columns share the strip, so the drawn day is whatever that
+     division gives and no declared height can equal it — holding the rows at
+     20px would only trade a wide cell for a tall one while spending 70px of
+     phone scroll per source. The phone keeps exactly the strip issue 268
+     measured filling its card (198/198, 253/253, 268/268, 290/290 px); the
+     square is a desktop-range promise, and that boundary is stated rather
+     than implied. */
   @media (max-width: 30rem) {
     .usage-activity {
       --grid-day-max: 100vw;
+      --grid-day-size: 0.625rem;
     }
   }
 

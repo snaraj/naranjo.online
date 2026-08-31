@@ -5,7 +5,13 @@
  * source.
  *
  * Everything here is a plain function so a node test can drive the bucketing,
- * the view transforms, and the month axis directly, with no browser. */
+ * the view transforms, the month axis and the pointer arithmetic directly,
+ * with no browser. */
+
+/* The one point shape this page has, borrowed rather than restated: a type-only
+ * import, erased at build and at test time, so this module still pulls nothing
+ * in at run time and a coordinate cannot come to mean two things. */
+import type { TipPoint } from './tooltip.ts';
 
 /* A grid column is one week: seven stacked cells, oldest day at the top. */
 export const gridRows = 7;
@@ -226,17 +232,33 @@ export const weekdayAxis: readonly WeekdayAxisLabel[] = [
  * Idempotent on already-aligned input: re-running it on its own output
  * recomputes the identical anchor from the identical newest dated cell, so a
  * source that is already calendar-aligned (the VCS payload's own weeks
- * array) passes through unchanged rather than drifting on a second pass. */
-export function calendarColumns(cells: GridCell[], weeks: number = pendingWeeks): GridCell[][] {
+ * array) passes through unchanged rather than drifting on a second pass.
+ *
+ * `anchor` OVERRIDES the newest-cell anchor above, and it is what lets several
+ * series share ONE window (issue 268). Left alone, each series ends its window
+ * on its own newest day — right for a lone strip, and wrong the moment two
+ * strips sit in one panel and have to be read against each other, because a
+ * source that stopped capturing a week early would silently draw a window a
+ * week behind the one above it. A caller that knows the panel's window passes
+ * its last day here and every source lays its cells onto the same calendar; a
+ * date this cannot parse is ignored rather than obeyed, so a malformed anchor
+ * degrades to the per-series answer instead of to an empty grid. */
+export function calendarColumns(
+  cells: GridCell[],
+  weeks: number = pendingWeeks,
+  anchor?: string
+): GridCell[][] {
   const dated = cells.filter((cell) => cell.date !== '');
   if (dated.length === 0) {
     return toColumns(cells);
   }
   const byDate = new Map(dated.map((cell) => [cell.date, cell]));
   const real = dated.filter((cell) => !cell.absent);
-  const anchor = (real.length > 0 ? real[real.length - 1] : dated[dated.length - 1]).date;
-  const anchorWeekday = new Date(`${anchor}T00:00:00Z`).getUTCDay();
-  const windowEnd = addDays(anchor, gridRows - 1 - anchorWeekday);
+  const supplied = anchor !== undefined && addDays(anchor, 0) === anchor ? anchor : null;
+  const anchorDate =
+    supplied ?? (real.length > 0 ? real[real.length - 1] : dated[dated.length - 1]).date;
+  const anchorWeekday = new Date(`${anchorDate}T00:00:00Z`).getUTCDay();
+  const windowEnd = addDays(anchorDate, gridRows - 1 - anchorWeekday);
   const totalDays = Math.max(0, weeks) * gridRows;
   const windowStart = addDays(windowEnd, -(totalDays - 1));
   const columns: GridCell[][] = [];
@@ -561,6 +583,81 @@ export type ValueFormat = (value: number) => string;
  * (the token strip says "Tokens used"). */
 export function nounTitle(noun: string): string {
   return noun.length === 0 ? '' : `${noun[0].toUpperCase()}${noun.slice(1)}`;
+}
+
+/* WHICH CELL A POINT NAMES (issue 219; corrected by the owner's 2026-08-31
+ * defect report, "the hover bleeds").
+ *
+ * The strip is laid out on a fixed pitch — a cell plus the gap that follows
+ * it — so a point maps to a cell by arithmetic rather than by hit-testing
+ * every box. That arithmetic lives here, out of the component, so both of its
+ * decisions are executable rather than pattern-matched.
+ *
+ * THE GAP IS THE WHOLE QUESTION, and the answer depends on who is asking.
+ * Flooring a point into its slot resolves a point in the GAP to the cell
+ * before it, which is right for a finger — a 10px cell cannot offer a 44px
+ * target, and reaching for a cell and landing 2px past it is what fingers do —
+ * and wrong for a mouse. The owner reported exactly that wrongness: hovering
+ * near the edge of a cell showed the NEIGHBOUR's reading, because the
+ * neighbour is what the gap resolves to and a mouse is pixel-exact enough to
+ * sit in one. So a fine pointer gets no forgiveness: a point outside a cell's
+ * own drawn box is -1, which the caller reads as "nothing here" and closes on,
+ * rather than a confident answer about the wrong day.
+ *
+ * Out-of-range points still clamp for a coarse pointer, because a finger a
+ * little past the last column is still reaching for the last column; for a
+ * fine pointer they are outside every cell like any other gap point. */
+export interface StripGeometry {
+  /* Viewport coordinates of the first cell's top-left corner. */
+  readonly left: number;
+  readonly top: number;
+  /* One cell plus the gap after it, per axis. */
+  readonly pitchX: number;
+  readonly pitchY: number;
+  /* The cell's own drawn box — the pitch minus the gap. Equal to the pitch
+   * only in a grid with no gap at all, where every point inside the strip is
+   * inside some cell and the two rules below agree. */
+  readonly cellWidth: number;
+  readonly cellHeight: number;
+  readonly columns: number;
+  /* How many cells the strip actually holds; a slot past the last one is no
+   * cell however the arithmetic lands. */
+  readonly count: number;
+}
+
+export function stripIndexAt(
+  point: TipPoint,
+  box: StripGeometry,
+  pointer: 'fine' | 'coarse',
+  rows: number = gridRows
+): number {
+  if (box.pitchX <= 0 || box.pitchY <= 0 || box.columns <= 0 || rows <= 0) {
+    return -1;
+  }
+  const offsetX = point.x - box.left;
+  const offsetY = point.y - box.top;
+  const rawColumn = Math.floor(offsetX / box.pitchX);
+  const rawRow = Math.floor(offsetY / box.pitchY);
+  if (pointer === 'fine') {
+    /* Inside a real cell, or nothing: both the slot and the position WITHIN
+       the slot have to land on the cell, and a point before the strip starts
+       floors to a negative slot rather than to cell zero. */
+    if (rawColumn < 0 || rawColumn >= box.columns || rawRow < 0 || rawRow >= rows) {
+      return -1;
+    }
+    if (offsetX - rawColumn * box.pitchX >= box.cellWidth) {
+      return -1;
+    }
+    if (offsetY - rawRow * box.pitchY >= box.cellHeight) {
+      return -1;
+    }
+    const index = rawColumn * rows + rawRow;
+    return index < box.count ? index : -1;
+  }
+  const column = Math.min(box.columns - 1, Math.max(0, rawColumn));
+  const row = Math.min(rows - 1, Math.max(0, rawRow));
+  const index = column * rows + row;
+  return index < box.count ? index : -1;
 }
 
 /* WHERE A KEY PRESS PUTS THE GRID'S CURSOR (issue 219).

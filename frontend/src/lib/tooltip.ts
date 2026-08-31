@@ -212,14 +212,35 @@ type TipOrigin = 'pointer' | 'focus' | 'touch';
  * paint a selection ring. It is a report, never a request: this module writes
  * no attribute and knows no class, exactly as `report` already works for
  * visibility. */
+/* What kind of pointer is asking (issue 268, owner defect report: "the hover
+ * bleeds"). It travels with the question because the ANSWER differs: a region
+ * caller may forgive a finger that lands between its subjects — that
+ * forgiveness is the 44px reach a 10px cell cannot otherwise offer — and must
+ * not forgive a mouse, which is pixel-exact and whose reader is looking
+ * straight at the cell they are not over.
+ *
+ * It is the EVENT's own type rather than a media query, deliberately: a
+ * touchscreen laptop matches `(pointer: fine)` and still sends touch events,
+ * so a query would answer for the device while the reader is using a finger.
+ * 'none' is a keyboard or programmatic ask, where there is no pointer to be
+ * precise or imprecise about. */
+export type TipPointerKind = 'fine' | 'coarse' | 'none';
+
 export interface DetailBinding {
   /* What the tip describes. Absent means the tip's own parent — one tile,
      one tip, the shape this module shipped with. */
   host?: HTMLElement;
   /* Which element a point describes, for a host that contains many. Null
      means "nothing here", and the tip closes rather than anchoring to the
-     region itself. Absent means the host describes itself. */
-  resolve?: (target: EventTarget | null, point: TipPoint) => HTMLElement | null;
+     region itself. Absent means the host describes itself. The pointer kind
+     is passed through untouched: this module knows nothing about the geometry
+     a region caller resolves against, and the caller knows nothing about which
+     event asked, so neither can answer alone. */
+  resolve?: (
+    target: EventTarget | null,
+    point: TipPoint,
+    pointer: TipPointerKind
+  ) => HTMLElement | null;
   /* Reports the currently described element, or null when nothing is. */
   select?: (element: HTMLElement | null) => void;
   /* Reports whether the box is showing. */
@@ -382,8 +403,8 @@ function bindDetail(
      than an anchor: a region caller says so for the gaps between its cells
      and for a cell it has no reading for, and anchoring to the strip itself
      would put a readout on screen that describes nothing. */
-  function aim(target: EventTarget | null, point: TipPoint): boolean {
-    const next = resolve(target, point);
+  function aim(target: EventTarget | null, point: TipPoint, pointer: TipPointerKind): boolean {
+    const next = resolve(target, point, pointer);
     if (next === null) {
       hide();
       return false;
@@ -562,7 +583,7 @@ function bindDetail(
       return;
     }
     const at = { x: event.clientX, y: event.clientY };
-    if (!aim(event.target, at)) {
+    if (!aim(event.target, at, 'fine')) {
       return;
     }
     reveal(fine.matches ? at : null, 'pointer');
@@ -578,7 +599,7 @@ function bindDetail(
        which is why the region case needs no branch of its own here. */
     const at = { x: event.clientX, y: event.clientY };
     const changed = subject;
-    if (!aim(event.target, at)) {
+    if (!aim(event.target, at, 'fine')) {
       return;
     }
     if (!shown) {
@@ -635,7 +656,7 @@ function bindDetail(
        "is it open" is what stops a finger dragged across a strip of cells
        from toggling the box off on every other cell it lands on. */
     const previous = subject;
-    if (!aim(event.target, at)) {
+    if (!aim(event.target, at, 'coarse')) {
       return;
     }
     if (shown && origin === 'touch' && subject === previous) {
@@ -662,7 +683,7 @@ function bindDetail(
     if (driven) {
       return;
     }
-    if (!aim(null, { x: 0, y: 0 })) {
+    if (!aim(null, { x: 0, y: 0 }, 'none')) {
       return;
     }
     reveal(null, 'focus');

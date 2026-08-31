@@ -505,30 +505,48 @@ export type MediaGalleryProps = {
 
 /* --- EntryLog: a feed of titled entries ---------------------------------- */
 
-/* One counter beside a linked entry's title: a small drawn glyph and the
- * figure it counts. `label` is the counter's whole meaning in words and is
- * what a screen reader always hears — the glyph is never the only channel.
+/* The provenance-by-exception wording, spelled ONCE for the whole page (owner
+ * directive, issue 268). A figure captured out of band says so, and it says so
+ * in these exact words wherever it appears — the usage tiles' visible suffix
+ * and the entry log's detail row are the same sentence rather than two
+ * sentences somebody keeps in step. A reader learns one mark for "this was
+ * recorded out of band", not one per panel. */
+export const recordedOutOfBand = 'recorded out of band, not fetched live';
+
+/* One counter beside a linked entry's title: a small drawn glyph, the bare
+ * figure it counts, and the detail that spells the whole thing out.
  *
- * `value` is the TERSE rendering (issue 252, owner directive): a counter that
- * declares one draws the glyph and the bare figure, and moves the words behind
- * it into the accessible name. It exists because two of these counters — open
- * issues and open pull requests — are conventional enough to read as glyph and
- * number, and spelling them out was the owner's explicit "don't write open
- * prs". It is NOT a licence to hide a figure: `value` carries the NUMBER, so
- * the value is still never encoded by glyph or colour alone, and `label` still
- * carries the complete sentence for anyone who cannot see the glyph.
+ * TERSE IS NOW THE ONLY SHAPE (issue 268, owner directive: "just remove it",
+ * of the label text and the inline provenance mark alike). Issue 252 made two
+ * of these counters terse; the owner extended that to every one of them, so
+ * `value` is required rather than optional and the words no longer have a
+ * visible branch to come back through. They have not left the DOM: `label` is
+ * the counter's whole meaning in words, rendered into a clipped span every
+ * screen reader still reads, and it is what `detail` shows a sighted reader on
+ * hover, touch or focus. The dataviz floor is intact — a value here is carried
+ * by glyph PLUS number, never by the glyph alone — and so is the accessible
+ * name.
  *
- * A counter with no `value` renders `label` visibly, which is what every
- * counter did before this one arrived and what most still do. */
+ * `detail` is the same primitive and the same grammar the stat tiles use
+ * (DetailTip, issue 136 rule 1): the detail's NAME is the full phrase, and its
+ * rows carry whatever else the counter can vouch for — the absolute instant
+ * behind a live age, the provenance row behind a recorded figure. */
 export type EntryCount = {
   readonly key: string;
   readonly glyph: 'node' | 'star' | 'clock' | 'issue' | 'pull';
   readonly label: string;
-  readonly value?: string;
-  /* Marked figures carry the provenance-by-exception suffix, the same one the
-   * usage tiles carry and worded identically, so a reader learns one mark for
-   * "this was recorded out of band" across the whole page rather than one per
-   * panel. */
+  readonly value: string;
+  readonly detail: TipDetail;
+  /* An ISO instant this counter is a LIVE AGE of (issue 268). Its presence is
+   * the whole discriminator: a counter that declares one has its figure, its
+   * words and its detail re-derived against the reader's own clock on a
+   * minute-aligned tick, so "3h" becomes "4h" while the page is open instead
+   * of freezing at whatever the render happened to catch. A counter without
+   * one renders exactly the value, label and detail the adapter built. */
+  readonly since?: string;
+  /* Whether this figure was recorded out of band. It no longer stamps a mark
+   * on the visible row — it drives the provenance row inside the detail, which
+   * is where the owner asked for it to live. */
   readonly marked?: boolean;
 };
 

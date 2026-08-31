@@ -21,14 +21,14 @@ import assert from 'node:assert/strict';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import test from 'node:test';
 
-import { section, sectionHref, staticBlock } from '../src/lib/blocks.ts';
+import { relativeAge } from '../src/lib/age.ts';
+import { recordedOutOfBand, section, sectionHref, staticBlock } from '../src/lib/blocks.ts';
 import { feedCardRegions, feedCardVariants, formatIsoDate } from '../src/lib/feed.ts';
 import { workByline, workBylineSeparator, workEntries, workHistoryProps } from '../src/lib/work.ts';
 import {
   codingProjectsPanelId,
   codingProjectsProps,
   projectCounts,
-  updatedLabel,
   projectHost,
   projectLinkLabel,
   projects,
@@ -773,15 +773,24 @@ test('a count of one is a count of one thing', () => {
     projectCounts({ ...row, commits: 1234, stars: 5678 }, undefined, noon).map((count) => count.label),
     ['1,234 commits', '5,678 stars', 'updated 3 days ago', ...unreported]
   );
-  // Every band of the since-sentence, against the same fixed clock — and the
-  // singular derived exactly as the other counts derive theirs.
-  assert.equal(updatedLabel('2026-08-27T02:00:00Z', noon), 'updated today');
-  assert.equal(updatedLabel('2026-08-26T02:00:00Z', noon), 'updated 1 day ago');
-  assert.equal(updatedLabel('2026-07-30T12:00:00Z', noon), 'updated 28 days ago');
-  assert.equal(updatedLabel('2026-07-27T12:00:00Z', noon), 'updated 1 month ago');
-  assert.equal(updatedLabel('2026-02-27T12:00:00Z', noon), 'updated 6 months ago');
-  assert.equal(updatedLabel('2025-08-20T12:00:00Z', noon), 'updated 1 year ago');
-  assert.equal(updatedLabel('2023-08-27T12:00:00Z', noon), 'updated 3 years ago');
+  /* The freshness counter's own bands moved to lib/age.ts with the live clock
+     (issue 268) and tests/age.test.mjs executes every one of them from both
+     sides. What stays HERE is the seam: this adapter's third counter is that
+     module's sentence about this row's push instant, and nothing in between.
+     Pinned by reproduction rather than by restating a string, so the two
+     cannot drift into two answers about one instant. */
+  assert.equal(
+    projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[2].label,
+    relativeAge(row.pushedAt, noon).phrase
+  );
+  assert.equal(
+    projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[2].value,
+    relativeAge(row.pushedAt, noon).compact
+  );
+  /* And `since` is what keeps it alive: the component re-derives the figure
+     from THIS instant on every minute-aligned tick, so an adapter that stopped
+     carrying it would ship a counter frozen at whichever render caught it. */
+  assert.equal(projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[2].since, row.pushedAt);
   // The adapter carries the same labels into the log, with the glyph beside
   // the words rather than instead of them. Against the feed's LEADING entry,
   // which is the most recently pushed repository rather than the module list's
@@ -798,9 +807,51 @@ test('a count of one is a count of one thing', () => {
     ['node', 'star', 'clock', 'issue', 'pull'],
     'each count names its generic glyph; the drawing is the component’s'
   );
+  /* EVERY counter is terse now (issue 268): the glyph and a bare figure on the
+     visible line, the whole sentence in the clipped span and in the detail.
+     Both channels are checked, because dropping either one is the failure —
+     the figure alone leaves the glyph carrying the meaning for a screen
+     reader, and the words alone are the noise the owner removed. */
+  for (const count of codingProjectsProps(null, noon).entries[0].counts) {
+    assert.ok(
+      typeof count.value === 'string' && count.value.length > 0,
+      `${count.key} renders no visible figure`
+    );
+    assert.ok(count.label.length > 0, `${count.key} carries no sentence`);
+    assert.equal(count.detail.name, count.label, `${count.key}'s detail does not name its phrase`);
+  }
   // The figure is TEXT beside the glyph, never carried by the glyph alone.
+  assert.match(entryLog, /\{count\.value\}/);
   assert.match(entryLog, /\{count\.label\}/);
   assert.match(entryLog, /aria-hidden="true"/);
+});
+
+test('a figure the origin recorded says so in its detail, never on the visible line (issue 268)', () => {
+  /* The owner, of the inline italic mark repeated on every row: "stale, static
+     and ugly ... just remove it". Provenance did NOT go with it — it moved one
+     interaction away, into the same detail primitive the stat tiles use — so
+     this pin is in two halves and both matter. */
+  const noon = Date.parse('2026-08-27T12:00:00Z');
+  const captured = codingProjectsProps(null, noon).entries[0].counts;
+  const commits = captured.find((count) => count.key === 'commits');
+  assert.equal(commits.marked, true, 'the commit total is captured however fresh the row is');
+  assert.deepEqual(
+    commits.detail.rows,
+    [{ label: '', value: recordedOutOfBand }],
+    'a recorded figure carries no provenance row in its detail'
+  );
+  // The wording is the page's ONE constant, not a second copy of the sentence.
+  assert.equal(recordedOutOfBand, 'recorded out of band, not fetched live');
+  // And nothing on the visible line says it: the mark, its class and its
+  // browser tooltip are gone from the component rather than merely unused.
+  assert.doesNotMatch(entryLog, /entry-recorded/);
+  assert.doesNotMatch(entryLog, /·\s*recorded/);
+  /* A DASH gets no provenance row. "not reported" and "recorded out of band"
+     are different claims, and only one of them can be true of a figure that
+     does not exist. */
+  const unreported = captured.find((count) => count.key === 'issues');
+  assert.equal(unreported.value, '—');
+  assert.deepEqual(unreported.detail.rows, []);
 });
 
 test('the feed leads with the repository pushed most recently (issue 252)', () => {
@@ -961,13 +1012,18 @@ test('the counters are one aligned column geometry, decided by viewport alone (i
   const [, breakpoint, overrideBody] = overrides[0];
   assert.match(
     overrideBody,
-    /grid-template-columns:\s*var\(--entry-count-columns, 10\.5rem 8\.25rem 14rem 6\.75rem 6\.25rem\)/,
+    /grid-template-columns:\s*var\(--entry-count-columns, repeat\(5, minmax\(0, 1fr\)\)\)/,
     'the five tracks are not the one shared token, so cards can disagree about where a column starts'
   );
-  assert.match(
+  /* EQUAL FRACTIONS, and the negative is the load-bearing half (issue 268): a
+     track sized from its own content is a track that moves when the content
+     does, and one of these five now changes every minute. Five equal shares of
+     the card depend on nothing, which is what makes both the cross-card
+     alignment and the live counter's zero CLS structural. */
+  assert.doesNotMatch(
     overrideBody,
-    /justify-content:\s*space-between/,
-    'the surplus no longer goes to the gaps, so the row stops short of the card’s right edge (no-dead-space rule)'
+    /justify-content/,
+    'the row distributes a surplus again; equal-fraction tracks leave none, so this can only be a return to content-sized ones'
   );
   assert.match(
     overrideBody,
@@ -979,7 +1035,7 @@ test('the counters are one aligned column geometry, decided by viewport alone (i
      verbatim, so an engine that never resolved the property paints the same
      table. */
   assert.ok(
-    styles.includes('--entry-count-columns: 10.5rem 8.25rem 14rem 6.75rem 6.25rem;'),
+    styles.includes('--entry-count-columns: repeat(5, minmax(0, 1fr));'),
     'styles.css does not declare --entry-count-columns'
   );
   /* Breakpoint parity with the documented token, exactly as the retired
@@ -993,29 +1049,30 @@ test('the counters are one aligned column geometry, decided by viewport alone (i
     'EntryLog.svelte’s media query must match styles.css’s documented --breakpoint-entry-columns'
   );
   const breakpointPx = Number.parseFloat(documentedValue) * 16;
-  for (const phoneWidth of [320, 360, 390, 412]) {
+  for (const phoneWidth of [320, 360, 375, 390, 412]) {
     assert.ok(
       phoneWidth < breakpointPx,
       `phone width ${phoneWidth}px must sit below --breakpoint-entry-columns (${breakpointPx}px)`
     );
   }
-  /* Inside a fixed track a counter holds one line — a provenance mark
-     wrapping under its figure on one card is the unevenness coming back —
-     while the base keeps wrap as the enlarged-font safety valve (the
-     issue-242 lane measures that half in every engine). */
-  assert.match(
-    style,
-    /@container \(min-width:\s*[^)]+\)\s*\{[\s\S]*?\.entry-count\s*\{\s*flex-wrap:\s*nowrap;/,
-    'a counter inside a fixed track may not wrap its mark onto a second line'
-  );
+  /* THE CELL IS ITS TRACK (issue 268). With equal-fraction tracks a
+     shrink-to-fit counter ends wherever its two digits do — most of a track
+     short of the card's right edge, which is the no-dead-space rule broken by
+     the same change that fixed the alignment. A block-level flex cell fills
+     the track it was given, so the fifth column ends at the card's own edge
+     and the browser lanes measure it there. */
+  const countRule = /\.entry-count\s*\{([^}]*position:\s*relative[^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.match(countRule, /display:\s*flex;/, 'the counter shrinks to its content instead of filling its column');
+  assert.doesNotMatch(countRule, /display:\s*inline-flex/);
   /* And a digit may not jitter the column it sits in: the counters read
-     tabular figures. Anchored on the base rule (the one carrying the
-     counter's own layout) rather than the first `.entry-count` block in file
-     order, which is the one-line nowrap override above. */
-  assert.match(
-    /\.entry-count\s*\{([^}]*position:\s*relative[^}]*)\}/.exec(style)?.[1] ?? '',
-    /font-variant-numeric:\s*tabular-nums/
-  );
+     tabular figures. That is a LIVE requirement now rather than a precaution —
+     the freshness counter re-renders every minute, so "9m" becoming "10m"
+     would nudge its neighbours once a minute forever without it. */
+  assert.match(countRule, /font-variant-numeric:\s*tabular-nums/);
+  /* Every counter is a focus stop, so every counter wears the ring — the twin
+     of .stat-cell's, because the affordance the owner asked for ("like the
+     token count on the other trackers") is that one. */
+  assert.match(style, /\.entry-count:focus-visible\s*\{[^}]*outline:/);
 });
 
 test('projectsCapturedOn is a well-formed date, and formatIsoDate renders every stated date honestly', () => {
@@ -1894,6 +1951,68 @@ test('a film is swipeable until the reader hands the surface to the player (issu
   );
 });
 
+test('the strip owns its settle: a new grab ends it, and a turn enters forward (issue 265)', () => {
+  /* Three measured defects meet in this one binding, and each of them is a
+     line here rather than a behaviour a reader has to catch.
+
+     D6/D7 — `settling` arms the CSS transition, and it was cleared only by a
+     free-running setTimeout nobody held. A swipe begun inside that window
+     dragged through a still-armed transition (MEASURED at 66-93px of lag
+     between finger and picture), and one settle's timer could disarm the
+     NEXT settle mid-flight. The timer is owned now: cleared before it is
+     re-armed, and ended early by the one event that always comes first. */
+  assert.match(galleryCode, /down: \(\) => endSettle\(\)/, 'a new grab no longer ends the settle it interrupted');
+  assert.match(
+    galleryCode,
+    /function endSettle\(\): void \{\s*clearTimeout\(settleTimer\);\s*settleTimer = undefined;\s*settling = false;/,
+    'ending the settle leaves its timer running, so it can still disarm the next one'
+  );
+  assert.match(
+    galleryCode,
+    /function armSettle\(\): void \{\s*clearTimeout\(settleTimer\);/,
+    'a settle is armed without cancelling the timer already running'
+  );
+  assert.doesNotMatch(
+    galleryCode,
+    /setTimeout\(\(\) => \(settling = false\)/,
+    'the unowned free-running settle timer is back'
+  );
+
+  /* D5 — a committed turn used to mount the new item at the OLD drag offset,
+     so it slid in BACKWARDS from the side it had just left (120-202px of
+     wrong-way travel per swipe). The entry offset is the arithmetic in
+     lib/gesture.ts, taken BEFORE the index moves because it is built from the
+     offset the finger left behind. */
+  assert.match(
+    galleryCode,
+    /entering = entryOffset\(dragX, direction, swipe\.span\(\)\);/,
+    'the incoming item does not enter from its own side'
+  );
+  assert.match(galleryCode, /import \{ entryOffset, swipeHorizontal \} from '\.\.\/gesture\.ts';/);
+  /* And the ORDER, which is the whole repair: the entry position is written
+     with the transition off, flushed to the engine by a forced box read, and
+     only then does the transition arm and the offset go to zero. Both writes
+     inside one style recalc would animate from wherever the element already
+     was, which is the defect. */
+  assert.match(
+    galleryCode,
+    /endSettle\(\);\s*dragX = entering;\s*await tick\(\);\s*stageEl\?\.getBoundingClientRect\(\);/,
+    'the entry position is never flushed, so the turn animates from the old offset again'
+  );
+  assert.match(
+    galleryCode,
+    /entering = 0;\s*armSettle\(\);\s*dragX = 0;/,
+    'the settle does not arm the transition before travelling home'
+  );
+  // A reader who asked for less motion is handed the destination, not a
+  // two-step jump: no entry offset at all.
+  assert.match(
+    galleryCode,
+    /if \(entering !== 0 && !reducedMotion\(\)\) \{/,
+    'a reduced-motion reader is given the entry jump anyway'
+  );
+});
+
 test('the prev/next pair lives on the stage, desktop-only by capability, inside 44px targets (owner, 2026-08-29)', () => {
   const style = styleBlock(mediaGallery);
   /* Owner, 2026-08-29: "bring back the buttons but chose to hide them by
@@ -2063,7 +2182,7 @@ test('the source ladder renders in the manifest’s own order, never re-ranked (
   );
 });
 
-test('the Art block renders the vendored set first and lets a runtime manifest replace it (issue 182/207)', () => {
+test('the Media block renders the vendored set first and lets a runtime manifest replace it (issue 182/207)', () => {
   // The cutover's whole shape, pinned where it is decided: the build's own
   // props are the block's FALLBACK — they render before any request exists —
   // and the volume's manifest is a one-shot read that may replace them. A
@@ -2195,6 +2314,12 @@ test('the lightbox scrim, close control and size caps are tokens too (coordinato
        tokens that had no home in the layer — the #204 review's finding 1 —
        so they join the list here rather than the obligation staying prose. */
     caption: /\.gallery-caption\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
+    /* The lane inside it (issue 265): the caption's own gap moved onto the
+       per-item lane when the box became a reserved stack, and the token
+       obligation moved with the declaration exactly as --gallery-close-surface
+       did at issue 202 — the rule that USES a dimension is the rule that owes
+       it a token. */
+    captionLane: /\.gallery-caption-lane\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
     meta: /\.gallery-lightbox-meta\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
     metaLink: /\.gallery-meta-link\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
   };
@@ -2213,7 +2338,7 @@ test('the lightbox scrim, close control and size caps are tokens too (coordinato
     ['lightbox', '--gallery-close-lane'],
     ['closeMark', '--gallery-close-size'],
     ['closeMark', '--gallery-close-rest-opacity'],
-    ['caption', '--gallery-caption-gap'],
+    ['captionLane', '--gallery-caption-gap'],
     ['caption', '--gallery-caption-space'],
     ['meta', '--gallery-meta-gap'],
     ['meta', '--gallery-meta-space'],
@@ -2552,28 +2677,95 @@ test('gallery metadata is optional in the data, and every row states only what S
   }
 });
 
-test('absent metadata renders NOTHING — no empty row, no default, no reserved band (issue 202)', () => {
-  /* The whole contract, pinned where it is decided. Each field is guarded on
+test("the caption's BOX is reserved for every item; content absent when the item has none (issue 265)", () => {
+  /* RE-AIMED, NOT RELAXED (issue 265). This pin used to enforce the caption's
+     CONTAINER being conditional on the current item — issue 202's deliberate
+     trade, "reserve space only when the specific item has something to show".
+     The owner overruled that from a live review: a captioned item arriving
+     pushed the whole document up and down (MEASURED at 50px on 1440 and 69px
+     on 390), and the ruling is that the frame must already hold the box.
+     Every assertion about CONTENT below is untouched and still exactly as
+     strict — nothing is fabricated, nothing is defaulted, an item with no
+     title still renders no title. What moved is the one assertion that was
+     enforcing the defect.
+     The whole contract, pinned where it is decided. Each field is guarded on
      its OWN {#if}: a single combined guard would render an empty <p> for a
      description-less item that happens to carry a title. */
-  for (const field of ['item.title', 'item.description', 'item.link']) {
+  for (const field of ['shot.title', 'shot.description', 'item.title', 'item.description', 'item.link']) {
     assert.ok(
       mediaGallery.includes(`{#if ${field}}`),
       `${field} is rendered without a guard of its own, so an item lacking it renders an empty row`
     );
   }
-  // Both containers are conditional too, so an item with no metadata at all
-  // contributes no element — the absent state is the absence of the box.
-  assert.match(mediaGallery, /\{#if hasCaption\}\s*<div class="gallery-caption">/);
+  /* THE BOX IS NOT CONDITIONAL, AND THE LANES ARE THE RESERVATION. Every
+     item's caption renders into one stacked grid cell — one lane per item,
+     all in `grid-area: 1 / 1` — so the row is as tall as the tallest caption
+     THIS SET can render and the current item cannot change it. Hiding by
+     VISIBILITY rather than by display is the mechanism: a `display: none`
+     lane would take no space and the reservation would be nothing at all. */
+  assert.doesNotMatch(
+    mediaGallery,
+    /\{#if hasCaption\}\s*<div class="gallery-caption">/,
+    'the caption box is conditional on the current item again, so an item change moves the document'
+  );
+  assert.match(
+    mediaGallery,
+    /<div class="gallery-caption">\s*\{#each items as shot, at \(shot\.key\)\}/,
+    'the caption box no longer holds one lane per item, so it is sized by whichever item is showing'
+  );
+  /* THE ONE QUESTION THE BOX ASKS IS THE SET'S. A set nobody captioned has no
+     lane to hold open, and reserving one charged the page a constant empty
+     band (+12px on the vendored bootstrap gallery). The guard reads `items`,
+     never `item`, so within a set the answer cannot change and an item change
+     still moves nothing — a guard on the current item would be the defect
+     itself, which is what the assertion above refuses. */
+  assert.match(
+    mediaGallery,
+    /\{#if captionedSet\}\s*<div class="gallery-caption">/,
+    'the caption box is reserved for a set with nothing to say, which is an empty band'
+  );
+  assert.match(
+    galleryCode,
+    /const captionedSet = \$derived\(items\.some\(hasCaptionCopy\)\);/,
+    'whether a caption box exists is not derived from the set'
+  );
+  /* ONE DEFINITION of what counts as a caption, asked by both questions: two
+     copies is how the reserved lane and the rendered content drift apart. */
+  assert.match(
+    galleryCode,
+    /function hasCaptionCopy\(candidate: MediaGalleryItem\): boolean \{\s*return Boolean\(candidate\.title\) \|\| Boolean\(candidate\.description\);/,
+    'the caption rule is not stated in one place'
+  );
+  assert.match(mediaGallery, /data-current=\{at === index \? 'true' : undefined\}/);
+  assert.match(mediaGallery, /aria-hidden=\{at === index \? undefined : 'true'\}/, 'every item’s caption is announced at once');
+  const captionStyle = styleBlock(mediaGallery);
+  const lane = /\.gallery-caption-lane\s*\{([^}]*)\}/.exec(captionStyle)?.[1] ?? '';
+  assert.match(lane, /grid-area:\s*1 \/ 1/, 'the lanes are not stacked, so the box is the sum of every caption');
+  assert.match(lane, /visibility:\s*hidden/, 'a lane that is not current still paints');
+  assert.doesNotMatch(lane, /display:\s*none/, 'a display:none lane reserves nothing');
+  /* Stretch is the grid default and it would spread ONE item's paragraphs
+     down the height of the tallest lane — a one-line caption floating apart
+     from its own picture. */
+  assert.match(lane, /align-content:\s*start/, 'a short caption is stretched down the reserved lane');
+  assert.match(
+    captionStyle,
+    /\.gallery-caption-lane\[data-current\]\s*\{\s*visibility:\s*visible/,
+    'the current item’s caption is never revealed'
+  );
+  // The lightbox's container stays conditional: it is a modal surface with
+  // nothing below it to move, so an item with no metadata renders no band.
   assert.match(mediaGallery, /\{#if hasMeta\}\s*<div class="gallery-lightbox-meta">/);
-  assert.match(mediaGallery, /const hasCaption = \$derived\(Boolean\(item\.title\) \|\| Boolean\(item\.description\)\)/);
+  assert.match(mediaGallery, /const hasCaption = \$derived\(hasCaptionCopy\(item\)\)/);
   assert.match(mediaGallery, /const hasMeta = \$derived\(hasCaption \|\| item\.link !== undefined\)/);
   /* No default anywhere on the path: a ?? or a literal placeholder is how an
-     honest empty state becomes a fabricated one. */
+     honest empty state becomes a fabricated one. Both names the component
+     reads a row by are swept — `item` for the current one, `shot` for the
+     reserved lanes — so the reservation cannot become the place a dash is
+     quietly written. */
   for (const field of ['title', 'description', 'link']) {
     assert.doesNotMatch(
       mediaGallery,
-      new RegExp(`item\\.${field}\\s*(\\?\\?|\\|\\|)\\s*['"\`]`),
+      new RegExp(`(item|shot)\\.${field}\\s*(\\?\\?|\\|\\|)\\s*['"\`]`),
       `the component substitutes copy of its own for a missing ${field}`
     );
     assert.doesNotMatch(
@@ -2583,12 +2775,11 @@ test('absent metadata renders NOTHING — no empty row, no default, no reserved 
     );
     assert.match(artBinding, new RegExp(`${field}: photo\\.${field}`), `the adapter drops ${field} on the way through`);
   }
-  // The caption is the LAST thing in the block, after the counter: an item
-  // that carries one therefore moves neither the photograph nor the arrows
-  // nor the counter (zero-CLS floor).
+  // The caption is the LAST thing in the block, after the counter, so even
+  // the reserved lane sits below everything a reader is looking at.
   assert.ok(
     mediaGallery.indexOf('class="gallery-caption"') > mediaGallery.indexOf('class="gallery-count"'),
-    'the caption sits above the counter, so metadata arriving would move the frame'
+    'the caption sits above the counter, so the reserved lane pushes the frame down the page'
   );
 });
 
@@ -2682,11 +2873,11 @@ test('the enlarged lightbox is anchored to the viewport, never to the document (
 });
 
 // ---------------------------------------------------------------------------
-// The art binding
+// The media binding
 // ---------------------------------------------------------------------------
 
-test('the art block introduces itself with its heading, and only its heading', () => {
-  assert.match(artBinding, /heading: 'Art'/);
+test('the media block introduces itself with its heading, and only its heading', () => {
+  assert.match(artBinding, /heading: 'Media'/);
   // The retired intro/note provenance lines do not come back (issue 176):
   // the gallery's whole content is the frame itself now, and the licence
   // lives in gallery.ts's own doc comment and SOURCES.md — a maintainer

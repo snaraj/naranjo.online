@@ -94,12 +94,25 @@ export function swipeDecision(
   return dx < 0 ? 1 : -1;
 }
 
+/* THE SLOP: how far a finger may travel before anything on this page treats
+ * it as a deliberate direction. A finger is never perfectly still, and a
+ * gesture layer that acts on the first pixel acts on tremor.
+ *
+ * It is EXPORTED because two gestures now read it (issue 265). The pull's
+ * native-touch defence has to answer "is this drag going downward on purpose?"
+ * before it may contest the browser's own scroll claim, and the honest answer
+ * is the same one the swipe already uses for "is this drag going across on
+ * purpose?" — one number, so the two can never disagree about what a still
+ * finger is. Writing a second literal beside the first is how a defence ends
+ * up defending a different gesture from the one it was reasoned about. */
+export const gestureSlop = 8;
+
 /* Has this drag proven itself horizontal? Until it has, the browser owns the
  * gesture and the surface must not move at all — claiming early is how a
  * carousel eats the page's vertical scroll. The threshold is a small absolute
  * distance (a finger is never perfectly still) AND a genuine bias across
  * rather than down. */
-export function claimsHorizontal(dx: number, dy: number, slop = 8): boolean {
+export function claimsHorizontal(dx: number, dy: number, slop = gestureSlop): boolean {
   return Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy);
 }
 
@@ -116,9 +129,52 @@ export function boundedDrag(
   span: number
 ): number {
   const past = (dx > 0 && atStart) || (dx < 0 && atEnd);
-  /* A third of the span is how far the resisted end can ever travel: enough
-     to read as give, never enough to look like a turn that failed. */
-  return past ? rubberBand(dx, span / 3) : dx;
+  if (past) {
+    /* A third of the span is how far the resisted end can ever travel: enough
+       to read as give, never enough to look like a turn that failed. */
+    return rubberBand(dx, span / 3);
+  }
+  /* AND ONE SPAN IS ALL THERE IS, wrapping or not (issue 265). A wrapping
+     surface has no END to resist at, which is why nothing above stops it —
+     but it does have a LAST THING TO SHOW. One span of travel puts the
+     incoming item exactly where the outgoing one was; past that the reader is
+     dragging toward a third item this strip never mounted, so the stage goes
+     EMPTY. MEASURED before this clamp: -552px past the edge, a blank stage a
+     reader had to drag back from.
+     A hard stop rather than a curve, deliberately: the curve above says
+     "there is nothing past here" at an END, and this is not an end — the next
+     item is already fully in place, so the honest statement is that the
+     surface has arrived, not that it is straining. Inside one span a drag
+     still tracks the finger exactly.
+     A span of zero is a surface nobody has measured yet (the stage's own
+     width, read at gesture start, before layout). Clamping to it would freeze
+     every drag at zero, so an unmeasured surface passes through untouched —
+     the same "no give stated, none applied" answer rubberBand gives. */
+  return span > 0 ? Math.min(span, Math.max(-span, dx)) : dx;
+}
+
+/* WHERE THE INCOMING ITEM STARTS (issue 265), and it is the drag's own last
+ * position carried one span forward.
+ *
+ * A committed turn used to mount the new item at the OLD offset and settle it
+ * to zero, so the picture slid in BACKWARDS from the side it had just left —
+ * MEASURED at 120-202px of wrong-way travel per swipe. The repair is that the
+ * new item enters from the side it is coming from and only ever moves the way
+ * the finger did.
+ *
+ * `offset + direction * span` rather than a bare `direction * span`: the
+ * finger left the surface at `offset`, and the item behind it was exactly one
+ * span further along, so this is the position the reader was ALREADY looking
+ * at when they let go. Starting at the full span instead would jump the strip
+ * to an empty stage for one frame and then slide in from nothing.
+ *
+ * It can never point backwards, and that is a property of the pair rather
+ * than of this line: boundedDrag clamps |offset| to one span, so a forward
+ * turn (direction 1, dragged left, offset in [-span, 0]) starts in [0, span]
+ * and travels down to zero — the same direction the finger went. The two
+ * changes are one change; separating them reintroduces the defect. */
+export function entryOffset(offset: number, direction: -1 | 1, span: number): number {
+  return offset + direction * span;
 }
 
 /* ONE VISIBLE UPDATE PER FRAME, and this is the whole of the owner's "swiping
@@ -210,6 +266,15 @@ export interface SwipeBinding {
      Read at gesture START rather than stored, so a resize between gestures
      never measures against a stale box. */
   span: () => number;
+  /* A FINGER IS ON THE SURFACE (issue 265), before anything is claimed. The
+     gallery's snap-back is a CSS transition the component arms for the length
+     of a settle and disarms on a free-running timer, and a swipe that began
+     inside that window dragged through a still-armed transition — MEASURED at
+     66-93px of lag between the finger and the picture. Nothing but the next
+     pointerdown can know that the settle is over early, so the binding says
+     so: the one event that is always first, on every path into a gesture.
+     Optional, because a surface with no settle to disarm needs no hook. */
+  down?: () => void;
   /* Live drag feedback, in pixels. Called with 0 when the gesture settles. */
   move: (offset: number) => void;
   /* A committed turn. */
@@ -273,6 +338,10 @@ export function swipeHorizontal(node: HTMLElement, binding: SwipeBinding) {
     claimed = false;
     dragged = false;
     span = binding.span();
+    /* AFTER the guards, never before: a second finger and a right button are
+       not gestures, and telling the surface a gesture started for one of them
+       would disarm a settle nobody interrupted. */
+    binding.down?.();
   }
 
   function onMove(event: PointerEvent): void {

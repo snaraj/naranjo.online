@@ -160,7 +160,7 @@ the caller's response to all of them is identical:
 - a document of the wrong schema;
 - a manifest that yields no usable item — including a well-formed empty one.
 
-In every one of those cases the Art block keeps rendering the vendored
+In every one of those cases the Media block keeps rendering the vendored
 bootstrap set the build shipped with (`frontend/src/lib/gallery.ts`, files
 under `frontend/src/assets/images/gallery/` with provenance in their
 `SOURCES.md`). That is issue #182's sanctioned explicit offline fallback, and

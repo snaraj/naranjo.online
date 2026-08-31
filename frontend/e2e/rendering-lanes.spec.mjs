@@ -51,7 +51,7 @@ const galleryStageCapPx = 448;
 
 /* One gallery/v1 manifest carrying a still and a film, served from the media
  * volume's own mutable path so the page takes the route it takes in
- * production: lib/galleryManifest.ts reads it once, admits it, and the Art
+ * production: lib/galleryManifest.ts reads it once, admits it, and the Media
  * block replaces its vendored bootstrap items wholesale.
  *
  * The FILES it names are never served — the e2e origin runs with no media
@@ -62,6 +62,17 @@ const galleryStageCapPx = 448;
  * asserting the operator's pipeline rather than this build. Publishing a
  * fixture film into the repository to change that would also be exactly the
  * heavy media requirement 11 keeps out of git. */
+/* THE ITEMS CARRY CAPTIONS, and the fixture's blindness to them is why the
+ * zero-shift lane below passed against a site that visibly moved (issue 265).
+ * A gallery/v1 item may carry a title and a description; neither of these two
+ * did, so "moving between a still and a film shifts the document by nothing"
+ * measured a page with no caption to shift it — one added field flipped the
+ * same lane from 0 to 50px red.
+ * The two are DELIBERATELY UNEQUAL, and the taller one is deliberately
+ * SECOND: the reservation is the tallest caption in the CURRENT SET, so a
+ * mutation that reserved only the first item's caption, or only the current
+ * item's, is caught by moving onto the film rather than by the fixture
+ * happening to be symmetric. */
 const galleryManifestFixture = {
   schema: 'gallery/v1',
   items: [
@@ -69,6 +80,7 @@ const galleryManifestFixture = {
       kind: 'image',
       key: 'lane-still',
       alt: 'A still, served by the lane',
+      title: 'A still with a title',
       full: { path: 'gallery/still.webp', sha256: 'a'.repeat(64), width: 3840, height: 2160 },
       preview: { path: 'gallery/still-preview.webp', sha256: 'b'.repeat(64), width: 960, height: 540 },
     },
@@ -76,6 +88,9 @@ const galleryManifestFixture = {
       kind: 'video',
       key: 'lane-film',
       alt: 'A film, served by the lane',
+      title: 'A film with a title',
+      description:
+        'And a description long enough to wrap onto a second line on a phone, which is exactly what makes this the taller caption of the two at every width the matrix measures.',
       full: { path: 'gallery/film.webp', sha256: 'c'.repeat(64), width: 3840, height: 2160 },
       preview: { path: 'gallery/film-preview.webp', sha256: 'd'.repeat(64), width: 960, height: 540 },
       poster: { path: 'gallery/film-poster.webp', sha256: 'e'.repeat(64), width: 1920, height: 1080 },
@@ -1053,30 +1068,47 @@ function syntheticSeries(days) {
 }
 
 /* LOOK, at every length a real series can be (owner directive, 2026-08-24;
- * RETARGETED by issue 178, RETARGETED AGAIN by issue 189). Sizing a box to
- * its data was only an improvement if the box's GRAMMAR survived the short
- * end — that used to mean "the same cell, the same gap, the legend in the
- * same place" while the CELL COUNT still tracked the series length one-for-
- * one. Issue 189 retired that second half: every dated series, however
- * short or long, now realigns onto the SAME fixed pendingWeeks trailing
- * window (calendarColumns) — a fixed weekday axis is only truthful across a
- * fixed window, so a strip that still resized its column count with its
- * data could never promise one. What this lane proves is therefore the
- * stronger, simpler claim issue 189 makes true: the box, the cell size, the
- * gap, the row height and the legend placement are now IDENTICAL for every
- * series length, not merely "no narrower than the shortest." A strip that
- * quietly still varied its column count with the data, or that let its key
- * drift at one length and not another, would pass every OTHER assertion in
- * this file and still be wrong. So the four shapes are rendered on the real
- * page and compared to each other. */
-test('the full-width strip draws the identical fixed window at every series length (issue 189)', async ({ page }) => {
-  const shapes = [1, 15, 31];
+ * RETARGETED by issue 178, again by issue 189, and RE-AIMED by issue 268).
+ *
+ * Sizing a box to its data was only an improvement if the box's GRAMMAR
+ * survived the short end — the same cell, the same gap, the legend in the
+ * same place. Issue 189 added the axis claim on top: a fixed weekday axis is
+ * only truthful across a window that does not move, so every series realigned
+ * onto one trailing calendar. It bought that truthfulness with a fixed
+ * fifty-three weeks, which the owner reported from the other side: a fortnight
+ * of history drawn against fifty weeks of dated emptiness reads as a year that
+ * failed rather than as a fortnight that worked.
+ *
+ * WHAT SURVIVES IS THE AXIS CLAIM, RE-SCOPED. The window is derived from the
+ * panel's own coverage now, capped at the reserve — so it is no longer
+ * identical at every series LENGTH, and pinning that would pin the very thing
+ * the owner asked to remove. It is identical across the panel's own SOURCES,
+ * which is where the claim was always load-bearing: two strips stacked in one
+ * card are read against each other, so a column at the same x has to be the
+ * same week on both, and a source that stopped capturing early must not
+ * silently sit a week to the left of the one above it.
+ *
+ * So this lane renders the real page at three coverages and measures BOTH of
+ * the panel's graphs each time. The grammar comparison is between the two
+ * sources at one coverage (where it must be exact), and the window comparison
+ * is across the three coverages (where it must TRACK, between a floor and the
+ * reserve). A per-series window passes none of it: the second source keeps its
+ * own fifteen days throughout, so it would draw the floor while the first drew
+ * the capture. */
+test('the full-width strips draw ONE window per panel, sized to its coverage (issue 189; owner 2026-08-31)', async ({
+  page,
+}) => {
+  /* Three coverages: under the floor, between the floor and the reserve, and
+     past the reserve. The SECOND source is never restaged — it keeps the
+     origin's own fifteen days — which is what makes the per-source equality
+     below a claim rather than a coincidence at every shape but the first. */
+  const shapes = [15, 200, 900];
   const measured = [];
   for (const days of shapes) {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
     await stageUsagePayload(page, (envelope) => {
       const sources = envelope?.data?.sources ?? [];
-      expect(sources.length, 'the origin serves no usage source to restage').toBeGreaterThan(0);
+      expect(sources.length, 'the origin serves fewer than two usage sources').toBeGreaterThan(1);
       sources[0].series = syntheticSeries(days);
     });
     await visit(page);
@@ -1097,116 +1129,141 @@ test('the full-width strip draws the identical fixed window at every series leng
     ).toBeAttached();
     measured.push({
       days,
-      ...(await page.evaluate(() => {
-        const block = window.document.querySelector('.usage-source .grid-block');
-        const rect = (node) => node.getBoundingClientRect();
-        const cells = block.querySelector('.grid-cells');
-        const legend = block.querySelector('.grid-legend');
-        const cell = cells.querySelector('.grid-cell');
-        const round = (value) => Math.round(value * 100) / 100;
-        return {
-          claimed: Number(block.getAttribute('data-grid-columns')),
-          drawn: Math.ceil(cells.querySelectorAll('.grid-cell').length / 7),
-          cell: round(rect(cell).width),
-          cellHeight: round(rect(cell).height),
-          gap: round(parseFloat(getComputedStyle(cells).columnGap || '0')),
-          rows: getComputedStyle(cells).gridTemplateRows.split(' ').length,
-          block: round(rect(block).width),
-          /* Placement, measured as the offset of the key's END edge from the
-             block's END edge: the legend is right-aligned under the graph, and
-             "right-aligned" is a relationship, not a width. */
-          legendOffset: round(rect(block).right - rect(legend).right),
-          legendTop: round(rect(legend).top - rect(block).top),
-          strip: round(rect(block.querySelector('.grid-strip')).height),
-        };
-      })),
+      sources: await page.evaluate(() =>
+        [...window.document.querySelectorAll('.usage-source .grid-block')].map((block) => {
+          const rect = (node) => node.getBoundingClientRect();
+          const cells = block.querySelector('.grid-cells');
+          const legend = block.querySelector('.grid-legend');
+          const cell = cells.querySelector('.grid-cell');
+          const round = (value) => Math.round(value * 100) / 100;
+          const real = [...cells.querySelectorAll('[data-grid-absent="false"]')];
+          return {
+            label: block
+              .closest('.usage-source')
+              .querySelector('.usage-source-label')
+              .textContent.trim(),
+            claimed: Number(block.getAttribute('data-grid-columns')),
+            drawn: Math.ceil(cells.querySelectorAll('.grid-cell').length / 7),
+            /* THE WINDOW'S OWN CALENDAR, fingerprinted off the month axis:
+               each tick's full month name and the column it sits in. It is
+               the only dated thing the DOM exposes about a window — an absent
+               cell's accessible text is "no data for this day" and carries no
+               date — and it is exactly the right thing to compare, because the
+               axis IS what a reader reads the two strips against. Two windows
+               that agree here are drawing the same weeks in the same places. */
+            calendar: [...block.querySelectorAll('.grid-month')]
+              .map((tick) => `${tick.getAttribute('title')}@${getComputedStyle(tick).gridColumnStart}`)
+              .join('|'),
+            /* What the source actually captured inside that window, so a
+               truncated capture is visible as a count rather than inferred. */
+            realCount: real.length,
+            realLast: real[real.length - 1]?.getAttribute('aria-label') ?? '',
+            cell: round(rect(cell).width),
+            cellHeight: round(rect(cell).height),
+            gap: round(parseFloat(getComputedStyle(cells).columnGap || '0')),
+            rows: getComputedStyle(cells).gridTemplateRows.split(' ').length,
+            block: round(rect(block).width),
+            /* Placement, measured as the offset of the key's END edge from the
+               block's END edge: the legend is right-aligned under the graph,
+               and "right-aligned" is a relationship, not a width. */
+            legendOffset: round(rect(block).right - rect(legend).right),
+            legendTop: round(rect(legend).top - rect(block).top),
+            strip: round(rect(block.querySelector('.grid-strip')).height),
+          };
+        })
+      ),
     });
   }
 
-  const [first, ...rest] = measured;
   for (const shape of measured) {
-    // The fixed window (issue 189): every dated series, whatever its own
-    // length, realigns onto the SAME pendingWeeks trailing calendar, so
-    // "drawn" no longer tracks the series length at all.
     expect(
-      shape.drawn,
-      `a ${shape.days}-day series drew ${shape.drawn} columns instead of the fixed trailing window it claims (${shape.claimed})`
-    ).toBe(shape.claimed);
-    expect(shape.rows, `a ${shape.days} day series stopped being seven days tall`).toBe(7);
-  }
-  for (const shape of rest) {
-    /* The grammar that survives full width: identical BOX (the card's own
-       width, not the data's), identical row height, identical gap, identical
-       legend placement relative to that unchanging box — and now, because
-       the fixed window means the column count itself never varies with the
-       series length either, identical CELL size too. A strip whose own
-       window never changes shape has nothing left that data length could
-       stretch or shrink. */
-    expect(
-      shape.claimed,
-      `the fixed window changed width at ${shape.days} days (${first.claimed} columns at 1 day, ${shape.claimed} here)`
-    ).toBe(first.claimed);
-    expect(
-      shape.block,
-      `the box resized from ${first.block}px at 1 day to ${shape.block}px at ${shape.days} days; full width means the card decides the box, not the data`
-    ).toBe(first.block);
-    expect(
-      shape.cell,
-      `the cell width moved at ${shape.days} days even though the fixed window never changes column count`
-    ).toBe(first.cell);
-    expect(shape.cellHeight, `the cell height moved at ${shape.days} days`).toBe(first.cellHeight);
-    expect(shape.gap, `the gap moved at ${shape.days} days`).toBe(first.gap);
-    expect(shape.strip, `the strip changed height at ${shape.days} days`).toBe(first.strip);
-    expect(
-      shape.legendOffset,
-      `the less/more key sits ${shape.legendOffset}px from the block edge at ${shape.days} days and ${first.legendOffset}px at 1 day`
-    ).toBe(first.legendOffset);
-    expect(shape.legendTop, `the key changed row at ${shape.days} days`).toBe(first.legendTop);
-  }
-  /* The reserve is genuinely the width all three claim, rather than a number
-     they happen to agree on: a one-day series and a month-long one both draw
-     the same fifty-three columns, which is the direction a stray data-driven
-     code path would break at one end of the range and not the other. */
-  for (const shape of measured) {
-    expect(shape.claimed, `a ${shape.days}-day series no longer claims the reserve`).toBe(53);
+      shape.sources.length,
+      `the token panel drew ${shape.sources.length} graphs at ${shape.days} days; this lane compares two`
+    ).toBeGreaterThan(1);
+    const [lead, ...others] = shape.sources;
+    expect(lead.drawn, `"${lead.label}" drew a width it did not claim`).toBe(lead.claimed);
+    expect(lead.rows, `a ${shape.days}-day panel stopped being seven days tall`).toBe(7);
+    for (const other of others) {
+      /* THE AXIS CLAIM. Same column count, same first and last day, and the
+         same box drawn around them: two strips a reader compares by eye must
+         be comparable by eye. */
+      expect(
+        other.claimed,
+        `at ${shape.days} days "${lead.label}" drew ${lead.claimed} columns and "${other.label}" drew ${other.claimed}`
+      ).toBe(lead.claimed);
+      expect(other.drawn, `"${other.label}" drew a width it did not claim`).toBe(other.claimed);
+      expect(
+        other.calendar,
+        `at ${shape.days} days the two sources drew different calendars`
+      ).toBe(lead.calendar);
+      expect(other.calendar.length, 'the month axis rendered no ticks to compare').toBeGreaterThan(0);
+      /* The grammar that survives full width: identical box, cell, gap, row
+         height and legend placement, so neither strip reads as the odd one. */
+      expect(other.block, `the two blocks disagree about their width at ${shape.days} days`).toBe(
+        lead.block
+      );
+      expect(other.cell, `the two cells disagree about their width at ${shape.days} days`).toBe(
+        lead.cell
+      );
+      expect(
+        other.cellHeight,
+        `the two cells disagree about their height at ${shape.days} days`
+      ).toBe(lead.cellHeight);
+      expect(other.gap, `the two strips disagree about their gap at ${shape.days} days`).toBe(
+        lead.gap
+      );
+      expect(other.strip, `the two strips disagree about their height at ${shape.days} days`).toBe(
+        lead.strip
+      );
+      expect(
+        other.legendOffset,
+        `the two keys sit at different offsets at ${shape.days} days`
+      ).toBe(lead.legendOffset);
+      expect(other.legendTop, `the two keys sit on different rows at ${shape.days} days`).toBe(
+        lead.legendTop
+      );
+    }
   }
 
-  /* AND THE OTHER SIDE OF THE WINDOW (issue 233). The reserve stopped being a
-     CEILING when the display menu was deleted: keeping the retired 12mo
-     default would have silently dropped every day past a year, which is the
-     defect the deleted range control existed to remove, so the fixed window
-     is the wider of the reserve and the capture (fullDepthColumns,
-     lib/periods.ts). Measured here rather than only in that module's own
-     tests, because "the strip grew" is a claim about a rendered box: a
-     four-hundred-day capture must draw MORE than the reserve, must draw the
-     width it claims, and must still be seven days tall in a box the card
-     still decides. */
-  await page.unrouteAll({ behavior: 'ignoreErrors' });
-  await stageUsagePayload(page, (envelope) => {
-    const sources = envelope?.data?.sources ?? [];
-    expect(sources.length, 'the origin serves no usage source to restage').toBeGreaterThan(0);
-    sources[0].series = syntheticSeries(400);
-  });
-  await visit(page);
-  const deep = await page.evaluate(() => {
-    const block = window.document.querySelector('.usage-source .grid-block');
-    const cells = block.querySelector('.grid-cells');
-    const round = (value) => Math.round(value * 100) / 100;
-    return {
-      claimed: Number(block.getAttribute('data-grid-columns')),
-      drawn: Math.ceil(cells.querySelectorAll('.grid-cell').length / 7),
-      rows: getComputedStyle(cells).gridTemplateRows.split(' ').length,
-      block: round(block.getBoundingClientRect().width),
-    };
-  });
+  /* AND THE WINDOW TRACKS THE COVERAGE, which is the half that replaced the
+     fixed frame. Three coverages, three answers, each pinned on its own terms:
+     the floor keeps a very short capture legible (its own less/more key has to
+     fit beside it), the middle is the capture itself, and the reserve is the
+     cap a longer capture is shown the trailing end of. */
+  const [short, middle, deep] = measured.map((shape) => shape.sources[0]);
+  expect(
+    short.claimed,
+    `a fortnight of coverage drew ${short.claimed} columns; the fixed frame is back`
+  ).toBeLessThan(53);
+  expect(
+    middle.claimed,
+    `two hundred days drew ${middle.claimed} columns, no more than the fortnight's ${short.claimed}`
+  ).toBeGreaterThan(short.claimed);
+  expect(
+    middle.claimed,
+    `two hundred days drew ${middle.claimed} columns; the reserve is a floor again`
+  ).toBeLessThan(53);
   expect(
     deep.claimed,
-    `a 400-day capture drew ${deep.claimed} columns; the reserve is a ceiling again`
-  ).toBeGreaterThan(53);
-  expect(deep.claimed * 7, 'the window is too narrow to hold the capture it drew').toBeGreaterThanOrEqual(400);
-  expect(deep.drawn, 'the deep window drew a width it did not claim').toBe(deep.claimed);
-  expect(deep.rows, 'the deep window stopped being seven days tall').toBe(7);
-  expect(deep.block, 'the card stopped deciding the box once the capture outgrew the reserve').toBe(first.block);
+    `nine hundred days drew ${deep.claimed} columns; the reserve is not the cap`
+  ).toBe(53);
+  expect(deep.drawn, 'the capped window drew a width it did not claim').toBe(deep.claimed);
+  /* The cap is TRAILING, stated in both directions: the capture is genuinely
+     cut (nine hundred days do not all fit in fifty-three weeks) and what
+     SURVIVES is its newest end — the same newest day the short shape drew,
+     which is the end a reader came to see. A leading cap would keep the same
+     number of days and lose exactly the wrong ones. */
+  expect(
+    deep.realCount,
+    `nine hundred days drew ${deep.realCount} captured cells; the cap is not cutting anything`
+  ).toBeLessThan(900);
+  expect(
+    deep.realCount,
+    `the capped window holds ${deep.realCount} captured days of the 371 it draws; only the current week's unfinished days should be missing`
+  ).toBeGreaterThan(53 * 7 - 7);
+  expect(deep.realLast, 'the capped window does not end on the panel’s newest day').toBe(
+    short.realLast
+  );
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
@@ -1314,6 +1371,18 @@ test('the strip survives the whole range of the page column token', async ({ pag
   );
   expect(declared, 'the page column token is not declared; this lane drives nothing').not.toBe('');
 
+  /* Each strip's own first measurement, kept per grid. The height claim below
+     is WIDTH-independence — one grid measured across the whole token range —
+     and it used to be written as "every grid matches the first grid on the
+     page", which is a different claim that happened to coincide while every
+     heatmap drew the same day. It stopped coinciding when the token panel
+     bounded and squared its day (issue 178 vs 268's ruling): its strip is
+     deliberately taller than the calendar's now, while each strip's own height
+     is still exactly as width-independent as it ever was. Measuring each grid
+     against itself says what the message has always said, and says it about
+     more: grids that all drifted together used to pass. */
+  const baseline = new Map();
+
   for (const width of ['20rem', '32rem', '48rem', '60rem', '90rem', '140rem']) {
     await page.evaluate((value) => {
       window.document.documentElement.style.setProperty('--page-column-width', value);
@@ -1353,10 +1422,11 @@ test('the strip survives the whole range of the page column token', async ({ pag
           `"${grid.label}" overflows its box at a ${width} page column without scrolling inside itself`
         ).toBe(true);
       }
+      if (!baseline.has(grid.label)) baseline.set(grid.label, grid.height);
       expect(
         grid.height,
         `"${grid.label}" changed height at a ${width} page column; the block-size reserve is not width-independent`
-      ).toBeCloseTo(observed.grids[0].height, 1);
+      ).toBeCloseTo(baseline.get(grid.label), 1);
     }
   }
   await page.evaluate(() =>
@@ -1725,14 +1795,6 @@ test('a source with no series renders no graph, and one with a series still rend
       rendered,
       pending: panel.querySelectorAll('[data-grid-pending]').length,
       notes: panel.querySelectorAll('.grid-empty').length,
-      /* The other heatmap on the page, and the geometry the shared component
-         guarantees. The graph that STAYED must render in exactly that box:
-         this is the height comparison the retired lane made between an empty
-         grid and a full one, made between two full ones instead. */
-      calendarStrip: (() => {
-        const block = window.document.querySelector('[data-activity-panel] .grid-block');
-        return block === null ? 0 : strip(block);
-      })(),
     };
   });
   expect(observed, 'the token panel never painted; this lane proves nothing').not.toBeNull();
@@ -1790,19 +1852,111 @@ test('a source with no series renders no graph, and one with a series still rend
        only panel-wide so a control growing back beside one graph fails here
        too. */
     expect(shown.toggles, `"${source.label}" grew a display control back`).toBe(0);
-    /* MEASURED, not asserted: the graph that stayed renders in exactly the
-       box the shared component gives the other panel's calendar, so removing
-       the region beside it moved nothing about it. */
-    expect(observed.calendarStrip, 'no second heatmap to measure against').toBeGreaterThan(0);
-    expect(
-      shown.stripHeight,
-      `"${source.label}" renders its graph in a different box from the page's other heatmap`
-    ).toBe(observed.calendarStrip);
+    /* The graph that stayed still has a box at all — a source whose neighbour
+       lost its series must not come back as a zero-height strip.
+
+       WHAT THIS LANE DELIBERATELY NO LONGER CLAIMS, and the correction is
+       worth writing down because the first attempt got it wrong. Until issue
+       178 vs 268's ruling this compared the surviving strip against the OTHER
+       panel's calendar; the ruling makes those two boxes different on purpose,
+       so that equality would now pin the absence of the ruling. The first
+       re-aim pointed the same comparison at `drawn[0]` instead — but this lane
+       STAGES one of exactly two sources seriesless, so `drawn` has one element
+       under every admitted input and the assertion compared a number with
+       itself. A tautology is not a weaker guard, it is no guard, and it hid
+       the fact that the advertised contract was measured nowhere.
+       "Every source in this panel shares one box" needs a page where two
+       sources actually draw, which this lane by construction is not, so it is
+       measured in the lane immediately below instead. */
+    expect(shown.stripHeight, `"${source.label}" renders a graph with no box`).toBeGreaterThan(0);
   }
 
   /* Nothing anywhere in this panel is a placeholder. */
   expect(observed.pending, 'the token panel renders placeholder cells somewhere').toBe(0);
   expect(observed.notes, 'the token panel renders an empty-grid note somewhere').toBe(0);
+});
+
+/* ONE PANEL, ONE BOX (issues 178/268). Every source in the token panel draws
+ * its graph at the same size, because the bound that decides that size
+ * (--grid-day-size / --grid-day-max) belongs to the PANEL and not to any one
+ * source. That is the guarantee "removing the region beside a graph moved
+ * nothing about it" was always leaning on, and until this lane existed it was
+ * measured nowhere: the lane above stages one of exactly two sources
+ * seriesless, so it can only ever have one drawn source to compare, and an
+ * earlier version of this contract lived there as a number compared with
+ * itself.
+ *
+ * So this lane stages NOTHING. It takes the origin's real payload, where both
+ * sources carry a series, and the guard below refuses to run at all on a page
+ * that offers fewer than two — which is what stops it degenerating back into a
+ * tautology the day the snapshot changes shape. The comparison is made on the
+ * boxes a reader actually sees: the strip's own height, the cell band inside
+ * it, and the drawn day itself, so a source given a different day by any route
+ * fails here by name. */
+test('every drawn source in the token panel shares one graph box (issues 178/268)', async ({
+  page,
+}) => {
+  await visit(page);
+  const sources = await page.evaluate(() => {
+    const panel = window.document.querySelector('[data-panel-id="token-usage"]');
+    if (panel === null) return null;
+    const box = (node) => {
+      const rect = node.getBoundingClientRect();
+      return `${Math.round(rect.width * 100) / 100}x${Math.round(rect.height * 100) / 100}`;
+    };
+    const drawn = [];
+    for (const source of panel.querySelectorAll('.usage-source')) {
+      const block = source.querySelector('.grid-block');
+      if (block === null) continue;
+      const cell = block.querySelector('.grid-cells .grid-cell');
+      if (cell === null) continue;
+      drawn.push({
+        label: source.querySelector('.usage-source-label').textContent.trim(),
+        strip: box(block.querySelector('.grid-strip')),
+        cells: box(block.querySelector('.grid-cells')),
+        day: box(cell),
+        columns: block.getAttribute('data-grid-columns'),
+      });
+    }
+    return drawn;
+  });
+  expect(sources, 'the token panel never painted; this lane proves nothing').not.toBeNull();
+
+  /* The guard that keeps this lane honest. One drawn source would make every
+     comparison below compare an element with itself, which is exactly the
+     failure this lane was written to repair — so it is refused outright rather
+     than passing quietly. */
+  expect(
+    sources.length,
+    `the token panel draws ${sources.length} source graph(s); a shared-box claim needs at least two to compare`
+  ).toBeGreaterThan(1);
+
+  const [first, ...rest] = sources;
+  // Non-vacuity: zero-sized boxes would satisfy any equality between them.
+  expect(first.day, `"${first.label}" draws a day of no size`).not.toBe('0x0');
+  expect(first.strip, `"${first.label}" draws a strip of no size`).not.toBe('0x0');
+
+  for (const source of rest) {
+    expect(
+      source.day,
+      `"${source.label}" draws a ${source.day} day where "${first.label}" draws ${first.day}; the day bound belongs to the panel, not to one source`
+    ).toBe(first.day);
+    expect(
+      source.strip,
+      `"${source.label}" renders its graph in a ${source.strip} box where "${first.label}" renders ${first.strip}`
+    ).toBe(first.strip);
+    expect(
+      source.cells,
+      `"${source.label}" draws a ${source.cells} cell band where "${first.label}" draws ${first.cells}`
+    ).toBe(first.cells);
+    /* The window is the panel's too (issue 268: one window per panel, derived
+       from the coverage of all its sources), so two sources drawing different
+       column counts would mean the same box holds two different windows. */
+    expect(
+      source.columns,
+      `"${source.label}" draws ${source.columns} columns where "${first.label}" draws ${first.columns}; the coverage window is the panel's, not each source's`
+    ).toBe(first.columns);
+  }
 });
 
 /* The other half of the ruling, and the reason the empty state was not simply
@@ -3580,7 +3734,7 @@ test('the gallery frame is centred in its track, with no dead gutter (issue 202)
   }
 });
 
-/* ZERO SHIFT ACROSS A KIND CHANGE (issue 241).
+/* ZERO SHIFT ACROSS A KIND CHANGE (issue 241, re-aimed at issue 265).
  *
  * MEASURED on 0.1.54: a still's stage is a square and a film's is 16:9, and
  * each reserved its own box — so pressing next across the boundary resized the
@@ -3588,7 +3742,17 @@ test('the gallery frame is centred in its track, with no dead gutter (issue 202)
  * back. The reservation now sits on the frame, which knows nothing about kind,
  * and this measures the document itself rather than any box: the whole page's
  * scroll height, and the top of the section BELOW the gallery, which is what a
- * reader actually watches move. */
+ * reader actually watches move.
+ *
+ * AND IT PASSED WHILE THE SITE MOVED, which is the second thing this lane now
+ * records. The owner watched the section jump on every item change of the live
+ * 0.1.65 origin — 50px at 1440, 69px at 390 — and this lane was green
+ * throughout, because the fixture above carried no captions and the caption
+ * was the mover: a conditional sibling that existed only for the items that
+ * had something to say. The fixture now captions both items, unequally, so
+ * the same three measurements it always took are taken against a page that
+ * has something to shift; the caption's own box joins them, so a failure
+ * names the mover instead of only the movement. */
 test('moving between a still and a film shifts the document by nothing (issue 241)', async ({ page }) => {
   await serveGalleryManifest(page);
   await visit(page);
@@ -3600,11 +3764,18 @@ test('moving between a still and a film shifts the document by nothing (issue 24
       const frame = window.document.querySelector('.gallery-frame').getBoundingClientRect();
       const stage = window.document.querySelector('.gallery-stage').getBoundingClientRect();
       const below = window.document.querySelector('#trackers');
+      const caption = window.document.querySelector('.gallery-caption');
       return {
         document: window.document.documentElement.scrollHeight,
         frame: Math.round(frame.height * 10) / 10,
         stage: { width: Math.round(stage.width * 10) / 10, height: Math.round(stage.height * 10) / 10 },
         below: below === null ? null : Math.round(below.getBoundingClientRect().top + window.scrollY),
+        /* The lane the caption is rendered into (issue 265). It is reserved
+           for the whole SET rather than for the current item, so its height is
+           one number for every item — and a null here would mean the box went
+           back to being conditional. */
+        caption:
+          caption === null ? null : Math.round(caption.getBoundingClientRect().height * 10) / 10,
         kind: window.document.querySelector('.gallery-stage').getAttribute('data-gallery-kind'),
       };
     });
@@ -3634,6 +3805,13 @@ test('moving between a still and a film shifts the document by nothing (issue 24
   ).toEqual(still.stage);
   expect(back.kind, 'the strip did not come back to the still it started on').toBe('image');
 
+  /* NON-VACUITY, THE CAPTION HALF (issue 265): the fixture's two items carry
+     DIFFERENT captions, so the lane below is measuring a page that has
+     something to shift. A reservation that had gone back to the current
+     item's own caption would report a height of nothing here for the still. */
+  expect(still.caption, 'the caption box is conditional again, so this lane measures nothing').not.toBeNull();
+  expect(still.caption, 'the reserved caption lane has no height at all').toBeGreaterThan(0);
+
   for (const [label, state] of [
     ['the film', film],
     ['the still, coming back', back],
@@ -3650,6 +3828,10 @@ test('moving between a still and a film shifts the document by nothing (issue 24
       state.below,
       `${label} moved the section under the gallery from ${still.below} to ${state.below}`
     ).toBe(still.below);
+    expect(
+      state.caption,
+      `${label} resized the caption lane from ${still.caption}px to ${state.caption}px; the item is moving the box again`
+    ).toBeCloseTo(still.caption, 0);
   }
 });
 
@@ -4052,9 +4234,47 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
   const frame = page.locator('.gallery-image-button');
   await frame.scrollIntoViewIfNeeded();
 
-  // Absent, on the feed surface: no caption element exists at all — not an
-  // empty one, not a hidden one.
-  expect(await page.locator('.gallery-caption').count()).toBe(0);
+  /* Absent, on the feed surface, and this is the SET's answer rather than the
+     current item's (issue 265). The reserved lane is what stops an item change
+     moving the page — but this set is the vendored bootstrap gallery, in which
+     NOBODY has anything to say, so there is no lane to hold open and reserving
+     one would charge the page a constant empty band (MEASURED at +12px of
+     document height, one section row gap for a zero-height box).
+     The captioned half of the same contract is measured by the zero-shift lane
+     earlier in this file, which serves a manifest whose items DO carry
+     captions and holds the document to the pixel across every item change. */
+  expect(
+    await page.locator('.gallery-caption').count(),
+    'a set with nothing to say still reserved a caption band',
+  ).toBe(0);
+  expect(
+    await page.locator('.gallery-caption p').count(),
+    'a caption line rendered for a set whose items have nothing to say',
+  ).toBe(0);
+  /* AND THE BLOCK ENDS AT ITS DOTS. The count above would still pass if the
+     gallery had left some other empty box behind it, so the geometry says the
+     same thing independently: the last flow box inside the gallery's own
+     subsection is the position row, which is exactly the shape the page had
+     before anything was reserved. */
+  const trailing = await page.evaluate(() => {
+    const position = window.document.querySelector('.gallery-position');
+    const block = position.parentElement;
+    return {
+      blockBottom: block.getBoundingClientRect().bottom,
+      positionBottom: position.getBoundingClientRect().bottom,
+      /* Every box after the dots must take no part in layout — the lightbox
+         is `display: none` while closed and nothing else may be there. */
+      inFlowAfter: [...block.children]
+        .slice([...block.children].indexOf(position) + 1)
+        .filter((node) => window.getComputedStyle(node).display !== 'none')
+        .map((node) => node.className.toString()),
+    };
+  });
+  expect(trailing.inFlowAfter, 'the gallery left a box in flow after its dots').toEqual([]);
+  expect(
+    trailing.blockBottom,
+    `the gallery block runs ${trailing.blockBottom - trailing.positionBottom}px past its own dots`,
+  ).toBeCloseTo(trailing.positionBottom, 1);
 
   /* Zero CLS across the whole cycle: the frame and the counter occupy the
      identical box for every one of the eight items, so nothing an item does
@@ -4083,7 +4303,10 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
           reserved: round(row.height),
           counterHeight: round(counter.height),
           counterGap: round(counter.top - frame.bottom),
-          captions: window.document.querySelectorAll('.gallery-caption').length,
+          /* The caption's own CONTENT, item by item: the box is reserved for
+             every item now (issue 265), and what must still be absent for an
+             item with nothing to say is every line inside it. */
+          captionLines: window.document.querySelectorAll('.gallery-caption p').length,
         };
       })
     );
@@ -4091,7 +4314,7 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
   }
   const [first] = geometry;
   for (const [index, state] of geometry.entries()) {
-    expect(state.captions, `item ${index + 1} rendered a caption element with nothing to say`).toBe(0);
+    expect(state.captionLines, `item ${index + 1} rendered caption copy nobody wrote`).toBe(0);
     expect(state, `the gallery block reshaped between item 1 and item ${index + 1}`).toEqual(first);
   }
 
@@ -4317,67 +4540,6 @@ test('the repo cards’ stat columns align across cards at desktop, and stack as
       ).toBeGreaterThanOrEqual(rowEnd - 8);
     }
   }
-});
-
-/* A provenance mark says a figure was recorded out of band. It is a WORD
- * beside a figure, so it costs horizontal room — and a counter row is the one
- * place on this page where horizontal room is deliberately rationed, because
- * `.entry-count-text` is nowrap so a number is never split from the noun it
- * counts. Nest the mark inside that run and it joins it: the card's
- * min-content grows by the mark's whole width, the panel column can no longer
- * shrink to a phone, and the page scrolls sideways. That is exactly what
- * happened on 0.1.56 — red on all five projects, green on the author's
- * workstation, because the identical string sets ~3.4px narrower in macOS's
- * UI font than in the runner's.
- *
- * So the WIDTH tests above are not the pin. They are font-dependent by
- * construction: on a narrow enough typeface the regression fits and passes,
- * which is how it reached CI in the first place. This pin is STRUCTURAL and
- * font-independent — it asks the engine what it computed, and a mark that is
- * back inside an unbreakable run answers `nowrap` on every engine and at every
- * font size. */
-test('a provenance mark never joins the unbreakable run it sits beside (issue 242)', async ({
-  page,
-}) => {
-  await visit(page);
-  await page.setViewportSize({ width: 320, height: 900 });
-  await settled(page);
-
-  const observed = await page.evaluate(() => {
-    const marks = [...window.document.querySelectorAll('.entry-recorded')];
-    return {
-      count: marks.length,
-      /* The mark's OWN computed value. `white-space` inherits, so a mark
-         nested back inside `.entry-count-text` reports that ancestor's
-         `nowrap` here without this test naming any ancestor. */
-      unbreakable: marks.filter((mark) => getComputedStyle(mark).whiteSpace === 'nowrap').length,
-      /* And the row it sits in must be able to take a second line, or the
-         mark is unwrappable by a second route. */
-      rigidRows: [...window.document.querySelectorAll('.entry-count')].filter(
-        (row) => getComputedStyle(row).flexWrap === 'nowrap'
-      ).length,
-      /* Non-vacuity, stated as data rather than assumed: the label it marks
-         IS an unbreakable run, so "not nowrap" is a real distinction here
-         and not a property every span on the page happens to have. */
-      rigidLabels: [...window.document.querySelectorAll('.entry-count-text')].filter(
-        (label) => getComputedStyle(label).whiteSpace === 'nowrap'
-      ).length,
-    };
-  });
-
-  expect(observed.count, 'no provenance mark rendered; this lane proves nothing').toBeGreaterThan(0);
-  expect(
-    observed.rigidLabels,
-    'no counter label is an unbreakable run, so this lane is no longer testing what it describes'
-  ).toBeGreaterThan(0);
-  expect(
-    observed.unbreakable,
-    `${observed.unbreakable} provenance marks compute white-space: nowrap; a mark inside an unbreakable run adds its whole width to the card's min-content`
-  ).toBe(0);
-  expect(
-    observed.rigidRows,
-    `${observed.rigidRows} counter rows refuse to wrap, so the mark has nowhere to go on a narrow card`
-  ).toBe(0);
 });
 
 /* The pull-to-refresh settle guard (issue 187). What this lane CAN prove,
@@ -5632,10 +5794,24 @@ test('the token-activity grid fills its card, not a tiny left-aligned block', as
     if (!block || !body) return null;
     const blockBox = block.getBoundingClientRect();
     const bodyBox = body.getBoundingClientRect();
+    const cells = block.querySelector('.grid-cells');
+    const strip = block.querySelector('.grid-strip');
+    const cell = block.querySelector('.grid-cells .grid-cell');
+    const cellsBox = cells === null ? null : cells.getBoundingClientRect();
+    const stripBox = strip === null ? null : strip.getBoundingClientRect();
+    const cellBox = cell === null ? null : cell.getBoundingClientRect();
     return {
       fullwidth: block.getAttribute('data-grid-fullwidth'),
       blockWidth: blockBox.width,
       bodyWidth: bodyBox.width,
+      columns: Number(block.getAttribute('data-grid-columns')),
+      cellsWidth: cellsBox === null ? 0 : cellsBox.width,
+      cellsLeft: cellsBox === null ? 0 : cellsBox.left,
+      stripLeft: stripBox === null ? 0 : stripBox.left,
+      stripWidth: stripBox === null ? 0 : stripBox.width,
+      cellWidth: cellBox === null ? 0 : cellBox.width,
+      cellHeight: cellBox === null ? 0 : cellBox.height,
+      viewport: window.innerWidth,
     };
   });
   expect(measured, 'the token panel rendered no activity grid to measure').not.toBeNull();
@@ -5647,6 +5823,68 @@ test('the token-activity grid fills its card, not a tiny left-aligned block', as
     measured.blockWidth,
     `the grid is ${Math.round(measured.blockWidth)}px inside a ${Math.round(measured.bodyWidth)}px card`
   ).toBeGreaterThan(measured.bodyWidth * 0.9);
+
+  /* THE RULING, no longer a recorded gap (issue 178 vs issue 268). The owner
+     delegated this call to the coordinator on 2026-08-31 and the ruling is
+     that COVERAGE-WINDOW TRUTH OUTRANKS FILL at short coverage: the panel
+     draws only the days it captured, a day stays square and may scale up only
+     to the caller's bound, and the width the strip does not reach is accepted
+     because it closes itself — one real column per week. This lane used to pin
+     CURRENT BEHAVIOUR with the conflict written into its message; it now
+     asserts the ruled contract, and only for THIS surface. The version-control
+     calendar sets no bound, keeps the plain stretch, and is not measured here.
+
+     Three statements, because the ruling has three halves and any one of them
+     alone would let a defect through: the BLOCK still spans the card (issue
+     178's own report, unchanged and asserted above), the CELLS stop at the
+     bound instead of stretching into bar-chart days, and what stops is LEFT-
+     ALIGNED with the strip rather than centred in the space it declined. */
+  expect(
+    measured.columns > 0 && measured.cellWidth > 0,
+    'the token strip drew no cells to measure the ruling against'
+  ).toBe(true);
+
+  /* Left-aligned: the cells begin exactly where the strip's content begins.
+     A centred remainder would split the accepted gap in two and read as a
+     mistake rather than as a window that has not filled out yet. */
+  expect(
+    measured.cellsLeft,
+    `the token strip's cells begin at ${measured.cellsLeft.toFixed(1)} inside a strip that begins at ${measured.stripLeft.toFixed(1)}: the remainder was distributed instead of left-aligned`
+  ).toBeCloseTo(measured.stripLeft, 0);
+
+  /* The token panel's own bound is 1.25rem, released below 30rem where the
+     columns share the strip instead (UsageTracker.svelte states both halves).
+     So the contract is range-dependent, and both ranges are asserted rather
+     than one being skipped — the desktop projects reach the first branch and
+     the two phone projects reach the second. */
+  const dayBoundPx = 20;
+  if (measured.viewport > 480) {
+    expect(
+      measured.cellWidth,
+      `a day is drawn ${measured.cellWidth.toFixed(2)}px wide against a ${dayBoundPx}px bound; the cap is not holding and the strip is stretching into bar-chart days again`
+    ).toBeLessThanOrEqual(dayBoundPx + subPixel);
+    /* SQUARE, which is the half a width cap alone does not give: capping the
+       width and leaving the row height at the base token drew a 20x10 day —
+       the same shape issue 158 refused, only smaller. */
+    expect(
+      measured.cellWidth,
+      `a day is ${measured.cellWidth.toFixed(2)}x${measured.cellHeight.toFixed(2)}: the bound stopped its width without squaring it`
+    ).toBeCloseTo(measured.cellHeight, 0);
+    // Non-vacuity: a day that never grew would satisfy both of the above.
+    expect(
+      measured.cellHeight,
+      `a day is ${measured.cellHeight.toFixed(2)}px tall; it did not scale up from the base cell at all`
+    ).toBeGreaterThan(10);
+  } else {
+    /* Below the bound's range the phone contract issue 268 measured still
+       holds: the columns share the strip and the cells reach its edge, which
+       is the owner's no-dead-space rule on a box too narrow for a bound and a
+       fill to coexist. */
+    expect(
+      measured.cellsWidth,
+      `the token strip's cells reach ${measured.cellsWidth.toFixed(1)} of a ${measured.stripWidth.toFixed(1)}px strip at ${measured.viewport}px`
+    ).toBeCloseTo(measured.stripWidth, 0);
+  }
 });
 
 /* NO DISPLAY CONTROLS, AND ONE GRAPH PER SOURCE (owner directive, 2026-08-28,
@@ -5741,14 +5979,20 @@ test('the token panel offers no display control, and every source still draws it
       `"${first.label}" draws ${first.claimed} columns and "${graph.label}" draws ${graph.claimed}; the window is not fixed`
     ).toBe(first.claimed);
   }
-  /* The window is at least the reserve, which is what keeps a short capture
-     from drawing a tenth of the card the owner's no-dead-space rule says must
-     be filled. It may be wider — the capture decides above the reserve — so
-     this is a floor, exactly as fullDepthColumns is. */
+  /* The window is the panel's own coverage, between the floor that keeps a
+     very short capture legible and the reserve that caps a long one (issue
+     268; the fixed fifty-three-week frame this used to require is what the
+     owner reported as a graph mostly made of nothing). Both bounds are pinned
+     here so a window that escaped either end fails on the real page as well as
+     in lib/periods.ts's own arithmetic. */
   expect(
     first.claimed,
-    `the fixed window drew ${first.claimed} columns, under the reserve the card is sized for`
-  ).toBeGreaterThanOrEqual(53);
+    `the panel's window drew ${first.claimed} columns, under the width its own less/more key needs`
+  ).toBeGreaterThanOrEqual(10);
+  expect(
+    first.claimed,
+    `the panel's window drew ${first.claimed} columns, past the reserve it is capped at`
+  ).toBeLessThanOrEqual(53);
 });
 
 test('a token-activity cell card is titled "Tokens used" and reads a human period phrase, never a raw ISO date', async ({
@@ -7338,11 +7582,30 @@ test('the keyboard cursor survives a scroll, and every arrow opens a cold strip 
 
 /* Reads the keyboard cursor AND the scrollport it is supposed to be inside,
  * scoped to one strip so three grids on a page cannot answer for each other. */
-async function cursorInPort(page) {
-  return page.evaluate(() => {
-    const region = window.document.querySelector('.grid-strip[role="listbox"]');
+/* WHICH strip these lanes drive. It used to be "the first one", which was the
+ * same thing while every strip on the page drew a fixed year of columns and so
+ * overflowed a phone. Since issue 268 the token panel's window is its own
+ * coverage, and a fortnight of it fits a phone with nothing to pan — so a lane
+ * about panning that still took the first strip would measure a box with no
+ * overflow and fail on its own non-vacuity check. This asks the PAGE which
+ * strip has something to pan instead of naming a panel, so the lanes below
+ * keep measuring their own subject however the panels' windows move. -1 when
+ * no strip overflows at all, which the lanes report as the finding it is. */
+async function pannableStrip(page) {
+  return page.evaluate(() =>
+    [...window.document.querySelectorAll('.grid-strip[role="listbox"]')].findIndex(
+      (strip) => strip.scrollWidth > strip.clientWidth
+    )
+  );
+}
+
+async function cursorInPort(page, index = 0) {
+  return page.evaluate((at) => {
+    const region = window.document.querySelectorAll('.grid-strip[role="listbox"]')[at];
     const marked = region.querySelector('.grid-cell[data-grid-selected="true"]');
-    const tip = window.document.querySelector('.grid-block .cell-tip[data-tip-open="true"]');
+    const tip = region
+      .closest('.grid-block')
+      ?.querySelector('.cell-tip[data-tip-open="true"]') ?? null;
     const port = region.getBoundingClientRect();
     const cell = marked === null ? null : marked.getBoundingClientRect();
     return {
@@ -7357,7 +7620,7 @@ async function cursorInPort(page) {
       open: tip !== null,
       text: tip === null ? null : tip.innerText.replace(/\s+/g, ' ').trim(),
     };
-  });
+  }, index);
 }
 
 /* THE PAIR (issue 219, review round 2). Findings 1 and 2 are one lane because
@@ -7394,7 +7657,9 @@ test('the keyboard cursor is scrolled into its own strip, and a readout panned o
   await page.setViewportSize({ width: 390, height: 844 });
   await settled(page);
 
-  const strip = page.locator('.grid-strip[role="listbox"]').first();
+  const stripIndex = await pannableStrip(page);
+  expect(stripIndex, 'no strip on the page has anything to pan; this lane proves nothing').toBeGreaterThanOrEqual(0);
+  const strip = page.locator('.grid-strip[role="listbox"]').nth(stripIndex);
   await strip.scrollIntoViewIfNeeded();
   await settled(page);
 
@@ -7417,7 +7682,7 @@ test('the keyboard cursor is scrolled into its own strip, and a readout panned o
   // A tab into the strip must name a cell the reader can see, not whichever
   // one happens to sit at the viewport's origin.
   await strip.evaluate((node) => node.focus());
-  const entered = await cursorInPort(page);
+  const entered = await cursorInPort(page, stripIndex);
   expect(entered.marked, 'focusing the strip marked no cell at all').not.toBeNull();
   expect(
     entered.visible,
@@ -7431,7 +7696,7 @@ test('the keyboard cursor is scrolled into its own strip, and a readout panned o
      port before anything scrolls, so the assertion cannot be satisfied by a
      cursor that happened to be in view already. */
   await page.keyboard.press('Home');
-  const home = await cursorInPort(page);
+  const home = await cursorInPort(page, stripIndex);
   expect(home.scrollLeft, 'Home did not pan the strip at all').toBeLessThan(entered.scrollLeft);
   expect(
     home.visible,
@@ -7446,7 +7711,7 @@ test('the keyboard cursor is scrolled into its own strip, and a readout panned o
   let panned = 0;
   for (let press = 0; press < 30; press += 1) {
     await page.keyboard.press('ArrowRight');
-    const step = await cursorInPort(page);
+    const step = await cursorInPort(page, stripIndex);
     expect(
       step.visible,
       `ArrowRight #${press + 1} left the cursor at ${Math.round(step.cell?.left)}–${Math.round(step.cell?.right)}, outside the strip's ${Math.round(step.port.left)}–${Math.round(step.port.right)}`,
@@ -7466,7 +7731,7 @@ test('the keyboard cursor is scrolled into its own strip, and a readout panned o
 
   // End, the other jump, from the other side of the window.
   await page.keyboard.press('End');
-  const end = await cursorInPort(page);
+  const end = await cursorInPort(page, stripIndex);
   expect(end.visible, 'End marked a cell outside the strip').toBe(true);
   expect(end.open, 'End closed the readout').toBe(true);
 
@@ -7479,12 +7744,12 @@ test('the keyboard cursor is scrolled into its own strip, and a readout panned o
     node.scrollLeft = 0;
   });
   await expect
-    .poll(async () => (await cursorInPort(page)).open, {
+    .poll(async () => (await cursorInPort(page, stripIndex)).open, {
       message: 'the readout kept naming a cell panned clean out of its own strip',
       timeout: 5_000,
     })
     .toBe(false);
-  const stale = await cursorInPort(page);
+  const stale = await cursorInPort(page, stripIndex);
   expect(stale.marked, 'a ring stayed painted on a cell panned out of the strip').toBeNull();
   expect(stale.active, 'aria-activedescendant still names a cell nobody can see').toBeNull();
 });
@@ -7503,15 +7768,20 @@ test('bringing the cursor into view is instant, whatever motion the reader asked
     await visit(page);
     await page.setViewportSize({ width: 390, height: 844 });
     await settled(page);
-    const strip = page.locator('.grid-strip[role="listbox"]').first();
+    const stripIndex = await pannableStrip(page);
+    expect(
+      stripIndex,
+      'no strip on the page has anything to pan; this lane proves nothing'
+    ).toBeGreaterThanOrEqual(0);
+    const strip = page.locator('.grid-strip[role="listbox"]').nth(stripIndex);
     await strip.scrollIntoViewIfNeeded();
     await settled(page);
     await strip.evaluate((node) => node.focus());
-    const before = await cursorInPort(page);
+    const before = await cursorInPort(page, stripIndex);
     await page.keyboard.press('Home');
     // Exactly one frame, not a settle: an animated scroll is still travelling.
     await page.evaluate(() => new Promise((resolve) => window.requestAnimationFrame(resolve)));
-    const after = await cursorInPort(page);
+    const after = await cursorInPort(page, stripIndex);
     expect(
       after.scrollLeft,
       `under ${reducedMotion} the strip had not finished panning one frame after the press`,
@@ -7670,21 +7940,41 @@ test('a wide grid still pans natively, and never takes the page sideways (issue 
   await page.setViewportSize({ width: 390, height: 844 });
   await settled(page);
   const pan = await page.evaluate(() => {
-    const strip = window.document.querySelector('.grid-strip');
-    const before = strip.scrollLeft;
-    strip.scrollLeft = Math.max(0, before - 120);
-    return {
+    const strips = [...window.document.querySelectorAll('.grid-strip')];
+    /* EVERY strip hands its pan to the browser — that half is a property of
+       the component and is checked across all of them, so a strip that took
+       the gesture fails here whether or not it currently overflows. */
+    const declarations = strips.map((strip) => ({
       touchAction: window.getComputedStyle(strip).touchAction,
       overflowX: window.getComputedStyle(strip).overflowX,
-      scrollable: strip.scrollWidth > strip.clientWidth,
-      moved: strip.scrollLeft !== before,
+    }));
+    /* The pan itself needs a strip with something to pan, and since issue 268
+       that is no longer every strip: the token panel's window is its own
+       coverage, so a fortnight of it fits a phone with room to spare. The
+       contribution calendar still draws a year and still overflows, so the
+       question stays real — asked of whichever strip actually has the
+       overflow rather than of whichever one comes first in the document. */
+    const strip = strips.find((node) => node.scrollWidth > node.clientWidth) ?? null;
+    const before = strip === null ? 0 : strip.scrollLeft;
+    if (strip !== null) {
+      strip.scrollLeft = Math.max(0, before - 120);
+    }
+    return {
+      declarations,
+      scrollable: strip !== null,
+      moved: strip !== null && strip.scrollLeft !== before,
       docScrollWidth: window.document.documentElement.scrollWidth,
       docClientWidth: window.document.documentElement.clientWidth,
     };
   });
-  expect(pan.scrollable, 'the strip has nothing to pan; this lane proves nothing').toBe(true);
-  expect(pan.touchAction, 'the grid strip stopped handing its pan to the browser').toBe('auto');
-  expect(pan.overflowX).toBe('auto');
+  expect(pan.declarations.length, 'the page renders no strips at all').toBeGreaterThan(0);
+  for (const [index, declared] of pan.declarations.entries()) {
+    expect(declared.touchAction, `grid strip ${index} stopped handing its pan to the browser`).toBe(
+      'auto'
+    );
+    expect(declared.overflowX, `grid strip ${index} stopped scrolling inside itself`).toBe('auto');
+  }
+  expect(pan.scrollable, 'no strip has anything to pan; this lane proves nothing').toBe(true);
   expect(pan.moved).toBe(true);
   expect(pan.docScrollWidth, 'wide grid content took the page sideways').toBeLessThanOrEqual(
     pan.docClientWidth,
@@ -7777,6 +8067,79 @@ test('the gallery advances on a swipe and settles back on a fidget (issue 219)',
     return matrix.m41;
   });
   expect(Math.abs(resting), 'the gallery did not settle back to its resting position').toBeLessThan(1);
+});
+
+/* THE TURN GOES FORWARD (issue 265, defect 5). Layer 1 owns the arithmetic —
+ * where the incoming item starts, and that the clamp keeps it on the right
+ * side — and this owns the one thing only an engine can answer: what the
+ * reader's own display actually painted in the frames after they let go.
+ * MEASURED on 0.1.65 in all five engines: 120-202px of travel in the wrong
+ * direction per swipe, over a 200ms settle, because the new item mounted at
+ * the OLD drag offset and eased home from there. */
+test('a committed swipe brings the new item in from its own side (issue 265)', async ({ page }) => {
+  await visit(page);
+  const stage = page.locator('.gallery-stage').first();
+  await stage.scrollIntoViewIfNeeded();
+  const counter = page.locator('.gallery-count').first();
+  const before = (await counter.innerText()).trim();
+
+  const box = await stage.boundingBox();
+  const walk = await page.evaluate(
+    async ([left, width, y]) => {
+      const stageNode = window.document.querySelector('.gallery-stage');
+      const send = (type, x) =>
+        stageNode.dispatchEvent(
+          new PointerEvent(type, {
+            pointerId: 61,
+            pointerType: 'touch',
+            clientX: x,
+            clientY: y,
+            bubbles: true,
+          }),
+        );
+      /* The PAINTED offset, read off the element the reader is looking at
+         rather than off the custom property that feeds it: a transition
+         resolves to its current animated value here, which is exactly the
+         travel this lane is about. */
+      const offset = () =>
+        new DOMMatrixReadOnly(
+          window.getComputedStyle(window.document.querySelector('.gallery-image-button')).transform,
+        ).m41;
+      const frame = () => new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+      send('pointerdown', left + width * 0.8);
+      for (const at of [0.7, 0.55, 0.4, 0.25]) {
+        send('pointermove', left + width * at);
+        await frame();
+      }
+      const dragged = offset();
+      send('pointerup', left + width * 0.25);
+      const painted = [];
+      for (let step = 0; step < 3; step += 1) {
+        await frame();
+        painted.push(offset());
+      }
+      return { dragged, painted };
+    },
+    [box.x, box.width, box.y + box.height / 2],
+  );
+
+  /* Non-vacuity, both halves: the drag really pulled the surface leftward,
+     and the release really turned the page. A gesture that committed nothing
+     would settle to zero and satisfy the assertion below for the wrong
+     reason. */
+  expect(walk.dragged, 'the drag never moved the surface, so nothing was released from anywhere').toBeLessThan(0);
+  await expect(counter, 'the swipe did not turn the page').not.toHaveText(before);
+
+  /* THE ASSERTION: not one painted frame after the turn sits on the side the
+     finger came FROM. The drag went left, so every frame of the arrival is at
+     or right of centre and travels toward it. */
+  for (const [step, at] of walk.painted.entries()) {
+    expect(
+      at + subPixel,
+      `frame ${step + 1} after a leftward turn painted the new item at ${at}px, on the side the gesture came from — it is sliding in backwards`,
+    ).toBeGreaterThanOrEqual(0);
+  }
 });
 
 /* THE MOTION BATTERY, LAYER 2 (issue 243). The layer scheme is written out in
@@ -8623,6 +8986,80 @@ test('a pull claims only a downward drag, and takes no open readout with it (iss
     .toBe(false);
 });
 
+/* THE STRAND (issue 265, defect 1), in a real engine. The state machine is
+ * exercised exhaustively in tests/gesture.test.mjs; what only an engine can
+ * say is whether the page itself came back — the custom property, the
+ * attribute that makes <main> a containing block, and the transform a reader
+ * is left looking at. MEASURED on the live 0.1.65 origin, all five engines:
+ * `--page-pull` frozen at 39.98px, `data-pulling="true"` for the rest of the
+ * session, and the indicator pinned at the top of the viewport 1500px down
+ * the page. */
+test('a second touch during the snap-back leaves the page nowhere but home (issue 265)', async ({
+  page,
+}) => {
+  await visit(page);
+  const walk = await page.evaluate(async () => {
+    const root = window.document.documentElement;
+    const body = window.document.body;
+    const send = (id, type, y) =>
+      body.dispatchEvent(
+        new PointerEvent(type, {
+          pointerId: id,
+          pointerType: 'touch',
+          clientX: 100,
+          clientY: y,
+          bubbles: true,
+        }),
+      );
+    const frame = () => new Promise((resolve) => window.requestAnimationFrame(resolve));
+    const pull = () => Number.parseFloat(root.style.getPropertyValue('--page-pull')) || 0;
+
+    window.scrollTo(0, 0);
+    /* A pull SHORT of the arming threshold, so releasing it starts the 260ms
+       snap-back rather than a refresh — the window the strand lives in. */
+    send(51, 'pointerdown', 100);
+    for (const y of [120, 135, 145]) {
+      send(51, 'pointermove', y);
+      await frame();
+    }
+    const dragged = pull();
+    send(51, 'pointerup', 145);
+    await frame();
+    /* The second touch, which cancels that settle simply by arriving — and
+       then turns out to be an upward flick, which is the page's gesture and
+       not this one's. Before the repair, the pull stopped tracking here and
+       nothing ever restarted the settle it had just cancelled. */
+    send(52, 'pointerdown', 300);
+    const interrupted = pull();
+    send(52, 'pointermove', 262);
+    send(52, 'pointerup', 262);
+    return { dragged, interrupted };
+  });
+
+  // Non-vacuity, both halves: a pull that never moved the page, or a settle
+  // that had already finished, would make the walk above prove nothing.
+  expect(walk.dragged, 'the setup pull never moved the page').toBeGreaterThan(0);
+  expect(
+    walk.interrupted,
+    'the snap-back had already finished when the second touch arrived; there was nothing to interrupt',
+  ).toBeGreaterThan(0);
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => ({
+          pull: window.document.documentElement.style.getPropertyValue('--page-pull'),
+          pulling: window.document.documentElement.hasAttribute('data-pulling'),
+          main: window.getComputedStyle(window.document.querySelector('main')).transform,
+        })),
+      {
+        message: `the page was stranded at ${walk.interrupted}px by a gesture that stood down mid-settle`,
+        timeout: 10_000,
+      },
+    )
+    .toEqual({ pull: '0px', pulling: false, main: 'none' });
+});
+
 test('the refresh gesture has a control a keyboard can reach (issue 219)', async ({ page }) => {
   await visit(page);
   const control = page.locator('.pull-control');
@@ -8646,9 +9083,24 @@ test('the refresh gesture has a control a keyboard can reach (issue 219)', async
      buttons. The reachability half below is asserted everywhere, because
      focus() is what assistive technology uses regardless. */
   await page.keyboard.press('Tab');
-  const focused = await page.evaluate(() => window.document.activeElement?.className ?? '');
-  if (focused !== '' && !focused.includes('gallery-dot')) {
-    expect(focused, 'the refresh control is not the first focus stop').toContain('pull-control');
+  const focused = await page.evaluate(() => ({
+    tag: window.document.activeElement?.tagName ?? '',
+    className: window.document.activeElement?.className ?? '',
+  }));
+  /* The engine test is the ENGINE'S OWN ANSWER, not a list of classes that
+     happen to come first. This used to skip WebKit by naming the element it
+     landed on — a gallery dot — which made the lane depend on which element
+     carrying an explicit tabindex sat earliest in the document, and issue 268
+     moved that: the repo cards' counters are focus stops now (they carry the
+     stat tiles' detail affordance) and they precede the gallery. Asking
+     whether the first stop is a BUTTON states the same skip in terms of the
+     claim itself, and it is strictly tighter — a button that is not the
+     refresh control now fails on every engine instead of only on some. */
+  if (focused.tag === 'BUTTON') {
+    expect(
+      focused.className,
+      'the refresh control is not the first button a keyboard reaches'
+    ).toContain('pull-control');
   }
   await control.evaluate((node) => node.focus());
   expect(
@@ -8677,7 +9129,7 @@ test('the refresh gesture has a control a keyboard can reach (issue 219)', async
  * content passed through the corner the control owns — with nothing painted
  * behind it, the label showed straight through. (A phone's control is glued to
  * the document since issue 264; the header is viewport-glued above the handle
- * breakpoint, which is the range halves one and two below still measure.)
+ * breakpoint, which is the range half one below still measures.)
  *
  * MEASURED before the fix at 390x844 in WebKit: icon x 330-374 y 16-60,
  * "cumulative" x 283.19-360.0 y 26.98-70.98 — a 30x33px overlap. At 1440px
@@ -8737,10 +9189,9 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
   ).not.toBe('auto');
 
   /* HALF ONE — browser-driven scrolling no longer parks a target under the
-     control at all. This is the layout half of the fix and the stronger of
-     the two statements: scrollIntoView (and every focus move, which uses the
-     same machinery) now honours the scroll padding, so the segment the owner
-     could not read lands BELOW the control instead of beneath it. */
+     control at all: scrollIntoView (and every focus move, which uses the same
+     machinery) now honours the scroll padding, so the segment the owner could
+     not read lands BELOW the control instead of beneath it. */
   const landing = await page.evaluate(() => {
     /* The right-aligned panel content the owner's report was actually about.
        It used to be the last "cumulative" segment of an exposed pill row, then
@@ -8775,56 +9226,29 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
     `"${landing.text}" was scrolled to ${landing.segmentTop}, under a control whose bottom edge is ${landing.headerBottom}`,
   ).toBeGreaterThanOrEqual(landing.headerBottom);
 
-  /* HALF TWO — where the control stays viewport-glued, content genuinely does
-     pass under it when a reader scrolls BY HAND; that is what "fixed" means and
-     no layout can prevent it. What must not happen is the owner's actual
-     report: the label rendering THROUGH the glyph because nothing was painted
-     between them. So the content is put deliberately under the control and the
-     top-most element at the centre of the overlap is measured — it must be the
-     control, not the text. Under the handle breakpoint the two boxes cannot
-     meet at all (half three), so this probe finds no overlap to measure and
-     says so rather than inventing one. */
-  const occlusion = await page.evaluate(() => {
-    const segments = [...window.document.querySelectorAll('.usage-insight-value')];
-    const segment = segments.at(-1);
-    const header = window.document.querySelector('.page-header');
-    const hb = header.getBoundingClientRect();
-    // Scroll by hand until this segment's own box is centred on the control.
-    const sb = segment.getBoundingClientRect();
-    window.scrollBy(0, sb.top + sb.height / 2 - (hb.top + hb.height / 2));
-    const nowSegment = segment.getBoundingClientRect();
-    const nowHeader = header.getBoundingClientRect();
-    const left = Math.max(nowSegment.left, nowHeader.left);
-    const right = Math.min(nowSegment.right, nowHeader.right);
-    const top = Math.max(nowSegment.top, nowHeader.top);
-    const bottom = Math.min(nowSegment.bottom, nowHeader.bottom);
-    if (right <= left || bottom <= top) {
-      return { overlaps: false };
-    }
-    // The CENTRE of the intersection, never a corner: a corner plus one pixel
-    // lands outside whichever box is thinner there, which is a hit test of
-    // the wrong element dressed up as a finding.
-    const hit = window.document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
-    return {
-      overlaps: true,
-      headerOnTop: hit !== null && (header === hit || header.contains(hit)),
-      hit: hit === null ? null : hit.className.toString(),
-    };
-  });
-  if (occlusion.overlaps) {
-    expect(
-      occlusion.headerOnTop,
-      `page text renders over the fixed control instead of behind its plate (topmost element was "${occlusion.hit}")`,
-    ).toBe(true);
-  }
+  /* HALF TWO IS GONE (issue 265), and it is worth saying why rather than
+     leaving a reader to wonder what happened to it. It scrolled the last
+     insight figure under the fixed control and hit-tested the centre of the
+     overlap, expecting the control to be on top — but its whole body sat
+     behind `if (occlusion.overlaps)`, and that guard is structurally FALSE at
+     every viewport in this matrix, so nothing behind it ever ran. Two
+     geometries make it false, one on each side of the handle breakpoint:
+     ABOVE it — where the desktop projects sit — the column ceiling's two-rail
+     giveback holds the column clear of the control arithmetically; BELOW it
+     the control is glued to the DOCUMENT and leaves with the page (issue 264),
+     which is exactly what half three measures. A probe whose assertion no
+     input in the matrix can reach is decorative, and this repository does not
+     keep those (AGENTS.md's own vacuity rule). What it meant to protect — that
+     the plate is painted between the page and the glyph — is measured above,
+     where the plate's background alpha, blur and shadow are each pinned in the
+     direction the redesign chose.
 
-  /* HALF THREE — below the handle breakpoint the control can never be over page
-     content at all (issues 241, 264), which is the guarantee the two halves
-     above could not give. Halves one and two are about a target scrolled to a
-     place and a plate painted under a glyph; neither says anything about the
-     ordinary case the owner was actually reading, which is body text passing
-     under a control on its way up the screen. MEASURED on 0.1.54, and this
-     half is why it was only ever a phone defect: at 320px <main> ended at
+     HALF THREE — below the handle breakpoint the control can never be over page
+     content at all (issues 241, 264), which is the guarantee half one could not
+     give. Half one is about a target scrolled to a place; it says nothing about
+     the ordinary case the owner was actually reading, which is body text
+     passing under a control on its way up the screen. MEASURED on 0.1.54, and
+     this half is why it was only ever a phone defect: at 320px <main> ended at
      exactly 304 and the trigger box was x 260-304, so a scroll sweep found
      body text under the control 9 to 11 times at 320, 360, 390, 412 and 768 —
      bullets, card bylines and a card title — and zero times at 1280 and 1440.

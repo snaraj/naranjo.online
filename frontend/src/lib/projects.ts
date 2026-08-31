@@ -48,10 +48,12 @@
  * carries whatever the host currently says, which is the owner's own text on
  * the owner's own origin and not this repository's tree at all. */
 
-import type { EntryCount, EntryLogProps } from './blocks.ts';
+import { ageDetail, relativeAge } from './age.ts';
+import { recordedOutOfBand, type EntryCount, type EntryLogProps } from './blocks.ts';
 import { formatWhole } from './grid.ts';
 import { panelKinds } from './panels.ts';
 import type { CodingProjectRow, CodingProjectsData, PanelEnvelope } from './panels';
+import type { TipDetail } from './tooltip.ts';
 
 export interface Project {
   /* The repository name — the visible title, the stable key, and the last
@@ -173,28 +175,24 @@ export function projectLinkLabel(project: Project): string {
   return `${project.name} on ${projectHostLabel}, opens in a new tab`;
 }
 
-/* How long ago an instant was, as the coarse sentence a project card carries
- * ("updated 3 days ago"). Coarse on purpose: the capture is a maintenance
- * record, not a clock, so hours would claim a precision the data does not
- * have — a repository pushed within the last day simply reads "today".
- * Thirty-day months and 365-day years for the same reason: this is a reading
- * aid, and the calendar-exact arithmetic would change no reader's takeaway.
- * `now` is injectable so the unit suite can execute every band against a
- * fixed clock instead of asserting around a moving one. */
-export function updatedLabel(pushedAt: string, now: number = Date.now()): string {
-  const days = Math.floor((now - Date.parse(pushedAt)) / 86_400_000);
-  if (days < 1) {
-    return 'updated today';
-  }
-  if (days < 30) {
-    return `updated ${days} ${days === 1 ? 'day' : 'days'} ago`;
-  }
-  const months = Math.floor(days / 30);
-  if (days < 365) {
-    return `updated ${months} ${months === 1 ? 'month' : 'months'} ago`;
-  }
-  const years = Math.floor(days / 365);
-  return `updated ${years} ${years === 1 ? 'year' : 'years'} ago`;
+/* The rendering for a figure this card has no number for. It is deliberately
+ * not a zero: "nothing open" and "not reported" are different claims and only
+ * one of them is supported. */
+const unknownFigure = '—';
+
+/* The detail one counter carries: the full phrase as its name, and the
+ * provenance row when the figure was recorded out of band.
+ *
+ * The grammar is bossLog.ts's `summaryDetail`, deliberately — a tile shows the
+ * short form and the detail's NAME is the long one — so the two grids and this
+ * feed present one idea one way rather than three. A DASH gets no provenance
+ * row: there is no figure there to have been recorded, and marking an absence
+ * would claim a capture nobody made. */
+function countDetail(label: string, value: string, marked: boolean): TipDetail {
+  return {
+    name: label,
+    rows: marked && value !== unknownFigure ? [{ label: '', value: recordedOutOfBand }] : []
+  };
 }
 
 /* projectCounts renders one row's five figures against whatever the panel
@@ -205,14 +203,15 @@ export function updatedLabel(pushedAt: string, now: number = Date.now()): string
  * marked. The commit count is marked either way — no repository API reports a
  * total, so it is captured no matter how fresh the row beside it is.
  *
- * Every figure ships with the WORD it counts, visibly, rather than behind the
- * glyph: an icon is a second channel for a figure, never the only one, and a
- * monochrome render or a screen reader has to convey the same thing the icon
- * does (dataviz floor). The plural is derived rather than assumed — "1
+ * EVERY FIGURE IS NOW TERSE (issue 268, owner directive): the visible channel
+ * is the glyph and the bare number, and the WORD it counts moves into the
+ * counter's clipped accessible name and into its detail. The dataviz floor is
+ * unchanged — a value is carried by glyph plus number, never by the glyph
+ * alone — and the plural is still derived rather than assumed, because "1
  * commits" is the kind of small lie a page tells when nobody executes its
- * labels, and two of the seven rows genuinely are one commit today. The
- * derivation is still executed by test against synthetic rows rather than
- * resting on whichever figures the tracked repositories carry this week.
+ * labels and two of the seven rows genuinely are one commit today. The
+ * derivation is executed by test against synthetic rows rather than resting on
+ * whichever figures the tracked repositories carry this week.
  *
  * A star tally the host did not report renders as an explicit unknown, never
  * as a zero: those are different claims, and only one of them is true. */
@@ -224,36 +223,47 @@ export function projectCounts(
   const recorded = live === undefined || live.recorded === true;
   const stars = recorded ? project.stars : live.stars;
   const pushedAt = effectivePushedAt(project, live);
+  const commitFigure = formatWhole(project.commits);
+  const commitLabel = `${commitFigure} ${project.commits === 1 ? 'commit' : 'commits'}`;
+  const starLabel =
+    stars === null ? 'stars unknown' : `${formatWhole(stars)} ${stars === 1 ? 'star' : 'stars'}`;
+  const starFigure = stars === null ? unknownFigure : formatWhole(stars);
+  const age = relativeAge(pushedAt, now);
   return [
     {
       key: 'commits',
       glyph: 'node',
-      label: `${formatWhole(project.commits)} ${project.commits === 1 ? 'commit' : 'commits'}`,
+      label: commitLabel,
+      value: commitFigure,
       /* Always: the count is captured however fresh the row beside it is. */
-      marked: true
+      marked: true,
+      detail: countDetail(commitLabel, commitFigure, true)
     },
     {
       key: 'stars',
       glyph: 'star',
-      label:
-        stars === null ? 'stars unknown' : `${formatWhole(stars)} ${stars === 1 ? 'star' : 'stars'}`,
-      marked: recorded
+      label: starLabel,
+      value: starFigure,
+      marked: recorded,
+      detail: countDetail(starLabel, starFigure, recorded)
     },
-    /* How long since the last update (owner directive, 0.1.52), computed from
-     * the instant against the reader's own clock rather than shipped as frozen
-     * words — see pushedAt above. */
+    /* How long since the last update (owner directive, 0.1.52; live since
+     * issue 268), computed from the instant against the reader's own clock
+     * rather than shipped as frozen words — see pushedAt above. `since` is
+     * what tells the log to keep recomputing it: the value and label here are
+     * the FIRST rendering, and the component re-derives both on every
+     * minute-aligned tick, so a card open on a desk stays true. */
     {
       key: 'updated',
       glyph: 'clock',
-      label: updatedLabel(pushedAt, now),
-      marked: recorded
+      label: age.phrase,
+      value: age.compact,
+      since: pushedAt,
+      marked: recorded,
+      detail: ageDetail(pushedAt, now, recorded)
     },
-    /* The two open-work counters (owner directive, issue 252). They render
-     * TERSELY — glyph and figure, no words — because the owner asked for
-     * exactly that and because "open issues"/"open pull requests" spelled out
-     * four times per card is noise on a card whose subject is a repository.
-     * The words are still there for anyone who needs them, in the accessible
-     * name EntryLog clips; see the `value` field on EntryCount.
+    /* The two open-work counters (owner directive, issue 252 — the first two
+     * counters to go terse, and since issue 268 the shape every counter has).
      *
      * Both come from the panel or from nowhere. There is no captured fallback
      * for them and there should not be: these are the fastest-moving figures
@@ -279,14 +289,24 @@ function openWorkCount(
 ): EntryCount {
   const noun = glyph === 'issue' ? 'issue' : 'pull request';
   if (tally === undefined) {
-    return { key, glyph, label: `open ${noun}s not reported`, value: '—' };
+    const label = `open ${noun}s not reported`;
+    return {
+      key,
+      glyph,
+      label,
+      value: unknownFigure,
+      detail: countDetail(label, unknownFigure, false)
+    };
   }
+  const figure = formatWhole(tally);
+  const label = `${figure} open ${tally === 1 ? noun : `${noun}s`}`;
   return {
     key,
     glyph,
-    label: `${formatWhole(tally)} open ${tally === 1 ? noun : `${noun}s`}`,
-    value: formatWhole(tally),
-    marked: recorded
+    label,
+    value: figure,
+    marked: recorded,
+    detail: countDetail(label, figure, recorded)
   };
 }
 
