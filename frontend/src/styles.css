@@ -305,10 +305,10 @@
 
   /* The space above the page's name (owner directive, 2026-08-25: "Samuel
      Naranjo" sat hard against the top of the viewport — "it almost feels
-     like it's about to escape"). The header row is FIXED (.page-header,
-     below), so it occupies no flow space and reserved none: #app declared a
-     block-start padding of zero and the h1 began at the very first pixel of
-     the document.
+     like it's about to escape"). The header row is OUT OF FLOW (.page-header,
+     below — fixed above the handle breakpoint, absolute under it), so it
+     occupies no flow space and reserved none: #app declared a block-start
+     padding of zero and the h1 began at the very first pixel of the document.
 
      Derived rather than picked, so the rhythm cannot drift away from the
      thing it clears: the chrome row starts at its own top inset and is
@@ -331,11 +331,13 @@
      owner's a11y instruction on issue 168. */
   --page-rail-size: 2.75rem;
 
-  /* The header's own fixed position (owner directive, issue 168): pinned to
-     the viewport's top-end corner, independent of the column's width, so
-     dragging the feed never moves it. Insets rather than a bare page-gutter
-     literal so a notch or a home indicator is cleared the same way the rest
-     of the page already clears one.
+  /* The header's own corner position (owner directive, issue 168): pinned to
+     the top-end corner, independent of the column's width, so dragging the
+     feed never moves it. Insets rather than a bare page-gutter literal so a
+     notch or a home indicator is cleared the same way the rest of the page
+     already clears one. One pair for both of the header's ranges — which
+     corner they measure from is the positioning scheme's business, not
+     theirs.
 
      ONE declaration each, deliberately not the plain-base-then-progressive
      pair #app's own safe-area padding uses below (coordinator quality pass
@@ -815,10 +817,10 @@ body,
    effect itself, which is the actual bug. `none` suppresses that boundary
    effect directly, on both axes' block dimension, on both elements a
    browser might treat as the real scroller for the root document. The
-   header's own fixed positioning (`.page-header`, below) already keeps it
-   glued to the viewport rather than the document, so it was swept for a
-   leftover top gap during this fix and needs no rule of its own: a fixed
-   element never occupies flow space to leave behind. */
+   header's own positioning (`.page-header`, below) takes it out of flow in
+   both of its ranges, so it was swept for a leftover top gap during this fix
+   and needs no rule of its own: an out-of-flow element never occupies flow
+   space to leave behind. */
 html,
 body {
   overscroll-behavior-y: none;
@@ -960,47 +962,6 @@ textarea {
   }
 }
 
-/* THE FIXED CONTROL'S OWN LANE (issue 241). The reading-mode control is glued
-   to the viewport's top-end corner, and on any viewport where the column
-   reaches that corner the column and the control claim the same pixels.
-   MEASURED on 0.1.54, Chromium and WebKit alike: at 320px the trigger box is
-   x 260-304 and <main> ends at exactly 304, and scrolling the page put body
-   text under it 9 to 11 times per sweep at 320, 360, 390, 412 and 768 — bullet
-   items, card bylines and a card TITLE among them. At 1280 and 1440 the count
-   was zero, because there the capped column ends 116px short of the control.
-
-   The plate under the glyph (.page-header, below) is what keeps the text from
-   rendering THROUGH the icon, and it is the right answer to that half. It is
-   not an answer to this one: legible text a reader cannot read because a
-   control is painted over it is still unreadable. So the page reserves the
-   control's lane wherever the column would otherwise run into it, exactly the
-   way the column already gives back its two 44px rail lanes above the handle
-   breakpoint below — same token, same reasoning, the other side of the same
-   breakpoint.
-
-   The breakpoint is not a taste: above 67.5rem the ceiling below already
-   reserves two rail lanes from a capped column, which puts its end edge at or
-   before the control's start edge at every width (at exactly 67.5rem they
-   touch, and the gap only grows). Below it the column fills the screen and
-   nothing separates the two. So this states the SAME reserve for the range the
-   rule below does not cover, and neither range is left to chance.
-
-   Base then inset-aware, for the reason the pair above is written that way: an
-   engine without env() must be left with a real gutter rather than none. */
-@media not all and (min-width: 67.5rem) {
-  #app {
-    padding-inline-end: calc(var(--page-gutter) + var(--page-rail-size));
-  }
-}
-
-@supports (padding: env(safe-area-inset-right)) {
-  @media not all and (min-width: 67.5rem) {
-    #app {
-      padding-inline-end: calc(max(var(--page-gutter), env(safe-area-inset-right)) + var(--page-rail-size));
-    }
-  }
-}
-
 /* The column's own width, decoupled from the header (owner directive, issue
    168: the header pins to the viewport corner now, independent of whatever
    the reader drags this to).
@@ -1108,11 +1069,14 @@ html[data-column-resizing] {
    don't like how they move when I drag the feed in and out." Fixed
    positioning is what makes that true — the header no longer takes the
    column's width or sits in its flow at all, so nothing the reader drags
-   can move it, and it needs no reserved row height either, because fixed
-   chrome never occupies one. The insets clear the same safe areas #app
-   pads by. z-index reuses the popover's own layer: the header CONTAINS the
-   reading-mode trigger, so anything that must out-rank the resize rails
-   (--layer-rail) already has to out-rank it by exactly that much. */
+   can move it, and it needs no reserved row height either, because
+   out-of-flow chrome never occupies one. Below the handle breakpoint there
+   is nothing to drag and the corner is re-aimed at the document instead
+   (issue 264, under this rule). The insets clear the same safe areas #app
+   pads by, and they are declared once here for both ranges. z-index reuses
+   the popover's own layer: the header CONTAINS the reading-mode trigger, so
+   anything that must out-rank the resize rails (--layer-rail) already has to
+   out-rank it by exactly that much. */
 .page-header {
   position: fixed;
   /* The fallback argument is real protection here, not decoration
@@ -1126,14 +1090,21 @@ html[data-column-resizing] {
   z-index: var(--layer-menu);
   display: flex;
   align-items: center;
-  /* THE PLATE (issue 219). A fixed control is glued to the VIEWPORT while the
+  /* THE PLATE (issue 219). A viewport-glued control keeps its corner while the
      column scrolls underneath it, and at a phone width the column IS the
-     viewport — so page content passes through the corner this control owns.
+     viewport — so page content passed through the corner this control owns.
      MEASURED at 390x844 in WebKit: the reading-mode glyph occupies x 330-374,
      y 16-60, and the token panel's "cumulative" segment scrolls to x 283-360,
      y 27-71, a 30x33px overlap that renders the label underneath the icon.
      At 1440px there is none — the glyph sits at x 1380-1424 and the column
      ends at 1200 — which is exactly why this only ever showed on a phone.
+
+     The phone half of that is structural now (issue 264, under this rule):
+     below the handle breakpoint the control is glued to the DOCUMENT, so it
+     leaves with the page and no scrolled row reaches it. The plate still backs
+     the control across the range where it stays viewport-glued, and it is the
+     control's own appearance at every width — which is what the owner's 0.1.52
+     report was about.
 
      The reserve at the top of the document was never the problem and is not
      the fix: --page-top-space already clears this row at scroll zero. What was
@@ -1160,6 +1131,37 @@ html[data-column-resizing] {
   backdrop-filter: blur(8px);
   border-radius: 999px;
   box-shadow: none;
+}
+
+/* BELOW THE HANDLE BREAKPOINT THE CORNER IS THE DOCUMENT'S (owner defect
+   report, issue 264, 2026-08-31: on a phone the page showed a dead strip
+   roughly 60px wide down its inline end). That strip was a lane the page
+   reserved for this control on every row it has (retired with the rule that
+   declared it): a viewport-glued box owns its corner at every scroll offset,
+   so the only way to keep text out from under it was to hold the whole column
+   away from it — the entire page paying for one corner.
+
+   Re-aiming the control answers the same collision without charging anything
+   for it. There is no positioned ancestor to resolve against — #app is not
+   positioned, and <main> is, but this header is its SIBLING rather than its
+   child — so these insets resolve against the initial containing block, the
+   viewport-sized rectangle anchored at the document's origin. That is the
+   identical box fixed positioning produced at scroll zero, and
+   --page-top-space already clears it: the column begins exactly where this
+   chrome row ends, so nothing sits beside it at rest. The moment the reader
+   scrolls, the control leaves with the page, so no scrolled row can pass
+   under it at any offset. The lane had nothing left to defend, and the column
+   is the viewport less its two gutters again.
+
+   Above the breakpoint nothing changes, and both reasons still hold there:
+   fixed is the owner's issue-168 directive (the drag handles exist only in
+   that range, and the control must not move when the feed is dragged), and
+   the column's ceiling gives its two rail lanes back up there, which keeps
+   the two boxes apart arithmetically rather than by reserve. */
+@media not all and (min-width: 67.5rem) {
+  .page-header {
+    position: absolute;
+  }
 }
 
 /* The other half of the same collision, for a reader who never scrolls by

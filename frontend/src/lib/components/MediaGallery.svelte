@@ -882,8 +882,8 @@
 
              A MEDIA query rather than srcset/sizes, and the difference is the
              whole point. `sizes` is multiplied by the device pixel ratio, so
-             on the 3x phones this defect was reported from a 90vw box asks for
-             ~1053px and would take the 3840px master anyway — the exact
+             on the 3x phones this defect was reported from the enlarged box
+             asks for ~1100px and would take the 3840px master anyway — the exact
              behaviour being fixed, wearing a responsive-images costume. A
              media query is a statement about the VIEWPORT, and the breakpoint
              is the preview's own declared width: at or below it the preview
@@ -1477,7 +1477,21 @@
 
   .gallery-lightbox-image {
     display: block;
-    max-inline-size: 90vw;
+    /* THE SAME CAP THE DIALOG ITSELF CARRIES, and it has to be (issue 264).
+       A cap is needed here at all because the picture is a grid item sized
+       `auto` from its intrinsic attributes, so without one it overflows the
+       box it sits in. It used to be a 90vw literal of its own, tuned when a
+       phone's feed column was the viewport less its two gutters AND the
+       44px lane reserved for the reading-mode control. That lane is retired
+       (styles.css, "BELOW THE HANDLE BREAKPOINT..."), so the feed stage grew
+       to the full column and a 90vw enlargement MEASURED smaller than the
+       frame it enlarged from: 353.7px against a 361px stage on a Pixel 5,
+       354.4 against 358 on an iPhone 13 — an "enlarge" that shrank the
+       photograph. Reading the dialog's own token instead of a second number
+       is what stops the two disagreeing again: whatever the enlarged surface
+       is allowed to be, the picture inside it is allowed to be exactly
+       that. */
+    max-inline-size: var(--gallery-lightbox-max-inline, min(94vw, 90rem));
     /* The loading affordance's canvas: the enlarged <img> inlines the strip's
        cached preview as its background-image, and these three make that
        stand-in sit exactly where the full picture will land. A video sets no
