@@ -2370,10 +2370,6 @@ class SpliceTest(unittest.TestCase):
             self.splice(document)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class FinalOpenIsDescriptorRootedTest(unittest.TestCase):
     """The check/open TOCTOU, in the two forms two review rounds found.
 
@@ -2618,3 +2614,7 @@ class FinalOpenIsDescriptorRootedTest(unittest.TestCase):
             capture_usage_series.capture(
                 self.root, capture_usage_series.FORMAT_MESSAGES
             )
+
+
+if __name__ == "__main__":
+    unittest.main()

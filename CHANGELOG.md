@@ -39,6 +39,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   already-capped bytes at zero cost against the public API's request budget.
   Requests with computed URLs or bodies never participate, and an
   unsolicited 304 is refused like any other unexpected status.
+- Direct runs of `scripts/ci/test_capture_usage_series.py` and
+  `scripts/ci/test_usage_export_scripts.py` execute their full suites again
+  (issue #282): each file's `if __name__ == "__main__"` block sat mid-file,
+  so classes defined after it never ran under direct invocation — 12 and 4
+  tests respectively. The blocks moved to end-of-file; CI's discovery run
+  never used them and is unchanged at 694 tests.
 
 ### Added
 

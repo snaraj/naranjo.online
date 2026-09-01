@@ -978,10 +978,6 @@ class InstallAnchorTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 @unittest.skipIf(shutil.which("ssh") is None, "no ssh client on this host")
 class SshResolvedConfigurationTest(unittest.TestCase):
     """Round-3 finding 8, against the REAL resolver.
@@ -1137,3 +1133,7 @@ Host *
             "remotecommand", resolved,
             "the staged config contributed no unnamed parameter; the control proves nothing",
         )
+
+
+if __name__ == "__main__":
+    unittest.main()
