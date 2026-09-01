@@ -1,5 +1,17 @@
 # Third-party content attribution
 
+## JetBrains Mono webfont
+
+The site's typeface is [JetBrains Mono](https://www.jetbrains.com/lp/mono/),
+copyright 2020 The JetBrains Mono Project Authors, used under the SIL Open
+Font License 1.1. The license text ships beside the font files as
+`frontend/src/assets/fonts/OFL.txt`, per this repository's webfont
+convention. The four `.woff2` files are the variable face (weights 100–800,
+upright and italic) split into the latin and latin-ext character ranges, as
+compiled and subset by the Google Fonts pipeline from the same OFL sources
+(fonts.gstatic.com, jetbrainsmono v24); they are vendored here so the page
+serves them from its own origin and no visitor request ever leaves it.
+
 ## Old School RuneScape boss and skill icons
 
 The images under `frontend/src/assets/icons/bosses/` and

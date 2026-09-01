@@ -208,18 +208,29 @@ describe('gallery/v1 item admission', () => {
       imageItem({
         title: '  Harbour at dusk  ',
         description: 'What the operator wrote about it.',
-        link: { href: 'https://example.org/work/harbour', label: 'The full series' }
+        link: { href: 'https://example.org/work/harbour', label: 'The full series' },
+        set: '  OldSchool RuneScape  '
       })
     );
     assert.ok(item !== null);
     assert.equal(item.title, 'Harbour at dusk', 'surrounding whitespace is trimmed, the words are not touched');
     assert.equal(item.description, 'What the operator wrote about it.');
     assert.deepEqual(item.link, { href: 'https://example.org/work/harbour', label: 'The full series' });
+    /* The set label rides the same trim (issue 275): it is the dropdown's
+       verbatim entry, and two operators writing the same set with different
+       padding must land in ONE group, not two. */
+    assert.equal(item.set, 'OldSchool RuneScape');
     // Absent means absent: no empty string, no placeholder, no key at all.
     const bare = admitGalleryItem(imageItem());
     assert.equal('title' in bare, false);
     assert.equal('description' in bare, false);
     assert.equal('link' in bare, false);
+    assert.equal('set' in bare, false);
+    /* An unreadable set refuses the ITEM (a picture silently landing in the
+       wrong dropdown group is a caption-level lie), and the bound holds. */
+    assert.equal(admitGalleryItem(imageItem({ set: '   ' })), null);
+    assert.equal(admitGalleryItem(imageItem({ set: 42 })), null);
+    assert.equal(admitGalleryItem(imageItem({ set: 'x'.repeat(maxGalleryTextLengths.set + 1) })), null);
   });
 
   it('refuses any link scheme that is not https, by PARSING rather than prefix-matching', () => {

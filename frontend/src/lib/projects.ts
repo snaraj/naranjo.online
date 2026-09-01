@@ -229,16 +229,11 @@ export function projectCounts(
     stars === null ? 'stars unknown' : `${formatWhole(stars)} ${stars === 1 ? 'star' : 'stars'}`;
   const starFigure = stars === null ? unknownFigure : formatWhole(stars);
   const age = relativeAge(pushedAt, now);
+  /* Cluster order per the owner's sketch (2026-08-31, issue 275): stars and
+   * freshness on the first row, the captured commit total and open issues on
+   * the second, open pulls on the last — the live figures lead and the one
+   * always-captured figure no longer fronts the card. */
   return [
-    {
-      key: 'commits',
-      glyph: 'node',
-      label: commitLabel,
-      value: commitFigure,
-      /* Always: the count is captured however fresh the row beside it is. */
-      marked: true,
-      detail: countDetail(commitLabel, commitFigure, true)
-    },
     {
       key: 'stars',
       glyph: 'star',
@@ -261,6 +256,15 @@ export function projectCounts(
       since: pushedAt,
       marked: recorded,
       detail: ageDetail(pushedAt, now, recorded)
+    },
+    {
+      key: 'commits',
+      glyph: 'node',
+      label: commitLabel,
+      value: commitFigure,
+      /* Always: the count is captured however fresh the row beside it is. */
+      marked: true,
+      detail: countDetail(commitLabel, commitFigure, true)
     },
     /* The two open-work counters (owner directive, issue 252 — the first two
      * counters to go terse, and since issue 268 the shape every counter has).

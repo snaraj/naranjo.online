@@ -487,8 +487,21 @@ test('the card token defaults are global, and resolve through the reading modes'
   assert.match(styles, /--panel-border:\s*var\(--card-border-color\)/);
   // And the font stack is a token, so a card's type ramp references the page's
   // one family rather than restating it.
-  assert.match(styles, /--font-sans:/);
-  assert.match(styles, /font-family:\s*var\(--font-sans\)/);
+  assert.match(styles, /--font-mono:\s*'JetBrains Mono',/);
+  assert.match(styles, /font-family:\s*var\(--font-mono\)/);
+  // The face is self-hosted: every @font-face source resolves inside the
+  // bundle (requirement 1 — no CDN), and each of the four faces declares the
+  // variable weight span so the ramp's 650s render as drawn, not snapped.
+  for (const face of styles.match(/@font-face \{[^}]*\}/gs) ?? []) {
+    assert.match(face, /src: url\('\.\/assets\/fonts\//, 'a webfont loads from outside the bundle');
+    assert.match(face, /font-weight: 100 800/, 'a face lost its variable weight span');
+    assert.match(face, /font-display: swap/, 'a face would hold first paint invisible');
+  }
+  assert.equal(
+    (styles.match(/@font-face/g) ?? []).length,
+    4,
+    'expected the four JetBrains Mono faces (two styles by two character ranges)'
+  );
 });
 
 test('every content component renders through the card primitive', () => {
@@ -759,38 +772,40 @@ test('a count of one is a count of one thing', () => {
   // two labels here are the honest not-reported sentence throughout; the
   // singular/plural of THOSE is executed by the icon test below.
   const unreported = ['open issues not reported', 'open pull requests not reported'];
+  // Cluster order per the owner's sketch (issue 275): stars, freshness,
+  // commits, then the open-work pair.
   assert.deepEqual(
     projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon).map((count) => count.label),
-    ['1 commit', '1 star', 'updated 3 days ago', ...unreported]
+    ['1 star', 'updated 3 days ago', '1 commit', ...unreported]
   );
   assert.deepEqual(
     projectCounts({ ...row, commits: 0, stars: 20 }, undefined, noon).map((count) => count.label),
-    ['0 commits', '20 stars', 'updated 3 days ago', ...unreported]
+    ['20 stars', 'updated 3 days ago', '0 commits', ...unreported]
   );
   // Grouped through the same whole-number renderer every other figure on the
   // page uses, so a four-figure count does not suddenly read differently.
   assert.deepEqual(
     projectCounts({ ...row, commits: 1234, stars: 5678 }, undefined, noon).map((count) => count.label),
-    ['1,234 commits', '5,678 stars', 'updated 3 days ago', ...unreported]
+    ['5,678 stars', 'updated 3 days ago', '1,234 commits', ...unreported]
   );
   /* The freshness counter's own bands moved to lib/age.ts with the live clock
      (issue 268) and tests/age.test.mjs executes every one of them from both
-     sides. What stays HERE is the seam: this adapter's third counter is that
+     sides. What stays HERE is the seam: this adapter's second counter is that
      module's sentence about this row's push instant, and nothing in between.
      Pinned by reproduction rather than by restating a string, so the two
      cannot drift into two answers about one instant. */
   assert.equal(
-    projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[2].label,
+    projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[1].label,
     relativeAge(row.pushedAt, noon).phrase
   );
   assert.equal(
-    projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[2].value,
+    projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[1].value,
     relativeAge(row.pushedAt, noon).compact
   );
   /* And `since` is what keeps it alive: the component re-derives the figure
      from THIS instant on every minute-aligned tick, so an adapter that stopped
      carrying it would ship a counter frozen at whichever render caught it. */
-  assert.equal(projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[2].since, row.pushedAt);
+  assert.equal(projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[1].since, row.pushedAt);
   // The adapter carries the same labels into the log, with the glyph beside
   // the words rather than instead of them. Against the feed's LEADING entry,
   // which is the most recently pushed repository rather than the module list's
@@ -804,7 +819,7 @@ test('a count of one is a count of one thing', () => {
   );
   assert.deepEqual(
     codingProjectsProps(null).entries[0].counts.map((count) => count.glyph),
-    ['node', 'star', 'clock', 'issue', 'pull'],
+    ['star', 'clock', 'node', 'issue', 'pull'],
     'each count names its generic glyph; the drawing is the component’s'
   );
   /* EVERY counter is terse now (issue 268): the glyph and a bare figure on the
@@ -970,97 +985,65 @@ test('open issues and open pull requests are told with icons and a number (issue
   assert.doesNotMatch(styleBlock(entryLog), /\.entry-count-words \{[^}]*display: none/s);
 });
 
-test('the counters are one aligned column geometry, decided by viewport alone (issue 188; owner 2026-08-29)', () => {
+test('the counters are one right-anchored cluster at the title’s level, decided by no card’s content (issue 188; owner sketch 2026-08-31)', () => {
   const style = styleBlock(entryLog);
-  /* Issue 188's claim survives strengthened: no placement in the card head
-     depends on content. The head itself now has ONE shape at every width —
-     title line, then a full-width counter line — so there is nothing left
-     for a title's length to decide, and the old row/column toggle is gone
-     rather than pinned. */
+  /* Issue 188's claim survives the owner's 2026-08-31 sketch (issue 275): no
+     placement in the card head depends on content. The head is ONE grid at
+     every width — the title column shrinkable to nothing, the cluster sized
+     by its own floored tracks — so there is still nothing for a title's
+     length to decide, and no width switch exists to reintroduce a second
+     shape. */
   const entryHeadBlocks = [...style.matchAll(/\.entry-head\s*\{([^}]*)\}/g)].map(([, body]) => body);
   assert.equal(entryHeadBlocks.length, 1, 'the head has grown a second shape again');
-  assert.match(entryHeadBlocks[0], /flex-direction:\s*column/);
-  assert.doesNotMatch(
+  assert.match(entryHeadBlocks[0], /display:\s*grid/);
+  assert.match(
     entryHeadBlocks[0],
-    /flex-wrap:\s*wrap\b/,
-    'a wrap-based rule reintroduces content-dependent placement'
+    /grid-template-columns:\s*minmax\(0, 1fr\) auto/,
+    'the title column must shrink under a long name instead of pushing the cluster'
   );
   assert.equal(
-    [...style.matchAll(/@(?:media|container)[^{]*\{\s*\.entry-head\s*\{/g)].length,
+    [...style.matchAll(/@(?:media|container)[^{]*\{\s*\.entry-(?:head|counts)\s*\{/g)].length,
     0,
-    'the head is viewport-switched again; the owner’s one-layout ruling (2026-08-29) says it may not be'
+    'the head or cluster is width-switched again; the one-layout rule (2026-08-29, re-drawn 2026-08-31) says it may not be'
   );
 
-  /* THE ALIGNMENT MECHANISM (owner, 2026-08-29: the stat columns align
-     across every card). The counters are a grid over one shared track
-     token, so column N starts at the identical x on every card whatever
-     figures it holds; the base is a single-column ledger. Both are decided
-     by the width the CARD actually has (a container query through the
-     head's inline-size containment), never by any card's own content. */
+  /* THE CLUSTER (owner sketch, issue 275: "icons + number", concise, at the
+     card's top-right). Two columns, both floored by the ONE token declared
+     in styles.css, so the cluster reads the same geometry on every card and
+     the live age counter can tick without moving a pixel — nothing is
+     measured from a figure. */
   const counts = /\.entry-counts\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.match(counts, /display:\s*grid/, 'the counter row is content-placed flex again');
-  assert.doesNotMatch(counts, /grid-template-columns/, 'the base (phone) rule must stay a single-column ledger');
-  /* The percentage is doing two jobs — spanning the card AND contributing
-     zero to intrinsic sizing, so a narrowed column is never forced wide by
-     the fixed tracks (the 20rem-column regression the column-range lane
-     catches in every engine). */
-  assert.match(counts, /inline-size:\s*100%/, 'the row no longer spans the card by a zero-contribution size');
-  const overrides = [
-    ...style.matchAll(/@container \(min-width:\s*([^)]+)\)\s*\{\s*\.entry-counts\s*\{([^}]*)\}/g)
-  ];
-  assert.equal(overrides.length, 1, 'expected exactly one container override for .entry-counts');
-  const [, breakpoint, overrideBody] = overrides[0];
+  assert.match(counts, /display:\s*grid/, 'the cluster is content-placed flex');
   assert.match(
-    overrideBody,
-    /grid-template-columns:\s*var\(--entry-count-columns, repeat\(5, minmax\(0, 1fr\)\)\)/,
-    'the five tracks are not the one shared token, so cards can disagree about where a column starts'
+    counts,
+    /grid-template-columns:\s*repeat\(2, minmax\(var\(--entry-count-min\), auto\)\)/,
+    'the two tracks are not floored by the one shared token, so cards can disagree about where a column starts'
   );
-  /* EQUAL FRACTIONS, and the negative is the load-bearing half (issue 268): a
-     track sized from its own content is a track that moves when the content
-     does, and one of these five now changes every minute. Five equal shares of
-     the card depend on nothing, which is what makes both the cross-card
-     alignment and the live counter's zero CLS structural. */
-  assert.doesNotMatch(
-    overrideBody,
-    /justify-content/,
-    'the row distributes a surplus again; equal-fraction tracks leave none, so this can only be a return to content-sized ones'
-  );
-  assert.match(
-    overrideBody,
-    /overflow-x:\s*auto/,
-    'a narrowed reading column has nowhere to put the tracks that do not fit'
-  );
-  /* The token itself is declared in styles.css — the token layer, where the
-     owner tunes it — and the component's fallback is that declaration
-     verbatim, so an engine that never resolved the property paints the same
-     table. */
+  /* The retired full-width table may not creep back: no full-card span, no
+     scroll lane, no surplus to distribute. */
+  assert.doesNotMatch(counts, /inline-size:\s*100%/);
+  assert.doesNotMatch(counts, /justify-content/);
+  assert.doesNotMatch(style, /--entry-count-columns|--breakpoint-entry-columns/);
+  assert.doesNotMatch(styles, /--entry-count-columns|--breakpoint-entry-columns/);
+  /* The floor is declared in styles.css — the token layer, where the owner
+     tunes it — and it must FIT: two floored tracks plus their column gap
+     inside the narrowest card the phone lanes measure (226px at a 320
+     viewport), so the cluster never needs the breakpoint this shape
+     retired. The gap read here is --card-meta-gap's column half, resolved
+     the way the component resolves it. */
+  const [, floorValue] = /--entry-count-min:\s*([0-9.]+)rem;/.exec(styles) ?? [];
+  assert.ok(floorValue, 'styles.css must declare --entry-count-min in rem');
+  const floorPx = Number.parseFloat(floorValue) * 16;
+  const [, , columnGap] = /--card-meta-gap:\s*([0-9.]+)rem\s+([0-9.]+)rem;/.exec(styles) ?? [];
+  assert.ok(columnGap, '--card-meta-gap no longer carries a row and a column half');
   assert.ok(
-    styles.includes('--entry-count-columns: repeat(5, minmax(0, 1fr));'),
-    'styles.css does not declare --entry-count-columns'
+    2 * floorPx + Number.parseFloat(columnGap) * 16 < 226,
+    `two floored tracks plus the gap (${2 * floorPx + Number.parseFloat(columnGap) * 16}px) must fit the 226px card a 320px phone renders`
   );
-  /* Breakpoint parity with the documented token, exactly as the retired
-     30rem toggle was pinned; and every named phone width sits far below it,
-     so no phone lane can land on the table side by accident. */
-  const [, documentedValue] = /--breakpoint-entry-columns:\s*([^;]+);/.exec(styles) ?? [];
-  assert.ok(documentedValue, 'styles.css must document --breakpoint-entry-columns');
-  assert.equal(
-    breakpoint.trim(),
-    documentedValue.trim(),
-    'EntryLog.svelte’s media query must match styles.css’s documented --breakpoint-entry-columns'
-  );
-  const breakpointPx = Number.parseFloat(documentedValue) * 16;
-  for (const phoneWidth of [320, 360, 375, 390, 412]) {
-    assert.ok(
-      phoneWidth < breakpointPx,
-      `phone width ${phoneWidth}px must sit below --breakpoint-entry-columns (${breakpointPx}px)`
-    );
-  }
-  /* THE CELL IS ITS TRACK (issue 268). With equal-fraction tracks a
-     shrink-to-fit counter ends wherever its two digits do — most of a track
-     short of the card's right edge, which is the no-dead-space rule broken by
-     the same change that fixed the alignment. A block-level flex cell fills
-     the track it was given, so the fifth column ends at the card's own edge
-     and the browser lanes measure it there. */
+  /* THE CELL IS ITS TRACK (issue 268, unchanged by the move): a block-level
+     flex cell fills the track it was given, so the second column's cells end
+     together at the card's right edge — where the cluster is anchored — and
+     the browser lanes measure them there. */
   const countRule = /\.entry-count\s*\{([^}]*position:\s*relative[^}]*)\}/.exec(style)?.[1] ?? '';
   assert.match(countRule, /display:\s*flex;/, 'the counter shrinks to its content instead of filling its column');
   assert.doesNotMatch(countRule, /display:\s*inline-flex/);
@@ -1249,7 +1232,7 @@ test('exactly one frame is ever visible — never eight stacked', () => {
   // a time, which is the opposite of the regression. The load-bearing pin for
   // the real rule is the count assertion below — exactly one `.gallery-image`
   // in the file — and it is name-blind.
-  for (const [loop] of mediaGallery.matchAll(/\{#each items as[\s\S]*?\{\/each\}/g)) {
+  for (const [loop] of mediaGallery.matchAll(/\{#each (?:items|visible|sets) as[\s\S]*?\{\/each\}/g)) {
     assert.doesNotMatch(
       loop,
       /<img|<video|<source/,
@@ -1262,7 +1245,11 @@ test('exactly one frame is ever visible — never eight stacked', () => {
     'exactly one visible-frame <img> may exist in the markup'
   );
   assert.match(mediaGallery, /let index = \$state\(0\)/);
-  assert.match(mediaGallery, /const item = \$derived\(items\[index\]\)/);
+  /* The frame shows the CLAMPED position of the VISIBLE set (issue 275):
+     rendering happens before any effect can repair state, so the read
+     itself must survive the strip shrinking underneath it. */
+  assert.match(mediaGallery, /const shown = \$derived\(Math\.min\(index, Math\.max\(0, total - 1\)\)\)/);
+  assert.match(mediaGallery, /const item = \$derived\(visible\[shown\]\)/);
 });
 
 test('prev/next are icon-only, and both wrap around the eight photographs', () => {
@@ -1276,8 +1263,8 @@ test('prev/next are icon-only, and both wrap around the eight photographs', () =
      e2e/rendering-lanes.spec.mjs presses them by that name), and it cannot
      produce them for a film. Both halves are pinned — the derivation, and the
      absence of a hardcoded noun on either control. */
-  assert.match(mediaGallery, /aria-label=\{`Previous \$\{itemNoun\(items\[previousIndex\]\)\}`\}/);
-  assert.match(mediaGallery, /aria-label=\{`Next \$\{itemNoun\(items\[nextIndex\]\)\}`\}/);
+  assert.match(mediaGallery, /aria-label=\{`Previous \$\{itemNoun\(visible\[previousIndex\]\)\}`\}/);
+  assert.match(mediaGallery, /aria-label=\{`Next \$\{itemNoun\(visible\[nextIndex\]\)\}`\}/);
   assert.doesNotMatch(
     mediaGallery,
     /aria-label="(?:Previous|Next) \w+"/,
@@ -1291,52 +1278,52 @@ test('prev/next are icon-only, and both wrap around the eight photographs', () =
     /function itemNoun\(candidate: MediaGalleryItem\): string \{\s*return candidate\.video === undefined \? 'photograph' : 'film';/,
     'the label noun is no longer derived from the item’s own kind'
   );
-  // The neighbours are derived with the same wrap-around arithmetic the moves
-  // are, so a label can never name an item the press will not reach.
-  assert.match(mediaGallery, /const previousIndex = \$derived\(\(index - 1 \+ total\) % total\)/);
-  assert.match(mediaGallery, /const nextIndex = \$derived\(\(index \+ 1\) % total\)/);
+  // The neighbours are derived with wrap-around arithmetic from the CLAMPED
+  // position, so a label can never name an item the press will not reach.
+  assert.match(mediaGallery, /const previousIndex = \$derived\(\(shown - 1 \+ total\) % total\)/);
+  assert.match(mediaGallery, /const nextIndex = \$derived\(\(shown \+ 1\) % total\)/);
   // Text-free navigation affordance (issue 176): the controls carry an
   // accessible name, never visible label prose.
   assert.doesNotMatch(mediaGallery, />Next</);
   assert.doesNotMatch(mediaGallery, />Previous</);
-  /* The wrap arithmetic is unchanged; what moved is where it lands (issue 243
-     review finding 1): both moves now hand their target to goTo, which clears
-     the film handover on the way. The modulo is still asserted here, because
-     the wrap is this pin's subject and a move that stopped wrapping would be a
-     different defect from one that skipped the reset. */
-  assert.match(mediaGallery, /goTo\(\(index \+ 1\) % total\)/, 'next must wrap forward');
-  assert.match(mediaGallery, /goTo\(\(index - 1 \+ total\) % total\)/, 'previous must wrap backward');
+  /* Both moves hand THE DERIVED NEIGHBOUR to goTo (issue 243 review finding
+     1 kept the reset; issue 275 unified the arithmetic): the wrap lives in
+     the two derivations pinned above, and the moves spend them, so the label
+     and the landing place are one computation rather than two that agree. */
+  assert.match(mediaGallery, /function next\(\): void \{\s*goTo\(nextIndex\);/, 'next must land on the derived neighbour');
+  assert.match(
+    mediaGallery,
+    /function previous\(\): void \{\s*goTo\(previousIndex\);/,
+    'previous must land on the derived neighbour'
+  );
 });
 
-test('every position label says what KIND of item it names (issue 241)', () => {
-  /* The other three surfaces the same false noun reached: each dot's own
-     accessible name, the live region that is the only thing announced on a
-     move, and the group's name. All three now read the item rather than
-     assuming it. */
+test('the position speaks its KIND and draws its ordinal (issue 241; owner sketch 2026-08-31)', () => {
+  /* The live region is the only thing announced on a move, and it reads the
+     item rather than assuming it — issue 241's claim, surviving the dots'
+     retirement (issue 275) on the one surface that still speaks. */
   assert.match(
     mediaGallery,
-    /function positionLabel\(at: number\): string \{[\s\S]*?const noun = itemNoun\(items\[at\]\);/,
+    /function positionLabel\(at: number\): string \{[\s\S]*?const noun = itemNoun\(visible\[at\]\);/,
     'the position label no longer derives its noun from the item'
   );
-  assert.match(mediaGallery, /aria-label=\{positionLabel\(at\)\}/, 'a dot no longer names its own item');
   assert.match(
     mediaGallery,
-    /<p class="gallery-count" aria-live="polite">\{positionLabel\(index\)\}<\/p>/,
+    /<p class="gallery-count" aria-live="polite">\{positionLabel\(shown\)\}<\/p>/,
     'the live region announces a bare ratio again, so a move says nothing about what it landed on'
   );
-  assert.doesNotMatch(
-    mediaGallery,
-    /aria-label=\{`Photograph \$\{/,
-    'a dot names a kind it has not checked again'
-  );
-  /* The group is named over the SET, not the current item: a name that changed
-     underneath a reader as they arrowed through it would be worse than the
-     wrong noun. */
+  /* THE VISIBLE MARK IS THE ORDINAL (owner sketch: "1/n"), aria-hidden
+     because the live region above already speaks the whole sentence —
+     announcing both would say every move twice. It renders only when there
+     is a strip to be positioned in. */
   assert.match(
     mediaGallery,
-    /items\.some\(\(candidate\) => candidate\.video !== undefined\) \? 'Choose a photograph or film' : 'Choose a photograph'/
+    /<p class="gallery-ordinal" aria-hidden="true">\{shown \+ 1\} \/ \{total\}<\/p>/,
+    'the visible 1/n counter is gone or speaks over the live region'
   );
-  assert.match(mediaGallery, /aria-label=\{chooseLabel\}/);
+  /* And the dots are RETIRED, not renamed: no dot markup, no radio pattern,
+     no dot keyboard — the stage pair is the press equivalent now. */
+  assert.doesNotMatch(mediaGallery, /gallery-dot|radiogroup|onDotsKeydown/);
 });
 
 /* The enlarged branch, extracted whole. Issue 202 nested a further {#if}
@@ -1919,14 +1906,15 @@ test('a film is swipeable until the reader hands the surface to the player (issu
     `the component assigns \`index\` ${indexWrites.length} times; it must be exactly twice — its $state declaration and the assignment inside goTo — or a move through the strip can skip the reset`
   );
   assert.match(galleryCode, /let index = \$state\(0\);/, 'the index declaration moved');
-  /* And every control that moves the strip calls it, named individually so a
-     silent revert of any one of them is a failure rather than a count that
-     still happens to add up. */
+  /* And every mover calls it, named individually so a silent revert of any
+     one of them is a failure rather than a count that still happens to add
+     up: the two arrows, the set choice landing on the new strip's start
+     (issue 275), and the shrink guard bringing a stale position home. */
   for (const caller of [
-    /function next\(\): void \{\s*goTo\(\(index \+ 1\) % total\);/,
-    /function previous\(\): void \{\s*goTo\(\(index - 1 \+ total\) % total\);/,
-    /event\.preventDefault\(\);\s*goTo\(target\);/,
-    /onclick=\{\(\) => goTo\(at\)\}/
+    /function next\(\): void \{\s*goTo\(nextIndex\);/,
+    /function previous\(\): void \{\s*goTo\(previousIndex\);/,
+    /chosenSet = name;\s*goTo\(0\);/,
+    /if \(index >= total && total > 0\) \{\s*goTo\(0\);/
   ]) {
     assert.match(galleryCode, caller, `a control moves the strip without going through goTo: ${caller}`);
   }
@@ -2013,34 +2001,37 @@ test('the strip owns its settle: a new grab ends it, and a turn enters forward (
   );
 });
 
-test('the prev/next pair lives on the stage, desktop-only by capability, inside 44px targets (owner, 2026-08-29)', () => {
+test('the prev/next pair lives on the stage, on every device, inside 44px targets (owner sketch 2026-08-31)', () => {
   const style = styleBlock(mediaGallery);
-  /* Owner, 2026-08-29: "bring back the buttons but chose to hide them by
-     default in mobile." The 12px control-row chevrons this test used to pin
-     (owner directive 2026-08-28) are the buttons that stopped reading as
-     buttons; the pair is now the .gallery-nav discs on the stage, and the
-     three claims that make the owner's sentence structural are each pinned
-     here: hidden by DEFAULT, shown only to a hover-and-fine-pointer device,
-     and never at the cost of the 44px target. */
-  assert.match(
-    style,
-    /\.gallery-nav\s*\{\s*display:\s*none;\s*\}/,
-    'the nav pair is not hidden by default, so a touch-primary device shows buttons the owner ruled out'
+  /* The owner's 2026-08-31 sketch (issue 275) draws the arrows at the
+     stage's sides with no device carve-out, and the dot row's retirement is
+     what makes that structural: the pair is now the gesture's ONE
+     press-and-keyboard equivalent, so a capability gate hiding it from a
+     phone would leave the swipe with no equivalent at all. The 2026-08-29
+     hidden-by-default rule retired with the dots that justified it. */
+  const navRule = /\.gallery-nav\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.match(navRule, /display:\s*grid;/, 'the nav pair no longer renders');
+  assert.doesNotMatch(
+    navRule,
+    /display:\s*none/,
+    'the nav pair is hidden again; with the dots retired that leaves the swipe no press equivalent'
   );
-  const fineBlock = /@media \(hover: hover\) and \(pointer: fine\)\s*\{([\s\S]*?)\n  \}/.exec(style)?.[1] ?? '';
-  assert.ok(fineBlock.length > 0, 'the capability block that shows the pair is not where this pin expects it');
-  assert.match(fineBlock, /\.gallery-nav\s*\{[^}]*display:\s*grid;/, 'the capability block does not show the pair');
-  assert.match(fineBlock, /min-inline-size:\s*2\.75rem;/, 'the shown pair lost its 44px inline target');
-  assert.match(fineBlock, /min-block-size:\s*2\.75rem;/, 'the shown pair lost its 44px block target');
+  assert.equal(
+    [...style.matchAll(/@media[^{]*\{\s*\.gallery-nav\b/g)].length,
+    0,
+    'the pair is capability-gated again (2026-08-29 rule); the 2026-08-31 sketch shows it on every device'
+  );
+  assert.match(navRule, /min-inline-size:\s*2\.75rem;/, 'the pair lost its 44px inline target');
+  assert.match(navRule, /min-block-size:\s*2\.75rem;/, 'the pair lost its 44px block target');
   /* At the STAGE's edges, from the same one expression the stage is sized
      by — see the ONE-stage-box pin above for the declaration count. */
   assert.match(
-    fineBlock,
+    style,
     /inset-inline-start:\s*calc\(\(100% - var\(--gallery-stage-inline\)\) \/ 2 \+ var\(--gallery-nav-inset, 0\.375rem\)\)/,
     'the previous control no longer sits at the stage’s own edge'
   );
   assert.match(
-    fineBlock,
+    style,
     /inset-inline-end:\s*calc\(\(100% - var\(--gallery-stage-inline\)\) \/ 2 \+ var\(--gallery-nav-inset, 0\.375rem\)\)/,
     'the next control no longer sits at the stage’s own edge'
   );
@@ -2072,25 +2063,15 @@ test('the prev/next pair lives on the stage, desktop-only by capability, inside 
      one-index-write pin above is what makes this sufficient. */
   assert.match(galleryMarkup, /data-gallery-nav="previous"\s+onclick=\{previous\}/);
   assert.match(galleryMarkup, /data-gallery-nav="next"\s+onclick=\{next\}/);
-  /* The retired control-row chevrons stay retired: the row is the dots'.
-     Declaration-or-read forms only (name plus colon, or inside var()), so a
-     history note in prose does not count as the token coming back. */
-  assert.doesNotMatch(style, /--gallery-arrow-size\s*[:,)]/, 'the retired row-chevron token is read again');
-  assert.doesNotMatch(styles, /--gallery-arrow-size\s*[:,)]/, 'styles.css still declares the retired row-chevron token');
-  // The dots, the same way, plus the scale that keeps the current one
-  // distinguishable after the shrink — a value is never carried by opacity
-  // alone.
-  const dotRule = /\.gallery-dot-mark\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.match(dotRule, /inline-size: var\(--gallery-dot-size, 0\.25rem\);/);
-  assert.match(dotRule, /block-size: var\(--gallery-dot-size, 0\.25rem\);/);
-  assert.match(style, /transform: scale\(var\(--gallery-dot-active-scale, 1\.5\)\);/);
-  for (const token of ['--gallery-dot-size: 0.25rem;', '--gallery-dot-active-scale: 1.5;']) {
-    assert.ok(styles.includes(token), `styles.css does not declare ${token}`);
+  /* The retired control-row chevrons stay retired, and the dots' own tokens
+     went with the dots (issue 275). Declaration-or-read forms only (name
+     plus colon, or inside var()), so a history note in prose does not count
+     as a token coming back. */
+  for (const retired of ['--gallery-arrow-size', '--gallery-dot-size', '--gallery-dot-active-scale']) {
+    const pattern = new RegExp(`${retired}\\s*[:,)]`);
+    assert.doesNotMatch(style, pattern, `the retired token ${retired} is read again`);
+    assert.doesNotMatch(styles, pattern, `styles.css still declares the retired token ${retired}`);
   }
-  // The targets did NOT move: the marks sit inside their old 44px boxes.
-  const dotButton = /\.gallery-dot\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.match(dotButton, /min-inline-size: 2\.75rem;/);
-  assert.match(dotButton, /min-block-size: 2\.75rem;/);
   assert.match(styles, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
 });
 
@@ -2133,26 +2114,57 @@ test('the film stage paints a ground of its own, so a poster in flight is not a 
     'the film stage paints no ground of its own; a poster still in flight shows the page through the reservation'
   );
   /* The value is a GLOBAL token like every other dimension the stage reads,
-     so it is tuned in styles.css and the component states no colour. */
-  const declared = /--gallery-stage-ground:\s*([^;]+);/.exec(styles)?.[1]?.trim();
-  assert.ok(declared, 'the film stage reads --gallery-stage-ground, which the token layer never declares');
-  /* MEASURED, not asserted: a ground is only honest if it is genuinely dark.
-     Declaring the token and setting it to the page's own near-white would
-     satisfy every pin above and re-create the exact hole this fixes, so the
-     value itself is read and weighed. A form this pin cannot measure fails
-     loudly rather than passing by default — that is where a light value would
-     hide. */
-  const channels = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(declared);
+     so it is tuned in styles.css and the component states no colour. Since
+     the owner's light-mode ruling (2026-08-31, the issue-275 wave: "really
+     ugly black lines in light mode") the token BRANCHES by reading mode, so
+     both halves are measured rather than asserted. The :root default is the
+     exact white anthropic.com opens on — its compiled CSS's ivory-light
+     swatch — because the owner named that value; and every dark reading
+     mode must remap the token, by reference as the color roles do, onto a
+     shared projection ground that is genuinely dark. A form either pin
+     cannot measure fails loudly rather than passing by default. */
+  const declared = /--gallery-stage-ground:\s*(rgb\([^)]*\));/.exec(styles)?.[1]?.trim();
+  assert.equal(
+    declared,
+    'rgb(250, 249, 245)',
+    `the light-mode --gallery-stage-ground is "${declared}"; the owner ruled it the white anthropic.com opens on`
+  );
+  /* CASCADE ORDER, measured — the fault the PR-278 review caught running: a
+     bare :root block and a [data-theme] block tie at (0,1,0) specificity, so
+     the LATER one wins, and a light declaration written after the mode
+     blocks silently beats all three explicit dark remaps while every
+     textual pin here stays green (the token is still declared everywhere —
+     it just loses). The declaration must therefore precede the first mode
+     block in source. */
+  const lightAt = styles.indexOf('--gallery-stage-ground: rgb(250, 249, 245);');
+  const firstModeBlock = styles.search(/\[data-theme="[a-z]+"\]\s*\{/);
+  assert.ok(firstModeBlock >= 0, 'no [data-theme] block found; the mode architecture moved under this pin');
+  assert.ok(
+    lightAt >= 0 && lightAt < firstModeBlock,
+    'the light --gallery-stage-ground declaration must come BEFORE every [data-theme] block: written after them it wins the (0,1,0) tie on source order and paints a chosen dark mode’s letterbox ivory'
+  );
+  const projection = /--palette-projection-ground:\s*([^;]+);/.exec(styles)?.[1]?.trim();
+  const channels = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(projection ?? '');
   assert.ok(
     channels,
-    `--gallery-stage-ground is "${declared}", which this pin cannot resolve to channels; state it as rgb(r, g, b) so its darkness can be measured`
+    `--palette-projection-ground is "${projection}", which this pin cannot resolve to channels; state it as rgb(r, g, b) so its darkness can be measured`
   );
   for (const channel of channels.slice(1).map(Number)) {
     assert.ok(
       channel <= 64,
-      `--gallery-stage-ground is "${declared}"; a film's letterbox must be a dark ground, and a light one is the white hole this token exists to remove`
+      `--palette-projection-ground is "${projection}"; the dark modes' letterbox must be a dark ground, and a light one is the white hole issue 239 removed`
     );
   }
+  /* One remap per dark-family block — the OS auto mapping, dark, slate,
+     sepia — counted rather than located: a mode that misses the remap falls
+     through to the light ivory, silently, in that mode only, which is the
+     exact fault class the reading-mode parity pin exists for. */
+  const remaps = styles.match(/--gallery-stage-ground:\s*var\(--palette-projection-ground\)/g) ?? [];
+  assert.equal(
+    remaps.length,
+    4,
+    'every dark reading-mode block must remap the stage ground onto the shared projection value'
+  );
   /* Zero CLS: the ground paints the box the three declarations above already
      measured, so this rule may not restate a size of its own. */
   assert.doesNotMatch(
@@ -2540,34 +2552,31 @@ test('the frame reserves ONE box, so changing kind moves nothing (issue 241)', (
   assert.ok(declared, `styles.css declares no ${frameCap}, so the reservation resolves to nothing`);
 });
 
-test('the position marks are one scrolling row, and the artwork accepts a pinch (issue 241)', () => {
+test('the set control is quiet chrome, its menu the page’s one popover grammar, and the artwork accepts a pinch (issue 275; issue 241)', () => {
   const style = styleBlock(mediaGallery);
-  const dots = /\.gallery-dots\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.ok(dots.length > 0, 'the dot row rule is not where this pin expects it');
-  /* ONE ROW. Nine 44px targets are 396px, so the old `wrap` put them on two
-     rows at every phone width and three at 250px. The surplus goes to the
-     scroll axis instead, which is this page's standing answer for wide
-     content. */
-  assert.match(dots, /flex-wrap:\s*nowrap;/, 'the dot row wraps again');
-  assert.match(dots, /overflow-x:\s*auto;/, 'the row has nowhere to put the marks that do not fit');
-  /* And the three declarations that let it shrink without taking the page
-     sideways: a scroll container's min-content is still its content's, so a
-     definite zero inline size is what stops 352px of marks propagating up to
-     the page column — MEASURED, `min-inline-size: 0` and a zero flex-basis
-     both leave it propagating. It is grown back to at most its own content, so
-     a row that fits stays exactly as wide as its marks. */
-  /* ANCHORED to the start of its own declaration, and that is the whole point
-     of the regex rather than tidiness: `min-inline-size: 0;` CONTAINS
-     `inline-size: 0;`, so the unanchored form was satisfied by the exact
-     alternative the comment above documents as measured-and-broken. The
-     browser lane kills that substitution on all five projects; a source pin
-     that cannot is a pin pointing at the wrong thing. */
-  assert.match(dots, /^\s*inline-size:\s*0;/m, 'the row’s minimum contribution is its content again');
-  assert.match(dots, /flex-grow:\s*1;/, 'the row cannot take the space the arrows leave');
-  assert.match(dots, /max-inline-size:\s*max-content;/, 'the row grows past its own marks, pushing the arrows away from them');
-  // A safe centring over a plain one, so an overflowing row is reachable at
-  // its start edge rather than clipped there.
-  assert.match(dots, /justify-content:\s*center;[\s\S]*justify-content:\s*safe center;/);
+  /* THE SET CONTROL (owner sketch, 2026-08-31: "sleek, small"): the button
+     paints nothing of its own — no border, no fill, meta-step type — and
+     still carries the 44px floor by minimums, the same
+     shrink-the-ink-never-the-target trade every quiet control on this page
+     makes. */
+  const setButton = /\.gallery-set-button\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(setButton.length > 0, 'the set button rule is not where this pin expects it');
+  assert.match(setButton, /background:\s*transparent;/, 'the set button paints a surface of its own');
+  assert.match(setButton, /min-inline-size:\s*2\.75rem;/, 'the set button lost its 44px inline target');
+  assert.match(setButton, /min-block-size:\s*2\.75rem;/, 'the set button lost its 44px block target');
+  assert.match(setButton, /font-size:\s*var\(--card-meta-size\);/, 'the set button restates a type step');
+  /* The open menu moves NOTHING: absolutely positioned out of flow (the
+     owner weighed the brief overlap of the stage and took it), on the
+     page's shared popover tokens rather than values of its own. */
+  const setMenu = /\.gallery-set-menu\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.match(setMenu, /position:\s*absolute;/, 'an open menu reflows the page instead of overlaying it');
+  assert.match(setMenu, /border-radius:\s*var\(--theme-menu-radius\);/, 'the menu invents its own curve');
+  assert.match(setMenu, /padding:\s*var\(--swatch-popover-padding\);/, 'the menu invents its own padding');
+  /* Each option is a real ≥44px control, and the chosen one is marked by
+     weight — never by color alone (dataviz floor). */
+  const setOption = /\.gallery-set-option\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.match(setOption, /min-block-size:\s*2\.75rem;/, 'an option is under the touch floor');
+  assert.match(style, /\.gallery-set-option\[aria-selected='true'\]\s*\{[^}]*font-weight/);
 
   /* THE PINCH. `pan-y` alone refuses a two-finger zoom on the one element a
      reader would ever try it on. The base declaration under it is not
@@ -2580,6 +2589,64 @@ test('the position marks are one scrolling row, and the artwork accepts a pinch 
     /touch-action:\s*pan-y;[\s\S]*touch-action:\s*pan-y pinch-zoom;/,
     'the artwork refuses a pinch, or upgrades to one with no base under it'
   );
+});
+
+test('the media sets are data: kind-derived by default, named by the manifest, chrome only when there is a choice (issue 275)', () => {
+  /* The default is derived from the same field the stage's own kind is, so
+     an untagged manifest and the vendored bootstrap set render exactly as
+     they always did — one Drawings strip, no dropdown, no new chrome. */
+  assert.match(
+    galleryCode,
+    /return candidate\.set \?\? \(candidate\.video === undefined \? 'Drawings' : 'Videos'\);/,
+    'an item without a set no longer falls into the kind-derived default'
+  );
+  /* The set menu's chord discipline. The always-rendered chord sweep in the
+     rendering lanes cannot reach a menu that mounts only while open on a
+     multi-set strip, and its comment defers to THIS pin by name — so the
+     guard the comment cites must actually be asserted somewhere, or the
+     deferral is a citation to nothing (PR-278 review, finding 3). The
+     keydown handler's first act is handing browser chords back to the
+     browser. */
+  assert.match(
+    galleryCode,
+    /function onSetMenuKeydown\(event: KeyboardEvent\): void \{\n\s*if \(isChord\(event\)\) \{\n\s*return;/,
+    'the set menu’s keydown no longer opens by refusing chords; the lanes’ sweep comment cites a guard that is not there'
+  );
+  /* First appearance wins, verbatim, and no entry is invented: a set exists
+     exactly when something is in it (honest-states floor), and the strip is
+     the chosen set's items alone. */
+  assert.match(galleryCode, /const sets = \$derived\(\[\.\.\.new Set\(items\.map\(setOf\)\)\]\);/);
+  assert.match(
+    galleryCode,
+    /const visible = \$derived\(items\.filter\(\(candidate\) => setOf\(candidate\) === activeSet\)\);/
+  );
+  /* A chosen name that no longer names a set resolves to the first set
+     rather than to an empty stage. */
+  assert.match(
+    galleryCode,
+    /chosenSet !== undefined && sets\.includes\(chosenSet\) \? chosenSet : sets\[0\]/
+  );
+  assert.match(
+    galleryMarkup,
+    /\{#if sets\.length > 1\}\s*<div class="gallery-set"/,
+    'a single-set gallery draws set chrome for a choice that does not exist'
+  );
+  /* The control is the listbox pattern: the button declares the popup and
+     its state, each option carries the selection, and the roving stop sits
+     on the choice. */
+  assert.match(galleryMarkup, /aria-haspopup="listbox"/);
+  assert.match(galleryMarkup, /aria-expanded=\{setMenuOpen\}/);
+  assert.match(galleryMarkup, /role="listbox"[\s\S]*?aria-label="Choose a media set"/);
+  assert.match(galleryMarkup, /role="option"[\s\S]*?aria-selected=\{name === activeSet\}/);
+  assert.match(galleryMarkup, /tabindex=\{name === activeSet \? 0 : -1\}/);
+  /* Escape and focus leaving the control both close it, and a choice hands
+     focus back to the button — the menu can never strand the keyboard. */
+  assert.match(galleryCode, /if \(event\.key === 'Escape'\) \{[\s\S]*?setButtonEl\?\.focus\(\);/);
+  assert.match(galleryCode, /function onSetFocusout\(event: FocusEvent\): void \{/);
+  assert.match(galleryMarkup, /onfocusout=\{onSetFocusout\}/);
+  /* And the adapter passes the manifest's word through untouched, the same
+     absent-means-absent ride the other optional metadata takes. */
+  assert.match(artBinding, /if \(item\.set !== undefined\) \{\s*rendered\.set = item\.set;/);
 });
 
 test('the lightbox close control paints a small mark, never a disc over the photograph (issue 202)', () => {
@@ -2710,15 +2777,17 @@ test("the caption's BOX is reserved for every item; content absent when the item
   );
   assert.match(
     mediaGallery,
-    /<div class="gallery-caption">\s*\{#each items as shot, at \(shot\.key\)\}/,
+    /<div class="gallery-caption">\s*\{#each visible as shot, at \(shot\.key\)\}/,
     'the caption box no longer holds one lane per item, so it is sized by whichever item is showing'
   );
-  /* THE ONE QUESTION THE BOX ASKS IS THE SET'S. A set nobody captioned has no
-     lane to hold open, and reserving one charged the page a constant empty
-     band (+12px on the vendored bootstrap gallery). The guard reads `items`,
-     never `item`, so within a set the answer cannot change and an item change
-     still moves nothing — a guard on the current item would be the defect
-     itself, which is what the assertion above refuses. */
+  /* THE ONE QUESTION THE BOX ASKS IS THE VISIBLE SET'S. A set nobody
+     captioned has no lane to hold open, and reserving one charged the page a
+     constant empty band (+12px on the vendored bootstrap gallery). The guard
+     reads `visible`, never `item`, so within a set the answer cannot change
+     and an ITEM change still moves nothing — the two moments the box may
+     move are a manifest load and the reader's own set choice (issue 275),
+     both explicit. A guard on the current item would be the defect itself,
+     which is what the assertion above refuses. */
   assert.match(
     mediaGallery,
     /\{#if captionedSet\}\s*<div class="gallery-caption">/,
@@ -2726,8 +2795,8 @@ test("the caption's BOX is reserved for every item; content absent when the item
   );
   assert.match(
     galleryCode,
-    /const captionedSet = \$derived\(items\.some\(hasCaptionCopy\)\);/,
-    'whether a caption box exists is not derived from the set'
+    /const captionedSet = \$derived\(visible\.some\(hasCaptionCopy\)\);/,
+    'whether a caption box exists is not derived from the visible set'
   );
   /* ONE DEFINITION of what counts as a caption, asked by both questions: two
      copies is how the reserved lane and the rendered content drift apart. */
@@ -2736,8 +2805,8 @@ test("the caption's BOX is reserved for every item; content absent when the item
     /function hasCaptionCopy\(candidate: MediaGalleryItem\): boolean \{\s*return Boolean\(candidate\.title\) \|\| Boolean\(candidate\.description\);/,
     'the caption rule is not stated in one place'
   );
-  assert.match(mediaGallery, /data-current=\{at === index \? 'true' : undefined\}/);
-  assert.match(mediaGallery, /aria-hidden=\{at === index \? undefined : 'true'\}/, 'every item’s caption is announced at once');
+  assert.match(mediaGallery, /data-current=\{at === shown \? 'true' : undefined\}/);
+  assert.match(mediaGallery, /aria-hidden=\{at === shown \? undefined : 'true'\}/, 'every item’s caption is announced at once');
   const captionStyle = styleBlock(mediaGallery);
   const lane = /\.gallery-caption-lane\s*\{([^}]*)\}/.exec(captionStyle)?.[1] ?? '';
   assert.match(lane, /grid-area:\s*1 \/ 1/, 'the lanes are not stacked, so the box is the sum of every caption');
@@ -2885,4 +2954,14 @@ test('the media block introduces itself with its heading, and only its heading',
   // 167 already made for the Coding Projects capture note).
   assert.doesNotMatch(artBinding, /intro:|note:/);
   assert.match(pageSectionSource, /<h3 class="subsection-title">\{block\.heading\}<\/h3>/);
+});
+
+test('the coding-projects block declares no heading of its own (owner ruling, 2026-08-31)', () => {
+  /* "Remove coding projects and just make it a clean Projects": the cards sit
+     directly under the section's own title, so the binding must not present a
+     subheading — the conditional in PageSection.svelte (pinned above) renders
+     the block bare when no heading is declared. The fixture envelopes' `title:
+     'Coding Projects'` fields elsewhere in this suite are the panel's own
+     server-side metadata and are NOT what this pin is about. */
+  assert.doesNotMatch(projectsBinding, /heading:/);
 });

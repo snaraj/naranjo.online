@@ -9,6 +9,54 @@
  * what a block says is a data edit beside its adapter; how the three loops
  * fit together is docs/design-iteration.md. */
 
+/* THE PAGE'S TYPEFACE, SELF-HOSTED (owner directive, 2026-08-31: the site
+ * reads in JetBrains Mono, "same as my terminal"). Four files, not one:
+ * the VARIABLE font carries every weight from 100 to 800 in one face — the
+ * type ramp's 650s render at 650 rather than snapping to a static bold —
+ * and the true italic is its own file because `font-synthesis: none` below
+ * means a slanted fake is never drawn in its place. Each face is split into
+ * the two character ranges this site's text can actually reach (latin and
+ * latin-ext), so a page load costs the ~40KB range it uses rather than one
+ * ~250KB everything-file; the unicode-range descriptors are what let the
+ * browser skip the file it does not need. The files live in
+ * src/assets/fonts/ beside their OFL license per the attribution
+ * convention, vite content-hashes them like every other asset (they stay
+ * same-origin under the requirement-1 local-origin rule and the CSP's
+ * default-src 'self'), and `font-display: swap` keeps first paint honest —
+ * system text now beats invisible text. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('./assets/fonts/JetBrainsMono-Variable-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('./assets/fonts/JetBrainsMono-Variable-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: italic;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('./assets/fonts/JetBrainsMono-Italic-Variable-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: italic;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('./assets/fonts/JetBrainsMono-Italic-Variable-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 /* Reading-mode token layer (issue #22, the OSRS-wiki mechanism adapted):
  * every color lives in a custom property, and each reading mode is one
  * override block scoped by the data-theme attribute the origin stamps on
@@ -152,6 +200,30 @@
   --palette-status-stale-on-light: #8f6100;
   --palette-status-critical: #e05a5a;
   --palette-status-critical-on-light: #c62828;
+
+  /* The projection ground the film stage letterboxes onto in the three dark
+     reading modes — one shared value like the status family above, and for
+     the same reason: their surfaces sit within a whisker of each other.
+     Near-black rather than black so the stage still reads as a surface
+     against a true-dark page instead of dissolving into it. Light mode never
+     reads this token; see --gallery-stage-ground directly below. */
+  --palette-projection-ground: rgb(20, 20, 20);
+
+  /* The GROUND a film sits on, light half (owner ruling 2026-08-31, the
+     issue-275 wave: the near-black bands on the light page are a defect, and
+     the replacement is the white anthropic.com opens on — the ivory-light
+     swatch of its compiled CSS, stated in the rgb form the pin in
+     tests/sections.test.mjs measures). Declared HERE, with the palettes and
+     not beside the other gallery tokens, because position is load-bearing:
+     bare :root and [data-theme] blocks tie at (0,1,0) specificity, so
+     whichever is written LATER wins, and the reading-mode remaps of this
+     token live in the mode blocks below. Declared after them it would win
+     the tie and paint every explicitly-chosen dark mode's letterbox ivory —
+     the exact fault the PR-278 review caught running. The same pin now
+     measures this ordering, so moving the declaration down fails the build
+     rather than the reader. The full issue-239 history of why a stage
+     paints a ground at all stays with the gallery tokens. */
+  --gallery-stage-ground: rgb(250, 249, 245);
 
   /* The contribution ramp: one hue, monotone lightness, five steps. The
      DIRECTION is per-palette and that is the whole point — "steps brighter"
@@ -398,54 +470,30 @@
   --card-header-gap: 0.125rem;
   --card-body-gap: 0.5rem;
   --card-meta-gap: 0.25rem 0.875rem;
-  /* A linked card's counter columns (owner, 2026-08-29: the stat columns
-     align across every card, "it should not differ in the layout"). The five
-     tracks are ONE token so all seven cards read the identical geometry —
-     column N starts at the same x on every card.
-
-     EQUAL FRACTIONS since issue 268. The tracks used to be five hand-measured
-     widths, each sized from the widest realistic content of its own column
-     with the inline "· recorded" mark showing, and that arrangement had one
-     structural weakness the owner's directive removed rather than patched: a
-     track sized from CONTENT has to be re-measured every time the content
-     changes, and one of the five now changes every minute. With the words and
-     the mark gone from the visible row — icon and bare figure, the sentence in
-     the detail — no track is measured from anything, so five equal shares
-     align every card by construction and the freshness counter can tick
-     without moving a pixel. */
-  --entry-count-columns: repeat(5, minmax(0, 1fr));
-  /* The width the five cells genuinely fit at, MEASURED in three engines
-     rather than named. A counter is a 16px glyph, a 0.3125rem gap and its
-     figure: the widest one the feed renders today is 45.34px ("127 commits" as
-     "127", identical in Chromium and WebKit, 45.30 in Firefox), and the widest
-     one it could plausibly grow into is 65.36px (a five-figure commit total,
-     "12,345"). Five of those plus the row's four 0.875rem column gaps come to
-     382.8px, so 28rem (448px) clears the growth case by 65px — headroom the
-     old content-sized tracks needed re-measuring to keep and equal fractions
-     no longer do, since nothing below this width is decided by content at all.
-     Over the breakpoint the row still carries `overflow-x: auto`, so a reader
-     who enlarges their text past even that headroom scrolls the row inside
-     itself rather than bending the card.
-
-     It is a CONTAINER width, not a viewport one, because the reading column is
-     the reader's to narrow (ColumnHandles) far below any viewport a media
-     query could name — MEASURED, a viewport switch rendered the wide table
-     into a 288px card — so the card itself answers, through the head's
-     inline-size containment in EntryLog.svelte. Every named phone width gives
-     a card far under 448px (MEASURED: 226px at 320, 281 at 375, 296 at 390,
-     318 at 412 — e2e/rendering-lanes.spec.mjs's phoneWidths plus the iPhone SE
-     report), so a phone always gets the single-column ledger. This retires
-     --breakpoint-card-meta (30rem) with the inline title/counters row it
-     gated: the counters hold their own full-width line at every width now,
-     which is what makes cross-card alignment possible at all. */
-  --breakpoint-entry-columns: 28rem;
-  --card-title-family: var(--font-sans);
+  /* The floor under a linked card's counter tracks (owner sketch 2026-08-31,
+     issue 275: the counters are a compact two-column icons-and-figures
+     cluster at the card's top-right). One token floors BOTH tracks on EVERY
+     card, which is what keeps the cluster columns landing at the same x
+     card-to-card (the 2026-08-29 alignment ruling, carried into the new
+     shape) and what keeps the live age counter zero-CLS: a counter is a
+     16px glyph, a 0.3125rem gap and its figure, the widest figure the feed
+     renders today is 45.34px MEASURED ("127"), and this 52px floor holds
+     all of it with room for the minute tick to grow into. Two floored
+     tracks plus their 0.875rem gap are ~118px — comfortably inside even
+     the 226px card a 320px phone renders — so the cluster needs no
+     breakpoint, no container query, and no second shape anywhere. The
+     full-width five-column table this replaces took its track token and its
+     breakpoint token with it (both are pinned ABSENT, by name, in
+     tests/sections.test.mjs — which is why this comment does not spell
+     them). */
+  --entry-count-min: 3.25rem;
+  --card-title-family: var(--font-mono);
   --card-title-size: 1.0625rem;
   --card-title-weight: 650;
   --card-title-tracking: -0.01em;
   --card-title-leading: 1.25;
   --card-title-ink: var(--card-ink);
-  --card-meta-family: var(--font-sans);
+  --card-meta-family: var(--font-mono);
   --card-meta-size: 0.8125rem;
   --card-meta-weight: 400;
   --card-meta-tracking: 0.02em;
@@ -640,8 +688,14 @@
   --color-cat-4: var(--palette-light-cat-4);
   --color-cat-5: var(--palette-light-cat-5);
   /* The page's one font stack, as a token: a card's type ramp reads it rather
-     than restating it, so the family is chosen in exactly one place. */
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+     than restating it, so the family is chosen in exactly one place. The face
+     is the self-hosted JetBrains Mono declared at the top of this file (owner
+     directive, 2026-08-31), and the fallbacks behind it are each platform's
+     own monospace so the swap-window text is at least the right SHAPE of
+     type. The token is named for what it holds — a mono stack — because a
+     token called sans holding a mono face is the kind of small lie the
+     dead-code audit exists to catch. */
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
 
   /* The chrome-icon grammar (owner directive, 2026-08-24). The page's two
      header controls are LINE ICONS — a small glyph inside a 44px hit area,
@@ -685,7 +739,7 @@
 
   color: var(--color-text);
   background: var(--color-surface);
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -720,6 +774,7 @@
     --color-cat-3: var(--palette-dark-cat-3);
     --color-cat-4: var(--palette-dark-cat-4);
     --color-cat-5: var(--palette-dark-cat-5);
+    --gallery-stage-ground: var(--palette-projection-ground);
   }
 }
 
@@ -747,6 +802,7 @@
   --color-cat-3: var(--palette-dark-cat-3);
   --color-cat-4: var(--palette-dark-cat-4);
   --color-cat-5: var(--palette-dark-cat-5);
+  --gallery-stage-ground: var(--palette-projection-ground);
 }
 
 /* Slate remaps the identical slot list onto its own palette — same roles,
@@ -779,6 +835,7 @@
   --color-cat-3: var(--palette-slate-cat-3);
   --color-cat-4: var(--palette-slate-cat-4);
   --color-cat-5: var(--palette-slate-cat-5);
+  --gallery-stage-ground: var(--palette-projection-ground);
 }
 
 [data-theme="sepia"] {
@@ -805,6 +862,7 @@
   --color-cat-3: var(--palette-sepia-cat-3);
   --color-cat-4: var(--palette-sepia-cat-4);
   --color-cat-5: var(--palette-sepia-cat-5);
+  --gallery-stage-ground: var(--palette-projection-ground);
 }
 
 * {
@@ -1480,19 +1538,24 @@ h1 {
      below. */
   /* The GROUND a film sits on (issue 239). The film stage carried no
      background at all, so it was transparent: a poster still in flight left
-     the page's own near-white surface showing through a 768x432 hole, which
-     reads as a broken image rather than as a frame that has not arrived yet.
-     The same transparency showed through the bands `object-fit: contain`
-     leaves whenever a film's ratio is not exactly the stage's.
+     the page's own surface showing through a 768x432 hole, which reads as a
+     broken image rather than as a frame that has not arrived yet. The same
+     transparency showed through the bands `object-fit: contain` leaves
+     whenever a film's ratio is not exactly the stage's — so the stage paints
+     a ground of its own in every mode.
 
-     Deliberately NOT branched by reading mode, and for the same reason
-     --gallery-scrim and --gallery-meta-ink are not: this is the letterbox a
-     moving picture is projected onto, it carries no text, and a film's own
-     black bars do not lighten because a reader chose the sepia page. Every
-     video player on the web is dark in a light theme for exactly this reason.
-     Near-black rather than black so the stage still reads as a surface
-     against a true-dark page instead of dissolving into it. */
-  --gallery-stage-ground: rgb(20, 20, 20);
+     WHICH ground branches by reading mode (owner ruling 2026-08-31,
+     superseding the earlier every-player-is-dark rationale that lived
+     here): the light page projects onto the white anthropic.com opens on,
+     an ivory a few points off this site's own light surface, so an
+     in-flight poster reads as a quiet pale box rather than a black
+     monolith — a trade the owner weighed and ruled for; the three dark
+     reading modes keep the shared near-black, a film's letterbox having no
+     reason to lighten there. The token is deliberately NOT declared in this
+     block: this :root block sits after the reading-mode blocks and would
+     beat their remaps on source order at equal specificity, so the light
+     value lives with the palettes, before them, where the pin measures its
+     position. */
   /* The desktop prev/next pair (owner, 2026-08-29: "bring back the buttons
      but chose to hide them by default in mobile"). The retired
      --gallery-arrow-size sized the 12px chevron ink that stopped reading as
@@ -1506,12 +1569,6 @@ h1 {
   --gallery-nav-ink: white;
   --gallery-nav-rest-opacity: 0.7;
   --gallery-nav-inset: 0.375rem;
-  /* The position marks (owner directive, 2026-08-28: smaller controls): a
-     4px dot inside a 44px button, scaled on the current one so position is
-     never carried by opacity alone. Tokens rather than literals because
-     these are the two numbers the owner asked to be able to tune. */
-  --gallery-dot-size: 0.25rem;
-  --gallery-dot-active-scale: 1.5;
   /* The film's play control (issue 243): the painted disc inside the 44px
      target, the ink on it, and how far the triangle is nudged off centre so a
      right-pointing glyph reads centred in a circle. The disc is LARGER than

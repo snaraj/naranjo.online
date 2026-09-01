@@ -185,7 +185,10 @@ func newStaticFile(name string, data []byte) *staticFile {
 		// cache safe: changed bytes are always published under a new URL.
 		cacheControl = immutableCacheControl
 	}
-	contentType := mime.TypeByExtension(path.Ext(name))
+	contentType, pinned := embeddedTypes[path.Ext(name)]
+	if !pinned {
+		contentType = mime.TypeByExtension(path.Ext(name))
+	}
 	if contentType == "" {
 		// The embedded bundle is build-controlled, so an extension outside the
 		// MIME registry is a packaging surprise, not a delivery feature. Pinning

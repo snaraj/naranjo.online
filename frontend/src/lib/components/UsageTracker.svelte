@@ -160,9 +160,44 @@
                       </span>
                     </div>
                   {/if}
+                  <!-- The pair row reads glyph-plus-figure (owner directive,
+                    2026-08-31: the word run "in 5.4B out 7.3M" was
+                    unreadable). The arrows are drawn in the page's own glyph
+                    grammar — a 24-unit box, currentColor, round caps, like
+                    every counter glyph on the repo cards — and each is
+                    decorative because the word it replaced is still here,
+                    clipped into the accessibility tree beside its figure.
+                    The exact-figures sentence stays on the row's title. -->
                   <p class="usage-pairs" title={usageWindow.pairsLabel}>
                     {#each usageWindow.pairs as pair (pair.key)}
                       <span class="usage-pair">
+                        {#if pair.glyph === 'flow-in'}
+                          <svg class="usage-pair-glyph" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                            <path d="M12 4.5v9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                            <path
+                              d="M8 10l4 4 4-4"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="2"
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                            />
+                            <path d="M5.5 19h13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                          </svg>
+                        {:else}
+                          <svg class="usage-pair-glyph" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                            <path d="M12 14.5v-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                            <path
+                              d="M8 9l4-4 4 4"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="2"
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                            />
+                            <path d="M5.5 19h13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                          </svg>
+                        {/if}
                         <span class="usage-pair-label">{pair.label}</span>
                         <span class="usage-pair-value">{pair.figure}</span>
                       </span>
@@ -492,8 +527,34 @@
     gap: var(--usage-pair-gap, 0.75rem);
   }
 
-  .usage-pair-label {
+  /* Glyph and figure on one baseline; the glyph takes the muted ink the word
+     it replaced used to wear. */
+  .usage-pair {
+    /* The containing block for the clipped word below, so the 1px box stays
+       anchored inside the pair it belongs to. */
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3125rem;
+  }
+
+  .usage-pair-glyph {
+    flex: none;
     color: var(--panel-muted, rgb(158, 158, 158));
+  }
+
+  /* The word behind the glyph (owner directive, 2026-08-31). Hidden by
+     CLIPPING, never display:none — the same rule the entry counters follow
+     and for the same reason: removed from flow it costs the row nothing,
+     removed from the tree it would leave the arrow carrying the meaning
+     alone. */
+  .usage-pair-label {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .usage-pair-value {

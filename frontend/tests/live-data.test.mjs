@@ -139,9 +139,9 @@ describe('the Coding Projects feed follows the host', () => {
     assert.deepEqual(
       counts.map((count) => [count.key, count.marked]),
       [
-        ['commits', true],
         ['stars', false],
         ['updated', false],
+        ['commits', true],
         // These fixture rows carry no tallies, which is the ADDITIVE path: the
         // exact shape a payload written before the two counters existed still
         // has. A figure that is not there renders as a dash, and a dash has no
@@ -182,7 +182,7 @@ describe('the Coding Projects feed follows the host', () => {
     );
     assert.deepEqual(
       entryFor(projects[0].name).counts.map((count) => count.marked),
-      [true, false, false, undefined, undefined],
+      [false, false, true, undefined, undefined],
       'a live row inherited the recorded row’s marks'
     );
   });
@@ -195,14 +195,14 @@ describe('the Coding Projects feed follows the host', () => {
       { name: projects[0].name, description: 'x', stars: null },
       noon
     );
-    assert.equal(unknown[1].label, 'stars unknown');
+    assert.equal(unknown[0].label, 'stars unknown');
     // A REPORTED zero is a measurement and stays a zero.
     const measured = projectCounts(
       { ...projects[0], commits: 1 },
       { name: projects[0].name, description: 'x', stars: 0 },
       noon
     );
-    assert.equal(measured[1].label, '0 stars');
+    assert.equal(measured[0].label, '0 stars');
   });
 
   it('renders the captured rows for a null, wrong-kinded, or malformed envelope', () => {

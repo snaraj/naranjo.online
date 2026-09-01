@@ -146,6 +146,17 @@ row costs one row.
   an absolute `https:` URL. It is parsed, not prefix-matched, so
   `javascript:`, `data:`, and every whitespace or case trick around them are
   refused the way the browser would resolve them.
+- `set` (40) is optional and additive (issue 275): the Media block's
+  dropdown groups items under this label, verbatim after trimming. An item
+  without one falls into the kind-derived default — an image is a Drawing, a
+  video a Video — so every manifest written before the field existed renders
+  exactly as it did, and the dropdown itself appears only when the items
+  span more than one set. Publishing a new set (the owner's sketch names an
+  OldSchool RuneScape one) is therefore one field on the items that belong
+  to it, with no code, CI, or release consequence. An item whose `set` is
+  present but unreadable — blank, non-string, over the bound — refuses that
+  item, because a picture silently landing in the wrong group is a
+  caption-level lie.
 
 ## What happens when it is not there
 

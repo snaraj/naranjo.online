@@ -182,6 +182,20 @@ var (
 		".webm": "video/webm",
 		".webp": "image/webp",
 	}
+	// embeddedTypes pins the Content-Type of bundle extensions no host registry
+	// can be trusted to know. The typeface travels in the bundle (issue 275),
+	// and .woff2 is in neither Go's builtin table nor the distroless image,
+	// which carries no /etc mime registry to extend it — so in production it
+	// would fall through to newStaticFile's octet-stream default. Fail-inert
+	// (font fetches never enforce the served type), but avoidably untyped. A
+	// TABLE rather than a branch for the same reason mediaTypes above is one:
+	// the pin test asserts the entry itself, which stays falsifiable on hosts
+	// whose own registry also happens to know the extension (the PR-278
+	// round-2 review measured exactly that mutant surviving a handler-path
+	// assertion on macOS).
+	embeddedTypes = map[string]string{
+		".woff2": "font/woff2",
+	}
 	// reservedMediaSegments prevents a future mount-layout mistake from exposing
 	// operator-only roles even if they appear below the delivery root.
 	reservedMediaSegments = map[string]struct{}{

@@ -445,6 +445,13 @@ func TestEmbeddedContentTypePolicy(t *testing.T) {
 		// guarantee rather than exact values.
 		"registered extension": {target: "/", contentType: "text/html; charset=utf-8"},
 		"unknown extension":    {target: "/downloads/blob", contentType: "application/octet-stream"},
+		// Proves DELIVERY end-to-end: the typeface answers with its pinned
+		// type through the real handler. On hosts whose own mime registry
+		// also knows .woff2 this row alone cannot tell the pin from the
+		// registry (the round-2 review measured that mutant surviving on
+		// macOS) — TestEmbeddedTypePins below is the assertion that kills
+		// it everywhere.
+		"typeface": {target: "/assets/type-abc123.woff2", contentType: "font/woff2"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -464,6 +471,23 @@ func TestEmbeddedContentTypePolicy(t *testing.T) {
 				t.Errorf("Content-Disposition = %q, want none for embedded files", got)
 			}
 		})
+	}
+}
+
+// TestEmbeddedTypePins asserts the embeddedTypes entries directly, because a
+// handler-path check cannot: on a host whose own mime registry knows the same
+// extension, deleting the pin changes nothing observable through the handler,
+// and the pin's whole purpose is hosts (the distroless image) that have no
+// registry at all. The table entry is the falsifiable claim.
+func TestEmbeddedTypePins(t *testing.T) {
+	want := map[string]string{".woff2": "font/woff2"}
+	if len(embeddedTypes) != len(want) {
+		t.Errorf("embeddedTypes has %d entries, want %d — a new pin needs its row here", len(embeddedTypes), len(want))
+	}
+	for extension, contentType := range want {
+		if got := embeddedTypes[extension]; got != contentType {
+			t.Errorf("embeddedTypes[%q] = %q, want %q", extension, got, contentType)
+		}
 	}
 }
 

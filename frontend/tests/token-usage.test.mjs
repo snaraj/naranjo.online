@@ -250,11 +250,21 @@ describe('UsageTracker source contract', () => {
     // A window without a reported utilization draws no meter at all.
     const [, second] = tokenUsageProps(envelopeFor(shippedPayload)).sections;
     assert.equal(second.windows[0].meter, undefined);
-    // The pair row: compact figures visible, exact figures on the title.
+    // The pair row: compact figures beside named glyphs, the replaced word
+    // clipped into the tree (owner directive, 2026-08-31), exact figures on
+    // the title.
     assert.deepEqual(
-      first.windows[0].pairs.map((pair) => `${pair.label} ${pair.figure}`),
-      [`in ${formatTokenCount(182340)}`, `out ${formatTokenCount(45120)}`]
+      first.windows[0].pairs.map((pair) => `${pair.glyph} ${pair.label} ${pair.figure}`),
+      [`flow-in input ${formatTokenCount(182340)}`, `flow-out output ${formatTokenCount(45120)}`]
     );
+    // The component draws both arrows in the page's one glyph language and
+    // marks them decorative; the clipped word is what carries the meaning.
+    for (const glyph of ["pair.glyph === 'flow-in'"]) {
+      assert.ok(component.includes(glyph), `the tracker draws no ${glyph} branch`);
+    }
+    assert.match(component, /class="usage-pair-glyph"[^>]*aria-hidden="true"/s);
+    assert.match(component, /\.usage-pair-label \{[^}]*clip-path: inset\(50%\)/s);
+    assert.doesNotMatch(component, /\.usage-pair-label \{[^}]*display: none/s);
     // The exact figures stay exact (owner directive, 2026-08-25: the compact
     // reading is what surfaces, the exact one survives here) — but GROUPED,
     // because nine undelimited digits on a tooltip is a log line, not a
