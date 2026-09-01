@@ -1019,6 +1019,17 @@ test('a card looks stale when its envelope says so (issue 281, defect 2)', () =>
     now
   );
   assert.equal(stale.staleNote, 'stale · data as of 5h ago');
+  // The status half ALONE, unmasked by age: a refused-row round marks the
+  // envelope stale while stamping a CURRENT generatedAt (defect 1's refusal
+  // path), so the timestamp above — 5h old, past the 2h threshold — cannot
+  // distinguish the origin's verdict from mere aging. This fixture can: five
+  // minutes old, well inside the threshold, the note must come from the
+  // status. Review receipt 5497788881 caught this input missing.
+  const freshStale = codingProjectsProps(
+    projectsEnvelope(repos, { status: 'stale', generatedAt: '2026-09-01T12:25:00Z' }),
+    now
+  );
+  assert.equal(freshStale.staleNote, 'stale · data as of 5m ago');
   // Unavailable renders the captured face and says which face it is.
   const unavailable = codingProjectsProps(
     projectsEnvelope([], { status: 'unavailable', generatedAt: undefined, data: null }),
