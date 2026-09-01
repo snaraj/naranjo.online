@@ -804,9 +804,12 @@ function usageWindowProps(entry: TokenUsageWindow): UsageWindow {
     period: entry.period,
     reset: resetsIn(entry.resetsAt),
     meter,
+    /* The words became glyphs on the visible row (owner directive,
+       2026-08-31) — the label survives as each pair's clipped accessible
+       word, so a reader hears "input 5.4B" where the eye reads the arrow. */
     pairs: [
-      { key: 'in', label: 'in', figure: formatTokenCount(entry.inputTokens) },
-      { key: 'out', label: 'out', figure: formatTokenCount(entry.outputTokens) }
+      { key: 'in', glyph: 'flow-in', label: 'input', figure: formatTokenCount(entry.inputTokens) },
+      { key: 'out', glyph: 'flow-out', label: 'output', figure: formatTokenCount(entry.outputTokens) }
     ],
     /* The one place an EXACT figure survives (owner directive, 2026-08-25):
        the pair row above is compacted, and this is the tooltip a reader opens

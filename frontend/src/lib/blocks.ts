@@ -293,9 +293,16 @@ export type UsageMeter = {
   readonly reading: string;
 };
 
-/* One labelled figure of a window's pair row. */
+/* One figure of a window's pair row: a named glyph, the compact figure, and
+ * the word the glyph replaced. The component draws the glyph and clips the
+ * word (owner directive, 2026-08-31: "week  in 5.4B  out 7.3M ... see how
+ * weird that reads? instead use icons") — same split the entry counters
+ * made at issue 268: the visible channel is glyph plus figure, the words
+ * stay in the accessibility tree. The glyph is a NAME, not a drawing, so
+ * this type stays domain-free the way EntryCount's glyph field is. */
 export type UsagePair = {
   readonly key: string;
+  readonly glyph: 'flow-in' | 'flow-out';
   readonly label: string;
   readonly figure: string;
 };
@@ -476,6 +483,11 @@ export type MediaGalleryItem = {
   readonly title?: string;
   readonly description?: string;
   readonly link?: MediaGalleryLink;
+  /* The named set the gallery's dropdown groups this item under (owner
+   * sketch, 2026-08-31, issue 275). Optional: an item without one falls
+   * into the component's kind-derived default set, so every existing
+   * caller renders exactly as it did. */
+  readonly set?: string;
   /* Present exactly when the item moves; see MediaGalleryVideo. */
   readonly video?: MediaGalleryVideo;
   /* This item's own intrinsic box, when it differs from the gallery's

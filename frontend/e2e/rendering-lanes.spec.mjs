@@ -73,6 +73,12 @@ const galleryStageCapPx = 448;
  * mutation that reserved only the first item's caption, or only the current
  * item's, is caught by moving onto the film rather than by the fixture
  * happening to be symmetric. */
+/* BOTH ITEMS NAME ONE EXPLICIT SET (issue 275). Without it the component's
+ * kind-derived default would split this fixture into a Drawings strip and a
+ * Videos strip, and every mixed-strip walk below — still onto film, film onto
+ * still, the caption reservation across kinds — would silently measure a
+ * one-item strip instead. A shared explicit set is exactly how an operator
+ * publishes a mixed strip, so the fixture exercises that admitted path. */
 const galleryManifestFixture = {
   schema: 'gallery/v1',
   items: [
@@ -81,6 +87,7 @@ const galleryManifestFixture = {
       key: 'lane-still',
       alt: 'A still, served by the lane',
       title: 'A still with a title',
+      set: 'Lane fixtures',
       full: { path: 'gallery/still.webp', sha256: 'a'.repeat(64), width: 3840, height: 2160 },
       preview: { path: 'gallery/still-preview.webp', sha256: 'b'.repeat(64), width: 960, height: 540 },
     },
@@ -89,6 +96,7 @@ const galleryManifestFixture = {
       key: 'lane-film',
       alt: 'A film, served by the lane',
       title: 'A film with a title',
+      set: 'Lane fixtures',
       description:
         'And a description long enough to wrap onto a second line on a phone, which is exactly what makes this the taller caption of the two at every width the matrix measures.',
       full: { path: 'gallery/film.webp', sha256: 'c'.repeat(64), width: 3840, height: 2160 },
@@ -235,17 +243,21 @@ function finePointer(page) {
   return page.evaluate(() => window.matchMedia('(hover: hover) and (pointer: fine)').matches);
 }
 
-/* Moves the strip to the item whose position label is `label`, through a
- * control every device shows: each dot is a real button whose accessible name
- * is the exact positionLabel the live region announces, so the label doubles
- * as the arrival check. The stage's prev/next pair has its own lane (paging,
- * adjacency, the touch-primary hiding); every OTHER walk only needs the strip
- * to move, and one that navigated through the pair would silently stop
- * running on the phone projects, where the pair is hidden by owner directive
- * (2026-08-29). */
+/* Moves the strip to the item whose position label is `label`, through the
+ * stage pair — a control every device shows since the 2026-08-31 sketch
+ * retired the dots and their capability gate with them (issue 275). The walk
+ * is bounded by the longest strip this suite serves, so a label nothing
+ * carries fails loudly on the arrival check rather than looping. */
 async function goToItem(page, label) {
-  await page.getByRole('radio', { name: label }).click();
-  await expect(page.locator('.gallery-count')).toHaveText(label);
+  const count = page.locator('.gallery-count');
+  const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
+  for (let presses = 0; presses < 8; presses += 1) {
+    if ((await count.textContent())?.trim() === label) {
+      break;
+    }
+    await next.click();
+  }
+  await expect(count).toHaveText(label);
 }
 
 /* WCAG 2.2 relative luminance and contrast, over whatever spelling of a color
@@ -2998,18 +3010,13 @@ test('the gallery shows exactly one loaded photograph, never eight stacked (issu
       track,
       count: counter?.textContent?.trim(),
       /* The counter is still in the tree and still says where the reader is —
-         it is the dots' aria-live voice — but it is CLIPPED out of view
-         (owner directive, 2026-08-28: "I only like the dots"). */
+         it is the position's aria-live voice — but it is CLIPPED out of view;
+         the visible mark is the bare ordinal (owner sketch 2026-08-31). */
       counterWidth: counterBox === null ? null : counterBox.width,
       counterClip: counterStyle === null ? null : counterStyle.clipPath,
-      /* The visible position mark, which is now the dots alone. */
-      dots: [...window.document.querySelectorAll('.gallery-dot')].map((dot) => {
-        const box = dot.getBoundingClientRect();
-        return {
-          checked: dot.getAttribute('aria-checked') === 'true',
-          painted: box.width > 0 && box.height > 0,
-        };
-      }),
+      ordinal: window.document.querySelector('.gallery-ordinal')?.textContent?.trim() ?? null,
+      ordinalHidden:
+        window.document.querySelector('.gallery-ordinal')?.getAttribute('aria-hidden') ?? null,
       fit: images.map((image) => getComputedStyle(image).objectFit),
       sizes: frames.map((frame) => {
         const box = frame.getBoundingClientRect();
@@ -3023,21 +3030,18 @@ test('the gallery shows exactly one loaded photograph, never eight stacked (issu
     observed.arrowsInFrame,
     'an arrow is back inside the frame, taking inline size from the work it points at'
   ).toBe(0);
-  /* The number survives as the live region — an assistive reader can be told
-     "2 / 8", and cannot usefully be told that the second of eight identical
-     dots lit up — but it is clipped rather than painted, so the visible
-     position mark is the dots and nothing else. */
+  /* The sentence survives as the live region — an assistive reader is told
+     what KIND of item a move landed on — clipped rather than painted; the
+     visible mark is the bare ordinal the owner drew ("1/n", 2026-08-31),
+     aria-hidden so a move is never announced twice. */
   expect(observed.count).toBe('Photograph 1 of 8');
   expect(
     observed.counterWidth,
-    `the counter paints ${observed.counterWidth}px of visible text beside the dots`
+    `the counter paints ${observed.counterWidth}px of visible text beside the ordinal`
   ).toBeLessThanOrEqual(1 + subPixel);
   expect(observed.counterClip, 'the counter is not clipped, only shrunk').toContain('inset');
-  expect(observed.dots.length, 'the dots must offer one position per photograph').toBe(8);
-  expect(observed.dots.filter((dot) => dot.checked).length, 'no single dot is marked current').toBe(1);
-  for (const dot of observed.dots) {
-    expect(dot.painted, 'a position dot paints no box at all').toBe(true);
-  }
+  expect(observed.ordinal, 'the visible 1/n mark is gone').toBe('1 / 8');
+  expect(observed.ordinalHidden, 'the ordinal speaks over the live region').toBe('true');
   /* The box is reserved before the byte arrives, and since 2026-08-28 it is a
      SQUARE stage rather than the feed's 16:9 media box: the owner's drawings
      are portrait scans, so a wide frame cropped them ("the art is cut off
@@ -3086,40 +3090,32 @@ test('prev/next cycle the visible photograph without leaving the page', async ({
      pointer shows it, the dots where touch hides it (owner, 2026-08-29).
      What this lane holds either way is the cycle itself — the visible
      photograph changes and comes back, with no navigation, no lightbox. */
-  const fine = await finePointer(page);
-  if (fine) {
-    await page.getByRole('button', { name: 'Next photograph' }).click();
-    await expect(page.locator('.gallery-count')).toHaveText('Photograph 2 of 8');
-  } else {
-    await goToItem(page, 'Photograph 2 of 8');
-  }
+  // The pair is on every device since the 2026-08-31 sketch (issue 275).
+  await page.getByRole('button', { name: 'Next photograph' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('Photograph 2 of 8');
   const after = await image.getAttribute('src');
   expect(after, 'next must actually change which photograph is visible').not.toBe(before);
-  if (fine) {
-    await page.getByRole('button', { name: 'Previous photograph' }).click();
-    await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 8');
-  } else {
-    await goToItem(page, 'Photograph 1 of 8');
-  }
+  await page.getByRole('button', { name: 'Previous photograph' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 8');
   const backToStart = await image.getAttribute('src');
   expect(backToStart).toBe(before);
 });
 
-/* THE STAGE PAIR (owner, 2026-08-29): "on the web browser, I lost the ability
- * to move through the images/videos, only on full screen I can do it. bring
- * back the buttons but chose to hide them by default in mobile."
+/* THE STAGE PAIR, ON EVERY DEVICE (owner sketch 2026-08-31, issue 275; the
+ * desktop half was owner 2026-08-29: "on the web browser, I lost the ability
+ * to move through the images/videos, only on full screen I can do it").
  *
- * The desktop defect this answers is structural, MEASURED on this exact
- * binary before the fix: a mouse drag across the still never became a swipe —
- * the native image drag took it after one pointermove and the browser sent
- * pointercancel — so a fine-pointer reader's only in-strip control was a 12px
- * chevron. This lane drives the repair on both device classes, keyed on the
- * same capability query the stylesheet uses, never on the project name:
- * a hover-and-fine-pointer device gets two visible 44px buttons ON the work
- * that page stills and films alike — a playing film included, with the
- * handover taken back — and a touch-primary device gets no buttons at all
- * while the dots and the swipe keep the strip fully navigable. */
-test('the stage pair pages every kind on a fine pointer, and hides where touch is primary (owner, 2026-08-29)', async ({
+ * The desktop defect that first brought the pair back is structural,
+ * MEASURED on this exact binary: a mouse drag across the still never became
+ * a swipe — the native image drag took it after one pointermove and the
+ * browser sent pointercancel — so a fine-pointer reader's only in-strip
+ * control was a 12px chevron. The 2026-08-31 sketch then retired the dot
+ * row, which had been the phone's press equivalent, so the capability gate
+ * that hid the pair from touch devices retired with it: this lane now
+ * drives the same repair on EVERY project — two visible 44px buttons ON the
+ * work that page stills and films alike, a playing film included, with the
+ * handover taken back. */
+test('the stage pair pages every kind, on every device, inside 44px targets (owner sketch 2026-08-31)', async ({
   page,
 }) => {
   await serveGalleryManifest(page);
@@ -3128,23 +3124,8 @@ test('the stage pair pages every kind on a fine pointer, and hides where touch i
   await stage.scrollIntoViewIfNeeded();
   const previous = page.locator('.gallery-nav[data-gallery-nav="previous"]');
   const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
-  // Both controls exist in the tree on every device; the CAPABILITY decides
-  // whether they are shown, so a device that matches no query loses nothing.
   await expect(previous).toHaveCount(1);
   await expect(next).toHaveCount(1);
-
-  if (!(await finePointer(page))) {
-    /* The owner's "hide them by default in mobile", measured: hidden from
-       rendering and the accessibility tree alike, and the strip is still
-       fully navigable without them — the dots here, the swipe in this file's
-       motion battery. */
-    await expect(previous).toBeHidden();
-    await expect(next).toBeHidden();
-    await goToItem(page, 'Film 2 of 2');
-    await goToItem(page, 'Photograph 1 of 2');
-    await page.unrouteAll({ behavior: 'ignoreErrors' });
-    return;
-  }
 
   /* Visible, at the touch floor, and ON the stage rather than adrift in the
      track — each control's centre sits within the stage's own span, which is
@@ -3196,6 +3177,65 @@ test('the stage pair pages every kind on a fine pointer, and hides where touch i
     await page.locator('video').evaluate((node) => node.controls),
     'the returned film still declares the controls it was handed before the reader paged away'
   ).toBe(false);
+
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+/* THE SET DROPDOWN (owner sketch 2026-08-31, issue 275): a small control
+ * above the frame choosing which set the strip shows. This lane serves the
+ * fixture UNTAGGED, so the sets under test are the kind-derived defaults —
+ * the still is a Drawing, the film a Video — which is both halves of the
+ * data-driven claim at once: entries exist exactly for what the manifest
+ * holds, and nothing (no OldSchool RuneScape, no empty promise) is listed
+ * for a set nobody has published. The owner weighed the open menu briefly
+ * overlapping the stage and took it; what that trade must never cost is
+ * layout — opening the menu grows the document by nothing. */
+test('the set dropdown filters the strip, overlays without moving the page, and lists only sets that exist (issue 275)', async ({
+  page,
+}) => {
+  await page.route('**/media/mutable/gallery/manifest.json', (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      body: JSON.stringify({
+        schema: 'gallery/v1',
+        items: galleryManifestFixture.items.map(({ set: _set, ...item }) => item),
+      }),
+    })
+  );
+  await visit(page);
+  const button = page.locator('.gallery-set-button');
+  await button.scrollIntoViewIfNeeded();
+  await expect(button).toBeVisible();
+  await expect(button).toContainText('Drawings');
+  const buttonBox = await button.boundingBox();
+  expect(buttonBox.width + subPixel, 'the set button is under the touch floor').toBeGreaterThanOrEqual(
+    touchFloorPx
+  );
+  expect(buttonBox.height + subPixel, 'the set button is under the touch floor').toBeGreaterThanOrEqual(
+    touchFloorPx
+  );
+  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 1');
+
+  const heightBefore = await page.evaluate(() => window.document.documentElement.scrollHeight);
+  await button.click();
+  const menu = page.locator('.gallery-set-menu');
+  await expect(menu).toBeVisible();
+  await expect(page.locator('.gallery-set-option')).toHaveText(['Drawings', 'Videos']);
+  const heightOpen = await page.evaluate(() => window.document.documentElement.scrollHeight);
+  expect(heightOpen, 'opening the set menu grew the document').toBe(heightBefore);
+
+  /* Choosing filters the strip — the film set holds the film — closes the
+     menu, renames the button, and hands focus back to it, so the keyboard
+     is never stranded in a control that just unmounted. */
+  await page.locator('.gallery-set-option', { hasText: 'Videos' }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(page.locator('.gallery-count')).toHaveText('Film 1 of 1');
+  await expect(button).toContainText('Videos');
+  expect(
+    await page.evaluate(() => window.document.activeElement?.className ?? ''),
+    'the choice stranded keyboard focus'
+  ).toContain('gallery-set-button');
 
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
@@ -3456,26 +3496,18 @@ test('a film mounts inline in the same block a still gets, behind one play contr
     `the still’s stage is ${still.width.toFixed(1)}x${still.height.toFixed(1)}, not the square it keeps`
   ).toBeCloseTo(still.width, 0);
 
-  /* The control names the item it will REACH (issue 241). On a fine-pointer
-     device that control is the stage pair, and pressing it by that name is
-     this lane's proof the kind-aware naming reaches a real engine; a
-     touch-primary device hides the pair (owner, 2026-08-29) and moves by the
-     dot, whose own name carries the same kind-aware noun. */
-  if (await finePointer(page)) {
-    await page.getByRole('button', { name: 'Next film' }).click();
-    await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
-  } else {
-    await goToItem(page, 'Film 2 of 2');
-  }
+  /* The control names the item it will REACH (issue 241), and it is the
+     stage pair on every device now (issue 275) — pressing it by that name is
+     this lane's proof the kind-aware naming reaches a real engine, on every
+     project in the matrix. */
+  await page.getByRole('button', { name: 'Next film' }).click();
+  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
 
   const film = await page.evaluate(() => {
     const node = window.document.querySelector('.gallery-stage');
     const box = node.getBoundingClientRect();
     const video = window.document.querySelector('video');
     const player = video === null ? null : video.getBoundingClientRect();
-    const dot = window.document.querySelector('.gallery-dot[aria-checked="true"]');
-    const dotMark = dot.querySelector('.gallery-dot-mark').getBoundingClientRect();
-    const dotBox = dot.getBoundingClientRect();
     return {
       kind: node.getAttribute('data-gallery-kind'),
       width: box.width,
@@ -3514,7 +3546,6 @@ test('a film mounts inline in the same block a still gets, behind one play contr
               width: player.width,
               height: player.height,
             },
-      dot: { mark: dotMark.width, hit: { width: dotBox.width, height: dotBox.height } },
     };
   });
 
@@ -3614,18 +3645,6 @@ test('a film mounts inline in the same block a still gets, behind one play contr
     `the film stage is ${film.width.toFixed(1)}px inside a ${frameWidth.toFixed(1)}px frame`
   ).toBeCloseTo(Math.min(frameWidth, galleryStageCapPx), 0);
 
-  /* THE MARKS SHRANK AND THE TARGETS DID NOT (owner: reduce the current-media
-     indicator). The prev/next half of that directive retired with the row
-     chevrons themselves (owner, 2026-08-29 — the pair lives on the stage now,
-     with its own lane above); what this still holds is the dots.
-     The current dot is the LARGEST of them (it is the scaled one), so bounding
-     it bounds every dot on the row. Four CSS pixels, scaled by 1.5. */
-  expect(film.dot.mark, `the position mark paints ${film.dot.mark}px; it did not shrink`).toBeLessThanOrEqual(
-    6 + subPixel
-  );
-  expect(film.dot.hit.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-  expect(film.dot.hit.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
@@ -3702,21 +3721,20 @@ test('the gallery frame is centred in its track, with no dead gutter (issue 202)
   const frame = page.locator('.gallery-image-button');
   await frame.scrollIntoViewIfNeeded();
   const observed = await page.evaluate(() => {
-    /* The gutters are measured against the FRAME's own edges since issue 241,
-       and the dots' row bounds the touch-floor half since 2026-08-29 — the
-       row chevrons this lane used to measure retired with the stage pair's
-       return, and that pair's own adjacency-to-the-work is measured in its
-       own lane rather than here. Two rendered boxes still, and an
-       expectation derived from neither the stylesheet nor a token. */
+    /* The gutters are measured against the FRAME's own edges since issue
+       241; the touch-floor half of this lane now bounds the stage pair,
+       which is the control that remains after the dot row's retirement
+       (issue 275). Two rendered boxes still, and an expectation derived
+       from neither the stylesheet nor a token. */
     const row = window.document.querySelector('.gallery-frame').getBoundingClientRect();
     const button = window.document.querySelector('.gallery-image-button').getBoundingClientRect();
-    const dots = [...window.document.querySelectorAll('.gallery-dot')].map((control) =>
+    const controls = [...window.document.querySelectorAll('.gallery-nav')].map((control) =>
       control.getBoundingClientRect()
     );
     return {
       left: button.left - row.left,
       right: row.right - button.right,
-      dots: dots.map((dot) => ({ width: dot.width, height: dot.height })),
+      controls: controls.map((control) => ({ width: control.width, height: control.height })),
     };
   });
   expect(observed.left, 'the frame sits against the start edge of its track').toBeGreaterThanOrEqual(0);
@@ -3724,13 +3742,13 @@ test('the gallery frame is centred in its track, with no dead gutter (issue 202)
     observed.left,
     `the gutters are ${observed.left.toFixed(1)}px and ${observed.right.toFixed(1)}px — the frame is off centre`
   ).toBeCloseTo(observed.right, 0);
-  /* Centring must not have been bought by shrinking the controls that remain
-     in the row: every dot still clears the touch floor at every viewport this
-     lane runs. */
-  expect(observed.dots.length, 'the gallery lost its position dots').toBe(8);
-  for (const dot of observed.dots) {
-    expect(dot.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-    expect(dot.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+  /* Centring must not have been bought by shrinking the controls that
+     remain: both stage-pair buttons still clear the touch floor at every
+     viewport this lane runs. */
+  expect(observed.controls.length, 'the gallery lost its stage pair').toBe(2);
+  for (const control of observed.controls) {
+    expect(control.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+    expect(control.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
   }
 });
 
@@ -4041,48 +4059,50 @@ test('the gallery frame reserves the SAME box with the photograph refused as wit
   ).toEqual(served);
 });
 
-/* ONE ROW OF DOTS, AT EVERY WIDTH THIS SITE SUPPORTS (issue 241).
- *
- * MEASURED on 0.1.54: nine 44px targets are 396px of controls, so the row
- * wrapped to two lines at 320, 360, 390 and 412, and to three at 250px. The
- * floor that may not move is the target; the axis the surplus goes to is what
- * changed, and this page's standing answer for wide content is that it scrolls
- * inside its own container rather than taking the document sideways. Both
- * halves are measured: one row, and no page-level horizontal scroll. */
-test('the position marks stay one row at every phone width, at full size (issue 241)', async ({ page }) => {
+/* THE POSITION ROW, AT EVERY WIDTH THIS SITE SUPPORTS (issue 275, replacing
+ * the retired dot row's lane). The visible mark is the bare ordinal the
+ * owner drew ("1/n"), so the row that used to carry 396px of controls now
+ * carries one short paragraph — measured painted, one line, aria-hidden
+ * beside the clipped live sentence, and never a page-level horizontal
+ * scroll. The controls the floor bounds are the stage pair, in their own
+ * lane. */
+test('the position ordinal paints one short line at every phone width (issue 275)', async ({ page }) => {
   await visit(page);
   for (const width of [250, ...phoneWidths]) {
     await page.setViewportSize({ width, height: 800 });
     await settled(page);
     const row = await page.evaluate(() => {
-      const dots = [...window.document.querySelectorAll('.gallery-dot')];
-      const strip = window.document.querySelector('.gallery-dots');
+      const ordinal = window.document.querySelector('.gallery-ordinal');
+      const box = ordinal === null ? null : ordinal.getBoundingClientRect();
       return {
-        count: dots.length,
-        rows: new Set(dots.map((dot) => Math.round(dot.getBoundingClientRect().top))).size,
-        smallest: Math.min(...dots.map((dot) => dot.getBoundingClientRect().width)),
-        shortest: Math.min(...dots.map((dot) => dot.getBoundingClientRect().height)),
-        scrolls: strip.scrollWidth > strip.clientWidth,
-        overflow: getComputedStyle(strip).overflowX,
+        text: ordinal?.textContent?.trim() ?? null,
+        hidden: ordinal?.getAttribute('aria-hidden') ?? null,
+        painted: box !== null && box.width > 0 && box.height > 0,
+        /* Counted as LINE BOXES, not as height over line-height: the ordinal
+           carries no explicit line-height, so its computed value is the word
+           `normal`, which parses to NaN and would fail this lane on every
+           engine while the paragraph renders perfectly. A Range over the text
+           yields one client rect per rendered line in all five engines. */
+        lines:
+          ordinal === null
+            ? null
+            : (() => {
+                const range = window.document.createRange();
+                range.selectNodeContents(ordinal);
+                return [...range.getClientRects()].filter((rect) => rect.width > 0).length;
+              })(),
         documentScrolls:
           window.document.documentElement.scrollWidth > window.document.documentElement.clientWidth,
       };
     });
-    expect(row.count, 'the gallery drew no position marks to measure').toBeGreaterThan(1);
-    expect(row.rows, `the marks wrapped onto ${row.rows} rows at ${width}px`).toBe(1);
-    expect(
-      row.smallest + subPixel,
-      `a mark is ${row.smallest.toFixed(1)}px wide at ${width}px; the row was made to fit by shrinking its targets`
-    ).toBeGreaterThanOrEqual(touchFloorPx);
-    expect(row.shortest + subPixel).toBeGreaterThanOrEqual(touchFloorPx);
+    expect(row.text, `the ordinal is gone at ${width}px`).toBe('1 / 8');
+    expect(row.hidden, 'the ordinal speaks over the live region').toBe('true');
+    expect(row.painted, `the ordinal paints nothing at ${width}px`).toBe(true);
+    expect(row.lines, `the ordinal wrapped at ${width}px`).toBe(1);
     expect(
       row.documentScrolls,
-      `the page itself scrolls sideways at ${width}px; the row took the document with it`
+      `the page itself scrolls sideways at ${width}px; the position row took the document with it`
     ).toBe(false);
-    // And where the surplus actually went, when there is one.
-    if (row.scrolls) {
-      expect(row.overflow, `the marks overflow at ${width}px with nowhere to scroll`).toBe('auto');
-    }
   }
 });
 
@@ -4385,10 +4405,11 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
      second component: what a visitor's browser actually put on the screen. */
   await visit(page);
 
-  const codingProjects = page
-    .locator('#projects .page-subsection')
-    .filter({ has: page.locator('h3.subsection-title', { hasText: 'Coding Projects' }) });
-  await expect(codingProjects, 'the Coding Projects subsection is not on the page at all').toHaveCount(1);
+  /* Anchored on the feed itself, not on a subsection heading: the block
+     declares no heading since the owner's clean-Projects ruling (2026-08-31,
+     issue 275 wave), so there is no wrapper and no h3 to filter by. */
+  const codingProjects = page.locator('#projects ol.entry-log');
+  await expect(codingProjects, 'the Coding Projects feed is not on the page at all').toHaveCount(1);
 
   const text = await codingProjects.innerText();
 
@@ -4406,34 +4427,31 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
   );
   expect(text, 'the rendered DOM still shows the no-fetch caption').not.toMatch(/fetches nothing/);
 
-  /* Scoped correctly: this proves the CODING PROJECTS half never shows the
-     caption, not merely that the phrase is absent from the whole page (a
-     weaker claim that would tell this pin nothing about THIS subsection
-     specifically). */
-  await expect(codingProjects.locator('h3.subsection-title')).toHaveText('Coding Projects');
+  /* The clean-Projects ruling, measured: the one subsection heading left
+     under #projects is the Media block's. A revived 'Coding Projects' h3
+     would double the count and name itself in the failure. */
+  await expect(page.locator('#projects h3.subsection-title')).toHaveText(['Media']);
 });
 
-/* Every repo card's counter columns, measured (issue 188; owner 2026-08-29:
- * "the columns of information are not aligned, even if the information
- * presented is different it should not differ in the layout, makes it look
- * uneven"). Issue 188's determinism claim survives strengthened — no card's
- * content decides any placement — and the owner's alignment ruling adds the
- * cross-card half: the same five stat columns start at the IDENTICAL x on
- * every card at a wide viewport, whatever figures or words each cell holds
- * ("105" against "9", a dash against a zero, "today" against "27 days ago"),
- * so the panel reads as one table drawn over seven cards. At every phone
- * width the counters are a single-column ledger, one counter per line, every
- * line starting at the same x on every card — stacked and aligned, never a
- * content-driven wrap. Both device classes are measured in this one lane, in
- * every engine, by what the engine painted. */
-test('the repo cards’ stat columns align across cards at desktop, and stack as one ledger on a phone (issue 188; owner 2026-08-29)', async ({
+/* Every repo card's counter cluster, measured (issue 188; owner sketch
+ * 2026-08-31, issue 275). Issue 188's determinism claim survives the redraw —
+ * no card's content decides any placement — and the 2026-08-29 cross-card
+ * alignment ruling carries into the new shape: the cluster's two columns
+ * start at the IDENTICAL x on every card, whatever figures each cell holds,
+ * because both tracks are floored by one token and the cluster is anchored
+ * to the card's right edge. The sketch's own claims are measured here in
+ * every engine, at phone and desktop widths alike: the cluster sits at the
+ * TITLE'S level (not on a line below it), it ends at the card's right edge
+ * (no-dead-space rule), the five cells read as two columns — three rows of
+ * 2, 2 and 1 — and the title never runs under the cluster. */
+test('the repo cards’ counters are one right-anchored cluster at the title’s level, aligned across cards (issue 188; owner sketch 2026-08-31)', async ({
   page,
 }) => {
   await visit(page);
 
-  const codingProjects = page
-    .locator('#projects .page-subsection')
-    .filter({ has: page.locator('h3.subsection-title', { hasText: 'Coding Projects' }) });
+  /* Anchored on the feed itself — the block carries no subsection heading
+     since the clean-Projects ruling (2026-08-31). */
+  const codingProjects = page.locator('#projects ol.entry-log');
   const heads = codingProjects.locator('.entry-head');
   const cardCount = await heads.count();
   expect(cardCount, 'the seven repo cards are not all on the page').toBe(7);
@@ -4444,8 +4462,10 @@ test('the repo cards’ stat columns align across cards at desktop, and stack as
     const rows = [];
     for (let index = 0; index < cardCount; index += 1) {
       const head = heads.nth(index);
+      const headBox = await head.boundingBox();
       const heading = await head.locator('.entry-heading').boundingBox();
       const counts = await head.locator('.entry-counts').boundingBox();
+      expect(headBox, `card ${index}'s head never rendered a box`).not.toBeNull();
       expect(heading, `card ${index}'s title never rendered a box`).not.toBeNull();
       expect(counts, `card ${index}'s counters never rendered a box`).not.toBeNull();
       const cells = [];
@@ -4453,91 +4473,72 @@ test('the repo cards’ stat columns align across cards at desktop, and stack as
       for (let cell = 0; cell < cellCount; cell += 1) {
         cells.push(await head.locator('.entry-count').nth(cell).boundingBox());
       }
-      rows.push({ heading, counts, cells, inline: overlapsVertically(heading, counts) });
+      rows.push({ headBox, heading, counts, cells, inline: overlapsVertically(heading, counts) });
     }
     return rows;
   };
 
-  /* THE ONE SHAPE, at every width this lane visits: the counters hold their
-     own line under the title on every card — that is what makes the columns
-     free to align to the card rather than to each title's end. */
-  const assertStacked = (rows, width) => {
-    for (const [index, row] of rows.entries()) {
-      expect(
-        row.inline,
-        `at ${width}px, card ${index}'s counters sit beside its title instead of below it`
-      ).toBe(false);
-      expect(
-        row.counts.y,
-        `at ${width}px, card ${index}'s counters render above its title`
-      ).toBeGreaterThanOrEqual(row.heading.y + row.heading.height - 1);
-      expect(row.cells.length, `card ${index} lost a stat column`).toBe(5);
-    }
-  };
-
-  // Narrow: 320, 375 and 412 are the owner's named widths for issue 188 —
-  // 375 is an iPhone SE/8 report the shared phoneWidths list does not
-  // otherwise cover, so it is added here rather than reused from that list.
-  for (const width of [320, 375, 412]) {
+  // 320, 375 and 412 are the owner's named phone widths for issue 188; 1280
+  // and 1440 are the desktop pair, 1440 being where the owner reviews the
+  // no-dead-space rule. ONE shape at every one of them is the point of the
+  // 2026-08-31 sketch, so the same assertions run at all five.
+  for (const width of [320, 375, 412, 1280, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     const rows = await measure();
-    assertStacked(rows, width);
     for (const [index, row] of rows.entries()) {
-      /* The LEDGER: one counter per line — each cell strictly below the one
-         before it — and every line starting at the same x, on this card and
-         on every other card, so the stack reads as intentional alignment
-         rather than as a wrap that happened to land somewhere. */
-      for (let cell = 1; cell < row.cells.length; cell += 1) {
-        expect(
-          row.cells[cell].y,
-          `at ${width}px, card ${index}'s counter ${cell} shares a line with its neighbour`
-        ).toBeGreaterThanOrEqual(row.cells[cell - 1].y + row.cells[cell - 1].height - 1);
+      expect(row.cells.length, `card ${index} lost a stat cell`).toBe(5);
+      /* AT THE TITLE'S LEVEL: the cluster's box overlaps the heading's
+         vertically — it sits beside the title, not on a line below it. */
+      expect(
+        row.inline,
+        `at ${width}px, card ${index}'s cluster dropped below its title`
+      ).toBe(true);
+      /* RIGHT-ANCHORED: the cluster ends at the head's own right edge, which
+         is the card's content edge — the no-dead-space rule as measured. */
+      const headEnd = row.headBox.x + row.headBox.width;
+      expect(
+        row.counts.x + row.counts.width,
+        `at ${width}px, card ${index}'s cluster ends ${(headEnd - row.counts.x - row.counts.width).toFixed(1)}px short of the card's right edge`
+      ).toBeGreaterThanOrEqual(headEnd - 8);
+      /* AND THE TITLE NEVER RUNS UNDER IT: the heading's column ends before
+         the cluster's begins, however long the repo name is. */
+      expect(
+        row.heading.x + row.heading.width,
+        `at ${width}px, card ${index}'s title runs under its cluster`
+      ).toBeLessThanOrEqual(row.counts.x + 1);
+      /* TWO COLUMNS, THREE ROWS (2, 2, 1): cells 0/2/4 share the first
+         column's x, cells 1/3 the second's; 0|1 and 2|3 pair on their rows,
+         and 4 sits alone below. */
+      for (const cell of [2, 4]) {
         expect(
           row.cells[cell].x,
-          `at ${width}px, card ${index}'s counter ${cell} does not start where its siblings do`
+          `at ${width}px, card ${index}'s cell ${cell} left the first column`
         ).toBeCloseTo(row.cells[0].x, 0);
       }
       expect(
-        row.cells[0].x,
-        `at ${width}px, card ${index}'s ledger starts at a different x than card 0's`
-      ).toBeCloseTo(rows[0].cells[0].x, 0);
-    }
-  }
-
-  /* Wide: ordinary desktop widths above --breakpoint-entry-columns,
-     including ~1440 where the owner reviews (no-dead-space rule). PER
-     COLUMN, the x position is identical across all seven cards — the
-     owner's sentence as arithmetic — and the five columns span the card's
-     own row from its start edge to its end edge, so the table fills the
-     card instead of stopping short of it. */
-  for (const width of [1280, 1440]) {
-    await page.setViewportSize({ width, height: 900 });
-    const rows = await measure();
-    assertStacked(rows, width);
-    for (let column = 0; column < 5; column += 1) {
-      const first = rows[0].cells[column].x;
-      for (const [index, row] of rows.entries()) {
+        row.cells[3].x,
+        `at ${width}px, card ${index}'s cell 3 left the second column`
+      ).toBeCloseTo(row.cells[1].x, 0);
+      for (const [left, right] of [[0, 1], [2, 3]]) {
         expect(
-          row.cells[column].x,
-          `at ${width}px, column ${column} starts at ${row.cells[column].x.toFixed(1)}px on card ${index} against ${first.toFixed(1)}px on card 0`
-        ).toBeCloseTo(first, 0);
-        expect(
-          overlapsVertically(row.cells[column], row.cells[0]),
-          `at ${width}px, card ${index}'s column ${column} wrapped off the counter line`
+          overlapsVertically(row.cells[left], row.cells[right]),
+          `at ${width}px, card ${index}'s cells ${left} and ${right} no longer share a row`
         ).toBe(true);
       }
-    }
-    for (const [index, row] of rows.entries()) {
+      expect(
+        row.cells[4].y,
+        `at ${width}px, card ${index}'s last cell shares a row it should sit below`
+      ).toBeGreaterThanOrEqual(row.cells[2].y + row.cells[2].height - 1);
+      /* CROSS-CARD (owner 2026-08-29, carried into the sketch): each column
+         lands at the same x on every card. */
       expect(
         row.cells[0].x,
-        `at ${width}px, card ${index}'s first column does not start at the row's own start edge`
-      ).toBeCloseTo(row.counts.x, 0);
-      const rowEnd = row.counts.x + row.counts.width;
-      const lastCell = row.cells[4];
+        `at ${width}px, card ${index}'s first column is at a different x than card 0's`
+      ).toBeCloseTo(rows[0].cells[0].x, 0);
       expect(
-        lastCell.x + lastCell.width,
-        `at ${width}px, card ${index}'s last column ends ${(rowEnd - lastCell.x - lastCell.width).toFixed(1)}px short of the card's right edge`
-      ).toBeGreaterThanOrEqual(rowEnd - 8);
+        row.cells[1].x,
+        `at ${width}px, card ${index}'s second column is at a different x than card 0's`
+      ).toBeCloseTo(rows[0].cells[1].x, 0);
     }
   }
 });
@@ -6676,6 +6677,15 @@ test('the keyboard resizes the column, and a double click puts it back', async (
 
 test('a stored width is on the page before it paints, and moves nothing', async ({ page }) => {
   const context = page.context();
+  /* Font-neutral on purpose: this lane compares the first-frame heading box
+     across TWO loads of the same context, and the self-hosted typeface loads
+     `font-display: swap` — whether it lands before the first frame is a race
+     the second load wins more often (warm cache), which measured as a 2px
+     heading-width delta in Firefox and failed this pin against a page that
+     shifts nothing. What this lane measures is the stored COLUMN width, not
+     typography, so both loads run on identical fallback metrics; the
+     typeface has its own pins in tests/sections.test.mjs. */
+  await context.route('**/*.woff2', (route) => route.abort());
   const shipped = await loadAndObserve(context, null);
   const chosen = await loadAndObserve(context, '40');
 
@@ -8320,114 +8330,47 @@ test('a dragged gallery writes its offset once a frame, not once an event (issue
   expect(Math.abs(resting), 'the coalesced drag left the surface displaced').toBeLessThan(1);
 });
 
-test('the gallery is reachable without a gesture, and says where it is (issue 219)', async ({
+test('the gallery is reachable without a gesture, and says where it is (issue 219; issue 275)', async ({
   page,
 }) => {
   await visit(page);
   const counter = page.locator('.gallery-count').first();
-  const dots = page.locator('.gallery-dot');
-  const total = await dots.count();
-  expect(total, 'the gallery offers no visible position affordance').toBeGreaterThan(1);
+  const ordinal = page.locator('.gallery-ordinal').first();
+  const previous = page.locator('.gallery-nav[data-gallery-nav="previous"]');
+  const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
 
-  // The position marks are real controls, at the touch floor on BOTH axes.
-  for (let index = 0; index < total; index += 1) {
-    const box = await dots.nth(index).boundingBox();
-    expect(box.width + subPixel, `position dot ${index} is under the touch floor`).toBeGreaterThanOrEqual(
+  /* The press equivalent of the swipe is the stage pair, on EVERY device
+     since the 2026-08-31 sketch retired the dot row (issue 275) — real
+     buttons, visible, at the touch floor on both axes. */
+  for (const control of [previous, next]) {
+    await expect(control).toBeVisible();
+    const box = await control.boundingBox();
+    expect(box.width + subPixel, 'a stage control is under the touch floor').toBeGreaterThanOrEqual(
       touchFloorPx,
     );
-    expect(box.height + subPixel, `position dot ${index} is under the touch floor`).toBeGreaterThanOrEqual(
+    expect(box.height + subPixel, 'a stage control is under the touch floor').toBeGreaterThanOrEqual(
       touchFloorPx,
     );
   }
 
-  // The current position is never colour alone: the selected mark is also
-  // LARGER, which is the dataviz floor applied to a control.
-  const marks = await page.evaluate(() =>
-    [...window.document.querySelectorAll('.gallery-dot')].map((dot) => ({
-      selected: dot.getAttribute('aria-checked') === 'true',
-      width: dot.querySelector('.gallery-dot-mark').getBoundingClientRect().width,
-    })),
-  );
-  const current = marks.find((mark) => mark.selected);
-  const other = marks.find((mark) => !mark.selected);
-  expect(current, 'no position mark is marked current').toBeTruthy();
-  expect(
-    current.width,
-    'the current position is distinguished by colour alone',
-  ).toBeGreaterThan(other.width);
-
-  // Pressing one navigates — the POINTER equivalent, exercised.
+  /* Pressing one navigates — the POINTER equivalent, exercised — and the
+     visible ordinal moves in step with the clipped live sentence, so "says
+     where it is" holds on both channels at once. */
   const before = (await counter.innerText()).trim();
-  await dots.nth(total - 1).click();
+  await next.click();
   await page.waitForTimeout(150);
-  expect((await counter.innerText()).trim(), 'a position dot did not navigate').not.toBe(before);
+  expect((await counter.innerText()).trim(), 'the stage pair did not navigate').not.toBe(before);
+  await expect(ordinal).toHaveText('2 / 8');
 
-  /* AND THE KEYBOARD ONE, WHICH A CLICK CANNOT PROVE (issue 219 review round
-     2, finding 3). The click above bypasses `tabindex="-1"` entirely, so it
-     passed against a widget where seven of eight dots were unreachable by
-     keyboard and the eighth's handler was `index = at` with `at === index` —
-     a no-op. A keyboard affordance is proven with keyboard events or it is
-     not proven.
-     The shape is a composite widget's: ONE tab stop, the arrows moving the
-     choice and the focus together, Home and End at the ends. Each half is
-     measured on the counter AND on where focus landed, because moving the
-     selection without moving focus strands it on a control that has just
-     become untabbable. */
-  const roles = await page.evaluate(() => ({
-    group: window.document.querySelector('.gallery-dots').getAttribute('role'),
-    option: window.document.querySelector('.gallery-dot').getAttribute('role'),
-    tabbable: [...window.document.querySelectorAll('.gallery-dot')].filter(
-      (dot) => dot.getAttribute('tabindex') === '0',
-    ).length,
-  }));
-  expect(roles.group, 'the dots are not announced as a single choice').toBe('radiogroup');
-  expect(roles.option).toBe('radio');
-  expect(roles.tabbable, 'a composite widget has exactly one tab stop').toBe(1);
-
-  const dotState = () =>
-    page.evaluate(() => {
-      const all = [...window.document.querySelectorAll('.gallery-dot')];
-      return {
-        counter: window.document.querySelector('.gallery-count').innerText.trim(),
-        checked: all.findIndex((dot) => dot.getAttribute('aria-checked') === 'true'),
-        focused: all.indexOf(window.document.activeElement),
-        tabbable: all.findIndex((dot) => dot.getAttribute('tabindex') === '0'),
-      };
-    });
-
-  // Enter the group at its one tab stop, exactly as a keyboard reader does.
-  await page.evaluate(() => {
-    window.document.querySelector('.gallery-dot[tabindex="0"]').focus();
-  });
-  const entered = await dotState();
-  expect(entered.focused, 'the one tab stop is not the checked dot').toBe(entered.checked);
-
-  for (const [key, expected] of [
-    ['ArrowRight', (at) => (at + 1) % total],
-    ['ArrowDown', (at) => (at + 1) % total],
-    ['ArrowLeft', (at) => (at - 1 + total) % total],
-    ['ArrowUp', (at) => (at - 1 + total) % total],
-    ['End', () => total - 1],
-    ['Home', () => 0],
-  ]) {
-    const from = await dotState();
-    await page.keyboard.press(key);
-    await page.waitForTimeout(120);
-    const to = await dotState();
-    const want = expected(from.checked);
-    expect(to.checked, `${key} did not move the choice`).toBe(want);
-    expect(to.focused, `${key} moved the choice but left focus behind`).toBe(want);
-    expect(to.tabbable, `${key} left the tab stop on a dot that is no longer current`).toBe(want);
-    /* The live region names the KIND as well as the position since issue 241
-       — "Photograph 3 of 8" rather than "3 / 8" — because a bare ratio was the
-       one announcement a reader got on a move and it said nothing about what
-       they had landed on. The vendored set this lane drives is all stills, so
-       the noun is stated here rather than derived, which is what keeps the
-       assertion able to fail. */
-    expect(to.counter, `${key} moved the dot but not the photograph`).toBe(
-      `Photograph ${want + 1} of ${total}`
-    );
-  }
+  /* AND THE KEYBOARD ONE, WHICH A CLICK CANNOT PROVE (issue 219 review
+     round 2, finding 3): the pair are ordinary buttons — tab stops with no
+     roving apparatus to get wrong — so a real Enter on a focused control
+     must page exactly as a press does. */
+  await next.focus();
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(150);
+  await expect(ordinal).toHaveText('3 / 8');
+  await expect(counter).toHaveText('Photograph 3 of 8');
 
   // And so do the arrow keys on the frame itself.
   const frame = page.locator('.gallery-image-button').first();
@@ -8558,13 +8501,16 @@ test('a widget’s arrows do not swallow the browser’s own chords (issue 219)'
       return event.defaultPrevented;
     };
     /* Every composite widget on this page that owns arrow keys. The token
-       panel's display pills were the third until the owner deleted the menu
-       on 2026-08-28; the two that remain are the ones a reader can still
-       reach, and the sweep asserts below that each is genuinely present, so
-       losing another one fails loudly rather than shrinking in silence. */
+       panel's display pills left when the owner deleted the menu on
+       2026-08-28, and the gallery's dot radiogroup left with the dots on
+       2026-08-31 (issue 275) — the gallery's set-menu listbox is its
+       successor, but it mounts only while open on a multi-set strip, so
+       this always-rendered sweep cannot reach it and its chord discipline
+       is the component's own keydown guard (isChord, pinned in source).
+       What remains reachable here is asserted genuinely present below, so
+       losing it fails loudly rather than shrinking in silence. */
     const surfaces = {
       strip: window.document.querySelector('.grid-strip[role="listbox"]'),
-      dots: window.document.querySelector('.gallery-dots[role="radiogroup"]'),
     };
     const readings = {};
     for (const [name, node] of Object.entries(surfaces)) {

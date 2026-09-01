@@ -78,6 +78,7 @@ function toGalleryItem(item: GalleryItem): MediaGalleryItem {
     title?: string;
     description?: string;
     link?: { href: string; label: string };
+    set?: string;
     video?: { posterSrc: string; sources: readonly { src: string; type: string; media?: string }[] };
     previewWidth?: number;
   } = {
@@ -101,6 +102,9 @@ function toGalleryItem(item: GalleryItem): MediaGalleryItem {
   }
   if (item.link !== undefined) {
     rendered.link = item.link;
+  }
+  if (item.set !== undefined) {
+    rendered.set = item.set;
   }
   if (item.kind === 'video' && item.sources !== undefined) {
     /* Positional, and zipped rather than recomputed: which viewport each rung

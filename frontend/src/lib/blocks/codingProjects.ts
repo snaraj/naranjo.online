@@ -19,10 +19,14 @@ import { panelBlock, type PageBlock } from '../blocks.ts';
 import EntryLog from '../components/EntryLog.svelte';
 import { codingProjectsPanelId, codingProjectsProps } from '../projects.ts';
 
+/* No block heading (owner ruling, 2026-08-31, issue 275 wave: "remove coding
+ * projects and just make it a clean Projects"). The cards sit directly under
+ * the section's own "Projects" title; a "Coding Projects" h3 one line below
+ * it said the same word twice. The panel ENVELOPE still carries its own
+ * title — that is server-side metadata, not this page's outline. */
 export const codingProjects: PageBlock = panelBlock(
   'coding-projects',
   EntryLog,
   codingProjectsPanelId,
-  (envelope) => codingProjectsProps(envelope),
-  { heading: 'Coding Projects' }
+  (envelope) => codingProjectsProps(envelope)
 );

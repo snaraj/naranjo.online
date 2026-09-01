@@ -299,36 +299,25 @@
     gap: var(--feed-gap);
   }
 
-  /* Deterministic by viewport, never by content (issue 188), and since the
-     owner's 2026-08-29 alignment ruling ("even if the information presented
-     is different it should not differ in the layout") ONE shape at every
-     width: the title on its own line, the counters on the line below. The
-     inline title/counters row this rule used to flip to above
-     --breakpoint-card-meta is gone, because it is what made cross-card
-     alignment impossible — each card's counters started wherever its own
-     title ended, so the same five columns landed at seven different x
-     positions (MEASURED at 1440px: first cells at 474..509px across the
-     seven cards, one card's fifth cell wrapped to a second line). With the
-     counters on their own full-width line, the columns below can align
-     card to card, and no title's length enters any placement decision. */
+  /* Deterministic by viewport, never by content (issue 188), and still ONE
+     shape at every width — but the shape changed by owner sketch (2026-08-31,
+     issue 275): the title sits top-left and the counters are a compact
+     icon-and-figure cluster pinned to the card's top-right, at the title's
+     own level. This SUPERSEDES the 2026-08-29 full-width-line ruling the
+     previous shape implemented ("the counters hold their own line") — same
+     owner, later ruling, drawn rather than described. What survives from
+     both rulings is the property they were about: no card's CONTENT decides
+     any placement. The title column is `minmax(0, 1fr)` so a long repo name
+     shrinks and wraps inside its own column instead of pushing the cluster,
+     and the cluster's tracks are floored by one token rather than measured
+     from any figure (see .entry-counts), so the same two columns land at the
+     same place on every card. The old container query and its size
+     containment left with the full-width table they existed to protect. */
   .entry-head {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
     gap: var(--card-meta-gap);
-    /* The head is the counters' SIZE CONTAINER, and this declaration does
-       two load-bearing jobs at once. It lets the table below switch on the
-       width the card actually has — the reader can narrow the reading
-       column far under any viewport breakpoint (ColumnHandles), and a
-       viewport query rendered the 788px table into a 288px card — and its
-       inline-size containment is what stops the five fixed tracks
-       propagating as min-content into the page column itself: MEASURED
-       before it, a 20rem column was forced out to 806px and the document
-       scrolled sideways in every engine, WebKit surviving every other
-       cure. An engine without container queries never matches the block
-       below and keeps the ledger, which is degradation to less, not to
-       broken. */
-    container-type: inline-size;
   }
 
   .entry-heading {
@@ -397,68 +386,35 @@
     letter-spacing: var(--card-title-tracking);
   }
 
-  /* THE COUNTERS ARE A TABLE THAT HAPPENS TO SIT ON SEVEN CARDS (owner,
-     2026-08-29: "the columns of information are not aligned... it should not
-     differ in the layout, makes it look uneven"). Cards are separate DOM
-     containers, so cross-card alignment has to be deliberate: every card's
-     row is a grid over the SAME tracks — --entry-count-columns, one token
-     declared in styles.css — stretched to the card's full width, so column N
-     starts at the identical x on every card whatever figure it holds.
+  /* THE CLUSTER (owner sketch, 2026-08-31, issue 275: "icons + number", a
+     concise element at the card's top-right, on the title's level). Two
+     columns of icon-and-figure cells, anchored to the card's right edge —
+     which is where the no-dead-space rule wants the row to end — with the
+     odd fifth cell taking the last row alone.
 
-     EQUAL FRACTIONS since issue 268, and that is a simplification the terse
-     counters earned. The five tracks used to be five hand-measured widths,
-     each sized from the widest realistic content of its own column with every
-     provenance mark showing; with the words and the mark gone from the visible
-     row there is no content left for a track to be sized FROM, so the honest
-     answer is the one that depends on no content at all. `repeat(5, minmax(0,
-     1fr))` aligns every card by construction — five equal shares of whatever
-     width the card has — and it is also what makes the live age counter
-     zero-CLS: a figure that grows from "9m" to "10m" changes no track, because
-     no track is measured from a figure. The old `justify-content:
-     space-between` went with them: it distributed the surplus of fixed tracks,
-     and equal fractions leave no surplus to distribute.
-
-     Below --breakpoint-entry-columns the tracks do not fit, and the fallback
-     is the same answer stacked cards already give: a single-column ledger,
-     one counter per line, every line starting at the card's edge — aligned
-     across cards by construction, no wrap deciding anything. The one row
-     that outgrows a narrowed reading column scrolls inside itself (the
-     page's standing rule for wide content) rather than bending the card. */
+     CROSS-CARD ALIGNMENT SURVIVES THE MOVE (owner, 2026-08-29): both tracks
+     are floored by ONE token, --entry-count-min, and every figure this feed
+     renders today fits inside that floor (the widest is 45.34px MEASURED,
+     against a 3.25rem = 52px floor), so the two columns land at the same x
+     on every card — anchored right, equal floors, nothing measured from a
+     figure. The floor is also what keeps the live age counter zero-CLS:
+     "9m" becoming "10m" grows nothing past it, so no track moves. The
+     `auto` half of the minmax is the enlarged-base-font valve — a reader
+     who doubles their text widens the track on that card rather than
+     clipping the figure. */
   .entry-counts {
     margin: 0;
     padding: 0;
     list-style: none;
-    /* A PERCENTAGE, and it is the load-bearing declaration (MEASURED): a
-       grid's min-content contribution is its tracks', so a plain stretch
-       forced the whole page column out past its own token whenever the reader
-       narrowed it below the table — the document scrolled sideways by the
-       difference (1286 against a 1280 viewport at a 20rem column token, when
-       the tracks were five fixed widths totalling 788px). A percentage size
-       contributes ZERO to intrinsic sizing, so the column keeps whatever width
-       its own token says and the row scrolls inside itself instead — the same
-       trap the gallery's dot row records in MediaGallery.svelte, met on the
-       other axis. It stays load-bearing under the 1fr tracks: `minmax(0, 1fr)`
-       floors each track at zero, and a zero-minimum track set is exactly the
-       shape a reader can narrow into nothing. */
-    inline-size: 100%;
     display: grid;
+    grid-template-columns: repeat(2, minmax(var(--entry-count-min), auto));
     gap: var(--card-meta-gap);
-  }
-
-  @container (min-width: 28rem) {
-    .entry-counts {
-      grid-template-columns: var(--entry-count-columns, repeat(5, minmax(0, 1fr)));
-      overflow-x: auto;
-    }
   }
 
   /* One counter: the glyph, the figure, and the shared detail hanging off the
      whole cell. `display: flex` rather than `inline-flex` so the cell IS its
-     track — the last column then ends at the card's own right edge, which is
-     the owner's no-dead-space rule as the browser lanes measure it (a
-     shrink-to-fit cell would end wherever its two digits did, most of a track
-     short). The visible content still sits at the track's start, so the five
-     columns line up card to card exactly as before.
+     track — the second column's cells all end together at the card's right
+     edge instead of wherever each cell's own digits do.
 
      `flex-wrap: wrap` is the enlarged-base-font safety valve: a glyph and a
      figure fit one line at every shipped size, but a reader who doubles their

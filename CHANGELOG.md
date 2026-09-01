@@ -7,6 +7,59 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.68] - 2026-08-31
+
+### Added
+
+- The site now sets itself in JetBrains Mono, the owner's terminal face —
+  self-hosted as four variable WOFF2 subsets (upright and italic, latin and
+  latin-ext) under the SIL Open Font License, with the license text beside
+  the files. One variable file per style carries every weight from thin to
+  extra-bold, so headings, emphasis, and the selected-option mark all draw
+  from the same four files, and the system monospace stack stands behind
+  them unchanged as the fallback.
+- A gallery item may carry a `set` label. `gallery/v1` stays a closed
+  shape — the key is named by the contract, at most 40 characters, and an
+  unreadable value refuses that item. The Media block groups its items by
+  set: an untagged image is a Drawing and an untagged film a Video, so
+  every manifest written before the field existed renders exactly as it
+  did, and a small dropdown above the stage appears only when the items
+  span more than one set. Publishing a new set is one field on the items
+  that belong to it, with no code, CI, or release involved.
+
+### Changed
+
+- Each Coding Projects card follows the owner's sketch: the repository name
+  and description keep the left edge, and the five counters sit as a
+  compact two-column cluster in the card's top-right, level with the title
+  — stars, freshness, commits, open issues, open pulls. The full-width
+  five-column stat table and the two tokens that switched its column count
+  are retired.
+- The Projects section reads clean (owner: "remove coding projects and just
+  make it a clean Projects"): the redundant "Coding Projects" subheading one
+  line under the section's own title is gone, and the repo cards sit
+  directly under "Projects". The Media block keeps its subheading, which now
+  marks the section's one genuine subdivision.
+- The Media stage's position reads as a numeric "2 / 8" ordinal below the
+  stage instead of a row of dots, and the previous/next arrows show on
+  every device rather than only where a pointer hovers. The screen
+  reader's fuller "Photograph 2 of 8" announcement stays as it was.
+- The usage trackers' window rows read as glyph and figure — an
+  into-the-tray arrow for input, out-of-the-tray for output, drawn in-page
+  like every other glyph on the site — instead of the word run
+  "in … out …". The words remain in the accessible tree, so a screen
+  reader loses nothing.
+
+### Fixed
+
+- In light mode the Media stage no longer letterboxes a film between heavy
+  near-black bands (owner: "really ugly black lines in light mode"). The
+  stage ground now branches by reading mode: the light page projects onto
+  the same white anthropic.com opens on — the ivory-light swatch of its
+  compiled CSS, ruled by the owner — while the three dark reading modes
+  keep the shared near-black projection ground. The reserved box, its
+  fixed size, and the visible in-flight-poster guarantee are untouched.
+
 ## [0.1.67] - 2026-08-31
 
 ### Fixed

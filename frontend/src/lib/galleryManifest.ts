@@ -73,6 +73,7 @@ export const maxGalleryTextLengths = {
   alt: 500,
   title: 160,
   description: 800,
+  set: 40,
   label: 160,
   href: 512
 } as const;
@@ -151,6 +152,12 @@ export interface GalleryItem {
   readonly title?: string;
   readonly description?: string;
   readonly link?: GalleryManifestLink;
+  /* The named set this item belongs to (owner sketch, 2026-08-31, issue
+   * 275): the Media block's dropdown groups items by this label, verbatim.
+   * Optional and additive — an item without one falls into the kind-derived
+   * default set downstream (image → Drawings, video → Videos), so every
+   * manifest written before this field existed renders exactly as it did. */
+  readonly set?: string;
 }
 
 /* --- Admission ----------------------------------------------------------- */
@@ -292,7 +299,8 @@ const itemKeys = [
   'sources',
   'title',
   'description',
-  'link'
+  'link',
+  'set'
 ] as const;
 
 /* admitItem returns null for every item this build cannot render honestly.
@@ -327,6 +335,7 @@ export function admitGalleryItem(value: unknown): GalleryItem | null {
     title?: string;
     description?: string;
     link?: GalleryManifestLink;
+    set?: string;
   } = { kind: kind as 'image' | 'video', key, alt, full, preview };
 
   if (kind === 'video') {
@@ -385,6 +394,16 @@ export function admitGalleryItem(value: unknown): GalleryItem | null {
       return null;
     }
     item.link = link;
+  }
+  /* The set label rides the same absent-means-absent contract as the three
+   * fields above: an unreadable one refuses the item, because a picture
+   * silently landing in the wrong dropdown group is a caption-level lie. */
+  if (value.set !== undefined) {
+    const set = admitText(value.set, maxGalleryTextLengths.set);
+    if (set === null) {
+      return null;
+    }
+    item.set = set;
   }
   return item;
 }

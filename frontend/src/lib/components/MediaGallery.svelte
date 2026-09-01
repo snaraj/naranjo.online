@@ -234,17 +234,18 @@
   button at all.
 
   So the buttons come back where they were before issue 241 moved them — ON
-  the work, flanking the stage — and the phone half of that issue's case is
-  answered by capability rather than relocation: the pair is hidden by
-  default and shown only where hover and a fine pointer are both reported
-  (lib/tooltip.ts's finePointerQuery, the site's one capability split), so a
-  phone keeps swipe plus dots and never pays the 116px the old flanking
-  arrows cost it. The control row's own chevrons leave with the change —
-  two pairs of the same control on a desktop is chrome about chrome, and on
-  a phone the owner already ruled "I only like the dots". Navigation is the
-  same one path everything else uses: the pair calls previous()/next(),
-  which run through goTo(), so paging away from a playing film still takes
-  the surface back exactly as the issue-243 block above requires.
+  the work, flanking the stage — and since the owner's 2026-08-31 sketch
+  (issue 275) they are there on EVERY device: the sketch draws the arrows at
+  the stage's sides, the dot row it retired was the phone's press
+  equivalent, and a gesture with no press equivalent anywhere is an
+  affordance hole by this file's own accounting. The 2026-08-29
+  fine-pointer capability gate went with the dots ("I only like the dots"
+  was the dots-era ruling the sketch supersedes), and the pair costs the
+  phone none of the 116px the pre-241 flanking arrows did, because it
+  overlays the stage instead of sitting beside it. Navigation is the same
+  one path everything else uses: the pair calls previous()/next(), which
+  run through goTo(), so paging away from a playing film still takes the
+  surface back exactly as the issue-243 block above requires.
 
   ISSUE 265 — the gesture defects a five-engine sweep measured on 0.1.65, and
   the two that live in this file.
@@ -283,12 +284,112 @@
 
   let { items, width, height }: MediaGalleryProps = $props();
 
-  const total = $derived(items.length);
+  /* THE SETS (owner sketch, 2026-08-31, issue 275): the gallery is one strip
+     per named set, chosen by the small dropdown above the frame. An item's
+     set is the manifest's word when it wrote one and the kind-derived
+     default when it did not — image is a Drawing, video is a Video — so the
+     dropdown's entries are DATA: a set exists exactly when something is in
+     it, and a set the operator has not published yet (the sketch names an
+     Old School RuneScape one) appears the day its first item does, rather
+     than standing as an empty promise (honest-states floor). Order is the
+     items' own order, first appearance wins. */
+  function setOf(candidate: MediaGalleryItem): string {
+    return candidate.set ?? (candidate.video === undefined ? 'Drawings' : 'Videos');
+  }
+
+  const sets = $derived([...new Set(items.map(setOf))]);
+
+  /* The reader's choice, kept apart from its RESOLUTION: a chosen name that
+     no longer names a set (the items were replaced under it — a manifest
+     load, the one moment the gallery may change shape) resolves to the first
+     set rather than to an empty stage. */
+  let chosenSet = $state<string | undefined>(undefined);
+  const activeSet = $derived(
+    chosenSet !== undefined && sets.includes(chosenSet) ? chosenSet : sets[0]
+  );
+
+  const visible = $derived(items.filter((candidate) => setOf(candidate) === activeSet));
+  const total = $derived(visible.length);
 
   let index = $state(0);
   let enlarged = $state(false);
 
-  const item = $derived(items[index]);
+  /* The position the strip actually SHOWS. Rendering happens before any
+     effect can repair state, so if the strip shrinks under the position — a
+     manifest load replacing a long set with a short one — the read is
+     clamped here and the effect below brings `index` itself home through
+     the one door every move uses. Selection changes never need either:
+     selectSet resets through goTo(0). */
+  const shown = $derived(Math.min(index, Math.max(0, total - 1)));
+
+  const item = $derived(visible[shown]);
+
+  $effect(() => {
+    if (index >= total && total > 0) {
+      goTo(0);
+    }
+  });
+
+  /* THE DROPDOWN (owner sketch, 2026-08-31: "sleek, small" — no radio row,
+     no text run; the owner accepts the open menu briefly overlapping the
+     stage's top edge). One button, one listbox, the page's own popover
+     tokens. Selection returns focus to the button so the choice never
+     strands the keyboard; Escape does the same without choosing. */
+  let setMenuOpen = $state(false);
+  let setButtonEl: HTMLButtonElement | undefined = $state();
+  let setMenuEl: HTMLDivElement | undefined = $state();
+
+  function selectSet(name: string): void {
+    setMenuOpen = false;
+    if (name !== activeSet) {
+      chosenSet = name;
+      goTo(0);
+    }
+    setButtonEl?.focus();
+  }
+
+  async function toggleSetMenu(): Promise<void> {
+    setMenuOpen = !setMenuOpen;
+    if (setMenuOpen) {
+      await tick();
+      setMenuEl
+        ?.querySelectorAll<HTMLElement>('[role="option"]')
+        [Math.max(0, sets.indexOf(activeSet))]?.focus();
+    }
+  }
+
+  function onSetMenuKeydown(event: KeyboardEvent): void {
+    if (isChord(event)) {
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setMenuOpen = false;
+      setButtonEl?.focus();
+      return;
+    }
+    const options = [...(setMenuEl?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])];
+    const at = options.indexOf(event.target as HTMLElement);
+    if (at === -1) {
+      return;
+    }
+    const target = ringTarget(event.key, at, options.length);
+    if (target === null) {
+      return;
+    }
+    event.preventDefault();
+    options[target]?.focus();
+  }
+
+  /* Light dismiss: focus leaving the control closes it. Pointer taps outside
+     move focus, so this is the click-away path too — no document listener to
+     leak. */
+  function onSetFocusout(event: FocusEvent): void {
+    const next = event.relatedTarget;
+    if (!(next instanceof Node) || !(event.currentTarget as HTMLElement).contains(next)) {
+      setMenuOpen = false;
+    }
+  }
 
   /* WHICH FILM THE READER HANDED THE SURFACE TO (issue 243). It is the item's
      KEY rather than a boolean, and the key buys ONE thing precisely: no render
@@ -311,11 +412,11 @@
     return candidate.video === undefined ? 'photograph' : 'film';
   }
 
-  /* One item's position, spoken. It is the dots' accessible name AND the live
-     region's whole text, so the announcement a reader gets on every move is
-     the same sentence the control they pressed already carried. */
+  /* One item's position, spoken. It is the live region's whole text, so the
+     announcement a reader gets on every move is a sentence rather than the
+     bare ordinal the visible counter draws. */
   function positionLabel(at: number): string {
-    const noun = itemNoun(items[at]);
+    const noun = itemNoun(visible[at]);
     return `${noun.charAt(0).toUpperCase()}${noun.slice(1)} ${at + 1} of ${total}`;
   }
 
@@ -323,15 +424,8 @@
      "Next film" is the true thing to say about a press that lands on a film,
      and a reader hearing "next photograph" and getting a video player has been
      told something wrong by the only label they had. */
-  const previousIndex = $derived((index - 1 + total) % total);
-  const nextIndex = $derived((index + 1) % total);
-
-  /* The group's own name, over the SET rather than the current item: a strip
-     of eight drawings is still a choice of photographs, and one carrying films
-     says so once instead of changing its name underneath a reader. */
-  const chooseLabel = $derived(
-    items.some((candidate) => candidate.video !== undefined) ? 'Choose a photograph or film' : 'Choose a photograph'
-  );
+  const previousIndex = $derived((shown - 1 + total) % total);
+  const nextIndex = $derived((shown + 1) % total);
 
   /* Truthiness, not `!== undefined`: an empty string is as absent as a
      missing field for a reader, and rendering an empty row for one is the
@@ -354,12 +448,14 @@
      constant empty band: MEASURED at +12px of document height on the vendored
      bootstrap gallery, one section row gap for a zero-height box, which the
      no-dead-space rule treats as a defect rather than as a rounding error.
-     This asks the SET, never the current item, so the D9 invariant is
+     This asks the VISIBLE set, never the current item, so the D9 invariant is
      untouched: within one set the answer cannot change, and the box either
-     exists for every item or for none of them. It moves only when the items
-     themselves are replaced — a manifest load, which is the one moment the
-     gallery is allowed to change shape. */
-  const captionedSet = $derived(items.some(hasCaptionCopy));
+     exists for every item or for none of them. It moves only when the strip
+     itself is replaced — a manifest load, or the reader choosing another set
+     from the dropdown (issue 275) — which are the two moments the gallery is
+     allowed to change shape, both of them explicit and neither of them an
+     item change. */
+  const captionedSet = $derived(visible.some(hasCaptionCopy));
 
   /* An item's own intrinsic box when it declared one, the gallery's otherwise.
      This is the element's size HINT; the reserved frame comes from the
@@ -389,11 +485,11 @@
   }
 
   function next(): void {
-    goTo((index + 1) % total);
+    goTo(nextIndex);
   }
 
   function previous(): void {
-    goTo((index - 1 + total) % total);
+    goTo(previousIndex);
   }
 
   /* THE SWIPE (issue 219). The owner's report was "I can't swipe/motion
@@ -548,75 +644,6 @@
     }
   }
 
-  /* THE POSITION DOTS' KEYBOARD, and why it is a radiogroup (issue 219 review
-     round 2). What shipped was a `tablist` of `tab`s with a roving tabindex
-     and no keydown handler at all — the exact shape this same PR fixed in the
-     token panel's segmented pills, reintroduced eight files away. MEASURED:
-     tabindex ["0","-1","-1","-1","-1","-1","-1","-1"], and ArrowRight,
-     ArrowDown, End and Home on the one tabbable dot all left the counter at
-     `1 / 8`, whose own click handler is `index = at` where `at === index` — a
-     no-op. Seven of eight dots were unreachable by keyboard and the eighth
-     did nothing. A roving tabindex is HALF a composite widget; the arrows are
-     the other half, and shipping one without the other is worse than shipping
-     neither, because it removes seven tab stops in exchange for nothing.
-
-     The role changed with it. `tablist`/`tab` promises tab panels, and these
-     dots control none — there is no `aria-controls`, no `tabpanel`, and no
-     second region to swap. What they actually are is a single choice from a
-     set, announced as such: a `radiogroup`, exactly the pattern the token
-     panel's pills already use, so the two composite widgets on this page are
-     one pattern rather than two. The movement itself is lib/keys.ts's ring,
-     shared with those pills and with the reading-mode swatches. */
-  let dotsEl: HTMLDivElement | undefined = $state();
-
-  function onDotsKeydown(event: KeyboardEvent): void {
-    if (isChord(event)) {
-      return;
-    }
-    const target = ringTarget(event.key, index, total);
-    if (target === null) {
-      return;
-    }
-    /* The arrows belong to the group once focus is inside it, so the page
-       must not scroll underneath the reader as well. */
-    event.preventDefault();
-    goTo(target);
-    /* Focus follows selection: in a radio group the checked control IS the
-       tab stop, so leaving focus behind would strand it on a dot that just
-       became untabbable. */
-    dotsEl?.querySelectorAll<HTMLElement>('[role="radio"]')[target]?.focus();
-  }
-
-  /* THE ROW IS ONE ROW, AND IT SCROLLS (issue 241). Nine 44px targets are
-     396px of controls, so the row wrapped to two lines at every phone width
-     this site supports and to three at 250px — MEASURED — which turned a
-     position affordance into a block of chrome taller than some of the art it
-     indexes. Wrapping was the wrong axis to give: the floor that may not move
-     is the 44px target, the row is WIDE CONTENT, and this page's own rule for
-     wide content is that it scrolls inside its own container rather than
-     taking the page sideways with it (AGENTS.md, rendering lanes stage 1).
-
-     The scroller owes the reader one thing in return, and this is it: the
-     current dot is always brought into view, so "which one am I on" is never
-     a question answered off-screen. Written against the two boxes the engine
-     reports rather than offsetLeft — offsetLeft is measured from the nearest
-     positioned ancestor, which is not promised to be this row — and it moves
-     the ROW's own scrollLeft, never scrollIntoView, because scrollIntoView
-     walks every scrollable ancestor and would take the page with it. */
-  $effect(() => {
-    const row = dotsEl;
-    if (row === undefined) {
-      return;
-    }
-    const dot = row.querySelectorAll<HTMLElement>('[role="radio"]')[index];
-    if (dot === undefined) {
-      return;
-    }
-    const dotBox = dot.getBoundingClientRect();
-    const rowBox = row.getBoundingClientRect();
-    row.scrollLeft += dotBox.left - rowBox.left - (row.clientWidth - dotBox.width) / 2;
-  });
-
   let dialogEl: HTMLDialogElement | undefined = $state();
 
   /* The control that opens the lightbox, kept so closing can put focus back
@@ -728,6 +755,62 @@
 </script>
 
 {#if total > 0}
+  <!-- THE SET CONTROL (owner sketch, 2026-08-31, issue 275): one small
+    button above the frame naming the visible set, opening a compact listbox
+    of every set the strip actually holds. Rendered only when there is a
+    choice to make — a single-set gallery draws no chrome for it at all. The
+    owner weighed the open menu briefly overlapping the stage's top edge and
+    chose that over a radio row or a text run ("it has to be sleek, small");
+    the overlap lasts exactly as long as the menu is open, and the menu
+    closes on choice, on Escape, and on focus leaving it. -->
+  {#if sets.length > 1}
+    <div class="gallery-set" onfocusout={onSetFocusout}>
+      <button
+        type="button"
+        class="gallery-set-button"
+        bind:this={setButtonEl}
+        aria-haspopup="listbox"
+        aria-expanded={setMenuOpen}
+        onclick={toggleSetMenu}
+      >
+        <span class="gallery-set-name">{activeSet}</span>
+        <svg class="gallery-glyph" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+          <path
+            d="M6 9.5l6 6 6-6"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
+      {#if setMenuOpen}
+        <!-- tabindex -1: focus lives on the option buttons (roving, the
+          chosen one is the stop); the container is focusable only
+          programmatically, which is what the interactive role requires. -->
+        <div
+          class="gallery-set-menu"
+          role="listbox"
+          tabindex="-1"
+          aria-label="Choose a media set"
+          bind:this={setMenuEl}
+          onkeydown={onSetMenuKeydown}
+        >
+          {#each sets as name (name)}
+            <button
+              type="button"
+              role="option"
+              class="gallery-set-option"
+              aria-selected={name === activeSet}
+              tabindex={name === activeSet ? 0 : -1}
+              onclick={() => selectSet(name)}
+            >{name}</button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
   <!-- flat, not media (owner directive, 2026-08-28): the art carries its own
     white ground, so a card box around it read as an ugly outline. The stage
     below centers the work; the page's column is the only frame. -->
@@ -843,26 +926,27 @@
           </div>
         {/if}
         {#if total > 1}
-          <!-- THE DESKTOP PAIR (owner, 2026-08-29): real prev/next controls on
-            the work itself, for the reader whose device has no working drag.
-            Hidden by default and shown only where hover and a fine pointer are
-            both reported — the same capability split lib/tooltip.ts draws — so
-            a phone keeps swipe and dots. They sit at the STAGE's own edges,
-            not the frame's: the offset is the same one expression the stage's
-            width is built from, so the pair cannot drift away from the work
-            the way the pre-241 arrows drifted 212px from it. Rendered after
-            both stages so they paint above whichever surface the item mounts —
-            including a playing film's, because navigating away from one must
-            never require the lightbox or the player's own chrome. Both go
-            through previous()/next(), so a press pages away from a playing
-            film AND hands its surface back (goTo clears the key). -->
+          <!-- THE PAIR (owner sketch, 2026-08-31, issue 275): real prev/next
+            controls flanking the work, on EVERY device now — the sketch draws
+            them at the stage's sides, and with the dot row gone they are the
+            gesture's one press-and-keyboard equivalent, so the 2026-08-29
+            fine-pointer gate that hid them from phones went with the dots.
+            They sit at the STAGE's own edges, not the frame's: the offset is
+            the same one expression the stage's width is built from, so the
+            pair cannot drift away from the work the way the pre-241 arrows
+            drifted 212px from it. Rendered after both stages so they paint
+            above whichever surface the item mounts — including a playing
+            film's, because navigating away from one must never require the
+            lightbox or the player's own chrome. Both go through
+            previous()/next(), so a press pages away from a playing film AND
+            hands its surface back (goTo clears the key). -->
           <button
             type="button"
             class="gallery-nav"
             data-gallery-nav="previous"
             onclick={previous}
             onkeydown={onFrameKeydown}
-            aria-label={`Previous ${itemNoun(items[previousIndex])}`}
+            aria-label={`Previous ${itemNoun(visible[previousIndex])}`}
           >
             <span class="gallery-nav-disc">
               <svg class="gallery-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -883,7 +967,7 @@
             data-gallery-nav="next"
             onclick={next}
             onkeydown={onFrameKeydown}
-            aria-label={`Next ${itemNoun(items[nextIndex])}`}
+            aria-label={`Next ${itemNoun(visible[nextIndex])}`}
           >
             <span class="gallery-nav-disc">
               <svg class="gallery-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -902,57 +986,21 @@
       </div>
     {/snippet}
   </FeedCard>
-  <!-- The position affordance the swipe owes (issue 219). A counter alone
-    tells a reader WHERE they are; it does not tell them the surface can be
-    moved, and it cannot be pressed. The dots say both — how many, which one,
-    and that the set is navigable — and each is a real button, so the gesture's
-    keyboard-and-tap equivalent is the same control that shows the position
-    rather than a second one somewhere else. The dots are the ONLY visible
-    position mark (owner directive, 2026-08-28: "I only like the dots") —
-    the counter below is clipped out of view but kept in the tree, because
-    it is the live region: a number is what assistive technology can
-    usefully announce on a change, and nine identical dots are not.
-    "Reachable by keyboard" is a claim with a shape: one tab stop for the
-    group, the arrows moving inside it, Home and End at the ends, and focus
-    following the choice — see onDotsKeydown. A roving tabindex without that
-    is not a keyboard affordance, it is seven controls taken away. -->
+  <!-- THE POSITION IS A COUNTER (owner sketch, 2026-08-31, issue 275: "1/n"
+    under the stage). This supersedes the dot row of the 2026-08-28 "I only
+    like the dots" ruling — same owner, later drawing — and with it the dots'
+    whole keyboard apparatus, because a counter has nothing to press: the
+    press-and-keyboard equivalent of the gesture is the stage pair above,
+    now on every device rather than behind a capability query. The visible
+    mark is the bare ordinal, aria-hidden because the live region beside it
+    already speaks the full sentence on every move; that region stays
+    clipped, exactly as before, because a number is what assistive
+    technology can usefully announce. -->
   <div class="gallery-position">
-    <p class="gallery-count" aria-live="polite">{positionLabel(index)}</p>
-    <!-- THE ROW IS THE DOTS' ALONE (owner, 2026-08-29). Issue 241 put two
-      chevrons here, beside the dots, after they left the frame — and shrunk
-      to 12px by the 2026-08-28 directive they stopped reading as buttons at
-      all, which is the "bring back the buttons" report in the header. The
-      pair is back on the stage as .gallery-nav, desktop-only by capability;
-      what this row keeps is the position affordance the swipe owes (issue
-      219) — the dots, each a real button, the gesture's tap-and-keyboard
-      equivalent on every device — inside the same scrolling container issue
-      241 built, so nine 44px targets still never wrap or take the page
-      sideways. -->
-    <div class="gallery-controls">
-      {#if total > 1}
-        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-        <div
-          class="gallery-dots"
-          role="radiogroup"
-          tabindex="-1"
-          aria-label={chooseLabel}
-          bind:this={dotsEl}
-          onkeydown={onDotsKeydown}
-        >
-          {#each items as dot, at (dot.previewSrc)}
-            <button
-              type="button"
-              class="gallery-dot"
-              role="radio"
-              aria-checked={at === index}
-              tabindex={at === index ? 0 : -1}
-              aria-label={positionLabel(at)}
-              onclick={() => goTo(at)}
-            ><span class="gallery-dot-mark" aria-hidden="true"></span></button>
-          {/each}
-        </div>
-      {/if}
-    </div>
+    <p class="gallery-count" aria-live="polite">{positionLabel(shown)}</p>
+    {#if total > 1}
+      <p class="gallery-ordinal" aria-hidden="true">{shown + 1} / {total}</p>
+    {/if}
   </div>
 
   <!-- THE CAPTION LANE, RESERVED FOR EVERY ITEM (issue 265, owner ruling:
@@ -976,11 +1024,11 @@
     still moves nothing — see captionedSet. -->
   {#if captionedSet}
     <div class="gallery-caption">
-      {#each items as shot, at (shot.key)}
+      {#each visible as shot, at (shot.key)}
         <div
           class="gallery-caption-lane"
-          data-current={at === index ? 'true' : undefined}
-          aria-hidden={at === index ? undefined : 'true'}
+          data-current={at === shown ? 'true' : undefined}
+          aria-hidden={at === shown ? undefined : 'true'}
         >
           {#if shot.title}<p class="gallery-caption-title">{shot.title}</p>{/if}
           {#if shot.description}<p class="gallery-caption-text">{shot.description}</p>{/if}
@@ -1114,51 +1162,41 @@
     color: inherit;
   }
 
-  /* THE DESKTOP PAIR (owner, 2026-08-29): hidden by DEFAULT — that is the
-     owner's "hide them by default in mobile" made structural, since a device
-     that matches no media query gets no buttons and loses nothing it had —
-     and shown only where hover and a fine pointer are both reported, the
-     same split lib/tooltip.ts's finePointerQuery draws. On such a device the
-     strip's drag does not exist (the native image drag takes a mouse's
-     before it can prove itself horizontal — MEASURED, see the header), so
-     this pair is the primary navigation there, not decoration: vertically
-     centred on the stage, at its edges, above whichever surface the item
-     mounts, playing film included. */
+  /* THE PAIR, ON EVERY DEVICE (owner sketch, 2026-08-31, issue 275: the
+     arrows flank the stage in the drawing, and with the dot row gone they
+     are the gesture's one press-and-keyboard equivalent — a control the
+     swipe owes every reader, not only the fine-pointer ones the 2026-08-29
+     capability gate served). Vertically centred on the stage, at its edges,
+     above whichever surface the item mounts, playing film included. The
+     stage and the frame share a vertical centre — the stage is the centred
+     grid item — so half the frame is half the stage, and the pair rides the
+     work, not the track. */
   .gallery-nav {
-    display: none;
+    display: grid;
+    place-items: center;
+    position: absolute;
+    inset-block-start: 50%;
+    transform: translateY(-50%);
+    min-inline-size: 2.75rem;
+    min-block-size: 2.75rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    color: var(--gallery-nav-ink, white);
   }
 
-  @media (hover: hover) and (pointer: fine) {
-    .gallery-nav {
-      display: grid;
-      place-items: center;
-      position: absolute;
-      inset-block-start: 50%;
-      transform: translateY(-50%);
-      /* The stage and the frame share a vertical centre — the stage is the
-         centred grid item — so half the frame is half the stage, and the
-         pair rides the work, not the track. */
-      min-inline-size: 2.75rem;
-      min-block-size: 2.75rem;
-      padding: 0;
-      border: 0;
-      background: transparent;
-      cursor: pointer;
-      color: var(--gallery-nav-ink, white);
-    }
+  /* At the STAGE's edge, not the frame's: the frame's surplus is split
+     evenly by the auto margins that centre the stage, so half of
+     (100% − stage) IS the stage's start edge, from the same expression
+     the stage is sized by. The inset token nudges the disc inward so it
+     overlaps the work the way every inline-player control does. */
+  .gallery-nav[data-gallery-nav='previous'] {
+    inset-inline-start: calc((100% - var(--gallery-stage-inline)) / 2 + var(--gallery-nav-inset, 0.375rem));
+  }
 
-    /* At the STAGE's edge, not the frame's: the frame's surplus is split
-       evenly by the auto margins that centre the stage, so half of
-       (100% − stage) IS the stage's start edge, from the same expression
-       the stage is sized by. The inset token nudges the disc inward so it
-       overlaps the work the way every inline-player control does. */
-    .gallery-nav[data-gallery-nav='previous'] {
-      inset-inline-start: calc((100% - var(--gallery-stage-inline)) / 2 + var(--gallery-nav-inset, 0.375rem));
-    }
-
-    .gallery-nav[data-gallery-nav='next'] {
-      inset-inline-end: calc((100% - var(--gallery-stage-inline)) / 2 + var(--gallery-nav-inset, 0.375rem));
-    }
+  .gallery-nav[data-gallery-nav='next'] {
+    inset-inline-end: calc((100% - var(--gallery-stage-inline)) / 2 + var(--gallery-nav-inset, 0.375rem));
   }
 
   /* The painted disc inside the 44px target — the same trade the play
@@ -1377,7 +1415,7 @@
     gap: 0.125rem;
   }
 
-  /* Visually clipped, never removed: this is the dots' aria-live voice.
+  /* Visually clipped, never removed: this is the position's aria-live voice.
      Clipping (not display:none) keeps it announceable; 1px, not 0, because
      some engines skip announcing zero-sized live regions. */
   .gallery-count {
@@ -1391,118 +1429,94 @@
     white-space: nowrap;
   }
 
-  /* The control row, now the dots' scrolling container alone (owner,
-     2026-08-29): still a full-width centred flex row, because the dot row's
-     own shrink arithmetic below is written against exactly this shape. The
-     gap token left with the arrows it separated. */
-  .gallery-controls {
-    display: flex;
+  /* THE VISIBLE ORDINAL (owner sketch, 2026-08-31: "1/n"). A mark, not a
+     control — the arrows above are the press — at the meta step in tabular
+     figures, so "9 / 12" becoming "10 / 12" widens nothing and the page
+     never moves on a turn. */
+  .gallery-ordinal {
+    margin: 0;
+    font-size: var(--card-meta-size);
+    color: var(--card-meta-ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* THE SET CONTROL (owner sketch, 2026-08-31: "sleek, small"). The button
+     is quiet chrome — the set's name at the meta step beside a small
+     chevron, no border, no fill — with the 44px floor carried by minimums
+     the way every quiet control on this page carries it. The open menu is
+     the page's one popover grammar: the theme menu's radius, the swatch
+     popover's padding, the overlay surface tokens. It is absolutely
+     positioned so opening it moves NOTHING — the brief overlap of the
+     stage's top edge is the trade the owner weighed and took. */
+  .gallery-set {
+    position: relative;
+    align-self: start;
+  }
+
+  .gallery-set-button {
+    display: inline-flex;
     align-items: center;
-    justify-content: center;
-    inline-size: 100%;
-  }
-
-  /* ONE ROW, SCROLLED RATHER THAN WRAPPED (issue 241). nine 44px targets are
-     396px wide, so `flex-wrap: wrap` put them on two rows at every phone
-     width and three at 250px — MEASURED — which is a bigger object than the
-     caption it sits under. Nothing about the target moves: the floor is
-     44x44 and the dots below still declare it. What changes is the axis the
-     surplus goes to, which is this page's standing answer for wide content —
-     it scrolls inside its own container and never takes the document
-     sideways with it.
-
-     `safe center` is stated over a plain `center` base: a centred flex line
-     that overflows is unreachable at its START edge, and `safe` degrades that
-     to flex-start. An engine without it keeps the base, which is exactly
-     today's centring — the same base-then-upgrade shape every progressive
-     value on this page is written in.
-
-     The scrollbar is hidden because the dots ARE the affordance — nine marks,
-     one of them lit, kept in view by the effect above — and a 15px classic
-     scrollbar under a 4px dot is chrome about chrome. */
-  .gallery-dots {
-    display: flex;
-    flex-wrap: nowrap;
-    justify-content: center;
-    justify-content: safe center;
-    /* THE THREE DECLARATIONS THAT MAKE IT SHRINKABLE, and none of them is
-       ceremony — MEASURED across all three engines while fixing this. A
-       scroll container's min-content size is still its CONTENT's, so a row
-       of nine 44px marks contributed 352px of minimum width all the way up
-       to the page column, which then overflowed the viewport by 144px at
-       320px. `min-inline-size: 0` does not touch that (it changes the
-       automatic minimum, not the contribution) and neither does a zero
-       flex-basis (engines read the WIDTH property for the contribution); a
-       definite zero inline size does, in every engine.
-       It is then grown back: flex-grow takes the row's whole space now that
-       the chevrons have left it (2026-08-29), and the max-content ceiling
-       stops it there — so a row that fits is exactly as wide as its marks,
-       while a row that does not fit takes what there is and scrolls the
-       rest. */
-    inline-size: 0;
-    flex-grow: 1;
-    max-inline-size: max-content;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scroll-snap-type: x proximity;
-    scrollbar-width: none;
-  }
-
-  .gallery-dots::-webkit-scrollbar {
-    display: none;
-  }
-
-  /* A 44px hit box around a small painted mark, exactly as the lightbox's
-     close control is built (issue 202): the touch floor is about what a
-     finger can hit, never about how big the ink is, and a row of 44px discs
-     would be a bigger object than the photograph's own caption. The mark is
-     drawn by the child span so the button can be transparent chrome. */
-  .gallery-dot {
-    display: grid;
-    place-items: center;
-    /* 44px on BOTH axes, not just the block one. The inline floor is not
-       belt-and-braces here and the token panel learned it the hard way
-       (UsageTracker.svelte): a floor that depends on how wide the content
-       happens to be is not a floor, and a dot's content is 6px. The row
-       wraps, so eight of them still fit a 320px viewport without taking the
-       page's scrollbar sideways. */
+    gap: 0.375rem;
     min-inline-size: 2.75rem;
     min-block-size: 2.75rem;
     padding: 0;
     border: 0;
     background: transparent;
     cursor: pointer;
-    /* In a scrolling row a dot must not be squeezed under its own floor by
-       flex, and it is the snap point the row settles on. */
-    flex: 0 0 auto;
-    scroll-snap-align: center;
+    font-family: var(--card-meta-family);
+    font-size: var(--card-meta-size);
+    color: var(--card-meta-ink);
   }
 
-  /* The painted mark, at its own token (owner directive, 2026-08-28: the
-     current-media indicator should be smaller too). The 44px button above is
-     untouched — a smaller mark is a smaller MARK, never a smaller target. */
-  .gallery-dot-mark {
-    inline-size: var(--gallery-dot-size, 0.25rem);
-    block-size: var(--gallery-dot-size, 0.25rem);
-    border-radius: 999px;
-    background: var(--card-meta-ink);
-    opacity: 0.35;
+  .gallery-set-button:hover .gallery-set-name,
+  .gallery-set-button:focus-visible .gallery-set-name {
+    color: var(--color-brand);
   }
 
-  /* Position is never carried by the fill alone: the current dot is both
-     brighter AND larger, so the state survives a reading mode that flattens
-     contrast and a reader who cannot separate the two tones. The scale is a
-     token beside the size, because shrinking one without the other is how the
-     marked state quietly stops being distinguishable. */
-  .gallery-dot[aria-checked='true'] .gallery-dot-mark {
-    opacity: 1;
-    transform: scale(var(--gallery-dot-active-scale, 1.5));
-  }
-
-  .gallery-dot:focus-visible {
+  .gallery-set-button:focus-visible {
     outline: 2px solid var(--color-accent);
-    outline-offset: -6px;
-    border-radius: 999px;
+    outline-offset: 2px;
+  }
+
+  .gallery-set-menu {
+    position: absolute;
+    inset-block-start: 100%;
+    inset-inline-start: 0;
+    z-index: 1;
+    display: grid;
+    min-inline-size: max-content;
+    padding: var(--swatch-popover-padding);
+    border: var(--card-border-width) var(--card-border-style) var(--card-border-color);
+    border-radius: var(--theme-menu-radius);
+    background: var(--color-surface-overlay);
+  }
+
+  .gallery-set-option {
+    display: block;
+    min-block-size: 2.75rem;
+    padding: 0 0.75rem;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    text-align: start;
+    font-family: var(--card-meta-family);
+    font-size: var(--card-meta-size);
+    color: var(--color-text);
+  }
+
+  /* The chosen set is marked by weight, never by color alone. */
+  .gallery-set-option[aria-selected='true'] {
+    font-weight: 650;
+  }
+
+  .gallery-set-option:hover,
+  .gallery-set-option:focus-visible {
+    color: var(--color-brand);
+  }
+
+  .gallery-set-option:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
   }
 
   /* THE DRAG SURFACE. `pan-y` is the load-bearing declaration on this whole
