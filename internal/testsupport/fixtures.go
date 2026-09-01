@@ -27,8 +27,8 @@ const FrontendShellSentinel = "naranjo-fixture-shell"
 //	                      data-static-fallback structural marker, and the
 //	                      FrontendShellSentinel text
 //	assets/app-abc123.js  one content-hashed asset (immutable cache class)
-//	assets/type-abc123.woff2  one typeface asset, whose extension no host MIME
-//	                      registry is consulted for (the newStaticFile pin)
+//	assets/type-abc123.woff2  one typeface asset, whose extension resolves
+//	                      through the embeddedTypes pin, never a host registry
 //	favicon.svg           one root-level file (revalidated cache class)
 //	downloads/blob        one extensionless file whose deliberately sniffable
 //	                      HTML body pins the octet-stream unknown-type policy
@@ -43,9 +43,10 @@ func FrontendFS() fstest.MapFS {
 		},
 		"assets/app-abc123.js": &fstest.MapFile{Data: []byte("console.log('app')")},
 		// A typeface stand-in (issue 275): .woff2 is absent from Go's builtin
-		// MIME table, so its served type depends on the one pinned row in
-		// newStaticFile rather than any host registry, and the content-type
-		// policy test drives that row through the real handler.
+		// MIME table, so its served type comes from the embeddedTypes pin
+		// rather than any host registry; the content-type policy test drives
+		// delivery through the real handler and TestEmbeddedTypePins asserts
+		// the pin itself.
 		"assets/type-abc123.woff2": &fstest.MapFile{Data: []byte("wOF2")},
 		"favicon.svg":              &fstest.MapFile{Data: []byte("<svg/>")},
 		"downloads/blob":           &fstest.MapFile{Data: []byte("<!doctype html><script>sniffable</script>")},
