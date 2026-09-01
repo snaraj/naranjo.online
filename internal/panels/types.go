@@ -428,14 +428,14 @@ const (
 
 // CodingProjectsData is the coding-projects/v1 payload: one row per
 // repository the owner publishes, carrying what its host currently says about
-// it. Rows arrive in CONFIGURATION order, which fixes WHICH repositories the
-// payload may describe — an upstream can neither add a row nor drop one. It no
-// longer fixes the order they are READ in: the owner's directive of 2026-08-29
-// is that the most recently pushed repository leads, and that is a property of
-// the DATA, so the frontend derives it from each row's push instant (issue
-// 252). Serving the rows in config order keeps this payload's own shape
-// stable and auditable against the config file; display order is decided where
-// the live and captured instants are both in hand.
+// it. Rows arrive most recently pushed first, DERIVED from the account's own
+// public listing at fetch time (issue 281): the owner's ruling is that a new
+// public repository appears without a release, so membership is the
+// listing's to report — bounded by the account pin, the name grammar, the
+// exclusion list, and the served-row cap in mapRepositoryListing, which is
+// where "an upstream cannot put a stranger's project on this page" now
+// lives. The frontend still orders by each row's push instant (issue 252),
+// so the serve order is a stable convenience, not a contract.
 type CodingProjectsData struct {
 	// Repos holds one row per configured repository.
 	Repos []CodingProject `json:"repos"`
@@ -446,10 +446,13 @@ type CodingProjectsData struct {
 // do: a row whose live read failed serves the shipped snapshot's values and
 // says so, rather than borrowing the freshness of the rows beside it.
 type CodingProject struct {
-	// Name is the repository's public name. It comes from CONFIGURATION, not
-	// from the upstream document — the same rule VCSCommit.Repo follows, and
-	// for the same reason: a name an upstream can choose is a name a
-	// compromised upstream can forge.
+	// Name is the repository's public name. Since issue 281 it comes from the
+	// account's own public LISTING rather than from configuration — that is
+	// what lets a new repository appear with no release — and the forgery
+	// concern the old configuration rule answered is answered structurally
+	// instead: the listing row must belong to the configured account, the
+	// name must sit inside the host's own grammar, and any violation refuses
+	// the whole document (mapRepositoryListing).
 	Name string `json:"name"`
 	// Description is the repository's own description, truncated with a
 	// visible marker past maxProjectDescriptionRunes. Empty is a real state:
@@ -478,8 +481,10 @@ type CodingProject struct {
 	OpenPulls  *int64 `json:"openPulls,omitempty"`
 	// Recorded marks a row served from the shipped snapshot rather than read
 	// live — the same provenance meaning it carries on a token-usage stat
-	// tile. A mixed payload is the normal degraded state: five rows read and
-	// one refused is five live rows beside one that says it is not.
+	// tile. Since issue 281 only the cold-start snapshot produces such rows:
+	// a live round serves the listing whole or fails whole, and a failed
+	// round keeps the last GOOD live payload serving as stale instead of
+	// time-travelling single rows back to the release capture.
 	Recorded bool `json:"recorded,omitempty"`
 }
 
@@ -679,12 +684,32 @@ type FetchSource struct {
 	// has ever been fetched, which the payload reports as an absent commitsAt
 	// rather than as a fresh empty list.
 	commitsAt time.Time
+	// documents retains, per conditional endpoint, the last 200 answer and the
+	// validator the upstream stamped on it, so the next attempt can ask "has
+	// this changed?" instead of re-transferring bytes it already holds — and a
+	// 304 answer does not count against the public API's per-address request
+	// budget, which is the zero-spend attack on the rate exhaustion issue 281
+	// measured. Only requests flagged conditional participate, and callers may
+	// flag only endpoints whose URL is a CONFIG LITERAL, so the key set is
+	// bounded by configuration and every retained body already passed its byte
+	// cap. Bodies, never credentials: a validator and a public document are
+	// retained exactly as the calendar and commit list beside them are.
+	documents map[string]conditionalDocument
 	// logger narrates this source's fetch attempts: host, status, and byte
 	// counts at debug, per-source failures at warn — never a URL, never a
 	// credential, never a payload byte. Set once by the registry before its
 	// refresh loops launch; the mu-guarded accessor falls back to the
 	// discard logger so directly driven test sources stay quiet.
 	logger *slog.Logger
+}
+
+// conditionalDocument is one retained conditional-fetch answer: the exact
+// body a 200 carried and the entity validator the upstream stamped on it.
+type conditionalDocument struct {
+	// etag is the validator, sent back as If-None-Match on the next attempt.
+	etag string
+	// body is the retained answer a 304 re-serves.
+	body []byte
 }
 
 // Rate-budget roles. A role groups the endpoints that share one budget, so
@@ -904,23 +929,59 @@ const (
 // therefore has to ask for the right one.
 const calendarWindowDays = 357
 
-// codingProjectsFetchSpec configures the repository-metadata producer: one
-// document per repository, each named by a complete literal URL in
-// configuration for exactly the reason the commit sources are — a set of
-// reachable URLs fixed before the first request is a set no upstream answer can
-// extend.
+// codingProjectsFetchSpec configures the repository-metadata producer: the
+// account's PUBLIC REPOSITORY LISTING, read as one document, plus one search
+// document counting the account's open pull requests (issue 281).
+//
+// The roster is DERIVED from the listing rather than enumerated here, for
+// exactly the reason the boss list is derived from the hiscores table: an
+// enumerated list silently drops everything created after the last edit,
+// and the owner's ruling is that a new public repository appears on its own.
+// Curation is the explicit Exclude list — data, never a whitelist that goes
+// stale.
+//
+// The literal-URL property survives the change, and is in fact STRONGER than
+// before: the round's complete reachable-URL set is the two config literals
+// below — down from one-plus-one per repository — and no name read out of the
+// listing is ever used to build a request. What the listing chooses is which
+// ROWS are served, bounded by the account pin, the name grammar, the exclusion
+// list, and maxCodingProjectSources; where this process connects stays fixed
+// before the first request.
 //
 // The credential here is OPTIONAL in a way the calendar's is not, and the
 // difference is worth stating because it is the reason this producer ships
-// working rather than waiting. The repository documents are public: an
-// anonymous read returns the same description, tally and push instant a
-// credentialed one does. What the credential buys is rate headroom — an
-// anonymous caller shares a per-address budget with everything else on the
-// node, a credentialed one gets its own far larger budget — so the key is used
-// when it is there and its absence changes nothing about what is served.
+// working rather than waiting. The listing and the search document are public:
+// an anonymous read returns the same rows a credentialed one does. What the
+// credential buys is rate headroom — an anonymous caller shares a per-address
+// budget with everything else on the node, a credentialed one gets its own far
+// larger budget — so the key is used when it is there and its absence changes
+// nothing about what is served.
 type codingProjectsFetchSpec struct {
-	// Sources lists one labeled repository document per row, in serve order.
-	Sources []codingProjectSourceSpec `json:"sources"`
+	// ListingEndpoint is the full literal URL of the account's public
+	// repository listing. Its page-size parameter is data and is what bounds
+	// the document's size against MaxBytes.
+	ListingEndpoint string `json:"listingEndpoint"`
+	// Account is the account login every listed row must belong to. A row
+	// whose owner is anyone else refuses the whole document: a listing that
+	// can name another account's repository is a listing that can put a
+	// stranger's project on the owner's page.
+	Account string `json:"account"`
+	// Exclude lists repository names the owner curates OUT of the roster.
+	// Explicit exclusion is the sanctioned curation shape: everything public
+	// appears unless a name is written here, so curation can never silently
+	// hide a new repository the way a stale whitelist did.
+	Exclude []string `json:"exclude"`
+	// PullsEndpoint optionally names ONE literal search URL answering with
+	// every open pull request across the account (issue 252, reshaped by
+	// issue 281). It is a separate document because the listing has no such
+	// field: its open-issue figure counts pull requests, so the two tallies
+	// are only separable by reading the open pull requests and subtracting.
+	//
+	// Optional in the same sense the credential is: a spec that names none
+	// serves rows with no tallies, which the frontend dashes. The failure
+	// mode stays per FIELD — this document going bad costs the two counts on
+	// every row and nothing else.
+	PullsEndpoint string `json:"pullsEndpoint"`
 	// Headers holds static request headers, held to the same public-producer
 	// allowlist the commit sources' are.
 	Headers map[string]string `json:"headers"`
@@ -936,38 +997,32 @@ type codingProjectsFetchSpec struct {
 	MaxBytes int64 `json:"maxBytes"`
 	// ContentType is the exact media type each answer must declare.
 	ContentType string `json:"contentType"`
-	// MinIntervalMinutes is the rate budget applied to the whole group.
+	// MinIntervalMinutes is the rate budget applied to the whole round.
 	MinIntervalMinutes int `json:"minIntervalMinutes"`
 }
 
-// codingProjectSourceSpec is one repository's document: the public name the
-// panel SERVES and the literal URL it is read from. The name is configuration
-// precisely so a hostile or drifting upstream cannot relabel a row.
-type codingProjectSourceSpec struct {
-	// Name is the public repository name served on this row.
-	Name string `json:"name"`
-	// Endpoint is the full request URL.
-	Endpoint string `json:"endpoint"`
-	// PullsEndpoint optionally names a second literal URL answering with this
-	// repository's OPEN PULL-REQUEST tally and nothing else (issue 252). It is
-	// a separate document because the repository document has no such field:
-	// its open-issue figure counts pull requests, so the two tallies are only
-	// separable by reading a second count and subtracting.
-	//
-	// Optional in the same sense the credential is: a source that names none
-	// serves a row with no tallies, which the frontend dashes. That keeps this
-	// producer's failure mode per FIELD rather than per row — the second
-	// request going bad costs the two counts and nothing else.
-	PullsEndpoint string `json:"pullsEndpoint"`
-}
-
 // Bounds on the repository-metadata producer. Every one of them refuses rather
-// than clamps, except the description truncation, which is called out below.
+// than clamps, except the description truncation and the served-row selection,
+// which are called out below.
 const (
-	// maxCodingProjectSources bounds how many repositories configuration may
-	// list. Each one is a request per round, so the list is also the round's
-	// cost against the upstream's rate budget.
+	// maxCodingProjectSources bounds how many repository ROWS one round may
+	// serve. The listing is SELECTED down to this many — most recently pushed
+	// first — rather than refused over it, the same clamp-by-recency shape
+	// mergeCommits applies to its row cap: a thirteenth public repository must
+	// not take the panel down, and the payload budget still has to fit.
 	maxCodingProjectSources = 12
+	// maxListedRepositories bounds how many entries the listing document may
+	// carry at all. The configured page size asks for a fraction of this;
+	// a document past it is drift or an upstream inflating a body, refused
+	// whole before it can cost memory or mapping work.
+	maxListedRepositories = 100
+	// maxOpenPullItems bounds the search document's item list the same way.
+	// The tally mapping also requires the item count to EQUAL the document's
+	// own total, so a truncated answer is refused rather than undercounted.
+	maxOpenPullItems = 100
+	// maxRepositoryNameRunes bounds one repository name. The code host caps
+	// names at 100 characters; anything longer never came from it.
+	maxRepositoryNameRunes = 100
 	// maxProjectDescriptionRunes bounds one served description. Longer text is
 	// TRUNCATED with a visible marker rather than refused, for the same reason
 	// a long commit subject is: length alone is not hostility, and refusing
@@ -1279,35 +1334,54 @@ type calendarDay struct {
 	Count int    `json:"contributionCount"`
 }
 
-// repositoryEntry is the PROJECTION this package reads a repository metadata
-// document through, and the second place its admission gate is a projection
-// rather than decodeStrict — for the identical reason commitListEntry is one,
-// which is worth restating rather than cross-referencing:
+// repositoryListingEntry is the PROJECTION this package reads one row of the
+// account's public repository listing through, and the second place its
+// admission gate is a projection rather than decodeStrict — for the identical
+// reason commitListEntry is one, which is worth restating rather than
+// cross-referencing:
 //
-//   - Closing the document is not possible without holding the repository
-//     OWNER object in this process. The upstream carries a complete account
-//     profile on every repository document; DisallowUnknownFields would force
+//   - Closing the document is not possible without holding the complete
+//     account profile every row carries. DisallowUnknownFields would force
 //     this package to declare fields for personal identifiers it must never
-//     hold, log, or serve (requirement 12). Reading only the three values the
-//     panel renders is the stronger privacy posture, not the looser one.
-//   - A projection decodes silently, so every field below is then value-checked
-//     — a parseable push instant inside a plausible window, a bounded
-//     non-negative tally, a printable description — and any failure discards
-//     the whole document for that repository. The gate moved from the decoder
-//     to the values; it did not go away.
+//     hold, log, or serve (requirement 12). Reading only the values the panel
+//     renders — plus the three admission facts below — is the stronger
+//     privacy posture, not the looser one.
+//   - A projection decodes silently, so every field is then value-checked in
+//     mapRepositoryListing: an exact owner login, a name inside the host's
+//     own grammar, a parseable push instant inside a plausible window, a
+//     bounded non-negative tally, a printable description. The gate moved
+//     from the decoder to the values; it did not go away.
+//
+// The NAME is read from the document here, which the retired per-repository
+// producer refused to do — its names were configuration. That refusal moved,
+// not vanished: the account pin (Owner.Login must equal the configured
+// account), the name grammar, the privacy check, and the exclusion list now
+// bound what a listing may put on the page, and any violation refuses the
+// WHOLE document rather than one row, because a listing carrying one forged
+// row is a hostile listing, not a listing with a bad row.
 //
 // Description is a POINTER because the upstream writes JSON null for a
 // repository that has none, and that is a real state the row serves as an
 // empty description rather than as invented copy.
-type repositoryEntry struct {
+type repositoryListingEntry struct {
+	// Name is the repository's public name, admitted only through the name
+	// grammar and the account pin.
+	Name string `json:"name"`
+	// Owner carries the one profile fact admission needs: the login the row
+	// belongs to. Nothing else of the profile is ever decoded.
+	Owner repositoryListingOwner `json:"owner"`
+	// Private must be false: the listing endpoint serves public repositories,
+	// so a private row is drift, and a private name is not this panel's to
+	// serve (requirement 12).
+	Private bool `json:"private"`
 	// Description is the repository's own description, or null when it has
 	// none.
 	Description *string `json:"description"`
 	// Stars is the star tally.
 	Stars int64 `json:"stargazers_count"`
-	// PushedAt is the RFC 3339 instant of the last push. It is also the proof
-	// the document was really parsed: an unrelated JSON object projects to an
-	// empty string here, and an empty string does not parse.
+	// PushedAt is the RFC 3339 instant of the last push, or empty for a
+	// repository that has never been pushed — which is skipped, not refused:
+	// a repository with no pushes has no activity to report.
 	PushedAt string `json:"pushed_at"`
 	// OpenIssues is the upstream's COMBINED open tally: it counts open pull
 	// requests as open issues, which is why nothing renders it directly. It is
@@ -1316,19 +1390,63 @@ type repositoryEntry struct {
 	OpenIssues int64 `json:"open_issues_count"`
 }
 
-// searchCountEntry is the projection over the pull-request tally document, and
-// a projection for a sharper reason than repositoryEntry's: that answer
-// carries a full result item per match, complete with account profiles this
-// package must never hold, log, or serve (requirement 12). Reading the single
-// aggregate and discarding the items is the whole point of the shape.
+// repositoryListingOwner is the owner sub-object, reduced to its login.
+type repositoryListingOwner struct {
+	Login string `json:"login"`
+}
+
+// listedProject is one admitted listing row on its way to being served: the
+// row itself plus the upstream's combined open tally, which only becomes the
+// two rendered figures once the separately read pull-request count arrives.
+type listedProject struct {
+	// row carries everything but the open-work pair.
+	row CodingProject
+	// combinedOpen is the upstream's one open tally, pull requests included.
+	combinedOpen int64
+	// at is the parsed push instant, kept so the recency ordering never
+	// re-parses or trusts string order.
+	at time.Time
+}
+
+// refusedRow names one listing row that failed its value checks, so the
+// caller can narrate the refusal: a dropped row with no log line is exactly
+// the silent degradation issue 281's defect 3 is about.
+type refusedRow struct {
+	// name is the repository name, already admitted through the grammar and
+	// account gates before the value checks ran.
+	name string
+	// err is the value refusal.
+	err error
+}
+
+// openPullSearchEntry is the projection over the account-wide open
+// pull-request search answer. The document carries a full result item per
+// match, complete with account profiles this package must never hold, log, or
+// serve (requirement 12); each item is reduced to the ONE fact attribution
+// needs — which repository the match belongs to.
 //
 // The count is a POINTER so an unrelated JSON object is distinguishable from a
-// genuine zero. A repository with no open pull requests reports 0 and that is
+// genuine zero. An account with no open pull requests reports 0 and that is
 // data; a document that never mentioned the field reports nothing, and the
 // panel must not read that as "none open".
-type searchCountEntry struct {
-	// Total is the number of matches the upstream counted.
+type openPullSearchEntry struct {
+	// Total is the number of matches the upstream counted. The mapping
+	// requires it to EQUAL the item count, so a paginated or truncated answer
+	// is refused rather than silently undercounted per repository.
 	Total *int64 `json:"total_count"`
+	// Incomplete is the upstream's own admission that the search timed out
+	// before covering everything; a tally built from it would undercount.
+	Incomplete bool `json:"incomplete_results"`
+	// Items carries one entry per open pull request.
+	Items []openPullSearchItem `json:"items"`
+}
+
+// openPullSearchItem is one search match, reduced to its repository address.
+type openPullSearchItem struct {
+	// RepositoryURL is the API address of the repository the match belongs
+	// to. It is PARSED for its trailing account and name segments and never
+	// requested: attribution is a read of the string, not a reachable URL.
+	RepositoryURL string `json:"repository_url"`
 }
 
 // maxSeriesDays bounds a mapped activity series. The configured endpoints

@@ -839,60 +839,82 @@ test('the boss list is derived from the upstream, never enumerated in config', {
   );
 });
 
-/* The Coding Projects roster is written down in THREE places that can drift
- * apart in silence, and the owner's ruling of 2026-08-29 — as corrected in
- * issue 256: the foobar2000-* trio stays — is about exactly that set. This is
- * the pin that makes "exactly these seven, everywhere" enforceable rather
- * than a thing somebody remembered:
+/* The Coding Projects roster is DERIVED, never enumerated (issue 281). This
+ * is the same pin the boss list carries above, applied to the second producer
+ * that earned it the same way: the owner created a repository and the site
+ * could not show it, because the roster was a whitelist written down in three
+ * places that only a release could move. The structure under the ruling:
  *
- *   - `internal/panels/config/fetch.json` decides which repositories are READ;
- *   - `internal/panels/snapshots/coding-projects.json` decides which rows are
- *     SERVED on a cold boot or a failed round;
- *   - `frontend/src/lib/projects.ts` decides which are RENDERED, and its list
- *     fixes each row's identity, so a name only it lacks is a repository the
- *     origin fetches every cycle and no reader ever sees.
+ *   - `internal/panels/config/fetch.json` names ONE listing endpoint and the
+ *     account it must belong to — never a source list. An enumerated roster
+ *     silently misses every repository created after the last edit.
+ *   - Curation is an explicit `exclude` array — data a reviewer can see —
+ *     never a whitelist that goes stale. Empty is the current ruling.
+ *   - The one search document that splits the open-work tallies is still
+ *     configured, because losing it quietly costs every row two permanent
+ *     dashes.
  *
- * That asymmetry is why the drift is silent: removing a repository from two of
- * the three files leaves no visible trace. A leftover source costs a request
- * per round forever; a missing frontend row costs the reader the repository
- * entirely. Neither turns anything red without this.
- *
- * The check is SET equality in both directions and the failure names the file
- * that has to change, in the parity-pin style AGENTS.md asks for. ORDER is
- * deliberately not compared: the feed sorts by push instant (issue 252), so
- * pinning the three files to one order would pin a fact none of them owns. */
-test('the tracked repository set is the same in config, snapshot and frontend', {
+ * The snapshot ↔ frontend parity HALF survives, because the invariant it
+ * guarded survives: the shipped snapshot and the frontend's captured rows
+ * are the two halves of the same cold-start/fallback face, and a name only
+ * one of them carries is a row that renders differently depending on which
+ * fallback path ran. The config leg is gone with the whitelist itself. */
+test('the project roster is derived from the account listing, never enumerated in config', {
   skip: reducedContextNote,
 }, async () => {
   const fetchConfig = await read('../../internal/panels/config/fetch.json').then(JSON.parse);
+  assert.equal(
+    fetchConfig.codingProjects.sources,
+    undefined,
+    'an enumerated repository list silently drops every repository created since the last edit'
+  );
+  assert.ok(
+    typeof fetchConfig.codingProjects.listingEndpoint === 'string' &&
+      fetchConfig.codingProjects.listingEndpoint.length > 0,
+    'config must name the account listing the roster is derived from'
+  );
+  assert.ok(
+    typeof fetchConfig.codingProjects.account === 'string' &&
+      fetchConfig.codingProjects.account.length > 0,
+    'config must pin the account every listed row is checked against'
+  );
+  assert.ok(
+    Array.isArray(fetchConfig.codingProjects.exclude),
+    'curation must be an explicit exclusion list — data, not a whitelist'
+  );
+  assert.ok(
+    typeof fetchConfig.codingProjects.pullsEndpoint === 'string' &&
+      fetchConfig.codingProjects.pullsEndpoint.length > 0,
+    'config names no pullsEndpoint, so every row’s open-work counts would be a permanent dash'
+  );
+  // The listing endpoint bounds its own answer as data: a page-size
+  // parameter is what justifies the byte cap beside it.
+  assert.match(
+    fetchConfig.codingProjects.listingEndpoint,
+    /per_page=\d+/,
+    'the listing endpoint declares no page size, so its byte cap is justified against nothing'
+  );
+});
+
+test('the snapshot and the frontend fallback describe the same captured set', {
+  skip: reducedContextNote,
+}, async () => {
   const snapshot = await read('../../internal/panels/snapshots/coding-projects.json').then(
     JSON.parse
   );
-  const configured = fetchConfig.codingProjects.sources.map((source) => source.name).sort();
   const shipped = snapshot.data.repos.map((repo) => repo.name).sort();
   const rendered = projects.map((project) => project.name).toSorted();
-
-  assert.deepEqual(
-    configured,
-    rendered,
-    'config/fetch.json and frontend/src/lib/projects.ts disagree about which repositories this panel tracks; a name only the config carries is fetched every round and rendered to nobody'
-  );
   assert.deepEqual(
     shipped,
     rendered,
-    'snapshots/coding-projects.json and frontend/src/lib/projects.ts disagree; a snapshot row with no frontend row is dead weight in the served payload, and a frontend row with no snapshot row falls back to nothing'
+    'snapshots/coding-projects.json and frontend/src/lib/projects.ts disagree; the cold-boot face and the no-payload face would show different repositories'
   );
-  // Non-vacuity: three empty lists would satisfy both assertions above.
-  assert.equal(rendered.length, 7, 'the owner-ruled set is seven repositories');
-  // Every source carries BOTH documents. A source that lost its pullsEndpoint
-  // in an edit still serves a live row — with two permanent dashes where the
-  // open-work counts belong — which is the quietest way this panel can
-  // degrade, so it is pinned rather than left to be noticed.
-  for (const source of fetchConfig.codingProjects.sources) {
-    assert.ok(
-      typeof source.pullsEndpoint === 'string' && source.pullsEndpoint.length > 0,
-      `${source.name} names no pullsEndpoint, so its open-work counts would be a permanent dash`
-    );
+  // Non-vacuity: two empty lists would satisfy the assertion above.
+  assert.ok(rendered.length > 0, 'the captured fallback set is empty');
+  // Every snapshot row says it is a capture: the cold-start payload must
+  // never wear live provenance.
+  for (const repo of snapshot.data.repos) {
+    assert.equal(repo.recorded, true, `${repo.name} in the snapshot claims live provenance`);
   }
 });
 

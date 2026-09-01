@@ -323,54 +323,176 @@ func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, error) {
 	return calendarPayload(daily, total, first, last, CoverageComplete)
 }
 
-// mapRepository maps ONE repository metadata document onto a served row. The
-// document is read through the repositoryEntry projection rather than
-// decodeStrict — see that type for why the exception is narrow and why it is
-// the stronger privacy posture — so the whole gate lives in the value checks
-// below, and any failure refuses the row rather than repairing it.
-//
-// The name is the caller's, never the document's: an upstream that could name
-// the repository could put a stranger's project on the owner's page.
-//
-// openPulls is the separately read open pull-request tally, or nil when the
-// source named no such document or that read failed. It is what SPLITS the
-// upstream's one combined open tally into the two figures the card draws, and
-// splitOpenWork below refuses the pair outright rather than serving half of a
-// derived number.
-func mapRepository(raw []byte, name string, openPulls *int64, now time.Time) (CodingProject, error) {
-	var entry repositoryEntry
-	if err := json.Unmarshal(raw, &entry); err != nil {
-		return CodingProject{}, fmt.Errorf("repository document for %s: %w", name, err)
+// isRepositoryName admits a repository name through the code host's own
+// grammar: letters, digits, dots, underscores, and dashes, bounded in length,
+// and never a filesystem dot name. It is THE gate that makes a listing-chosen
+// name safe to serve and safe for the frontend to build an owner-account link
+// from — a name outside it never came from the host and is treated as
+// hostility, not data.
+func isRepositoryName(name string) bool {
+	if name == "" || name == "." || name == ".." || len(name) > maxRepositoryNameRunes {
+		return false
 	}
-	// The instant check is what makes the projection fail closed. An unrelated
-	// JSON object decodes into a zero-valued entry without error; a parseable
-	// instant is the cheapest thing no unrelated document has.
+	for _, symbol := range name {
+		switch {
+		case symbol >= 'a' && symbol <= 'z',
+			symbol >= 'A' && symbol <= 'Z',
+			symbol >= '0' && symbol <= '9',
+			symbol == '.', symbol == '_', symbol == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// isAccountLogin admits an account login: letters, digits, and dashes, the
+// host's own grammar. Stricter than the repository grammar — no dot, no
+// underscore — because logins are.
+func isAccountLogin(login string) bool {
+	if login == "" || len(login) > 39 {
+		return false
+	}
+	for _, symbol := range login {
+		switch {
+		case symbol >= 'a' && symbol <= 'z',
+			symbol >= 'A' && symbol <= 'Z',
+			symbol >= '0' && symbol <= '9',
+			symbol == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// mapRepositoryListing maps the account's public repository listing onto the
+// rows one round serves: admitted rows most recently pushed first, capped at
+// maxCodingProjectSources, beside the names of rows refused by their value
+// checks so the caller can narrate each one.
+//
+// The document is read through the repositoryListingEntry projection rather
+// than decodeStrict — see that type for why the exception is narrow and why
+// it is the stronger privacy posture — so the whole gate lives in the checks
+// here, in two tiers with different blast radii:
+//
+//   - IDENTITY violations refuse the WHOLE document: a name outside the
+//     host's grammar, a row belonging to any other account, a private row, or
+//     a duplicate name is not a bad row in a good listing, it is a document
+//     that did not come from the account's public listing at all.
+//   - VALUE failures refuse the ROW: an implausible push instant, an absurd
+//     tally, or an unprintable description drops that repository from the
+//     round, named in the refusal list, and the caller reports the envelope
+//     stale — a roster short one repository must not claim to be ok.
+//
+// Two skips are neither: an EXCLUDED name is the owner's curation doing its
+// job, and a row with no push instant is a repository with no activity to
+// report — no claim, no row, no staleness.
+func mapRepositoryListing(raw []byte, spec *codingProjectsFetchSpec, now time.Time) ([]listedProject, []refusedRow, error) {
+	var entries []repositoryListingEntry
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, nil, fmt.Errorf("repository listing: %w", err)
+	}
+	if len(entries) == 0 {
+		return nil, nil, errors.New("repository listing: the document lists no repository at all")
+	}
+	if len(entries) > maxListedRepositories {
+		return nil, nil, fmt.Errorf("repository listing: %d entries is over the %d bound", len(entries), maxListedRepositories)
+	}
+	excluded := make(map[string]bool, len(spec.Exclude))
+	for _, name := range spec.Exclude {
+		excluded[name] = true
+	}
+	seen := make(map[string]bool, len(entries))
+	ordered := make([]listedProject, 0, maxCodingProjectSources)
+	refused := make([]refusedRow, 0, 2)
+	for _, entry := range entries {
+		if !isRepositoryName(entry.Name) {
+			return nil, nil, fmt.Errorf("repository listing: a name is outside the host's grammar")
+		}
+		if entry.Owner.Login != spec.Account {
+			return nil, nil, fmt.Errorf("repository listing: a row does not belong to the configured account")
+		}
+		if entry.Private {
+			return nil, nil, fmt.Errorf("repository listing: %s claims to be private; the public listing may not carry it", entry.Name)
+		}
+		if seen[entry.Name] {
+			return nil, nil, fmt.Errorf("repository listing: %s is listed twice", entry.Name)
+		}
+		seen[entry.Name] = true
+		if excluded[entry.Name] {
+			continue
+		}
+		if entry.PushedAt == "" {
+			continue
+		}
+		project, err := admitListedRepository(entry, now)
+		if err != nil {
+			refused = append(refused, refusedRow{name: entry.Name, err: err})
+			continue
+		}
+		// Bounded insertion by recency, newest first with the name as the
+		// deterministic tie-break — the same clamp-by-recency shape
+		// mergeCommits applies to its own row cap.
+		at := len(ordered)
+		for at > 0 && earlierListing(ordered[at-1], project) {
+			at--
+		}
+		if at >= maxCodingProjectSources {
+			continue
+		}
+		if len(ordered) < maxCodingProjectSources {
+			ordered = append(ordered, listedProject{})
+		}
+		copy(ordered[at+1:], ordered[at:])
+		ordered[at] = project
+	}
+	if len(ordered) == 0 {
+		return nil, nil, errors.New("repository listing: no row survived admission")
+	}
+	return ordered, refused, nil
+}
+
+// earlierListing reports whether have should sit AFTER candidate: it was
+// pushed earlier, or at the same instant with the later name.
+func earlierListing(have, candidate listedProject) bool {
+	if have.at.Equal(candidate.at) {
+		return have.row.Name > candidate.row.Name
+	}
+	return have.at.Before(candidate.at)
+}
+
+// admitListedRepository runs one row's value checks and builds the served
+// row, tallies excluded — those arrive from the separately read search
+// document, or not at all.
+func admitListedRepository(entry repositoryListingEntry, now time.Time) (listedProject, error) {
 	at, err := time.Parse(time.RFC3339, entry.PushedAt)
 	if err != nil {
-		return CodingProject{}, fmt.Errorf("repository document for %s: push instant %q: %w", name, entry.PushedAt, err)
+		return listedProject{}, fmt.Errorf("push instant %q: %w", entry.PushedAt, err)
 	}
 	if at.After(now.Add(maxCommitFutureSkew)) || at.Before(now.Add(-maxProjectAge)) {
-		return CodingProject{}, fmt.Errorf("repository document for %s: push instant %s is outside the plausible window", name, at.UTC().Format(time.RFC3339))
+		return listedProject{}, fmt.Errorf("push instant %s is outside the plausible window", at.UTC().Format(time.RFC3339))
 	}
 	if entry.Stars < 0 || entry.Stars > maxCountValue {
-		return CodingProject{}, fmt.Errorf("repository document for %s: a star tally of %d is outside the admissible range", name, entry.Stars)
+		return listedProject{}, fmt.Errorf("a star tally of %d is outside the admissible range", entry.Stars)
 	}
 	description := ""
 	if entry.Description != nil {
 		description, err = projectDescription(*entry.Description)
 		if err != nil {
-			return CodingProject{}, fmt.Errorf("repository document for %s: %w", name, err)
+			return listedProject{}, err
 		}
 	}
 	stars := entry.Stars
-	issues, pulls := splitOpenWork(entry.OpenIssues, openPulls)
-	return CodingProject{
-		Name:        name,
-		Description: description,
-		Stars:       &stars,
-		PushedAt:    at.UTC().Format(time.RFC3339),
-		OpenIssues:  issues,
-		OpenPulls:   pulls,
+	return listedProject{
+		row: CodingProject{
+			Name:        entry.Name,
+			Description: description,
+			Stars:       &stars,
+			PushedAt:    at.UTC().Format(time.RFC3339),
+		},
+		combinedOpen: entry.OpenIssues,
+		at:           at,
 	}, nil
 }
 
@@ -404,21 +526,59 @@ func splitOpenWork(combined int64, openPulls *int64) (*int64, *int64) {
 	return &issues, &pulls
 }
 
-// mapOpenPullCount reads the open pull-request tally out of a search answer,
-// through the searchCountEntry projection and its bound. A document that
-// reports no count at all is refused rather than read as zero.
-func mapOpenPullCount(raw []byte, name string) (int64, error) {
-	var entry searchCountEntry
+// mapOpenPullsByRepo reads the account-wide open pull-request search answer
+// and attributes each match to its repository, through the openPullSearchEntry
+// projection and its bounds. A document that reports no count at all is
+// refused rather than read as zero, and a document whose matches cannot ALL
+// be attributed — a truncated page, an admitted-incomplete search, an item
+// pointing outside the account — is refused whole, because a partial map is
+// an undercount wearing a confident number.
+func mapOpenPullsByRepo(raw []byte, account string) (map[string]int64, error) {
+	var entry openPullSearchEntry
 	if err := json.Unmarshal(raw, &entry); err != nil {
-		return 0, fmt.Errorf("pull-request tally for %s: %w", name, err)
+		return nil, fmt.Errorf("pull-request tally: %w", err)
 	}
 	if entry.Total == nil {
-		return 0, fmt.Errorf("pull-request tally for %s: the document reports no total", name)
+		return nil, errors.New("pull-request tally: the document reports no total")
 	}
 	if *entry.Total < 0 || *entry.Total > maxCountValue {
-		return 0, fmt.Errorf("pull-request tally for %s: %d is outside the admissible range", name, *entry.Total)
+		return nil, fmt.Errorf("pull-request tally: %d is outside the admissible range", *entry.Total)
 	}
-	return *entry.Total, nil
+	if entry.Incomplete {
+		return nil, errors.New("pull-request tally: the upstream reports its own search incomplete")
+	}
+	if len(entry.Items) > maxOpenPullItems {
+		return nil, fmt.Errorf("pull-request tally: %d items is over the %d bound", len(entry.Items), maxOpenPullItems)
+	}
+	if int64(len(entry.Items)) != *entry.Total {
+		return nil, fmt.Errorf("pull-request tally: the document reports %d matches but carries %d; a truncated answer would undercount", *entry.Total, len(entry.Items))
+	}
+	counted := make(map[string]int64, len(entry.Items))
+	for _, item := range entry.Items {
+		name, err := pullRepositoryName(item.RepositoryURL, account)
+		if err != nil {
+			return nil, fmt.Errorf("pull-request tally: %w", err)
+		}
+		counted[name] += 1
+	}
+	return counted, nil
+}
+
+// pullRepositoryName reads the repository name out of one search item's
+// repository address, admitting only the exact ".../repos/<account>/<name>"
+// tail with a grammatical name. The address is never requested — this is
+// attribution over a string, and the account pin is what stops a hostile
+// document from crediting a stranger's pull requests to the owner's rows.
+func pullRepositoryName(address, account string) (string, error) {
+	segments := strings.Split(address, "/")
+	if len(segments) < 3 {
+		return "", errors.New("a match names no repository address")
+	}
+	name := segments[len(segments)-1]
+	if segments[len(segments)-3] != "repos" || segments[len(segments)-2] != account || !isRepositoryName(name) {
+		return "", errors.New("a match sits outside the configured account")
+	}
+	return name, nil
 }
 
 // projectDescription reduces a repository's description to the single line a
@@ -448,35 +608,6 @@ func projectDescription(description string) (string, error) {
 		return string(runes[:maxProjectDescriptionRunes]) + "…", nil
 	}
 	return string(runes), nil
-}
-
-// mergeProjectRows assembles the served payload in CONFIG order: the freshly
-// read row where a repository answered, that repository's shipped snapshot row
-// otherwise, marked recorded so a reader is told which is which. The result is
-// fresh only when every configured repository answered.
-//
-// A repository the snapshot has never heard of degrades to a row carrying its
-// name and nothing else — a null tally the frontend dashes, no description,
-// no instant — rather than to a row silently borrowing another's figures.
-func mergeProjectRows(spec *codingProjectsFetchSpec, fetched map[string]CodingProject, fallback CodingProjectsData) (CodingProjectsData, bool) {
-	fallbackByName := make(map[string]CodingProject, len(fallback.Repos))
-	for _, repo := range fallback.Repos {
-		fallbackByName[repo.Name] = repo
-	}
-	merged := CodingProjectsData{Repos: make([]CodingProject, 0, len(spec.Sources))}
-	allFresh := true
-	for _, source := range spec.Sources {
-		if live, ok := fetched[source.Name]; ok {
-			merged.Repos = append(merged.Repos, live)
-			continue
-		}
-		allFresh = false
-		recorded := fallbackByName[source.Name]
-		recorded.Name = source.Name
-		recorded.Recorded = true
-		merged.Repos = append(merged.Repos, recorded)
-	}
-	return merged, allFresh
 }
 
 // calendarCellMark is the class the upstream marks a calendar day cell with.

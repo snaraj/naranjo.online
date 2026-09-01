@@ -69,7 +69,7 @@
   import FeedCard from './FeedCard.svelte';
   import type { EntryCount, EntryLogEntry, EntryLogProps } from '../blocks.ts';
 
-  let { entries, variant, titleLevel = 3 }: EntryLogProps = $props();
+  let { entries, variant, titleLevel = 3, staleNote }: EntryLogProps = $props();
 
   /* The clock the live counters read. State rather than a plain read, because
      the whole point is that it MOVES while the page is open. */
@@ -121,6 +121,15 @@
   }
 </script>
 
+<!-- The staleness line (issue 281, defect 2): rendered exactly when the
+  adapter proved this log's information source is not current, ABOVE the
+  entries so the reader meets the caveat before the figures it qualifies —
+  the same posture as the usage tracker's data-through line (issue 276). The
+  entries below keep rendering: the data is real, and its freshness is the
+  only claim being corrected. -->
+{#if staleNote}
+  <p class="entry-log-stale" data-entry-log-stale>{staleNote}</p>
+{/if}
 <ol class="entry-log" data-variant={variant}>
   {#each entries as entry (entry.key)}
     <li data-placeholder={entry.placeholder ? 'true' : undefined}>
@@ -291,6 +300,16 @@
 {/snippet}
 
 <style>
+  /* The stale line wears the muted card ink but not an italic: it is a
+     factual reading ("stale · data as of …"), not an empty-state apology,
+     and it must not be mistaken for one — the twin of .usage-stale in
+     UsageTracker.svelte, scoped per component because Svelte scopes styles. */
+  .entry-log-stale {
+    margin: 0 0 var(--card-meta-gap);
+    font-size: var(--card-meta-size);
+    color: var(--card-meta-ink);
+  }
+
   .entry-log {
     margin: 0;
     padding: 0;

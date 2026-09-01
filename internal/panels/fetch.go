@@ -183,18 +183,15 @@ func NewFetchSource(fallback SnapshotSource, config FetchConfig, specs panelFetc
 		if err := validateBodyCap(specs.projects.MaxBytes, config.MaxBytes); err != nil {
 			return nil, err
 		}
-		for _, source := range specs.projects.Sources {
-			if err := validateEndpoint(source.Endpoint, config.Hosts); err != nil {
+		if err := validateEndpoint(specs.projects.ListingEndpoint, config.Hosts); err != nil {
+			return nil, err
+		}
+		// The tally document is a second reachable URL and gets the identical
+		// construction-time host check, because "optional" is about whether it
+		// is configured, never about whether it is checked.
+		if specs.projects.PullsEndpoint != "" {
+			if err := validateEndpoint(specs.projects.PullsEndpoint, config.Hosts); err != nil {
 				return nil, err
-			}
-			// The tally document is a second reachable URL and gets the
-			// identical construction-time host check, because "optional" is
-			// about whether it is configured, never about whether it is
-			// checked.
-			if source.PullsEndpoint != "" {
-				if err := validateEndpoint(source.PullsEndpoint, config.Hosts); err != nil {
-					return nil, err
-				}
 			}
 		}
 	}
@@ -509,11 +506,22 @@ func (s *FetchSource) cool(role string, now time.Time, delay time.Duration) {
 }
 
 // coolOnRateLimit applies the rate-limit cooldown when — and only when — the
-// failure was the upstream saying the client is asking too often.
-func (s *FetchSource) coolOnRateLimit(role string, now time.Time, err error) {
-	if errors.Is(err, errUpstreamRateLimited) {
-		s.cool(role, now, s.config.MaxBackoff)
+// failure was the upstream saying the client is asking too often. The
+// cooldown is NARRATED at warn (issue 281, defect 3): it silences a role for
+// the full backoff ceiling, every wake inside it reports only a debug idle
+// line, and the morning the owner measured a two-day-stale card that silence
+// was exactly what made "why is this panel stale" unanswerable from a
+// cluster log. The role name is this package's own constant and the instant
+// is arithmetic; no URL, credential, or upstream byte is logged.
+func (s *FetchSource) coolOnRateLimit(ctx context.Context, role string, now time.Time, err error) {
+	if !errors.Is(err, errUpstreamRateLimited) {
+		return
 	}
+	s.cool(role, now, s.config.MaxBackoff)
+	s.log().LogAttrs(ctx, slog.LevelWarn, "source cooling down: the upstream refused for rate reasons",
+		slog.String("source", role),
+		slog.Time("until", now.Add(s.config.MaxBackoff)),
+	)
 }
 
 // endpointInterval resolves one spec's configured rate budget. Zero means the
@@ -553,9 +561,10 @@ func (s *FetchSource) refreshBossLog(ctx context.Context, doer fetchDoer, now ti
 	}
 	body, err := s.fetchDocument(ctx, doer, fetchRequest{
 		source: roleBossLog, endpoint: spec.Endpoint, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
+		conditional: true,
 	})
 	if err != nil {
-		s.coolOnRateLimit(roleBossLog, now, err)
+		s.coolOnRateLimit(ctx, roleBossLog, now, err)
 		return loadedPayload{}, err
 	}
 	data, err := mapHiscores(body, spec)
@@ -629,7 +638,7 @@ func (s *FetchSource) calendarSection(ctx context.Context, doer fetchDoer, env f
 	}
 	mapped, err := s.readCalendar(ctx, doer, env, spec, now)
 	if err != nil {
-		s.coolOnRateLimit(roleVCSCalendar, now, err)
+		s.coolOnRateLimit(ctx, roleVCSCalendar, now, err)
 		return nil, time.Time{}, false, err
 	}
 	s.mu.Lock()
@@ -687,6 +696,7 @@ func (s *FetchSource) readCalendar(ctx context.Context, doer fetchDoer, env func
 	}
 	body, err := s.fetchDocument(ctx, doer, fetchRequest{
 		source: roleVCSCalendar, endpoint: spec.Endpoint, headers: spec.Headers, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
+		conditional: true,
 	})
 	if err != nil {
 		return nil, err
@@ -729,116 +739,122 @@ func calendarRequestBody(query string, now time.Time) ([]byte, error) {
 	return body, nil
 }
 
-// refreshProjects reads every configured repository document and assembles the
-// coding-projects payload in CONFIG order.
+// refreshProjects reads the account's public repository LISTING — one
+// document — and assembles the coding-projects payload from whatever the
+// account publishes right now, most recently pushed first (issue 281). A new
+// public repository therefore appears at the next tick with no code change
+// and no release, which is the owner's going-forward-correctness ruling; the
+// old per-repository whitelist could only ever show what its last edit knew.
 //
-// The degradation rule is the one mergeUsagePayload established, applied per
-// ROW: a repository whose document could not be read or admitted serves the
-// shipped snapshot's row for that name, marked recorded, and the envelope
-// reports stale. A mixed payload is therefore normal and legible — live rows
-// beside one that says it is not — rather than an all-or-nothing panel that
-// blanks every repository because one endpoint had a bad minute.
+// Failure semantics, coarser than the retired per-repository round because
+// the round IS one document now:
 //
-// A round in which NOTHING could be read is an error, so the caller keeps
-// serving the payload it already has instead of replacing every live row with
-// a recorded one.
+//   - The listing failing to fetch or refusing admission fails the round, and
+//     the caller keeps serving the last good payload as stale — which is a
+//     LIVE payload from minutes ago, not the release-time snapshot, so a bad
+//     minute no longer time-travels a card back to the capture date.
+//   - A row failing its own value checks is dropped and named at warn, and
+//     the envelope reports stale: a roster short one repository must not
+//     claim to be ok.
+//   - The tally document failing costs the two derived tallies on every row
+//     — the frontend dashes them — and nothing else, exactly the granularity
+//     the second request was designed around. The rows themselves are live
+//     and current, so the envelope stays ok.
 func (s *FetchSource) refreshProjects(ctx context.Context, doer fetchDoer, env func(string) string, now time.Time) (loadedPayload, error) {
 	spec := s.specs.projects
 	if !s.reserve(roleCodingProjects, now, s.config.endpointInterval(spec.MinIntervalMinutes)) {
 		return loadedPayload{}, errNothingDue
 	}
 	logger := s.log()
-	key := ""
-	if spec.KeyEnvName != "" {
-		key = env(spec.KeyEnvName)
-	}
 	request := fetchRequest{
 		source: roleCodingProjects, headers: spec.Headers, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
+		conditional: true,
 	}
-	if key != "" {
-		request.keyHeader, request.keyValue = spec.KeyHeader, spec.KeyPrefix+key
-	}
-	fetched := make(map[string]CodingProject, len(spec.Sources))
-	for _, source := range spec.Sources {
-		attempt := request
-		attempt.endpoint = source.Endpoint
-		body, err := s.fetchDocument(ctx, doer, attempt)
-		if err != nil {
-			s.coolOnRateLimit(roleCodingProjects, now, err)
-			// A failed row never propagates — the round degrades to a recorded
-			// row instead — so its failure is narrated HERE or nowhere. The
-			// name is configuration data and the error chain names a host at
-			// most; no URL.
-			logger.LogAttrs(ctx, slog.LevelWarn, "repository source failed",
-				slog.String("repo", source.Name), slog.Any("error", err))
-			continue
+	if spec.KeyEnvName != "" {
+		if key := env(spec.KeyEnvName); key != "" {
+			request.keyHeader, request.keyValue = spec.KeyHeader, spec.KeyPrefix+key
 		}
-		row, err := mapRepository(body, source.Name, s.openPullCount(ctx, doer, request, source, now), now)
-		if err != nil {
-			logger.LogAttrs(ctx, slog.LevelWarn, "repository source failed",
-				slog.String("repo", source.Name), slog.Any("error", err))
-			continue
+	}
+	listingRequest := request
+	listingRequest.endpoint = spec.ListingEndpoint
+	body, err := s.fetchDocument(ctx, doer, listingRequest)
+	if err != nil {
+		s.coolOnRateLimit(ctx, roleCodingProjects, now, err)
+		return loadedPayload{}, fmt.Errorf("repository listing: %w", err)
+	}
+	listed, refused, err := mapRepositoryListing(body, spec, now)
+	if err != nil {
+		return loadedPayload{}, err
+	}
+	for _, refusal := range refused {
+		// A refused row never propagates — the round serves the rest and
+		// reports stale — so its failure is narrated HERE or nowhere. The
+		// name already passed the grammar and account gates, and the reason
+		// names a value fact at most; no URL.
+		logger.LogAttrs(ctx, slog.LevelWarn, "repository row refused",
+			slog.String("repo", refusal.name), slog.Any("error", refusal.err))
+	}
+	pulls, talliesLive := s.openPullsByRepo(ctx, doer, request, spec, now)
+	payload := CodingProjectsData{Repos: make([]CodingProject, 0, len(listed))}
+	for _, entry := range listed {
+		row := entry.row
+		if talliesLive {
+			count := pulls[row.Name]
+			row.OpenIssues, row.OpenPulls = splitOpenWork(entry.combinedOpen, &count)
 		}
-		fetched[source.Name] = row
+		payload.Repos = append(payload.Repos, row)
 	}
-	if len(fetched) == 0 {
-		return loadedPayload{}, errors.New("coding projects: no repository could be read")
-	}
-	fallbackLoaded, err := s.fallback.load(snapshotFiles, KindCodingProjects)
-	var fallback CodingProjectsData
-	if err == nil {
-		// The fallback snapshot already passed the strict gate at load.
-		_ = decodeStrict(fallbackLoaded.data, &fallback)
-	}
-	merged, allFresh := mergeProjectRows(spec, fetched, fallback)
 	status := StatusOK
-	if !allFresh {
+	if len(refused) > 0 {
 		status = StatusStale
 	}
 	logger.LogAttrs(ctx, slog.LevelDebug, "coding projects refresh cycle",
-		slog.Int("repos_ok", len(fetched)),
-		slog.Int("repos_recorded", len(spec.Sources)-len(fetched)),
+		slog.Int("repos_served", len(payload.Repos)),
+		slog.Int("rows_refused", len(refused)),
+		slog.Bool("tallies_live", talliesLive),
 	)
 	// Marshaling the package-owned payload cannot fail.
-	data, _ := json.Marshal(merged)
+	data, _ := json.Marshal(payload)
 	return loadedPayload{generatedAt: now.Format(time.RFC3339), data: data, status: status}, nil
 }
 
-// openPullCount reads one repository's open pull-request tally, or returns nil
-// when the source names no such document or the read does not hold up.
+// openPullsByRepo reads the account-wide open pull-request search document
+// and attributes its matches per repository, or reports the tallies dead for
+// this round when the spec names no such document or the read does not hold
+// up.
 //
-// Nil is a first-class answer here rather than an error, and that is the whole
-// design of this second request: it can fail without costing the row. The
-// caller still serves a LIVE repository row — description, stars, push instant
-// — and the two derived tallies simply are not there, which the frontend draws
-// as a dash. Losing a count is not a reason to fall the whole row back to a
-// captured one and tell the reader its description is stale.
+// A false second answer is first-class rather than an error, and that is the
+// whole design of this second request: it can fail without costing the rows.
+// The caller still serves LIVE repository rows — description, stars, push
+// instant — and the two derived tallies simply are not there, which the
+// frontend draws as a dash. A repository the map has no entry for genuinely
+// has zero open pull requests, because the document vouches for the whole
+// account: the mapping refused it already if any match went unattributed.
 //
-// The credential rides on this request exactly as it does on the repository
-// one, because it is the same host and the same rate budget; it is read from
-// the environment by the caller, flows into a header, and is neither stored
-// nor logged (requirement 12).
-func (s *FetchSource) openPullCount(ctx context.Context, doer fetchDoer, request fetchRequest, source codingProjectSourceSpec, now time.Time) *int64 {
-	if source.PullsEndpoint == "" {
-		return nil
+// The credential rides on this request exactly as it does on the listing,
+// because it is the same host and the same rate budget; it is read from the
+// environment by the caller, flows into a header, and is neither stored nor
+// logged (requirement 12).
+func (s *FetchSource) openPullsByRepo(ctx context.Context, doer fetchDoer, request fetchRequest, spec *codingProjectsFetchSpec, now time.Time) (map[string]int64, bool) {
+	if spec.PullsEndpoint == "" {
+		return nil, false
 	}
 	attempt := request
-	attempt.endpoint = source.PullsEndpoint
+	attempt.endpoint = spec.PullsEndpoint
 	body, err := s.fetchDocument(ctx, doer, attempt)
 	if err == nil {
-		var total int64
-		if total, err = mapOpenPullCount(body, source.Name); err == nil {
-			return &total
+		var counted map[string]int64
+		if counted, err = mapOpenPullsByRepo(body, spec.Account); err == nil {
+			return counted, true
 		}
 	} else {
-		s.coolOnRateLimit(roleCodingProjects, now, err)
+		s.coolOnRateLimit(ctx, roleCodingProjects, now, err)
 	}
-	// Narrated HERE or nowhere, for the same reason the row failure is: this
-	// is the end of the line for the error. The repo name is configuration
-	// data and the chain names a host at most; no URL.
-	s.log().LogAttrs(ctx, slog.LevelWarn, "repository pull-request tally failed",
-		slog.String("repo", source.Name), slog.Any("error", err))
-	return nil
+	// Narrated HERE or nowhere: this is the end of the line for the error,
+	// and the chain names a host or a value fact at most; no URL.
+	s.log().LogAttrs(ctx, slog.LevelWarn, "open pull-request tally failed",
+		slog.Any("error", err))
+	return nil, false
 }
 
 // commitSection returns the recent-commit rows to serve, the instant they
@@ -862,9 +878,10 @@ func (s *FetchSource) commitSection(ctx context.Context, doer fetchDoer, spec *v
 	for _, source := range spec.Sources {
 		body, err := s.fetchDocument(ctx, doer, fetchRequest{
 			source: roleVCSCommits, endpoint: source.Endpoint, headers: spec.Headers, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
+			conditional: true,
 		})
 		if err != nil {
-			s.coolOnRateLimit(roleVCSCommits, now, err)
+			s.coolOnRateLimit(ctx, roleVCSCommits, now, err)
 			complete = false
 			// A failed commit document never propagates — the round degrades
 			// to stale instead — so its failure is narrated HERE or nowhere.
@@ -1035,6 +1052,17 @@ type fetchRequest struct {
 	// property complete literal endpoint URLs give the request LINE, extended
 	// to the request BODY.
 	payload []byte
+	// conditional opts this GET into validator revalidation: the last 200
+	// answer and its entity validator are retained per endpoint, the next
+	// attempt carries If-None-Match, and a 304 re-serves the retained bytes.
+	// The public API does not charge a 304 against the per-address request
+	// budget, which is what makes this the zero-spend answer to the rate
+	// exhaustion issue 281 measured. A caller may set it ONLY for an endpoint
+	// whose URL is a config literal — the retention map is keyed by endpoint,
+	// so a computed URL (the usage windows) would grow the key set without
+	// bound and never revalidate anything. Requests carrying a payload never
+	// participate, whatever this says.
+	conditional bool
 }
 
 // method reports the HTTP method one request uses. It is derived rather than
@@ -1123,6 +1151,23 @@ func (s *FetchSource) exchangeDocument(ctx context.Context, doer fetchDoer, requ
 	if request.keyHeader != "" {
 		outbound.Header.Set(request.keyHeader, request.keyValue)
 	}
+	// Conditional revalidation (issue 281): a retained validator rides out as
+	// If-None-Match, so an unchanged document answers 304 — no body, and no
+	// charge against the public API's per-address request budget. Only ever
+	// on a GET: a request carrying a payload asks a question the retained
+	// answer did not.
+	revalidating := request.conditional && request.payload == nil
+	validator := ""
+	if revalidating {
+		s.mu.Lock()
+		if retained, ok := s.documents[request.endpoint]; ok {
+			validator = retained.etag
+		}
+		s.mu.Unlock()
+		if validator != "" {
+			outbound.Header.Set("If-None-Match", validator)
+		}
+	}
 	response, err := doer.Do(outbound)
 	if err != nil {
 		// The client's *url.Error embeds the full request URL; the chain
@@ -1130,6 +1175,19 @@ func (s *FetchSource) exchangeDocument(ctx context.Context, doer fetchDoer, requ
 		return nil, 0, host, fmt.Errorf("fetch %s: %w", parsed.Hostname(), transportErrorCause(err))
 	}
 	defer func() { _ = response.Body.Close() }()
+	// The 304 branch answers only a question this process asked: a validator
+	// went out, so the retained bytes it names ARE the current document, and
+	// they already passed the byte cap and the media-type check when they
+	// were retained. An unsolicited 304 falls through to the status refusal
+	// below like any other unexpected answer.
+	if response.StatusCode == http.StatusNotModified && validator != "" {
+		s.mu.Lock()
+		retained, ok := s.documents[request.endpoint]
+		s.mu.Unlock()
+		if ok {
+			return retained.body, response.StatusCode, host, nil
+		}
+	}
 	// A rate-limit refusal is separated from every other bad status because
 	// the right response to it is different: back the endpoint off past the
 	// ordinary cadence instead of knocking again on the next tick. HTTP says
@@ -1155,6 +1213,19 @@ func (s *FetchSource) exchangeDocument(ctx context.Context, doer fetchDoer, requ
 	}
 	if int64(len(body)) > limit {
 		return nil, response.StatusCode, host, fmt.Errorf("fetch %s: body exceeds the %d byte bound", parsed.Hostname(), limit)
+	}
+	// Retain a validated answer for revalidation. The body is capped and the
+	// media type checked above; the validator is the upstream's own. The key
+	// set is bounded because conditional is set only for config-literal URLs.
+	if revalidating {
+		if etag := response.Header.Get("Etag"); etag != "" {
+			s.mu.Lock()
+			if s.documents == nil {
+				s.documents = make(map[string]conditionalDocument, 4)
+			}
+			s.documents[request.endpoint] = conditionalDocument{etag: etag, body: body}
+			s.mu.Unlock()
+		}
 	}
 	return body, response.StatusCode, host, nil
 }

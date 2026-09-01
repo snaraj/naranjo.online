@@ -193,28 +193,35 @@ func validateVCSCalendarSpec(spec *vcsCalendarFetchSpec) error {
 }
 
 // validateCodingProjectsSpec rejects a repository-metadata spec that is not
-// fully described: a bounded, non-empty, fully labeled source list, a cadence
-// inside the reviewed band, and a header map held to the public-producer
-// allowlist. The credential fields are optional together — a spec naming an
-// environment variable must also name the header it rides in, because a
-// credential with nowhere to go is a configuration accident rather than a
-// choice to read anonymously.
+// fully described: a listing endpoint, the account pin every listed row is
+// checked against, an exclusion list of well-formed names, a cadence inside
+// the reviewed band, and a header map held to the public-producer allowlist.
+// The credential fields are optional together — a spec naming an environment
+// variable must also name the header it rides in, because a credential with
+// nowhere to go is a configuration accident rather than a choice to read
+// anonymously.
+//
+// The exclusion list may be EMPTY: "curate nothing out" is the owner's
+// current ruling, and the field existing as data is what makes future
+// curation an edit here rather than a code change. Its entries are held to
+// the repository name grammar so a typo cannot sit in the list matching
+// nothing forever.
 func validateCodingProjectsSpec(spec *codingProjectsFetchSpec) error {
-	if len(spec.Sources) == 0 {
-		return errors.New("coding-projects fetch spec: no sources")
+	if spec.ListingEndpoint == "" || spec.Account == "" {
+		return errors.New("coding-projects fetch spec: listingEndpoint and account are both required")
 	}
-	if len(spec.Sources) > maxCodingProjectSources {
-		return fmt.Errorf("coding-projects fetch spec: %d sources is over the %d bound", len(spec.Sources), maxCodingProjectSources)
+	if !isAccountLogin(spec.Account) {
+		return fmt.Errorf("coding-projects fetch spec: %q is not an account login", spec.Account)
 	}
-	seen := make(map[string]bool, len(spec.Sources))
-	for _, source := range spec.Sources {
-		if source.Name == "" || source.Endpoint == "" {
-			return errors.New("coding-projects fetch spec: every source needs a name and an endpoint")
+	seen := make(map[string]bool, len(spec.Exclude))
+	for _, name := range spec.Exclude {
+		if !isRepositoryName(name) {
+			return fmt.Errorf("coding-projects fetch spec: excluded name %q is outside the repository name grammar", name)
 		}
-		if seen[source.Name] {
-			return fmt.Errorf("coding-projects fetch spec: %q is listed twice", source.Name)
+		if seen[name] {
+			return fmt.Errorf("coding-projects fetch spec: %q is excluded twice", name)
 		}
-		seen[source.Name] = true
+		seen[name] = true
 	}
 	if (spec.KeyEnvName == "") != (spec.KeyHeader == "") {
 		return errors.New("coding-projects fetch spec: keyEnvName and keyHeader are declared together or not at all")

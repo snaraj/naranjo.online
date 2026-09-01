@@ -101,6 +101,42 @@ func (urlErrorDoer) Do(r *http.Request) (*http.Response, error) {
 	return nil, &url.Error{Op: "Get", URL: r.URL.String(), Err: errors.New("connection reset by peer")}
 }
 
+// TestARateLimitCooldownWarnsWithTheSilencedSource pins the narration issue
+// 281's defect 3 demanded: a quota refusal silences a role for the full
+// backoff ceiling, every wake inside that window is only a DEBUG idle line,
+// and before this record the silence was indistinguishable from health in a
+// cluster log. The record names the role and the instant the silence ends —
+// and nothing else: no URL, no credential, no upstream byte.
+func TestARateLimitCooldownWarnsWithTheSilencedSource(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	var out safeBuffer
+	source := projectsSource(t)
+	source.setLogger(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	doer := newCapturingDoer(map[string]cannedAnswer{
+		"/users/owner/repos": {status: http.StatusForbidden, contentType: "application/json", body: "{}"},
+	})
+	if _, err := source.refreshProjects(t.Context(), doer, func(string) string { return "" }, now); err == nil {
+		t.Fatal("a rate-limited round reported success")
+	}
+	records := refreshLogRecords(t, out.String())
+	cooling := findRecord(records, "source cooling down: the upstream refused for rate reasons")
+	if cooling == nil {
+		t.Fatalf("no cooldown record in %q", out.String())
+	}
+	if cooling["level"] != "WARN" || cooling["source"] != roleCodingProjects {
+		t.Errorf("cooldown record = %v, want WARN naming the silenced role", cooling)
+	}
+	if cooling["until"] == nil {
+		t.Error("the cooldown record names no until instant; an operator cannot tell silence from health without it")
+	}
+	assertNoUpstreamURL(t, out.String())
+	// The silenced window is real: a wake inside it attempts nothing.
+	if _, err := source.refreshProjects(t.Context(), doer, func(string) string { return "" }, now.Add(time.Minute)); !errors.Is(err, errNothingDue) {
+		t.Fatalf("a wake inside the cooldown reported %v, want errNothingDue", err)
+	}
+}
+
 // TestRefreshLoopWarnsOnFailureWithNextRetry drives the real loop under
 // synctest against a transport that always fails: the first cycle must WARN
 // with the panel id, the error chain, and the exact next-retry instant one
