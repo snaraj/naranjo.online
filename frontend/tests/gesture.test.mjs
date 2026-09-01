@@ -1005,6 +1005,48 @@ test('every exit from a pull settles the surface to zero, including mid-settle (
   }
 });
 
+test('a claim takes the surface from the settle its own watch started (issue 277)', () => {
+  /* The two-writer guard at the moment of claiming, pinned where it can
+     actually fail: under ANIMATED settles (`reduced: () => false`, the
+     production default), because an instant settle leaves nothing in flight
+     to cancel and hides the race completely. The sequence is the
+     interrupted-snap-back family issue 265 established, one step further: the
+     second touch's first sample reads horizontal, so the watch branch
+     restarts the settle it interrupted — and then the SAME touch pulls
+     straight down and claims. Without the guard, the stale settle keeps
+     writing decaying `idle` frames over the claimed drag (and `show`'s
+     coalescer-cancel eats the drag's own frame), so the page slides home
+     under a finger that is dragging it down — MEASURED in PR #279's review
+     as [24.18 idle] → [19.73 idle] → [15.86 idle] where [64.16 armed]
+     belongs. */
+  const pull = strandedMidSettle();
+  // The horizontal-reading first sample: the watch declines to claim and —
+  // the settle guarantee — restarts the snap-back the touch interrupted.
+  pull.touch('pointermove', 102, { clientX: 220 });
+  pull.frames.tick();
+  assert.equal(pull.phase(), 'idle', 'the watch never restarted the interrupted settle');
+  assert.ok(
+    pull.distance() > 0,
+    'the restarted settle already finished; there is no stale writer left to race the claim'
+  );
+  // The same touch turns straight down and claims.
+  const before = pull.rendered.length;
+  pull.touch('pointermove', 100 + armingDrag);
+  for (let frame = 0; frame < 3; frame += 1) {
+    pull.frames.tick();
+  }
+  const after = pull.rendered.slice(before);
+  assert.ok(after.length > 0, 'the claim rendered nothing; the drag is not driving the surface');
+  for (const [distance, phase] of after) {
+    assert.equal(phase, 'armed', `a stale settle wrote "${phase}" over a claimed drag`);
+    assert.equal(
+      distance,
+      pullDistance(armingDrag),
+      'a stale settle drove the surface home under the finger'
+    );
+  }
+});
+
 test('a stand-down releases the touch defence rather than leaking it (issue 265)', () => {
   /* The same three exits leaked the non-passive touchmove listener onto
      document.body — permanently, since only onUp and onCancel ever removed
