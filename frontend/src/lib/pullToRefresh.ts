@@ -400,37 +400,55 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
     const dx = event.clientX - startX;
     const dy = event.clientY - startY;
     if (!claimed) {
-      /* Upward, or no longer at the top: the page's gesture, and standing
-         down explicitly stops a later downward wobble in the same gesture
-         from grabbing a scroll already in progress. */
-      if (dy <= 0 || !binding.atTop()) {
+      /* No longer at the top: the page's gesture. Standing down explicitly
+         stops a later downward wobble in the same gesture from grabbing a
+         scroll already in progress. */
+      if (!binding.atTop()) {
         standDown();
         return;
       }
-      /* AND A GESTURE MUST PROVE ITSELF, which this one did not. The header
-         of lib/gesture.ts states the rule the whole layer rests on — "a
-         gesture must PROVE it is horizontal before it claims anything" — and
-         its swipe binding stands down explicitly when a drag turns out to be
-         the other axis. The pull asked only for downward travel, so a
-         mostly-HORIZONTAL drag with any downward drift claimed it too:
-         MEASURED at the top of the document, a drag of dx 160 / dy 20 set
-         `data-pulling="true"` and moved the page 18.8px, and a sloppier
-         diagonal reaches the arming threshold and fires a real refresh.
-         claimsHorizontal is the SAME predicate the swipe stands down on —
-         one definition of "this drag is across, not down", so the two
-         gestures on this page can never disagree about which of them a
-         diagonal belongs to. Standing down rather than merely waiting is
-         deliberate for the reason gesture.ts gives: a later downward wobble
-         inside a gesture the reader is using to swipe something must not
-         suddenly grab the page. */
-      if (claimsHorizontal(dx, dy)) {
+      /* Upward PAST THE SLOP: the page's flick, permanently. Past the slop
+         and not on the first pixel, and the difference is the whole of the
+         owner's "it works only in one band" (issue 277, real iPhone). This
+         used to stand down on ANY dy <= 0, so the tremor a real finger
+         plants before a pull — MEASURED: one sample 1px UP, then 240px
+         straight down — killed the gesture on every engine, because a
+         stand-down is for the rest of the touch. lib/gesture.ts's own rule
+         is that nothing acts before the slop, and the same courtesy the
+         swipe extends to a wobbling finger is extended here: a drag has to
+         GO upward to be an upward flick, not merely waver. */
+      if (dy < -gestureSlop) {
         standDown();
         return;
       }
-      if (dy < 12) {
+      /* Everything else about an unproven drag DECIDES NOTHING PERMANENT —
+         it is watched, sample by sample, until the drag itself picks a
+         direction. That is the other half of issue 277: a thumb pulling
+         from low on the screen arcs, so its FIRST past-slop sample reads
+         horizontal (MEASURED: dx 10 / dy 4, then 240px straight down), and
+         the old per-first-sample stand-down handed the whole pull to a
+         swipe that does not exist at the top of this page. claimsHorizontal
+         is still the one shared definition of "across, not down" — while
+         the CUMULATIVE drag reads horizontal the pull claims nothing, so
+         the mostly-horizontal drag 0.1.67 measured (dx 160 / dy 20) still
+         never claims, and a swipe wobbling downward stays unclaimed until
+         it has genuinely travelled further down than across. What a
+         watched sample DOES owe is the settle guarantee: a second touch
+         cancels a snap-back just by arriving (onDown), and if that touch
+         then drifts sideways forever, nobody else is left to bring the
+         displaced page home. */
+      if (claimsHorizontal(dx, dy) || dy < 12) {
+        if (distance > 0 && cancelSettle === null) {
+          settle(0, 'idle');
+        }
         return;
       }
       claimed = true;
+      /* The watch above may have started that settle; the surface is the
+         finger's now, and two writers — a settle easing home and the drag
+         below — must not share it. */
+      cancelSettle?.();
+      cancelSettle = null;
     }
     const next = pullDistance(dy, metrics);
     showLive(next, pullArmed(next, metrics) ? 'armed' : 'pulling');
@@ -469,9 +487,16 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
        gesture during the first downward pixels, before `claimed` flips, and a
        pull that only defends itself after proof still dies on a real phone.
        An eligible, still-tracked touch moving DOWNWARD PAST THE SLOP at the
-       top is defended; everything else — upward, inside the slop, a
-       horizontal stand-down (pointer is already -1), a page no longer at its
-       top — falls through to the browser untouched.
+       top is defended; everything else — upward, inside the slop, a drag
+       reading horizontal, a page no longer at its top — falls through to
+       the browser untouched. The horizontal reading is asked HERE as well
+       as in onMove, and has to be: since issue 277 a horizontal-reading
+       sample no longer stands the pointer down (it is watched, because a
+       thumb-arc pull's first sample reads horizontal), so this listener now
+       lives until the touch ends — and a touch that currently reads across
+       rather than down is not a plausible pull and must not have its native
+       pan eaten while it is watched. claimsHorizontal over the same
+       adopted-touch deltas keeps that the one shared definition.
        THE SLOP IS THE WHOLE OF THE OWNER'S "the flick sometimes does nothing"
        (2026-08-31, real iPhone; not reproducible under emulation). This used
        to defend any downward delta greater than ZERO, and a finger does not
@@ -490,6 +515,7 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
       pointer !== -1 &&
       touch !== undefined &&
       touch.clientY - startY > gestureSlop &&
+      !claimsHorizontal(touch.clientX - startX, touch.clientY - startY) &&
       binding.atTop()
     ) {
       event.preventDefault();

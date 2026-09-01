@@ -7,6 +7,30 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.69] - 2026-09-01
+
+### Fixed
+
+- Pull-to-refresh arms from anywhere on the screen at the top of the page
+  (issue 277). The gesture was already bound page-wide, but its arbitration
+  executed a permanent stand-down on the first pointer sample: a 1px upward
+  tremor, or a thumb arc's 10px-across/4px-down opening — both ordinary ways
+  a real finger begins a deliberate pull — killed a subsequent 240px
+  straight-down drag on every engine, which on a real phone read as "it only
+  works in one band of the screen". Direction is now judged on the drag's own
+  cumulative travel, sample by sample: only movement past the shared gesture
+  slop stands the pull down (an upward flick still scrolls, a drag that stays
+  horizontal still never claims), an ambiguous sample decides nothing, and a
+  watched touch that leaves the page displaced mid-settle still sends it
+  home. The native-touch defence declines to contest a horizontal-reading
+  touch for the same reason, so a sideways pan at the top keeps its native
+  scroll. Off the top nothing arms, and every 0.1.67 guarantee — settle from
+  every exit, no stranding, adopted-finger tracking — is pinned unchanged.
+  Three new browser lanes hold the bar across all five engines: a wide pull
+  arms from every start target at the top (wobble openings included), no
+  start target arms off the top, and a drifting horizontal swipe over the
+  Media strip still swipes while the pull claims nothing.
+
 ## [0.1.68] - 2026-08-31
 
 ### Added
