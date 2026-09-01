@@ -445,6 +445,11 @@ func TestEmbeddedContentTypePolicy(t *testing.T) {
 		// guarantee rather than exact values.
 		"registered extension": {target: "/", contentType: "text/html; charset=utf-8"},
 		"unknown extension":    {target: "/downloads/blob", contentType: "application/octet-stream"},
+		// .woff2 is in neither Go's builtin table nor the distroless runtime
+		// image's absent mime registry, so this exact value proves the pinned
+		// row in newStaticFile rather than any host table (issue 275; the
+		// PR-278 review measured octet-stream in production without it).
+		"typeface": {target: "/assets/type-abc123.woff2", contentType: "font/woff2"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			response := httptest.NewRecorder()

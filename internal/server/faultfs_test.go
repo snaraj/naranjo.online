@@ -77,7 +77,7 @@ func (f *failingDirFS) ReadDir(name string) ([]fs.DirEntry, error) {
 // constructionReadSet is every file New must read from the canonical bundle:
 // all of testsupport.FrontendFS except the .gitkeep placeholder, which the
 // walk skips by design and must therefore never appear in the read log.
-var constructionReadSet = []string{"assets/app-abc123.js", "downloads/blob", "favicon.svg", "index.html"}
+var constructionReadSet = []string{"assets/app-abc123.js", "assets/type-abc123.woff2", "downloads/blob", "favicon.svg", "index.html"}
 
 // TestConstructionReadsEveryFileExactlyOnce verifies the prepared-table
 // contract by observed calls, not implementation trust: New reads each

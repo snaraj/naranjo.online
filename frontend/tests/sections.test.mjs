@@ -2129,6 +2129,20 @@ test('the film stage paints a ground of its own, so a poster in flight is not a 
     'rgb(250, 249, 245)',
     `the light-mode --gallery-stage-ground is "${declared}"; the owner ruled it the white anthropic.com opens on`
   );
+  /* CASCADE ORDER, measured — the fault the PR-278 review caught running: a
+     bare :root block and a [data-theme] block tie at (0,1,0) specificity, so
+     the LATER one wins, and a light declaration written after the mode
+     blocks silently beats all three explicit dark remaps while every
+     textual pin here stays green (the token is still declared everywhere —
+     it just loses). The declaration must therefore precede the first mode
+     block in source. */
+  const lightAt = styles.indexOf('--gallery-stage-ground: rgb(250, 249, 245);');
+  const firstModeBlock = styles.search(/\[data-theme="[a-z]+"\]\s*\{/);
+  assert.ok(firstModeBlock >= 0, 'no [data-theme] block found; the mode architecture moved under this pin');
+  assert.ok(
+    lightAt >= 0 && lightAt < firstModeBlock,
+    'the light --gallery-stage-ground declaration must come BEFORE every [data-theme] block: written after them it wins the (0,1,0) tie on source order and paints a chosen dark mode’s letterbox ivory'
+  );
   const projection = /--palette-projection-ground:\s*([^;]+);/.exec(styles)?.[1]?.trim();
   const channels = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(projection ?? '');
   assert.ok(
@@ -2585,6 +2599,18 @@ test('the media sets are data: kind-derived by default, named by the manifest, c
     galleryCode,
     /return candidate\.set \?\? \(candidate\.video === undefined \? 'Drawings' : 'Videos'\);/,
     'an item without a set no longer falls into the kind-derived default'
+  );
+  /* The set menu's chord discipline. The always-rendered chord sweep in the
+     rendering lanes cannot reach a menu that mounts only while open on a
+     multi-set strip, and its comment defers to THIS pin by name — so the
+     guard the comment cites must actually be asserted somewhere, or the
+     deferral is a citation to nothing (PR-278 review, finding 3). The
+     keydown handler's first act is handing browser chords back to the
+     browser. */
+  assert.match(
+    galleryCode,
+    /function onSetMenuKeydown\(event: KeyboardEvent\): void \{\n\s*if \(isChord\(event\)\) \{\n\s*return;/,
+    'the set menu’s keydown no longer opens by refusing chords; the lanes’ sweep comment cites a guard that is not there'
   );
   /* First appearance wins, verbatim, and no entry is invented: a set exists
      exactly when something is in it (honest-states floor), and the strip is

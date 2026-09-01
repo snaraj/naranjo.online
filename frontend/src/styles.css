@@ -206,8 +206,24 @@
      the same reason: their surfaces sit within a whisker of each other.
      Near-black rather than black so the stage still reads as a surface
      against a true-dark page instead of dissolving into it. Light mode never
-     reads this token; see --gallery-stage-ground's own declaration. */
+     reads this token; see --gallery-stage-ground directly below. */
   --palette-projection-ground: rgb(20, 20, 20);
+
+  /* The GROUND a film sits on, light half (owner ruling 2026-08-31, the
+     issue-275 wave: the near-black bands on the light page are a defect, and
+     the replacement is the white anthropic.com opens on — the ivory-light
+     swatch of its compiled CSS, stated in the rgb form the pin in
+     tests/sections.test.mjs measures). Declared HERE, with the palettes and
+     not beside the other gallery tokens, because position is load-bearing:
+     bare :root and [data-theme] blocks tie at (0,1,0) specificity, so
+     whichever is written LATER wins, and the reading-mode remaps of this
+     token live in the mode blocks below. Declared after them it would win
+     the tie and paint every explicitly-chosen dark mode's letterbox ivory —
+     the exact fault the PR-278 review caught running. The same pin now
+     measures this ordering, so moving the declaration down fails the build
+     rather than the reader. The full issue-239 history of why a stage
+     paints a ground at all stays with the gallery tokens. */
+  --gallery-stage-ground: rgb(250, 249, 245);
 
   /* The contribution ramp: one hue, monotone lightness, five steps. The
      DIRECTION is per-palette and that is the whole point — "steps brighter"
@@ -1528,19 +1544,18 @@ h1 {
      whenever a film's ratio is not exactly the stage's — so the stage paints
      a ground of its own in every mode.
 
-     WHICH ground now branches by reading mode, superseding the earlier
-     every-player-is-dark rationale that lived here: the owner saw the
-     near-black bands on the light page and ruled them a defect (2026-08-31,
-     the issue-275 wave), naming the replacement — the white anthropic.com
-     opens on, the ivory-light swatch of its compiled CSS, stated in the
-     rgb form the pin in tests/sections.test.mjs measures. It sits a few
-     points off this site's own light surface, so an in-flight poster reads
-     as a quiet pale box rather than a black monolith; the owner weighed
-     that trade and ruled for the bands' removal. The three dark reading
-     modes keep projecting onto the shared near-black — a film's letterbox
-     has no reason to lighten there — and each mode block remaps this token
-     by reference exactly as the color roles do. */
-  --gallery-stage-ground: rgb(250, 249, 245);
+     WHICH ground branches by reading mode (owner ruling 2026-08-31,
+     superseding the earlier every-player-is-dark rationale that lived
+     here): the light page projects onto the white anthropic.com opens on,
+     an ivory a few points off this site's own light surface, so an
+     in-flight poster reads as a quiet pale box rather than a black
+     monolith — a trade the owner weighed and ruled for; the three dark
+     reading modes keep the shared near-black, a film's letterbox having no
+     reason to lighten there. The token is deliberately NOT declared in this
+     block: this :root block sits after the reading-mode blocks and would
+     beat their remaps on source order at equal specificity, so the light
+     value lives with the palettes, before them, where the pin measures its
+     position. */
   /* The desktop prev/next pair (owner, 2026-08-29: "bring back the buttons
      but chose to hide them by default in mobile"). The retired
      --gallery-arrow-size sized the 12px chevron ink that stopped reading as

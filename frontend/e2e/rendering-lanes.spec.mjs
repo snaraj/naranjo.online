@@ -8506,7 +8506,8 @@ test('a widget’s arrows do not swallow the browser’s own chords (issue 219)'
        2026-08-31 (issue 275) — the gallery's set-menu listbox is its
        successor, but it mounts only while open on a multi-set strip, so
        this always-rendered sweep cannot reach it and its chord discipline
-       is the component's own keydown guard (isChord, pinned in source).
+       is the component's own keydown guard: onSetMenuKeydown opens on
+       isChord, asserted by the media-sets pin in tests/sections.test.mjs.
        What remains reachable here is asserted genuinely present below, so
        losing it fails loudly rather than shrinking in silence. */
     const surfaces = {

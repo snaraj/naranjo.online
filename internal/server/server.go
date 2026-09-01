@@ -186,6 +186,16 @@ func newStaticFile(name string, data []byte) *staticFile {
 		cacheControl = immutableCacheControl
 	}
 	contentType := mime.TypeByExtension(path.Ext(name))
+	if path.Ext(name) == ".woff2" {
+		// The typeface travels in the bundle (issue 275), and .woff2 is in
+		// neither Go's builtin table nor the distroless image, which carries no
+		// /etc mime registry to extend it — so in production this would fall
+		// through to the octet-stream default below. Fail-inert (font fetches
+		// never enforce the served type), but avoidably untyped: one pinned row
+		// keeps it host-independent, the same no-host-registry reasoning
+		// mediaTypes states for operator files.
+		contentType = "font/woff2"
+	}
 	if contentType == "" {
 		// The embedded bundle is build-controlled, so an extension outside the
 		// MIME registry is a packaging surprise, not a delivery feature. Pinning
