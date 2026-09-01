@@ -147,11 +147,16 @@ keeps the last good payload and says so in the envelope `status`.
   and every alias (2026-08-24 round-3 review, finding 7).
 - **Strict admission.** The app reads at most the one sealed-byte cap
   documented below, unseals, strict-decodes `usage-series/v1` (unknown
-  fields refused, closed window/derived/CATEGORY vocabularies — a pushed
-  file can never mint a category label; the five accounting classes are the
-  whole set — categories must partition the day totals), refuses replays via
+  fields refused, closed window/derived/CATEGORY/captured-stat vocabularies
+  — a pushed file can never mint a category label or a tile; the five
+  accounting classes are the whole set — categories must partition the day
+  totals), refuses replays via
   a monotonic `generatedAt` floor, and re-checks the serving byte budget
-  before publishing.
+  before publishing. Since issue #276 a document must also refresh every
+  LIFETIME-CLASS tile the embedded snapshot ships (lifetime, the four
+  class totals, sessions), for the same reason `windows` and `derived` are
+  required whole: a frozen release-time lifetime beside a runtime series is
+  two ages of data under one instant.
 - **One producer owns the panel.** When `PANELS_DATA_ROOT` is set, the
   sealed data root OWNS the token-usage panel and the credentialed live
   refresh never fetches it — the pod logs that decision once at startup
@@ -230,20 +235,23 @@ admitted, and an oversized one was truncated, atomically installed over the
 last good file, and only then reported as a checksum mismatch.
 
 The ceiling is measured, not guessed, and the measurement has been REDONE
-twice — at the 2026-08-24 round-3 review, when a required per-source
+three times — at the 2026-08-24 round-3 review, when a required per-source
 `capturedAt` and mandatory window and derived sections made the printed
-figures stale, and again for issue #170, which added the per-model
-partition. The structural maximum the origin can admit is one document
+figures stale; again for issue #170, which added the per-model
+partition; and again for issue #276, which grew the derived set to five and
+added the captured-stats section. The structural maximum the origin can
+admit is one document
 covering both shipped snapshot sources, each at the 732-day series bound with
 the complete five-key category vocabulary, the complete five-key model
-vocabulary over its own 92-day window, and every required section present.
-Compact-encoded and sealed, that measures **109,280 bytes** at ten-digit daily
+vocabulary over its own 92-day window, the complete six-key captured-stats
+vocabulary, and every required section present.
+Compact-encoded and sealed, that measures **109,638 bytes** at ten-digit daily
 values — an order of magnitude above the shipped snapshot's own measured peak
-day of 1,911,380,289. Pretty-printed, the identical document is 216,898
-bytes, so compact output alone roughly halves it. 131,072 leaves **21,792
-bytes** of headroom: the same maximum still seals to 128,708 bytes at
+day of 1,911,380,289. Pretty-printed, the identical document is 217,482
+bytes, so compact output alone roughly halves it. 131,072 leaves **21,434
+bytes** of headroom: the same maximum still seals to 129,090 bytes at
 twelve-digit values and only crosses the ceiling at thirteen, where it
-reaches 138,422.
+reaches 138,816.
 
 The models section spent one decimal digit of that headroom — it was three
 before #170 — and that is precisely the trade its 92-day window bounds. One
@@ -279,6 +287,49 @@ it. A file sealed at exactly 131,072 bytes is therefore refused at serve
 time. What equality buys is only that the last step no longer hides a
 SMALLER ceiling than the four before it; what makes an over-budget document
 safe is the refusal itself, which keeps the last good response serving.
+
+## Days, lifetime figures, and the one-time baselines (issue #276)
+
+**Days are the workstation's LOCAL calendar days.** The owner ruled
+(2026-09-01) that going-forward correctness means matching the vendors' own
+surfaces, and those bucket in local days; the earlier UTC rule put a visible
+±1-day skew on every boundary figure — a 12-day vendor streak read 13 here
+the moment one evening crossed UTC midnight. `local_day` in
+`scripts/capture_usage_series.py` is where the decision is enforced, per
+instant and DST-correct, and the "today" the windows and streaks read
+follows the same clock. Instants (`generatedAt`, `capturedAt`) remain UTC —
+only the day BUCKETING is local. One honest residual: history-store days
+written under the old UTC rule keep their stored figures wherever those are
+larger (the store's evidence-survives rule is deliberate and unchanged), so
+old boundary days may carry the UTC-bucketed split; going forward every day
+buckets locally.
+
+**Lifetime-class tiles track the tool's own accounting.** The walked
+source's activity cache carries the tool's per-model lifetime totals and
+session tally, and every push now reads them into the document's `stats`
+section, so the lifetime, class-total, and session tiles move with every
+push instead of freezing at the release snapshot (the defect the owner
+reported: a lifetime tile 10B behind the vendor's own page).
+
+**A source whose full accounting never reaches this machine gets a
+baseline.** Retention floors mean the local record starts long after the
+vendor's count did, so no local walk can reconstruct such a source's
+lifetime. The owner-sanctioned correction is
+`scripts/usage-export/lifetime-baselines.json` — committed repo DATA (source
+keys, token totals, calendar days; nothing requirement 12 guards) so the
+one-time reading is reviewable — recording the vendor surface's own reading
+and the last day that reading covers. The export then emits `baseline +
+every captured day STRICTLY after the as-of day`; the as-of day itself
+never re-accrues. The shipped entry is exact rather than screenshot-derived:
+the vendor's own export (2026-09-01T07:56:32Z) reported the precise
+lifetime figure while its own bucket for 2026-09-01 still read zero, so the
+reading covers exactly the days through 2026-08-31 and the as-of day
+carries no residual — the remaining drift is only the vendor-versus-local
+capture disagreement the shared-window comparison measured at about a
+percent. To re-baseline after a
+drift review: read the vendor surface again, replace the entry's `total`
+and `asOf` together, and land it through review like any other artifact
+change.
 
 ## Workstation setup
 
@@ -375,11 +426,17 @@ safe is the refusal itself, which keeps the last good response serving.
    tree the roll-up runs roughly twice as high on days both cover, so the
    two are never summed and the walk always wins a conflict.
 
-   The option is optional and the refusal is narrow: configure nothing and
-   the series is simply shorter, which is honest. Configure a path that is
-   not a readable file and the run REFUSES before it pushes, because a
-   silently dropped cache would shorten the published history with nothing
-   anywhere saying why.
+   Since issue #276 the cache also supplies the walked source's
+   LIFETIME-CLASS stats (`modelUsage`/`totalSessions`), and the origin
+   refuses a document that leaves those tiles unrefreshed. So the option's
+   real weight changed: configure nothing and the push itself refuses at the
+   origin whenever the shipped snapshot carries lifetime-class tiles for the
+   walked source — the panel goes visibly stale instead of serving frozen
+   tiles. Configure a path that is
+   not a readable file — or a cache without the lifetime accounting — and
+   the run REFUSES before it pushes, because a
+   silently dropped cache would freeze the lifetime tiles (and shorten the
+   published history) with nothing anywhere saying why.
 
    `MERGE_CAPTURES` is the same idea for a SECOND tool whose records live on
    this machine: each `KEY=FORMAT=DIRECTORY` triple is walked fresh at the
@@ -595,6 +652,7 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | panel `status: stale` after every push, panel never advances | the document does not cover every shipped source — add the missing `MERGE_SOURCES` entry (see step 4) — or one of its sections is malformed |
 | panel `status: stale`, sealed file gone from the data dir | the runtime document this pod had already served from was deleted or unmounted: the data is retained, the freshness claim is not (2026-08-24 security review, finding 5). Before the FIRST push an absent file is the ordinary cold state and stays `ok` on the embedded snapshot |
 | panel serves embedded snapshot | `panels.data.enabled=false` (the default — the documented as-of-release decision), or no sealed file yet — the shipped state, not an error |
+| panel shows "data through … · last capture …" | the frontend's own staleness reading (issue #276): the envelope says `stale`, or its `generatedAt` has fallen more than two days behind — the one state the origin structurally cannot flag itself, since an unchanged file is its ordinary between-pushes state. Check the workstation's scheduled export first |
 | floor marker absent in the state dir, no `token-usage.floor.init` beside it | a first boot: benign, the floor is the embedded snapshot's, and the first published push writes both files |
 | floor marker absent but `token-usage.floor.init` present | the durable floor was INITIALIZED and its marker is now gone — deleted, or lost with the volume. Durable mode refuses the tick and reports `stale` instead of cold-starting on a floor of zero (2026-08-24 round-3 review, finding 4). The reset ceremony below is the only way out |
 | floor marker present but corrupt, unauthentic, or future-dated | durable mode refuses the tick and reports `stale` rather than serving on a silently lowered floor. The reset ceremony below is the only way out |

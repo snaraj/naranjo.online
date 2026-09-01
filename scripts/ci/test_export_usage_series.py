@@ -43,7 +43,18 @@ import os
 import pathlib
 import re
 import tempfile
+import time
 import unittest
+
+
+def setUpModule():
+    # The capture buckets records into the WORKSTATION-LOCAL calendar day
+    # (issue #276), so day expectations here depend on the process timezone;
+    # TZ=UTC pins the suite deterministic on every machine, exactly as
+    # test_capture_usage_series.py pins it. The local-day decision itself is
+    # proven there, in LocalDayTest, under explicitly staged zones.
+    os.environ["TZ"] = "UTC"
+    time.tzset()
 
 _MODULE_PATH = pathlib.Path(__file__).resolve().parents[1] / "export_usage_series.py"
 _SPEC = importlib.util.spec_from_file_location("export_usage_series", _MODULE_PATH)
@@ -119,7 +130,13 @@ def merge_document(**overrides):
     document = {
         "generatedAt": MERGE_CAPTURED_AT,
         "series": {"startDate": "2026-08-10", "totals": [30, 10], "recorded": True},
-        "derived": {"peak-day": 30, "current-streak": 2, "longest-streak": 2},
+        "derived": {
+            "peak-day": 30,
+            "current-streak": 2,
+            "longest-streak": 2,
+            "active-days": 2,
+            "tracked-days": 2,
+        },
         "categories": {
             "input": [10, 4],
             "output": [5, 3],
@@ -158,6 +175,8 @@ def merge_section(days, value):
             "peak-day": value * len(capture.CATEGORY_KEYS),
             "current-streak": days,
             "longest-streak": days,
+            "active-days": days,
+            "tracked-days": days,
         },
     }
 
@@ -761,11 +780,162 @@ class MergeSourceTest(unittest.TestCase):
             ),
             "unknown derived key": merge_document(derived={"sessions": 4}),
             "prose in derived": merge_document(derived={"peak-day": LEAK_PROSE}),
+            # The captured-stats section (issue #276): optional as a section,
+            # closed and count-bounded per key like every other figure.
+            "stats not an object": merge_document(stats=[1]),
+            "empty stats section": merge_document(stats={}),
+            "stats key outside the vocabulary": merge_document(stats={"window-total": 1}),
+            "prose in stats": merge_document(stats={"lifetime": LEAK_PROSE}),
+            "negative stat": merge_document(stats={"lifetime": -1}),
+            "boolean stat": merge_document(stats={"lifetime": True}),
+            "stat over the shared count bound": merge_document(
+                stats={"lifetime": capture.MAX_COUNT + 1}
+            ),
         }
         for name, document in cases.items():
             with self.subTest(name):
                 with self.assertRaises(CaptureError):
                     self.load(document)
+
+    def test_a_stats_section_is_admitted_against_the_closed_vocabulary(self):
+        # The positive half of the issue-#276 section: vocabulary members
+        # ride through verbatim, and an ABSENT section stays absent — which
+        # tiles a source owes is the origin's call, measured against its own
+        # snapshot inventory, not this loader's.
+        section, _captured = self.load(merge_document(stats={"lifetime": 99, "sessions": 4}))
+        self.assertEqual(section["stats"], {"lifetime": 99, "sessions": 4})
+        section, _captured = self.load(merge_document())
+        self.assertNotIn("stats", section)
+
+
+class LifetimeBaselineTest(unittest.TestCase):
+    """The one-time baselines table and its accrual rule (issue #276).
+
+    A vendor whose full accounting never reaches this machine leaves a
+    lifetime figure local data cannot reconstruct — retention floors mean
+    the local record starts long after the vendor's own count did. The
+    owner-sanctioned correction is a committed baseline (the vendor
+    surface's own reading, with the local day it was read on) from which the
+    figure tracks as baseline plus every day captured STRICTLY after that
+    day. The as-of day itself never re-accrues: most of it is already inside
+    the reading, and the honest residual is the sliver of that one evening
+    after it — permanently excluded rather than double-counted.
+    """
+
+    REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+    def write_table(self, scratch, document):
+        path = pathlib.Path(scratch) / "baselines.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        return path
+
+    def table(self, baselines):
+        return {"schema": export_usage_series.BASELINES_SCHEMA, "baselines": baselines}
+
+    def test_the_shipped_table_is_loadable_and_carries_the_sanctioned_baseline(self):
+        # The committed table IS the owner ruling of 2026-09-01: the vendor
+        # surface's exact lifetime reading (46,336,700,095, exported
+        # 2026-09-01T07:56:32Z, at which instant the vendor's own bucket for
+        # 2026-09-01 was still zero — so the reading covers exactly the days
+        # through 2026-08-31 and the as-of day carries no residual). This pin
+        # makes the sanctioned numbers reproducible by review. The key is
+        # asserted label-shaped rather than spelled: source labels are data,
+        # and this suite keeps vendor names out of its own text.
+        table = export_usage_series.load_lifetime_baselines(
+            self.REPO_ROOT / "scripts/usage-export/lifetime-baselines.json"
+        )
+        self.assertEqual(len(table), 1)
+        ((key, entry),) = table.items()
+        self.assertTrue(export_usage_series.valid_source_key(key))
+        self.assertEqual(entry, (46_336_700_095, "2026-08-31"))
+
+    def test_a_malformed_table_refuses_the_run(self):
+        for name, document in {
+            "not an object": [1, 2],
+            "missing schema": {"baselines": {}},
+            "wrong schema": {"schema": "usage-series/v1", "baselines": {}},
+            "unknown top-level key": dict(self.table({}), notes="prose"),
+            "baselines not an object": self.table([1]),
+            "key not label-shaped": self.table({"Not A Key": {"total": 1, "asOf": "2026-08-31"}}),
+            "entry not an object": self.table({"beta": 5}),
+            "unknown entry field": self.table(
+                {"beta": {"total": 1, "asOf": "2026-08-31", "note": "x"}}
+            ),
+            "zero total": self.table({"beta": {"total": 0, "asOf": "2026-08-31"}}),
+            "boolean total": self.table({"beta": {"total": True, "asOf": "2026-08-31"}}),
+            "total over the shared count bound": self.table(
+                {"beta": {"total": capture.MAX_COUNT + 1, "asOf": "2026-08-31"}}
+            ),
+            "as-of not a calendar day": self.table({"beta": {"total": 1, "asOf": "2026-99-99"}}),
+        }.items():
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as scratch:
+                    path = self.write_table(scratch, document)
+                    with self.assertRaises(CaptureError):
+                        export_usage_series.load_lifetime_baselines(path)
+
+    def section_with_series(self, start, totals, stats=None):
+        section = {"series": {"startDate": start, "totals": totals, "recorded": True}}
+        if stats is not None:
+            section["stats"] = dict(stats)
+        return section
+
+    def test_accrues_only_the_days_strictly_after_the_as_of_day(self):
+        # The series spans the as-of day and both sides of it: the day
+        # before and the day itself sit inside the vendor reading, so only
+        # the two later days accrue.
+        sources = {"beta": self.section_with_series("2026-08-30", [100, 200, 40, 2])}
+        export_usage_series.apply_lifetime_baselines(
+            sources, {"beta": (1_000, "2026-08-31")}
+        )
+        self.assertEqual(sources["beta"]["stats"], {"lifetime": 1_042})
+
+    def test_a_baseline_older_than_the_whole_series_accrues_every_day(self):
+        sources = {"beta": self.section_with_series("2026-08-30", [100, 200])}
+        export_usage_series.apply_lifetime_baselines(
+            sources, {"beta": (1_000, "2026-08-01")}
+        )
+        self.assertEqual(sources["beta"]["stats"]["lifetime"], 1_300)
+
+    def test_a_table_key_absent_from_this_export_is_skipped(self):
+        # The table describes the shipped production source set; the
+        # exporter stays generic over whatever an operator configures. The
+        # fail-closed net for a drifted table is the origin's tile-inventory
+        # completeness check, which turns the panel visibly stale.
+        sources = {"beta": self.section_with_series("2026-08-30", [100])}
+        export_usage_series.apply_lifetime_baselines(
+            sources, {"gamma": (1_000, "2026-08-01")}
+        )
+        self.assertNotIn("stats", sources["beta"])
+
+    def test_a_baseline_colliding_with_a_captured_lifetime_is_refused(self):
+        # Two derivations claiming one tile: neither could be trusted over
+        # the other, so the contradiction refuses the run by name.
+        sources = {
+            "beta": self.section_with_series("2026-08-30", [100], stats={"lifetime": 5})
+        }
+        with self.assertRaises(CaptureError) as caught:
+            export_usage_series.apply_lifetime_baselines(
+                sources, {"beta": (1_000, "2026-08-01")}
+            )
+        self.assertIn("collides", str(caught.exception))
+
+    def test_a_baseline_joins_captured_stats_without_displacing_them(self):
+        sources = {
+            "beta": self.section_with_series("2026-08-30", [100], stats={"sessions": 9})
+        }
+        export_usage_series.apply_lifetime_baselines(
+            sources, {"beta": (1_000, "2026-08-01")}
+        )
+        self.assertEqual(sources["beta"]["stats"], {"sessions": 9, "lifetime": 1_100})
+
+    def test_an_accrual_past_the_shared_count_bound_is_refused(self):
+        sources = {"beta": self.section_with_series("2026-08-30", [1])}
+        with self.assertRaises(CaptureError) as caught:
+            export_usage_series.apply_lifetime_baselines(
+                sources, {"beta": (capture.MAX_COUNT, "2026-08-01")}
+            )
+        self.assertIn("count bound", str(caught.exception))
 
 
 class ExportTest(unittest.TestCase):
@@ -902,6 +1072,45 @@ class MainTest(unittest.TestCase):
             r"^files=\d+ unreadable=\d+ symlinks=\d+ oversized=\d+ lines=\d+ counted=\d+ "
         r"duplicates=\d+ unpartitioned=\d+ unattributed=\d+ sources=\d+$",
         )
+
+    def test_the_baselines_argument_reaches_the_accrual(self):
+        # Issue #276, end to end through the CLI: a committed table naming
+        # the walked source sets its lifetime figure, and a malformed table
+        # refuses the run with a diagnostic that names the table and never a
+        # path.
+        with tempfile.TemporaryDirectory() as scratch:
+            root = os.path.join(scratch, "transcripts")
+            self.tree(root)
+            table = os.path.join(scratch, "baselines.json")
+            with open(table, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "schema": export_usage_series.BASELINES_SCHEMA,
+                        "baselines": {"alpha": {"total": 1_000, "asOf": "2026-08-01"}},
+                    },
+                    handle,
+                )
+            out = os.path.join(scratch, "usage.json")
+            code, _stdout, stderr = self.run_main(
+                ["--transcripts", root, "--source", "alpha", "--out", out,
+                 "--lifetime-baselines", table]
+            )
+            self.assertEqual(code, 0, stderr)
+            with open(out, "r", encoding="utf-8") as handle:
+                document = json.load(handle)
+            walked = sum(document["sources"]["alpha"]["series"]["totals"])
+            self.assertEqual(
+                document["sources"]["alpha"]["stats"]["lifetime"], 1_000 + walked
+            )
+            with open(table, "w", encoding="utf-8") as handle:
+                handle.write("{}")
+            code, _stdout, stderr = self.run_main(
+                ["--transcripts", root, "--source", "alpha", "--out", out,
+                 "--lifetime-baselines", table]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("baselines table is malformed", stderr)
+            self.assertNotIn(scratch, stderr)
 
     def test_a_history_store_carries_the_walked_source_across_pruning(self):
         # Issue #234, end to end through the CLI: the walked tree is

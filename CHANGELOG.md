@@ -7,6 +7,32 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.70] - 2026-09-01
+
+### Fixed
+
+- The usage panel's lifetime-class tiles no longer freeze at the release
+  snapshot (issue #276). The sealed push now refreshes every lifetime-class
+  tile the snapshot ships — lifetime, the four class totals, sessions — from
+  the producing tool's own accounting, and the origin refuses a document
+  that leaves one at its release-time value: the same completeness
+  discipline the windows and derived tiles earned in the 2026-08-24 reviews.
+  A source whose full accounting never reaches the workstation tracks from a
+  committed one-time baseline (the vendor surface's own reading, with its
+  as-of day) plus every day captured strictly after it.
+- `active-days` and `tracked-days` joined the series-derived vocabulary in
+  its pinned places, so those tiles now move with the graph they sit above
+  instead of contradicting it; the embedded snapshot's own values moved to
+  what its embedded series defines.
+- Day bucketing switched from UTC to the workstation's local calendar day —
+  an explicit, tested exporter decision matching the vendors' own surfaces,
+  which ends the ±1-day skew on every boundary figure. The windows and
+  streaks follow the same clock.
+- A stalled capture pipeline is now visible on the panel (the rendering half
+  of issue #267): when the envelope says stale, or its own `generatedAt`
+  falls more than two days behind, the panel renders an honest
+  "data through … · last capture …" line instead of fresh-looking tiles.
+
 ## [0.1.69] - 2026-09-01
 
 ### Fixed

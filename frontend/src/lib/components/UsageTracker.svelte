@@ -66,7 +66,7 @@
   import ContributionGrid from './ContributionGrid.svelte';
   import PanelShell from './PanelShell.svelte';
 
-  let { id, title, status, generatedAt, sections, emptyNote }: UsageTrackerProps = $props();
+  let { id, title, status, generatedAt, sections, emptyNote, staleNote }: UsageTrackerProps = $props();
 
   /* THE FIXED READING (owner directive, 2026-08-28). Everything this
      component used to hold as presentation state — a per-source view lens, a
@@ -109,6 +109,15 @@
 
 <aside class="usage-tracker" data-panel-id={id} aria-label={title}>
   <PanelShell {title} {status} {generatedAt}>
+    <!-- The data-through line (issue 276): rendered exactly when the
+      adapter proved the payload stopped advancing, above every section so a
+      reader meets the caveat before the figures it qualifies. The tiles and
+      graphs below keep rendering — the data is real, its freshness is the
+      only claim being corrected — which is the origin's own retention
+      posture told at the surface. -->
+    {#if staleNote}
+      <p class="usage-stale" data-usage-stale>{staleNote}</p>
+    {/if}
     {#if sections.length === 0}
       <p class="usage-empty">{emptyNote}</p>
     {:else}
@@ -788,6 +797,15 @@
   .usage-empty {
     margin: 0;
     font-style: italic;
+    color: var(--panel-muted, rgb(158, 158, 158));
+  }
+
+  /* The stale line wears the muted ink but not the italic: it is a factual
+     reading ("data through …"), not an empty-state apology, and it must not
+     be mistaken for one. */
+  .usage-stale {
+    margin: 0;
+    font-size: var(--panel-badge-size, 0.6875rem);
     color: var(--panel-muted, rgb(158, 158, 158));
   }
 </style>

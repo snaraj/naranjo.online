@@ -58,14 +58,14 @@
           {
             "key": "active-days",
             "label": "Active days",
-            "value": 17,
+            "value": 11,
             "unit": "days",
             "recorded": true
           },
           {
             "key": "tracked-days",
             "label": "Days tracked",
-            "value": 54,
+            "value": 15,
             "unit": "days",
             "recorded": true
           },

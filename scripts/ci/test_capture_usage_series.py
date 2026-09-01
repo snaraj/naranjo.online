@@ -25,7 +25,20 @@ import re
 import shutil
 import pathlib
 import tempfile
+import time
 import unittest
+
+
+def setUpModule():
+    # The capture buckets records into the WORKSTATION-LOCAL calendar day
+    # (issue #276), so every day expectation in this suite depends on the
+    # process timezone. Pinning TZ=UTC once makes the suite deterministic on
+    # every machine — CI runners and developer laptops in any zone alike —
+    # and LocalDayTest is the one place a non-UTC zone is staged, explicitly,
+    # to prove the local bucketing is real rather than a UTC rule wearing a
+    # new name.
+    os.environ["TZ"] = "UTC"
+    time.tzset()
 
 _MODULE_PATH = pathlib.Path(__file__).resolve().parents[1] / "capture_usage_series.py"
 _SPEC = importlib.util.spec_from_file_location("capture_usage_series", _MODULE_PATH)
@@ -684,7 +697,10 @@ class RunningTotalsCaptureTest(unittest.TestCase):
         self.assertEqual(
             series, {"startDate": "2026-08-23", "totals": [60, 0, 140], "recorded": True}
         )
-        self.assertEqual(derived, {"peak-day": 140, "current-streak": 1, "longest-streak": 1})
+        self.assertEqual(
+            derived,
+            {"peak-day": 140, "current-streak": 1, "longest-streak": 1, "active-days": 2, "tracked-days": 3},
+        )
         # This shape journals no model at all, so the models section is
         # ABSENT rather than a single residual row that repeats the aggregate.
         self.assertNotIn("models", section)
@@ -739,6 +755,18 @@ class ActivityCacheTest(unittest.TestCase):
                     }
                     for day, amounts in rows
                 ],
+                # The lifetime accounting a configured cache must carry
+                # (issue #276); LifetimeStatsTest owns its own arithmetic and
+                # refusal rows, so this fixture only has to be admissible.
+                capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: {
+                    "avendor-%s" % self.MEMBER: {
+                        "inputTokens": 6,
+                        "outputTokens": 7,
+                        "cacheReadInputTokens": 8,
+                        "cacheCreationInputTokens": 9,
+                    }
+                },
+                capture_usage_series.ACTIVITY_CACHE_SESSIONS_KEY: 3,
             }
         )
 
@@ -844,6 +872,135 @@ class ActivityCacheTest(unittest.TestCase):
         )
         self.assertEqual(section["series"]["startDate"], "2026-08-09")
         self.assertEqual(section["series"]["totals"], [2, 135])
+
+    def test_a_configured_cache_supplies_the_captured_stats_section(self):
+        # Issue #276: the same cache document also carries the tool's own
+        # lifetime accounting, and a capture that reads the cache emits it as
+        # the closed captured-stats section — the figures the frozen
+        # lifetime-class tiles stopped tracking.
+        section, _counters = self.capture_with(
+            [("2026-07-30", {"avendor-%s" % self.MEMBER: 4_000})]
+        )
+        self.assertEqual(
+            section["stats"],
+            {
+                "input": 6,
+                "output": 7,
+                "cache-read": 8,
+                "cache-write": 9,
+                "lifetime": 30,
+                "sessions": 3,
+            },
+        )
+
+
+class LifetimeStatsTest(unittest.TestCase):
+    """The cache's lifetime accounting, summed and fail-closed (issue #276).
+
+    Every refusal here refuses the whole run rather than dropping a figure,
+    because the origin refuses a document that leaves a lifetime-class tile
+    unrefreshed: a cache that stops carrying this accounting must stop the
+    push loudly at the producer, not feed the origin a document it rejects on
+    every five-minute tick.
+    """
+
+    def document(self, **overrides):
+        base = {
+            capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: {
+                "avendor-alpha": {
+                    "inputTokens": 1,
+                    "outputTokens": 2,
+                    "cacheReadInputTokens": 3,
+                    "cacheCreationInputTokens": 4,
+                },
+                "avendor-beta": {
+                    "inputTokens": 10,
+                    "outputTokens": 20,
+                    "cacheReadInputTokens": 30,
+                    "cacheCreationInputTokens": 40,
+                },
+            },
+            capture_usage_series.ACTIVITY_CACHE_SESSIONS_KEY: 7,
+        }
+        base.update(overrides)
+        return base
+
+    def test_sums_the_four_classes_and_their_whole(self):
+        self.assertEqual(
+            capture_usage_series.lifetime_stats(self.document()),
+            {
+                "input": 11,
+                "output": 22,
+                "cache-read": 33,
+                "cache-write": 44,
+                "lifetime": 110,
+                "sessions": 7,
+            },
+        )
+
+    def test_every_malformed_corner_refuses_the_run(self):
+        member = {
+            "inputTokens": 1,
+            "outputTokens": 2,
+            "cacheReadInputTokens": 3,
+            "cacheCreationInputTokens": 4,
+        }
+        for name, document in {
+            "no usage accounting at all": self.document(
+                **{capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: None}
+            ),
+            "empty usage accounting": self.document(
+                **{capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: {}}
+            ),
+            "an entry that is not an object": self.document(
+                **{capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: {"m": 5}}
+            ),
+            "a missing class field": self.document(
+                **{
+                    capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: {
+                        "m": {k: v for k, v in member.items() if k != "outputTokens"}
+                    }
+                }
+            ),
+            "a negative count": self.document(
+                **{
+                    capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: {
+                        "m": dict(member, inputTokens=-1)
+                    }
+                }
+            ),
+            "a boolean count": self.document(
+                **{
+                    capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: {
+                        "m": dict(member, inputTokens=True)
+                    }
+                }
+            ),
+            "a fractional count": self.document(
+                **{
+                    capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: {
+                        "m": dict(member, inputTokens=1.5)
+                    }
+                }
+            ),
+            "no session tally": self.document(
+                **{capture_usage_series.ACTIVITY_CACHE_SESSIONS_KEY: None}
+            ),
+            "a boolean session tally": self.document(
+                **{capture_usage_series.ACTIVITY_CACHE_SESSIONS_KEY: True}
+            ),
+            "a sum past the shared count bound": self.document(
+                **{
+                    capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: {
+                        "m": dict(member, inputTokens=capture_usage_series.MAX_COUNT),
+                        "n": dict(member, inputTokens=1),
+                    }
+                }
+            ),
+        }.items():
+            with self.subTest(name=name):
+                with self.assertRaises(CaptureError):
+                    capture_usage_series.lifetime_stats(document)
 
 
 class HistoryStoreTest(unittest.TestCase):
@@ -1429,17 +1586,52 @@ class ImportSurfaceTest(unittest.TestCase):
         self.assertGreater(len(self.imported_roots()), 3)
 
 
-class UTCDayTest(unittest.TestCase):
-    def test_an_offset_instant_lands_on_its_utc_day(self):
-        # The live mapper indexes days in UTC, so a capture that used local
-        # time would shift every cell for anyone west of Greenwich.
-        self.assertEqual(capture_usage_series.utc_day("2026-08-10T20:00:00-07:00"), "2026-08-11")
+class LocalDayTest(unittest.TestCase):
+    """local_day is THE bucketing decision (issue #276, owner ruling
+    2026-09-01): a record lands on the workstation's local calendar day,
+    because that is how the vendors' own surfaces bucket and matching them is
+    what going-forward correctness means. The suite runs pinned to TZ=UTC for
+    determinism, so these tests stage non-UTC zones explicitly — POSIX
+    fixed-offset strings, portable across macOS and the CI runners — and
+    restore the pin afterwards. Under UTC these cases are indistinguishable
+    from the retired UTC rule, which is exactly why the staged zones are what
+    makes this suite able to fail."""
+
+    def pinned(self, zone):
+        os.environ["TZ"] = zone
+        time.tzset()
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        os.environ["TZ"] = "UTC"
+        time.tzset()
+
+    def test_an_instant_lands_on_the_local_day_west_of_greenwich(self):
+        # 03:51Z on the 24th is still the evening of the 23rd at UTC-5. The
+        # retired UTC rule filed that evening under the 24th — the exact
+        # ±1-day skew the owner measured against the vendor surfaces (a
+        # 12-day vendor streak reading 13 here).
+        self.pinned("EST5")
+        self.assertEqual(capture_usage_series.local_day("2026-08-24T03:51:18Z"), "2026-08-23")
+
+    def test_an_instant_lands_on_the_local_day_east_of_greenwich(self):
+        self.pinned("JST-9")
+        self.assertEqual(capture_usage_series.local_day("2026-08-23T20:00:00Z"), "2026-08-24")
+
+    def test_an_offset_instant_is_normalized_before_bucketing(self):
+        # Under the suite's TZ=UTC pin the local day IS the UTC day, so an
+        # instant carrying its own offset lands where the arithmetic says.
+        self.assertEqual(capture_usage_series.local_day("2026-08-10T20:00:00-07:00"), "2026-08-11")
 
     def test_a_naive_instant_is_read_as_utc(self):
-        self.assertEqual(capture_usage_series.utc_day("2026-08-10T00:30:00"), "2026-08-10")
+        # A journal record that omits its zone is a UTC instant, never
+        # silently a local one: at UTC-5 the naive 00:30 is 19:30 the
+        # previous local evening.
+        self.pinned("EST5")
+        self.assertEqual(capture_usage_series.local_day("2026-08-10T00:30:00"), "2026-08-09")
 
     def test_an_unparseable_instant_is_no_day_at_all(self):
-        self.assertIsNone(capture_usage_series.utc_day("the tenth"))
+        self.assertIsNone(capture_usage_series.local_day("the tenth"))
 
 
 class DailySeriesTest(unittest.TestCase):
@@ -1744,6 +1936,69 @@ class ModelVocabularyParityTest(unittest.TestCase):
         )
 
 
+class DerivedVocabularyParityTest(unittest.TestCase):
+    """The closed derived vocabulary is ONE fact on both ends of the pipe.
+
+    The producer's derived_figures defines what a series emission carries;
+    internal/panels/types.go usageSeriesDerivedKeys is what the origin
+    requires COMPLETE and refuses beyond. A key added on one side alone is
+    either a document the origin rejects on every push (producer wider) or a
+    tile no push can ever refresh again (origin wider) — issue #276 grew the
+    set to five precisely because the second failure mode is what froze the
+    active-days and tracked-days tiles. The Go map's keys are identifiers, so
+    the pin resolves them through the stat-key const block first.
+    """
+
+    REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+    def test_matches_the_go_derived_vocabulary(self):
+        source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
+        constants = dict(re.findall(r'\b(stat\w+)\s+=\s+"([^"]+)"', source))
+        self.assertTrue(constants, "internal/panels/types.go carries no stat-key constants")
+        match = required_match(
+            r"usageSeriesDerivedKeys = map\[string\]string\{([^}]*)\}",
+            source,
+            "internal/panels/types.go carries no usageSeriesDerivedKeys",
+        )
+        identifiers = re.findall(r"(stat\w+):", match.group(1))
+        go_keys = {constants[name] for name in identifiers}
+        self.assertEqual(len(go_keys), len(identifiers), "an unresolved or repeated stat key")
+        produced = set(capture_usage_series.derived_figures({"totals": [1]}))
+        self.assertEqual(
+            go_keys,
+            produced,
+            "usageSeriesDerivedKeys in internal/panels/types.go and derived_figures in "
+            "scripts/capture_usage_series.py must define the identical closed set",
+        )
+
+
+class StatsVocabularyParityTest(unittest.TestCase):
+    """The closed captured-stats vocabulary is ONE fact on both ends too.
+
+    scripts/capture_usage_series.py STATS_KEYS bounds what a producer may
+    emit; internal/panels/types.go usageSeriesStatKeys bounds what the origin
+    admits and which snapshot tiles it requires refreshed (issue #276). The
+    same two failure modes as the derived pin, so the same discipline.
+    """
+
+    REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+    def test_matches_the_go_captured_vocabulary(self):
+        source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
+        match = required_match(
+            r"usageSeriesStatKeys = map\[string\]string\{([^}]*)\}",
+            source,
+            "internal/panels/types.go carries no usageSeriesStatKeys",
+        )
+        go_keys = set(re.findall(r'"([^"]+)":', match.group(1)))
+        self.assertEqual(
+            go_keys,
+            set(capture_usage_series.STATS_KEYS),
+            "usageSeriesStatKeys in internal/panels/types.go and STATS_KEYS in "
+            "scripts/capture_usage_series.py must define the identical closed set",
+        )
+
+
 class CapParityTest(unittest.TestCase):
     """The payload ceiling is ONE fact spelled in five places.
 
@@ -1841,6 +2096,15 @@ class CapParityTest(unittest.TestCase):
                         "peak-day": total,
                         "current-streak": days,
                         "longest-streak": days,
+                        "active-days": days,
+                        "tracked-days": days,
+                    },
+                    # The captured-stats section at its widest (issue #276):
+                    # every vocabulary member, each at the ladder value, on
+                    # every source — wider than any real document, which is
+                    # the right direction for a structural maximum.
+                    "stats": {
+                        key: value for key in capture_usage_series.STATS_KEYS
                     },
                 }
                 for label in labels
@@ -1992,7 +2256,13 @@ class CaptureTest(unittest.TestCase):
         derived = section["derived"]
 
         self.assertEqual(series, {"startDate": "2026-08-10", "totals": [135, 0, 7], "recorded": True})
-        self.assertEqual(derived, {"peak-day": 135, "current-streak": 1, "longest-streak": 1})
+        self.assertEqual(
+            derived,
+            {"peak-day": 135, "current-streak": 1, "longest-streak": 1, "active-days": 2, "tracked-days": 3},
+        )
+        # No activity cache means no captured-stats section: a lifetime
+        # figure this walk cannot measure is absent, never zero-filled.
+        self.assertNotIn("stats", section)
         self.assertEqual(counters["files"], 1)
         self.assertEqual(counters["duplicates"], 1)
         self.assertEqual(counters["counted"], 2)

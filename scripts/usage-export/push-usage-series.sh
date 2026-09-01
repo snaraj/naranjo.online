@@ -44,12 +44,17 @@
 #   ACTIVITY_CACHE  a rollup file the first tool maintains beside its
 #                   transcripts, naming per-day totals per model. It EXTENDS
 #                   the walked series backwards over days whose transcripts
-#                   the tool's own retention has already deleted, and nothing
-#                   else: a day the walk still holds keeps the walked figure,
+#                   the tool's own retention has already deleted, and it is
+#                   where the walked source's LIFETIME-CLASS stats come from
+#                   (issue #276: modelUsage/totalSessions). On the depth job
+#                   a day the walk still holds keeps the walked figure,
 #                   because that one is derived from the records themselves.
-#                   Optional by design — an absent or unreadable cache costs
-#                   depth, never correctness, so a run without one is a
-#                   shorter honest series rather than a failure.
+#                   Still optional in the script, but no longer free to omit
+#                   when the origin's snapshot ships lifetime-class tiles for
+#                   the walked source: a document without their refreshed
+#                   figures is refused whole there, so omitting the cache
+#                   costs the push, not merely depth — and the panel says so
+#                   by going stale instead of serving frozen tiles.
 #   MERGE_SOURCES   space-separated KEY=FILE pairs for further tools'
 #                   captured series, each file produced by an earlier capture
 #                   run. REQUIRED, together with MERGE_CAPTURES below,
@@ -134,6 +139,13 @@ EXPORT_SCRIPT="$REPO_DIR/scripts/export_usage_series.py"
 [ -f "$EXPORT_SCRIPT" ] || fail "export script not found under REPO_DIR"
 CAPTURE_SCRIPT="$REPO_DIR/scripts/capture_usage_series.py"
 [ -f "$CAPTURE_SCRIPT" ] || fail "capture script not found under REPO_DIR"
+# The one-time lifetime baselines are REPO DATA (issue #276): the owner's
+# sanctioned vendor readings, committed where review can reproduce them,
+# never operator configuration. A checkout without the table cannot keep the
+# baselined lifetime tiles tracking, so it refuses rather than pushing a
+# document the origin will reject on every tick.
+BASELINES_FILE="$REPO_DIR/scripts/usage-export/lifetime-baselines.json"
+[ -f "$BASELINES_FILE" ] || fail "lifetime baselines table not found under REPO_DIR"
 [ -x "$USAGESEAL_BIN" ] || fail "usageseal binary not executable"
 
 # The producer's capability boundary, and the reason it lives HERE rather than
@@ -228,7 +240,8 @@ done
 #    dropped cache would shorten the published history with nothing to say so,
 #    and a series that quietly loses two months of depth between runs is the
 #    failure this whole work package exists to end (issue #170).
-set -- --transcripts "$TRANSCRIPTS" --source "$SOURCE_LABEL" --out "$PLAIN"
+set -- --transcripts "$TRANSCRIPTS" --source "$SOURCE_LABEL" --out "$PLAIN" \
+    --lifetime-baselines "$BASELINES_FILE"
 if [ -n "$ACTIVITY_CACHE" ]; then
     [ -f "$ACTIVITY_CACHE" ] \
         || fail "ACTIVITY_CACHE does not name a file; a configured cache that cannot be read would silently shorten the series"

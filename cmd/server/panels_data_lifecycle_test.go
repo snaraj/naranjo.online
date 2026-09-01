@@ -91,7 +91,19 @@ func stageSealedSeries(t *testing.T, dir string, labels []string) string {
 				"today": map[string]any{"input": 24, "output": 7},
 				"week":  map[string]any{"input": 24, "output": 7},
 			},
-			"derived": map[string]any{"peak-day": 31, "current-streak": 2, "longest-streak": 2},
+			"derived": map[string]any{"peak-day": 31, "current-streak": 2, "longest-streak": 2, "active-days": 2, "tracked-days": 2},
+			// The complete captured-stats vocabulary (issue #276): every
+			// lifetime-class tile a source's snapshot ships must be
+			// refreshed, and a key naming no tile is validated and
+			// unrendered, so the full set satisfies every shipped label.
+			"stats": map[string]any{
+				"lifetime":    77,
+				"input":       11,
+				"output":      22,
+				"cache-read":  33,
+				"cache-write": 44,
+				"sessions":    55,
+			},
 		}
 	}
 	document := map[string]any{

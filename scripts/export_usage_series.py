@@ -82,7 +82,8 @@ and only this", never as "this program cannot spawn".
 `pathlib` plus the capture tool's own bounded walk do the same job.
 
     scripts/export_usage_series.py --transcripts DIR --source LABEL \\
-        [--activity-cache FILE] [--merge-source LABEL=FILE] [--out FILE]
+        [--activity-cache FILE] [--merge-source LABEL=FILE] \\
+        [--lifetime-baselines FILE] [--out FILE]
 """
 
 from __future__ import annotations
@@ -293,6 +294,7 @@ def load_merge_source(path, now):
         "models",
         "modelsStartDate",
         "windows",
+        "stats",
     }
     unknown = set(document) - allowed
     if unknown:
@@ -349,6 +351,8 @@ def load_merge_source(path, now):
         capture.STAT_PEAK_DAY,
         capture.STAT_CURRENT_STREAK,
         capture.STAT_LONGEST_STREAK,
+        capture.STAT_ACTIVE_DAYS,
+        capture.STAT_TRACKED_DAYS,
     }
     if not isinstance(derived, dict) or set(derived) != derived_keys:
         raise capture.CaptureError(
@@ -360,13 +364,135 @@ def load_merge_source(path, now):
     ):
         raise capture.CaptureError("a merge source derived figure is malformed")
     section["derived"] = derived
+    stats = document.get("stats")
+    if stats is not None:
+        # OPTIONAL, unlike windows and derived, because absence means
+        # something different here: the origin measures completeness against
+        # its own snapshot's TILE INVENTORY, so a source that ships no
+        # lifetime-class tile owes no figure, and a source that does ship one
+        # is refused THERE if this section fails to cover it. Validation is
+        # membership plus the shared count contract, same as every figure.
+        if not isinstance(stats, dict) or not stats:
+            raise capture.CaptureError("a merge source carries a malformed stats section")
+        for key, value in stats.items():
+            if key not in capture.STATS_KEYS:
+                raise capture.CaptureError(
+                    "a merge source stats key is outside its closed vocabulary"
+                )
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 0
+                or value > capture.MAX_COUNT
+            ):
+                raise capture.CaptureError("a merge source stats figure is malformed")
+        section["stats"] = stats
     return section, captured
 
 
-def export(root, source_key, merge_files, now, activity_cache=None, history_store=None):
+# The one-time lifetime baselines (issue #276, owner ruling 2026-09-01). A
+# vendor whose full accounting never reaches this machine leaves a lifetime
+# figure local data cannot reconstruct: retention floors mean the local walk
+# reaches back only so far, so "sum the series" undercounts by everything
+# before the floor. The owner-sanctioned correction is a BASELINE — the
+# vendor surface's own reading, recorded with the local calendar day it was
+# read on — from which the figure tracks as baseline plus every day captured
+# strictly AFTER that day. The as-of day itself is not re-added: most of it
+# is already inside the vendor's reading, and the honest residual is the
+# sliver of that one evening after the reading, permanently excluded rather
+# than double-counted.
+BASELINES_SCHEMA = "lifetime-baselines/v1"
+
+
+def load_lifetime_baselines(path):
+    """Load and strictly validate the committed baselines table.
+
+    The table is repo data (scripts/usage-export/lifetime-baselines.json) so
+    the one-time owner reading is reviewable and reproducible; it carries
+    only source keys, token totals, and calendar days — nothing requirement
+    12 guards. Every malformed corner refuses the whole run: a silently
+    dropped baseline would freeze the very tile this table exists to keep
+    moving.
+    """
+    document = capture.read_bounded_json(path, MAX_MERGE_BYTES)
+    if not isinstance(document, dict) or set(document) != {"schema", "baselines"}:
+        raise capture.CaptureError("the lifetime baselines table is malformed")
+    if document["schema"] != BASELINES_SCHEMA:
+        raise capture.CaptureError(
+            "the lifetime baselines table does not declare the expected schema"
+        )
+    entries = document["baselines"]
+    if not isinstance(entries, dict):
+        raise capture.CaptureError("the lifetime baselines table carries no baselines")
+    baselines = {}
+    for key, entry in entries.items():
+        if not valid_source_key(key):
+            raise capture.CaptureError("a lifetime baseline key is not label-shaped")
+        if not isinstance(entry, dict) or set(entry) != {"total", "asOf"}:
+            raise capture.CaptureError("a lifetime baseline entry is malformed")
+        total = entry["total"]
+        if (
+            not isinstance(total, int)
+            or isinstance(total, bool)
+            or total <= 0
+            or total > capture.MAX_COUNT
+        ):
+            raise capture.CaptureError("a lifetime baseline total is malformed")
+        if not capture.valid_calendar_day(entry["asOf"]):
+            raise capture.CaptureError("a lifetime baseline carries no calendar as-of day")
+        baselines[key] = (total, entry["asOf"])
+    return baselines
+
+
+def apply_lifetime_baselines(sources, baselines):
+    """Set each baselined source's lifetime figure to baseline plus delta.
+
+    The delta is the sum of the source's series days STRICTLY AFTER the
+    as-of day — the accrual rule the table's comment above states.
+
+    A table key naming no source in THIS export is skipped, not refused,
+    because the table describes the shipped production source set while the
+    exporter stays generic over whatever sources an operator configures. The
+    fail-closed net for a drifted table is the ORIGIN's: a snapshot source
+    shipping a lifetime tile that this document fails to refresh refuses the
+    whole document, so a baseline that stops reaching its source turns the
+    panel visibly stale rather than silently freezing a tile. One refusal
+    does live here, where only the producer can see it: a baseline colliding
+    with a lifetime figure the capture already measured is two derivations
+    claiming one tile, and neither could be trusted over the other.
+    """
+    for key, (total, as_of) in baselines.items():
+        section = sources.get(key)
+        if section is None:
+            continue
+        stats = section.get("stats")
+        if stats is not None and capture.STAT_LIFETIME in stats:
+            raise capture.CaptureError(
+                "a lifetime baseline collides with a captured lifetime figure"
+            )
+        series = section["series"]
+        start = datetime.date.fromisoformat(series["startDate"])
+        boundary = datetime.date.fromisoformat(as_of)
+        lifetime = total
+        for offset, value in enumerate(series["totals"]):
+            if start + datetime.timedelta(days=offset) > boundary:
+                lifetime += value
+        if lifetime > capture.MAX_COUNT:
+            raise capture.CaptureError(
+                "a lifetime baseline figure exceeds the shared count bound"
+            )
+        if stats is None:
+            stats = {}
+            section["stats"] = stats
+        stats[capture.STAT_LIFETIME] = lifetime
+
+
+def export(root, source_key, merge_files, now, activity_cache=None, history_store=None, baselines=None):
     """Walk, merge, guard, and return (sources payload, counters)."""
     section, counters = capture.capture(
-        root, capture.FORMAT_MESSAGES, activity_cache, now.date(), history_store
+        # The capture buckets LOCAL days (issue #276), so the "today" its
+        # windows read is this instant's local date, not its UTC one.
+        root, capture.FORMAT_MESSAGES, activity_cache, now.astimezone().date(), history_store
     )
     sources = {source_key: section}
     # The walked tree is captured by THIS run, so its instant is this run's.
@@ -375,6 +501,8 @@ def export(root, source_key, merge_files, now, activity_cache=None, history_stor
         if key in sources:
             raise capture.CaptureError("two sources claim one key")
         sources[key], captured[key] = load_merge_source(path, now)
+    if baselines:
+        apply_lifetime_baselines(sources, baselines)
     # THE guard — the capture tool's own, not a copy — over the complete
     # payload: nothing but calendar dates, non-negative integers, and the
     # declared recorded flags survives to the emission. Every dictionary key
@@ -425,6 +553,10 @@ def parse_arguments(argv):
         help="durable per-source day store for the walked tree, read and rewritten",
     )
     parser.add_argument(
+        "--lifetime-baselines",
+        help="committed baselines table for sources whose lifetime tracks baseline plus delta",
+    )
+    parser.add_argument(
         "--out",
         help="file to write the document to; prints to stdout when omitted",
     )
@@ -462,9 +594,21 @@ def main(argv=None):
             print("no such history store directory", file=sys.stderr)
             return 2
     now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+    baselines = None
+    if arguments.lifetime_baselines is not None:
+        try:
+            baselines = load_lifetime_baselines(
+                pathlib.Path(arguments.lifetime_baselines).expanduser()
+            )
+        except capture.CaptureError as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        except OSError:
+            print("the lifetime baselines table could not be read", file=sys.stderr)
+            return 1
     try:
         sources, counters = export(
-            root, arguments.source, merge_files, now, activity_cache, history_store
+            root, arguments.source, merge_files, now, activity_cache, history_store, baselines
         )
     except capture.CaptureError as error:
         print(str(error), file=sys.stderr)

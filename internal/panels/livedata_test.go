@@ -1154,14 +1154,16 @@ func TestAFigureTheProducerCouldNotMeasureIsNeverPublishedAsZero(t *testing.T) {
 			{Key: statPeakDay, Label: "Peak day", Unit: UnitTokens},
 			{Key: statCurrentStreak, Label: "Current streak", Unit: UnitDays},
 			{Key: statLongestStreak, Label: "Longest streak", Unit: UnitDays},
+			{Key: statActiveDays, Label: "Active days", Unit: UnitDays},
+			{Key: statTrackedDays, Label: "Days tracked", Unit: UnitDays},
 		}
 		for _, testCase := range []struct {
 			name    string
 			body    string
 			refused bool
 		}{
-			{"an explicit null figure", `{"peak-day":null,"current-streak":1,"longest-streak":2}`, true},
-			{"a measured zero", `{"peak-day":0,"current-streak":0,"longest-streak":0}`, false},
+			{"an explicit null figure", `{"peak-day":null,"current-streak":1,"longest-streak":2,"active-days":1,"tracked-days":2}`, true},
+			{"a measured zero", `{"peak-day":0,"current-streak":0,"longest-streak":0,"active-days":0,"tracked-days":0}`, false},
 		} {
 			t.Run(testCase.name, func(t *testing.T) {
 				t.Parallel()
