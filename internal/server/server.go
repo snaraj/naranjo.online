@@ -174,20 +174,6 @@ func stampReadingTheme(document []byte, theme string) ([]byte, error) {
 	return append(stamped, document[insertAt:]...), nil
 }
 
-// embeddedTypes pins the Content-Type of bundle extensions no host registry
-// can be trusted to know. The typeface travels in the bundle (issue 275),
-// and .woff2 is in neither Go's builtin table nor the distroless image,
-// which carries no /etc mime registry to extend it — so in production it
-// would fall through to the octet-stream default. Fail-inert (font fetches
-// never enforce the served type), but avoidably untyped. A TABLE rather
-// than a branch for the same reason mediaTypes is one: the pin test asserts
-// the entry itself, which stays falsifiable on hosts whose own registry
-// also happens to know the extension (the round-2 review measured exactly
-// that mutant surviving a handler-path assertion on macOS).
-var embeddedTypes = map[string]string{
-	".woff2": "font/woff2",
-}
-
 // newStaticFile derives the response identity for one embedded file. The
 // digest-based strong ETag remains stable across replicas and restarts, so
 // every pod presents the same cache identity for the same bytes.
