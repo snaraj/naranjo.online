@@ -331,6 +331,15 @@ class PushTransportHardeningTest(unittest.TestCase):
         # being traded for it.
         self.assertIn("-I", argv)
         self.assertIn("-B", argv)
+        # The committed baselines table reaches the export on every run
+        # (issue #276): the argument is pinned, not merely the file, because
+        # a table the producer never receives is a lifetime tile that
+        # silently stops tracking.
+        self.assertIn("--lifetime-baselines", argv)
+        self.assertEqual(
+            pathlib.Path(argv[argv.index("--lifetime-baselines") + 1]).resolve(),
+            (REPO_ROOT / "scripts/usage-export/lifetime-baselines.json").resolve(),
+        )
 
     def test_a_locally_recorded_merge_source_is_recaptured_every_run(self):
         # The fault this replaced: the second source was a file somebody
@@ -372,7 +381,20 @@ class PushTransportHardeningTest(unittest.TestCase):
                             "date": earlier.isoformat(),
                             "tokensByModel": {"claude-opus-5": 4096},
                         }
-                    ]
+                    ],
+                    # A configured cache must also carry the tool's lifetime
+                    # accounting (issue #276): the export refuses one without
+                    # it rather than pushing a document whose lifetime-class
+                    # tiles the origin would reject as unrefreshed.
+                    "modelUsage": {
+                        "claude-opus-5": {
+                            "inputTokens": 1,
+                            "outputTokens": 2,
+                            "cacheReadInputTokens": 3,
+                            "cacheCreationInputTokens": 4,
+                        }
+                    },
+                    "totalSessions": 5,
                 }
             ),
             encoding="utf-8",

@@ -24,7 +24,7 @@ guard, the splice — is shared:
     a RUNNING CUMULATIVE for the session so far, which repeats on every
     event. Naive summation multiplies the truth. The contribution of one
     record is therefore how far the running total ADVANCED since the
-    previous record in the same file, attributed to that record's own UTC
+    previous record in the same file, attributed to that record's own LOCAL
     day — so a session spanning midnight splits across the two days it
     really happened on, exactly like the message shape does.
 
@@ -101,7 +101,15 @@ record, while `cached_input_tokens`, `cache_write_input_tokens` and
 `reasoning_output_tokens` are SUBSETS of those two rather than additions to
 them — so adding them would count the same tokens two and three times. The
 two shapes therefore report the same measurement: every token the tool
-processed. Days are UTC, like the mapper's. The
+processed. Days are the WORKSTATION'S LOCAL calendar days — an explicit
+ruling, not a default (issue #276, owner ruling 2026-09-01). The vendors'
+own surfaces bucket in the owner's local days, so UTC bucketing put a
+visible ±1-day skew on every figure near a day boundary: a streak the
+vendor showed as 12 read 13 here because a late evening had already
+crossed UTC midnight. `local_day` below is where the decision is enforced,
+per instant and DST-correct, and the capture-instant "today" the windows
+and streaks read follows the same clock, so the whole emission buckets one
+way. The
 series runs contiguously from the oldest recorded day to the newest, with
 zeros for days inside that window the record has nothing for — again the
 mapper's own rule, and the reason the series never extends past the days the
@@ -115,7 +123,10 @@ instant of the capture, which is what makes a partial final day legible.
 
 TILES. `--snapshot` splices the series into one named source and updates ONLY
 the tiles that are a function of that series — `peak-day`, `current-streak`,
-`longest-streak`, the three keys `mapUsage` derives from a daily series alone.
+`longest-streak`, `active-days`, `tracked-days`: the five keys a daily series
+defines on its own (the last two joined at issue #276, precisely because
+tiles outside the derived vocabulary sat frozen beneath a graph that
+contradicted them).
 Every other recorded tile is left exactly as its own capture left it: this
 program has no opinion about a lifetime total or a session count, and
 overwriting a figure it cannot measure would be the invention the panel
@@ -255,6 +266,13 @@ EMISSION_KEYS = frozenset(
         "peak-day",
         "current-streak",
         "longest-streak",
+        "active-days",
+        "tracked-days",
+        # The captured-stats section and the two of its keys the category
+        # vocabulary does not already carry (also declared below as STATS_*).
+        "stats",
+        "lifetime",
+        "sessions",
     }
 ).union(CATEGORY_KEYS).union(MODEL_KEYS)
 
@@ -385,14 +403,29 @@ WEEK_DAYS = 7
 # shown a silent truncation.
 MAX_MODEL_DAYS = 92
 
-# The tool's own per-day roll-up, named for what it contains. `read_activity_
-# cache` explains why a second, weaker source of the same measurement exists
-# at all; these are the three field names it reads and the bound it reads
-# them under.
+# The tool's own per-day roll-up, named for what it contains. `activity_days`
+# explains why a second, weaker source of the same measurement exists at all;
+# these are the three field names it reads and the bound the document is read
+# under.
 ACTIVITY_CACHE_DAILY_KEY = "dailyModelTokens"
 ACTIVITY_CACHE_DATE_KEY = "date"
 ACTIVITY_CACHE_MODELS_KEY = "tokensByModel"
 MAX_ACTIVITY_CACHE_BYTES = 1 << 20
+
+# The same cache document also carries the tool's own LIFETIME accounting —
+# per-model running totals and a session tally — which is the record the
+# lifetime-class tiles must track (issue #276: those tiles sat frozen at
+# their release-time values while the graph below them kept moving). The
+# field names are the tool's own; the emitted keys are this file's closed
+# stats vocabulary below.
+ACTIVITY_CACHE_USAGE_KEY = "modelUsage"
+ACTIVITY_CACHE_SESSIONS_KEY = "totalSessions"
+ACTIVITY_CACHE_USAGE_FIELDS = (
+    ("inputTokens", "input"),
+    ("outputTokens", "output"),
+    ("cacheReadInputTokens", "cache-read"),
+    ("cacheCreationInputTokens", "cache-write"),
+)
 
 # The durable per-source history store (issue #234). Every source this
 # pipeline reads is VOLATILE: the transcript trees are retention-pruned on
@@ -412,12 +445,35 @@ HISTORY_DAYS_KEY = "days"
 HISTORY_TOTAL_KEY = "total"
 MAX_HISTORY_STORE_BYTES = 1 << 20
 
-# The stat keys a daily series defines on its own — the same four
-# internal/panels/types.go lists, minus the window total, which is a property
-# of a fetch window rather than of a recorded series.
+# The stat keys a daily series defines on its own — the same set
+# internal/panels/types.go's usageSeriesDerivedKeys lists, and pinned against
+# it by DerivedVocabularyParityTest exactly as the category vocabulary is.
+# The live mapper computes the first three and deliberately NOT the last two:
+# its series covers only a fetch window, and "active days" or "days tracked"
+# measured over seven fetched days would replace a recorded whole-history
+# figure with a window-bounded one.
 STAT_PEAK_DAY = "peak-day"
 STAT_CURRENT_STREAK = "current-streak"
 STAT_LONGEST_STREAK = "longest-streak"
+STAT_ACTIVE_DAYS = "active-days"
+STAT_TRACKED_DAYS = "tracked-days"
+
+# The CLOSED captured-stats vocabulary (issue #276): the lifetime-class
+# figures a push may refresh, each a RECORDED capture of the tool's own
+# accounting rather than a function of the series. Mirrors — and is pinned
+# by StatsVocabularyParityTest against — usageSeriesStatKeys in
+# internal/panels/types.go. The origin refreshes only tiles the shipped
+# snapshot already shows, so a key here can never ADD a tile.
+STAT_LIFETIME = "lifetime"
+STAT_SESSIONS = "sessions"
+STATS_KEYS = (
+    STAT_LIFETIME,
+    "input",
+    "output",
+    "cache-read",
+    "cache-write",
+    STAT_SESSIONS,
+)
 
 # The key order one source is written back in, matching the field order of
 # TokenUsageSource in internal/panels/types.go so the snapshot reads like the
@@ -921,7 +977,7 @@ def reduce_line(line, seen, counters):
             counters["duplicates"] += 1
             return None
         remember_identity(identity, seen)
-    day = utc_day(stamp)
+    day = local_day(stamp)
     if day is None:
         return None
     parts = usage_parts(usage)
@@ -959,7 +1015,7 @@ def reduce_running_line(line):
     stamp = record.get("timestamp")
     if not isinstance(stamp, str):
         return None
-    day = utc_day(stamp)
+    day = local_day(stamp)
     if day is None:
         return None
     return day, running_fields(running)
@@ -1079,15 +1135,30 @@ def model_key(value, counters):
     return MODEL_OTHER
 
 
-def utc_day(stamp):
-    """Return the UTC calendar date of an ISO 8601 instant, or None."""
+def local_day(stamp):
+    """Return the workstation-local calendar date of an ISO 8601 instant, or None.
+
+    THE bucketing decision, made once and made here (issue #276, owner ruling
+    2026-09-01): records bucket into the WORKSTATION'S LOCAL calendar day,
+    because that is how the vendors' own surfaces bucket, and matching what
+    the owner reads there is what "correct going forward" means. The previous
+    UTC rule skewed every day-boundary figure by up to a day — a 12-day
+    vendor streak read 13 here the moment one evening crossed UTC midnight.
+
+    The conversion is per instant, so it is DST-correct: `astimezone()` with
+    no argument resolves each instant against the platform's own zone rules
+    rather than freezing today's offset onto historical records. A naive
+    timestamp is taken as UTC, exactly as before — the journals write
+    Z-suffixed instants, and a record that omits the zone should not
+    silently inherit the local one.
+    """
     try:
         moment = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
     except ValueError:
         return None
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=datetime.timezone.utc)
-    return moment.astimezone(datetime.timezone.utc).date().isoformat()
+    return moment.astimezone().date().isoformat()
 
 
 def usage_parts(usage):
@@ -1211,13 +1282,21 @@ def daily_streaks(totals):
 
 
 def derived_figures(series):
-    """The figures the series itself defines, keyed by their stat keys."""
+    """The figures the series itself defines, keyed by their stat keys.
+
+    `active-days` and `tracked-days` joined at issue #276: both are pure
+    series functions — the days the graph paints and the days it covers —
+    yet the tiles carrying them sat outside the derived vocabulary, frozen
+    at release-time values that contradicted the graph directly above them.
+    """
     totals = series["totals"]
     current, longest = daily_streaks(totals)
     return {
         STAT_PEAK_DAY: max(totals),
         STAT_CURRENT_STREAK: current,
         STAT_LONGEST_STREAK: longest,
+        STAT_ACTIVE_DAYS: sum(1 for total in totals if total > 0),
+        STAT_TRACKED_DAYS: len(totals),
     }
 
 
@@ -1266,7 +1345,8 @@ def trailing_offset(window, covered):
 def windows_from(series, categories, offset, today):
     """Derive the closed window set from the daily categories.
 
-    `today` is the capture instant's UTC date; a day the record does not
+    `today` is the capture instant's LOCAL date, matching the series' own
+    local-day bucketing (issue #276); a day the record does not
     cover contributes zero, which inside the asked window is a measurement —
     "no recorded usage that day" — never an invention. The input figure sums
     the input-class categories (uncached input plus both cache classes),
@@ -1325,8 +1405,21 @@ def read_bounded_json(path, bound):
         raise CaptureError("a merge source is not a parsable JSON document")
 
 
-def read_activity_cache(path, counters):
-    """Read the tool's own per-day, per-model roll-up: {day: {member: count}}.
+def read_activity_cache(path):
+    """Read the tool's own cache document, bounded and shape-checked.
+
+    ONE read for BOTH derivations below — the per-day roll-up and the
+    lifetime accounting — so the two cannot come from different generations
+    of a file the tool rewrites on its own schedule.
+    """
+    document = read_bounded_json(path, MAX_ACTIVITY_CACHE_BYTES)
+    if not isinstance(document, dict):
+        raise CaptureError("the activity cache must be a JSON object")
+    return document
+
+
+def activity_days(document, counters):
+    """The cache's per-day, per-model roll-up: {day: {member: count}}.
 
     WHY THIS EXISTS. The transcript journals are RETENTION-PRUNED — the tool
     deletes them on its own schedule — so a walk of the tree measures only as
@@ -1348,9 +1441,6 @@ def read_activity_cache(path, counters):
     function; an identifier outside the vocabulary becomes the residual
     member exactly as it does on the walk's own path.
     """
-    document = read_bounded_json(path, MAX_ACTIVITY_CACHE_BYTES)
-    if not isinstance(document, dict):
-        raise CaptureError("the activity cache must be a JSON object")
     rows = document.get(ACTIVITY_CACHE_DAILY_KEY)
     if not isinstance(rows, list):
         raise CaptureError("the activity cache carries no daily model roll-up")
@@ -1369,6 +1459,45 @@ def read_activity_cache(path, counters):
             key = model_key(identifier, counters)
             bucket[key] = bucket.get(key, 0) + value
     return by_day
+
+
+def lifetime_stats(document):
+    """The cache's lifetime accounting as the closed captured-stats set.
+
+    The four per-model running totals sum into the four token classes plus
+    their whole, and the session tally rides beside them — the exact figures
+    the frozen lifetime-class tiles stopped tracking (issue #276). The tool's
+    own accounting is the record here, matching its terminal report within
+    its own recompute lag; nothing is derived from the walk, so these figures
+    never inherit the walk's de-duplication rule.
+
+    Every refusal is a refusal of the WHOLE run, not a silently absent
+    figure: the origin refuses a document that leaves a lifetime-class tile
+    unrefreshed, so a cache that stops carrying this accounting must stop
+    the push loudly here rather than push a document the origin rejects on
+    every tick. A missing field, a non-integer, a negative, a bool, or a sum
+    past the shared count bound all name the defect and push nothing.
+    """
+    usage = document.get(ACTIVITY_CACHE_USAGE_KEY)
+    if not isinstance(usage, dict) or not usage:
+        raise CaptureError("the activity cache carries no lifetime usage accounting")
+    stats = {key: 0 for _, key in ACTIVITY_CACHE_USAGE_FIELDS}
+    for entry in usage.values():
+        if not isinstance(entry, dict):
+            raise CaptureError("the activity cache carries a malformed lifetime entry")
+        for field, key in ACTIVITY_CACHE_USAGE_FIELDS:
+            value = entry.get(field)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise CaptureError("the activity cache carries a malformed lifetime count")
+            stats[key] += value
+    stats[STAT_LIFETIME] = sum(stats.values())
+    sessions = document.get(ACTIVITY_CACHE_SESSIONS_KEY)
+    if not isinstance(sessions, int) or isinstance(sessions, bool) or sessions < 0:
+        raise CaptureError("the activity cache carries no session tally")
+    stats[STAT_SESSIONS] = sessions
+    if any(value > MAX_COUNT for value in stats.values()):
+        raise CaptureError("the activity cache lifetime figures exceed the shared count bound")
+    return stats
 
 
 def extend_with_cache(series, categories, models, partitioned, cached):
@@ -1725,7 +1854,9 @@ def capture(root, record_format=FORMAT_MESSAGES, activity_cache=None, today=None
     The returned section is EXACTLY the shape export_usage_series.py's
     merge-source loader admits and the origin's data root then merges: the
     aggregate series, the two windowed breakdowns with their own start dates,
-    the complete window set, and the complete derived-tile set. It is one
+    the complete window set, the complete derived-tile set, and — when an
+    activity cache supplies the tool's own lifetime accounting — the
+    captured-stats section (issue #276). It is one
     shape, produced by one function, so "capture a second tool's series and
     merge it" needs no hand assembly and no second definition of what a valid
     section is — which is exactly how a hand-written merge file came to be
@@ -1737,10 +1868,13 @@ def capture(root, record_format=FORMAT_MESSAGES, activity_cache=None, today=None
     counters = new_counters()
     reader = read_records if record_format == FORMAT_MESSAGES else read_running_totals
     series, categories, models, partitioned = daily_series(reader(root, counters))
+    stats = None
     if activity_cache is not None:
+        cache_document = read_activity_cache(activity_cache)
         series, categories, models, partitioned = extend_with_cache(
-            series, categories, models, partitioned, read_activity_cache(activity_cache, counters)
+            series, categories, models, partitioned, activity_days(cache_document, counters)
         )
+        stats = lifetime_stats(cache_document)
     if history_store is not None:
         # AFTER the cache union, so the store remembers the deepest series
         # this run could derive; the walk must still find records (the
@@ -1802,9 +1936,15 @@ def capture(root, record_format=FORMAT_MESSAGES, activity_cache=None, today=None
         series,
         categories,
         offset,
-        today if today is not None else datetime.datetime.now(datetime.timezone.utc).date(),
+        # The LOCAL date, matching the series' own bucketing (issue #276): a
+        # window keyed to the UTC date would ask about a day the series does
+        # not bucket by, and every evening past UTC midnight would read as
+        # tomorrow's usage.
+        today if today is not None else datetime.datetime.now().astimezone().date(),
     )
     section["derived"] = derived_figures(series)
+    if stats is not None:
+        section["stats"] = stats
     # Proven clean before anything is printed, written, or spliced.
     assert_only_dates_and_integers(section, "section")
     return section, counters
@@ -1962,8 +2102,7 @@ def main(argv=None):
         # source and refuses one that cannot say when it was captured, because
         # a second tool's series can be arbitrarily older than the export
         # carrying it (2026-08-24 round-3 review, finding 5).
-        document = {"generatedAt": generated_at}
-        document.update(section)
+        document = {"generatedAt": generated_at, **section}
         json.dump(document, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 0

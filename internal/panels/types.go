@@ -1063,10 +1063,11 @@ type windowParamSpec struct {
 	LookbackDays int `json:"lookbackDays"`
 }
 
-// Stat keys the live mapping can compute from a daily series alone. A
-// recorded snapshot tile carrying the same key is replaced by the live one;
-// keys the live feed cannot produce — a lifetime total, a longest single
-// task — stay recorded, because no usage API reports them.
+// Stat keys a daily series defines. The live mapping computes the first
+// three from its fetched window and replaces a recorded snapshot tile
+// carrying the same key; keys the live feed cannot produce — a lifetime
+// total, a longest single task — stay recorded, because no usage API
+// reports them.
 const (
 	// statCurrentStreak is the current run of consecutive active days.
 	statCurrentStreak = "current-streak"
@@ -1076,6 +1077,15 @@ const (
 	statPeakDay = "peak-day"
 	// statWindowTotal is every token counted inside the fetched window.
 	statWindowTotal = "window-total"
+	// statActiveDays is how many days inside the series recorded any
+	// consumption, and statTrackedDays is how many days the series covers —
+	// pure series functions both (issue #276), refreshed by the sealed push
+	// but deliberately NOT by the live mapping: its series spans only a
+	// fetch window, and either figure measured over seven fetched days
+	// would replace a recorded whole-history figure with a window-bounded
+	// one wearing the same key.
+	statActiveDays  = "active-days"
+	statTrackedDays = "tracked-days"
 )
 
 // dayLayout is the calendar-date form the activity series indexes by.
@@ -1743,16 +1753,41 @@ var usageSeriesWindowKeys = map[string]string{
 	"week":  "week",
 }
 
-// usageSeriesDerivedKeys is the CLOSED set of stat keys a series document may
-// update, and the unit each must already carry — exactly the three figures a
-// daily series defines on its own. The document can never add a tile, only
-// refresh one of these where the shipped snapshot already shows it; every
-// other recorded figure (a lifetime total, a session count) is out of its
-// reach by construction.
+// usageSeriesDerivedKeys is the CLOSED set of series-derived stat keys a
+// document must refresh, and the unit each must already carry — exactly the
+// five figures a daily series defines on its own (active-days and
+// tracked-days joined at issue #276, because tiles outside this vocabulary
+// sat frozen beneath a graph that contradicted them). The document can never
+// add a tile, only refresh one of these where the shipped snapshot already
+// shows it; the captured lifetime-class figures ride the separate
+// usageSeriesStatKeys vocabulary below.
 var usageSeriesDerivedKeys = map[string]string{
 	statPeakDay:       UnitTokens,
 	statCurrentStreak: UnitDays,
 	statLongestStreak: UnitDays,
+	statActiveDays:    UnitDays,
+	statTrackedDays:   UnitDays,
+}
+
+// usageSeriesStatKeys is the CLOSED set of CAPTURED stat keys a series
+// document may refresh — the lifetime-class figures the producing tool's own
+// accounting reports and no series can define — and the unit each tile must
+// already carry (issue #276). Same discipline as the derived vocabulary,
+// different completeness rule: derived figures are functions of the pushed
+// series, so every source owes all of them; a captured figure exists only
+// where the shipped snapshot shows its tile, so overlayCapturedStats measures
+// completeness against that TILE INVENTORY instead — every snapshot tile
+// whose key sits here must be refreshed, and a source shipping no such tile
+// owes nothing. Pinned against the producer's STATS_KEYS by
+// StatsVocabularyParityTest in scripts/ci, exactly as the category
+// vocabulary is.
+var usageSeriesStatKeys = map[string]string{
+	"lifetime":    UnitTokens,
+	"input":       UnitTokens,
+	"output":      UnitTokens,
+	"cache-read":  UnitTokens,
+	"cache-write": UnitTokens,
+	"sessions":    UnitCount,
 }
 
 // categoryServeOrder is the CLOSED category vocabulary AND the canonical
@@ -1855,6 +1890,16 @@ type usageSeriesSource struct {
 	// refused by name rather than published as a zero (owner directive,
 	// 2026-08-28: "if its either 0 or unknown I rather it be Unknown").
 	Derived map[string]*int64 `json:"derived"`
+	// Stats carries the CAPTURED lifetime-class figures, keyed by the closed
+	// usageSeriesStatKeys vocabulary (issue #276). Absent as a SECTION only
+	// for a source whose snapshot ships no such tile: overlayCapturedStats
+	// requires every lifetime-class tile the snapshot shows to be refreshed,
+	// so a frozen release-time lifetime can never again sit beside a runtime
+	// series — the exact mixing findings 5 and 7 refused for windows and
+	// derived. Values are pointers for Derived's reason: a key present
+	// carrying null is a figure nobody measured and refuses rather than
+	// publishing a zero.
+	Stats map[string]*int64 `json:"stats,omitempty"`
 }
 
 // usageSeriesSection mirrors TokenUsageSeries' on-disk form.

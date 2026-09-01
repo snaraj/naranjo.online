@@ -419,6 +419,12 @@ export type UsageTrackerProps = {
   readonly generatedAt?: string;
   readonly sections: readonly UsageSection[];
   readonly emptyNote: string;
+  /* The honest data-through line, present exactly when the envelope itself
+   * proves the payload has stopped advancing (issue #276: a stalled capture
+   * pipeline used to render fresh-looking tiles with nothing anywhere saying
+   * the data was days old). Adapter-built, so the component renders words it
+   * never composes. */
+  readonly staleNote?: string;
 };
 
 /* --- MediaGallery: one visible frame, prev/next, a click-to-enlarge lightbox

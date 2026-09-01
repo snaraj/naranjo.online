@@ -58,7 +58,20 @@ func sealSeriesFile(t *testing.T, dir string, labels []string, generatedAt strin
 				"today": map[string]any{"input": 1, "output": 3},
 				"week":  map[string]any{"input": 2, "output": 5},
 			},
-			"derived": map[string]any{"peak-day": 4, "current-streak": 2, "longest-streak": 2},
+			"derived": map[string]any{"peak-day": 4, "current-streak": 2, "longest-streak": 2, "active-days": 2, "tracked-days": 2},
+			// The complete captured-stats vocabulary on every source: the
+			// origin requires every lifetime-class tile a source's snapshot
+			// ships to be refreshed (issue #276), and a key naming no tile
+			// is validated and unrendered, so the full set satisfies every
+			// label this generic builder is handed.
+			"stats": map[string]any{
+				"lifetime":    9,
+				"input":       1,
+				"output":      2,
+				"cache-read":  3,
+				"cache-write": 4,
+				"sessions":    5,
+			},
 		}
 	}
 	document := map[string]any{

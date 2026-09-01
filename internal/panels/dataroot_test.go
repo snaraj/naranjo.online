@@ -44,7 +44,9 @@ var dataRootTestKeyHex = func() string {
 // dataRootSnapshot is the synthetic embedded snapshot the tests merge onto:
 // two neutral sources (labels are data — no vendor is spelled anywhere in
 // this package, tests included), one with the full tile set including the
-// three series-derived tiles and one figure a series can never define.
+// five series-derived tiles and one captured lifetime-class figure a series
+// can never define (issue #276: refreshed from the document's stats section,
+// never left at its release-time value).
 const dataRootSnapshot = `{
   "generatedAt": "2026-08-20T00:00:00Z",
   "data": {"sources": [
@@ -52,7 +54,9 @@ const dataRootSnapshot = `{
       {"key": "lifetime", "label": "Lifetime", "value": 1000, "unit": "tokens", "recorded": true},
       {"key": "peak-day", "label": "Peak day", "value": 50, "unit": "tokens", "recorded": true},
       {"key": "current-streak", "label": "Current streak", "value": 1, "unit": "days", "recorded": true},
-      {"key": "longest-streak", "label": "Longest streak", "value": 2, "unit": "days", "recorded": true}],
+      {"key": "longest-streak", "label": "Longest streak", "value": 2, "unit": "days", "recorded": true},
+      {"key": "active-days", "label": "Active days", "value": 1, "unit": "days", "recorded": true},
+      {"key": "tracked-days", "label": "Days tracked", "value": 1, "unit": "days", "recorded": true}],
      "series": {"startDate": "2026-08-10", "totals": [10, 20], "recorded": true},
      "insights": [{"label": "Deep mode", "pct": 50, "recorded": true}]},
     {"label": "beta", "windows": []}
@@ -106,7 +110,9 @@ func productionUnsealer(hexKey string) Unsealer {
 // under one envelope instant; beta's section is now a whole section like
 // alpha's, differing only in carrying no category partition — the one part
 // that genuinely is optional, because a source may report totals it cannot
-// break down.
+// break down. Alpha carries the captured stats its snapshot's lifetime tile
+// demands (issue #276); beta ships no lifetime-class tile and owes no stats
+// section — the two sources between them pin both halves of that rule.
 func validDocument() map[string]any {
 	return map[string]any{
 		"schema":      "usage-series/v1",
@@ -123,7 +129,8 @@ func validDocument() map[string]any {
 					"today": map[string]any{"input": 3, "output": 4},
 					"week":  map[string]any{"input": 4, "output": 8},
 				},
-				"derived": map[string]any{"peak-day": 7, "current-streak": 1, "longest-streak": 1},
+				"derived": map[string]any{"peak-day": 7, "current-streak": 1, "longest-streak": 1, "active-days": 2, "tracked-days": 3},
+				"stats":   map[string]any{"lifetime": 4321},
 			},
 			"beta": map[string]any{
 				"capturedAt": "2026-08-24T12:00:00Z",
@@ -132,7 +139,7 @@ func validDocument() map[string]any {
 					"today": map[string]any{"input": 1, "output": 1},
 					"week":  map[string]any{"input": 2, "output": 3},
 				},
-				"derived": map[string]any{"peak-day": 3, "current-streak": 2, "longest-streak": 2},
+				"derived": map[string]any{"peak-day": 3, "current-streak": 2, "longest-streak": 2, "active-days": 2, "tracked-days": 2},
 			},
 		},
 	}
@@ -228,8 +235,10 @@ func TestDataRootReplacesTheSeriesAndDerivedTiles(t *testing.T) {
 	if len(alpha.Series.Categories) != 2 || alpha.Series.Categories[0].Key != "input" || alpha.Series.Categories[1].Key != "output" {
 		t.Fatalf("categories not in canonical order: %+v", alpha.Series.Categories)
 	}
-	// Derived tiles refreshed; the lifetime figure — which no series can
-	// measure — kept exactly as the snapshot shipped it.
+	// Derived tiles refreshed — the issue-#276 pair included — and the
+	// lifetime figure, which no series can measure, refreshed from the
+	// document's captured stats section rather than left frozen at its
+	// release-time value.
 	tiles := map[string]int64{}
 	for _, stat := range alpha.Stats {
 		if stat.Value != nil {
@@ -239,8 +248,14 @@ func TestDataRootReplacesTheSeriesAndDerivedTiles(t *testing.T) {
 			t.Fatalf("tile %q lost its recorded provenance", stat.Key)
 		}
 	}
-	if tiles["peak-day"] != 7 || tiles["current-streak"] != 1 || tiles["longest-streak"] != 1 || tiles["lifetime"] != 1000 {
+	if tiles["peak-day"] != 7 || tiles["current-streak"] != 1 || tiles["longest-streak"] != 1 {
 		t.Fatalf("tiles wrong after merge: %v", tiles)
+	}
+	if tiles["active-days"] != 2 || tiles["tracked-days"] != 3 {
+		t.Fatalf("issue-#276 derived tiles not refreshed: %v", tiles)
+	}
+	if tiles["lifetime"] != 4321 {
+		t.Fatalf("lifetime tile not refreshed from the captured stats: %v", tiles)
 	}
 	if len(alpha.Windows) != 2 || alpha.Windows[0].Period != "today" || alpha.Windows[0].InputTokens != 3 || alpha.Windows[1].Period != "week" {
 		t.Fatalf("windows wrong after merge: %+v", alpha.Windows)
@@ -401,7 +416,7 @@ func TestDataRootRefusesHostileDocuments(t *testing.T) {
 				"today": map[string]any{"input": 0, "output": 0},
 				"week":  map[string]any{"input": 0, "output": 0},
 			}
-			section["derived"] = map[string]any{"peak-day": 0, "current-streak": 0, "longest-streak": 0}
+			section["derived"] = map[string]any{"peak-day": 0, "current-streak": 0, "longest-streak": 0, "active-days": 0, "tracked-days": 1}
 		}, "bound every stage of this pipeline shares"},
 		"a count above the shared numeric bound": {func(d map[string]any) {
 			alphaSection(d)["derived"].(map[string]any)["peak-day"] = int64(maxCountValue) + 1
@@ -490,6 +505,28 @@ func TestDataRootRefusesHostileDocuments(t *testing.T) {
 		"negative derived": {func(d map[string]any) {
 			alphaSection(d)["derived"].(map[string]any)["peak-day"] = -7
 		}, "negative"},
+		// The captured-stats rules (issue #276) mirror the derived ones with
+		// the inverted completeness: what a source owes is the lifetime-class
+		// tiles its snapshot ships, so alpha — whose snapshot shows a
+		// lifetime tile — may neither drop the key nor the whole section.
+		"a captured stat omitted while its tile ships": {func(d map[string]any) {
+			delete(alphaSection(d)["stats"].(map[string]any), "lifetime")
+		}, "does not refresh"},
+		"captured stats omitted entirely": {func(d map[string]any) {
+			delete(alphaSection(d), "stats")
+		}, "does not refresh"},
+		"captured stat outside the vocabulary": {func(d map[string]any) {
+			alphaSection(d)["stats"].(map[string]any)["window-total"] = 1
+		}, "captured stat key"},
+		"captured stat carrying null": {func(d map[string]any) {
+			alphaSection(d)["stats"].(map[string]any)["lifetime"] = nil
+		}, "carries no figure"},
+		"negative captured stat": {func(d map[string]any) {
+			alphaSection(d)["stats"].(map[string]any)["lifetime"] = -7
+		}, "negative"},
+		"a captured stat above the shared numeric bound": {func(d map[string]any) {
+			alphaSection(d)["stats"].(map[string]any)["lifetime"] = int64(maxCountValue) + 1
+		}, "bound every stage of this pipeline shares"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -756,6 +793,56 @@ func TestDataRootRefusesAUnitMismatchedTile(t *testing.T) {
 	_, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, validDocument())), productionUnsealer(dataRootTestKeyHex))
 	if err == nil || !strings.Contains(err.Error(), "unit") {
 		t.Fatalf("unit mismatch not refused: %v", err)
+	}
+	if state.current.Load() != before {
+		t.Fatal("a refused document still changed the served response")
+	}
+}
+
+// TestDataRootRefusesAUnitMismatchedCapturedTile is the same cross-check for
+// the captured lifetime-class vocabulary (issue #276): a snapshot whose
+// lifetime tile claims days cannot be refreshed by the document's stats
+// section, because the number would silently change meaning.
+func TestDataRootRefusesAUnitMismatchedCapturedTile(t *testing.T) {
+	t.Parallel()
+	snapshot := strings.Replace(dataRootSnapshot,
+		`{"key": "lifetime", "label": "Lifetime", "value": 1000, "unit": "tokens", "recorded": true}`,
+		`{"key": "lifetime", "label": "Lifetime", "value": 1000, "unit": "days", "recorded": true}`, 1)
+	reg, state := usageDataRootRegistry(t, snapshot)
+	before := state.current.Load()
+	_, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, validDocument())), productionUnsealer(dataRootTestKeyHex))
+	if err == nil || !strings.Contains(err.Error(), "unit") {
+		t.Fatalf("captured unit mismatch not refused: %v", err)
+	}
+	if state.current.Load() != before {
+		t.Fatal("a refused document still changed the served response")
+	}
+}
+
+// TestDataRootValidatesCapturedStatsWithoutAddingTiles pins both halves of
+// the captured-stats overlay's reach (issue #276): a source shipping no
+// lifetime-class tile may still push vocabulary figures — they are validated
+// and unrendered, exactly as a derived key without a tile is — and the
+// overlay can never ADD a tile the owner did not ship.
+func TestDataRootValidatesCapturedStatsWithoutAddingTiles(t *testing.T) {
+	t.Parallel()
+	reg, state := usageDataRootRegistry(t, dataRootSnapshot)
+	document := validDocument()
+	betaSection(document)["stats"] = map[string]any{"sessions": 9}
+	if _, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex)); err != nil {
+		t.Fatalf("a tile-less captured stat must be admitted: %v", err)
+	}
+	_, data := decodeServedUsage(t, state)
+	if len(data.Sources[1].Stats) != 0 {
+		t.Fatalf("beta grew tiles the snapshot never shipped: %+v", data.Sources[1].Stats)
+	}
+	// The same key malformed still refuses the document whole: validated,
+	// not ignored.
+	malformed := validDocument()
+	betaSection(malformed)["stats"] = map[string]any{"sessions": -1}
+	before := state.current.Load()
+	if _, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, malformed)), productionUnsealer(dataRootTestKeyHex)); err == nil {
+		t.Fatal("a malformed tile-less captured stat was admitted")
 	}
 	if state.current.Load() != before {
 		t.Fatal("a refused document still changed the served response")

@@ -22,7 +22,10 @@ import {
   resetsIn,
   tokenUsagePanelId,
   tokenUsageProps,
-  tokenUsageSources
+  tokenUsageSources,
+  usageDataThrough,
+  usageStaleAfterMs,
+  usageStaleNote
 } from '../src/lib/token-usage.ts';
 import { formatMagnitude } from '../src/lib/grid.ts';
 
@@ -1530,5 +1533,85 @@ describe('count admission holds the shared numeric contract', () => {
     assert.ok(Number.isSafeInteger(half) && Number.isSafeInteger(countBound));
     assert.ok(!Number.isSafeInteger(half + half));
     assert.deepEqual(tokenUsageSources(payload), []);
+  });
+});
+
+/* The honest data-through line (issue 276; the observability half of issue
+ * 267). A stalled capture pipeline used to be invisible: the origin keeps
+ * serving its last good payload at status ok, and nothing anywhere said the
+ * figures were days old. The adapter now derives a stale note from fields
+ * the envelope already carries — no invented freshness, no new wire data. */
+describe('the stale data-through note', () => {
+  const seriesSources = [
+    { label: 'alpha', windows: [], series: { startDate: '2026-08-20', totals: [1, 0, 2], recorded: true } },
+    { label: 'beta', windows: [], series: { startDate: '2026-08-25', totals: [3], recorded: true } }
+  ];
+  const now = new Date('2026-09-01T12:00:00Z');
+
+  it('dates the payload by the newest day any series covers', () => {
+    assert.equal(usageDataThrough(seriesSources), '2026-08-25');
+    assert.equal(usageDataThrough([{ label: 's', windows: [] }]), undefined);
+    assert.equal(
+      usageDataThrough([{ label: 's', windows: [], series: { startDate: '2026-08-01', totals: [] } }]),
+      undefined
+    );
+  });
+
+  it('stays silent while the payload is fresh', () => {
+    const fresh = new Date(Date.parse('2026-08-25T12:00:00Z') + usageStaleAfterMs);
+    assert.equal(usageStaleNote('ok', '2026-08-25T12:00:00Z', seriesSources, fresh), undefined);
+  });
+
+  it('renders the note once generatedAt falls beyond the threshold', () => {
+    // 2026-08-25T12:00Z to 2026-09-01T12:00Z is seven days — far beyond the
+    // two-day allowance, so the pipeline has provably stalled.
+    assert.equal(
+      usageStaleNote('ok', '2026-08-25T12:00:00Z', seriesSources, now),
+      'data through Aug 25, 2026 · last capture 7d ago'
+    );
+    // One millisecond inside the threshold is still fresh: the bound is a
+    // strict exceedance, so the note can never flicker on a healthy panel.
+    const edge = new Date(Date.parse('2026-08-25T12:00:00Z') + usageStaleAfterMs + 1);
+    assert.notEqual(usageStaleNote('ok', '2026-08-25T12:00:00Z', seriesSources, edge), undefined);
+  });
+
+  it('renders on an origin-declared stale envelope whatever the age', () => {
+    assert.equal(
+      usageStaleNote('stale', '2026-09-01T11:00:00Z', seriesSources, now),
+      'data through Aug 25, 2026 · last capture 1h ago'
+    );
+  });
+
+  it('falls back to the capture age alone when no source draws a series', () => {
+    assert.equal(
+      usageStaleNote('stale', '2026-09-01T11:00:00Z', [{ label: 's', windows: [] }], now),
+      'last capture 1h ago'
+    );
+  });
+
+  it('says nothing on the unavailable state, which renders the empty face instead', () => {
+    assert.equal(usageStaleNote('unavailable', '2026-08-01T00:00:00Z', seriesSources, now), undefined);
+  });
+
+  it('says nothing when the envelope carries nothing to restate', () => {
+    // No generatedAt and no origin stale claim: silence, never a guess.
+    assert.equal(usageStaleNote('ok', undefined, seriesSources, now), undefined);
+    // Origin-stale with nothing datable at all: still no invented words.
+    assert.equal(usageStaleNote('stale', undefined, [{ label: 's', windows: [] }], now), undefined);
+  });
+
+  it('rides tokenUsageProps into the component, which renders it above the sections', () => {
+    const props = tokenUsageProps(
+      envelopeFor({ sources: seriesSources }, { generatedAt: '2026-08-25T12:00:00Z' }),
+      now
+    );
+    assert.equal(props.staleNote, 'data through Aug 25, 2026 · last capture 7d ago');
+    const fresh = tokenUsageProps(
+      envelopeFor({ sources: seriesSources }, { generatedAt: '2026-09-01T11:30:00Z' }),
+      now
+    );
+    assert.equal(fresh.staleNote, undefined);
+    assert.match(component, /data-usage-stale/);
+    assert.match(component, /\{#if staleNote\}/);
   });
 });
