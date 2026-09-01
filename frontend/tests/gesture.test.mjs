@@ -1005,6 +1005,48 @@ test('every exit from a pull settles the surface to zero, including mid-settle (
   }
 });
 
+test('a claim takes the surface from the settle its own watch started (issue 277)', () => {
+  /* The two-writer guard at the moment of claiming, pinned where it can
+     actually fail: under ANIMATED settles (`reduced: () => false`, the
+     production default), because an instant settle leaves nothing in flight
+     to cancel and hides the race completely. The sequence is the
+     interrupted-snap-back family issue 265 established, one step further: the
+     second touch's first sample reads horizontal, so the watch branch
+     restarts the settle it interrupted — and then the SAME touch pulls
+     straight down and claims. Without the guard, the stale settle keeps
+     writing decaying `idle` frames over the claimed drag (and `show`'s
+     coalescer-cancel eats the drag's own frame), so the page slides home
+     under a finger that is dragging it down — MEASURED in PR #279's review
+     as [24.18 idle] → [19.73 idle] → [15.86 idle] where [64.16 armed]
+     belongs. */
+  const pull = strandedMidSettle();
+  // The horizontal-reading first sample: the watch declines to claim and —
+  // the settle guarantee — restarts the snap-back the touch interrupted.
+  pull.touch('pointermove', 102, { clientX: 220 });
+  pull.frames.tick();
+  assert.equal(pull.phase(), 'idle', 'the watch never restarted the interrupted settle');
+  assert.ok(
+    pull.distance() > 0,
+    'the restarted settle already finished; there is no stale writer left to race the claim'
+  );
+  // The same touch turns straight down and claims.
+  const before = pull.rendered.length;
+  pull.touch('pointermove', 100 + armingDrag);
+  for (let frame = 0; frame < 3; frame += 1) {
+    pull.frames.tick();
+  }
+  const after = pull.rendered.slice(before);
+  assert.ok(after.length > 0, 'the claim rendered nothing; the drag is not driving the surface');
+  for (const [distance, phase] of after) {
+    assert.equal(phase, 'armed', `a stale settle wrote "${phase}" over a claimed drag`);
+    assert.equal(
+      distance,
+      pullDistance(armingDrag),
+      'a stale settle drove the surface home under the finger'
+    );
+  }
+});
+
 test('a stand-down releases the touch defence rather than leaking it (issue 265)', () => {
   /* The same three exits leaked the non-passive touchmove listener onto
      document.body — permanently, since only onUp and onCancel ever removed
@@ -1252,15 +1294,82 @@ test('the pull contests the browser claim only while the touch could still be a 
   listeners.get('pointerup').handler({ pointerId: 7 });
   assert.ok(!listeners.has('touchmove'), 'the defence must not outlive its touch');
 
-  // A horizontal stand-down (the swipe's drag, not the pull's) leaves the
-  // remaining moves to the browser even though the listener is still wired:
-  // pointer is -1, so nothing is contested.
+  /* A drag reading HORIZONTAL is watched rather than stood down (issue 277),
+     so the listener stays wired for the touch's whole life — and the defence
+     itself must therefore decline it: a touch currently going across rather
+     than down is not a plausible pull, and eating its native pan would trade
+     the swipe's scroll for a gesture that can never claim. The touch carries
+     its own clientX here because the defence reads the ADOPTED touch's
+     deltas, not the pointer's. */
   down(100);
   move(120, 104);
-  assert.equal(touchMove(108), false, 'a stood-down gesture contests nothing');
+  assert.equal(
+    touchMove(112, { touches: [{ identifier: 1, clientX: 220, clientY: 112 }] }),
+    false,
+    'a horizontal-reading touch had its native pan contested'
+  );
+  // ...and the same past-slop downward move IS defended once the drag reads
+  // downward, or the decline above is a defence that never fires at all.
+  assert.equal(
+    touchMove(112, { touches: [{ identifier: 1, clientX: 52, clientY: 112 }] }),
+    true,
+    'a downward-reading touch past the slop went undefended'
+  );
 
   cleanup.destroy();
   assert.ok(!listeners.has('touchmove'), 'destroy must remove the defence');
+});
+
+/* THE FIRST SAMPLE DECIDES NOTHING (issue 277). The owner's "it works only in
+ * one band" from a real iPhone, reproduced at HEAD on every engine: a
+ * deliberate 240px straight-down pull at the top never armed when its first
+ * sample wobbled 1px UP, or read as a thumb-arc's 10px-across/4px-down —
+ * because both defences executed a permanent stand-down on that one unproven
+ * sample. The arbitration is now the drag's own cumulative direction, sample
+ * by sample: only movement past the slop stands the gesture down, and a
+ * horizontal reading merely declines to claim until the drag has genuinely
+ * gone further down than across. */
+test('a first-sample wobble never kills a deliberate pull (issue 277)', () => {
+  const wobbles = [
+    ['one pixel up', { clientX: 50, clientY: 99 }],
+    ['a thumb arc, ten across and four down', { clientX: 60, clientY: 104 }]
+  ];
+  for (const [name, first] of wobbles) {
+    const pull = pullHarness();
+    pull.touch('pointerdown', 100);
+    pull.touch('pointermove', first.clientY, { clientX: first.clientX });
+    pull.touch('pointermove', 100 + armingDrag);
+    pull.frames.tick();
+    assert.equal(pull.phase(), 'armed', `${name} as a first sample killed the pull`);
+    pull.touch('pointerup', 100 + armingDrag);
+    assert.equal(pull.refreshes, 1, `${name} cost the release its refresh`);
+  }
+});
+
+test('a drag that stays horizontal claims nothing, and an upward drag past the slop still stands down (issue 277)', () => {
+  /* The two properties the wobble tolerance must not have traded away. The
+     0.1.67 measurement — dx 160 / dy 20 moved the page 18.8px — stays fixed:
+     a drag whose cumulative reading is across never claims, however far it
+     travels. And a genuine upward flick is still the page's scroll. */
+  const across = pullHarness();
+  across.touch('pointerdown', 100);
+  across.touch('pointermove', 120, { clientX: 210 });
+  across.touch('pointermove', 125, { clientX: 300 });
+  across.frames.tick();
+  assert.deepEqual(across.rendered, [], 'a cumulative-horizontal drag drove the surface');
+  across.touch('pointerup', 125, { clientX: 300 });
+  assert.equal(across.refreshes, 0, 'a horizontal drag released into a refresh');
+
+  const upward = pullHarness();
+  upward.touch('pointerdown', 100);
+  upward.touch('pointermove', 100 - gestureSlop - 1);
+  upward.touch('pointermove', 100 + armingDrag);
+  upward.frames.tick();
+  assert.deepEqual(
+    upward.rendered,
+    [],
+    'an upward drag past the slop failed to stand the gesture down'
+  );
 });
 
 test('every horizontal gesture surface declares a touch-action that spares the page its scroll', () => {

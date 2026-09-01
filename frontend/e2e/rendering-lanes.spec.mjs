@@ -9007,6 +9007,210 @@ test('a second touch during the snap-back leaves the page nowhere but home (issu
     .toEqual({ pull: '0px', pulling: false, main: 'none' });
 });
 
+/* THE WIDE PULL (issue 277). The owner's ruling, from a real iPhone: at the
+ * top, a deliberate downward drag started ANYWHERE on the screen arms — the
+ * start target must not matter, because a reader dragging the page down at
+ * the top has no other plausible intent. Off the top, no start target arms.
+ *
+ * The lanes below dispatch every event at the element actually under the
+ * finger's position — the target a real touch's events bubble from — rather
+ * than at document.body directly, because "the start target must not matter"
+ * is exactly the dimension a body-targeted dispatch cannot measure: it was
+ * these drives that reproduced the defect at HEAD (a first sample 1px up, or
+ * a thumb-arc's 10px-across/4px-down, killed a 240px straight-down pull in
+ * all five engines) while every body-targeted lane stayed green. */
+const pullFrom = (page, points, exit = 'pointercancel') =>
+  page.evaluate(
+    async ({ points, exit }) => {
+      const root = window.document.documentElement;
+      const send = (type, x, y) => {
+        const target = window.document.elementFromPoint(x, y) ?? window.document.body;
+        target.dispatchEvent(
+          new PointerEvent(type, {
+            pointerId: 277,
+            pointerType: 'touch',
+            clientX: x,
+            clientY: y,
+            bubbles: true,
+          }),
+        );
+        return target;
+      };
+      const frame = () => new Promise((resolve) => window.requestAnimationFrame(resolve));
+      const [x0, y0] = points[0];
+      const started = send('pointerdown', x0, y0);
+      const startTarget = `${started.tagName}.${
+        (typeof started.className === 'string' ? started.className : '').split(' ')[0]
+      }`;
+      for (const [x, y] of points.slice(1)) {
+        send('pointermove', x, y);
+        await frame();
+      }
+      const state = {
+        startTarget,
+        phase: window.document.querySelector('.pull-indicator').dataset.pullPhase,
+        pull: root.style.getPropertyValue('--page-pull'),
+        pulling: root.hasAttribute('data-pulling'),
+      };
+      /* A cancel, not a release: the arming is the assertion, and a cancel
+         stands the gesture down through the same settle every exit uses
+         without spending a full refresh cycle per matrix row. */
+      send(exit, ...points.at(-1));
+      const deadline = performance.now() + 8000;
+      while (performance.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        if (
+          window.document.querySelector('.pull-indicator').dataset.pullPhase === 'idle' &&
+          ['', '0px'].includes(root.style.getPropertyValue('--page-pull'))
+        ) {
+          break;
+        }
+      }
+      return state;
+    },
+    { points, exit },
+  );
+
+/* A deliberate wide pull: 240px of downward travel, sampled the way a finger
+ * reports it. The two wobble variants are the exact first samples measured
+ * killing the gesture at HEAD — a 1px upward tremor, and a thumb arc's
+ * 10-across/4-down — so each matrix row is a regression that was real. */
+const widePull = (x, y0, wobble = []) => [
+  [x, y0],
+  ...wobble.map(([dx, dy]) => [x + dx, y0 + dy]),
+  [x, y0 + 30],
+  [x, y0 + 80],
+  [x, y0 + 150],
+  [x, y0 + 240],
+];
+
+test('at the top, a wide pull arms from every start target on the screen (issue 277)', async ({
+  page,
+}) => {
+  await visit(page);
+  const size = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+  const bands = [];
+  for (let y0 = 30; y0 <= size.h - 260; y0 += 120) {
+    bands.push(y0);
+  }
+
+  const rows = [];
+  for (const y0 of bands) {
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const row = await pullFrom(page, widePull(Math.round(size.w / 2), y0));
+    rows.push({ y0, ...row });
+    expect(
+      row.phase,
+      `a straight 240px pull from y=${y0} (${row.startTarget}) never armed`,
+    ).toBe('armed');
+  }
+  /* Non-vacuity for "every start target": the bands really did begin on
+     different element classes, or this matrix measured one surface many
+     times. Three is the floor a phone viewport always clears here — a gap,
+     a link, a list entry — and more is fine. */
+  const targets = new Set(rows.map((row) => row.startTarget));
+  expect(
+    targets.size,
+    `the matrix only ever started on ${[...targets].join(', ')}`,
+  ).toBeGreaterThanOrEqual(3);
+
+  // The measured killers: a first-sample wobble decides nothing.
+  for (const [name, wobble] of [
+    ['a 1px upward tremor', [[0, -1]]],
+    ['a thumb arc, 10 across and 4 down', [[10, 4]]],
+  ]) {
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const row = await pullFrom(page, widePull(Math.round(size.w / 2), 200, wobble));
+    expect(row.phase, `${name} as a first sample killed a deliberate wide pull`).toBe('armed');
+  }
+});
+
+test('off the top, no start target arms a pull — the gesture surfaces included (issue 277)', async ({
+  page,
+}) => {
+  await visit(page);
+  /* The two child surfaces with their own touch handling, plus the plain
+     column: the ruling's "off the top, none does" must hold exactly where a
+     competing gesture makes claiming most tempting. */
+  for (const selector of ['.gallery-stage', '.grid-strip', 'main']) {
+    const box = await page.evaluate((sel) => {
+      const el = window.document.querySelector(sel);
+      if (el === null) {
+        return null;
+      }
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      window.scrollTo(0, Math.max(120, top - 160));
+      const rect = el.getBoundingClientRect();
+      return {
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(Math.max(rect.top + 40, 40)),
+        scrolled: window.scrollY,
+      };
+    }, selector);
+    expect(box, `${selector} is not on this page; the lane measures nothing`).not.toBeNull();
+    expect(box.scrolled, `${selector} could not be scrolled away from the top`).toBeGreaterThan(1);
+    const row = await pullFrom(page, widePull(box.x, box.y), 'pointerup');
+    expect(row.pulling, `a pull claimed a drag over ${selector} with the page scrolled`).toBe(false);
+    expect(['', '0px'], `a drag over ${selector} moved the page off the top`).toContain(row.pull);
+  }
+});
+
+test('a horizontal swipe over the Media strip still swipes, downward drift and all (issue 277)', async ({
+  page,
+}) => {
+  await visit(page);
+  const stage = page.locator('.gallery-stage').first();
+  await stage.scrollIntoViewIfNeeded();
+  const counter = page.locator('.gallery-count').first();
+  const before = (await counter.innerText()).trim();
+  const box = await stage.boundingBox();
+
+  /* A leftward swipe whose finger drifts DOWNWARD as it goes — the wobble the
+     pull's wider arbitration must keep its hands off. The drift stays under
+     the travel (a swipe, not a diagonal), and the swipe must still turn the
+     page while the pull claims nothing. */
+  const y = box.y + box.height / 2;
+  await page.evaluate(
+    async ({ left, width, y }) => {
+      const send = (type, x, yAt) => {
+        const target = window.document.elementFromPoint(x, yAt) ?? window.document.body;
+        target.dispatchEvent(
+          new PointerEvent(type, {
+            pointerId: 278,
+            pointerType: 'touch',
+            clientX: x,
+            clientY: yAt,
+            bubbles: true,
+          }),
+        );
+      };
+      const frame = () => new Promise((resolve) => window.requestAnimationFrame(resolve));
+      send('pointerdown', left + width * 0.8, y);
+      for (const [at, drift] of [
+        [0.65, 4],
+        [0.5, 8],
+        [0.35, 12],
+        [0.22, 15],
+      ]) {
+        send('pointermove', left + width * at, y + drift);
+        await frame();
+      }
+      send('pointerup', left + width * 0.22, y + 15);
+    },
+    { left: box.x, width: box.width, y },
+  );
+
+  await expect(counter, 'a drifting horizontal swipe no longer turns the gallery').not.toHaveText(
+    before,
+  );
+  const claimed = await page.evaluate(() => ({
+    pulling: window.document.documentElement.hasAttribute('data-pulling'),
+    pull: window.document.documentElement.style.getPropertyValue('--page-pull'),
+  }));
+  expect(claimed.pulling, 'the pull claimed a horizontal swipe over the Media strip').toBe(false);
+  expect(['', '0px']).toContain(claimed.pull);
+});
+
 test('the refresh gesture has a control a keyboard can reach (issue 219)', async ({ page }) => {
   await visit(page);
   const control = page.locator('.pull-control');
