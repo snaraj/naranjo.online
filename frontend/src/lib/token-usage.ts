@@ -12,8 +12,10 @@ import type {
 } from './blocks.ts';
 import { addDays, formatMagnitude, formatWhole } from './grid.ts';
 import { dayNumber, formatDateRange } from './periods.ts';
+import { panelAge } from './panels.ts';
 import type {
   PanelEnvelope,
+  PanelStatus,
   TokenStatUnit,
   TokenUsageCategory,
   TokenUsageInsight,
@@ -995,20 +997,97 @@ function usageComposition(series: TokenUsageSeries): UsageCompositionRow[] | und
   }));
 }
 
+/* usageStaleAfterMs is how far behind the wall clock the envelope's own
+ * generatedAt may fall before the panel must SAY the data has stopped
+ * advancing (issue #276; the observability half of #267). The capture
+ * pipeline pushes hourly and the origin re-reads every five minutes, so a
+ * healthy panel is never more than a couple of hours old; the threshold is
+ * two full days because the workstation legitimately sleeps — a laptop lid
+ * closed overnight is not an outage — and a day-granularity series cannot
+ * honestly alarm at sub-day lag. Two days of silence, though, means dozens
+ * of missed pushes: that is a stalled pipeline, not a nap. */
+export const usageStaleAfterMs = 48 * 60 * 60 * 1000;
+
+/* usageDataThrough is the newest calendar day any source's series covers —
+ * the day the graphs actually draw through, which is the honest way to date
+ * a stale payload: not when the file was pushed, but how far the data it
+ * carries reaches. Undefined when no source draws a series at all. */
+export function usageDataThrough(sources: readonly TokenUsageSource[]): string | undefined {
+  let through: string | undefined;
+  for (const source of sources) {
+    if (!source.series || source.series.totals.length === 0) {
+      continue;
+    }
+    const end = addDays(source.series.startDate, source.series.totals.length - 1);
+    if (through === undefined || (dayNumber(end) ?? -1) > (dayNumber(through) ?? -1)) {
+      through = end;
+    }
+  }
+  return through;
+}
+
+/* usageStaleNote is the honest data-through line, or undefined while the
+ * payload is fresh. It renders in exactly two states, both proven by the
+ * envelope itself rather than inferred: the origin already SAYS stale (it
+ * refused a newer file, or lost the document it was serving from), or the
+ * origin says ok but its generatedAt has fallen beyond usageStaleAfterMs —
+ * the stalled-exporter state the origin structurally cannot distinguish
+ * from quiet, because an unchanged file is its ordinary state between
+ * pushes (#267: "would the app catch it?" used to be NO).
+ *
+ * The unavailable state is not this note's business: that renders the
+ * panel's empty face, and a note under it would date data nobody is shown.
+ * No invented freshness either way — every word here restates a field the
+ * envelope already carries. */
+export function usageStaleNote(
+  status: PanelStatus,
+  generatedAt: string | undefined,
+  sources: readonly TokenUsageSource[],
+  now: Date = new Date()
+): string | undefined {
+  if (status === 'unavailable') {
+    return undefined;
+  }
+  const at = generatedAt === undefined ? Number.NaN : Date.parse(generatedAt);
+  const aged = !Number.isNaN(at) && now.getTime() - at > usageStaleAfterMs;
+  if (status !== 'stale' && !aged) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  const through = usageDataThrough(sources);
+  if (through !== undefined) {
+    const day = formatDateRange(through, through);
+    if (day !== '') {
+      parts.push(`data through ${day}`);
+    }
+  }
+  const age = panelAge(generatedAt, now);
+  if (age !== '') {
+    parts.push(`last capture ${age}`);
+  }
+  return parts.length > 0 ? parts.join(' · ') : undefined;
+}
+
 /* tokenUsageProps renders the whole panel as data, or null before the first
  * envelope arrives — the retired component rendered nothing until then, and
  * the block host renders nothing for null, so the page's honest loading face
- * is unchanged. */
-export function tokenUsageProps(envelope: PanelEnvelope | null): UsageTrackerProps | null {
+ * is unchanged. `now` is injectable for the tests; the block host's call
+ * passes only the envelope. */
+export function tokenUsageProps(
+  envelope: PanelEnvelope | null,
+  now: Date = new Date()
+): UsageTrackerProps | null {
   if (envelope === null) {
     return null;
   }
+  const sources = tokenUsageSources(envelope.data);
   return {
     id: tokenUsagePanelId,
     title: envelope.title || tokenUsageFallbackTitle,
     status: envelope.status,
     generatedAt: envelope.generatedAt,
-    sections: tokenUsageSources(envelope.data).map(usageSection),
-    emptyNote: tokenUsageEmptyNote
+    sections: sources.map(usageSection),
+    emptyNote: tokenUsageEmptyNote,
+    staleNote: usageStaleNote(envelope.status, envelope.generatedAt, sources, now)
   };
 }

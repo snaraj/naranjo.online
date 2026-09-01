@@ -1,0 +1,9 @@
+{
+  "schema": "lifetime-baselines/v1",
+  "baselines": {
+    "codex": {
+      "total": 46336700095,
+      "asOf": "2026-08-31"
+    }
+  }
+}

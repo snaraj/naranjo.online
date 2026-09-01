@@ -13,8 +13,8 @@
 // strict JSON decoding with unknown fields refused, schema and calendar
 // validation, replay/rollback/future-skew checks on the capture instant,
 // label admission against the embedded snapshot (a file can never invent a
-// source), closed window/derived vocabularies (a file can never put new words
-// or tiles on the panel), category partition arithmetic, and finally the
+// source), closed window/derived/captured-stat vocabularies (a file can never
+// put new words or tiles on the panel), category partition arithmetic, and finally the
 // shared response-budget gate. Any failure keeps the last good payload and
 // marks it stale — never a crash, never fabricated data, never a partial
 // merge.
@@ -485,11 +485,12 @@ func (reg *Registry) loadSnapshotUsageData(state *panelState) (TokenUsageData, e
 // returns both the merged payload and the instant that HONESTLY describes it.
 // For every source section — each of which must name an existing snapshot
 // label — the series (with categories), the complete set of derived tiles,
-// and the complete window set are replaced; every figure the document does
-// not claim to measure (lifetime totals, session counts, insights) is left
-// exactly as the snapshot shipped it, still carrying its own `recorded`
-// provenance. Any invalid section refuses the WHOLE document: a partial merge
-// would serve a payload nobody produced.
+// every lifetime-class tile the snapshot ships (issue #276), and the
+// complete window set are replaced; every figure the document does not claim
+// to measure (a longest-task duration, insights) is left exactly as the
+// snapshot shipped it, still carrying its own `recorded` provenance. Any
+// invalid section refuses the WHOLE document: a partial merge would serve a
+// payload nobody produced.
 //
 // Three separate rules make one envelope honest about a multi-source payload,
 // and all three were review findings.
@@ -589,6 +590,10 @@ func mergeSeriesSource(section usageSeriesSource, base TokenUsageSource, capture
 		return TokenUsageSource{}, err
 	}
 	stats, err := overlayDerivedStats(base.Stats, section.Derived)
+	if err != nil {
+		return TokenUsageSource{}, err
+	}
+	stats, err = overlayCapturedStats(stats, section.Stats)
 	if err != nil {
 		return TokenUsageSource{}, err
 	}
@@ -854,6 +859,59 @@ func overlayDerivedStats(stats []TokenUsageStat, derived map[string]*int64) ([]T
 		}
 		if stat.Unit != usageSeriesDerivedKeys[stat.Key] {
 			return nil, fmt.Errorf("tile %q carries unit %q; the series defines %q", stat.Key, stat.Unit, usageSeriesDerivedKeys[stat.Key])
+		}
+		fresh := *value
+		stat.Value = &fresh
+		overlaid[index] = stat
+	}
+	return overlaid, nil
+}
+
+// overlayCapturedStats replaces the value of each existing lifetime-class
+// tile from the document's captured stats section (issue #276). Like the
+// derived overlay it can never add a tile — a figure the owner does not show
+// stays unshown, and a pushed key naming no tile is validated and unrendered.
+//
+// Completeness runs the OPPOSITE way from overlayDerivedStats', and the
+// asymmetry is the design: a derived figure is a function of the pushed
+// series, so every source owes the whole vocabulary; a captured figure is a
+// recording only its own tool can supply, so what a source owes is defined by
+// the tiles its snapshot ships. Every tile whose key sits in the closed
+// vocabulary must be refreshed — a document that leaves one at its
+// release-time value would put a frozen lifetime directly beside a runtime
+// series, the exact mixing findings 5 and 7 refused for windows and derived,
+// and the exact defect the owner reported (a lifetime tile 10B behind the
+// vendor's own page). A source whose snapshot ships no lifetime-class tile
+// owes no section at all.
+//
+// The per-key rules are the derived overlay's verbatim: closed-vocabulary
+// membership, null refused rather than published as a zero, the shared count
+// contract, and a unit that must agree with the vocabulary.
+func overlayCapturedStats(stats []TokenUsageStat, captured map[string]*int64) ([]TokenUsageStat, error) {
+	for key, value := range captured {
+		if _, ok := usageSeriesStatKeys[key]; !ok {
+			return nil, fmt.Errorf("captured stat key %q is outside the closed vocabulary", key)
+		}
+		if value == nil {
+			return nil, fmt.Errorf("captured stat key %q carries no figure; a tile the producer cannot measure may not be published as a zero", key)
+		}
+		if err := admitCount(*value); err != nil {
+			return nil, fmt.Errorf("captured stat key %q: %w", key, err)
+		}
+	}
+	overlaid := make([]TokenUsageStat, len(stats))
+	copy(overlaid, stats)
+	for index, stat := range overlaid {
+		unit, ok := usageSeriesStatKeys[stat.Key]
+		if !ok {
+			continue
+		}
+		value, present := captured[stat.Key]
+		if !present {
+			return nil, fmt.Errorf("the document does not refresh the %q tile; a captured lifetime-class tile may never keep a release-time value beside a runtime series", stat.Key)
+		}
+		if stat.Unit != unit {
+			return nil, fmt.Errorf("tile %q carries unit %q; the captured vocabulary defines %q", stat.Key, stat.Unit, unit)
 		}
 		fresh := *value
 		stat.Value = &fresh
