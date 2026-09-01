@@ -7,6 +7,48 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.71] - 2026-09-01
+
+### Fixed
+
+- The Coding Projects roster now tracks the owner's account instead of a
+  whitelist frozen at the last release (issue #281, defect 1). The origin
+  reads the account's public repository listing — one document, on the same
+  allowlisted host — and serves whatever it publishes, bounded by an account
+  pin, the host's own name grammar, an explicit exclusion list in config
+  data, and the served-row cap; the frontend renders the payload's roster
+  with links derived from the one host constant plus a grammar-validated
+  name. A repository created an hour ago appears at the next refresh tick
+  with no code change and no release.
+- A stale Coding Projects card now LOOKS stale (issue #281, defect 2): when
+  the envelope reports stale or unavailable — or an ok envelope's own
+  generatedAt stops advancing for two hours — the entry log renders an
+  honest status line dated by the envelope, above the entries it qualifies,
+  in the usage panel's data-through idiom.
+- Per-source refresh degradation is no longer silent (issue #281, defect 3):
+  a rate-limit cooldown logs WARN naming the silenced source and the instant
+  the silence ends, refused listing rows are named per repository, and the
+  round's cost against the public API's unauthenticated per-address budget
+  fell from 14 requests per tick to 2 — the old round's 56/hour alone
+  exceeded the documented 60/hour shared budget, which is the arithmetic
+  behind the morning's two-day-stale row. The existing worst-case cadence
+  pin now counts the coding-projects endpoints it previously omitted.
+- Panel fetches now revalidate conditionally (issue #281): config-literal
+  GET endpoints retain the upstream's entity validator and re-ask with
+  If-None-Match, so an unchanged document answers 304 — re-serving retained,
+  already-capped bytes at zero cost against the public API's request budget.
+  Requests with computed URLs or bodies never participate, and an
+  unsolicited 304 is refused like any other unexpected status.
+
+### Added
+
+- `scripts/ops/live-refresh-probe.sh` (issue #281, defect 4): the validated
+  reversible-mutation ceremony — open an ephemeral issue, watch the live
+  panel reflect it, revert, watch it reflect the revert, always cleaning up
+  — with the 2026-09-01 reference latencies (12m58s forward, 14m30s revert,
+  ~15-minute cadence) recorded in its header. Operator/agent-run only; CI
+  never touches the live site and never mutates the code host.
+
 ## [0.1.70] - 2026-09-01
 
 ### Fixed

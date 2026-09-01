@@ -606,4 +606,12 @@ export type EntryLogProps = {
   readonly variant?: FeedCardVariant;
   /* The heading depth entries sit at in the document outline. */
   readonly titleLevel?: 2 | 3 | 4 | 5 | 6;
+  /* The honest staleness line, present exactly when the adapter proved the
+   * log's information source is not current (issue 281 defect 2: an envelope
+   * honestly said stale while the rendered cards looked fresh). The same
+   * contract UsageTrackerProps.staleNote carries: adapter-built words the
+   * component renders and never composes, above the entries so the reader
+   * meets the caveat before the figures it qualifies. A static log — the
+   * work history — passes none and renders exactly as it always did. */
+  readonly staleNote?: string;
 };

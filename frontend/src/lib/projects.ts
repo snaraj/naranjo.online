@@ -1,13 +1,20 @@
 /* The Projects section's information module (owner directive, issue 134; live
- * since issue 242): the seven repositories this section tracks, most recently
- * pushed first.
+ * since issue 242): the owner's public repositories, most recently pushed
+ * first.
  *
- * SEVEN, and curated rather than derived: the roster is the owner's call, not
- * a query that sweeps an account. PR #255 read the owner's 2026-08-29 ruling
- * as dropping the foobar2000-* trio; the owner corrected that reading (issue
- * 256) — those three stay. Adding or removing a repository is an owner
- * decision expressed as a row below AND a source in
- * `internal/panels/config/fetch.json`, never a query that sweeps an account.
+ * THE ROSTER IS THE PANEL'S (issue 281). The owner's ruling reversed the
+ * curated-seven reading of 2026-08-29: a new public repository must appear
+ * on the site without a release, so the origin enumerates the account's own
+ * public listing and this module renders whatever roster the payload
+ * carries. Curation lives server-side as an explicit exclusion list in
+ * `internal/panels/config/fetch.json` — data, never a whitelist that goes
+ * stale. What this module still fixes is the LINK SHAPE: every entry's href
+ * is the one `projectHost` constant plus a name admitted through the
+ * repository-name grammar below, so a payload can decide which of the
+ * owner's repositories show and can never point a link at another host or
+ * an unparseable path. The rows captured below remain as the no-payload
+ * fallback and as the source of the one figure no listing reports — the
+ * captured commit totals.
  *
  * IT IS NO LONGER A CAPTURE. It was one, deliberately: `PANELS_REFRESH` was
  * default-off, so a live count would have been a promise the deployment could
@@ -51,7 +58,7 @@
 import { ageDetail, relativeAge } from './age.ts';
 import { recordedOutOfBand, type EntryCount, type EntryLogProps } from './blocks.ts';
 import { formatWhole } from './grid.ts';
-import { panelKinds } from './panels.ts';
+import { panelAge, panelKinds } from './panels.ts';
 import type { CodingProjectRow, CodingProjectsData, PanelEnvelope } from './panels';
 import type { TipDetail } from './tooltip.ts';
 
@@ -98,15 +105,14 @@ export const codingProjectsPanelId = 'coding-projects';
  * accompany on the page is enforced structurally, not by announcing it. */
 export const projectsCapturedOn = '2026-08-29';
 
-/* The owner's public repositories. The order here is a MAINTENANCE order — the
- * order these rows are written down in — and it is no longer the order the
- * section renders (issue 252). The feed sorts by last push, most recent first,
- * derived from the instants below and from the panel's when it has one, so a
- * repository the owner pushed to five minutes ago leads the section without an
- * edit to this file. What this list still fixes is WHICH repositories the
- * section may show and what each one's link, key and accessible name are; a
- * payload can reorder the rows and it can never introduce, rename or relink
- * one. */
+/* The CAPTURED rows: the owner's public repositories as read on the capture
+ * date above. Since issue 281 this list no longer fixes the roster — the
+ * panel's payload does, and a repository created after this capture renders
+ * from the payload alone. What these rows still are: the complete fallback
+ * face when no payload has arrived or none was admitted (a true thing to
+ * show, dated and marked), and the only source of each repository's captured
+ * commit total, which no listing endpoint reports. The order is a
+ * MAINTENANCE order; the feed sorts by last push (issue 252). */
 export const projects: readonly Project[] = [
   {
     name: 'naranjo.online',
@@ -163,15 +169,18 @@ export const projects: readonly Project[] = [
   }
 ];
 
-/* The repository's address. */
-export function projectUrl(project: Project): string {
+/* The repository's address: the ONE host constant plus a name. Every name
+ * that reaches this function has passed the repository-name grammar — the
+ * captured rows by review, a payload row by parseCodingProjects — so the
+ * link can only ever point inside the owner's own account. */
+export function projectUrl(project: Pick<Project, 'name'>): string {
   return `${projectHost}/${project.name}`;
 }
 
 /* The accessible name one project link carries. It names the destination and
  * says the link leaves the page, because a link that opens a new tab without
  * warning is a surprise for anyone who cannot see it happen. */
-export function projectLinkLabel(project: Project): string {
+export function projectLinkLabel(project: Pick<Project, 'name'>): string {
   return `${project.name} on ${projectHostLabel}, opens in a new tab`;
 }
 
@@ -216,19 +225,16 @@ function countDetail(label: string, value: string, marked: boolean): TipDetail {
  * A star tally the host did not report renders as an explicit unknown, never
  * as a zero: those are different claims, and only one of them is true. */
 export function projectCounts(
-  project: Project,
+  project: Project | undefined,
   live?: CodingProjectRow,
   now: number = Date.now()
 ): EntryCount[] {
   const recorded = live === undefined || live.recorded === true;
-  const stars = recorded ? project.stars : live.stars;
+  const stars = recorded ? (project?.stars ?? null) : live.stars;
   const pushedAt = effectivePushedAt(project, live);
-  const commitFigure = formatWhole(project.commits);
-  const commitLabel = `${commitFigure} ${project.commits === 1 ? 'commit' : 'commits'}`;
   const starLabel =
     stars === null ? 'stars unknown' : `${formatWhole(stars)} ${stars === 1 ? 'star' : 'stars'}`;
   const starFigure = stars === null ? unknownFigure : formatWhole(stars);
-  const age = relativeAge(pushedAt, now);
   /* Cluster order per the owner's sketch (2026-08-31, issue 275): stars and
    * freshness on the first row, the captured commit total and open issues on
    * the second, open pulls on the last — the live figures lead and the one
@@ -242,30 +248,8 @@ export function projectCounts(
       marked: recorded,
       detail: countDetail(starLabel, starFigure, recorded)
     },
-    /* How long since the last update (owner directive, 0.1.52; live since
-     * issue 268), computed from the instant against the reader's own clock
-     * rather than shipped as frozen words — see pushedAt above. `since` is
-     * what tells the log to keep recomputing it: the value and label here are
-     * the FIRST rendering, and the component re-derives both on every
-     * minute-aligned tick, so a card open on a desk stays true. */
-    {
-      key: 'updated',
-      glyph: 'clock',
-      label: age.phrase,
-      value: age.compact,
-      since: pushedAt,
-      marked: recorded,
-      detail: ageDetail(pushedAt, now, recorded)
-    },
-    {
-      key: 'commits',
-      glyph: 'node',
-      label: commitLabel,
-      value: commitFigure,
-      /* Always: the count is captured however fresh the row beside it is. */
-      marked: true,
-      detail: countDetail(commitLabel, commitFigure, true)
-    },
+    updatedCount(pushedAt, recorded, now),
+    commitCount(project),
     /* The two open-work counters (owner directive, issue 252 — the first two
      * counters to go terse, and since issue 268 the shape every counter has).
      *
@@ -279,6 +263,66 @@ export function projectCounts(
     openWorkCount('issues', 'issue', live?.openIssues, recorded),
     openWorkCount('pulls', 'pull', live?.openPulls, recorded)
   ];
+}
+
+/* How long since the last update (owner directive, 0.1.52; live since issue
+ * 268), computed from the instant against the reader's own clock rather than
+ * shipped as frozen words. `since` is what tells the log to keep recomputing
+ * it: the value and label here are the FIRST rendering, and the component
+ * re-derives both on every minute-aligned tick, so a card open on a desk
+ * stays true. An instant nobody reported — representable since a payload row
+ * may omit pushedAt and a dynamic row has no captured fallback — renders as
+ * the honest dash, never as an age of nothing. */
+function updatedCount(pushedAt: string | undefined, recorded: boolean, now: number): EntryCount {
+  if (pushedAt === undefined) {
+    const label = 'last update not reported';
+    return {
+      key: 'updated',
+      glyph: 'clock',
+      label,
+      value: unknownFigure,
+      detail: countDetail(label, unknownFigure, false)
+    };
+  }
+  const age = relativeAge(pushedAt, now);
+  return {
+    key: 'updated',
+    glyph: 'clock',
+    label: age.phrase,
+    value: age.compact,
+    since: pushedAt,
+    marked: recorded,
+    detail: ageDetail(pushedAt, now, recorded)
+  };
+}
+
+/* The captured commit total — always marked, since no listing reports one —
+ * or the honest dash for a repository the module list has no capture for,
+ * which is every repository discovered after the capture date (issue 281).
+ * The dash carries no provenance row: there is no figure there to have been
+ * recorded. */
+function commitCount(project: Project | undefined): EntryCount {
+  if (project === undefined) {
+    const label = 'commit total not recorded';
+    return {
+      key: 'commits',
+      glyph: 'node',
+      label,
+      value: unknownFigure,
+      detail: countDetail(label, unknownFigure, false)
+    };
+  }
+  const figure = formatWhole(project.commits);
+  const label = `${figure} ${project.commits === 1 ? 'commit' : 'commits'}`;
+  return {
+    key: 'commits',
+    glyph: 'node',
+    label,
+    value: figure,
+    /* Always: the count is captured however fresh the row beside it is. */
+    marked: true,
+    detail: countDetail(label, figure, true)
+  };
 }
 
 /* One open-work counter: the terse glyph-and-figure pair, or a dash when the
@@ -317,12 +361,17 @@ function openWorkCount(
 /* The instant a row is ORDERED and dated by: the panel's when it vouched for
  * one, the captured one otherwise. It is the one place that choice is made, so
  * the sentence a card shows ("updated 3 days ago") and the position it holds
- * in the feed can never disagree about which push they mean. */
-function effectivePushedAt(project: Project, live?: CodingProjectRow): string {
-  if (live === undefined || live.recorded === true) {
-    return project.pushedAt;
+ * in the feed can never disagree about which push they mean. Undefined when
+ * neither side reports one, which the counter renders as a dash and the sort
+ * places last. */
+function effectivePushedAt(
+  project: Project | undefined,
+  live?: CodingProjectRow
+): string | undefined {
+  if (live !== undefined && live.recorded !== true) {
+    return live.pushedAt ?? project?.pushedAt;
   }
-  return live.pushedAt ?? project.pushedAt;
+  return project?.pushedAt ?? live?.pushedAt;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -340,12 +389,25 @@ function isOptionalTally(value: unknown): boolean {
   );
 }
 
+/* The repository-name grammar, the frontend's half of the identity gate the
+ * origin's mapRepositoryListing applies (issue 281): letters, digits, dots,
+ * underscores and dashes, bounded, and never a filesystem dot name. Since the
+ * roster is the payload's, this is what makes a payload name safe to build
+ * an owner-account href from — the host is the one constant, and a name this
+ * grammar admits cannot escape its path segment or read as anything but a
+ * repository. */
+const repositoryNamePattern = /^[A-Za-z0-9._-]{1,100}$/;
+
+function isRepositoryName(name: string): boolean {
+  return name !== '.' && name !== '..' && repositoryNamePattern.test(name);
+}
+
 /* parseCodingProjects admits only payloads carrying the exact shape the feed
- * renders: a repos array of rows with a non-empty name, a string description,
- * a null-or-non-negative-integer star tally, an optional ISO push instant, and
- * an optional boolean provenance flag. Anything else returns null and the feed
- * falls back to its captured rows — a data fault degrades one section's
- * freshness, never the page.
+ * renders: a repos array of rows with a grammatical repository name, a string
+ * description, a null-or-non-negative-integer star tally, an optional ISO
+ * push instant, and an optional boolean provenance flag. Anything else
+ * returns null and the feed falls back to its captured rows — a data fault
+ * degrades one section's freshness, never the page.
  *
  * The refusal is WHOLESALE rather than per row, and that is the fail-closed
  * direction here: a payload that half-parses is drift, and a half-parsed
@@ -360,7 +422,7 @@ export function parseCodingProjects(document: unknown): CodingProjectsData | nul
       return null;
     }
     const { name, description, stars, pushedAt, openIssues, openPulls, recorded } = entry;
-    if (typeof name !== 'string' || name.length === 0 || typeof description !== 'string') {
+    if (typeof name !== 'string' || !isRepositoryName(name) || typeof description !== 'string') {
       return null;
     }
     if (
@@ -396,46 +458,95 @@ export function parseCodingProjects(document: unknown): CodingProjectsData | nul
   return { repos };
 }
 
-/* projectEntry builds one feed entry from a captured row and, when the panel
- * had something to say about it, the live one. The captured row is what fixes
- * the entry's IDENTITY — its name, its URL, its accessible name — so a payload
- * can never introduce a repository the owner did not list, rename one, or
- * point a link somewhere else. Only the CONTENT is live. */
-function projectEntry(project: Project, live: CodingProjectRow | undefined, now?: number) {
+/* projectEntry builds one feed entry from whichever sides exist: the captured
+ * row, the live one, or both. Identity — the name, the URL, the accessible
+ * name — derives from the name either side carries, which by this point has
+ * passed the repository-name grammar, so the href is the fixed host constant
+ * plus a segment that cannot escape it. The captured side contributes the
+ * figures no listing reports; the live side contributes everything current. */
+function projectEntry(project: Project | undefined, live: CodingProjectRow | undefined, now?: number) {
+  const name = project?.name ?? live?.name ?? '';
   const recorded = live === undefined || live.recorded === true;
   return {
-    key: project.name,
-    title: project.name,
-    href: projectUrl(project),
-    linkLabel: projectLinkLabel(project),
+    key: name,
+    title: name,
+    href: projectUrl({ name }),
+    linkLabel: projectLinkLabel({ name }),
     glyph: 'code' as const,
     counts: projectCounts(project, live, now),
     /* A live row with an empty description means the repository has none,
        which is a true thing to render as nothing rather than a reason to fall
        back to a sentence the host no longer carries. */
-    summary: recorded ? project.description : live.description
+    summary: recorded ? (project?.description ?? live?.description ?? '') : live.description
   };
+}
+
+/* One feed row's two sides: the captured record, the live one, or both. */
+type ProjectView = readonly [Project | undefined, CodingProjectRow | undefined];
+
+/* The instant one view is ordered by; an unreported instant sorts last, the
+ * honest place for a row nobody can date. */
+function viewInstant([project, live]: ProjectView): number {
+  const instant = effectivePushedAt(project, live);
+  const parsed = instant === undefined ? Number.NaN : Date.parse(instant);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+/* projectsStaleAfterMs is how far behind the wall clock the envelope's own
+ * generatedAt may fall before the card must SAY its data has stopped
+ * advancing, even while the status still reads ok — the wedged-loop state a
+ * status alone cannot see, the same #267 gap the usage panel's threshold
+ * closes. The origin refreshes this panel on a quarter-hour cadence and its
+ * rate-limit cooldown tops out at fifteen minutes, so two hours is eight
+ * silent ticks past every legitimate quiet spell: a stall, not a nap. */
+export const projectsStaleAfterMs = 2 * 60 * 60 * 1000;
+
+/* projectsStaleNote is the honest staleness line (issue 281, defect 2: the
+ * envelope said stale while the card LOOKED fresh). It renders in three
+ * proven states and invents nothing: the origin says stale — the retained
+ * figures are real and the note dates them by the envelope's own generatedAt;
+ * the origin says unavailable — the captured fallback renders and the note
+ * says which face the reader is seeing; or the origin says ok but its
+ * generatedAt has fallen past projectsStaleAfterMs. A fresh ok panel, and the
+ * pre-envelope captured face, carry no note. */
+export function projectsStaleNote(
+  envelope: PanelEnvelope | null,
+  now: number = Date.now()
+): string | undefined {
+  if (envelope === null) {
+    return undefined;
+  }
+  if (envelope.status === 'unavailable') {
+    return 'live repository data unavailable · showing captured figures';
+  }
+  const at = envelope.generatedAt === undefined ? Number.NaN : Date.parse(envelope.generatedAt);
+  const aged = !Number.isNaN(at) && now - at > projectsStaleAfterMs;
+  if (envelope.status !== 'stale' && !aged) {
+    return undefined;
+  }
+  const age = panelAge(envelope.generatedAt, new Date(now));
+  return age === '' ? 'stale · the last successful read is not current' : `stale · data as of ${age}`;
 }
 
 /* The adapter (issue 165, live since issue 242): the coding-projects envelope
  * in, EntryLog props out.
  *
- * A null envelope, a wrong kind, or a payload that fails admission all render
- * the CAPTURED rows rather than nothing. That is deliberate and it is the
- * honest-states floor rather than an exception to it: the fallback is a true
- * thing to show — these figures were really read, on the date recorded above,
- * and the page says so with the provenance mark — not a placeholder pretending
- * to be data. It also means the section's first paint is already true, so
- * nothing is reserved for late content and the panel's arrival shifts no
- * layout.
+ * THE ROSTER IS THE PAYLOAD'S (issue 281). A payload that passed admission
+ * decides which repositories render — that is what lets a repository created
+ * an hour ago appear with no release — and each of its rows is enriched with
+ * the captured record where one exists. A null envelope, a wrong kind, or a
+ * payload that fails admission all render the CAPTURED rows rather than
+ * nothing: the fallback is a true thing to show — these figures were really
+ * read, on the date recorded above, and the page says so with the provenance
+ * mark — not a placeholder pretending to be data.
  *
  * The ORDER is derived here rather than declared anywhere (issue 252): most
  * recently pushed first, against each row's effective instant, so the section
  * answers "what has the owner been working on" instead of "what order was this
  * file written in". Sorting at this layer rather than in the producer is what
- * lets it hold in all three states — a live payload, a payload whose rows fell
- * back to the shipped snapshot, and no payload at all — because this is the
- * only layer where the live and captured instants are both in hand.
+ * lets it hold in every state — a live payload, a stale retained one, and no
+ * payload at all — because this is the only layer where the live and captured
+ * instants are both in hand.
  *
  * `toSorted` rather than `sort`: `projects` is a module-level constant that
  * every other consumer reads, and sorting it in place would reorder theirs
@@ -445,15 +556,16 @@ export function codingProjectsProps(envelope: PanelEnvelope | null, now?: number
     envelope !== null && envelope.kind === panelKinds.codingProjects
       ? parseCodingProjects(envelope.data)
       : null;
-  const byName = new Map((payload?.repos ?? []).map((row) => [row.name, row]));
-  const ordered = projects.toSorted(
-    (left, right) =>
-      Date.parse(effectivePushedAt(right, byName.get(right.name))) -
-      Date.parse(effectivePushedAt(left, byName.get(left.name)))
-  );
+  const capturedByName = new Map(projects.map((project) => [project.name, project]));
+  const views: readonly ProjectView[] =
+    payload !== null && payload.repos.length > 0
+      ? payload.repos.map((row) => [capturedByName.get(row.name), row] as const)
+      : projects.map((project) => [project, undefined] as const);
+  const ordered = views.toSorted((left, right) => viewInstant(right) - viewInstant(left));
   return {
     variant: 'compact',
     titleLevel: 4,
-    entries: ordered.map((project) => projectEntry(project, byName.get(project.name), now))
+    entries: ordered.map(([project, live]) => projectEntry(project, live, now)),
+    staleNote: projectsStaleNote(envelope, now)
   };
 }

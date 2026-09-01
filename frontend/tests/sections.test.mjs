@@ -33,6 +33,8 @@ import {
   projectLinkLabel,
   projects,
   projectsCapturedOn,
+  projectsStaleAfterMs,
+  projectsStaleNote,
   projectUrl,
 } from '../src/lib/projects.ts';
 import {
@@ -927,6 +929,136 @@ test('the feed leads with the repository pushed most recently (issue 252)', () =
     expected,
     'a recorded row was ordered by an instant it was not vouching for'
   );
+});
+
+/* One admissible envelope, shared by the dynamic-roster tests below. */
+function projectsEnvelope(repos, overrides = {}) {
+  return {
+    schema: 'panel/v1',
+    id: codingProjectsPanelId,
+    kind: 'coding-projects/v1',
+    title: 'Coding Projects',
+    generatedAt: '2026-09-01T12:00:00Z',
+    status: 'ok',
+    data: { repos },
+    ...overrides,
+  };
+}
+
+test('the roster is the payload’s: a repository the module list has never heard of renders (issue 281)', () => {
+  // The defect, reproduced: the owner published a new repository and the site
+  // could not show it, because the module list fixed the roster. Now the
+  // payload does — the new row renders with its live figures, its identity
+  // derived from the one host constant plus its admitted name, and the one
+  // figure nobody captured for it is an honest dash, not a borrowed number.
+  const now = Date.parse('2026-09-01T12:30:00Z');
+  const fresh = {
+    name: 'born-this-morning',
+    description: 'a repository created after the last release',
+    stars: 1,
+    pushedAt: '2026-09-01T11:00:00Z',
+    openIssues: 2,
+    openPulls: 1,
+  };
+  const rendered = codingProjectsProps(projectsEnvelope([fresh]), now);
+  assert.equal(rendered.entries.length, 1, 'the payload decides the roster, not the module list');
+  const [entry] = rendered.entries;
+  assert.equal(entry.title, 'born-this-morning');
+  assert.equal(entry.href, `${projectHost}/born-this-morning`);
+  assert.equal(entry.linkLabel, 'born-this-morning on GitHub, opens in a new tab');
+  assert.equal(entry.summary, fresh.description);
+  const byKey = new Map(entry.counts.map((count) => [count.key, count]));
+  assert.equal(byKey.get('stars').value, '1');
+  assert.equal(byKey.get('issues').value, '2');
+  assert.equal(byKey.get('pulls').value, '1');
+  // No capture exists for this repository, so the commit counter is the
+  // honest dash — "not recorded" is a different claim than any number.
+  assert.equal(byKey.get('commits').value, '—');
+  assert.equal(byKey.get('commits').label, 'commit total not recorded');
+  assert.deepEqual(byKey.get('commits').detail.rows, [], 'a dash carries no provenance row');
+  // And a payload row for a KNOWN repository still gets its captured commit
+  // total beside its live figures.
+  const known = codingProjectsProps(
+    projectsEnvelope([
+      { name: projects[0].name, description: 'live text', stars: 5, pushedAt: '2026-09-01T11:00:00Z' },
+    ]),
+    now
+  );
+  assert.equal(
+    known.entries[0].counts.find((count) => count.key === 'commits').value,
+    String(projects[0].commits)
+  );
+});
+
+test('a payload name outside the repository grammar refuses the whole payload', () => {
+  // The identity gate that lets the roster be dynamic: the href is the host
+  // constant plus the name, so the name must be a plain path segment. A
+  // payload carrying one hostile name is drift or hostility, and the refusal
+  // is wholesale — the captured face renders, never a half-parsed roster.
+  const good = { name: 'fine', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z' };
+  for (const name of ['evil name', 'a/../b', '..', '.', '', 'x'.repeat(101), 'sla/sh']) {
+    const rendered = codingProjectsProps(projectsEnvelope([good, { ...good, name }]));
+    assert.deepEqual(
+      rendered.entries.map((entry) => entry.title).toSorted(),
+      projects.map((project) => project.name).toSorted(),
+      `a payload carrying the name ${JSON.stringify(name)} was not refused wholesale`
+    );
+  }
+});
+
+test('a card looks stale when its envelope says so (issue 281, defect 2)', () => {
+  const now = Date.parse('2026-09-01T12:30:00Z');
+  const repos = [{ name: 'fine', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z' }];
+  // A fresh ok panel carries no note, and neither does the pre-envelope face.
+  assert.equal(codingProjectsProps(projectsEnvelope(repos), now).staleNote, undefined);
+  assert.equal(codingProjectsProps(null, now).staleNote, undefined);
+  // The non-ok fixture: the origin says stale, and the card SAYS SO, dated by
+  // the envelope's own generatedAt — status plus timestamp, nothing invented.
+  const stale = codingProjectsProps(
+    projectsEnvelope(repos, { status: 'stale', generatedAt: '2026-09-01T07:30:00Z' }),
+    now
+  );
+  assert.equal(stale.staleNote, 'stale · data as of 5h ago');
+  // Unavailable renders the captured face and says which face it is.
+  const unavailable = codingProjectsProps(
+    projectsEnvelope([], { status: 'unavailable', generatedAt: undefined, data: null }),
+    now
+  );
+  assert.equal(unavailable.staleNote, 'live repository data unavailable · showing captured figures');
+  assert.equal(unavailable.entries.length, projects.length);
+  // An ok envelope whose generatedAt stopped advancing is the wedged-loop
+  // state a status alone cannot see: past the threshold the card says so.
+  const wedged = projectsEnvelope(repos, {
+    generatedAt: new Date(now - projectsStaleAfterMs - 60_000).toISOString(),
+  });
+  assert.match(codingProjectsProps(wedged, now).staleNote, /^stale · data as of /);
+  // Executed at the seam too: the note builder itself, from both sides of
+  // the threshold, so the boundary is arithmetic rather than luck.
+  assert.equal(
+    projectsStaleNote(projectsEnvelope(repos, { generatedAt: new Date(now - projectsStaleAfterMs + 60_000).toISOString() }), now),
+    undefined
+  );
+  assert.notEqual(
+    projectsStaleNote(projectsEnvelope(repos, { generatedAt: new Date(now - projectsStaleAfterMs - 60_000).toISOString() }), now),
+    undefined
+  );
+});
+
+test('the entry log renders the stale line above the entries, and only when it has one', () => {
+  // Structural, against the component source (the same way the usage
+  // tracker's data-through line is pinned): the note renders conditionally,
+  // carries its audit attribute, and sits before the list so the reader
+  // meets the caveat before the figures it qualifies. A static log passes
+  // none and renders exactly as it always did.
+  assert.match(entryLog, /\{#if staleNote\}/);
+  assert.match(entryLog, /data-entry-log-stale/);
+  assert.ok(
+    entryLog.indexOf('data-entry-log-stale') < entryLog.indexOf('<ol class="entry-log"'),
+    'the stale line renders after the entries it qualifies'
+  );
+  assert.equal(workHistoryProps.staleNote, undefined, 'the static work history grew a stale note');
+  // The line is a token-inked reading, not an italic apology.
+  assert.match(styleBlock(entryLog), /\.entry-log-stale \{[^}]*color: var\(--card-meta-ink\)/s);
 });
 
 test('open issues and open pull requests are told with icons and a number (issue 252)', () => {

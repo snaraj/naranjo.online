@@ -328,6 +328,13 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 	for _, source := range document.VCSActivity.Commits.Sources {
 		endpoints = append(endpoints, source.Endpoint)
 	}
+	if document.CodingProjects == nil {
+		t.Fatal("embedded config configures no coding-projects producer")
+	}
+	endpoints = append(endpoints, document.CodingProjects.ListingEndpoint)
+	if document.CodingProjects.PullsEndpoint != "" {
+		endpoints = append(endpoints, document.CodingProjects.PullsEndpoint)
+	}
 	for _, source := range document.TokenUsage.Sources {
 		endpoints = append(endpoints, source.Endpoint)
 	}
@@ -380,9 +387,10 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 	// Every endpoint's body cap must be at or below the shared bound, so a
 	// per-endpoint cap can only ever tighten.
 	caps := map[string]int64{
-		"boss-log":     document.BossLog.MaxBytes,
-		"vcs-activity": document.VCSActivity.MaxBytes,
-		"vcs-commits":  document.VCSActivity.Commits.MaxBytes,
+		"boss-log":        document.BossLog.MaxBytes,
+		"vcs-activity":    document.VCSActivity.MaxBytes,
+		"vcs-commits":     document.VCSActivity.Commits.MaxBytes,
+		"coding-projects": document.CodingProjects.MaxBytes,
 	}
 	for _, source := range document.TokenUsage.Sources {
 		caps["usage:"+source.Label] = source.MaxBytes
@@ -424,13 +432,19 @@ type ownedEndpoint struct {
 }
 
 // ownedEndpoints reads the shipped configuration into the shape the pins
-// below share. It covers ONLY the zero-secret producers issue #79 governs;
-// the credentialed usage sources belong to a different issue and appear in
+// below share: every producer that can hit a public host WITHOUT a
+// credential. The zero-secret producers issue #79 governs were always here;
+// issue 281 added the coding-projects pair, because that producer reads
+// anonymously whenever its optional credential is unset and its cadence
+// therefore has to fit the unauthenticated budget too — the retired
+// per-repository round sat outside this accounting at 56 requests/hour,
+// which is the arithmetic behind the rate exhaustion the issue measured.
+// The credentialed usage sources belong to a different issue and appear in
 // the rate arithmetic through their own accounting.
 func ownedEndpoints(t *testing.T, document fetchConfigDocument) []ownedEndpoint {
 	t.Helper()
-	if document.BossLog == nil || document.VCSActivity == nil || document.VCSActivity.Commits == nil {
-		t.Fatal("the embedded config lost one of the zero-secret producers")
+	if document.BossLog == nil || document.VCSActivity == nil || document.VCSActivity.Commits == nil || document.CodingProjects == nil {
+		t.Fatal("the embedded config lost one of the public-capable producers")
 	}
 	owned := []ownedEndpoint{
 		{"boss-log", hostOf(t, document.BossLog.Endpoint), document.BossLog.ContentType, document.BossLog.MinIntervalMinutes},
@@ -440,6 +454,15 @@ func ownedEndpoints(t *testing.T, document fetchConfigDocument) []ownedEndpoint 
 	for _, source := range commits.Sources {
 		owned = append(owned, ownedEndpoint{
 			"vcs-commits:" + source.Repo, hostOf(t, source.Endpoint), commits.ContentType, commits.MinIntervalMinutes,
+		})
+	}
+	projects := document.CodingProjects
+	owned = append(owned, ownedEndpoint{
+		"coding-projects:listing", hostOf(t, projects.ListingEndpoint), projects.ContentType, projects.MinIntervalMinutes,
+	})
+	if projects.PullsEndpoint != "" {
+		owned = append(owned, ownedEndpoint{
+			"coding-projects:pulls", hostOf(t, projects.PullsEndpoint), projects.ContentType, projects.MinIntervalMinutes,
 		})
 	}
 	return owned

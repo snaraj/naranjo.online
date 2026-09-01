@@ -607,14 +607,13 @@ func TestAGetProducerNeverBecomesAPost(t *testing.T) {
  * coding-projects/v1
  * ------------------------------------------------------------------------ */
 
-// projectsSpec is the repository-metadata fixture spec: two repositories, the
-// optional credential named, mirroring the shipped configuration's shape.
+// projectsSpec is the repository-metadata fixture spec: the account's listing
+// endpoint, the account pin, the optional credential named, mirroring the
+// shipped configuration's shape.
 func projectsSpec() *codingProjectsFetchSpec {
 	return &codingProjectsFetchSpec{
-		Sources: []codingProjectSourceSpec{
-			{Name: "alpha", Endpoint: "https://api.example.test/repos/owner/alpha"},
-			{Name: "beta", Endpoint: "https://api.example.test/repos/owner/beta"},
-		},
+		ListingEndpoint:    "https://api.example.test/users/owner/repos?per_page=30&sort=pushed",
+		Account:            "owner",
 		Headers:            map[string]string{"Accept": "application/json"},
 		KeyEnvName:         "FIXTURE_PROJECTS_TOKEN",
 		KeyHeader:          "Authorization",
@@ -625,41 +624,63 @@ func projectsSpec() *codingProjectsFetchSpec {
 	}
 }
 
-// repositoryAnswer is a realistic upstream document: the fields the panel
-// reads, surrounded by the many it deliberately does not — including the owner
-// profile the projection exists to avoid holding. The combined open tally is
-// zero here; repositoryAnswerOpen is the variant that sets it.
-func repositoryAnswer(description string, stars int, pushedAt string) string {
-	return repositoryAnswerOpen(description, stars, pushedAt, 0)
+// listedRepo is one listing row's variable facts; everything the fixture
+// builder does not take is realistic filler the projection must ignore.
+type listedRepo struct {
+	name        string
+	owner       string // "" means the fixture account "owner"
+	private     bool
+	description string // a raw JSON value: `"text"` or `null`
+	stars       int
+	pushedAt    string // "" serves JSON null: a repository never pushed
+	open        int    // the COMBINED open tally, pull requests included
 }
 
-// repositoryAnswerOpen is the same document with the upstream's COMBINED open
-// tally set — the figure that counts pull requests as issues, and therefore
-// the one half of the subtraction that lives in this document.
-func repositoryAnswerOpen(description string, stars int, pushedAt string, open int) string {
-	return fmt.Sprintf(`{"id":1,"name":"ignored-by-design","full_name":"owner/ignored",`+
-		`"owner":{"login":"owner","id":2,"type":"User"},"private":false,`+
-		`"description":%s,"fork":false,"created_at":"2020-01-01T00:00:00Z",`+
-		`"pushed_at":%q,"stargazers_count":%d,"watchers_count":%d,"forks_count":0,`+
-		`"open_issues_count":%d,"default_branch":"main"}`,
-		description, pushedAt, stars, stars, open)
+// listingAnswer is a realistic listing document: one entry per row, each
+// carrying the fields the panel reads surrounded by the many it deliberately
+// does not — including the owner profile the projection reduces to a login.
+func listingAnswer(rows ...listedRepo) string {
+	entries := make([]string, 0, len(rows))
+	for _, row := range rows {
+		owner := row.owner
+		if owner == "" {
+			owner = "owner"
+		}
+		pushed := "null"
+		if row.pushedAt != "" {
+			pushed = fmt.Sprintf("%q", row.pushedAt)
+		}
+		entries = append(entries, fmt.Sprintf(`{"id":1,"name":%q,"full_name":"%s/%s",`+
+			`"owner":{"login":%q,"id":2,"type":"User"},"private":%t,`+
+			`"description":%s,"fork":false,"created_at":"2020-01-01T00:00:00Z",`+
+			`"pushed_at":%s,"stargazers_count":%d,"watchers_count":%d,"forks_count":0,`+
+			`"open_issues_count":%d,"default_branch":"main"}`,
+			row.name, owner, row.name, owner, row.private, row.description, pushed, row.stars, row.stars, row.open))
+	}
+	return "[" + strings.Join(entries, ",") + "]"
 }
 
-// tallyAnswer is a realistic search answer: the aggregate the projection reads,
-// beside the result items and their account profiles it must never hold.
-func tallyAnswer(total int) string {
-	return fmt.Sprintf(`{"total_count":%d,"incomplete_results":false,`+
-		`"items":[{"id":9,"number":1,"title":"a pull request",`+
-		`"user":{"login":"somebody","id":3,"type":"User"},"state":"open"}]}`, total)
+// searchAnswer is a realistic account-wide open-pull search answer: one item
+// per name given (repeat a name for several matches), each carrying the
+// account profiles the projection must never hold beside the one address it
+// reads. The total is the honest item count unless overridden by a test that
+// drives the truncation refusal.
+func searchAnswer(account string, names ...string) string {
+	items := make([]string, 0, len(names))
+	for _, name := range names {
+		items = append(items, fmt.Sprintf(`{"id":9,"number":1,"title":"a pull request",`+
+			`"user":{"login":"somebody","id":3,"type":"User"},"state":"open",`+
+			`"repository_url":"https://api.example.test/repos/%s/%s"}`, account, name))
+	}
+	return fmt.Sprintf(`{"total_count":%d,"incomplete_results":false,"items":[%s]}`,
+		len(names), strings.Join(items, ","))
 }
 
-// projectsSpecWithTallies is projectsSpec with the optional second document
-// named on every source, which is the shipped configuration's shape.
+// projectsSpecWithTallies is projectsSpec with the optional search document
+// named, which is the shipped configuration's shape.
 func projectsSpecWithTallies() *codingProjectsFetchSpec {
 	spec := projectsSpec()
-	for index := range spec.Sources {
-		spec.Sources[index].PullsEndpoint = "https://api.example.test/search/issues?q=" + spec.Sources[index].Name
-	}
+	spec.PullsEndpoint = "https://api.example.test/search/issues?q=owner-pulls"
 	return spec
 }
 
@@ -695,15 +716,20 @@ func decodeProjects(t *testing.T, loaded loadedPayload) CodingProjectsData {
 	return payload
 }
 
-// TestCodingProjectsServeWhatTheHostSaysNow is the commission: the owner edits
-// a description on the host and the site follows on the next refresh, rather
-// than serving a capture frozen at build time.
+// TestCodingProjectsServeWhatTheHostSaysNow is the commission, extended by
+// issue 281: the owner edits a description — or CREATES A REPOSITORY — and
+// the site follows on the next refresh, rather than serving a roster frozen
+// at the last config edit. The row the shipped snapshot has never heard of is
+// the defect-1 regression: under the retired whitelist it could never appear.
 func TestCodingProjectsServeWhatTheHostSaysNow(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	doer := newCapturingDoer(map[string]cannedAnswer{
-		"/repos/owner/alpha": {contentType: "application/json", body: repositoryAnswer(`"a description the owner just changed"`, 7, "2026-08-27T10:00:00Z")},
-		"/repos/owner/beta":  {contentType: "application/json", body: repositoryAnswer(`null`, 0, "2026-08-26T10:00:00Z")},
+		"/users/owner/repos": {contentType: "application/json", body: listingAnswer(
+			listedRepo{name: "alpha", description: `"a description the owner just changed"`, stars: 7, pushedAt: "2026-08-27T10:00:00Z"},
+			listedRepo{name: "beta", description: `null`, stars: 0, pushedAt: "2026-08-26T10:00:00Z"},
+			listedRepo{name: "born-this-morning", description: `"a repository created after the last release"`, stars: 1, pushedAt: "2026-08-28T09:00:00Z"},
+		)},
 	})
 	loaded, err := projectsSource(t).refreshProjects(t.Context(), doer, func(name string) string {
 		if name == "FIXTURE_PROJECTS_TOKEN" {
@@ -715,40 +741,122 @@ func TestCodingProjectsServeWhatTheHostSaysNow(t *testing.T) {
 		t.Fatalf("refresh: %v", err)
 	}
 	if loaded.status != StatusOK {
-		t.Errorf("status = %q, want ok when every repository answered", loaded.status)
+		t.Errorf("status = %q, want ok when the whole listing was admitted", loaded.status)
 	}
 	payload := decodeProjects(t, loaded)
-	if len(payload.Repos) != 2 {
-		t.Fatalf("served %d rows, want 2", len(payload.Repos))
+	if len(payload.Repos) != 3 {
+		t.Fatalf("served %d rows, want 3", len(payload.Repos))
 	}
-	if payload.Repos[0].Name != "alpha" || payload.Repos[1].Name != "beta" {
-		t.Errorf("rows = %q/%q, want config order alpha then beta", payload.Repos[0].Name, payload.Repos[1].Name)
+	// Most recently pushed first — the roster is the listing's, ordered by
+	// the data, and the new repository leads because it was pushed last.
+	if payload.Repos[0].Name != "born-this-morning" || payload.Repos[1].Name != "alpha" || payload.Repos[2].Name != "beta" {
+		t.Errorf("rows = %q/%q/%q, want most recently pushed first with the new repository leading",
+			payload.Repos[0].Name, payload.Repos[1].Name, payload.Repos[2].Name)
 	}
-	if payload.Repos[0].Description != "a description the owner just changed" {
-		t.Errorf("description = %q, want the host's current text", payload.Repos[0].Description)
+	if payload.Repos[1].Description != "a description the owner just changed" {
+		t.Errorf("description = %q, want the host's current text", payload.Repos[1].Description)
 	}
-	if payload.Repos[0].Stars == nil || *payload.Repos[0].Stars != 7 {
-		t.Errorf("stars = %v, want 7", payload.Repos[0].Stars)
+	if payload.Repos[1].Stars == nil || *payload.Repos[1].Stars != 7 {
+		t.Errorf("stars = %v, want 7", payload.Repos[1].Stars)
 	}
-	if payload.Repos[0].Recorded {
-		t.Error("a live row is marked recorded")
+	for _, row := range payload.Repos {
+		if row.Recorded {
+			t.Errorf("live row %q is marked recorded", row.Name)
+		}
 	}
 	// A repository with no description has none; the row serves an empty
 	// string rather than borrowed or invented copy.
-	if payload.Repos[1].Description != "" {
-		t.Errorf("a repository with no description served %q", payload.Repos[1].Description)
+	if payload.Repos[2].Description != "" {
+		t.Errorf("a repository with no description served %q", payload.Repos[2].Description)
 	}
 	// A genuinely reported zero stays zero — that is what the nullable tally
 	// makes expressible in the first place.
-	if payload.Repos[1].Stars == nil || *payload.Repos[1].Stars != 0 {
-		t.Errorf("a reported zero tally served %v, want 0", payload.Repos[1].Stars)
+	if payload.Repos[2].Stars == nil || *payload.Repos[2].Stars != 0 {
+		t.Errorf("a reported zero tally served %v, want 0", payload.Repos[2].Stars)
 	}
-	for _, request := range doer.at("/repos/owner/alpha") {
+	listing := doer.at("/users/owner/repos")
+	if len(listing) != 1 {
+		t.Fatalf("%d listing requests, want exactly one: the whole roster is one document", len(listing))
+	}
+	for _, request := range listing {
 		if got := request.header.Get("Authorization"); got != "Bearer fixture-token-value" {
 			t.Errorf("Authorization header = %q, want the prefixed credential", got)
 		}
 		if request.method != http.MethodGet {
-			t.Errorf("method = %s, want GET: reading a repository is a read", request.method)
+			t.Errorf("method = %s, want GET: reading a listing is a read", request.method)
+		}
+	}
+}
+
+// TestTheRosterIsCuratedByExclusionOnly pins the owner's sanctioned curation
+// shape: an excluded name disappears from the roster with the envelope still
+// ok — curation is a choice, not degradation — and the exclusion of one name
+// hides nothing else.
+func TestTheRosterIsCuratedByExclusionOnly(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	doer := newCapturingDoer(map[string]cannedAnswer{
+		"/users/owner/repos": {contentType: "application/json", body: listingAnswer(
+			listedRepo{name: "alpha", description: `"kept"`, stars: 1, pushedAt: "2026-08-27T10:00:00Z"},
+			listedRepo{name: "beta", description: `"curated out"`, stars: 1, pushedAt: "2026-08-26T10:00:00Z"},
+		)},
+	})
+	spec := projectsSpec()
+	spec.Exclude = []string{"beta"}
+	source, err := NewFetchSource(SnapshotSource{Name: "snapshots/coding-projects.json"}, liveTestConfig(),
+		panelFetchSpecs{projects: spec})
+	if err != nil {
+		t.Fatalf("build source: %v", err)
+	}
+	loaded, err := source.refreshProjects(t.Context(), doer, func(string) string { return "" }, now)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if loaded.status != StatusOK {
+		t.Errorf("status = %q, want ok: curation is not degradation", loaded.status)
+	}
+	payload := decodeProjects(t, loaded)
+	if len(payload.Repos) != 1 || payload.Repos[0].Name != "alpha" {
+		t.Fatalf("served %v, want exactly the uncurated row", payload.Repos)
+	}
+}
+
+// TestARosterOverTheRowCapServesTheMostRecent pins the clamp-by-recency
+// selection: a thirteenth public repository must not take the panel down, and
+// which twelve serve is decided by push instant, never by listing position.
+func TestARosterOverTheRowCapServesTheMostRecent(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	rows := make([]listedRepo, 0, maxCodingProjectSources+1)
+	// Oldest first, so serving "the first twelve listed" would be wrong.
+	for index := range maxCodingProjectSources + 1 {
+		rows = append(rows, listedRepo{
+			name:        fmt.Sprintf("repo-%02d", index),
+			description: `"x"`,
+			stars:       1,
+			pushedAt:    time.Date(2026, 8, 1+index, 10, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		})
+	}
+	doer := newCapturingDoer(map[string]cannedAnswer{
+		"/users/owner/repos": {contentType: "application/json", body: listingAnswer(rows...)},
+	})
+	loaded, err := projectsSource(t).refreshProjects(t.Context(), doer, func(string) string { return "" }, now)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if loaded.status != StatusOK {
+		t.Errorf("status = %q, want ok: selection is a stated bound, not a failure", loaded.status)
+	}
+	payload := decodeProjects(t, loaded)
+	if len(payload.Repos) != maxCodingProjectSources {
+		t.Fatalf("served %d rows, want the %d cap", len(payload.Repos), maxCodingProjectSources)
+	}
+	if payload.Repos[0].Name != "repo-12" {
+		t.Errorf("leading row = %q, want the most recently pushed", payload.Repos[0].Name)
+	}
+	for _, row := range payload.Repos {
+		if row.Name == "repo-00" {
+			t.Error("the oldest repository survived the recency selection; the cap dropped the wrong row")
 		}
 	}
 }
@@ -761,8 +869,9 @@ func TestCodingProjectsReadAnonymouslyWithoutACredential(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	doer := newCapturingDoer(map[string]cannedAnswer{
-		"/repos/owner/alpha": {contentType: "application/json", body: repositoryAnswer(`"alpha"`, 1, "2026-08-27T10:00:00Z")},
-		"/repos/owner/beta":  {contentType: "application/json", body: repositoryAnswer(`"beta"`, 2, "2026-08-26T10:00:00Z")},
+		"/users/owner/repos": {contentType: "application/json", body: listingAnswer(
+			listedRepo{name: "alpha", description: `"alpha"`, stars: 1, pushedAt: "2026-08-27T10:00:00Z"},
+		)},
 	})
 	loaded, err := projectsSource(t).refreshProjects(t.Context(), doer, func(string) string { return "" }, now)
 	if err != nil {
@@ -771,61 +880,68 @@ func TestCodingProjectsReadAnonymouslyWithoutACredential(t *testing.T) {
 	if loaded.status != StatusOK {
 		t.Errorf("status = %q, want ok: the credential is headroom, not access", loaded.status)
 	}
-	for _, request := range doer.at("/repos/owner/alpha") {
+	for _, request := range doer.at("/users/owner/repos") {
 		if got := request.header.Get("Authorization"); got != "" {
 			t.Errorf("an unset credential still sent an Authorization header %q", got)
 		}
 	}
 }
 
-// TestOneUnreadableRepositoryDegradesOnlyItsOwnRow pins the per-row
-// degradation: a bad minute at one endpoint must not blank the five
-// repositories that answered, and the row that fell back must say so.
-func TestOneUnreadableRepositoryDegradesOnlyItsOwnRow(t *testing.T) {
+// TestARefusedRowIsDroppedAndMakesTheRoundStale pins the per-row value tier:
+// a row whose facts do not hold up is dropped rather than served wrong, the
+// rows beside it stay live, and the envelope says the roster is not whole.
+func TestARefusedRowIsDroppedAndMakesTheRoundStale(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	doer := newCapturingDoer(map[string]cannedAnswer{
-		"/repos/owner/alpha": {contentType: "application/json", body: repositoryAnswer(`"alpha lives"`, 4, "2026-08-27T10:00:00Z")},
-		"/repos/owner/beta":  {status: http.StatusInternalServerError, contentType: "application/json", body: "{}"},
+		"/users/owner/repos": {contentType: "application/json", body: listingAnswer(
+			listedRepo{name: "alpha", description: `"alpha lives"`, stars: 4, pushedAt: "2026-08-27T10:00:00Z"},
+			listedRepo{name: "beta", description: `"from the future"`, stars: 1, pushedAt: "2027-01-01T00:00:00Z"},
+		)},
 	})
 	loaded, err := projectsSource(t).refreshProjects(t.Context(), doer, func(string) string { return "" }, now)
 	if err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
 	if loaded.status != StatusStale {
-		t.Errorf("status = %q, want stale while one row is recorded", loaded.status)
+		t.Errorf("status = %q, want stale while the roster is short a repository", loaded.status)
 	}
 	payload := decodeProjects(t, loaded)
-	if payload.Repos[0].Recorded {
-		t.Error("the row that answered is marked recorded")
-	}
-	if !payload.Repos[1].Recorded {
-		t.Error("the row that fell back to the snapshot does not say so")
+	if len(payload.Repos) != 1 || payload.Repos[0].Name != "alpha" {
+		t.Fatalf("served %v, want exactly the surviving row", payload.Repos)
 	}
 	if payload.Repos[0].Description != "alpha lives" {
 		t.Errorf("the live row lost its data: %q", payload.Repos[0].Description)
 	}
 }
 
-// TestARoundThatReadsNothingKeepsTheServedPayload pins the other direction: a
-// total outage must not replace live rows with recorded ones, because the
-// caller's last-good payload is the better answer.
+// TestARoundThatReadsNothingKeepsTheServedPayload pins the coarse failure
+// direction: the listing failing — by status or by admission — fails the
+// round, so the caller keeps its last-good LIVE payload serving as stale
+// instead of replacing it with anything older or emptier.
 func TestARoundThatReadsNothingKeepsTheServedPayload(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
-	doer := newCapturingDoer(map[string]cannedAnswer{
-		"/repos/owner/alpha": {status: http.StatusBadGateway, contentType: "application/json", body: "{}"},
-		"/repos/owner/beta":  {status: http.StatusBadGateway, contentType: "application/json", body: "{}"},
-	})
-	if _, err := projectsSource(t).refreshProjects(t.Context(), doer, func(string) string { return "" }, now); err == nil {
-		t.Fatal("a round that read nothing reported a successful refresh")
+	for name, answer := range map[string]cannedAnswer{
+		"a listing outage":      {status: http.StatusBadGateway, contentType: "application/json", body: "{}"},
+		"an empty listing":      {contentType: "application/json", body: "[]"},
+		"an unrelated document": {contentType: "application/json", body: `{"unrelated":true}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			doer := newCapturingDoer(map[string]cannedAnswer{"/users/owner/repos": answer})
+			if _, err := projectsSource(t).refreshProjects(t.Context(), doer, func(string) string { return "" }, now); err == nil {
+				t.Fatal("a round that read nothing reported a successful refresh")
+			}
+		})
 	}
 }
 
-// TestTheRepositoryDocumentFailsClosed drives the value gate that replaced the
-// decoder gate. Every case parses as JSON and would produce a plausible row if
-// its check were removed.
-func TestTheRepositoryDocumentFailsClosed(t *testing.T) {
+// TestTheRepositoryRowValueGateFailsClosed drives the per-row value gate.
+// Every case parses as JSON and would produce a plausible row if its check
+// were removed; each is projected exactly as the listing mapping projects a
+// row, then driven through the same admission production runs.
+func TestTheRepositoryRowValueGateFailsClosed(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	for _, testCase := range []struct {
@@ -834,15 +950,19 @@ func TestTheRepositoryDocumentFailsClosed(t *testing.T) {
 		want string
 	}{
 		{"an unrelated JSON object", `{"unrelated":true}`, "push instant"},
-		{"an unparseable instant", repositoryAnswer(`"x"`, 1, "yesterday"), "push instant"},
-		{"an instant from the future", repositoryAnswer(`"x"`, 1, "2027-01-01T00:00:00Z"), "plausible window"},
-		{"a negative tally", repositoryAnswer(`"x"`, -1, "2026-08-27T10:00:00Z"), "star tally"},
+		{"an unparseable instant", `{"description":"x","stargazers_count":1,"pushed_at":"yesterday"}`, "push instant"},
+		{"an instant from the future", `{"description":"x","stargazers_count":1,"pushed_at":"2027-01-01T00:00:00Z"}`, "plausible window"},
+		{"a negative tally", `{"description":"x","stargazers_count":-1,"pushed_at":"2026-08-27T10:00:00Z"}`, "star tally"},
 		{"a description carrying control characters", `{"description":"a\u0007b","stargazers_count":1,"pushed_at":"2026-08-27T10:00:00Z"}`, "control characters"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := mapRepository([]byte(testCase.body), "alpha", nil, now); err == nil {
-				t.Fatal("a hostile or drifted document produced a row")
+			var entry repositoryListingEntry
+			if err := json.Unmarshal([]byte(testCase.body), &entry); err != nil {
+				t.Fatalf("decode listing row: %v", err)
+			}
+			if _, err := admitListedRepository(entry, now); err == nil {
+				t.Fatal("a hostile or drifted row produced a served row")
 			} else if !strings.Contains(err.Error(), testCase.want) {
 				t.Fatalf("refusal = %v, want it to name %q", err, testCase.want)
 			}
@@ -850,19 +970,90 @@ func TestTheRepositoryDocumentFailsClosed(t *testing.T) {
 	}
 }
 
-// TestARepositoryNameIsNeverTheDocumentsToChoose pins the rule VCSCommit.Repo
-// already follows: an upstream that could name the repository could put a
-// stranger's project on the owner's page.
-func TestARepositoryNameIsNeverTheDocumentsToChoose(t *testing.T) {
+// TestTheRepositoryListingFailsClosed drives the identity tier of the listing
+// gate: every case is a well-formed JSON array that would put a wrong or
+// unownable row on the page if its check were removed, and every one refuses
+// the WHOLE document — a listing carrying one forged row is a hostile
+// listing, not a listing with a bad row.
+//
+// This tier is where the retired "a name is never the document's to choose"
+// rule now lives: the name IS the document's — that is the owner's
+// dynamic-roster ruling (issue 281) — and what makes it safe is the account
+// pin, the name grammar, and the privacy check standing in front of it.
+func TestTheRepositoryListingFailsClosed(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
-	row, err := mapRepository([]byte(repositoryAnswer(`"x"`, 1, "2026-08-27T10:00:00Z")), "the-configured-name", nil, now)
-	if err != nil {
-		t.Fatalf("map: %v", err)
+	good := listedRepo{name: "alpha", description: `"x"`, stars: 1, pushedAt: "2026-08-27T10:00:00Z"}
+	for _, testCase := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{"a name outside the host's grammar", listingAnswer(good, listedRepo{name: "evil name/../x", description: `"x"`, stars: 1, pushedAt: "2026-08-27T10:00:00Z"}), "grammar"},
+		{"a row belonging to another account", listingAnswer(good, listedRepo{name: "stranger", owner: "somebody-else", description: `"x"`, stars: 1, pushedAt: "2026-08-27T10:00:00Z"}), "configured account"},
+		{"a private row in the public listing", listingAnswer(good, listedRepo{name: "hidden", private: true, description: `"x"`, stars: 1, pushedAt: "2026-08-27T10:00:00Z"}), "private"},
+		{"a repository listed twice", listingAnswer(good, good), "listed twice"},
+		{"an empty listing", "[]", "no repository at all"},
+		{"an unrelated document", `{"unrelated":true}`, "repository listing"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			_, _, err := mapRepositoryListing([]byte(testCase.body), projectsSpec(), now)
+			if err == nil {
+				t.Fatal("a hostile or drifted listing was admitted")
+			}
+			if !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("refusal = %v, want it to name %q", err, testCase.want)
+			}
+		})
 	}
-	if row.Name != "the-configured-name" {
-		t.Errorf("name = %q, want the configured one; the document said something else", row.Name)
-	}
+	t.Run("a listing over the entry bound", func(t *testing.T) {
+		t.Parallel()
+		rows := make([]listedRepo, 0, maxListedRepositories+1)
+		for index := range maxListedRepositories + 1 {
+			rows = append(rows, listedRepo{name: fmt.Sprintf("repo-%03d", index), description: `"x"`, stars: 1, pushedAt: "2026-08-27T10:00:00Z"})
+		}
+		if _, _, err := mapRepositoryListing([]byte(listingAnswer(rows...)), projectsSpec(), now); err == nil {
+			t.Fatal("a listing over the entry bound was admitted")
+		} else if !strings.Contains(err.Error(), "over the") {
+			t.Fatalf("refusal = %v, want the bound named", err)
+		}
+	})
+	t.Run("value failures refuse the row and name it for the log", func(t *testing.T) {
+		t.Parallel()
+		listed, refused, err := mapRepositoryListing([]byte(listingAnswer(
+			good,
+			listedRepo{name: "gamma", description: `"x"`, stars: -1, pushedAt: "2026-08-27T08:00:00Z"},
+			listedRepo{name: "delta", description: `"x"`, stars: 1, pushedAt: "yesterday"},
+		)), projectsSpec(), now)
+		if err != nil {
+			t.Fatalf("map: %v", err)
+		}
+		if len(listed) != 1 || listed[0].row.Name != "alpha" {
+			t.Fatalf("served %v, want exactly the surviving row", listed)
+		}
+		if len(refused) != 2 {
+			t.Fatalf("refused %d rows, want both bad rows named for the log", len(refused))
+		}
+		for index, want := range []string{"gamma", "delta"} {
+			if refused[index].name != want || refused[index].err == nil {
+				t.Errorf("refusal %d = %q/%v, want %q with its reason", index, refused[index].name, refused[index].err, want)
+			}
+		}
+	})
+	t.Run("a repository never pushed is skipped without staleness", func(t *testing.T) {
+		t.Parallel()
+		listed, refused, err := mapRepositoryListing([]byte(listingAnswer(
+			good,
+			listedRepo{name: "unborn", description: `"x"`, stars: 0},
+		)), projectsSpec(), now)
+		if err != nil {
+			t.Fatalf("map: %v", err)
+		}
+		if len(listed) != 1 || len(refused) != 0 {
+			t.Fatalf("served %d rows with %d refusals, want the pushed row alone and no refusal: no pushes is no claim, not a fault", len(listed), len(refused))
+		}
+	})
 }
 
 // TestALongDescriptionIsTruncatedRatherThanLost pins the one place this
@@ -882,34 +1073,27 @@ func TestALongDescriptionIsTruncatedRatherThanLost(t *testing.T) {
 	}
 }
 
-// TestOpenWorkIsSplitOutOfTheCombinedTally is the arithmetic the two new
-// figures rest on (issue 252): the repository document's open tally counts
-// pull requests as issues, so the issue figure is that tally MINUS the
-// separately read pull-request one. Getting this backwards, or skipping the
-// subtraction, publishes a wrong number that looks entirely plausible.
+// TestOpenWorkIsSplitOutOfTheCombinedTally is the arithmetic the two figures
+// rest on (issue 252): the listing's open tally counts pull requests as
+// issues, so the issue figure is that tally MINUS the separately read
+// pull-request one. Getting this backwards, or skipping the subtraction,
+// publishes a wrong number that looks entirely plausible.
 func TestOpenWorkIsSplitOutOfTheCombinedTally(t *testing.T) {
 	t.Parallel()
-	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	pulls := int64(2)
-	row, err := mapRepository([]byte(repositoryAnswerOpen(`"x"`, 1, "2026-08-29T10:00:00Z", 5)), "alpha", &pulls, now)
-	if err != nil {
-		t.Fatalf("map: %v", err)
+	issues, split := splitOpenWork(5, &pulls)
+	if issues == nil || *issues != 3 {
+		t.Errorf("open issues = %v, want 3: five open things of which two are pull requests", issues)
 	}
-	if row.OpenIssues == nil || *row.OpenIssues != 3 {
-		t.Errorf("open issues = %v, want 3: five open things of which two are pull requests", row.OpenIssues)
-	}
-	if row.OpenPulls == nil || *row.OpenPulls != 2 {
-		t.Errorf("open pull requests = %v, want the tally as read", row.OpenPulls)
+	if split == nil || *split != 2 {
+		t.Errorf("open pull requests = %v, want the tally as read", split)
 	}
 	// A genuine zero is a figure, not an absence: a repository with nothing
 	// open reports nothing open, and the card is entitled to say so.
 	none := int64(0)
-	quiet, err := mapRepository([]byte(repositoryAnswerOpen(`"x"`, 1, "2026-08-29T10:00:00Z", 0)), "alpha", &none, now)
-	if err != nil {
-		t.Fatalf("map: %v", err)
-	}
-	if quiet.OpenIssues == nil || *quiet.OpenIssues != 0 || quiet.OpenPulls == nil || *quiet.OpenPulls != 0 {
-		t.Errorf("a quiet repository served %v/%v, want a reported zero on both", quiet.OpenIssues, quiet.OpenPulls)
+	quietIssues, quietPulls := splitOpenWork(0, &none)
+	if quietIssues == nil || *quietIssues != 0 || quietPulls == nil || *quietPulls != 0 {
+		t.Errorf("a quiet repository served %v/%v, want a reported zero on both", quietIssues, quietPulls)
 	}
 }
 
@@ -943,10 +1127,14 @@ func TestAnUnsplittableTallyServesNeitherFigure(t *testing.T) {
 	}
 }
 
-// TestThePullRequestTallyDocumentFailsClosed drives the second projection's
+// TestThePullRequestTallyDocumentFailsClosed drives the search projection's
 // value gate. The missing-total case is the one that matters most: an
 // unrelated JSON object projects to no count at all, and reading that as zero
-// would put "nothing open" on a card that knows nothing.
+// would put "nothing open" on a card that knows nothing. The truncation and
+// attribution refusals are new with the account-wide document (issue 281):
+// a partial map is an undercount wearing a confident number, and an item
+// pointing outside the account is a stranger's pull request on the owner's
+// card.
 func TestThePullRequestTallyDocumentFailsClosed(t *testing.T) {
 	t.Parallel()
 	for _, testCase := range []struct {
@@ -957,32 +1145,51 @@ func TestThePullRequestTallyDocumentFailsClosed(t *testing.T) {
 		{"an unrelated JSON object", `{"unrelated":true}`, "no total"},
 		{"a document that is not JSON at all", `<html>`, "pull-request tally"},
 		{"a negative count", `{"total_count":-1}`, "admissible range"},
-		{"a count past the bound", fmt.Sprintf(`{"total_count":%d}`, int64(maxCountValue)+1), "admissible range"},
+		{"a count past the bound", fmt.Sprintf(`{"total_count":%d,"incomplete_results":false,"items":[]}`, int64(maxCountValue)+1), "admissible range"},
+		{"an admitted-incomplete search", `{"total_count":0,"incomplete_results":true,"items":[]}`, "incomplete"},
+		{"a truncated page", `{"total_count":5,"incomplete_results":false,"items":[{"repository_url":"https://api.example.test/repos/owner/alpha"}]}`, "undercount"},
+		{"an item outside the account", `{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.example.test/repos/somebody-else/theirs"}]}`, "outside the configured account"},
+		{"an item with no repository address", `{"total_count":1,"incomplete_results":false,"items":[{"repository_url":""}]}`, "no repository address"},
+		{"an item with an ungrammatical name", `{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.example.test/repos/owner/bad name"}]}`, "outside the configured account"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := mapOpenPullCount([]byte(testCase.body), "alpha"); err == nil {
+			if _, err := mapOpenPullsByRepo([]byte(testCase.body), "owner"); err == nil {
 				t.Fatal("a hostile or drifted tally document produced a count")
 			} else if !strings.Contains(err.Error(), testCase.want) {
 				t.Fatalf("refusal = %v, want it to name %q", err, testCase.want)
 			}
 		})
 	}
-	if total, err := mapOpenPullCount([]byte(tallyAnswer(0)), "alpha"); err != nil || total != 0 {
-		t.Fatalf("a reported zero was refused: %d, %v — the gate must admit real data too", total, err)
+	// The gate must admit real data too: an account with nothing open is a
+	// zero on every row, and two matches on one repository count as two.
+	counted, err := mapOpenPullsByRepo([]byte(searchAnswer("owner")), "owner")
+	if err != nil || len(counted) != 0 {
+		t.Fatalf("a reported zero was refused: %v, %v", counted, err)
+	}
+	counted, err = mapOpenPullsByRepo([]byte(searchAnswer("owner", "alpha", "alpha", "beta")), "owner")
+	if err != nil {
+		t.Fatalf("an honest answer was refused: %v", err)
+	}
+	if counted["alpha"] != 2 || counted["beta"] != 1 {
+		t.Fatalf("attribution = %v, want alpha:2 beta:1", counted)
 	}
 }
 
-// TestTheServedRowsCarryBothOpenTallies is the end-to-end claim: two documents
-// per repository go in, one row carrying both figures comes out, and the
-// credential rides the tally request exactly as it rides the repository one.
+// TestTheServedRowsCarryBothOpenTallies is the end-to-end claim: the listing
+// and ONE account-wide search document go in, every row comes out carrying
+// both figures — including the true zero on a repository the search names no
+// match for — and the credential rides the tally request exactly as it rides
+// the listing one.
 func TestTheServedRowsCarryBothOpenTallies(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	doer := newCapturingDoer(map[string]cannedAnswer{
-		"/repos/owner/alpha": {contentType: "application/json", body: repositoryAnswerOpen(`"alpha"`, 1, "2026-08-29T10:00:00Z", 9)},
-		"/repos/owner/beta":  {contentType: "application/json", body: repositoryAnswerOpen(`"beta"`, 1, "2026-08-28T10:00:00Z", 0)},
-		"/search/issues":     {contentType: "application/json", body: tallyAnswer(4)},
+		"/users/owner/repos": {contentType: "application/json", body: listingAnswer(
+			listedRepo{name: "alpha", description: `"alpha"`, stars: 1, pushedAt: "2026-08-29T10:00:00Z", open: 9},
+			listedRepo{name: "beta", description: `"beta"`, stars: 1, pushedAt: "2026-08-28T10:00:00Z", open: 0},
+		)},
+		"/search/issues": {contentType: "application/json", body: searchAnswer("owner", "alpha", "alpha", "alpha", "alpha")},
 	})
 	loaded, err := tallyingProjectsSource(t).refreshProjects(t.Context(), doer, func(name string) string {
 		if name == "FIXTURE_PROJECTS_TOKEN" {
@@ -995,77 +1202,108 @@ func TestTheServedRowsCarryBothOpenTallies(t *testing.T) {
 	}
 	payload := decodeProjects(t, loaded)
 	if payload.Repos[0].OpenIssues == nil || *payload.Repos[0].OpenIssues != 5 {
-		t.Errorf("open issues = %v, want 5", payload.Repos[0].OpenIssues)
+		t.Errorf("open issues = %v, want 5: nine open things of which four are pull requests", payload.Repos[0].OpenIssues)
 	}
 	if payload.Repos[0].OpenPulls == nil || *payload.Repos[0].OpenPulls != 4 {
 		t.Errorf("open pull requests = %v, want 4", payload.Repos[0].OpenPulls)
 	}
+	// The search vouches for the whole account, so a repository it names no
+	// match for carries a REPORTED zero, not a dash.
+	if payload.Repos[1].OpenIssues == nil || *payload.Repos[1].OpenIssues != 0 || payload.Repos[1].OpenPulls == nil || *payload.Repos[1].OpenPulls != 0 {
+		t.Errorf("the quiet repository served %v/%v, want a reported zero on both", payload.Repos[1].OpenIssues, payload.Repos[1].OpenPulls)
+	}
 	tallies := doer.at("/search/issues")
-	if len(tallies) != 2 {
-		t.Fatalf("%d tally requests, want one per repository", len(tallies))
+	if len(tallies) != 1 {
+		t.Fatalf("%d tally requests, want exactly one for the whole account", len(tallies))
 	}
 	for _, request := range tallies {
 		if got := request.header.Get("Authorization"); got != "Bearer fixture-token-value" {
-			t.Errorf("tally Authorization header = %q, want the same prefixed credential the repository read carries", got)
+			t.Errorf("tally Authorization header = %q, want the same prefixed credential the listing read carries", got)
 		}
 		if request.method != http.MethodGet {
 			t.Errorf("tally method = %s, want GET: counting is a read", request.method)
 		}
 	}
+	// The whole round is TWO requests — the arithmetic behind the rate-budget
+	// pin in fetch_test, executed on the wire.
+	if total := len(doer.at("/users/owner/repos")) + len(tallies); total != 2 {
+		t.Errorf("the round made %d requests, want 2", total)
+	}
 }
 
 // TestAFailedTallyCostsTheTalliesAndNothingElse pins the failure granularity
-// the second request was designed around. Falling the whole ROW back because a
-// count went missing would tell the reader a perfectly current description is
-// stale — a worse lie than the dash it replaces.
+// the second request was designed around. Falling the rows back — or marking
+// the envelope stale — because a count went missing would tell the reader a
+// perfectly current description is not, a worse lie than the dash it
+// replaces. Both failure shapes are driven: the transport failing, and a
+// document arriving intact that does not survive admission.
 func TestAFailedTallyCostsTheTalliesAndNothingElse(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
-	doer := newCapturingDoer(map[string]cannedAnswer{
-		"/repos/owner/alpha": {contentType: "application/json", body: repositoryAnswerOpen(`"alpha lives"`, 1, "2026-08-29T10:00:00Z", 9)},
-		"/repos/owner/beta":  {contentType: "application/json", body: repositoryAnswerOpen(`"beta lives"`, 1, "2026-08-28T10:00:00Z", 0)},
-		"/search/issues":     {status: http.StatusInternalServerError, contentType: "application/json", body: "{}"},
-	})
-	loaded, err := tallyingProjectsSource(t).refreshProjects(t.Context(), doer, func(string) string { return "" }, now)
-	if err != nil {
-		t.Fatalf("refresh: %v", err)
-	}
-	if loaded.status != StatusOK {
-		t.Errorf("status = %q, want ok: every repository answered; only an optional count did not", loaded.status)
-	}
-	payload := decodeProjects(t, loaded)
-	if payload.Repos[0].Recorded {
-		t.Error("a lost count fell the whole row back to the snapshot")
-	}
-	if payload.Repos[0].Description != "alpha lives" {
-		t.Errorf("description = %q, want the live text", payload.Repos[0].Description)
-	}
-	if payload.Repos[0].OpenIssues != nil || payload.Repos[0].OpenPulls != nil {
-		t.Errorf("served %v/%v, want a dash on both", payload.Repos[0].OpenIssues, payload.Repos[0].OpenPulls)
-	}
-	// The additive rule, proven on the wire rather than asserted: a payload
-	// with no tallies must carry no tally KEYS, so a consumer written before
-	// they existed sees the document it has always seen.
-	if bytes.Contains(loaded.data, []byte("openIssues")) || bytes.Contains(loaded.data, []byte("openPulls")) {
-		t.Errorf("an absent tally was serialized as a key: %s", loaded.data)
+	for name, answer := range map[string]cannedAnswer{
+		"a tally outage":              {status: http.StatusInternalServerError, contentType: "application/json", body: "{}"},
+		"a tally that fails the gate": {contentType: "application/json", body: `{"total_count":5,"incomplete_results":false,"items":[]}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			doer := newCapturingDoer(map[string]cannedAnswer{
+				"/users/owner/repos": {contentType: "application/json", body: listingAnswer(
+					listedRepo{name: "alpha", description: `"alpha lives"`, stars: 1, pushedAt: "2026-08-29T10:00:00Z", open: 9},
+				)},
+				"/search/issues": answer,
+			})
+			loaded, err := tallyingProjectsSource(t).refreshProjects(t.Context(), doer, func(string) string { return "" }, now)
+			if err != nil {
+				t.Fatalf("refresh: %v", err)
+			}
+			if loaded.status != StatusOK {
+				t.Errorf("status = %q, want ok: every repository answered; only an optional count did not", loaded.status)
+			}
+			payload := decodeProjects(t, loaded)
+			if payload.Repos[0].Recorded {
+				t.Error("a lost count fell the whole row back")
+			}
+			if payload.Repos[0].Description != "alpha lives" {
+				t.Errorf("description = %q, want the live text", payload.Repos[0].Description)
+			}
+			if payload.Repos[0].OpenIssues != nil || payload.Repos[0].OpenPulls != nil {
+				t.Errorf("served %v/%v, want a dash on both", payload.Repos[0].OpenIssues, payload.Repos[0].OpenPulls)
+			}
+			// The additive rule, proven on the wire rather than asserted: a
+			// payload with no tallies must carry no tally KEYS, so a consumer
+			// written before they existed sees the document it always saw.
+			if bytes.Contains(loaded.data, []byte("openIssues")) || bytes.Contains(loaded.data, []byte("openPulls")) {
+				t.Errorf("an absent tally was serialized as a key: %s", loaded.data)
+			}
+		})
 	}
 }
 
 // TestTheTallyEndpointIsHostCheckedToo pins that "optional" describes whether
 // the document is CONFIGURED, never whether its URL is admitted. A second
 // reachable URL that skipped the allowlist would be a hole in the one rule
-// every outbound request passes.
+// every outbound request passes — and the listing endpoint passes it too.
 func TestTheTallyEndpointIsHostCheckedToo(t *testing.T) {
 	t.Parallel()
-	spec := projectsSpecWithTallies()
-	spec.Sources[1].PullsEndpoint = "https://elsewhere.example.net/search/issues"
-	_, err := NewFetchSource(SnapshotSource{Name: "snapshots/coding-projects.json"}, liveTestConfig(),
-		panelFetchSpecs{projects: spec})
-	if err == nil {
-		t.Fatal("an off-allowlist tally endpoint built a source")
-	}
-	if !strings.Contains(err.Error(), "allowlist") {
-		t.Fatalf("refusal = %v, want it to name the allowlist", err)
+	for name, edit := range map[string]func(*codingProjectsFetchSpec){
+		"the tally document": func(s *codingProjectsFetchSpec) { s.PullsEndpoint = "https://elsewhere.example.net/search/issues" },
+		"the listing itself": func(s *codingProjectsFetchSpec) {
+			s.ListingEndpoint = "https://elsewhere.example.net/users/owner/repos"
+		},
+		"a plain-http listing": func(s *codingProjectsFetchSpec) {
+			s.ListingEndpoint = "http://api.example.test/users/owner/repos"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			spec := projectsSpecWithTallies()
+			edit(spec)
+			_, err := NewFetchSource(SnapshotSource{Name: "snapshots/coding-projects.json"}, liveTestConfig(),
+				panelFetchSpecs{projects: spec})
+			if err == nil {
+				t.Fatal("an off-allowlist endpoint built a source")
+			}
+		})
 	}
 }
 
@@ -1077,15 +1315,17 @@ func TestTheCodingProjectsSpecFailsClosed(t *testing.T) {
 		edit func(*codingProjectsFetchSpec)
 		want string
 	}{
-		{"no sources", func(s *codingProjectsFetchSpec) { s.Sources = nil }, "no sources"},
-		{"a source with no name", func(s *codingProjectsFetchSpec) { s.Sources[0].Name = "" }, "needs a name"},
-		{"the same repository twice", func(s *codingProjectsFetchSpec) { s.Sources[1].Name = s.Sources[0].Name }, "listed twice"},
+		{"no listing endpoint", func(s *codingProjectsFetchSpec) { s.ListingEndpoint = "" }, "listingEndpoint"},
+		{"no account pin", func(s *codingProjectsFetchSpec) { s.Account = "" }, "account"},
+		{"an account outside the login grammar", func(s *codingProjectsFetchSpec) { s.Account = "not a login" }, "account login"},
+		{"an ungrammatical exclusion", func(s *codingProjectsFetchSpec) { s.Exclude = []string{"bad name"} }, "grammar"},
+		{"the same exclusion twice", func(s *codingProjectsFetchSpec) { s.Exclude = []string{"twice", "twice"} }, "excluded twice"},
 		{"a credential with nowhere to ride", func(s *codingProjectsFetchSpec) { s.KeyHeader = "" }, "declared together"},
 		{"a header outside the public-producer list", func(s *codingProjectsFetchSpec) {
 			s.Headers = map[string]string{"Authorization": "Bearer smuggled"}
 		}, "not permitted"},
-		{"an off-allowlist endpoint", func(s *codingProjectsFetchSpec) {
-			s.Sources[0].Endpoint = "https://exfiltrate.example.test/repos/owner/alpha"
+		{"an off-allowlist listing endpoint", func(s *codingProjectsFetchSpec) {
+			s.ListingEndpoint = "https://exfiltrate.example.test/users/owner/repos"
 		}, "allowlist"},
 		{"a cadence outside the reviewed band", func(s *codingProjectsFetchSpec) { s.MinIntervalMinutes = 100000 }, "reviewed"},
 	} {
@@ -1231,26 +1471,12 @@ func TestTheCalendarSpecIsAdmittedAgainstTheSharedBounds(t *testing.T) {
 }
 
 // TestTheCodingProjectsSpecIsAdmittedAgainstTheSharedBounds does the same for
-// the repository producer's own bounds — the source ceiling and the declared
-// answer type, neither of which any other spec's checks would catch.
+// the repository producer's own bounds — the declared answer type and the
+// body cap, neither of which any other spec's checks would catch. (The row
+// ceiling is no longer a spec fact: the listing decides membership, and
+// TestARosterOverTheRowCapServesTheMostRecent pins the selection.)
 func TestTheCodingProjectsSpecIsAdmittedAgainstTheSharedBounds(t *testing.T) {
 	t.Parallel()
-	t.Run("more repositories than the round may cost", func(t *testing.T) {
-		t.Parallel()
-		spec := projectsSpec()
-		spec.Sources = make([]codingProjectSourceSpec, 0, maxCodingProjectSources+1)
-		for index := range maxCodingProjectSources + 1 {
-			spec.Sources = append(spec.Sources, codingProjectSourceSpec{
-				Name:     fmt.Sprintf("repo-%d", index),
-				Endpoint: fmt.Sprintf("https://api.example.test/repos/owner/repo-%d", index),
-			})
-		}
-		if err := validateCodingProjectsSpec(spec); err == nil {
-			t.Fatal("a source list over the bound was admitted")
-		} else if !strings.Contains(err.Error(), "over the") {
-			t.Fatalf("refusal = %v, want the bound named", err)
-		}
-	})
 	t.Run("no declared answer type", func(t *testing.T) {
 		t.Parallel()
 		spec := projectsSpec()
@@ -1352,13 +1578,18 @@ func TestARepositoryDescriptionThatIsNotTextIsRefused(t *testing.T) {
 	// bytes are not valid UTF-8, which is not the same thing as one that spells
 	// the replacement character.
 	document := []byte(`{"description":"a` + string([]byte{0xff}) + `b","stargazers_count":1,"pushed_at":"2026-08-27T10:00:00Z"}`)
-	if _, err := mapRepository(document, "alpha", nil, now); err == nil {
+	var entry repositoryListingEntry
+	err := json.Unmarshal(document, &entry)
+	if err == nil {
+		_, err = admitListedRepository(entry, now)
+	}
+	if err == nil {
 		t.Fatal("a description that is not valid UTF-8 produced a row")
 	} else if !strings.Contains(err.Error(), "UTF-8") && !strings.Contains(err.Error(), "invalid character") {
 		t.Fatalf("refusal = %v, want the encoding named", err)
 	}
-	// And the same fault reaching mapRepository through a well-formed JSON
-	// string still refuses the row rather than the byte.
+	// And the same fault arriving through a well-formed JSON string still
+	// refuses the row rather than the byte.
 	if _, err := projectDescription("a�b"); err == nil {
 		t.Fatal("a description carrying the replacement rune was admitted")
 	}
@@ -1371,47 +1602,21 @@ func TestCodingProjectsHonorTheirRateBudget(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	doer := newCapturingDoer(map[string]cannedAnswer{
-		"/repos/owner/alpha": {contentType: "application/json", body: repositoryAnswer(`"alpha"`, 1, "2026-08-27T10:00:00Z")},
-		"/repos/owner/beta":  {contentType: "application/json", body: repositoryAnswer(`"beta"`, 2, "2026-08-26T10:00:00Z")},
+		"/users/owner/repos": {contentType: "application/json", body: listingAnswer(
+			listedRepo{name: "alpha", description: `"alpha"`, stars: 1, pushedAt: "2026-08-27T10:00:00Z"},
+		)},
 	})
 	source := projectsSource(t)
 	if _, err := source.refreshProjects(t.Context(), doer, func(string) string { return "" }, now); err != nil {
 		t.Fatalf("first round: %v", err)
 	}
-	before := len(doer.at("/repos/owner/alpha"))
+	before := len(doer.at("/users/owner/repos"))
 	_, err := source.refreshProjects(t.Context(), doer, func(string) string { return "" }, now.Add(time.Minute))
 	if !errors.Is(err, errNothingDue) {
 		t.Fatalf("a round inside the budget reported %v, want errNothingDue", err)
 	}
-	if after := len(doer.at("/repos/owner/alpha")); after != before {
+	if after := len(doer.at("/users/owner/repos")); after != before {
 		t.Errorf("a budgeted round still made %d requests", after-before)
-	}
-}
-
-// TestARepositoryDocumentThatDoesNotMapDegradesItsOwnRow separates the two
-// per-row failure modes: a transport or status failure, and a document that
-// arrived intact and did not survive admission. Both must degrade one row
-// rather than the round, and the second is the one a status-only test misses.
-func TestARepositoryDocumentThatDoesNotMapDegradesItsOwnRow(t *testing.T) {
-	t.Parallel()
-	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
-	doer := newCapturingDoer(map[string]cannedAnswer{
-		"/repos/owner/alpha": {contentType: "application/json", body: repositoryAnswer(`"alpha lives"`, 4, "2026-08-27T10:00:00Z")},
-		// A 200 carrying a perfectly valid JSON document that is not a
-		// repository: the projection reads zero values and the value gate
-		// refuses them.
-		"/repos/owner/beta": {contentType: "application/json", body: `{"unrelated":true}`},
-	})
-	loaded, err := projectsSource(t).refreshProjects(t.Context(), doer, func(string) string { return "" }, now)
-	if err != nil {
-		t.Fatalf("refresh: %v", err)
-	}
-	if loaded.status != StatusStale {
-		t.Errorf("status = %q, want stale while one row is recorded", loaded.status)
-	}
-	payload := decodeProjects(t, loaded)
-	if !payload.Repos[1].Recorded {
-		t.Error("a row whose document failed admission does not say it fell back")
 	}
 }
 
@@ -1508,4 +1713,168 @@ func TestTheCalendarToleratesTrailingWeekPaddingButNotFutureContributions(t *tes
 			t.Fatalf("refusal = %v, want the overrun named", err)
 		}
 	})
+}
+
+/* ---------------------------------------------------------------------------
+ * Conditional revalidation (issue 281)
+ * ------------------------------------------------------------------------ */
+
+// revalidatingDoer answers by URL path with a validator-stamped 200, answers
+// 304 to any request presenting that validator, and records every request so
+// the tests can prove which questions were asked.
+type revalidatingDoer struct {
+	mu          sync.Mutex
+	answers     map[string]cannedAnswer
+	etag        string
+	requests    []recordedRequest
+	notModified int
+}
+
+func (d *revalidatingDoer) Do(r *http.Request) (*http.Response, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.requests = append(d.requests, recordedRequest{method: r.Method, path: r.URL.Path, header: r.Header.Clone()})
+	answer, known := d.answers[r.URL.Path]
+	if !known {
+		return nil, fmt.Errorf("revalidatingDoer: no answer scripted for %s", r.URL.Path)
+	}
+	header := http.Header{}
+	if d.etag != "" && r.Header.Get("If-None-Match") == d.etag {
+		d.notModified++
+		return &http.Response{StatusCode: http.StatusNotModified, Header: header, Body: io.NopCloser(strings.NewReader(""))}, nil
+	}
+	if answer.contentType != "" {
+		header.Set("Content-Type", answer.contentType)
+	}
+	header.Set("Etag", d.etag)
+	return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(answer.body))}, nil
+}
+
+func (d *revalidatingDoer) at(path string) []recordedRequest {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	matched := make([]recordedRequest, 0, len(d.requests))
+	for _, request := range d.requests {
+		if request.path == path {
+			matched = append(matched, request)
+		}
+	}
+	return matched
+}
+
+// TestConditionalRoundsRevalidateInsteadOfRetransferring is the end-to-end
+// zero-spend claim (issue 281): the second round asks "has this changed?"
+// with the retained validator, the upstream's 304 re-serves the retained
+// bytes — costing nothing against the public API's per-address budget — and
+// the payload is exactly what a full transfer would have produced, dated to
+// the instant the upstream just vouched for.
+func TestConditionalRoundsRevalidateInsteadOfRetransferring(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	doer := &revalidatingDoer{
+		etag: `W/"fixture-validator"`,
+		answers: map[string]cannedAnswer{
+			"/users/owner/repos": {contentType: "application/json", body: listingAnswer(
+				listedRepo{name: "alpha", description: `"alpha"`, stars: 3, pushedAt: "2026-08-27T10:00:00Z"},
+			)},
+		},
+	}
+	source := projectsSource(t)
+	env := func(string) string { return "" }
+	first, err := source.refreshProjects(t.Context(), doer, env, now)
+	if err != nil {
+		t.Fatalf("first round: %v", err)
+	}
+	requests := doer.at("/users/owner/repos")
+	if len(requests) != 1 || requests[0].header.Get("If-None-Match") != "" {
+		t.Fatalf("the FIRST request carried a validator nobody had retained yet: %v", requests)
+	}
+	later := now.Add(16 * time.Minute)
+	second, err := source.refreshProjects(t.Context(), doer, env, later)
+	if err != nil {
+		t.Fatalf("second round: %v", err)
+	}
+	requests = doer.at("/users/owner/repos")
+	if len(requests) != 2 {
+		t.Fatalf("%d listing requests, want 2", len(requests))
+	}
+	if got := requests[1].header.Get("If-None-Match"); got != `W/"fixture-validator"` {
+		t.Errorf("second request carried If-None-Match %q, want the retained validator", got)
+	}
+	if doer.notModified != 1 {
+		t.Errorf("the upstream answered %d revalidations, want exactly 1", doer.notModified)
+	}
+	if !bytes.Equal(first.data, second.data) {
+		t.Error("a revalidated round served different bytes than the transfer it stands for")
+	}
+	if second.status != StatusOK || second.generatedAt != later.Format(time.RFC3339) {
+		t.Errorf("revalidated round = %q at %q, want ok dated to the instant the upstream vouched for", second.status, second.generatedAt)
+	}
+}
+
+// TestRevalidationStaysInsideItsContract pins the two exclusions that keep
+// the retention map bounded and the semantics honest: a request not flagged
+// conditional never presents a validator even when one is retained for its
+// endpoint, and a request carrying a body never participates at all.
+func TestRevalidationStaysInsideItsContract(t *testing.T) {
+	t.Parallel()
+	source := projectsSource(t)
+	doer := &revalidatingDoer{
+		etag: `"fixture-validator"`,
+		answers: map[string]cannedAnswer{
+			"/document": {contentType: "application/json", body: `{"fixture":true}`},
+		},
+	}
+	request := fetchRequest{
+		source: "fixture", endpoint: "https://api.example.test/document",
+		maxBytes: 1024, contentType: "application/json", conditional: true,
+	}
+	if _, err := source.fetchDocument(t.Context(), doer, request); err != nil {
+		t.Fatalf("prime the retained document: %v", err)
+	}
+	plain := request
+	plain.conditional = false
+	if _, err := source.fetchDocument(t.Context(), doer, plain); err != nil {
+		t.Fatalf("unconditional fetch: %v", err)
+	}
+	posting := request
+	posting.payload = []byte(`{"q":1}`)
+	if _, err := source.fetchDocument(t.Context(), doer, posting); err != nil {
+		t.Fatalf("posting fetch: %v", err)
+	}
+	requests := doer.at("/document")
+	if len(requests) != 3 {
+		t.Fatalf("%d requests, want 3", len(requests))
+	}
+	if got := requests[1].header.Get("If-None-Match"); got != "" {
+		t.Errorf("an unconditional request presented the validator %q", got)
+	}
+	if got := requests[2].header.Get("If-None-Match"); got != "" {
+		t.Errorf("a request carrying a body presented the validator %q", got)
+	}
+	if doer.notModified != 0 {
+		t.Errorf("%d revalidations happened outside the contract", doer.notModified)
+	}
+}
+
+// TestAnUnsolicited304IsARefusedStatus probes the branch from the hostile
+// side: a 304 this process never asked for — no validator went out — is an
+// unexpected status like any other, refused rather than read as "serve
+// whatever you have lying around".
+func TestAnUnsolicited304IsARefusedStatus(t *testing.T) {
+	t.Parallel()
+	source := projectsSource(t)
+	doer := newCapturingDoer(map[string]cannedAnswer{
+		"/document": {status: http.StatusNotModified, contentType: "application/json", body: ""},
+	})
+	_, err := source.fetchDocument(t.Context(), doer, fetchRequest{
+		source: "fixture", endpoint: "https://api.example.test/document",
+		maxBytes: 1024, contentType: "application/json", conditional: true,
+	})
+	if err == nil {
+		t.Fatal("an unsolicited 304 was admitted with nothing retained to serve")
+	}
+	if !strings.Contains(err.Error(), "status 304") {
+		t.Fatalf("refusal = %v, want the status named", err)
+	}
 }
