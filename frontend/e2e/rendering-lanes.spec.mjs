@@ -9469,3 +9469,204 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
     ).toBeLessThanOrEqual(lane.contentTop + subPixel);
   }
 });
+
+/* REAL TOUCH, THROUGH THE ENGINE'S OWN INPUT PIPELINE (issue 285). Every other
+ * touch lane in this file dispatches PointerEvents, which no browser
+ * arbitrates — the 0.1.67 header records that those drives kept every lane
+ * green while a physical phone was broken. Chromium exposes its input pipeline
+ * over the devtools protocol, and a touch dispatched there runs the browser's
+ * gesture recogniser exactly as a finger does: the scroll claim, pointercancel,
+ * uncancelable follow-up touchmoves. These lanes measure that arbitration
+ * rather than the pointer path, so they run on the one engine that offers it
+ * and skip where it is not offered (capability, never project name). */
+async function realTouchDrive(client, points, stepMs) {
+  await client.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [{ x: points[0].x, y: points[0].y }],
+  });
+  for (const point of points.slice(1)) {
+    await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: point.x, y: point.y }] });
+    await new Promise((resolve) => setTimeout(resolve, stepMs));
+  }
+  await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+}
+
+function straightLine(x, y, dx, dy, steps) {
+  return Array.from({ length: steps + 1 }, (_, index) => ({
+    x: Math.round(x + (dx * index) / steps),
+    y: Math.round(y + (dy * index) / steps),
+  }));
+}
+
+test('the first cancelable touchmove decides the touch, and a real pull at the top survives it (issue 285)', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', 'only Chromium exposes its touch input pipeline to a lane');
+  await visit(page);
+  const client = await page.context().newCDPSession(page);
+  await page.evaluate(() => {
+    window.__touches = [];
+    const record = (type, event) =>
+      window.__touches.push({ type, cancelable: event.cancelable, prevented: event.defaultPrevented });
+    for (const type of ['pointercancel']) window.document.addEventListener(type, (e) => record(type, e), true);
+    // After the body's own handlers, so defaultPrevented is their decision.
+    window.addEventListener('touchmove', (e) => record('touchmove', e), { passive: true });
+    window.__phases = new Set();
+    (function loop() {
+      window.__phases.add(window.document.querySelector('.pull-indicator')?.dataset.pullPhase);
+      window.requestAnimationFrame(loop);
+    })();
+  });
+
+  // A deliberate pull at the top, six pixels a frame.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await realTouchDrive(client, straightLine(200, 300, 0, 120, 20), 16);
+  await page.waitForTimeout(1500);
+  const pull = await page.evaluate(() => {
+    const touches = window.__touches.splice(0);
+    const phases = [...window.__phases];
+    window.__phases.clear();
+    return { touches, phases, scrollY: window.scrollY };
+  });
+  const pullMoves = pull.touches.filter((t) => t.type === 'touchmove');
+  expect(pullMoves.length, 'the drive produced no touchmove at all').toBeGreaterThan(0);
+  expect(pullMoves[0].cancelable, 'the first touchmove arrived uncancelable').toBe(true);
+  expect(pullMoves[0].prevented, 'the defence conceded the first sample to the scroll claim').toBe(true);
+  expect(pull.touches.some((t) => t.type === 'pointercancel'), 'the browser took a contested pull').toBe(false);
+  expect(pull.phases, 'the pull never armed under real touch').toContain('armed');
+  expect(pull.phases, 'the pull never ran its refresh').toContain('refreshing');
+  expect(pull.scrollY, 'a pull at the top scrolled the page').toBe(0);
+
+  // The model the defence rests on, measured: off the top the first touchmove
+  // is (correctly) not contested — and that one sample decides the rest.
+  await page.evaluate(() => window.scrollTo(0, 600));
+  await page.waitForTimeout(200);
+  await realTouchDrive(client, straightLine(200, 300, 0, 120, 20), 16);
+  await page.waitForTimeout(400);
+  const scroll = await page.evaluate(() => ({
+    touches: window.__touches.splice(0),
+    phases: [...window.__phases],
+    scrollY: window.scrollY,
+  }));
+  const scrollMoves = scroll.touches.filter((t) => t.type === 'touchmove');
+  expect(scrollMoves[0].prevented, 'a drag off the top was contested').toBe(false);
+  expect(scroll.touches.some((t) => t.type === 'pointercancel'), 'an un-prevented first touchmove left the pointer alive').toBe(true);
+  expect(
+    scrollMoves.slice(1).every((t) => t.cancelable === false),
+    'a later touchmove was still cancelable after the browser claimed the scroll — the first-sample model this defence rests on does not hold here'
+  ).toBe(true);
+  expect(scroll.phases.filter((phase) => phase !== 'idle'), 'the pull engaged off the top').toEqual([]);
+  expect(scroll.scrollY, 'the browser did not scroll a drag it claimed').toBeLessThan(600);
+});
+
+test('a real gallery swipe finds its incoming picture already decoded, even on a slow network (issue 285)', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', 'only Chromium exposes its touch input pipeline and network shaping to a lane');
+  await visit(page);
+  const stage = page.locator('.gallery-stage').first();
+  await stage.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(300);
+  const client = await page.context().newCDPSession(page);
+  await client.send('Network.enable');
+  /* A throttled 3G: the measured 480ms of blank stage came from exactly this
+     shape, and a warm desktop cache is what hid the defect for two releases. */
+  await client.send('Network.emulateNetworkConditions', {
+    offline: false,
+    downloadThroughput: (500 * 1024) / 8,
+    uploadThroughput: (500 * 1024) / 8,
+    latency: 400,
+  });
+  await page.evaluate(() => {
+    window.__stage = [];
+    (function loop() {
+      const image = window.document.querySelector('.gallery-stage img.gallery-image');
+      window.__stage.push({
+        ordinal: window.document.querySelector('.gallery-ordinal')?.textContent?.trim(),
+        decoded: image !== null && image.naturalWidth > 0,
+      });
+      window.requestAnimationFrame(loop);
+    })();
+  });
+  const box = await stage.boundingBox();
+  const cx = Math.round(box.x + box.width / 2);
+  const cy = Math.round(box.y + box.height / 2);
+  await realTouchDrive(client, straightLine(cx + 60, cy, -160, 0, 10), 16);
+  await expect(page.locator('.gallery-ordinal')).toHaveText('2 / 8');
+  await page.waitForTimeout(600);
+  const frames = await page.evaluate(() => window.__stage);
+  const commit = frames.findIndex((frame) => frame.ordinal === '2 / 8');
+  expect(commit, 'the swipe never committed').toBeGreaterThan(0);
+  const after = frames.slice(commit);
+  expect(after.length, 'no frame was recorded after the commit').toBeGreaterThan(5);
+  const blank = after.filter((frame) => !frame.decoded).length;
+  expect(blank, `the incoming picture was blank for ${blank} frames after the commit`).toBe(0);
+});
+
+/* THE CALENDAR SAYS WHEN ITS DATA STOPPED, AND SHOWS THE DAYS SINCE (issue
+ * 285). This lane's origin serves the embedded snapshot exactly as a cold
+ * deployment does — status stale, endDate weeks back — which is the state the
+ * live site was measured in: a total and a calendar two weeks old with nothing
+ * saying so. The stale line is dated by the payload, and the window's right
+ * edge is the reader's own week, with every day the payload never reached
+ * drawn as a dated absence. Every engine, both viewport classes. */
+test('the contribution calendar carries a data-through line and trails today past a stalled payload (issue 285)', async ({
+  page,
+  request,
+}) => {
+  await visit(page);
+  const envelope = await (await request.get('/api/panels/vcs-activity')).json();
+  expect(envelope.status, 'this lane needs the cold-start snapshot, which serves stale').toBe('stale');
+  const endDate = envelope.data.endDate;
+  expect(endDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+  const panel = page.locator('[data-activity-panel]');
+  const stale = panel.locator('[data-panel-note]');
+  await expect(stale, 'the stale calendar carries no data-through line').toHaveCount(1);
+  await expect(stale).toHaveText(/^data through [A-Z][a-z]{2} \d{1,2}, \d{4} · last capture .+ ago$/);
+  /* In the head's reserved row, at the title's own height, and never past
+     the card's edge: the note is the one thing allowed to appear on arrival
+     precisely because it costs the card no height and no width. */
+  const head = await page.evaluate(() => {
+    const title = window.document.querySelector('[data-activity-panel] .panel-title').getBoundingClientRect();
+    const note = window.document.querySelector('[data-activity-panel] [data-panel-note]').getBoundingClientRect();
+    const card = window.document.querySelector('[data-activity-panel] .panel-shell').getBoundingClientRect();
+    return { titleHeight: title.height, noteHeight: note.height, noteRight: note.right, cardRight: card.right, noteLeft: note.left, titleRight: title.right };
+  });
+  expect(head.noteHeight, 'the note is taller than the title row it shares').toBeLessThanOrEqual(head.titleHeight + subPixel);
+  expect(head.noteRight, 'the note runs past the card').toBeLessThanOrEqual(head.cardRight + subPixel);
+  expect(head.noteLeft, 'the note overlaps the title').toBeGreaterThanOrEqual(head.titleRight - subPixel);
+
+  /* The window ends on the Saturday of the reader's (UTC) week; the cells
+     between the payload's last day and that Saturday are absences, and they
+     are the LAST cells in the strip. Counted against the payload rather than
+     the calendar, so the assertion holds on whatever day CI runs. */
+  const observed = await page.evaluate(() => {
+    const cells = [...window.document.querySelectorAll('[data-activity-panel] .grid-cell[data-grid-cell]')];
+    let trailing = 0;
+    for (let index = cells.length - 1; index >= 0 && cells[index].dataset.gridAbsent === 'true'; index -= 1) {
+      trailing += 1;
+    }
+    return {
+      cells: cells.length,
+      trailing,
+      months: [...window.document.querySelectorAll('[data-activity-panel] .grid-month')].map((tick) => tick.title),
+    };
+  });
+  const today = new Date();
+  const utcDay = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const saturday = new Date(utcDay + (6 - today.getUTCDay()) * 86_400_000);
+  const payloadEnd = Date.parse(`${endDate}T00:00:00Z`);
+  const expectedTrailing = Math.round((saturday.getTime() - payloadEnd) / 86_400_000);
+  expect(observed.cells, 'the fixed window lost its 53 weeks').toBe(53 * 7);
+  expect(
+    observed.trailing,
+    `${observed.trailing} trailing absences drawn for a payload ending ${endDate}; the window should run ${expectedTrailing} days past it`
+  ).toBe(expectedTrailing);
+  expect(
+    observed.months,
+    'the month axis does not reach the month the reader is in'
+  ).toContain(saturday.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' }));
+});

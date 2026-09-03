@@ -3032,6 +3032,29 @@ test('the visible frame reserves its box before any byte arrives, and lazy-loads
   assert.match(mediaGallery, /decoding="async"/);
 });
 
+/* THE INCOMING NEIGHBOURS ARE DECODED BEFORE A SWIPE ASKS THEM TO ARRIVE
+ * (issue 285). The stage mounts one <img> and swaps its src on a commit — the
+ * one-frame rule above — and that src was never requested before the commit,
+ * so under a phone's network the entry animation slid an EMPTY frame in
+ * (MEASURED at 480ms of blank stage on a throttled 3G). The two items a swipe
+ * can reach are warmed off-DOM the moment they become neighbours; the browser
+ * lane measures the arrival, this pins the mechanism to those two items. */
+test('the gallery warms exactly its two neighbours, posters for films, and never the whole set (issue 285)', () => {
+  const warming = /const warmed = new Map<string, HTMLImageElement>\(\);\s*\$effect\(\(\) => \{([\s\S]*?)\n  \}\);/.exec(
+    mediaGallery
+  );
+  assert.ok(warming, 'the neighbour-warming effect is gone');
+  const body = warming[1];
+  assert.match(body, /\[visible\[previousIndex\], visible\[nextIndex\]\]/, 'the warmed set is not the two neighbours');
+  assert.match(body, /neighbour\.video === undefined \? neighbour\.previewSrc : neighbour\.video\.posterSrc/);
+  assert.match(body, /new Image\(\)/);
+  assert.match(body, /image\.decoding = 'async'/);
+  assert.doesNotMatch(body, /visible\.map|for \(const \w+ of visible\)|items\.map/, 'the whole set is warmed');
+  // Off-DOM by construction: the one-frame rule counts markup, and the
+  // warmed images must never enter it.
+  assert.doesNotMatch(body, /appendChild|document\./);
+});
+
 test('the gallery frame cap is pinned at its literal value, independent of computed style', () => {
   // Daybreak Blue's review of PR #161 found e2e coverage that read
   // getComputedStyle(...).maxHeight from the very stylesheet under test and

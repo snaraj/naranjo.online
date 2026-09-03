@@ -10,8 +10,8 @@
  * cannot drift. */
 
 import type { ActivityLink, ActivityTrackerProps } from './blocks.ts';
-import { addDays, calendarColumns, formatWhole, type GridCell } from './grid.ts';
-import { panelAge, panelKinds } from './panels.ts';
+import { addDays, calendarColumns, formatWhole, pendingWeeks, type GridCell } from './grid.ts';
+import { panelAge, panelKinds, panelStaleNote } from './panels.ts';
 import type { PanelEnvelope, VCSActivityData, VCSCoverage } from './panels';
 import { projectHost, projectHostLabel } from './projects.ts';
 
@@ -357,15 +357,39 @@ export function commitTitleLink(commit: { repo: string; sha: string; message: st
  * admission (parseVCSActivity); anything else — including no envelope yet —
  * is the honest empty state: no figures, an empty strip, no entry rows, each
  * region saying so in its own words while holding its reserved box. */
-export function vcsActivityProps(envelope: PanelEnvelope | null): ActivityTrackerProps {
+export function vcsActivityProps(envelope: PanelEnvelope | null, now: Date = new Date()): ActivityTrackerProps {
   const activity =
     envelope !== null && envelope.kind === panelKinds.vcsActivity
       ? parseVCSActivity(envelope.data)
       : null;
+  /* THE WINDOW TRAILS TODAY, NOT THE PAYLOAD (issue 285). calendarColumns
+   * anchors on the newest dated cell unless told otherwise, and for this
+   * panel that cell is the payload's endDate — today while the producer is
+   * live, and a day frozen weeks back when it is not: the live origin was
+   * MEASURED serving its cold-start snapshot (endDate 2026-08-20) fourteen
+   * days on, with the calendar's right edge sitting on that week and nothing
+   * anywhere saying so. A trailing window ends on the reader's today (UTC,
+   * the calendar the payload's own dates are written in), so a payload that
+   * stopped advancing shows every day since as the dated faint absence the
+   * doctrine draws for "not measured", growing by one cell a day, under the
+   * stale line above it. A fresh payload already ends on today, so nothing
+   * changes for it; a producer whose day is ahead of the reader's clock keeps
+   * its own end. */
+  const today = now.toISOString().slice(0, 10);
+  const anchor =
+    activity !== null && activity.endDate !== undefined && activity.endDate > today
+      ? activity.endDate
+      : today;
   return {
     title: envelope?.title || activityFallbackTitle,
     status: envelope?.status ?? 'unavailable',
     generatedAt: envelope?.generatedAt,
+    staleNote: panelStaleNote(
+      envelope?.status ?? 'unavailable',
+      envelope?.generatedAt,
+      activity?.endDate,
+      now
+    ),
     figures:
       activity === null
         ? []
@@ -385,7 +409,7 @@ export function vcsActivityProps(envelope: PanelEnvelope | null): ActivityTracke
        * realignment is idempotent by construction — but it is still the
        * one path both grids share, rather than a second implicit assumption
        * that this payload happens to already agree with it. */
-      columns: activity === null ? [] : calendarColumns(activityCells(activity)),
+      columns: activity === null ? [] : calendarColumns(activityCells(activity), pendingWeeks, anchor),
       noun: 'contribution',
       label:
         activity === null

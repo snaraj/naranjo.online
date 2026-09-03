@@ -48,6 +48,7 @@ import {
   swipeMetrics
 } from '../src/lib/gesture.ts';
 import {
+  handoffFlingMs,
   pullArmed,
   pullDistance,
   pullMetrics,
@@ -1241,23 +1242,16 @@ test('the pull contests the browser claim only while the touch could still be a 
   assert.ok(listeners.has('touchmove'), 'an eligible touch must attach the defence');
   assert.deepEqual(listeners.get('touchmove').options, { passive: false });
 
-  /* THE PROVING WINDOW, AND ITS FLOOR (issue 265). A downward move is
-     contested before `claimed` flips, because Safari takes the gesture inside
-     the first pixels — but only once the finger has gone somewhere. This used
-     to defend ANY downward delta greater than zero, and the owner's report
-     from a real iPhone is what that cost: "the top-of-page upward flick
-     sometimes does nothing until retried". A finger does not begin an upward
-     flick with an upward pixel; the first sample drifts a few pixels down,
-     that sample was preventDefault'ed at the top of the document, and the
-     scroll the reader asked for never happened.
-     The floor is lib/gesture.ts's own gestureSlop — the same number the swipe
-     decides a finger has gone somewhere at — so "still" means one thing to
-     both gestures on this page. */
-  assert.equal(
-    touchMove(100 + gestureSlop),
-    false,
-    'a touch still inside the slop is contested, so an upward flick can still be eaten at the top'
-  );
+  /* THE FIRST SAMPLE IS THE WHOLE CONTEST (issue 285). Driven through the
+     browser's own touch input, an un-prevented first touchmove is followed by
+     pointercancel in the same millisecond and every later touchmove arrives
+     uncancelable — there is no second sample to defend on. 0.1.69 conceded
+     the first 8px to spare a flick's downward tremor, and on the engine that
+     dispatches sub-slop samples (the owner's iPhone) that concession handed
+     every deliberate pull to the scroll claim. So a downward first sample is
+     contested however small it is; the eaten-flick case that rule was
+     avoiding is handed back by the pointer path instead (next test). */
+  assert.equal(touchMove(101), true, 'a one-pixel downward first sample was conceded to the scroll claim');
   assert.equal(touchMove(100 + gestureSlop + 1), true, 'a downward move past the slop must be defended');
   // An upward move falls through: that is the page's scroll, not a pull.
   assert.equal(touchMove(94), false, 'an upward move belongs to the browser');
@@ -1294,30 +1288,97 @@ test('the pull contests the browser claim only while the touch could still be a 
   listeners.get('pointerup').handler({ pointerId: 7 });
   assert.ok(!listeners.has('touchmove'), 'the defence must not outlive its touch');
 
-  /* A drag reading HORIZONTAL is watched rather than stood down (issue 277),
-     so the listener stays wired for the touch's whole life — and the defence
-     itself must therefore decline it: a touch currently going across rather
-     than down is not a plausible pull, and eating its native pan would trade
-     the swipe's scroll for a gesture that can never claim. The touch carries
-     its own clientX here because the defence reads the ADOPTED touch's
-     deltas, not the pointer's. */
+  /* A THUMB-ARC OPENING IS CONTESTED TOO (issue 285). A pull from low on the
+     screen reads across before it reads down (issue 277's measured 10px
+     across / 4px down), and since the first sample decides, declining it —
+     as 0.1.69 did, to spare a native sideways pan — killed the pull on a
+     phone. Nothing at the top of this page pans sideways, so there is no pan
+     to spare; the pointer path still refuses to CLAIM until the drag reads
+     downward, which is the guarantee the next test keeps. */
   down(100);
   move(120, 104);
   assert.equal(
-    touchMove(112, { touches: [{ identifier: 1, clientX: 220, clientY: 112 }] }),
-    false,
-    'a horizontal-reading touch had its native pan contested'
-  );
-  // ...and the same past-slop downward move IS defended once the drag reads
-  // downward, or the decline above is a defence that never fires at all.
-  assert.equal(
-    touchMove(112, { touches: [{ identifier: 1, clientX: 52, clientY: 112 }] }),
+    touchMove(104, { touches: [{ identifier: 1, clientX: 120, clientY: 104 }] }),
     true,
-    'a downward-reading touch past the slop went undefended'
+    'a thumb-arc opening sample was conceded to the scroll claim'
   );
 
   cleanup.destroy();
   assert.ok(!listeners.has('touchmove'), 'destroy must remove the defence');
+});
+
+/* THE HANDED-BACK FLICK (issue 285). Contesting the first downward sample is
+ * what makes the pull work on a phone, and it has exactly one cost: an upward
+ * flick whose opening sample drifted a pixel down has its native scroll
+ * cancelled for the rest of the touch (the owner's 2026-08-31 "the flick
+ * sometimes does nothing"). Rather than concede the sample — which is how the
+ * pull died — the pull scrolls the page for that touch itself: the travel so
+ * far when the drag proves upward, every sample after, and a fling at the
+ * finger's last velocity on release. A touch the defence never contested
+ * stands down exactly as before, because the browser is already scrolling. */
+test('a contested touch that turns into an upward flick is scrolled by hand, and flung on release (issue 285)', () => {
+  const listeners = new Map();
+  const node = {
+    addEventListener: (type, handler, options) => listeners.set(type, { handler, options }),
+    removeEventListener: (type) => listeners.delete(type)
+  };
+  const scrolled = [];
+  let reduced = false;
+  pullToRefresh(node, {
+    atTop: () => true,
+    render: () => {},
+    refresh: () => Promise.resolve(),
+    reduced: () => reduced,
+    scrollBy: (top, smooth) => scrolled.push([top, smooth])
+  });
+  const pointer = (type, y, at) =>
+    listeners.get(type).handler({ pointerType: 'touch', pointerId: 7, clientX: 50, clientY: y, timeStamp: at });
+  const touchMove = (y) => {
+    let prevented = false;
+    listeners.get('touchmove')?.handler({
+      cancelable: true,
+      touches: [{ identifier: 1, clientX: 50, clientY: y }],
+      preventDefault: () => (prevented = true)
+    });
+    return prevented;
+  };
+
+  // The tremor: one pixel down, contested — the browser's scroll is gone.
+  pointer('pointerdown', 100, 0);
+  assert.equal(touchMove(101), true, 'the opening tremor was not contested');
+  pointer('pointermove', 101, 8);
+  assert.deepEqual(scrolled, [], 'a watched sample scrolled the page');
+
+  // The flick proves upward past the slop: the page is handed the travel so far.
+  pointer('pointermove', 100 - gestureSlop - 12, 24);
+  assert.deepEqual(scrolled, [[gestureSlop + 12, false]], 'the upward travel so far was not handed to the page');
+  // ...and every sample after, instantly, with the defence still owning the touch.
+  pointer('pointermove', 60, 40);
+  assert.deepEqual(scrolled.at(-1), [100 - gestureSlop - 12 - 60, false]);
+  assert.equal(touchMove(60), true, 'a handed-back touch let a later sample reach the browser');
+  // Release flings at the last velocity: 20px over 16ms, for handoffFlingMs.
+  pointer('pointermove', 40, 56);
+  pointer('pointerup', 40, 56);
+  assert.deepEqual(scrolled.at(-1), [(20 / 16) * handoffFlingMs, true], 'the release did not fling');
+  assert.ok(!listeners.has('touchmove'), 'the handed-back touch outlived its finger');
+
+  // A reduced-motion reader gets the fling's distance at once, never smoothly.
+  reduced = true;
+  scrolled.length = 0;
+  pointer('pointerdown', 100, 100);
+  touchMove(101);
+  pointer('pointermove', 100 - gestureSlop - 1, 116);
+  pointer('pointermove', 70, 132);
+  pointer('pointerup', 70, 132);
+  assert.equal(scrolled.at(-1)[1], false, 'a reduced-motion fling was smooth');
+
+  // A touch the defence never contested is the browser's already: stand down, scroll nothing.
+  scrolled.length = 0;
+  pointer('pointerdown', 100, 200);
+  pointer('pointermove', 100 - gestureSlop - 1, 216);
+  pointer('pointermove', 40, 232);
+  pointer('pointerup', 40, 232);
+  assert.deepEqual(scrolled, [], 'an uncontested upward drag was scrolled by hand over the browser');
 });
 
 /* THE FIRST SAMPLE DECIDES NOTHING (issue 277). The owner's "it works only in

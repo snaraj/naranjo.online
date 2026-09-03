@@ -24,6 +24,7 @@ import {
   tally,
   unrankedLabel,
 } from '../src/lib/bossLog.ts';
+import { unavailablePanel } from '../src/lib/panels.ts';
 import { projects } from '../src/lib/projects.ts';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
@@ -270,6 +271,13 @@ test('no card announces its own age, and none keeps a control', () => {
   // words live, structural where they render.
   assert.equal(osrsStatsProps(null, { levels: new Map(), tallies: new Map() }).note, bossLogLoadingNote);
   assert.equal(bossLogUnavailableNote, 'Boss data is unavailable right now.');
+  // A failed read's fail-soft envelope carries no title (issue 285): the
+  // face it produces keeps this panel's heading rather than rendering a
+  // headless line — the only face of the boss log that read as "not rendered".
+  const failed = osrsStatsProps(unavailablePanel(bossLogPanelId), { levels: new Map(), tallies: new Map() });
+  assert.equal(failed.title, bossLogFallbackTitle);
+  assert.equal(failed.note, bossLogUnavailableNote);
+  assert.equal(failed.status, 'unavailable');
   assert.match(statTracker, /\{#if grids\.length === 0 && note\}\s*<p class="stat-note">\{note\}<\/p>/);
   assert.match(activityTracker, /<span class="activity-empty">\{figuresNote\}<\/span>/);
   assert.match(usageTracker, /<p class="usage-empty">\{emptyNote\}<\/p>/);

@@ -81,6 +81,11 @@
     atTop: () => globalThis.scrollY <= 1,
     reduced: () =>
       typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches,
+    /* The road an eaten flick is handed back on (lib/pullToRefresh.ts,
+       handoff): instant while the finger is down, so the page tracks it,
+       and the platform's own smooth scroll for the fling after. */
+    scrollBy: (top: number, smooth: boolean) =>
+      globalThis.scrollBy({ top, behavior: smooth ? 'smooth' : 'instant' }),
     render: (next: number, nextPhase: PullPhase) => {
       distance = next;
       phase = nextPhase;

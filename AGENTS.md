@@ -571,7 +571,8 @@ The complete delivery loop, each step gated by the sections around it:
    are lane-prefixed. The preferred grammar for new branches is
    `<lane>-<effort>/<issue#>-<topic>` (e.g. `sonnet5-med/155-rail-idle-ink`,
    `fable5-high/142-usage-export`), carrying the dispatched reasoning effort
-   (`low | med | high | max`) and the tracking issue number; `<lane>` is
+   (`low | med | high | xhigh | max`; `xhigh` admitted by owner ruling,
+   2026-09-03) and the tracking issue number; `<lane>` is
    parsed by longest match against the repository-registered label set
    (`fable5`, `5.6-sol`, `opus5`, `opus4.8`, `sonnet5`), then the
    `-<effort>` suffix. A branch with genuinely no issue states why in its PR

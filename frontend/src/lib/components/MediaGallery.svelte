@@ -427,6 +427,36 @@
   const previousIndex = $derived((shown - 1 + total) % total);
   const nextIndex = $derived((shown + 1) % total);
 
+  /* THE NEIGHBOURS ARE DECODED BEFORE A SWIPE ASKS THEM TO ARRIVE (issue
+     285). The stage mounts one <img> and swaps its src on a commit, and that
+     src was never requested before the commit — so on a phone network the
+     entry animation slid an EMPTY frame in: MEASURED under Chromium's own
+     touch input at a throttled 3G, the incoming preview stood at
+     naturalWidth 0 for 480ms after the commit (200ms on a faster 3G), the
+     whole of the 200ms settle and more, and the picture popped in afterwards.
+     A desktop with a warm cache never showed it. So the two items a swipe can
+     reach — the previous and the next — are fetched and decoded the moment
+     they become neighbours, through an off-DOM Image held here so the decoded
+     bytes stay in the browser's available-images list; a film contributes
+     its poster, which is what its stage shows on arrival. Two requests per
+     position, never the whole set, and never twice for one item. */
+  const warmed = new Map<string, HTMLImageElement>();
+  $effect(() => {
+    if (typeof Image === 'undefined' || total < 2) {
+      return;
+    }
+    for (const neighbour of [visible[previousIndex], visible[nextIndex]]) {
+      const src = neighbour.video === undefined ? neighbour.previewSrc : neighbour.video.posterSrc;
+      if (warmed.has(src)) {
+        continue;
+      }
+      const image = new Image();
+      image.decoding = 'async';
+      image.src = src;
+      warmed.set(src, image);
+    }
+  });
+
   /* Truthiness, not `!== undefined`: an empty string is as absent as a
      missing field for a reader, and rendering an empty row for one is the
      "no blank fields" failure this exists to prevent.

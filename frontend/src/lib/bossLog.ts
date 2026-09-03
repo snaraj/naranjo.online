@@ -207,7 +207,12 @@ export function osrsStatsProps(envelope: PanelEnvelope | null, icons: StatIconSe
   const data = (envelope.data ?? undefined) as BossLogData | undefined;
   if (!data) {
     return {
-      title: envelope.title,
+      /* The fail-soft envelope a failed read produces carries no title
+         (unavailablePanel, lib/panels.ts). Rendered verbatim it drew a
+         HEADLESS "Boss data is unavailable" line — the one face of this
+         panel that reads as never having rendered at all — while the two
+         adapters beside it fall back to their own headings (issue 285). */
+      title: envelope.title || bossLogFallbackTitle,
       status: envelope.status,
       generatedAt: envelope.generatedAt,
       grids: [],
