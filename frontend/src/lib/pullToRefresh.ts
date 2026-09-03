@@ -163,6 +163,10 @@ export interface PullBinding {
   /* Whether the reader has asked for reduced motion. Injected for the same
      reason atTop is: this file reads no media query and no DOM. */
   reduced?: () => boolean;
+  /* Scroll the page by `top` pixels — the road an eaten flick is given back
+     on (see handoff below). Optional: a surface that cannot scroll has
+     nothing to hand back. */
+  scrollBy?: (top: number, smooth: boolean) => void;
   metrics?: PullMetrics;
   /* The clock the dwell floor and the completion hold are measured on, and
      the frame clock the live drag is coalesced against. Injected for tests;
@@ -232,6 +236,13 @@ export function settleTo(
   };
 }
 
+/* How long a handed-back flick keeps travelling after the finger lifts, in
+ * milliseconds of its last measured velocity. A native fling decays over
+ * several hundred milliseconds; this is the same order, short enough that a
+ * reader who stopped their finger deliberately is not carried past where
+ * they stopped. */
+export const handoffFlingMs = 300;
+
 /* pullToRefresh binds the gesture to an element — in practice the document
  * body, because the thing being pulled is the page. It writes no style and
  * knows no class: every visible consequence goes through `render`. */
@@ -244,6 +255,16 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
   let startX = 0;
   let startY = 0;
   let claimed = false;
+  /* Whether the native-touch defence below has already contested this touch.
+     Once it has, the browser's own scroll is gone for the rest of the touch
+     (see onTouchMove), so a drag that then turns out to be an upward flick is
+     the pull's to hand back — `handoff` is that state, and the two clocks
+     under it are the last sample the page was scrolled to and when. */
+  let contested = false;
+  let handoff = false;
+  let handoffY = 0;
+  let handoffAt = 0;
+  let velocity = 0;
   /* WHICH FINGER THIS GESTURE IS (issue 265). A TouchList is every finger on
      the screen, and the native-touch defence below used to read `touches[0]`
      — the FIRST one down, which is not promised to be the one this binding is
@@ -335,6 +356,9 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
     pointer = -1;
     claimed = false;
     touchId = null;
+    contested = false;
+    handoff = false;
+    velocity = 0;
   }
 
   /* THE SURFACE IS NOT THE FINGER'S ANY MORE — and it goes home. This is rule
@@ -399,6 +423,20 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
     }
     const dx = event.clientX - startX;
     const dy = event.clientY - startY;
+    /* THE HANDED-BACK FLICK: the page follows the finger, sample by sample,
+       and remembers how fast it was going for the fling on release. Page
+       travel is the finger's travel inverted — a finger moving up scrolls
+       the page down — which is what `scrollBy` takes. */
+    if (handoff) {
+      binding.scrollBy?.(handoffY - event.clientY, false);
+      const elapsed = event.timeStamp - handoffAt;
+      if (elapsed > 0) {
+        velocity = (handoffY - event.clientY) / elapsed;
+      }
+      handoffY = event.clientY;
+      handoffAt = event.timeStamp;
+      return;
+    }
     if (!claimed) {
       /* No longer at the top: the page's gesture. Standing down explicitly
          stops a later downward wobble in the same gesture from grabbing a
@@ -416,8 +454,25 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
          stand-down is for the rest of the touch. lib/gesture.ts's own rule
          is that nothing acts before the slop, and the same courtesy the
          swipe extends to a wobbling finger is extended here: a drag has to
-         GO upward to be an upward flick, not merely waver. */
+         GO upward to be an upward flick, not merely waver.
+         IF THE DEFENCE ALREADY CONTESTED THIS TOUCH, standing down is not
+         enough: the browser's scroll is gone for the rest of it (the first
+         touchmove decided — see onTouchMove), so the flick the reader made
+         would simply do nothing. That was the owner's 2026-08-31 report,
+         and conceding the first sample to avoid it is what killed the pull
+         instead. So the page is handed the flick by hand: the travel so far
+         now, every later sample as it comes, and a fling on release. */
       if (dy < -gestureSlop) {
+        if (contested) {
+          handoff = true;
+          handoffY = event.clientY;
+          handoffAt = event.timeStamp;
+          binding.scrollBy?.(-dy, false);
+          if (distance > 0 && cancelSettle === null) {
+            settle(0, 'idle');
+          }
+          return;
+        }
         standDown();
         return;
       }
@@ -459,71 +514,66 @@ export function pullToRefresh(node: HTMLElement, binding: PullBinding) {
      refresh is broken, it doesn't work"). An earlier revision deliberately
      never called preventDefault, on the argument that overscroll-behavior-y
      already told the browser the gesture had nowhere to go. That argument
-     holds for the RUBBER BAND and not for the CLAIM: real iOS Safari still
-     claims a downward touch at the top as a scroll gesture, fires
-     pointercancel (exactly the behaviour lib/gesture.ts's header documents),
-     and the pull dies before it renders a pixel — while dispatched pointer
-     events, which no browser arbitrates, sailed through and made every
-     emulated lane green.
+     holds for the RUBBER BAND and not for the CLAIM: a browser still claims
+     a downward touch at the top as a scroll gesture, fires pointercancel
+     (exactly the behaviour lib/gesture.ts's header documents), and the pull
+     dies before it renders a pixel — while dispatched pointer events, which
+     no browser arbitrates, sail through and make every emulated lane green.
 
-     So the pull now contests the claim, as narrowly as it can be contested:
-     a NON-PASSIVE touchmove listener is attached only inside an eligible
-     touch (finger down at the document's top) and removed when that touch
-     ends, and it prevents default only once the drag has PROVEN itself a
-     pull (claimed, downward). An unclaimed touch — upward scroll, a
-     horizontal swipe, any drag once the page has left the top — falls
-     through untouched to the browser. The permanent listener alternative
-     would disable scroll optimisation for every touch on the page; this one
-     costs only the touches that begin at the very top. */
+     So the pull contests the claim, as narrowly as it can be contested: a
+     NON-PASSIVE touchmove listener is attached only inside an eligible touch
+     (finger down at the document's top) and removed when that touch ends.
+     The permanent-listener alternative would disable scroll optimisation for
+     every touch on the page; this one costs only the touches that begin at
+     the very top.
+
+     THE FIRST CANCELABLE TOUCHMOVE DECIDES THE WHOLE TOUCH, and that is
+     measured rather than read: driven through the browser's own touch input
+     (issue 285, Chromium), an un-prevented first touchmove is followed by
+     pointercancel in the same millisecond and every later touchmove arrives
+     uncancelable — there is no second chance. 0.1.69 conceded that sample
+     whenever it was inside the 8px slop, reasoning that "a pull that needs
+     one more sample to engage is a gesture that works". On an engine that
+     coalesces sub-slop movement (Chromium's first touchmove lands at ~16px)
+     the concession never bit; on one that dispatches every pixel — the
+     owner's iPhone — it handed every deliberate pull's opening sample to the
+     scroll claim, and the pull was dead on the phone it exists for. So the
+     defence contests any downward first sample at the top, however small,
+     and a horizontal-reading one too: a thumb-arc pull opens across before
+     it goes down, and nothing at the top of this page pans sideways. What
+     it never contests is a touch it did not adopt (issue 265), an upward
+     sample (the page's flick), or a page that has left its top. The one
+     flick this can eat — a real upward flick whose first sample drifts
+     down — is handed back by onMove rather than conceded up front. */
   function onTouchMove(event: TouchEvent): void {
     if (!event.cancelable) {
       return;
     }
-    if (claimed) {
+    if (claimed || handoff) {
       event.preventDefault();
       return;
     }
-    /* The proving window needs the same defence: Safari can claim the
-       gesture during the first downward pixels, before `claimed` flips, and a
-       pull that only defends itself after proof still dies on a real phone.
-       An eligible, still-tracked touch moving DOWNWARD PAST THE SLOP at the
-       top is defended; everything else — upward, inside the slop, a drag
-       reading horizontal, a page no longer at its top — falls through to
-       the browser untouched. The horizontal reading is asked HERE as well
-       as in onMove, and has to be: since issue 277 a horizontal-reading
-       sample no longer stands the pointer down (it is watched, because a
-       thumb-arc pull's first sample reads horizontal), so this listener now
-       lives until the touch ends — and a touch that currently reads across
-       rather than down is not a plausible pull and must not have its native
-       pan eaten while it is watched. claimsHorizontal over the same
-       adopted-touch deltas keeps that the one shared definition.
-       THE SLOP IS THE WHOLE OF THE OWNER'S "the flick sometimes does nothing"
-       (2026-08-31, real iPhone; not reproducible under emulation). This used
-       to defend any downward delta greater than ZERO, and a finger does not
-       start an upward flick with an upward pixel: the first sample of a real
-       flick drifts a few pixels DOWN, that sample was preventDefault'ed at
-       the top of the document, and the scroll the reader asked for was eaten.
-       It is lib/gesture.ts's own gestureSlop rather than a number of this
-       file's, so "a finger that has not gone anywhere yet" means the same
-       thing to both gestures on this page. The window it concedes is real and
-       narrow — a genuine pull's first 8 downward pixels are no longer
-       contested — and it is the correct side to be wrong on: a pull that
-       needs one more sample to engage is a gesture that works, while a scroll
-       that never happens is a page that is broken. */
     const touch = trackedTouch(event);
-    if (
-      pointer !== -1 &&
-      touch !== undefined &&
-      touch.clientY - startY > gestureSlop &&
-      !claimsHorizontal(touch.clientX - startX, touch.clientY - startY) &&
-      binding.atTop()
-    ) {
+    if (pointer !== -1 && touch !== undefined && touch.clientY - startY > 0 && binding.atTop()) {
+      contested = true;
       event.preventDefault();
     }
   }
 
   function onUp(event: PointerEvent): void {
     if (event.pointerId !== pointer) {
+      return;
+    }
+    /* A handed-back flick ends the way a native one does: the page keeps
+       going for a moment at the speed the finger left it. Smooth unless the
+       reader asked for less motion, in which case the distance lands at once
+       — the same rule settleTo applies to the surface. */
+    if (handoff) {
+      const fling = velocity * handoffFlingMs;
+      standDown();
+      if (Math.abs(fling) >= 1) {
+        binding.scrollBy?.(fling, !reduced());
+      }
       return;
     }
     /* An unclaimed release is an exit like any other, and it is an exit that

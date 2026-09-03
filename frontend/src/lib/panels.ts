@@ -5,6 +5,8 @@
  * whatever envelope comes back, so a data fault degrades one panel and can
  * never break the page. */
 
+import { formatDateRange } from './periods.ts';
+
 export type PanelStatus = 'ok' | 'stale' | 'unavailable';
 
 /* The envelope schema is stable forever by design (see internal/panels);
@@ -453,6 +455,17 @@ export function watchPanel<Data = unknown>(
   let stopped = false;
   let inFlight = false;
   let pending: Promise<void> = Promise.resolve();
+  /* The last envelope the origin served WITH data. A read that fails in
+     transport after one that succeeded delivers this, marked stale, rather
+     than blanking a rendered panel for a whole interval (issue 285): it is
+     the origin's own rule for its upstreams — the last good payload keeps
+     serving and says it is stale — applied at the page's boundary, and a
+     phone on a flaky connection is exactly where a background read fails.
+     loadPanel's fail-soft envelope is told apart by its EMPTY kind, which
+     parsePanelEnvelope admits from no origin, so an envelope the origin
+     genuinely served as unavailable is still delivered as the origin said,
+     and forgets the last good one with it. */
+  let lastGood: PanelEnvelope<Data> | null = null;
   /* This panel joins the pending count the moment it is watched and leaves it
      on its first delivery — or on stop(), because a panel torn down before it
      ever answered is no longer something the page is waiting for. `settled`
@@ -490,9 +503,17 @@ export function watchPanel<Data = unknown>(
         // succeeded. Counting only successes would leave a broken origin
         // looking like a page that never finished loading.
         settle();
-        if (!stopped) {
-          onEnvelope(envelope);
+        if (stopped) {
+          return;
         }
+        if (envelope.kind === '' && lastGood !== null) {
+          onEnvelope({ ...lastGood, status: 'stale' });
+          return;
+        }
+        if (envelope.kind !== '') {
+          lastGood = envelope.status === 'unavailable' ? null : envelope;
+        }
+        onEnvelope(envelope);
       });
     return pending;
   };
@@ -534,6 +555,53 @@ const live = new Set<PanelWatcher>();
  * loadPanel, and a gesture is not the place to surface a transport fault. */
 export async function refreshPanels(): Promise<void> {
   await Promise.all([...live].map((watcher) => watcher.refresh()));
+}
+
+/* panelStaleAfterMs is how far behind the wall clock an ok envelope's own
+ * generatedAt may fall before a panel must SAY its data has stopped advancing
+ * (issue #276; the observability half of #267). Two full days: the usage
+ * pipeline pushes hourly and the origin re-reads every five minutes, the
+ * fetched panels refresh on a minutes-long TTL, and a workstation
+ * legitimately sleeps overnight — a day-granularity series cannot honestly
+ * alarm at sub-day lag, while two days of silence is a stalled producer. */
+export const panelStaleAfterMs = 48 * 60 * 60 * 1000;
+
+/* panelStaleNote is the honest data-through line every panel renders in ONE
+ * idiom, or undefined while the payload is fresh. Exactly two states produce
+ * it, both proven by the envelope rather than inferred: the origin already
+ * SAYS stale (it refused a newer document, kept its last good one past a
+ * failed refresh, or is serving its cold-start snapshot), or the origin says
+ * ok but its generatedAt has fallen beyond panelStaleAfterMs — the stalled
+ * producer the origin structurally cannot tell from quiet. `through` is the
+ * newest calendar day the payload's data reaches; absent, the capture age
+ * stands alone. The unavailable state is not this line's business: that
+ * renders the panel's empty face, and a note under it would date data nobody
+ * is shown. No invented freshness either way — every word restates a field
+ * the envelope carries. */
+export function panelStaleNote(
+  status: PanelStatus,
+  generatedAt: string | undefined,
+  through: string | undefined,
+  now: Date = new Date()
+): string | undefined {
+  if (status === 'unavailable') {
+    return undefined;
+  }
+  const at = generatedAt === undefined ? Number.NaN : Date.parse(generatedAt);
+  const aged = !Number.isNaN(at) && now.getTime() - at > panelStaleAfterMs;
+  if (status !== 'stale' && !aged) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  const day = through === undefined ? '' : formatDateRange(through, through);
+  if (day !== '') {
+    parts.push(`data through ${day}`);
+  }
+  const age = panelAge(generatedAt, now);
+  if (age !== '') {
+    parts.push(`last capture ${age}`);
+  }
+  return parts.length > 0 ? parts.join(' · ') : undefined;
 }
 
 /* panelAge renders an ISO instant as a coarse human age. Its one live caller

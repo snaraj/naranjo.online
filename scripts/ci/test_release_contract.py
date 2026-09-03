@@ -7350,8 +7350,14 @@ class GovernanceParityTests(unittest.TestCase):
                  "340084c93dd72dbd2f93440ccc1f68955f3ad911ff08cf2904be70e0ff5d5694"),
                 ("- **Merge readiness.** Draft remains Draft until",
                  "ae8e12d40d0dc1b2fd8f0b4af635ffe5a7481f9c653f67c5d73808f60bd0b956"),
+                # Re-pinned for issue #285: step 2 of the list admits the
+                # `xhigh` effort to the branch grammar (owner ruling,
+                # 2026-09-03). The block's Ready sentences — step 1's "Never
+                # apply or interpret `requires-review` on the issue" and the
+                # later Ready/merge steps — are unchanged; only the effort set
+                # in the branch grammar grew by one word.
                 ("1. **Claim the work.** (the delivery-loop numbered list)",
-                 "e7c8953ae84d4b69aa2985d0a3dd94b171c0806205fd8394ddf53ade179b01a9"),
+                 "2bea38ceb4e31531cf764b18fe241a92dca0d0be598b87d874e58ed647d31eff"),
                 ("Comments the owner leaves on PRs ARE code reviews",
                  "e8e6f2dd0c82a28a8c280cd1705002f4faf8d2e9aa81195df5466d6db83a871c"),
                 ("The full local gate does not substitute for the server boundary",

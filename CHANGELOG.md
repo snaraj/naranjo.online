@@ -7,6 +7,38 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.72] - 2026-09-03
+
+### Fixed
+
+- Pull-to-refresh works on a phone again (issue #285). The first cancelable
+  touchmove decides a whole touch — measured through Chromium's own touch
+  input: an un-prevented first sample is followed by pointercancel in the
+  same millisecond and every later sample arrives uncancelable — and 0.1.69
+  conceded that sample whenever it lay inside the 8px slop, which an engine
+  that dispatches sub-slop movement (a real iPhone) turned into a dead pull
+  on every deliberate drag. The native-touch defence now contests any
+  downward first sample at the top, a thumb-arc's sideways opening included,
+  and never a second finger; the one flick that rule can eat — an upward
+  flick whose first sample drifts down — is handed back as a finger-tracked
+  scroll with a short fling instead of doing nothing.
+- A gallery swipe on a phone no longer slides an empty frame in. The stage
+  swapped its one image to a preview nobody had requested, so the incoming
+  picture stood blank for the whole entry settle (480ms on a throttled 3G,
+  measured) and popped in afterwards; the two items a swipe can reach are
+  decoded the moment they become neighbours.
+- The contribution calendar tells the truth when its producer stops: the
+  fixed 53-week window trails the reader's today rather than the payload's
+  last day, so a stalled payload shows every day since as a dated absence,
+  and the panel carries the same data-through line the usage panel has,
+  from one shared builder — the live origin was measured serving its Aug 20
+  snapshot fourteen days on with nothing on the page saying so.
+- A background panel read that fails in transport keeps the last envelope
+  the origin served, marked stale, instead of blanking a rendered panel for
+  a minute — the origin's own last-good rule at the page's boundary. The boss
+  log's fail-soft face has its heading back; it alone rendered headless.
+- Branch grammar admits the `xhigh` effort (owner ruling, 2026-09-03).
+
 ## [0.1.71] - 2026-09-01
 
 ### Fixed

@@ -42,12 +42,20 @@
     figuresNote,
     strip,
     entries,
-    entriesNote
+    entriesNote,
+    staleNote
   }: ActivityTrackerProps = $props();
 </script>
 
+<!-- The data-through line (issue 285) rides the shell's HEAD rather than this
+  body: every region below is a reserved box so the calendar's arrival costs
+  no layout shift, and a line that appeared among them would move the whole
+  card the moment a stale payload landed (the reserve lane measures exactly
+  that). The head keeps a row open for an addition beside the title, so the
+  note lands there — rendered exactly when the adapter proved the calendar
+  stopped advancing, and never on a fresh panel. -->
 <aside class="activity-tracker" data-activity-panel>
-  <PanelShell {title} {status} {generatedAt}>
+  <PanelShell {title} {status} {generatedAt} note={staleNote}>
     <div class="activity">
       <p class="activity-totals">
         {#if figures.length > 0}

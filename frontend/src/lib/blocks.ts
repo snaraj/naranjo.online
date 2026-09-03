@@ -273,6 +273,11 @@ export type ActivityTrackerProps = {
   readonly entries: readonly ActivityEntry[];
   /* Rendered as the log's one row when there are no entries. */
   readonly entriesNote: string;
+  /* The honest data-through line (issue 285), the same contract
+   * UsageTrackerProps.staleNote carries: adapter-built words the component
+   * renders above the figures, present exactly when the envelope itself
+   * proves the calendar stopped advancing. */
+  readonly staleNote?: string;
 };
 
 /* --- UsageTracker: per-source tiles, meters, series, insights ------------ */

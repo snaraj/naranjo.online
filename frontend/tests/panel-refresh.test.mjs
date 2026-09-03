@@ -216,6 +216,58 @@ test('watchPanel delivers an unavailable envelope when the read itself fails', a
   stop();
 });
 
+/* THE LAST GOOD ENVELOPE OUTLIVES A FAILED READ (issue 285). The origin's own
+ * rule for its upstreams — a failed refresh keeps the last good payload
+ * serving as stale — applied at the page's boundary: a background read that
+ * fails in transport after one that succeeded must not blank a rendered panel
+ * for a whole interval, which on a phone's flaky connection is exactly how a
+ * card that was there a moment ago reads as never having rendered. */
+test('watchPanel keeps the last good envelope, marked stale, across a read that fails in transport', async () => {
+  const host = fakeHost();
+  const seen = [];
+  const stop = watchPanel('token-usage', (envelope) => seen.push(envelope), { host });
+  await flush();
+  assert.equal(seen[0].status, 'ok');
+
+  host.respond = () => {
+    throw new Error('network down');
+  };
+  host.scheduled[0].callback();
+  await flush();
+  assert.equal(seen.length, 2);
+  assert.equal(seen[1].status, 'stale', 'a transport failure blanked a rendered panel');
+  assert.deepEqual(seen[1].data, seen[0].data, 'the stale envelope is not the one the origin served');
+  assert.equal(seen[1].generatedAt, seen[0].generatedAt, 'the stale envelope borrowed a freshness it never had');
+
+  // The origin's own unavailable answer is delivered as the origin said it —
+  // this is a rule about transport, never about disagreeing with the origin —
+  // and it forgets the last good envelope with it.
+  host.respond = () => ({
+    ok: true,
+    json: async () => ({ ...envelopeBody('token-usage', '2026-08-12T00:05:00Z'), status: 'unavailable', data: null })
+  });
+  host.scheduled[0].callback();
+  await flush();
+  assert.equal(seen[2].status, 'unavailable');
+  host.respond = () => {
+    throw new Error('network down');
+  };
+  host.scheduled[0].callback();
+  await flush();
+  assert.equal(seen[3].status, 'unavailable', 'a forgotten envelope came back as stale');
+
+  // ...and a read that succeeds again is delivered fresh, and remembered again.
+  host.respond = (url) => ({
+    ok: true,
+    json: async () => envelopeBody(url.split('/').at(-1), '2026-08-12T00:10:00Z')
+  });
+  host.scheduled[0].callback();
+  await flush();
+  assert.equal(seen[4].status, 'ok');
+  assert.equal(seen[4].generatedAt, '2026-08-12T00:10:00Z');
+  stop();
+});
+
 test('watchPanel refuses an unrenderable id without wedging the loop', async () => {
   const host = fakeHost();
   const seen = [];

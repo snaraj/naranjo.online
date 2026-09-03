@@ -21,7 +21,7 @@ import {
   shownEntryRows,
   vcsActivityProps
 } from '../src/lib/activity.ts';
-import { toColumns } from '../src/lib/grid.ts';
+import { calendarColumns, pendingWeeks, toColumns } from '../src/lib/grid.ts';
 import { projectHost, projectHostLabel } from '../src/lib/projects.ts';
 import {
   applyScrollbarGutter,
@@ -549,6 +549,74 @@ test('the adapter renders the figures, the strip, and the noun the panel always 
   assert.deepEqual(mislabeled.figures, []);
   assert.deepEqual(mislabeled.strip.columns, []);
   assert.equal(mislabeled.strip.label, 'contribution calendar');
+});
+
+/* THE CALENDAR TELLS THE TRUTH WHEN ITS PRODUCER STOPS (issue 285). The live
+ * origin was measured serving its cold-start snapshot — endDate 2026-08-20,
+ * status stale — fourteen days on, and the panel showed a 499-contribution
+ * total under a calendar whose right edge sat on that week, with nothing on
+ * the page saying either was two weeks old. Two repairs, both executed here:
+ * the window trails the reader's today, so every day past the payload's end
+ * is a dated absence the reader can see growing; and the panel carries the
+ * usage tracker's data-through line, from the one shared builder. */
+test('a stalled payload draws its missing days as dated absences up to today, under a stale line (issue 285)', async () => {
+  // A Sunday-start fortnight ending on Thursday 2026-08-20, exactly the shape
+  // the origin serves: seven-day columns, the final one padded past endDate.
+  const stalled = {
+    ...goodActivity,
+    weeks: [
+      [0, 2, 4, 1, 0, 3, 5],
+      [2, 6, 3, 0, 7, 0, 0]
+    ],
+    endDate: '2026-08-20'
+  };
+  const envelope = {
+    schema: 'panel/v1',
+    id: activityPanelId,
+    kind: 'vcs-activity/v1',
+    title: 'Fixture Activity',
+    status: 'stale',
+    generatedAt: '2026-08-20T09:50:34Z',
+    data: stalled
+  };
+  const now = new Date('2026-09-03T10:00:00Z');
+  const rendered = vcsActivityProps(envelope, now);
+  assert.equal(rendered.staleNote, 'data through Aug 20, 2026 · last capture 14d ago');
+
+  const columns = rendered.strip.columns;
+  assert.equal(columns.length, pendingWeeks, 'the fixed trailing window lost its width');
+  const last = columns.at(-1);
+  assert.equal(last[0].date, '2026-08-30', 'the window does not end on the week that holds today');
+  assert.equal(last[6].date, '2026-09-05');
+  // Every day after the payload's end is a DATED absence, never a quiet zero,
+  // so a reader sees where the data stopped rather than a fortnight of calm.
+  const after = columns.flat().filter((cell) => cell.date > '2026-08-20');
+  assert.equal(after.length, 16, 'the days since the payload ended are not all drawn');
+  assert.ok(after.every((cell) => cell.absent === true), 'a day the producer never reached rendered as a measured zero');
+  // ...and the real days stay exactly where the calendar puts them.
+  const thursday = columns.flat().find((cell) => cell.date === '2026-08-20');
+  assert.deepEqual(thursday, { value: 7, date: '2026-08-20' });
+  assert.equal(columns.flat().find((cell) => cell.date === '2026-08-10').value, 2);
+
+  // A fresh payload — endDate on the reader's today — renders exactly what it
+  // always did: the anchor changes nothing when the producer is live.
+  const fresh = { ...envelope, status: 'ok' };
+  const live = vcsActivityProps(fresh, new Date('2026-08-20T12:00:00Z'));
+  assert.equal(live.staleNote, undefined);
+  assert.deepEqual(live.strip.columns, calendarColumns(activityCells(parseVCSActivity(stalled))));
+  // A producer a time zone ahead of the reader keeps its own end.
+  const ahead = vcsActivityProps(fresh, new Date('2026-08-19T23:30:00Z'));
+  assert.deepEqual(ahead.strip.columns, live.strip.columns);
+  // An ok envelope whose generatedAt has silently stopped advancing says so too.
+  assert.equal(vcsActivityProps(fresh, now).staleNote, 'data through Aug 20, 2026 · last capture 14d ago');
+  // The component hands the line to the shell's HEAD — the one row the card
+  // already reserves — never to its body, whose every region is a fixed box
+  // so the calendar's arrival costs no layout shift (the reserve lane).
+  assert.match(component, /<PanelShell \{title\} \{status\} \{generatedAt\} note=\{staleNote\}>/);
+  assert.doesNotMatch(component, /staleNote\}<\/p>/, 'the stale line grew the reserved body');
+  const shell = await readFile(new URL('../src/lib/components/PanelShell.svelte', import.meta.url), 'utf8');
+  assert.match(shell, /\{#if note\}<span class="panel-note" data-panel-note>\{note\}<\/span>\{\/if\}/);
+  assert.match(shell, /\.panel-note \{[^}]*white-space: nowrap;[^}]*text-overflow: ellipsis;/s);
 });
 
 test('an empty commit list says so instead of showing invented history', () => {

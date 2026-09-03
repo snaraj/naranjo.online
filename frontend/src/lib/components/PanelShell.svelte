@@ -32,11 +32,20 @@
     title,
     status = 'unavailable',
     generatedAt,
+    note,
     children
   }: {
     title: string;
     status?: PanelStatus;
     generatedAt?: string;
+    /* The honest data-through line (issue 285), for a panel whose body is a
+       RESERVED box: the calendar holds every region at a fixed height so its
+       arrival costs no layout shift, which leaves the head — the row this
+       shell keeps open for exactly "a later addition beside the title" — as
+       the one place a line can appear without moving anything. Adapter-built
+       words, rendered only when there are any; a fresh panel draws nothing
+       here, which is what keeps this from being the retired freshness badge. */
+    note?: string;
     children?: Snippet;
   } = $props();
 </script>
@@ -44,6 +53,7 @@
 <section class="panel-shell" data-panel-status={status} data-panel-generated-at={generatedAt}>
   <header class="panel-head">
     <h2 class="panel-title">{title}</h2>
+    {#if note}<span class="panel-note" data-panel-note>{note}</span>{/if}
   </header>
   <div class="panel-body">
     {#if children}{@render children()}{/if}
@@ -80,6 +90,21 @@
     font-weight: 650;
     letter-spacing: 0.02em;
     color: var(--panel-heading, var(--panel-accent, rgb(220, 138, 0)));
+  }
+
+  /* One line at the head's far edge, a step smaller than the title so the
+     row's height stays the title's: a note that could wrap would grow the
+     reserved row on arrival, so on a card too narrow for its words it
+     truncates instead. Its own size token, defaulting to the same step the
+     usage tracker's body line reads, and the same muted ink. */
+  .panel-note {
+    min-inline-size: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    text-align: end;
+    font-size: var(--panel-note-size, 0.6875rem);
+    color: var(--panel-muted, rgb(158, 158, 158));
   }
 
   .panel-body {
