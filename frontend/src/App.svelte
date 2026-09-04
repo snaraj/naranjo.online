@@ -5,43 +5,30 @@
   import PullToRefresh from './lib/components/PullToRefresh.svelte';
   import TextureBand from './lib/components/TextureBand.svelte';
   import { bandTextures } from './lib/textureAssets.ts';
-  import {
-    bandMode,
-    documentPrefersDark,
-    nextTextureIndex,
-    prefersDarkQuery,
-    textureLabel,
-    textureSet
-  } from './lib/textures.ts';
+  import { bandMode, documentPrefersDark, prefersDarkQuery, textureFor } from './lib/textures.ts';
   import { page } from './page.ts';
 
   /* THE BAND'S STATE LIVES HERE, and that is deliberate: the page opens and
      closes on the SAME picture, so the two bands are two views of one value.
      Held by the page's own chrome rather than in a module store, because it is
-     chrome — a decorative index that lasts as long as the visit and is
-     persisted nowhere, which is what the owner asked for and also the reason
-     it needs no cookie, no storage and no consent question. */
+     chrome — the reading mode's own picture, persisted nowhere, which is why
+     it needs no cookie, no storage and no consent question. The cycle box is
+     gone (owner directive, 2026-09-04, issue 292): a mode has one picture, and
+     the only thing that changes it is the mode. */
   let mode = $state(bandMode());
   let prefersDark = $state(documentPrefersDark());
-  let index = $state(0);
 
-  const set = $derived(textureSet(mode, prefersDark));
-  const texture = $derived(set[index] ?? set[0]);
+  const texture = $derived(textureFor(mode, prefersDark));
 
   /* The reading mode is an ATTRIBUTE on the document, written by the toggle
      (lib/themes.ts) and by the origin's own stamp — never by this component —
      so the band watches the attribute rather than being told. That keeps the
      one mechanism the whole page already agrees on: the mode is what the
-     document says it is. Changing modes resets to the set's first texture,
-     because index 1 of one pair means nothing about index 1 of another. */
+     document says it is. */
   $effect(() => {
     const root = document.documentElement;
     const observer = new MutationObserver(() => {
-      const next = bandMode();
-      if (next !== mode) {
-        mode = next;
-        index = 0;
-      }
+      mode = bandMode();
     });
     observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
     return () => observer.disconnect();
@@ -56,15 +43,10 @@
     const query = window.matchMedia(prefersDarkQuery);
     const onChange = (): void => {
       prefersDark = query.matches;
-      index = 0;
     };
     query.addEventListener('change', onChange);
     return () => query.removeEventListener('change', onChange);
   });
-
-  function step(by: number): void {
-    index = nextTextureIndex(index, set.length, by);
-  }
 </script>
 
 <!-- The description meta moved to index.html's static head with the
@@ -91,12 +73,7 @@
   CHROME changes, nothing else — and the two bands, the masthead and the footer
   are exactly that. -->
 <main aria-labelledby="page-title">
-  <TextureBand
-    layers={bandTextures}
-    active={texture.file}
-    label={textureLabel(texture, index, set.length, true)}
-    controls
-    onStep={step} />
+  <TextureBand layers={bandTextures} active={texture.file} />
 
   <div class="page-intro">
     <h1 id="page-title">Samuel Naranjo</h1>
@@ -114,10 +91,7 @@
     <PageSection {section} ordinal={String(position + 1).padStart(2, '0')} />
   {/each}
 
-  <TextureBand
-    layers={bandTextures}
-    active={texture.file}
-    label={textureLabel(texture, index, set.length, true)} />
+  <TextureBand layers={bandTextures} active={texture.file} />
 
   <footer class="page-footer">
     <span class="footer-mark">naranjo.online v{__SITE_VERSION__}</span>

@@ -884,8 +884,8 @@ test('the seven repositories are the owner’s, at the addresses the owner gave'
      leaves the ordering claim to the test that exists for it.
 
      The table shows the four most recently pushed (owner directive of
-     2026-09-03, issue 287) and says so in its caption, so the roster it was
-     selected FROM is still counted on the page rather than silently dropped. */
+     2026-09-03, issue 287). The roster count it used to print above them is
+     gone (owner directive, 2026-09-04, issue 292). */
   const byPush = projects.toSorted(
     (left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt)
   );
@@ -901,11 +901,7 @@ test('the seven repositories are the owner’s, at the addresses the owner gave'
         project.description,
       ])
   );
-  assert.equal(
-    captured.caption,
-    `latest ${shownProjectRows} of ${projects.length} · by last push`,
-    'the head must say what the four rows are a selection of, and how large the roster is'
-  );
+  assert.equal(captured.caption, undefined, 'the roster caption came back (owner cut it, issue 292)');
   assert.deepEqual([...projectTableHeads], ['Repository', 'Description', 'Stars', 'Open', 'PRs', 'Pushed']);
   assert.match(ledgerTable, /target="_blank"/);
   assert.match(ledgerTable, /rel="noopener noreferrer"/);
@@ -1154,10 +1150,6 @@ test('the roster is the payload’s: a repository the module list has never hear
   assert.equal(byKey.get('stars').value, '1');
   assert.equal(byKey.get('issues').value, '2');
   assert.equal(byKey.get('pulls').value, '1');
-  /* The caption counts the roster the payload actually served, so a table of
-     one says one of one rather than borrowing the module list's seven (owner
-     directive of 2026-09-03, issue 287). */
-  assert.equal(rendered.caption, 'latest 1 of 1 · by last push');
   /* A repository the capture never saw still renders its live figures. The
      card carried a captured commit total the table has no column for, so what
      the honest-dash rule is read on here is the figure that CAN be absent from
@@ -1189,9 +1181,6 @@ test('a payload name outside the repository grammar refuses the whole payload', 
         .toSorted(),
       `a payload carrying the name ${JSON.stringify(name)} was not refused wholesale`
     );
-    // ...and the caption counts the CAPTURED roster, so the refusal is legible
-    // on the page rather than silently rendering four of an unknown number.
-    assert.equal(rendered.caption, `latest ${shownProjectRows} of ${projects.length} · by last push`);
   }
 });
 

@@ -275,48 +275,49 @@
      DIRECTION is per-palette and that is the whole point — "steps brighter"
      is only correct against a dark card. On the light one the identical ramp
      would step toward its own background and the busiest days would read as
-     the emptiest, so light steps darker instead. Sepia runs warm to sit in
-     its own palette rather than importing the blue one, and dark runs with
-     no hue at all: it is derived from the same white-over-base composite as
-     its surfaces, so the one chromatic thing in the whole mode stays the
-     brand mark. Restraint is the difference between a dark theme and a dim
-     one, and a heatmap is the easiest place to lose it.
+     the emptiest, so light steps darker instead.
 
-     THE RAMP IS MONOCHROME IN EVERY MODE NOW (owner directive, 2026-09-03,
-     issue 287). It used to carry a hue per palette — a blue on light and
-     slate, a warm gold on sepia, with only the true dark running hueless. The
-     ledger design spends colour on the peak alone (--palette-highlight above),
-     so every ramp is now what the dark one always was: its own palette's
-     neutrals walking from the empty tile to the ink. That makes the four modes
-     one picture rather than four, keeps the redundant channel (the count is
-     printed in every cell) doing the identifying, and leaves the highlight the
-     only chromatic thing on the page. The direction is still per palette and
-     still derived rather than assumed — a ramp that stepped brighter against
-     the light card would walk toward its own background and draw the busiest
-     days as the emptiest. The dark ramp is untouched. */
+     THE RAMP IS GREEN IN EVERY MODE (owner directive, 2026-09-04, issue 292:
+     "multiple shades of green and the most bright is bright green"). Level 0
+     stays each palette's own empty tile — a day with nothing in it is not a
+     pale green day — and levels 1..4 walk one green hue away from the card:
+     darker on the light sheet, brighter on the three dark ones, so the
+     busiest days are the ones furthest from the paper in every mode. The
+     PEAK is the brightest green of all and its own token below, rather than
+     the page's highlight: the busiest day of the window is the one cell the
+     owner asked to glow, and a red tile in a green calendar would be a
+     different picture from the one asked for. The true dark keeps its
+     hueless surfaces; the calendar is the one thing in it the owner chose to
+     colour, and the neutrality pin in tests/experience.test.mjs names the
+     ramp as that one exception. The direction is still per palette and still
+     derived rather than assumed. */
   --palette-light-grid-0: #e4e4dc;
-  --palette-light-grid-1: #b7b7ae;
-  --palette-light-grid-2: #85857d;
-  --palette-light-grid-3: #55554f;
-  --palette-light-grid-4: #262624;
+  --palette-light-grid-1: #aadf9f;
+  --palette-light-grid-2: #72cc6c;
+  --palette-light-grid-3: #37b043;
+  --palette-light-grid-4: #158a31;
+  --palette-light-grid-peak: #00d95a;
 
   --palette-dark-grid-0: #2a2a2a;
-  --palette-dark-grid-1: #545454;
-  --palette-dark-grid-2: #7f7f7f;
-  --palette-dark-grid-3: #aaaaaa;
-  --palette-dark-grid-4: #d9d9d9;
+  --palette-dark-grid-1: #17492a;
+  --palette-dark-grid-2: #1f7d3d;
+  --palette-dark-grid-3: #2eb457;
+  --palette-dark-grid-4: #5ee97b;
+  --palette-dark-grid-peak: #8dff97;
 
   --palette-slate-grid-0: #262b36;
-  --palette-slate-grid-1: #454d61;
-  --palette-slate-grid-2: #6b7488;
-  --palette-slate-grid-3: #98a0b2;
-  --palette-slate-grid-4: #cdd3de;
+  --palette-slate-grid-1: #1e4b35;
+  --palette-slate-grid-2: #237f48;
+  --palette-slate-grid-3: #34b762;
+  --palette-slate-grid-4: #6ceb8a;
+  --palette-slate-grid-peak: #9dffb2;
 
   --palette-sepia-grid-0: #3a322b;
-  --palette-sepia-grid-1: #5b4f43;
-  --palette-sepia-grid-2: #85735f;
-  --palette-sepia-grid-3: #ae9880;
-  --palette-sepia-grid-4: #d8c4a8;
+  --palette-sepia-grid-1: #3d5330;
+  --palette-sepia-grid-2: #55823f;
+  --palette-sepia-grid-3: #79b455;
+  --palette-sepia-grid-4: #a9e37e;
+  --palette-sepia-grid-peak: #ccff8a;
 
   /* The token-usage CATEGORY set: identity colors for the per-day breakdown
      (input, output, cache read, cache write, reasoning — slots 1..5, fixed
@@ -382,28 +383,32 @@
      choosing a width of its own.
 
      It is a CENTRED COLUMN, wider than the design it replaces (owner
-     directive, issue 134). Three widths have now been asked for and this is
-     the third: a 30rem maximum was a narrow ribbon down the middle of a
+     directive, issue 134). Four widths have now been asked for and this is
+     the fourth: a 30rem maximum was a narrow ribbon down the middle of a
      desktop, filling the viewport tiled the trackers three across, and the
-     owner wants everything stacked in one container that is wider than the
-     ribbon was. 60rem is that container — double the 30rem card the trackers
-     were designed at, so a tracker keeps room to be a table rather than a
-     list, while prose inside it sets its own reading measure instead of
-     running the full width.
+     owner then wanted everything stacked in one container wider than the
+     ribbon was — 60rem, double the 30rem card the trackers were designed at,
+     so a tracker keeps room to be a table rather than a list.
 
      The consumer wraps it in min(…, 100%), which is what keeps a phone
-     unchanged: min(60rem, 100%) resolves to the viewport on every phone
-     width, so the column is the screen there exactly as it has always been.
+     unchanged: min(…, 100%) resolves to the viewport on every phone width,
+     so the column is the screen there exactly as it has always been.
 
      That later issue arrived (owner directive, 2026-08-24): the reader drags
      the column in and out, and --page-column-width is the ONE token the drag
      writes. Everything below is what makes a written value safe.
 
+     THE PAGE SHIPS AT ITS CEILING (owner directive, 2026-09-04, issue 292:
+     "the longest you can drag it out to while still keeping two borders").
      --page-column-base is the width the page ships at and the width a
-     double-click returns to. It exists as its own token because the drag
-     writes --page-column-width as an inline style on <html>, which is exactly
-     what getComputedStyle then reports — so the shipped default has to be
-     readable from somewhere the override cannot reach.
+     double-click returns to, and it is now the same number as the ceiling: a
+     desktop opens at the widest column the drag can reach — the two gutters
+     and both hit lanes still on screen — and the drag only ever narrows it.
+     It stays its own token because the drag writes --page-column-width as an
+     inline style on <html>, which is exactly what getComputedStyle then
+     reports, so the shipped default has to be readable from somewhere the
+     override cannot reach. A frontend test holds the two numbers equal, so
+     the ceiling cannot move without the default moving with it.
 
      The bounds are tokens for the same reason every other dimension here is:
      they are read by the stylesheet AND by the script that writes the knob,
@@ -426,12 +431,26 @@
      212 — filled width wins over the measure cap), so a reader who drags the
      column out gets the width in the cards as well as in the trackers, and
      100rem is the width at which that stops being a favour. */
-  --page-column-base: 60rem;
+  --page-column-base: 100rem;
   --page-column-width: var(--page-column-base);
   --page-column-min: 18rem;
   --page-column-max: 100rem;
   --page-gutter: 1rem;
   --page-stack-gap: 0.75rem;
+
+  /* THE RAILS' OWN BREAKPOINT (owner directive, 2026-09-04, issue 292): the
+     viewport width from which the two hit lanes are rendered and the column's
+     ceiling gives them their room. It used to be arithmetic — the shipped
+     column plus its two gutters and two lanes, 60 + 2x1 + 2x2.75 = 67.5rem —
+     and it cannot be any more: with the shipped column at the ceiling that
+     sum is 107.5rem, which would leave every laptop an edge-to-edge sheet
+     with nothing to drag. So the number is kept exactly where it was and
+     stated once, here. Under it the sheet is a tablet or a phone and the
+     column is the screen, as it always was; from it the reader gets the lanes
+     and a column to narrow. A media query cannot read a token, so the
+     stylesheet's @media below spells the same number and a frontend test
+     holds the two equal. */
+  --page-rails-from: 67.5rem;
 
   /* The space above the page's name (owner directive, 2026-08-25: "Samuel
      Naranjo" sat hard against the top of the viewport — "it almost feels
@@ -707,7 +726,11 @@
   --square-pad: 0.875rem;
   --square-gap: 0.5rem;
   --ticker-icon: 22px;
-  --ticker-item-pad: 0.5625rem 0.875rem;
+  /* The item padding, stated per axis so the lead's mark can cancel the block
+     half of it and stand the strip's full height (below). */
+  --ticker-item-pad-block: 0.5625rem;
+  --ticker-item-pad-inline: 0.875rem;
+  --ticker-item-pad: var(--ticker-item-pad-block) var(--ticker-item-pad-inline);
   --ticker-dim: 0.35;
 
   /* Motion, as tokens, because how this page moves is as much a dial as how it
@@ -815,15 +838,17 @@
   --grid-cell-3: var(--color-grid-3);
   --grid-cell-4: var(--color-grid-4);
   /* THE PEAK IS NOT A RAMP LEVEL (owner directive, 2026-09-03, issue 287).
-     The busiest day of a window wears the highlight, and it wears it through
-     its own attribute rather than through a sixth bucket — a chromatic step
-     inside the ramp would break the monotone-lightness property the ramp is
-     measured for, and would mean the level a cell is bucketed into depended on
-     whether it happened to be the maximum. Two orthogonal facts, two channels:
-     the LEVEL says how busy the day was, the PEAK says it was the busiest. The
+     The busiest day of a window wears its own ink, and it wears it through
+     its own attribute rather than through a sixth bucket — a step inside the
+     ramp would break the monotone-lightness property the ramp is measured
+     for, and would mean the level a cell is bucketed into depended on whether
+     it happened to be the maximum. Two orthogonal facts, two channels: the
+     LEVEL says how busy the day was, the PEAK says it was the busiest. The
      count is printed in the cell either way, so neither is carried by colour
-     alone. */
-  --grid-cell-peak: var(--color-highlight);
+     alone. The ink is the palette's brightest green (owner directive,
+     2026-09-04, issue 292), read through the same per-mode slot the levels
+     use rather than the page highlight. */
+  --grid-cell-peak: var(--color-grid-peak);
   --usage-cat-0: var(--color-cat-0);
   --usage-cat-1: var(--color-cat-1);
   --usage-cat-2: var(--color-cat-2);
@@ -888,6 +913,7 @@
   --color-grid-2: var(--palette-light-grid-2);
   --color-grid-3: var(--palette-light-grid-3);
   --color-grid-4: var(--palette-light-grid-4);
+  --color-grid-peak: var(--palette-light-grid-peak);
   --color-cat-0: var(--palette-light-cat-0);
   --color-cat-1: var(--palette-light-cat-1);
   --color-cat-2: var(--palette-light-cat-2);
@@ -986,6 +1012,7 @@
     --color-grid-2: var(--palette-dark-grid-2);
     --color-grid-3: var(--palette-dark-grid-3);
     --color-grid-4: var(--palette-dark-grid-4);
+    --color-grid-peak: var(--palette-dark-grid-peak);
     --color-cat-0: var(--palette-dark-cat-0);
     --color-cat-1: var(--palette-dark-cat-1);
     --color-cat-2: var(--palette-dark-cat-2);
@@ -1015,6 +1042,7 @@
   --color-grid-2: var(--palette-dark-grid-2);
   --color-grid-3: var(--palette-dark-grid-3);
   --color-grid-4: var(--palette-dark-grid-4);
+  --color-grid-peak: var(--palette-dark-grid-peak);
   --color-cat-0: var(--palette-dark-cat-0);
   --color-cat-1: var(--palette-dark-cat-1);
   --color-cat-2: var(--palette-dark-cat-2);
@@ -1049,6 +1077,7 @@
   --color-grid-2: var(--palette-slate-grid-2);
   --color-grid-3: var(--palette-slate-grid-3);
   --color-grid-4: var(--palette-slate-grid-4);
+  --color-grid-peak: var(--palette-slate-grid-peak);
   --color-cat-0: var(--palette-slate-cat-0);
   --color-cat-1: var(--palette-slate-cat-1);
   --color-cat-2: var(--palette-slate-cat-2);
@@ -1077,6 +1106,7 @@
   --color-grid-2: var(--palette-sepia-grid-2);
   --color-grid-3: var(--palette-sepia-grid-3);
   --color-grid-4: var(--palette-sepia-grid-4);
+  --color-grid-peak: var(--palette-sepia-grid-peak);
   --color-cat-0: var(--palette-sepia-cat-0);
   --color-cat-1: var(--palette-sepia-cat-1);
   --color-cat-2: var(--palette-sepia-cat-2);
@@ -1306,13 +1336,12 @@ textarea {
    touch-action: none hands the whole gesture to the pointer handlers; without
    it a touch drag scrolls the page instead of resizing the column.
 
-   They start hidden. The rails exist only where there is room for them, and
-   "room" is arithmetic rather than a taste: the shipped column, its two
-   gutters and its two hit lanes, which is 60 + 2x1 + 2x2.75 = 67.5rem. Below
-   that the column already fills the screen and there is nothing to drag it
-   out to, so the handles are not rendered at all (the component asks the same
-   question of matchMedia) and this declaration is the second answer to it —
-   either alone keeps a phone exactly as it has always been. */
+   They start hidden. The rails exist only from --page-rails-from (the token
+   layer above records why that is a stated 67.5rem rather than a sum): below
+   it the sheet is a tablet or a phone whose column is the screen, so the
+   handles are not rendered at all (the component asks the same question of
+   matchMedia) and this declaration is the second answer to it — either alone
+   keeps a phone exactly as it has always been. */
 .column-handle {
   display: none;
   position: absolute;
@@ -1349,8 +1378,8 @@ html[data-column-resizing] {
    the maximum would push the column into the very space its own handles need,
    and the rail would end up drawn over the card instead of beside it — or off
    the edge of the page, which is the horizontal scroll this site does not
-   have. A frontend test recomputes 67.5 from the four tokens it is made of,
-   so the breakpoint cannot drift away from what it means. */
+   have. A frontend test holds this literal equal to --page-rails-from, so
+   the breakpoint cannot drift away from the token the script reads. */
 @media (min-width: 67.5rem) {
   #app > main,
   .page-header {
@@ -1912,12 +1941,12 @@ h1 {
 
 .band {
   position: relative;
-  /* A grid item's automatic minimum is its MIN-CONTENT, and the cycler's
-     label inside this band is one unbreakable line — so the band refused to
+  /* A grid item's automatic minimum is its MIN-CONTENT, and the cycle box
+     this band used to carry was one unbreakable line — the band refused to
      shrink under about 237px and pushed the document sideways below that,
-     measured at 250px. The band is a picture, not a column of text: it has no
-     minimum it needs to keep, and its own `overflow: hidden` already clips the
-     cycler the same way it does at every other narrow width. */
+     measured at 250px. The box is gone (owner directive, 2026-09-04, issue
+     292) and the floor stays: the band is a picture, not a column of text,
+     and it has no minimum it needs to keep. */
   min-inline-size: 0;
   block-size: var(--band-height);
   overflow: hidden;
@@ -1931,8 +1960,9 @@ h1 {
   inset: 0;
 }
 
-/* Every texture is mounted and only one is opaque; the swap is a crossfade
-   under the motion guard and an instant change without it. */
+/* The picture showing and the one it left are mounted and only one is opaque;
+   the swap is a crossfade under the motion guard and an instant change
+   without it. */
 .band-layer {
   position: absolute;
   inset: 0;
@@ -1944,53 +1974,6 @@ h1 {
 
 .band-layer[data-band-active='true'] {
   opacity: 1;
-}
-
-/* The cycle box, flush into the band's own end corner: two arrows around a
-   label, the arrows in ink and the label on paper, so the pair reads as one
-   object stamped on the picture rather than as controls floating over it. */
-.band-cycle {
-  position: absolute;
-  inset-block-end: 0;
-  inset-inline-end: 0;
-  display: flex;
-  align-items: stretch;
-}
-
-.band-step {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  inline-size: var(--control-target);
-  block-size: var(--control-target);
-  padding: 0;
-  border: 0;
-  cursor: pointer;
-  background: var(--ledger-ink);
-  color: var(--ledger-bg);
-}
-
-.band-step:hover {
-  background: var(--ledger-highlight);
-}
-
-.band-step:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: -2px;
-}
-
-.band-label {
-  display: inline-flex;
-  align-items: center;
-  padding-inline: 0.75rem;
-  background: var(--ledger-bg);
-  color: var(--ledger-ink);
-  border-block-start: var(--ledger-heavy) solid var(--ledger-ink);
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  letter-spacing: var(--ledger-label-tracking);
-  text-transform: uppercase;
-  white-space: nowrap;
 }
 
 /* --- The footer ---------------------------------------------------------- */
@@ -2173,16 +2156,6 @@ h1 {
 }
 
 /* --- 02 / the ruled table ------------------------------------------------ */
-
-.table-caption {
-  margin: 0;
-  padding-block: 0.5rem;
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  letter-spacing: var(--ledger-label-tracking);
-  text-transform: uppercase;
-  color: var(--ledger-muted);
-}
 
 .table-head,
 .table-row {
@@ -2668,6 +2641,16 @@ h1 {
 .ticker-strip {
   overflow-x: auto;
   overflow-y: hidden;
+  /* The scroller's own bar, in the sheet's inks. Where scrollbars take space
+     (a mouse on macOS, most of Windows) the strip's bar is part of the strip,
+     and left to the engine it arrived as a dark system track under a light
+     row — owner recording, 2026-09-04, Firefox with the device's motion
+     reduced, which is exactly the state in which this bar is the whole
+     affordance. Thin, and in the page's own two tokens, so it reads as the
+     strip's rule rather than a foreign control. Engines without the property
+     keep their own bar; nothing here is load-bearing. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--ledger-muted) var(--ledger-bg);
   border-block-start: var(--ledger-hairline) solid var(--ledger-rule);
   border-block-end: var(--ledger-hairline) solid var(--ledger-rule);
 }
@@ -2701,20 +2684,20 @@ h1 {
   color: var(--ledger-bg);
 }
 
+/* THE LEAD'S MARK STANDS THE FULL HEIGHT OF THE STRIP (owner directive,
+   2026-09-04, issue 292: the gnome). It is a tall figure, and at the item
+   icon's 22px it was a green sliver; drawn at the lead's whole box instead —
+   the icon plus both block paddings, with a negative margin that gives those
+   paddings back — it is recognisable and the strip's height is untouched,
+   because the mark's outer height is exactly the icon's. The inline size
+   follows the file's own ratio, which the img's width and height attributes
+   state, so the lead reserves its width before the picture arrives. */
 .ticker-mark {
   flex: none;
-}
-
-.ticker-name {
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  letter-spacing: var(--ledger-label-tracking);
-  text-transform: uppercase;
-}
-
-.ticker-lead-line {
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
+  block-size: calc(var(--ticker-icon) + 2 * var(--ticker-item-pad-block));
+  inline-size: auto;
+  margin-block: calc(-1 * var(--ticker-item-pad-block));
+  object-fit: contain;
 }
 
 .ticker-icon {
@@ -2759,16 +2742,6 @@ h1 {
 
 .ticker-item:hover {
   background: var(--ledger-raised);
-}
-
-/* The attribution the artwork travels with, under the strip that carries it. */
-.ticker-notice {
-  margin: 0;
-  padding-block: 0.5rem;
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  line-height: 1.45;
-  color: var(--ledger-muted);
 }
 
 /* --- The phone (owner's first requirement) ------------------------------- */
@@ -3010,8 +2983,7 @@ h1 {
   .table-link,
   .ledger-link,
   .page-mark,
-  .section-link,
-  .band-step {
+  .section-link {
     transition:
       background-color var(--ledger-hover),
       color var(--ledger-hover);

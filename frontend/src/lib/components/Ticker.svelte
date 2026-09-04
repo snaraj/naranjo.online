@@ -1,6 +1,8 @@
 <!-- Ticker is the scrolling strip (owner directive, 2026-09-03, issue 287): a
   ruled band whose items travel from right to left, led by an inverted item
-  carrying the collection's own name and totals.
+  carrying the collection's figure and nothing else — the name and totals it
+  used to print were cut as noise (owner directive, 2026-09-04, issue 292);
+  the panel head above already names the collection.
 
   THE ITEMS ARE WRITTEN TWICE AND THAT IS THE MECHANISM. A strip that
   translates from 0 to -50% of a row containing its content twice is seamless
@@ -16,10 +18,6 @@
   asked for less motion gets instead. That is why the base is the honest one:
   the floor is stated in the direction that degrades safely.
 
-  THE ARTWORK'S NOTICE RENDERS WHEREVER THE ARTWORK DOES. It is passed in as
-  data, word for word, and it is under the strip rather than somewhere else on
-  the page for exactly that reason.
-
   IT NAMES NOTHING. An item is an icon, a figure and its detail; the strip's
   own name and its lead line are the envelope's, served by the origin. No
   domain word of any kind lives in this file — a sweep refuses one — which is
@@ -33,7 +31,7 @@
   import FeedCard from './FeedCard.svelte';
   import PanelShell from './PanelShell.svelte';
 
-  let { title, status, generatedAt, lead, items, emptyNote, staleNote, notice, label }: TickerProps =
+  let { title, status, generatedAt, items, emptyNote, staleNote, label, mark }: TickerProps =
     $props();
 
   /* ONE DETAIL FOR THE WHOLE STRIP, and the reason is not economy — it is
@@ -104,29 +102,20 @@
           {#each [false, true] as duplicate (duplicate)}
             <div class="ticker-lane" aria-hidden={duplicate}>
               <span class="ticker-lead">
-                <!-- The mark is drawn rather than fetched: an inline SVG in the
-                  page's own two inks, so it follows every reading mode and
-                  costs no request under a CSP that admits no data: URI. -->
-                <svg class="ticker-mark" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
-                  <path d="M10 1.2 15.2 10.4H4.8z" fill="var(--color-highlight)" />
-                  <circle
-                    cx="10"
-                    cy="12.6"
-                    r="4.2"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.4" />
-                  <path
-                    d="M7.6 14.6q2.4 2.6 4.8 0"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.2"
-                    stroke-linecap="round" />
-                  <circle cx="8.6" cy="12.1" r="0.75" fill="currentColor" />
-                  <circle cx="11.4" cy="12.1" r="0.75" fill="currentColor" />
-                </svg>
-                <span class="ticker-name">{title}</span>
-                <span class="ticker-lead-line">{lead}</span>
+                <!-- The mark is the collection's own figure, handed in as data
+                  by the binding layer with its file's dimensions, so the lead
+                  reserves the box before the picture arrives (owner directive,
+                  2026-09-04, issue 292). Decorative: the name beside it is the
+                  accessible one. -->
+                {#if mark}
+                  <img
+                    class="ticker-mark"
+                    src={mark.url}
+                    alt=""
+                    width={mark.width}
+                    height={mark.height}
+                    decoding="async" />
+                {/if}
               </span>
               {#each items as item, index (item.key)}
                 <span
@@ -167,6 +156,5 @@
         anchor={hoveredItem}
       />
     {/if}
-    <p class="ticker-notice">{notice}</p>
   </FeedCard>
 </PanelShell>

@@ -1,24 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="SN.">
   <title>SN.</title>
-  <!-- The site's own mark, the same one og.png carries, inverted so it brings
-       its own field: an icon is painted at 16 CSS pixels into a browser chrome
-       whose colour this file cannot know, and a white-ground mark disappears
-       into a light tab strip while unfielded letterforms are too thin to
-       survive the rasteriser. Two inks, no gradient, no font file.
-
-       textLength with lengthAdjust pins the monogram to an exact 44-unit run,
-       so the mark occupies the same box whether the renderer resolves this
-       stack to Helvetica, Arial, or a Linux substitute. -->
-  <rect width="64" height="64" rx="10" fill="#000000" />
-  <text
-    x="32"
-    y="45"
-    text-anchor="middle"
-    textLength="44"
-    lengthAdjust="spacingAndGlyphs"
-    font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-    font-size="36"
-    font-weight="700"
-    fill="#ffffff"
-  >SN.</text>
+  <!-- The site's mark as letters alone (owner directive, 2026-09-04, issue
+       292): "SN." with no field behind it, the letters standing in relief.
+       The outlines are Archivo at weight 900 — the wordmark's own face,
+       extracted from the vendored variable font so no renderer's font stack
+       decides the shape — set with the wordmark's -0.03em tracking. Relief
+       is what lets an unfielded mark survive both a light and a dark tab
+       strip at 16 CSS pixels: the face is the sheet's paper and the extrusion
+       is its ink, five steps down and right, so on a dark strip the paper
+       face reads and on a light one the ink body does. Two inks, no
+       gradient, no font file, one path reused. The extrusion is drawn back
+       to front so each step sits under the one before it. -->
+  <defs>
+    <path id="m" transform="translate(-1.5 41.3) scale(0.0342 -0.0342)" d="M383 -12Q312 -12 250.5 -1.5Q189 9 142.5 34.5Q96 60 69.5 105.5Q43 151 43 220Q43 222 43 225.5Q43 229 44 233H253Q252 229 252 225.5Q252 222 252 219Q252 189 266 173Q280 157 305.5 151.5Q331 146 363 146Q375 146 388.5 146.5Q402 147 414.5 149.5Q427 152 437.5 157Q448 162 454 170.5Q460 179 460 192Q460 211 443 222Q426 233 397 241Q368 249 332 256Q296 263 257 272.5Q218 282 182 297Q146 312 117 335.5Q88 359 71 394.5Q54 430 54 480Q54 540 79 582Q104 624 147.5 650Q191 676 246.5 688Q302 700 363 700Q425 700 479.5 687.5Q534 675 576 649Q618 623 642 583Q666 543 667 488V476H460V480Q460 498 451 514Q442 530 422.5 540Q403 550 371 550Q341 550 320.5 544Q300 538 290 527.5Q280 517 280 505Q280 486 297 474Q314 462 343 454Q372 446 408 439Q444 432 483 423.5Q522 415 558 401Q594 387 623 364.5Q652 342 669 309Q686 276 686 228Q686 143 646.5 90Q607 37 538.5 12.5Q470 -12 383 -12ZM766 0V688H954L1168 441Q1177 431 1192 412Q1207 393 1222.5 373.5Q1238 354 1246 342L1251 344Q1250 372 1250 399.5Q1250 427 1250 441V688H1451V0H1264L1023 275Q1006 295 994 311.5Q982 328 971 343L966 341Q967 322 967 303Q967 284 967 275V0ZM1556 0V199H1768V0Z" />
+  </defs>
+  <g fill="#121212">
+    <use href="#m" x="5" y="5" />
+    <use href="#m" x="4" y="4" />
+    <use href="#m" x="3" y="3" />
+    <use href="#m" x="2" y="2" />
+    <use href="#m" x="1" y="1" />
+  </g>
+  <use href="#m" fill="#faf9f5" />
 </svg>

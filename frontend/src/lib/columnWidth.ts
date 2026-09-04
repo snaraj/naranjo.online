@@ -58,6 +58,11 @@ export interface ColumnTokens {
   max: number;
   gutter: number;
   rail: number;
+  // The viewport width the rails exist from. A stated token rather than a sum
+  // since the shipped column became the ceiling (owner directive, 2026-09-04,
+  // issue 292); styles.css records why the old arithmetic would strand a
+  // laptop.
+  railsFrom: number;
   rootFontPx: number;
 }
 
@@ -128,38 +133,45 @@ export function readColumnTokens(host: ColumnHost): ColumnTokens | null {
   if (!Number.isFinite(rootFontPx) || rootFontPx <= 0) {
     return null;
   }
-  const names = ['--page-column-base', '--page-column-min', '--page-column-max', '--page-gutter', '--page-rail-size'];
+  const names = [
+    '--page-column-base',
+    '--page-column-min',
+    '--page-column-max',
+    '--page-gutter',
+    '--page-rail-size',
+    '--page-rails-from'
+  ];
   const read = names.map((name) => lengthRem(host.tokenValue(name), rootFontPx));
   if (read.some((value) => value === null)) {
     return null;
   }
-  const [base, min, max, gutter, rail] = read as number[];
+  const [base, min, max, gutter, rail, railsFrom] = read as number[];
   // A layer that says the floor is above the ceiling is a broken layer, not a
   // puzzle to solve at runtime.
   if (min > max) {
     return null;
   }
-  return { base, min, max, gutter, rail, rootFontPx };
+  return { base, min, max, gutter, rail, railsFrom, rootFontPx };
 }
 
-// railsBreakpointRem is the viewport width at which the rails first fit: the
-// shipped column plus its two gutters plus its two hit lanes. It is COMPUTED
-// from the tokens rather than written down, and the frontend suite compares it
-// against the one media query in styles.css, so the two cannot drift.
+// railsBreakpointRem is the viewport width at which the rails first exist. It
+// is READ from the token layer rather than written down here, and the frontend
+// suite compares it against the one media query in styles.css, so the two
+// cannot drift.
 export function railsBreakpointRem(tokens: ColumnTokens): number {
-  return round(tokens.base + 2 * tokens.gutter + 2 * tokens.rail);
+  return round(tokens.railsFrom);
 }
 
 // railsMediaQuery builds the query the component listens to, from the same
-// arithmetic, so the script and the stylesheet ask one question rather than
-// two questions that agree today.
+// token, so the script and the stylesheet ask one question rather than two
+// questions that agree today.
 export function railsMediaQuery(tokens: ColumnTokens): string {
   return `(min-width: ${railsBreakpointRem(tokens)}rem)`;
 }
 
 // railsFit answers that question for a given viewport. Below it there are no
-// handles and no stored width in force: the column is min(60rem, 100%), which
-// is the phone rendering this page has always had.
+// handles and no stored width in force: the column is min(…, 100%), which is
+// the phone rendering this page has always had.
 export function railsFit(tokens: ColumnTokens, viewportPx: number): boolean {
   return viewportPx / tokens.rootFontPx >= railsBreakpointRem(tokens);
 }
@@ -330,7 +342,7 @@ export function writeStoredColumn(store: ColumnStore | null, rem: number): void 
 // at all — an unreadable token layer, or a viewport too narrow for the rails.
 // The narrow case REMOVES any inline value rather than clamping it down,
 // because below the breakpoint the correct column is the shipped
-// min(60rem, 100%) that every phone has always had: a preference chosen on a
+// min(…, 100%) that every phone has always had: a preference chosen on a
 // monitor is not a preference about a phone, and applying a clamped version of
 // it there would narrow a screen that was already exactly right.
 export function applyStoredColumnWidth(host: ColumnHost, store: ColumnStore | null): number | null {

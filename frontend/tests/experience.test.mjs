@@ -700,7 +700,14 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
     // equal — which is the whole claim the mode makes and the one a repaint
     // toward navy would have to break to get past here.
     '#121212', '#1e1e1e', '#2e2e2e', '#383838', '#6c6c6c', '#a0a0a0', '#e0e0e0',
-    '#2a2a2a', '#545454', '#7f7f7f', '#aaaaaa', '#d9d9d9', // its hueless heatmap
+    '#2a2a2a', // its empty heatmap tile, the one hueless step the green ramp keeps
+    // The green calendar (owner directive, 2026-09-04, issue 292): four
+    // ramps of four steps plus each palette's own peak, every value its own
+    // hex so a repaint of one mode cannot quietly restate another's.
+    '#aadf9f', '#72cc6c', '#37b043', '#158a31', '#00d95a', // light greens + peak
+    '#17492a', '#1f7d3d', '#2eb457', '#5ee97b', '#8dff97', // dark greens + peak
+    '#1e4b35', '#237f48', '#34b762', '#6ceb8a', '#9dffb2', // slate greens + peak
+    '#3d5330', '#55823f', '#79b455', '#a9e37e', '#ccff8a', // sepia greens + peak
     '#161a23', '#1d222d', '#2a3040', '#5f6a84', '#b9c2d4', // slate ramp
     '#1b1612', '#28221d', '#312a25', '#3e362f', '#7b6d60', '#b79d7e', '#f4eaea', // browntown seeds
     // The token-usage category sets (issue #142): four modes times six
@@ -721,6 +728,12 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
   // a hex list alone cannot see one arriving in a later repaint.
   for (const [name, value] of Object.entries(paletteLiterals(styles))) {
     if (!name.startsWith('--palette-dark-')) continue;
+    // The ONE exception, named: the commits calendar is green in every mode
+    // (owner directive, 2026-09-04, issue 292), the true dark's included. Its
+    // surfaces, inks, borders and category steps stay hueless; only the
+    // ramp's four levels and its peak carry the hue, and the empty tile
+    // (level 0) is still a grey the sweep below checks.
+    if (/^--palette-dark-grid-(?:[1-4]|peak)$/.test(name)) continue;
     const [red, green, blue] = [1, 3, 5].map((offset) => value.slice(offset, offset + 2));
     assert.ok(
       red === green && green === blue,

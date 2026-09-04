@@ -977,6 +977,6 @@ Structural promises of the panels subsystem, pinned by
   with its reviewed license; any webfont lands together with its license
   in `frontend/src/assets/fonts/` (currently a placeholder `.gitkeep` —
   no webfont has shipped yet). Where Jagex game art or intellectual property is
-  used — the OSRS boss-log panel — the exact Fan Content Policy notice
-  recorded in `ATTRIBUTION.md` accompanies it, word for word, pinned by a
-  frontend test wherever it renders.
+  used — the OSRS boss-log panel — the exact Fan Content Policy notice is
+  recorded in `ATTRIBUTION.md`, word for word, pinned by a frontend test. The
+  page itself does not print it (owner directive, 2026-09-04, issue #292).

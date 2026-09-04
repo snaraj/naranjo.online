@@ -20,13 +20,11 @@
   import FeedCard from './FeedCard.svelte';
   import PanelShell from './PanelShell.svelte';
 
-  let { title, status, generatedAt, heads, rows, caption, emptyNote, staleNote }: LedgerTableProps =
-    $props();
+  let { title, status, generatedAt, heads, rows, emptyNote, staleNote }: LedgerTableProps = $props();
 </script>
 
 <PanelShell {title} {status} {generatedAt} note={staleNote}>
   <FeedCard variant="table">
-    <p class="table-caption">{caption}</p>
     {#if rows.length === 0}
       <p class="table-note">{emptyNote}</p>
     {:else}

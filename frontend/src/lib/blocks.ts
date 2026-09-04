@@ -303,8 +303,6 @@ export type LedgerTableProps = {
   /* The column heads, in column order, exactly as they render. */
   readonly heads: readonly string[];
   readonly rows: readonly LedgerTableRow[];
-  /* The head's right-hand line — what this table is a selection of. */
-  readonly caption: string;
   readonly emptyNote: string;
   readonly staleNote?: string;
 };
@@ -445,16 +443,21 @@ export type TickerProps = {
   readonly title: string;
   readonly status: PanelStatus;
   readonly generatedAt?: string;
-  /* The lead item's own line — the totals, already written. */
-  readonly lead: string;
   readonly items: readonly TickerItem[];
   readonly emptyNote: string;
   readonly staleNote?: string;
-  /* The attribution the artwork travels with, rendered word for word wherever
-   * that artwork renders. Data, so the component quotes nothing. */
-  readonly notice: string;
   /* The strip's accessible name. */
   readonly label: string;
+  /* The lead item's picture, if the collection has one: a same-origin URL the
+   * binding layer resolved, with the file's own dimensions so the lead can
+   * reserve the box. Decorative — the title beside it is the name. */
+  readonly mark?: TickerMark;
+};
+
+export type TickerMark = {
+  readonly url: string;
+  readonly width: number;
+  readonly height: number;
 };
 
 /* --- MediaGallery: one visible frame, prev/next, a click-to-enlarge lightbox

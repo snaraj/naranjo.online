@@ -7,7 +7,6 @@ import { bossInitials, bossSlug } from '../src/lib/bossIcons.ts';
 import {
   bossDetail,
   bossLogFallbackTitle,
-  bossLogFanContentNotice,
   bossLogLoadingNote,
   bossLogPanelId,
   bossLogStripLabel,
@@ -581,33 +580,16 @@ test('the ticker renders the tallies through the tested renderers, formatting no
   assert.equal(bossLogPanelId, 'boss-log');
 });
 
-/* THE ATTRIBUTION TRAVELS WITH THE ARTWORK (AGENTS.md, "Attribution for
+/* THE ATTRIBUTION LIVES IN ATTRIBUTION.md (AGENTS.md, "Attribution for
  * third-party assets"): the icons are Jagex intellectual property used as fan
- * content, so the exact notice renders wherever they render. It is DATA on the
- * props — the component quotes nothing — and it is compared byte for byte with
- * the document it is quoted from. */
-test('the strip renders the fan-content notice word for word, under the art it covers', {
-  skip: reducedContextNote,
-}, async () => {
-  const attribution = await read('../../ATTRIBUTION.md');
-  const quoted = attribution
-    .slice(attribution.indexOf('> Created using intellectual property'))
-    .split('\n\n')[0]
-    .split('\n')
-    .map((line) => line.replace(/^>\s*/, '').trim())
-    .join(' ')
-    .trim();
-  assert.equal(
-    bossLogFanContentNotice,
-    quoted,
-    'the rendered notice and ATTRIBUTION.md have drifted apart; this text is quoted, never paraphrased'
-  );
-  assert.equal(bossTickerFixture().notice, bossLogFanContentNotice);
-  assert.match(ticker, /<p class="ticker-notice">\{notice\}<\/p>/);
-  assert.ok(
-    !ticker.includes('Jagex'),
-    'the component spells the notice itself; it is data, so there is one copy and it is the constant'
-  );
+ * content, and the exact notice is held there word for word by the sourcing
+ * test below. The page stopped printing it under the strip (owner directive,
+ * 2026-09-04, issue 292), so no rendered copy exists to drift — the component
+ * names no vendor and carries no notice at all. */
+test('the strip prints no attribution line and names no vendor', () => {
+  assert.equal(bossTickerFixture().notice, undefined, 'the strip grew a notice prop again');
+  assert.doesNotMatch(ticker, /ticker-notice/, 'the strip renders an attribution line the owner cut');
+  assert.ok(!ticker.includes('Jagex'), 'the component names a vendor; names live in data, never here');
 });
 
 // The owner reviewed the vendored boss art and locked it exactly as rendered
@@ -851,14 +833,14 @@ test('the panel heading is data the origin serves, not a string in either tree',
     'GitHub'
   );
   assert.equal(commitLogProps([null, null]).title, 'Version-control activity');
-  /* The boss panel's heading is the same arrangement and it MOVED into view
-     with the ledger (owner directive, 2026-09-03, issue 287): the strip's lead
-     item renders the envelope's own title, so the served string is now the
-     visible name of the collection rather than a card heading nobody reads.
-     That makes the rule stricter to break, not looser — the component is swept
-     for the word and the config is what carries it. */
+  /* The boss panel's heading is the same arrangement: the envelope's own
+     title is the panel head over the strip, and the strip's lead prints no
+     copy of it (owner directive, 2026-09-04, issue 292 — the lead's name and
+     totals line were cut as noise). The component is swept for the word and
+     the config is what carries it. */
   assert.equal(fetchConfig.titles?.['boss-log'], 'Old School RuneScape');
-  assert.match(ticker, /<span class="ticker-name">\{title\}<\/span>/);
+  assert.match(ticker, /<PanelShell \{title\}/);
+  assert.doesNotMatch(ticker, /ticker-name|ticker-lead-line/, 'the lead grew its text back');
   // And the Go source keeps the neutral name as its fallback, so a config
   // that fails to load degrades to a truthful heading rather than a blank.
   const panelConfig = await read('../../internal/panels/config.go');
@@ -1384,7 +1366,7 @@ test('the boss panel displays no account name anywhere', () => {
   assert.match(ticker, /<div class="ticker-strip" aria-label=\{label\} tabindex="0" role="group"/);
   assert.equal(bossTickerFixture().label, bossLogStripLabel);
   assert.ok(!bossLogStripLabel.includes('Roll'), 'the strip name must not carry the account');
-  // The lead item renders the ENVELOPE's title, so even the collection's own
+  // The panel head renders the ENVELOPE's title, so even the collection's own
   // name is origin-served data rather than a string in this tree.
   assert.equal(bossTickerFixture().title, 'Old School RuneScape');
 });

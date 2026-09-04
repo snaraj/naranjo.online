@@ -517,11 +517,10 @@ export function projectsStaleNote(
  * The ledger table (owner directive, 2026-09-03, issue 287)
  *
  * The section became a ruled table of the four most recently pushed
- * repositories rather than a feed of cards, and the head says so: "latest 4 of
- * <total> · by last push", where the total is the roster the payload actually
- * served — not a constant, and not the length of the captured list, because
- * the number a reader is told the four were chosen FROM has to be the number
- * that was really there.
+ * repositories rather than a feed of cards. The head used to count the roster
+ * they were chosen from ("latest 4 of <total> · by last push"); the owner cut
+ * that line (2026-09-04, issue 292), so the table shows its four and says
+ * nothing about the rest.
  *
  * Everything the cards proved stays proved. The roster is still the payload's,
  * the order is still derived from each row's effective instant, the captured
@@ -550,9 +549,7 @@ export const projectTableHeads: readonly string[] = [
 ];
 
 /* How many rows the table shows. The owner asked for the four most recent
- * (2026-09-03); the rest of the roster is still counted in the caption, so the
- * page says what it is showing a selection OF rather than quietly showing a
- * selection. */
+ * (2026-09-03). */
 export const shownProjectRows = 4;
 
 export const projectsEmptyNote = 'no repositories reported';
@@ -651,7 +648,6 @@ export function projectTableProps(envelope: PanelEnvelope | null, now?: number):
     generatedAt: envelope?.generatedAt,
     heads: projectTableHeads,
     rows,
-    caption: `latest ${rows.length} of ${ordered.length} · by last push`,
     emptyNote: projectsEmptyNote,
     staleNote: projectsStaleNote(envelope, now)
   };
