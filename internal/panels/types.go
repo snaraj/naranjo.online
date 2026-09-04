@@ -725,6 +725,9 @@ const (
 	// roleCodingProjects is the whole group of per-repository metadata
 	// documents, one budget for the round rather than one per repository.
 	roleCodingProjects = "coding-projects"
+	// roleTokenUsage is the whole multi-source usage round. One reservation
+	// keeps source windows atomic instead of letting per-source gates drift.
+	roleTokenUsage = "token-usage"
 )
 
 // panelFetchSpecs carries the per-kind fetch descriptions. EXACTLY ONE field
@@ -893,6 +896,12 @@ type vcsCalendarFetchSpec struct {
 	KeyHeader string `json:"keyHeader"`
 	// KeyPrefix is prepended to the credential in the header.
 	KeyPrefix string `json:"keyPrefix"`
+	// AuthenticatedMinIntervalMinutes is the shorter rate budget used only
+	// while KeyEnvName resolves to a credential. Zero keeps the public
+	// calendar's interval. Keeping the two budgets separate means losing the
+	// Secret slows the producer down before it falls back to an anonymous
+	// request instead of spending an authenticated budget without a key.
+	AuthenticatedMinIntervalMinutes int `json:"authenticatedMinIntervalMinutes"`
 	// Headers holds the static request headers, held to
 	// vcsCalendarHeaderAllowlist.
 	Headers map[string]string `json:"headers"`
@@ -999,6 +1008,10 @@ type codingProjectsFetchSpec struct {
 	ContentType string `json:"contentType"`
 	// MinIntervalMinutes is the rate budget applied to the whole round.
 	MinIntervalMinutes int `json:"minIntervalMinutes"`
+	// AuthenticatedMinIntervalMinutes is the shorter whole-round budget used
+	// only when KeyEnvName resolves to a credential. Zero means the public
+	// budget applies in both modes.
+	AuthenticatedMinIntervalMinutes int `json:"authenticatedMinIntervalMinutes"`
 }
 
 // Bounds on the repository-metadata producer. Every one of them refuses rather
@@ -1035,9 +1048,11 @@ const (
 	maxProjectAge = 40 * 365 * 24 * time.Hour
 )
 
-// vcsCommitsFetchSpec configures the recent-commit producer: one PUBLIC,
-// UNAUTHENTICATED commit-list document per repository, each named by a
-// complete literal URL in configuration.
+// vcsCommitsFetchSpec configures the recent-commit producer: one public
+// commit-list document per repository, each named by a complete literal URL
+// in configuration. Its optional credential changes only rate headroom; an
+// absent credential reads the identical public documents on the conservative
+// public budget.
 //
 // Complete literal URLs are the load-bearing detail. The obvious alternative —
 // discovering repositories from an upstream activity document and building
@@ -1052,6 +1067,14 @@ type vcsCommitsFetchSpec struct {
 	// Headers holds static request headers, held to the same public-producer
 	// allowlist the calendar's are.
 	Headers map[string]string `json:"headers"`
+	// KeyEnvName optionally names the environment variable holding a
+	// credential used only for rate headroom. The value is read at attempt
+	// time and never stored on the source.
+	KeyEnvName string `json:"keyEnvName"`
+	// KeyHeader is the request header that carries the credential.
+	KeyHeader string `json:"keyHeader"`
+	// KeyPrefix is prepended to it in the header.
+	KeyPrefix string `json:"keyPrefix"`
 	// MaxBytes optionally tightens the shared body cap for these endpoints.
 	MaxBytes int64 `json:"maxBytes"`
 	// ContentType is the exact media type each answer must declare.
@@ -1059,6 +1082,10 @@ type vcsCommitsFetchSpec struct {
 	// MinIntervalMinutes is the rate budget applied to the whole group: the
 	// shortest gap between two rounds of attempts across every source.
 	MinIntervalMinutes int `json:"minIntervalMinutes"`
+	// AuthenticatedMinIntervalMinutes is the shorter group budget used only
+	// while KeyEnvName resolves to a credential. Zero retains the public
+	// budget in both modes.
+	AuthenticatedMinIntervalMinutes int `json:"authenticatedMinIntervalMinutes"`
 	// Max caps how many commit rows the merged list serves. It can only ever
 	// tighten maxServedCommits.
 	Max int `json:"max"`
@@ -1079,6 +1106,10 @@ type vcsCommitSourceSpec struct {
 type tokenUsageFetchSpec struct {
 	// Sources lists the per-vendor fetch descriptions.
 	Sources []usageSourceSpec `json:"sources"`
+	// MinIntervalMinutes is the rate budget for one complete multi-source
+	// round. A single group budget prevents separately timed sources from
+	// alternately replacing one another with snapshot fallbacks.
+	MinIntervalMinutes int `json:"minIntervalMinutes"`
 }
 
 // usageSourceSpec describes one token-usage source entirely as data: where
@@ -1654,10 +1685,10 @@ type Registry struct {
 	byID map[string]*panelState
 	// refreshStarted guards StartRefresh against double starts.
 	refreshStarted atomic.Bool
-	// logger narrates the background refresh loops — per-cycle outcomes at
-	// info, failures at warn, per-attempt fetch detail at debug. Never nil:
-	// construction defaults it to discardLogger, and it never logs a URL, a
-	// credential, or a payload byte.
+	// logger narrates the background refresh loops — per-cycle outcomes and
+	// data-root recoveries at info, failures at warn, per-attempt fetch detail
+	// at debug. Never nil: construction defaults it to discardLogger, and it
+	// never logs a URL, a credential, or a payload byte.
 	logger *slog.Logger
 	// dataRootStarted guards StartDataRoot against double starts, exactly as
 	// refreshStarted guards the fetch loops.
@@ -1726,11 +1757,11 @@ const (
 	// hostile root can present exactly one candidate, this one.
 	dataRootSeriesName = "token-usage.series.enc"
 
-	// dataRootTTL is the re-read cadence. The workstation pushes on the
-	// order of hourly and the volume projection updates within about a
-	// minute of the cluster object, so five minutes keeps the panel at most
-	// minutes behind a push at negligible read cost.
-	dataRootTTL = 5 * time.Minute
+	// dataRootTTL is the re-read cadence. This path performs one bounded local
+	// file read and no egress, so it can sit at the owner's 30-second freshness
+	// floor: a projected volume update is admitted on the first or second wake
+	// instead of waiting behind another shared refresh poll.
+	dataRootTTL = 30 * time.Second
 
 	// maxSealedSeriesBytes caps one sealed series file read, and it is THE
 	// pipeline's single payload ceiling rather than this stage's private

@@ -80,4 +80,4 @@ plutil -lint "$AGENT" >/dev/null
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$AGENT"
 
-echo "installed $LABEL (hourly + at load); logs in $LOG_DIR"
+echo "installed $LABEL (every minute + at load); logs in $LOG_DIR"

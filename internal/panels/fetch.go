@@ -534,6 +534,18 @@ func (c FetchConfig) endpointInterval(minutes int) time.Duration {
 	return time.Duration(minutes) * time.Minute
 }
 
+// endpointIntervalForCredential selects a fast budget only when the value
+// that buys its authenticated rate headroom is present for THIS attempt. An
+// absent or rotated-away key therefore falls back to the public interval
+// before a reservation is taken; it can never spend the fast budget on an
+// anonymous request.
+func (c FetchConfig) endpointIntervalForCredential(publicMinutes, authenticatedMinutes int, credential string) time.Duration {
+	if credential != "" && authenticatedMinutes > 0 {
+		return c.endpointInterval(authenticatedMinutes)
+	}
+	return c.endpointInterval(publicMinutes)
+}
+
 // refresh performs one complete live refresh for this source: fetch,
 // strictly validate, and map. It is called only from the background loop —
 // never from a request path — and returns the payload to serve, errNothingDue
@@ -600,7 +612,7 @@ func (s *FetchSource) refreshActivity(ctx context.Context, doer fetchDoer, env f
 	if err != nil {
 		return loadedPayload{}, err
 	}
-	commits, commitsAt, commitsDue, commitsFresh := s.commitSection(ctx, doer, spec.Commits, now)
+	commits, commitsAt, commitsDue, commitsFresh := s.commitSection(ctx, doer, env, spec.Commits, now)
 	if !calendarDue && !commitsDue {
 		return loadedPayload{}, errNothingDue
 	}
@@ -627,7 +639,14 @@ func (s *FetchSource) refreshActivity(ctx context.Context, doer fetchDoer, env f
 // otherwise. A cycle where the calendar is not due and nothing has ever been
 // fetched has nothing to build from, and says so.
 func (s *FetchSource) calendarSection(ctx context.Context, doer fetchDoer, env func(string) string, spec *vcsActivityFetchSpec, now time.Time) (json.RawMessage, time.Time, bool, error) {
-	if !s.reserve(roleVCSCalendar, now, s.config.endpointInterval(spec.MinIntervalMinutes)) {
+	credential := ""
+	authenticatedMinutes := 0
+	if spec.Calendar != nil {
+		credential = env(spec.Calendar.KeyEnvName)
+		authenticatedMinutes = spec.Calendar.AuthenticatedMinIntervalMinutes
+	}
+	interval := s.config.endpointIntervalForCredential(spec.MinIntervalMinutes, authenticatedMinutes, credential)
+	if !s.reserve(roleVCSCalendar, now, interval) {
 		s.mu.Lock()
 		retained, at := s.calendar, s.calendarAt
 		s.mu.Unlock()
@@ -636,7 +655,7 @@ func (s *FetchSource) calendarSection(ctx context.Context, doer fetchDoer, env f
 		}
 		return retained, at, false, nil
 	}
-	mapped, err := s.readCalendar(ctx, doer, env, spec, now)
+	mapped, err := s.readCalendar(ctx, doer, credential, spec, now)
 	if err != nil {
 		s.coolOnRateLimit(ctx, roleVCSCalendar, now, err)
 		return nil, time.Time{}, false, err
@@ -664,12 +683,13 @@ func (s *FetchSource) calendarSection(ctx context.Context, doer fetchDoer, env f
 //     count exactly when the upstream is already unhappy. The round fails, the
 //     retained calendar keeps serving as stale, and the next round tries
 //     again: the same treatment every other producer's failure gets.
-//   - The credential is read HERE, moments before the request, and lives in
-//     one local and one request header. It is never stored on the source,
-//     never logged, and never part of any served value.
-func (s *FetchSource) readCalendar(ctx context.Context, doer fetchDoer, env func(string) string, spec *vcsActivityFetchSpec, now time.Time) (json.RawMessage, error) {
+//   - The credential was read once by calendarSection immediately before its
+//     rate reservation, and arrives here only as a local string. That binds
+//     the fast cadence to the same value the request actually sends. It is
+//     never stored on the source, logged, or part of any served value.
+func (s *FetchSource) readCalendar(ctx context.Context, doer fetchDoer, credential string, spec *vcsActivityFetchSpec, now time.Time) (json.RawMessage, error) {
 	if credentialed := spec.Calendar; credentialed != nil {
-		if key := env(credentialed.KeyEnvName); key != "" {
+		if credential != "" {
 			payload, err := calendarRequestBody(credentialed.Query, now)
 			if err != nil {
 				return nil, err
@@ -679,7 +699,7 @@ func (s *FetchSource) readCalendar(ctx context.Context, doer fetchDoer, env func
 				endpoint:    credentialed.Endpoint,
 				headers:     credentialed.Headers,
 				keyHeader:   credentialed.KeyHeader,
-				keyValue:    credentialed.KeyPrefix + key,
+				keyValue:    credentialed.KeyPrefix + credential,
 				maxBytes:    credentialed.MaxBytes,
 				contentType: credentialed.ContentType,
 				payload:     payload,
@@ -762,7 +782,12 @@ func calendarRequestBody(query string, now time.Time) ([]byte, error) {
 //     and current, so the envelope stays ok.
 func (s *FetchSource) refreshProjects(ctx context.Context, doer fetchDoer, env func(string) string, now time.Time) (loadedPayload, error) {
 	spec := s.specs.projects
-	if !s.reserve(roleCodingProjects, now, s.config.endpointInterval(spec.MinIntervalMinutes)) {
+	credential := ""
+	if spec.KeyEnvName != "" {
+		credential = env(spec.KeyEnvName)
+	}
+	interval := s.config.endpointIntervalForCredential(spec.MinIntervalMinutes, spec.AuthenticatedMinIntervalMinutes, credential)
+	if !s.reserve(roleCodingProjects, now, interval) {
 		return loadedPayload{}, errNothingDue
 	}
 	logger := s.log()
@@ -770,10 +795,8 @@ func (s *FetchSource) refreshProjects(ctx context.Context, doer fetchDoer, env f
 		source: roleCodingProjects, headers: spec.Headers, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
 		conditional: true,
 	}
-	if spec.KeyEnvName != "" {
-		if key := env(spec.KeyEnvName); key != "" {
-			request.keyHeader, request.keyValue = spec.KeyHeader, spec.KeyPrefix+key
-		}
+	if credential != "" {
+		request.keyHeader, request.keyValue = spec.KeyHeader, spec.KeyPrefix+credential
 	}
 	listingRequest := request
 	listingRequest.endpoint = spec.ListingEndpoint
@@ -861,11 +884,16 @@ func (s *FetchSource) openPullsByRepo(ctx context.Context, doer fetchDoer, reque
 // were read, whether this cycle attempted them at all, and whether the list
 // is live. A commit producer that is not configured serves an empty list and
 // never makes the panel stale: no producer, no claim.
-func (s *FetchSource) commitSection(ctx context.Context, doer fetchDoer, spec *vcsCommitsFetchSpec, now time.Time) ([]VCSCommit, time.Time, bool, bool) {
+func (s *FetchSource) commitSection(ctx context.Context, doer fetchDoer, env func(string) string, spec *vcsCommitsFetchSpec, now time.Time) ([]VCSCommit, time.Time, bool, bool) {
 	if spec == nil {
 		return []VCSCommit{}, time.Time{}, false, true
 	}
-	if !s.reserve(roleVCSCommits, now, s.config.endpointInterval(spec.MinIntervalMinutes)) {
+	credential := ""
+	if spec.KeyEnvName != "" {
+		credential = env(spec.KeyEnvName)
+	}
+	interval := s.config.endpointIntervalForCredential(spec.MinIntervalMinutes, spec.AuthenticatedMinIntervalMinutes, credential)
+	if !s.reserve(roleVCSCommits, now, interval) {
 		s.mu.Lock()
 		retained, at := s.commits, s.commitsAt
 		s.mu.Unlock()
@@ -876,10 +904,14 @@ func (s *FetchSource) commitSection(ctx context.Context, doer fetchDoer, spec *v
 	dated := make([]datedCommit, 0, len(spec.Sources)*maxCommitDocumentItems)
 	complete := true
 	for _, source := range spec.Sources {
-		body, err := s.fetchDocument(ctx, doer, fetchRequest{
+		request := fetchRequest{
 			source: roleVCSCommits, endpoint: source.Endpoint, headers: spec.Headers, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
 			conditional: true,
-		})
+		}
+		if credential != "" {
+			request.keyHeader, request.keyValue = spec.KeyHeader, spec.KeyPrefix+credential
+		}
+		body, err := s.fetchDocument(ctx, doer, request)
 		if err != nil {
 			s.coolOnRateLimit(ctx, roleVCSCommits, now, err)
 			complete = false
@@ -935,14 +967,35 @@ func retainedCommits(rows []VCSCommit) []VCSCommit {
 // the variable NAME holding one is ever logged.
 func (s *FetchSource) refreshUsage(ctx context.Context, doer fetchDoer, env func(string) string, now time.Time) (loadedPayload, error) {
 	logger := s.log()
-	fetched := make(map[string]usageMapping, len(s.specs.usage.Sources))
-	skipped, failed := 0, 0
-	for _, source := range s.specs.usage.Sources {
+	credentials := make([]string, len(s.specs.usage.Sources))
+	skipped := 0
+	configured := 0
+	for i, source := range s.specs.usage.Sources {
 		key := env(source.KeyEnvName)
 		if key == "" {
 			skipped++
 			logger.LogAttrs(ctx, slog.LevelDebug, "usage source skipped: credential unset",
 				slog.String("source", source.Label))
+			continue
+		}
+		credentials[i] = key
+		configured++
+	}
+	if configured == 0 {
+		return loadedPayload{}, errors.New("token usage: no source could be fetched")
+	}
+	// The envelope has one status and one generatedAt, so its source windows
+	// are one rate-budgeted round too. Per-source reservations can drift when
+	// a credential appears between wakes, alternately falling one live source
+	// back to its snapshot while the other advances.
+	if !s.reserve(roleTokenUsage, now, s.config.endpointInterval(s.specs.usage.MinIntervalMinutes)) {
+		return loadedPayload{}, errNothingDue
+	}
+	fetched := make(map[string]usageMapping, len(s.specs.usage.Sources))
+	failed := 0
+	for i, source := range s.specs.usage.Sources {
+		key := credentials[i]
+		if key == "" {
 			continue
 		}
 		endpoint, err := withWindowParam(source.Endpoint, source.Window, now)

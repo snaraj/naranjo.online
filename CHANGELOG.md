@@ -7,6 +7,24 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.74] - 2026-09-04
+
+### Changed
+
+- Authenticated GitHub calendar, commit, and project refreshes use one-minute
+  budgets while missing credentials retain the existing public cadences. Token
+  usage reserves one five-minute budget for the complete multi-source round.
+- The token exporter runs every minute, visible tabs conditionally re-read
+  panel envelopes every 30 seconds, and the live probe follows the
+  credentialed one-minute tick.
+
+### Fixed
+
+- The sealed token-usage feed now retries its bounded local file every 30
+  seconds, emits one safe warning per distinct refusal plus one recovery
+  transition, and restores the exact last-good envelope after a transient
+  mount or read failure without requiring a newer document.
+
 ## [0.1.73] - 2026-09-03
 
 ### Changed

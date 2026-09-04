@@ -10,11 +10,11 @@
   __LOG_DIR__ (a per-user log directory) — and installs the result under
   ~/Library/LaunchAgents.
 
-  The job runs hourly and at load. The origin re-reads its sealed file every
-  five minutes, so an hourly capture keeps the panel a bounded hour behind
-  reality without waking the machine needlessly. Failures land in the log
-  files below; the push script's diagnostics are stage names and byte
-  counts, never payload content.
+  The job runs each minute and at load. launchd keeps one instance per label,
+  so a slow capture does not overlap itself; the origin re-reads its sealed
+  file every thirty seconds and a visible browser does the same. Failures land
+  in the log files below; the push script's diagnostics are stage names and
+  byte counts, never payload content.
 -->
 <plist version="1.0">
 <dict>
@@ -25,7 +25,7 @@
         <string>__PUSH_SCRIPT__</string>
     </array>
     <key>StartInterval</key>
-    <integer>3600</integer>
+    <integer>60</integer>
     <key>RunAtLoad</key>
     <true/>
     <key>ProcessType</key>

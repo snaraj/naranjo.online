@@ -168,3 +168,21 @@ func (reg *Registry) markStale(state *panelState) {
 		reg.rebuildIndex()
 	}
 }
+
+// markFresh restores one last-good payload after the failure that marked it
+// stale has cleared without producing new bytes. The sealed data-root loop is
+// the only caller: it invokes this only after the exact accepted ciphertext's
+// digest matches the replay floor again. A fetched producer never calls it;
+// those paths need a newly validated fetch to become fresh.
+func (reg *Registry) markFresh(state *panelState) {
+	current := state.current.Load()
+	if current.payload.status != StatusStale {
+		return
+	}
+	freshPayload := current.payload
+	freshPayload.status = StatusOK
+	if served, err := state.definition.prepare(freshPayload); err == nil {
+		state.current.Store(served)
+		reg.rebuildIndex()
+	}
+}

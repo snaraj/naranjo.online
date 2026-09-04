@@ -9,7 +9,7 @@
 
   - Issue 179's ruling was that the page must stay current ON ITS OWN and never
     depend on a visitor noticing a control. That still holds and nothing here
-    weakens it: the per-panel minute loop is untouched, a reader who never
+    weakens it: the per-panel thirty-second loop is untouched, a reader who never
     pulls sees exactly what they saw before, and a failed read still logs and
     degrades to its honest unavailable envelope.
   - AGENTS.md's rendering floors require that every gesture have a non-gesture

@@ -156,10 +156,10 @@ func (s *Site) StartPanelData(ctx context.Context, rootPath, statePath string, l
 		}
 		s.panelsState = state
 		marker = newFloorMarker(state, lookupEnv)
-		// One classification, at boot, where an operator reads the pod log.
-		// The loop itself stays silent and simply refuses; this line is what
-		// turns "the panel went stale" into "you rotated the key, run the
-		// reset ceremony" without anyone reading the code.
+		// One durable-floor classification at boot, where an operator reads
+		// the pod log. The loop separately logs safe failure/recovery
+		// transitions; this line distinguishes a key-rotation/reset-ceremony
+		// condition without anyone reading the code.
 		s.panelsFloorNotice = describeFloorState(marker)
 	}
 	s.panelsData = root

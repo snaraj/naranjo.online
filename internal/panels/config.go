@@ -140,8 +140,8 @@ func validateRefreshInterval(what string, minutes int) error {
 // validateVCSActivitySpec rejects a version-control fetch spec missing its
 // endpoint, carrying a header outside the public-producer allowlist, naming a
 // cadence outside the reviewed band, or describing a malformed commit half.
-// Both halves of this panel are public and unauthenticated, so both go through
-// the same rules — a new producer must not arrive with looser ones.
+// Its public fallbacks retain the narrow static-header rules; optional
+// authenticated paths carry credentials only through their dedicated fields.
 func validateVCSActivitySpec(spec *vcsActivityFetchSpec) error {
 	if spec.Endpoint == "" {
 		return errors.New("vcs-activity fetch spec: endpoint is required")
@@ -189,7 +189,10 @@ func validateVCSCalendarSpec(spec *vcsCalendarFetchSpec) error {
 	if spec.ContentType == "" {
 		return errors.New("vcs-calendar fetch spec: contentType is required")
 	}
-	return validateHeaderAllowlist("vcs-calendar fetch spec", spec.Headers, vcsCalendarHeaderAllowlist)
+	if err := validateHeaderAllowlist("vcs-calendar fetch spec", spec.Headers, vcsCalendarHeaderAllowlist); err != nil {
+		return err
+	}
+	return validateAuthenticatedRefreshInterval("vcs-calendar fetch spec", spec.AuthenticatedMinIntervalMinutes, true)
 }
 
 // validateCodingProjectsSpec rejects a repository-metadata spec that is not
@@ -232,13 +235,16 @@ func validateCodingProjectsSpec(spec *codingProjectsFetchSpec) error {
 	if err := validateHeaderAllowlist("coding-projects fetch spec", spec.Headers, vcsActivityHeaderAllowlist); err != nil {
 		return err
 	}
-	return validateRefreshInterval("coding-projects fetch spec", spec.MinIntervalMinutes)
+	if err := validateRefreshInterval("coding-projects fetch spec", spec.MinIntervalMinutes); err != nil {
+		return err
+	}
+	return validateAuthenticatedRefreshInterval("coding-projects fetch spec", spec.AuthenticatedMinIntervalMinutes, spec.KeyEnvName != "")
 }
 
-// validateVCSCommitsSpec applies the SAME public-producer rules to the commit
-// half: no credential-bearing header, a bounded cadence, a bounded row count,
-// and a labeled endpoint for every source. An absent spec is valid — the
-// panel simply serves no commit list.
+// validateVCSCommitsSpec applies the same static-header rules to the commit
+// half, plus paired optional credential fields, bounded public/authenticated
+// cadences, a bounded row count, and a labeled endpoint for every source. An
+// absent spec is valid — the panel simply serves no commit list.
 func validateVCSCommitsSpec(spec *vcsCommitsFetchSpec) error {
 	if spec == nil {
 		return nil
@@ -254,10 +260,31 @@ func validateVCSCommitsSpec(spec *vcsCommitsFetchSpec) error {
 	if err := validateVCSHeaders("vcs-commits fetch spec", spec.Headers); err != nil {
 		return err
 	}
+	if (spec.KeyEnvName == "") != (spec.KeyHeader == "") {
+		return errors.New("vcs-commits fetch spec: keyEnvName and keyHeader are declared together or not at all")
+	}
 	if spec.Max <= 0 || spec.Max > maxServedCommits {
 		return fmt.Errorf("vcs-commits fetch spec: max %d is outside (0, %d]", spec.Max, maxServedCommits)
 	}
-	return validateRefreshInterval("vcs-commits fetch spec", spec.MinIntervalMinutes)
+	if err := validateRefreshInterval("vcs-commits fetch spec", spec.MinIntervalMinutes); err != nil {
+		return err
+	}
+	return validateAuthenticatedRefreshInterval("vcs-commits fetch spec", spec.AuthenticatedMinIntervalMinutes, spec.KeyEnvName != "")
+}
+
+// validateAuthenticatedRefreshInterval keeps a fast path inseparable from
+// the credential that makes its larger upstream budget true. Zero is the
+// backwards-compatible choice to use the public interval even when a key is
+// present; a positive interval without any key field would silently hammer
+// the anonymous allowance and is refused.
+func validateAuthenticatedRefreshInterval(what string, minutes int, credentialConfigured bool) error {
+	if minutes == 0 {
+		return nil
+	}
+	if !credentialConfigured {
+		return fmt.Errorf("%s: authenticatedMinIntervalMinutes requires a configured credential", what)
+	}
+	return validateRefreshInterval(what+" authenticated cadence", minutes)
 }
 
 // validateVCSHeaders refuses any request header outside
@@ -303,6 +330,9 @@ func headerAllowed(name string, allowlist []string) bool {
 func validateUsageSpec(spec *tokenUsageFetchSpec) error {
 	if len(spec.Sources) == 0 {
 		return errors.New("token-usage fetch spec: no sources")
+	}
+	if err := validateRefreshInterval("token-usage fetch spec", spec.MinIntervalMinutes); err != nil {
+		return err
 	}
 	for _, source := range spec.Sources {
 		if source.Label == "" || source.Endpoint == "" || source.KeyEnvName == "" || source.KeyHeader == "" {

@@ -19,7 +19,7 @@ transcript trees (read-only)
                                                    token-usage.series.enc
                                                 └─ static PV/PVC (read-only)
                                                      └─ pod mounts read-only
-                                                          └─ app re-reads every 5 min,
+                                                          └─ app re-reads every 30 sec,
                                                              unseals with PANELS_DATA_KEY,
                                                              strict-decodes, serves
 ```
@@ -165,7 +165,7 @@ keeps the last good payload and says so in the envelope `status`.
   so enabling the sealed feed never silently disables the rest. Both
   switches on used to start two independent producers writing the same panel
   with no precedence, so a live fetch could overwrite the sealed series and
-  the next five-minute tick could overwrite it back (2026-08-24 security
+  the next data-root tick could overwrite it back (2026-08-24 security
   review, finding 8).
 - **A document is whole or it is refused.** Its source set must EQUAL the
   set the embedded snapshot ships (2026-08-24 security review, finding 7).
@@ -188,7 +188,7 @@ keeps the last good payload and says so in the envelope `status`.
 
   - The marker is written BEFORE the payload is published. A write that
     fails means the payload is not published at all — the last good payload
-    keeps serving, the envelope says `stale`, and the next five-minute tick
+    keeps serving, the envelope says `stale`, and the next thirty-second tick
     retries the same file. The old order (publish, then try to persist,
     discard the error) let a pod serve an instant no restart could remember,
     after which an older but perfectly authentic file was re-admitted as
@@ -489,9 +489,10 @@ change.
    scripts/usage-export/install-launchd.sh
    ```
 
-   Hourly plus at load; logs under
-   `~/Library/Logs/naranjo-online-usage-export/`. One manual run first is
-   good practice: `scripts/usage-export/push-usage-series.sh`.
+   Every minute plus at load; launchd keeps a single instance of the labeled
+   job, so a capture that runs long does not overlap itself. Logs live under
+   `~/Library/Logs/naranjo-online-usage-export/`. One manual run first is good
+   practice: `scripts/usage-export/push-usage-series.sh`.
 
    The installed job is anchored to the PRIMARY checkout
    (`~/code/naranjo.online` by default; override with
@@ -617,14 +618,13 @@ repository.
    or the new pod waits Pending on an unbindable claim.
 
 5. **Enable the capability — deliberately, last.** `panels.data.enabled`
-   defaults to `false` (2026-08-24 security review, finding M6): a fresh
-   install renders none of the storage and schedules everywhere, serving
-   the token-usage panel from its embedded release-time snapshot — honest
-   recorded data whose envelope `generatedAt` says exactly how old it is.
-   Once steps 1–4 exist, set `panels.data.enabled=true` in the deployment
-   values. Turning it back off is the same explicit decision in reverse:
-   the sealed feed stops being read and the panel returns to as-of-release
-   data — documented behavior chosen in values, never a silent fallback.
+   defaults to `true` since the 2026-08-27 storage ceremony completed. A
+   fresh install therefore requires steps 1–4 before deployment; otherwise
+   its claims honestly remain Pending instead of silently serving from an
+   unintended store. Setting `panels.data.enabled=false` is the explicit
+   reverse decision: the sealed feed stops being read and the panel returns
+   to its embedded as-of-release snapshot, whose envelope says exactly how
+   old it is.
 
 ## Verifying end to end
 
@@ -648,10 +648,11 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | `sealing refused` / key-file refusal | key file missing, malformed, or group/world-readable |
 | `push refused` | ssh transport failed; nothing landed |
 | `checksum mismatch after push` | landed bytes differ from sealed bytes — investigate before trusting the panel |
+| origin WARN `failed to fetch token usage` | the sealed data-root tick failed; the structured `error` field names the cause and `next_retry` names the next thirty-second attempt. An unchanged cause logs once, and recovery writes one `token usage data root recovered` transition |
 | panel `status: stale` | the origin refused the newest file (tamper, replay, wrong key, over-cap, malformed) and kept the last good payload |
 | panel `status: stale` after every push, panel never advances | the document does not cover every shipped source — add the missing `MERGE_SOURCES` entry (see step 4) — or one of its sections is malformed |
 | panel `status: stale`, sealed file gone from the data dir | the runtime document this pod had already served from was deleted or unmounted: the data is retained, the freshness claim is not (2026-08-24 security review, finding 5). Before the FIRST push an absent file is the ordinary cold state and stays `ok` on the embedded snapshot |
-| panel serves embedded snapshot | `panels.data.enabled=false` (the default — the documented as-of-release decision), or no sealed file yet — the shipped state, not an error |
+| panel serves embedded snapshot | `panels.data.enabled=false` (an explicit as-of-release decision), or no sealed file has been admitted yet |
 | panel shows "data through … · last capture …" | the frontend's own staleness reading (issue #276): the envelope says `stale`, or its `generatedAt` has fallen more than two days behind — the one state the origin structurally cannot flag itself, since an unchanged file is its ordinary between-pushes state. Check the workstation's scheduled export first |
 | floor marker absent in the state dir, no `token-usage.floor.init` beside it | a first boot: benign, the floor is the embedded snapshot's, and the first published push writes both files |
 | floor marker absent but `token-usage.floor.init` present | the durable floor was INITIALIZED and its marker is now gone — deleted, or lost with the volume. Durable mode refuses the tick and reports `stale` instead of cold-starting on a floor of zero (2026-08-24 round-3 review, finding 4). The reset ceremony below is the only way out |
@@ -693,9 +694,9 @@ sudo rm -f /mnt/local-pie-ssd/naranjo-online/panels-state/token-usage.floor.enc 
 scripts/usage-export/push-usage-series.sh
 ```
 
-No restart is needed: the next tick sees an uninitialized state directory,
-cold-starts on the embedded snapshot's floor, and the fresh push raises it
-again.
+No restart is needed: the next thirty-second tick sees an uninitialized state
+directory, cold-starts on the embedded snapshot's floor, and the fresh push
+raises it again.
 
 ### Key rotation
 

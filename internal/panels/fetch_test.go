@@ -277,6 +277,11 @@ func TestNewFetchSourceFailsClosed(t *testing.T) {
 				s.Window.LookbackDays = 0
 			})})
 		},
+		"usage round with an unsafe cadence": func() (*FetchSource, error) {
+			spec := usageSpec(nil)
+			spec.MinIntervalMinutes = -1
+			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{usage: spec})
+		},
 		"empty usage sources": func() (*FetchSource, error) {
 			return NewFetchSource(fallback, validFetchConfig(), panelFetchSpecs{usage: &tokenUsageFetchSpec{}})
 		},
@@ -378,9 +383,9 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 	if bounds.MaxBytes > 524288 {
 		t.Errorf("shared body bound = %d, over the reviewed 524288 ceiling", bounds.MaxBytes)
 	}
-	// The version-control producer is deliberately credential-free: it reads
-	// a PUBLIC document, and a spec that grew a credential field would be a
-	// different security review.
+	// The public calendar remains independently usable without a credential;
+	// its static headers cannot carry one, and the optional fast path lives on
+	// the dedicated credentialed spec beside it.
 	if len(document.VCSActivity.Headers) == 0 {
 		t.Error("the activity spec declares no document type; the upstream refuses a JSON Accept header")
 	}
@@ -433,7 +438,7 @@ type ownedEndpoint struct {
 
 // ownedEndpoints reads the shipped configuration into the shape the pins
 // below share: every producer that can hit a public host WITHOUT a
-// credential. The zero-secret producers issue #79 governs were always here;
+// credential. The public fallbacks issue #79 governs were always here;
 // issue 281 added the coding-projects pair, because that producer reads
 // anonymously whenever its optional credential is unset and its cadence
 // therefore has to fit the unauthenticated budget too — the retired
@@ -516,11 +521,11 @@ func TestPublicProducerCadencesStayInsideTheRateBudget(t *testing.T) {
 	for _, endpoint := range ownedEndpoints(t, document) {
 		perHour[endpoint.host] += requestsPerHour(t, endpoint.what, endpoint.interval, bounds.TTL)
 	}
-	// The credentialed usage sources declare no budget of their own, so they
-	// fire on the loop cadence. They are counted anyway: the pin is about what
-	// this process does to a host, not about whose issue owns the endpoint.
+	// The credentialed usage sources used to fire on the loop cadence and now
+	// share one complete-round budget. They are counted anyway: the pin is
+	// about what this process does to a host, not whose issue owns the endpoint.
 	for _, source := range document.TokenUsage.Sources {
-		perHour[hostOf(t, source.Endpoint)] += requestsPerHour(t, "usage:"+source.Label, 0, bounds.TTL)
+		perHour[hostOf(t, source.Endpoint)] += requestsPerHour(t, "usage:"+source.Label, document.TokenUsage.MinIntervalMinutes, bounds.TTL)
 	}
 	for host, requests := range perHour {
 		budget, ok := budgets[host]
@@ -539,6 +544,49 @@ func TestPublicProducerCadencesStayInsideTheRateBudget(t *testing.T) {
 		if interval := time.Duration(endpoint.interval) * time.Minute; interval > 15*time.Minute {
 			t.Errorf("%s refreshes every %v; a live panel refreshes inside a quarter hour", endpoint.what, interval)
 		}
+	}
+}
+
+// TestAuthenticatedGitHubCadencesKeepWideRateHeadroom costs the fast path
+// independently from the anonymous fallbacks above. GitHub documents separate
+// 5,000-unit hourly primary budgets for authenticated REST requests and
+// GraphQL queries; one replica stays below ten percent of either, leaving a
+// rolling second replica and unrelated owner activity ample room. The actual
+// reads are serial and conditional, so this deliberately ignores the further
+// savings from authorized 304 responses.
+func TestAuthenticatedGitHubCadencesKeepWideRateHeadroom(t *testing.T) {
+	t.Parallel()
+	document, _, err := loadFetchConfig(fetchConfigBytes)
+	if err != nil {
+		t.Fatalf("embedded fetch config refused: %v", err)
+	}
+	calendar := document.VCSActivity.Calendar
+	commits := document.VCSActivity.Commits
+	projects := document.CodingProjects
+	if calendar == nil || commits == nil || projects == nil {
+		t.Fatal("the embedded config lost an authenticated GitHub producer")
+	}
+	for name, minutes := range map[string]int{
+		"calendar": calendar.AuthenticatedMinIntervalMinutes,
+		"commits":  commits.AuthenticatedMinIntervalMinutes,
+		"projects": projects.AuthenticatedMinIntervalMinutes,
+	} {
+		if minutes <= 0 {
+			t.Fatalf("%s declares no authenticated cadence", name)
+		}
+	}
+	graphqlPerHour := requestsPerHour(t, "authenticated calendar", calendar.AuthenticatedMinIntervalMinutes, 0)
+	restPerHour := len(commits.Sources)*requestsPerHour(t, "authenticated commits", commits.AuthenticatedMinIntervalMinutes, 0) +
+		requestsPerHour(t, "authenticated projects listing", projects.AuthenticatedMinIntervalMinutes, 0)
+	if projects.PullsEndpoint != "" {
+		restPerHour += requestsPerHour(t, "authenticated projects pulls", projects.AuthenticatedMinIntervalMinutes, 0)
+	}
+	const tenthOfAuthenticatedBudget = 500
+	if graphqlPerHour > tenthOfAuthenticatedBudget {
+		t.Errorf("authenticated GraphQL path takes %d points/hour, over the %d headroom ceiling", graphqlPerHour, tenthOfAuthenticatedBudget)
+	}
+	if restPerHour > tenthOfAuthenticatedBudget {
+		t.Errorf("authenticated REST path takes %d requests/hour, over the %d headroom ceiling", restPerHour, tenthOfAuthenticatedBudget)
 	}
 }
 
@@ -584,12 +632,11 @@ func TestEveryPublicProducerDeclaresItsBoundsAsData(t *testing.T) {
 	}
 }
 
-// TestPublicProducersCarryNoCredentialSurface is the zero-secret pin. It is
-// structural, not textual: the two specs the public producers use have no
-// field a credential could be written into, and the header map — the one
-// general escape hatch left — refuses every name but the document-type one on
-// BOTH halves, in any casing.
-func TestPublicProducersCarryNoCredentialSurface(t *testing.T) {
+// TestPublicStaticHeadersCannotSmuggleACredential is the zero-secret fallback
+// pin. Optional credentials travel only through dedicated fields filled from
+// the environment at attempt time; the static header map remains unable to
+// embed one in repository data, in any casing.
+func TestPublicStaticHeadersCannotSmuggleACredential(t *testing.T) {
 	t.Parallel()
 	document, bounds, err := loadFetchConfig(fetchConfigBytes)
 	if err != nil {
@@ -609,7 +656,7 @@ func TestPublicProducersCarryNoCredentialSurface(t *testing.T) {
 			commits.Headers = map[string]string{header: "fixture-sentinel-eeee"}
 			spec.Commits = &commits
 			if _, err := NewFetchSource(fallback, bounds, panelFetchSpecs{vcs: &spec}); err == nil {
-				t.Fatalf("the commit producer accepted a %s header; this path is public and sends no credential", name)
+				t.Fatalf("the commit producer accepted a static %s header; credentials only travel through the attempt-time field", name)
 			}
 		})
 	}
@@ -930,6 +977,16 @@ func TestCommitProducerSpecFailsClosed(t *testing.T) {
 		"a row cap past the ceiling":   func(c *vcsCommitsFetchSpec) { c.Max = maxServedCommits + 1 },
 		"a cadence below the floor":    func(c *vcsCommitsFetchSpec) { c.MinIntervalMinutes = 0 - 1 },
 		"a cadence past the ceiling":   func(c *vcsCommitsFetchSpec) { c.MinIntervalMinutes = int(maxEndpointInterval/time.Minute) + 1 },
+		"an authenticated cadence without a credential": func(c *vcsCommitsFetchSpec) {
+			c.AuthenticatedMinIntervalMinutes = 1
+		},
+		"a credential with no header": func(c *vcsCommitsFetchSpec) {
+			c.KeyEnvName = "FIXTURE_KEY"
+		},
+		"an authenticated cadence below the floor": func(c *vcsCommitsFetchSpec) {
+			c.KeyEnvName, c.KeyHeader = "FIXTURE_KEY", "Authorization"
+			c.AuthenticatedMinIntervalMinutes = -1
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

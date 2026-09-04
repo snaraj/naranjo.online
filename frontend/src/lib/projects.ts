@@ -479,9 +479,10 @@ function viewInstant([project, live]: ProjectView): number {
  * generatedAt may fall before the card must SAY its data has stopped
  * advancing, even while the status still reads ok — the wedged-loop state a
  * status alone cannot see, the same #267 gap the usage panel's threshold
- * closes. The origin refreshes this panel on a quarter-hour cadence and its
- * rate-limit cooldown tops out at fifteen minutes, so two hours is eight
- * silent ticks past every legitimate quiet spell: a stall, not a nap. */
+ * closes. The credentialed origin refreshes this panel each minute, with a
+ * quarter-hour anonymous fallback, and its rate-limit cooldown tops out at
+ * fifteen minutes. Two hours is therefore far past every legitimate quiet
+ * spell: a stall, not a nap. */
 export const projectsStaleAfterMs = 2 * 60 * 60 * 1000;
 
 /* projectsStaleNote is the honest staleness line (issue 281, defect 2: the

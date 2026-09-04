@@ -29,9 +29,12 @@
 #            a clean ~15-minute tick; both transitions landed at the FIRST
 #            possible tick, so a healthy loop's worst case is one interval.
 #
-# The timeout below is therefore TWO ticks plus margin per direction: a
-# healthy loop lands in one, a loop that misses two is the defect this
-# probe exists to catch.
+# That reference predates the authenticated fast path. The live deployment
+# now budgets GitHub-backed panels once a minute when its credential is
+# present (while preserving the wider anonymous fallback). The timeout below
+# is therefore TWO current ticks plus margin per direction: a healthy loop
+# lands in one, a loop that misses two is the defect this probe exists to
+# catch.
 #
 # OPERATOR/AGENT-RUN ONLY — NEVER WIRED INTO CI. CI must not depend on the
 # live site and must not create GitHub mutations; this script does both, on
@@ -43,7 +46,7 @@
 #
 # Environment:
 #   PROBE_SITE          origin to poll        (default https://naranjo.online)
-#   PROBE_TICK_SECONDS  one refresh tick      (default 900)
+#   PROBE_TICK_SECONDS  one refresh tick      (default 60)
 #   PROBE_POLL_SECONDS  poll interval         (default 30)
 #
 # Requires: gh (authenticated), curl, python3.
@@ -51,7 +54,7 @@
 set -euo pipefail
 
 site="${PROBE_SITE:-https://naranjo.online}"
-tick_seconds="${PROBE_TICK_SECONDS:-900}"
+tick_seconds="${PROBE_TICK_SECONDS:-60}"
 poll_seconds="${PROBE_POLL_SECONDS:-30}"
 # Two ticks plus one minute of margin, per transition.
 deadline_seconds="$((tick_seconds * 2 + 60))"

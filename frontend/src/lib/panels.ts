@@ -343,14 +343,13 @@ export async function loadPanel<Data = unknown>(
 }
 
 /* panelRefreshIntervalMs is how often a mounted panel re-reads its envelope.
- * One minute is the deliberate compromise: the origin refreshes fetch-backed
- * panels on a five-minute TTL (ttlMinutes in internal/panels/config/fetch.json,
- * pinned to the same 30s-5m band from the Go side), so a visitor sees new data
- * within a minute of it existing while a long-open tab costs the origin one
- * conditional GET a minute per panel — and every one of those is a 304 with no
- * body while the data is unchanged, because the panel API serves digest
- * ETags. */
-export const panelRefreshIntervalMs = 60_000;
+ * Thirty seconds is the owner's documented freshness floor. The origin now
+ * wakes fetch-backed panels each minute and the sealed data root every thirty
+ * seconds, so a long-open tab sees the first prepared answer after either
+ * source advances. Hidden tabs still make no requests, and unchanged visible
+ * reads are conditional 304s with no response body because the API serves
+ * digest ETags. */
+export const panelRefreshIntervalMs = 30_000;
 
 /* panelsPendingAttribute is where the page says how many mounted panels have
  * not yet received their FIRST envelope (issue 210). It is an honest state,
@@ -620,8 +619,8 @@ export async function refreshPanels(): Promise<void> {
 /* panelStaleAfterMs is how far behind the wall clock an ok envelope's own
  * generatedAt may fall before a panel must SAY its data has stopped advancing
  * (issue #276; the observability half of #267). Two full days: the usage
- * pipeline pushes hourly and the origin re-reads every five minutes, the
- * fetched panels refresh on a minutes-long TTL, and a workstation
+ * pipeline pushes each minute and the origin re-reads every thirty seconds,
+ * the fetched panels refresh on a minute TTL, and a workstation
  * legitimately sleeps overnight — a day-granularity series cannot honestly
  * alarm at sub-day lag, while two days of silence is a stalled producer. */
 export const panelStaleAfterMs = 48 * 60 * 60 * 1000;
@@ -669,7 +668,7 @@ export function panelStaleNote(
  * that commit landed.
  *
  * Coarse on purpose and NOT ticked: an age is recomputed when its row is
- * rebuilt, which watchPanel already does once a minute — the same cadence a
+ * rebuilt, which watchPanel already does every thirty seconds — faster than a
  * "3m ago" would need — so there is no second timer and no rendered age can
  * outlive its own panel's data. */
 export function panelAge(generatedAt: string | undefined, now: Date = new Date()): string {

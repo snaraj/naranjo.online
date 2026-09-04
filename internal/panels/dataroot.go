@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"time"
 )
 
@@ -189,6 +190,50 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 		commit = marker.Store
 	}
 	acceptedInProcess := false
+	// lastFailure is the transition key for the data-root narrative. The same
+	// bad file can sit on disk through hundreds of wakes; one actionable WARN
+	// is useful and hundreds are noise. A changed cause is a new transition,
+	// and clearing the cause writes one recovery line.
+	lastFailure := ""
+	// degradedByLoop remembers that this loop changed an ok envelope to stale.
+	// It is what permits the exact previously accepted ciphertext to restore
+	// that envelope to ok after a transient read/mount fault. Without it,
+	// errSeriesUnchanged leaves the last-good payload stale forever until a
+	// strictly newer push happens.
+	degradedByLoop := false
+	reportFailure := func(err error) {
+		if state.current.Load().payload.status == StatusOK {
+			degradedByLoop = true
+		}
+		reg.markStale(state)
+		cause := err.Error()
+		if cause == lastFailure {
+			return
+		}
+		lastFailure = cause
+		reg.logger.LogAttrs(ctx, slog.LevelWarn, "failed to fetch token usage",
+			slog.String("panel", dataRootPanelID),
+			slog.Any("error", err),
+			slog.Time("next_retry", now().Add(dataRootTTL)),
+		)
+	}
+	reportRecovery := func(restoreLastGood bool) {
+		if lastFailure == "" {
+			return
+		}
+		if restoreLastGood && degradedByLoop {
+			reg.markFresh(state)
+		}
+		current := state.current.Load().payload
+		reg.logger.LogAttrs(ctx, slog.LevelInfo, "token usage data root recovered",
+			slog.String("panel", dataRootPanelID),
+			slog.String("status", string(current.status)),
+			slog.String("generated_at", current.generatedAt),
+			slog.Time("next_refresh", now().Add(dataRootTTL)),
+		)
+		lastFailure = ""
+		degradedByLoop = false
+	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
@@ -203,7 +248,7 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 		if !floorResolved {
 			persisted, present, err := marker.Load()
 			switch {
-			case err != nil, present && persisted.Instant.After(now().Add(dataRootFutureSkew)):
+			case err != nil:
 				// The deployment asked for a durable floor and the state
 				// backing it is unreadable, nonsensical, sealed under a
 				// superseded key, or GONE from a directory that had already
@@ -212,7 +257,11 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 				// published past — the exact downgrade findings 2 and 4
 				// reproduced — so the tick is refused and the envelope says
 				// so. The next tick retries the load.
-				reg.markStale(state)
+				reportFailure(fmt.Errorf("data root: the replay floor could not be loaded: %w", err))
+				timer.Reset(dataRootTTL)
+				continue
+			case present && persisted.Instant.After(now().Add(dataRootFutureSkew)):
+				reportFailure(errors.New("data root: the replay floor claims a future capture instant"))
 				timer.Reset(dataRootTTL)
 				continue
 			case present:
@@ -238,9 +287,15 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 		case err == nil:
 			floor = accepted
 			acceptedInProcess = true
+			reportRecovery(false)
 		case errors.Is(err, errSeriesUnchanged):
 			// The ordinary state between pushes: the same file, already
-			// published, still there. Nothing is wrong.
+			// published, still there. Nothing is wrong. If a transient
+			// fault marked its last-good envelope stale, the digest match
+			// that produced errSeriesUnchanged is also proof that the exact
+			// accepted source is back, so freshness can recover without
+			// waiting for an unrelated newer push.
+			reportRecovery(true)
 		case errors.Is(err, fs.ErrNotExist):
 			// An absent file means two different things, and conflating them
 			// let a deleted document keep the envelope `ok` forever
@@ -259,14 +314,19 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 			// evidence it had just failed to find (2026-08-24 round-3
 			// review, finding 6).
 			if acceptedInProcess || markerPresent {
-				reg.markStale(state)
+				reportFailure(err)
+			} else {
+				// A malformed pre-first-push candidate can disappear again.
+				// That returns the root to its benign cold state and restores
+				// the embedded last-good envelope if this loop degraded it.
+				reportRecovery(true)
 			}
 		default:
 			// File present but unreadable, unauthentic, malformed, replayed,
 			// refused — or accepted but not committable to the durable
 			// floor: keep serving the last good payload and let the
 			// envelope's status say it is no longer fresh.
-			reg.markStale(state)
+			reportFailure(err)
 		}
 		timer.Reset(dataRootTTL)
 	}

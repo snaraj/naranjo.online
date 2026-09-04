@@ -240,6 +240,68 @@ func TestRefreshLoopSummarizesSuccessAndIdle(t *testing.T) {
 	})
 }
 
+// TestDataRootFailureLogsOnceAndSameDocumentRecovers covers the origin-side
+// silence that made a landed but refused usage push indistinguishable from a
+// frozen scheduler. One bad ciphertext warns with its cause exactly once no
+// matter how many ticks it survives; restoring the exact accepted ciphertext
+// writes one recovery transition and returns the envelope to ok without
+// waiting for a newer capture.
+func TestDataRootFailureLogsOnceAndSameDocumentRecovers(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		out := &safeBuffer{}
+		registry, state := usageDataRootRegistry(t, synctestSnapshot)
+		registry.logger = slog.New(slog.NewJSONHandler(out, nil))
+		accepted := sealDocument(t, synctestDocument("2000-01-01T00:00:00Z"))
+		fsys := &lockedFS{inner: seriesFS(accepted)}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		registry.startDataRoot(ctx, fsys, productionUnsealer(dataRootTestKeyHex), nil, time.Now)
+		synctest.Wait()
+
+		tampered := append([]byte(nil), accepted...)
+		tampered[len(tampered)-1] ^= 0x01
+		fsys.swap(seriesFS(tampered))
+		time.Sleep(dataRootTTL)
+		synctest.Wait()
+		if envelope, _ := decodeServedUsage(t, state); envelope.Status != StatusStale {
+			t.Fatalf("tampered source left status %q, want stale", envelope.Status)
+		}
+		// The identical failure survives more ticks but produces no duplicate
+		// WARN records.
+		time.Sleep(3 * dataRootTTL)
+		synctest.Wait()
+
+		fsys.swap(seriesFS(accepted))
+		time.Sleep(dataRootTTL)
+		synctest.Wait()
+		if envelope, _ := decodeServedUsage(t, state); envelope.Status != StatusOK {
+			t.Fatalf("restored accepted source left status %q, want ok", envelope.Status)
+		}
+
+		records := refreshLogRecords(t, out.String())
+		failures := 0
+		recoveries := 0
+		for _, record := range records {
+			switch record["msg"] {
+			case "failed to fetch token usage":
+				failures++
+				if record["level"] != "WARN" || record["panel"] != dataRootPanelID || record["error"] == nil || record["next_retry"] == nil {
+					t.Errorf("failure record = %v", record)
+				}
+			case "token usage data root recovered":
+				recoveries++
+				if record["level"] != "INFO" || record["status"] != string(StatusOK) || record["generated_at"] != "2000-01-01T00:00:00Z" {
+					t.Errorf("recovery record = %v", record)
+				}
+			}
+		}
+		if failures != 1 || recoveries != 1 {
+			t.Fatalf("records contain %d failures and %d recoveries, want one each: %s", failures, recoveries, out.String())
+		}
+		assertNoUpstreamURL(t, out.String())
+	})
+}
+
 // TestFetchAttemptNarratesHostStatusAndBytes pins the per-attempt DEBUG
 // detail: source role, bare host, upstream status, byte count, and duration
 // — and, by the shared privacy pin, that the endpoint's path and query
@@ -362,7 +424,7 @@ func TestCommitSourceFailureWarnsWithRepoLabel(t *testing.T) {
 		t.Fatalf("NewFetchSource() error = %v", err)
 	}
 	source.setLogger(slog.New(slog.NewJSONHandler(&out, nil)))
-	rows, _, attempted, fresh := source.commitSection(t.Context(), &scriptedDoer{}, source.specs.vcs.Commits, time.Now().UTC())
+	rows, _, attempted, fresh := source.commitSection(t.Context(), &scriptedDoer{}, func(string) string { return "" }, source.specs.vcs.Commits, time.Now().UTC())
 	if !attempted || fresh || len(rows) != 0 {
 		t.Fatalf("commitSection with a failing transport = %d rows, attempted %t, fresh %t; want an attempted, degraded round", len(rows), attempted, fresh)
 	}
@@ -418,10 +480,14 @@ func TestCommitSourceWarnSurvivesProductionURLError(t *testing.T) {
 			Headers:     map[string]string{"Accept": "text/html"},
 			ContentType: "text/html",
 			Commits: &vcsCommitsFetchSpec{
-				Headers:     map[string]string{"Accept": "application/json"},
-				ContentType: "application/json",
-				Max:         4,
-				Sources:     []vcsCommitSourceSpec{{Repo: "fixture-repo", Endpoint: "https://api.example.test/repos/fixture/commits?account=" + urlErrorQuerySecret}},
+				Headers:                         map[string]string{"Accept": "application/json"},
+				KeyEnvName:                      "FIXTURE_COMMITS_TOKEN",
+				KeyHeader:                       "Authorization",
+				KeyPrefix:                       "Bearer ",
+				AuthenticatedMinIntervalMinutes: 1,
+				ContentType:                     "application/json",
+				Max:                             4,
+				Sources:                         []vcsCommitSourceSpec{{Repo: "fixture-repo", Endpoint: "https://api.example.test/repos/fixture/commits?account=" + urlErrorQuerySecret}},
 			},
 		}},
 	)
@@ -429,7 +495,8 @@ func TestCommitSourceWarnSurvivesProductionURLError(t *testing.T) {
 		t.Fatalf("NewFetchSource() error = %v", err)
 	}
 	source.setLogger(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	_, _, attempted, fresh := source.commitSection(t.Context(), urlErrorDoer{}, source.specs.vcs.Commits, time.Now().UTC())
+	const credential = "commit-credential-sentinel-eeee"
+	_, _, attempted, fresh := source.commitSection(t.Context(), urlErrorDoer{}, func(string) string { return credential }, source.specs.vcs.Commits, time.Now().UTC())
 	if !attempted || fresh {
 		t.Fatalf("commitSection = attempted %t, fresh %t; want an attempted, degraded round", attempted, fresh)
 	}
@@ -440,6 +507,9 @@ func TestCommitSourceWarnSurvivesProductionURLError(t *testing.T) {
 	errText, _ := record["error"].(string)
 	if !strings.Contains(errText, "fetch api.example.test") || !strings.Contains(errText, "connection reset by peer") {
 		t.Errorf("sanitized error = %q, want the host and the transport cause", errText)
+	}
+	if strings.Contains(out.String(), credential) {
+		t.Error("the commit credential reached the refresh narrative")
 	}
 	assertNoUpstreamURL(t, out.String())
 }
