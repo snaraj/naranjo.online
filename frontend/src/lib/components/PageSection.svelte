@@ -26,11 +26,30 @@
   import type { PageSection } from '../blocks.ts';
   import Block from './Block.svelte';
 
-  let { section }: { section: PageSection } = $props();
+  let { section, ordinal }: { section: PageSection; ordinal: string } = $props();
 </script>
 
 <section class="page-section" id={section.id} aria-labelledby={`${section.id}-title`}>
-  <h2 class="section-title" id={`${section.id}-title`}>{section.label}</h2>
+  <!-- THE LEDGER'S SECTION HEAD (owner directive, 2026-09-03, issue 287):
+    a two-pixel rule over a hairline, with the section's number and name set
+    as one mono label between them.
+
+    The NUMBER is drawn beside the heading rather than inside it, and that is
+    an accessibility decision rather than a layout one: the heading's own
+    accessible name is what a screen-reader user navigates a page by, and
+    "01 Professional Experience" is a worse name than "Professional
+    Experience" for exactly the reader who cannot see that the sheet is
+    numbered. So the ordinal is decoration in the visual channel and absent
+    from the semantic one, while the heading, its class and its id are
+    untouched — the same h2 the nav's aria-labelledby has always pointed at.
+
+    It is derived from the manifest's own order, passed in by the page, so a
+    section moved in src/page.ts renumbers itself and two sections can never
+    claim the same number. -->
+  <div class="section-head">
+    <span class="section-number" aria-hidden="true">{ordinal}</span>
+    <h2 class="section-title" id={`${section.id}-title`}>{section.label}</h2>
+  </div>
   {#if section.layout === 'stack'}
     <!-- The stack states how many blocks it was given (issue 210). A
       panel-bound block renders NOTHING until its first envelope arrives, so

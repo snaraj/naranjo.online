@@ -142,7 +142,17 @@ test('initial source remains local and viewport-responsive', () => {
       `${name} introduces a remote origin`
     );
   }
-  assert.match(styles, /font-size:\s*clamp\(/);
+  /* The masthead's own size is the page's one viewport-responsive type step,
+     and since the ledger redesign (owner directive, 2026-09-03, issue 287) it
+     is a TOKEN rather than a literal on the h1: --masthead-size is the clamp,
+     and the heading reads it. Both halves are pinned, because either alone is
+     satisfiable by a page that is not responsive at all — a clamp nothing
+     reads, or a heading reading a token that turned into a fixed length. The
+     ceiling is the owner's drawing (180px) and the middle term is a viewport
+     width, which is what wraps the name to two lines on a phone instead of
+     pushing the document sideways. */
+  assert.match(styles, /--masthead-size:\s*clamp\([^;]*vw[^;]*\);/);
+  assert.match(styles, /h1 \{[^}]*font-size:\s*var\(--masthead-size\)/);
   // Rendering-lane floor (issue #26, delivered by #78): dynamic viewport
   // units, never 100vh. 100vh is the TALLEST the viewport ever gets, so on a
   // phone showing its toolbars the page is taller than the screen and its
@@ -1023,6 +1033,17 @@ const progressiveFeatures = [
   { name: 'a dynamic viewport unit', used: dynamicViewportHeight, tested: /[dsl]vh/ },
   { name: 'a safe-area inset', used: /env\(\s*safe-area-inset/, tested: /env\(\s*safe-area-inset/ },
   { name: 'a color mix', used: /color-mix\(/, tested: /color-mix\(/ },
+  /* Overflow alignment (owner directive of 2026-09-03, issue 287): `safe`
+     centres a row while it fits and falls back to its start when it does not,
+     which is what keeps the section nav's first link reachable on a phone.
+     Engines inside the support window that lack it drop the whole
+     declaration, so it is exactly this class of upgrade and takes the same
+     obligation as the other three. */
+  {
+    name: 'a safe overflow alignment',
+    used: /\bsafe\s+(?:center|start|end|flex-start|flex-end)\b/,
+    tested: /\bsafe\s+(?:center|start|end|flex-start|flex-end)\b/
+  }
 ];
 
 const supportsQueries = (rule) => rule.enclosing.filter((at) => at.startsWith('@supports'));
@@ -1327,51 +1348,49 @@ test('the page reserves the space above its name, derived from the chrome that s
   );
 });
 
-test('the control travels with the document under the breakpoint, so the column fills the phone (issues 241, 264)', () => {
-  /* RE-AIMED, not relaxed. Issue 241's measurement stands: on 0.1.54, in
-     Chromium and WebKit alike, <main> ended at exactly the reading-mode
-     trigger's own end edge at every phone width (at 320px the trigger box was
-     x 260-304 and main[16,304]), and scrolling put body text — bullets, card
-     bylines, a card title — under a 44px control 9 to 11 times per sweep at
-     320, 360, 390, 412 and 768. At 1280 and 1440 the count was zero, because
-     there the capped column stops 116px short of it.
+/* THE CORNER IS GONE, AND SO IS THE CLASS OF DEFECT IT KEPT PRODUCING (owner
+ * directive, 2026-09-03, issue 287).
+ *
+ * Issue 241's measurement stands and is worth keeping written down: on 0.1.54,
+ * in Chromium and WebKit alike, <main> ended at exactly the reading-mode
+ * trigger's own end edge at every phone width (at 320px the trigger box was
+ * x 260-304 and main[16,304]), and scrolling put body text — bullets, card
+ * bylines, a card title — under a 44px control 9 to 11 times per sweep at 320,
+ * 360, 390, 412 and 768. Issue 241 answered it by RESERVING the control's lane
+ * on #app's inline end, which charged every row of the page 44px for one
+ * corner — the ~60px dead strip the owner then reported (issue 264). Issue 264
+ * answered THAT by re-aiming the control at the document below the breakpoint,
+ * so it left with the page instead of owning a corner of the viewport. And
+ * issue 219 answered a third face of the same thing — content showing THROUGH
+ * a control that painted nothing — with a translucent plate behind it.
+ *
+ * The ledger removes the cause all three were treating. The chrome is a ROW
+ * across the sheet now, in the document's own flow, between two rules: it
+ * cannot pass over scrolled content, because it scrolls with it; it cannot
+ * take a lane from the column, because it spans the same column; and it needs
+ * no plate, because nothing passes beneath it. So this pin changed direction
+ * rather than value — what it proves now is that the row is in flow and that
+ * none of the three retired mechanisms has come back.
+ *
+ * The one thing that did NOT change is the reason the corner was ever
+ * defended: the controls in the row still clear the 44px touch floor, which
+ * the floor sweep above measures on every one of them. */
+test('the chrome row is in the document, so no control owns a corner of the page (issues 219, 241, 264, 287)', () => {
+  // In flow: neither of the two positioning schemes that took it out of the
+  // document survives, in either range.
+  assert.doesNotMatch(
+    stylesCode,
+    /\.page-header \{[^}]*position:\s*(?:fixed|absolute)/,
+    'the chrome row is out of the document flow again; a row that floats over the page is the corner all three of these issues were about'
+  );
+  assert.doesNotMatch(
+    stylesCode,
+    /@media not all and \(min-width: 67\.5rem\) \{\s*\.page-header \{\s*position:/,
+    'the narrow-range positioning override is back, so the row is floating again in one range'
+  );
 
-     What changed is the mechanism that answers it. 241 reserved the control's
-     lane on #app's inline end for the whole range below the breakpoint, which
-     charged EVERY row of the page 44px for one corner — the ~60px dead strip
-     the owner reported on a phone (issue 264, 2026-08-31). The control is now
-     glued to the DOCUMENT there instead of to the viewport, so the defect is
-     impossible by construction rather than held off by a reserve: the control
-     renders in the same corner at scroll zero (where --page-top-space already
-     clears it — pinned by the top-rhythm test above), and it leaves with the
-     page the moment the reader scrolls, so no scrolled row can pass under it
-     at any offset. Nothing holds text away from it because nothing has to.
-
-     The plate under the glyph still answers the OTHER half of the same
-     collision (text must not render through the icon) wherever the control
-     stays viewport-glued, which is the range above the breakpoint.
-
-     Two ranges, and neither is left to chance. Above the breakpoint the
-     column's own ceiling gives back two rail lanes, which puts its end edge at
-     or before the control's start edge — proven arithmetically below rather
-     than asserted, and unchanged by this re-aim. */
-  const token = (name) => {
-    const found = new RegExp(`--${name}:\\s*([^;]+);`).exec(stylesCode);
-    assert.ok(found, `--${name} is gone; the control's clearance is derived from it`);
-    return lengthInPx(found[1].trim());
-  };
-  const gutter = token('page-gutter');
-  const rail = token('page-rail-size');
-  const columnMax = token('page-column-max');
-  assert.ok(gutter !== null && rail !== null && columnMax !== null, 'the clearance is built from a length this pin cannot read');
-  assert.equal(rail, 44, 'the giveback is no longer the 44px the control actually occupies');
-
-  /* The retired reserve, in BOTH the shapes it shipped in — the plain one an
-     engine without env() kept, and the inset-aware upgrade over it. Matched by
-     their exact calc() text rather than by the property alone, because
-     padding-inline-end is a legitimate declaration elsewhere on this page (the
-     open-modal scrollbar giveback is one), and by the rail token because the
-     lane is the only thing that ever spent it here. */
+  // The lane the column used to pay for is still not being paid for, in any
+  // of the three spellings issue 264 retired.
   assert.doesNotMatch(
     stylesCode,
     /padding-inline-end: calc\(var\(--page-gutter\) \+ var\(--page-rail-size\)\)/,
@@ -1388,48 +1407,41 @@ test('the control travels with the document under the breakpoint, so the column 
     'the page reserves a rail-sized lane on #app again, by some other spelling'
   );
 
-  /* What replaces it: one declaration, in the range the reserve used to cover.
-     The base rule keeps position: fixed — it is the issue-168 directive and it
-     is what the range ABOVE the breakpoint still runs on — and the insets are
-     declared once for both ranges, so which corner they measure from is the
-     positioning scheme's business rather than a second set of numbers free to
-     disagree with the first. */
+  // The plate is gone with the float it existed to soften. It answered
+  // content showing THROUGH a viewport-glued control; a row in the flow has
+  // nothing passing beneath it, so a translucent wash and a backdrop blur
+  // would be chrome nothing needs.
+  assert.doesNotMatch(
+    stylesCode,
+    /\.page-header \{[^}]*backdrop-filter/,
+    'the plate is back under a control that no longer floats over anything'
+  );
+
+  // What the row IS: the site's own hit lane tall, ruled top and bottom like
+  // every other head on the sheet.
+  /* The reserve is the touch row PLUS the row's own two rules (owner
+     directive, 2026-09-03, issue 287): the box is border-box and the static
+     shell renders this header EMPTY, so a reserve stated as the control alone
+     measured four pixels short of the row that arrives and mounting moved the
+     page. The arithmetic is what makes the shell's promise keepable. */
   assert.match(
     stylesCode,
-    /@media not all and \(min-width: 67\.5rem\) \{\s*\.page-header \{\s*position: absolute;\s*\}\s*\}/,
-    'the control is viewport-glued below the handle breakpoint again, so scrolled content can pass under it'
+    /\.page-header \{[^}]*min-block-size: calc\(var\(--page-rail-size\) \+ 2 \* var\(--ledger-heavy\)\)/
   );
-  const baseRule = stylesCode.indexOf('.page-header {');
-  const override = stylesCode.search(/@media not all and \(min-width: 67\.5rem\) \{\s*\.page-header \{/);
-  assert.ok(baseRule >= 0 && override > baseRule, 'the narrow-range override no longer follows the rule it overrides; at equal specificity the later one wins, so ordering is the whole mechanism');
-  assert.match(stylesCode, /\.page-header \{[^}]*position: fixed;/, 'the header is no longer viewport-glued above the breakpoint, where the drag handles live');
-  assert.match(stylesCode, /\.page-header \{[^}]*inset-block-start: var\(--header-inset-block, var\(--page-gutter\)\)/);
-  assert.match(stylesCode, /\.page-header \{[^}]*inset-inline-end: var\(--header-inset-inline, var\(--page-gutter\)\)/);
-  assert.match(stylesCode, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
+  assert.match(stylesCode, /\.page-header \{[^}]*border-block-end: var\(--ledger-heavy\) solid var\(--ledger-rule\)/);
 
-  /* And the breakpoint is the right one, derived rather than trusted. At and
-     above it the column is capped AND gives back two rail lanes, so its end
-     edge — half the viewport plus half the column — never passes the control's
-     start edge. The tightest case is the breakpoint itself; anything wider only
-     adds slack. Below it the column fills the screen and the two boxes are kept
-     apart by the override above instead. */
-  const breakpointPx = 67.5 * 16;
-  const columnAt = (viewport) => Math.min(columnMax, viewport - 2 * gutter - 2 * rail);
-  for (const viewport of [breakpointPx, breakpointPx + 200, 1920]) {
-    const columnEnd = viewport / 2 + columnAt(viewport) / 2;
-    const controlStart = viewport - gutter - rail;
-    assert.ok(
-      columnEnd <= controlStart,
-      `at ${viewport}px the capped column ends at ${columnEnd}px, past the control's own ${controlStart}px start edge`
-    );
-  }
-  // Non-vacuity: WITHOUT the two-rail giveback the same arithmetic fails at the
-  // breakpoint, which is what makes the range split load-bearing rather than
-  // decorative.
-  const unreserved = Math.min(columnMax, breakpointPx - 2 * gutter);
-  assert.ok(
-    breakpointPx / 2 + unreserved / 2 > breakpointPx - gutter - rail,
-    'the column would clear the control even without the two-rail giveback; this pin proves nothing'
+  // And the control inside it still clears the touch floor on both axes.
+  assert.match(stylesCode, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
+  assert.match(stylesCode, /\.icon-button\s*\{[^}]*block-size:\s*2\.75rem/);
+
+  /* The two insets the floating control needed are retired with it: #app's own
+     safe-area padding clears a notch for everything in the column, including
+     this row, so a second answer to the same question would be a second set of
+     numbers free to disagree with the first. */
+  assert.doesNotMatch(
+    stylesCode,
+    /--header-inset-(?:block|inline)/,
+    'the retired corner insets are back; #app already clears the safe area for everything inside it'
   );
 });
 
@@ -1790,12 +1802,22 @@ test('the reading-mode swatches are drawn in the header chrome grammar', () => {
  * leaving a right-hand side empty. Removing the cap would let one long slug
  * take the row from the commit message, which is the thing a reader is
  * actually scanning for. */
-const admittedInlineCaps = new Map([
-  [
-    '.activity-entry-source',
-    'a track cap inside a row that fills: source | title | age, with the age column flush to the panel edge',
-  ],
-]);
+/* THE EXCEPTION LIST IS EMPTY, and the pin got STRICTER rather than weaker by
+ * emptying (owner directive, 2026-09-03, issue 287). Its one entry was
+ * `.activity-entry-source`, a track cap inside the activity tracker's entry
+ * row; the ledger lays every row of every section on a grid, where a track's
+ * width is the track's own definition and no element caps itself. So there is
+ * no admitted cap left, which means ANY absolute inline cap anywhere in the
+ * page's styles now fails — no selector can reach the exemption, because the
+ * exemption has nothing in it.
+ *
+ * The non-vacuity counter that used to guard this list went with the list, on
+ * the instruction the assertion itself carried ("retire it or the exception
+ * list with it"). It proved the refusal was REACHED by an existing value; the
+ * refusal is still reachable — it fires on the first `max-width: 42rem` anyone
+ * writes — and a counter demanding that such a value exist today would be a
+ * pin requiring the defect it forbids. */
+const admittedInlineCaps = new Map([]);
 
 /* How this pin reads ONE declared max-inline-size/max-width value. Exactly
  * three verdicts, and the third is why this function exists at all:
@@ -1901,9 +1923,20 @@ test('the cap reader resolves every unit a measure can be written in (issue 212)
 });
 
 test('no surface caps its prose short of the container it sits in (issue 212)', () => {
-  /* The token itself. `none` is the whole ruling in one value, and the
-     declaration is still READ by two surfaces in the entry log, which is what
-     keeps the per-card override channel alive instead of forcing a fork. */
+  /* The token itself. `none` is the whole ruling in one value.
+
+     NOTHING READS IT ANY MORE, and that is a deliberate consequence of the
+     ledger redesign (owner directive, 2026-09-03, issue 287) rather than a
+     surface quietly dropping the channel. The two readers were EntryLog's
+     `.entry-points` and `.entry-summary`; the entry log is gone, and the
+     surfaces that replaced it — the ledger's drawer points and the table's
+     one-line summaries — are laid out on the sheet's own grid, where a prose
+     cap would leave exactly the blank inline end issue 212 closed. The token
+     stays because it is the card primitive's per-instance channel: a single
+     surface that genuinely wants a measure sets `--card-measure` on that one
+     card, which is what keeps the day it is needed a call-site override rather
+     than a component fork. The list below is what proves nobody has quietly
+     reintroduced a cap through it. */
   const declared = /--card-measure:\s*([^;]+);/.exec(stylesCode);
   assert.ok(declared, '--card-measure is gone; the card primitive lost its measure channel');
   assert.equal(
@@ -1920,11 +1953,8 @@ test('no surface caps its prose short of the container it sits in (issue 212)', 
   );
   assert.deepEqual(
     readers.map((rule) => `${rule.file}: ${rule.selector}`).sort(),
-    [
-      'lib/components/EntryLog.svelte: .entry-points',
-      'lib/components/EntryLog.svelte: .entry-summary',
-    ],
-    'the card-body surfaces that read --card-measure changed; the override channel exists only where it is read, and a surface that stopped reading it can no longer be given a measure without a component fork'
+    [],
+    'a surface started reading --card-measure again; the ruling of issue 212 is that card text FILLS its container, so a reader here is a block that will stop short of its own inline end'
   );
 
   /* And nowhere is the number written down again. Any absolute-length inline
@@ -1936,7 +1966,6 @@ test('no surface caps its prose short of the container it sits in (issue 212)', 
     sweptRules.length > 50,
     'the swept-rule set collapsed; this pin would pass by scanning nothing'
   );
-  let refusable = 0;
   for (const rule of sweptRules) {
     for (const { property, value } of declarationsOf(rule.body)) {
       if (property !== 'max-inline-size' && property !== 'max-width') continue;
@@ -1958,17 +1987,10 @@ test('no surface caps its prose short of the container it sits in (issue 212)', 
         continue;
       }
       const length = verdict;
-      refusable += 1;
       assert.ok(
         admitted,
         `${rule.file}: "${rule.selector}" caps ${property} at ${value} (${length}px). A capped block start-aligns in a full-width parent, so this leaves the container's inline end blank — the defect of issue 212. Fill the width, or add the selector to admittedInlineCaps with the reason it is not a prose measure.`
       );
     }
   }
-  /* The refusal has to be reachable, or it is decoration: the one admitted cap
-     is itself proof that a bare length still reaches the assertion above. */
-  assert.ok(
-    refusable > 0,
-    'no absolute inline cap exists anywhere any more, so this pin can no longer fail — retire it or the exception list with it'
-  );
 });

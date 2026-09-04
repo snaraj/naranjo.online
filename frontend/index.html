@@ -47,6 +47,14 @@
         than pushing the page down. -->
       <header class="page-header"></header>
       <main aria-labelledby="static-page-title" data-static-fallback>
+        <!-- The band's own height, held open before the band exists. Without
+          it the shell's heading sat 176px above the hydrated one and mounting
+          MOVED the masthead — which the chrome row above was already written
+          to prevent for the controls, on the same reasoning. It carries no
+          picture and no label because it is a reserve rather than a band: the
+          class gives it exactly the height the real one takes, and hydration
+          replaces this whole element anyway. -->
+        <div class="band" aria-hidden="true"></div>
         <h1 id="static-page-title">Samuel Naranjo</h1>
         <!-- THE HONEST BOOT STATE (issue 239). This block is what a visitor
           reads when the entry module never arrives — degraded HTTP/3, or the

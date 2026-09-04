@@ -138,8 +138,8 @@ function toGalleryItem(item: GalleryItem): MediaGalleryItem {
   return rendered;
 }
 
-export const artGallery: PageBlock = runtimeBlock(
-  'art-gallery',
+export const mediaGallery: PageBlock = runtimeBlock(
+  'media-gallery',
   MediaGallery,
   vendored,
   async () => {
@@ -156,6 +156,5 @@ export const artGallery: PageBlock = runtimeBlock(
       width: galleryWidth,
       height: galleryHeight
     };
-  },
-  { heading: 'Media' }
+  }
 );

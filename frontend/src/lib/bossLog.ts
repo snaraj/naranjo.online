@@ -7,8 +7,8 @@
  * internal/panels/types.go: the hiscores legitimately return no figure, and
  * null is data that must survive the round trip. */
 
-import type { StatGrid, StatTrackerProps } from './blocks.ts';
-import { bossInitials, bossSlug, skillSlug } from './bossIcons.ts';
+import type { TickerItem, TickerProps } from './blocks.ts';
+import { bossInitials, bossSlug } from './bossIcons.ts';
 import { formatWhole } from './grid.ts';
 import type { BossLogData, BossLogEntry, BossLogSkill, PanelEnvelope } from './panels';
 import type { TipDetail } from './tooltip.ts';
@@ -48,67 +48,6 @@ export function cellLabel(boss: BossLogEntry): string {
   return parts.join(', ');
 }
 
-/* skillLabel is the same contract for a skill cell: the level a sighted
- * reader sees is one number in a dense grid, so the accessible text carries
- * the whole row — including the nulls the hiscores legitimately report. */
-export function skillLabel(skill: BossLogSkill): string {
-  const parts = [`${skill.name}: level ${tally(skill.level)}`, `rank ${rankLabel(skill.rank)}`];
-  if (skill.xp !== undefined && skill.xp !== null) {
-    parts.push(`${tally(skill.xp)} xp`);
-  }
-  return parts.join(', ');
-}
-
-/* The hiscores' first row is the account total, and it is named like a skill
- * without being one: its "level" is the sum of every level, its xp the sum of
- * every xp, its rank the overall rank. It is identified by the same slug rule
- * the icon files are named by (an overall.png already ships), so this file
- * spells the name once and matches it the way every other row is matched. */
-const overallRowSlug = 'overall';
-
-/* One cell of the skills grid that is a total rather than a skill. */
-export interface SkillSummaryCell {
-  /* Stable key for the keyed each block; never rendered. */
-  key: string;
-  /* The short label the cell shows, sized to fit the narrowest column. */
-  label: string;
-  /* The full name the accessible label and tooltip carry. */
-  name: string;
-  /* The rendered figure, through the same nullable renderers as every
-   * other cell — a total the hiscores do not report says so. */
-  value: string;
-}
-
-/* skillSummary is the answer to the grid's trailing gap. Twenty-five skills
- * in three columns leave the last row two cells short, and two blank tiles at
- * the end of a dense table read as missing data rather than as the end of the
- * table. The account's own totals fill them: Total XP and overall Rank, both
- * already in the payload's Overall row and neither shown anywhere else — the
- * grid renders that row's LEVEL and drops its other two figures.
- *
- * Nothing is invented to fill a hole: a payload with no Overall row returns
- * no cells and the gap simply comes back, which is the honest outcome and a
- * loud one — a paired test fails the moment the row count and the cell count
- * stop tiling the grid, so an upstream that adds a skill is a conscious edit
- * here rather than a blank tile in production. */
-export function skillSummary(skills: BossLogSkill[]): SkillSummaryCell[] {
-  const overall = skills.find((skill) => skillSlug(skill.name) === overallRowSlug);
-  if (!overall) {
-    return [];
-  }
-  return [
-    { key: 'total-xp', label: 'XP', name: 'Total XP', value: tally(overall.xp) },
-    { key: 'overall-rank', label: 'Rank', name: 'Overall rank', value: rankLabel(overall.rank) }
-  ];
-}
-
-/* summaryLabel is the accessible text one total carries: the short visible
- * label is what fits a 320px column, and the full name is what a reader who
- * cannot see the grid it sits in needs. */
-export function summaryLabel(cell: SkillSummaryCell): string {
-  return `${cell.name}: ${cell.value}`;
-}
-
 /* The three detail builders. They exist so the two grids cannot drift into
  * two presentations of the same idea: each returns the SAME shape — a name
  * and a list of labelled rows — which lib/components/DetailTip.svelte renders
@@ -134,131 +73,154 @@ export function bossDetail(boss: BossLogEntry): TipDetail {
   return { name: boss.name, rows };
 }
 
-export function skillDetail(skill: BossLogSkill): TipDetail {
-  const rows = [
-    { label: 'Level', value: tally(skill.level) },
-    { label: 'Rank', value: rankLabel(skill.rank) }
-  ];
-  /* xp is optional on the payload rather than nullable, so a row the
-     hiscores never sent gets no line at all — the same rule the boss score
-     follows, and the reason both are the last row rather than the middle. */
-  if (skill.xp !== undefined && skill.xp !== null) {
-    rows.push({ label: 'XP', value: tally(skill.xp) });
-  }
-  return { name: skill.name, rows };
-}
-
-/* The totals cell carries one figure, and the SHORT label it shows in a
- * 320px column is the one that names it here — the full name is the detail's
- * heading, which is exactly the room the tile did not have. */
-export function summaryDetail(cell: SkillSummaryCell): TipDetail {
-  return { name: cell.name, rows: [{ label: cell.label, value: cell.value }] };
-}
-
-/* ---------------------------------------------------------------------------
- * The adapter (issue 165): boss-log envelope in, StatTracker props out. This
- * is where the game becomes rows in a generic grid — every name, figure and
- * detail below rides a domain-free field, and the component that renders the
- * result knows none of this file.
- * ------------------------------------------------------------------------ */
-
 /* The icon URLs the adapter draws from, keyed by the same slug rule the icon
- * files are named by. The maps are built by the binding module
- * (lib/blocks/osrsStats.ts), because content-hashed asset URLs come from the
+ * files are named by. The map is built by the binding module
+ * (lib/blocks/bossTicker.ts), because content-hashed asset URLs come from the
  * bundler and this module stays executable under plain node. */
-export interface StatIconSet {
-  /* Icons for the compact levels grid (assets/icons/skills). */
-  readonly levels: ReadonlyMap<string, string>;
-  /* Icons for the roomy tallies grid (assets/icons/bosses). */
-  readonly tallies: ReadonlyMap<string, string>;
-}
+export type BossIconSet = ReadonlyMap<string, string>;
 
 /* The shell heading before any envelope arrives; afterwards the ORIGIN's own
- * title rides the envelope, exactly as it always has. */
-export const bossLogFallbackTitle = 'Old School RuneScape Stats';
+ * title rides the envelope, exactly as it always has.
+ *
+ * It lost the word "Stats" with the levels grid the owner cut (2026-09-03,
+ * issue 287), which is also what the origin's own served title dropped in the
+ * same change (SPEC §8.16, internal/panels/config). The two are still separate
+ * strings for a reason — this one is the page's own word for a panel that has
+ * not answered, and the origin's is data — but a fallback that named a surface
+ * nobody renders any more, and disagreed with the served title while doing it,
+ * was neither. */
+export const bossLogFallbackTitle = 'Old School RuneScape';
 
-/* The three honest non-data states, verbatim from the retired component. */
+/* The two honest non-data states, verbatim from the retired component. The
+ * third — the empty-skills line — left with the skills grid the owner cut
+ * (2026-09-03, issue 287): a note about a surface nothing renders is a
+ * sentence nobody can reach. */
 export const bossLogLoadingNote = 'Loading the boss log.';
 export const bossLogUnavailableNote = 'Boss data is unavailable right now.';
-export const bossLogEmptySkillsNote = 'No skill levels reported.';
 
-/* osrsStatsProps renders the whole panel as data:
+/* ---------------------------------------------------------------------------
+ * The ticker (owner directive, 2026-09-03, issue 287)
  *
- *   no envelope yet   -> the fallback title over the loading note;
- *   envelope, no data -> the envelope's own title over the unavailable note;
- *   data              -> the compact levels grid (icon, level, the two totals
- *                        closing the last row) and the roomy tallies grid, in
- *                        the RuneLite arrangement the owner asked for.
+ * The three-column tally grid became one scrolling strip: every boss the
+ * hiscores list, most-killed first, each an icon and its count. The grid's
+ * whole contract survives the move, item for item — the icon is the same
+ * vendored thumbnail keyed by the same slug, an unmapped row still falls back
+ * to its initials, every figure still goes through `tally` so an unreported
+ * one reads "--" rather than "0", and every item still carries the same
+ * `bossDetail` through the same one hover-detail primitive.
  *
- * The levels grid carries an emptyNote and the tallies grid deliberately does
- * NOT: a payload without skills says so in words, while a payload without
- * bosses renders the empty table it always rendered — same two shapes the
- * retired component drew, decided by the same data. Unranked rows arrive
- * muted (true or false, so the tallies grid always states the distinction);
- * the levels grid never sets the flag, because the hiscores rank skills too
- * and the retired grid never drew that state — an attribute would claim a
- * distinction the rendering does not make. */
-export function osrsStatsProps(envelope: PanelEnvelope | null, icons: StatIconSet): StatTrackerProps {
-  if (envelope === null) {
-    return { title: bossLogFallbackTitle, status: 'unavailable', grids: [], note: bossLogLoadingNote };
+ * Two things are new and both are the owner's. The strip's LEAD carries the
+ * collection's own name — which is envelope data, the origin's served title,
+ * never a string in this tree — with the totals beside it. And the largest
+ * count in the strip is marked as the peak, which is the page's one highlight;
+ * a count of zero is dimmed rather than dropped, because a boss the hiscores
+ * list with nothing against it is information the grid always showed.
+ *
+ * The account is still never read. It is not in this file, it is not in the
+ * lead line, and it is not in any accessible name.
+ * ------------------------------------------------------------------------ */
+
+/* The Jagex Fan Content Policy notice, word for word from ATTRIBUTION.md.
+ * It travels with the artwork: the icons are Jagex intellectual property used
+ * as fan content, so wherever they render this renders under them. It is DATA
+ * on the props rather than a string in the component for the same reason every
+ * other word on this page is — but it is also the one string here that may
+ * never be paraphrased, and a frontend test compares it byte for byte with the
+ * document it is quoted from. */
+export const bossLogFanContentNotice =
+  "Created using intellectual property belonging to Jagex Limited under the terms of Jagex's Fan Content Policy. This content is not endorsed by or affiliated with Jagex.";
+
+export const bossLogEmptyBossesNote = 'No boss kills reported.';
+
+/* The strip's accessible name. */
+export const bossLogStripLabel = 'Boss kill counts, most killed first';
+
+/* The lead line: how many of the listed bosses have ever been fought, out of
+ * how many the hiscores list, and the total kills across them. Every one of
+ * the three is counted from the payload's own rows — an unreported count is
+ * neither fought nor added, which is what keeps "fought" a claim the data
+ * supports rather than a row count. */
+export function bossTotalsLine(bosses: readonly BossLogEntry[]): string {
+  let fought = 0;
+  let kills = 0;
+  for (const boss of bosses) {
+    if (boss.kc === null || boss.kc === undefined || boss.kc <= 0) {
+      continue;
+    }
+    fought += 1;
+    kills += boss.kc;
   }
-  /* The registry id names the kind, the same trust the retired mount
-   * expressed through watchPanel's type parameter. */
-  const data = (envelope.data ?? undefined) as BossLogData | undefined;
-  if (!data) {
-    return {
-      /* The fail-soft envelope a failed read produces carries no title
-         (unavailablePanel, lib/panels.ts). Rendered verbatim it drew a
-         HEADLESS "Boss data is unavailable" line — the one face of this
-         panel that reads as never having rendered at all — while the two
-         adapters beside it fall back to their own headings (issue 285). */
-      title: envelope.title || bossLogFallbackTitle,
-      status: envelope.status,
-      generatedAt: envelope.generatedAt,
-      grids: [],
-      note: bossLogUnavailableNote
-    };
-  }
-  const skills = data.skills ?? [];
-  const levels: StatGrid = {
-    key: 'levels',
-    label: 'Skill levels',
-    size: 'compact',
-    emptyNote: bossLogEmptySkillsNote,
-    cells: skills.map((skill) => ({
-      key: skill.name,
-      icon: icons.levels.get(skillSlug(skill.name)),
-      glyph: bossInitials(skill.name),
-      figure: tally(skill.level),
-      label: skillLabel(skill),
-      detail: skillDetail(skill)
-    })),
-    closing: skillSummary(skills).map((cell) => ({
-      key: cell.key,
-      caption: cell.label,
-      figure: cell.value,
-      label: summaryLabel(cell),
-      detail: summaryDetail(cell)
-    }))
-  };
-  const tallies: StatGrid = {
-    key: 'tallies',
-    label: 'Boss tallies',
-    size: 'roomy',
-    cells: data.bosses.map((boss) => ({
+  return `${formatWhole(fought)} of ${formatWhole(bosses.length)} bosses fought · ${formatWhole(kills)} kills`;
+}
+
+/* The strip's order: most killed first, then by name, so a redraw of the same
+ * payload is byte-identical and two bosses on the same count do not swap
+ * places between renders. An unreported count sorts as the absence it is —
+ * last, with the zeroes. */
+function killCount(boss: BossLogEntry): number {
+  return boss.kc === null || boss.kc === undefined ? -1 : boss.kc;
+}
+
+export function bossTickerItems(
+  bosses: readonly BossLogEntry[],
+  icons: ReadonlyMap<string, string>
+): TickerItem[] {
+  const ordered = bosses
+    .slice()
+    .sort((left, right) => killCount(right) - killCount(left) || left.name.localeCompare(right.name));
+  const peak = ordered.reduce((largest, boss) => Math.max(largest, killCount(boss)), 0);
+  return ordered.map((boss) => {
+    const count = killCount(boss);
+    const item: TickerItem = {
       key: boss.name,
-      icon: icons.tallies.get(bossSlug(boss.name)),
+      icon: icons.get(bossSlug(boss.name)),
       glyph: bossInitials(boss.name),
       figure: tally(boss.kc),
       label: cellLabel(boss),
       detail: bossDetail(boss),
-      muted: boss.rank === null
-    }))
+      /* The peak is only a peak when something was actually killed: a strip
+         of unreported rows has no maximum to mark. */
+      peak: peak > 0 && count === peak,
+      quiet: count <= 0
+    };
+    return item;
+  });
+}
+
+/* bossTickerProps renders the strip as data, in the same three faces the grid
+ * had: no envelope yet, an envelope with no payload, and a payload. */
+export function bossTickerProps(envelope: PanelEnvelope | null, icons: BossIconSet): TickerProps {
+  const base = {
+    lead: '',
+    items: [] as TickerItem[],
+    notice: bossLogFanContentNotice,
+    label: bossLogStripLabel
   };
+  if (envelope === null) {
+    return {
+      ...base,
+      title: bossLogFallbackTitle,
+      status: 'unavailable',
+      emptyNote: bossLogLoadingNote
+    };
+  }
+  const data = (envelope.data ?? undefined) as BossLogData | undefined;
+  if (!data) {
+    return {
+      ...base,
+      title: envelope.title || bossLogFallbackTitle,
+      status: envelope.status,
+      generatedAt: envelope.generatedAt,
+      emptyNote: bossLogUnavailableNote
+    };
+  }
   return {
-    title: envelope.title,
+    ...base,
+    title: envelope.title || bossLogFallbackTitle,
     status: envelope.status,
     generatedAt: envelope.generatedAt,
-    grids: [levels, tallies]
+    lead: bossTotalsLine(data.bosses),
+    items: bossTickerItems(data.bosses, icons),
+    emptyNote: bossLogEmptyBossesNote
   };
 }

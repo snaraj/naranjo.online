@@ -25,9 +25,32 @@
  *             gets out of its way. The art feed's variant.
  *   compact — the framed card at a tighter rhythm, for dense rows.
  *
+ * The last four are the ledger's (owner directive, 2026-09-03, issue 287).
+ * They are variants rather than a second primitive for exactly the reason
+ * this list exists: the redesign changes what a card LOOKS like — no radius,
+ * no shadow, a rule instead of a border, the page's own paper instead of a
+ * raised surface — and changes nothing about what a card IS. Every one of
+ * them is a token remap on the card element and nothing else:
+ *
+ *   ledger  — a ruled block on the page's own paper: hairline rules between
+ *             rows, no frame around them, no radius, no shadow.
+ *   table   — the ledger with a column head over it; same paper, same rules.
+ *   board   — an edge-to-edge grid of squares, so the card's padding gets out
+ *             of the grid's way.
+ *   strip   — a full-bleed band the ticker runs inside, ruled top and bottom.
+ *
  * Exported as a list so a test can prove every variant the type admits is
  * actually styled; a variant that maps to no rule is a silent no-op. */
-export const feedCardVariants = ['framed', 'flat', 'media', 'compact'] as const;
+export const feedCardVariants = [
+  'framed',
+  'flat',
+  'media',
+  'compact',
+  'ledger',
+  'table',
+  'board',
+  'strip'
+] as const;
 
 export type FeedCardVariant = (typeof feedCardVariants)[number];
 

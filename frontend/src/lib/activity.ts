@@ -9,10 +9,10 @@
  * heatmap implementation shared with the token-activity grid, so the two
  * cannot drift. */
 
-import type { ActivityLink, ActivityTrackerProps } from './blocks.ts';
-import { addDays, calendarColumns, formatWhole, pendingWeeks, type GridCell } from './grid.ts';
-import { panelAge, panelKinds, panelStaleNote } from './panels.ts';
-import type { PanelEnvelope, VCSActivityData, VCSCoverage } from './panels';
+import type { ActivityLink } from './blocks.ts';
+import { addDays, type GridCell } from './grid.ts';
+
+import type { VCSActivityData, VCSCoverage } from './panels';
 import { projectHost, projectHostLabel } from './projects.ts';
 
 /* The registry identifier the activity strip loads; the one place the id is
@@ -290,14 +290,18 @@ export function commitShaLinkLabel(message: string, sha: string): string {
 }
 
 /* ---------------------------------------------------------------------------
- * The adapter (issue 165): vcs-activity envelope in, ActivityTracker props
- * out. This is where commits become entries in a generic log — repository
- * names, subjects and validated hrefs all ride domain-free fields, and the
- * component that renders the result knows none of this file.
+ * What the COMMITS section renders from (owner directive, 2026-09-03, issue
+ * 287). The adapter that turned this envelope into a whole panel's props moved
+ * and became a composite: the calendar it drew is now one of three the commits
+ * section cycles between, and the section reads two panels, so its adapter
+ * lives in lib/commits.ts. Everything the panel's own rendering depended on —
+ * admission, the calendar's cells, every validated destination, and the words
+ * for each honest empty state — stays here, beside the payload it describes,
+ * and is imported from there.
  * ------------------------------------------------------------------------ */
 
-/* The entry log shows at most this many rows inside its fixed box; the
- * payload may carry more and the rest simply do not render. */
+/* The log shows at most this many rows; the payload may carry more and the
+ * rest simply do not render. */
 export const shownEntryRows = 5;
 
 /* The shell heading before any envelope arrives, or when one arrives with an
@@ -325,8 +329,10 @@ export function contributionsLabel(coverage: VCSCoverage | undefined): string {
   return coverage === 'public' ? ' public contributions' : ' contributions';
 }
 
-/* The three honest empty-state lines, verbatim from the retired component. */
-export const activityFiguresNote = 'no activity data';
+/* The two honest empty-state lines, verbatim from the retired component. The
+ * third — the figures note — left with the figures row: the headline totals
+ * are the commits caption now, and a caption with nothing to say is the
+ * caption's own empty state rather than a second one. */
 export const activityStripEmptyNote = 'activity data unavailable';
 export const activityEntriesNote = 'no recent commits reported';
 
@@ -349,86 +355,5 @@ export function commitTitleLink(commit: { repo: string; sha: string; message: st
     text: commit.message,
     href: commitReferenceUrl(commit),
     label: commitReferenceLinkLabel(commit.message)
-  };
-}
-
-/* vcsActivityProps renders the whole panel as data. A payload renders only
- * when the envelope carries the pinned kind AND the data passes strict
- * admission (parseVCSActivity); anything else — including no envelope yet —
- * is the honest empty state: no figures, an empty strip, no entry rows, each
- * region saying so in its own words while holding its reserved box. */
-export function vcsActivityProps(envelope: PanelEnvelope | null, now: Date = new Date()): ActivityTrackerProps {
-  const activity =
-    envelope !== null && envelope.kind === panelKinds.vcsActivity
-      ? parseVCSActivity(envelope.data)
-      : null;
-  /* THE WINDOW TRAILS TODAY, NOT THE PAYLOAD (issue 285). calendarColumns
-   * anchors on the newest dated cell unless told otherwise, and for this
-   * panel that cell is the payload's endDate — today while the producer is
-   * live, and a day frozen weeks back when it is not: the live origin was
-   * MEASURED serving its cold-start snapshot (endDate 2026-08-20) fourteen
-   * days on, with the calendar's right edge sitting on that week and nothing
-   * anywhere saying so. A trailing window ends on the reader's today (UTC,
-   * the calendar the payload's own dates are written in), so a payload that
-   * stopped advancing shows every day since as the dated faint absence the
-   * doctrine draws for "not measured", growing by one cell a day, under the
-   * stale line above it. A fresh payload already ends on today, so nothing
-   * changes for it; a producer whose day is ahead of the reader's clock keeps
-   * its own end. */
-  const today = now.toISOString().slice(0, 10);
-  const anchor =
-    activity !== null && activity.endDate !== undefined && activity.endDate > today
-      ? activity.endDate
-      : today;
-  return {
-    title: envelope?.title || activityFallbackTitle,
-    status: envelope?.status ?? 'unavailable',
-    generatedAt: envelope?.generatedAt,
-    staleNote: panelStaleNote(
-      envelope?.status ?? 'unavailable',
-      envelope?.generatedAt,
-      activity?.endDate,
-      now
-    ),
-    figures:
-      activity === null
-        ? []
-        : [
-            {
-              key: 'total',
-              lead: formatWhole(activity.totalContributions),
-              rest: contributionsLabel(activity.coverage)
-            },
-            { key: 'streak', lead: formatWhole(activity.streak), rest: '-day streak' }
-          ],
-    figuresNote: activityFiguresNote,
-    strip: {
-      /* calendarColumns (issue 189), not the old positional toColumns: the
-       * payload's own weeks are already true Sunday-start calendar weeks
-       * (activityCells' own "Columns run Sunday..Saturday" comment), so this
-       * realignment is idempotent by construction — but it is still the
-       * one path both grids share, rather than a second implicit assumption
-       * that this payload happens to already agree with it. */
-      columns: activity === null ? [] : calendarColumns(activityCells(activity), pendingWeeks, anchor),
-      noun: 'contribution',
-      label:
-        activity === null
-          ? 'contribution calendar'
-          : `contribution calendar: ${activity.weeks.length} weeks of daily counts, newest last`,
-      emptyNote: activityStripEmptyNote
-    },
-    entries:
-      activity === null
-        ? []
-        : activity.recentCommits.slice(0, shownEntryRows).map((commit) => ({
-            source: {
-              text: commit.repo,
-              href: commitRepoUrl(commit.repo),
-              label: commitRepoLinkLabel(commit.repo)
-            },
-            title: commitTitleLink(commit),
-            age: panelAge(commit.at)
-          })),
-    entriesNote: activityEntriesNote
   };
 }

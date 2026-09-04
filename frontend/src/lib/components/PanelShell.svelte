@@ -67,7 +67,7 @@
     gap: var(--panel-gap, 0.5rem);
     padding: var(--panel-padding, 0.625rem);
     background: var(--panel-surface, rgb(40, 40, 40));
-    border: 1px solid var(--panel-border, rgb(23, 23, 23));
+    border: var(--panel-border-width, 1px) solid var(--panel-border, rgb(23, 23, 23));
     border-radius: var(--panel-radius, 3px);
     color: var(--panel-text, rgb(230, 230, 230));
     font-size: var(--panel-font-size, 0.8125rem);
@@ -77,18 +77,46 @@
      collapsing to a bare h2 so a later addition lands beside the title
      instead of under it — the geometry a card reserves must not depend on
      what happens to be in the row today. */
+  /* A GRID, so the two cells shrink in a stated ORDER rather than in
+     proportion to how long their text happens to be. Both truncate — neither
+     may wrap, because the head is the panel's reserve — but the title is the
+     panel's identity and the note is its freshness, so the title takes the
+     width it needs and the note takes what is left. As a flex row the note's
+     long sentence dominated the basis and squeezed the title first: "GitHub"
+     drew as "GIT…" on a 390px screen, which is a worse answer than a shorter
+     date. */
   .panel-head {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, auto) minmax(0, 1fr);
     align-items: center;
-    justify-content: space-between;
     gap: 0.5rem;
   }
 
+  /* Every dimension of the heading is a token, for the reason the rest of this
+     component's are: the ledger sets it as the sheet's mono label — small,
+     tracked out, uppercase, muted — and the panel layer is where that decision
+     belongs rather than in a second rule here. The fallbacks are the values
+     this row shipped with, so a token layer that lost one degrades to what it
+     used to look like rather than to nothing. */
+  /* ONE LINE, TRUNCATING, for the same reason the note below is — and the
+     head is the reserve, so this is the half that was missing. A title that
+     WRAPS makes the head taller, and the head that waits is not the head that
+     arrives: the version-control panel's fallback title is longer than the
+     origin's served one, so on a 393px screen the shell drew a two-line head
+     and mounting pulled 28px out from under everything below it. Measured on
+     a Pixel 5: `.panel-head` 42px before the envelope, 14px after. The words
+     are still in the accessible name; what truncates is the drawing. */
   .panel-title {
     margin: 0;
+    min-inline-size: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-family: var(--panel-title-family, inherit);
     font-size: var(--panel-title-size, 0.8125rem);
-    font-weight: 650;
-    letter-spacing: 0.02em;
+    font-weight: var(--panel-title-weight, 650);
+    letter-spacing: var(--panel-title-tracking, 0.02em);
+    text-transform: var(--panel-title-transform, none);
     color: var(--panel-heading, var(--panel-accent, rgb(220, 138, 0)));
   }
 
@@ -99,6 +127,9 @@
      usage tracker's body line reads, and the same muted ink. */
   .panel-note {
     min-inline-size: 0;
+    font-family: var(--panel-note-family, inherit);
+    letter-spacing: var(--panel-note-tracking, normal);
+    text-transform: var(--panel-note-transform, none);
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;

@@ -192,6 +192,36 @@
     --card-gap: var(--card-gap-compact);
   }
 
+  /* THE LEDGER FAMILY (owner directive, 2026-09-03, issue 287). Four looks,
+     zero new rules of substance: each is a remap of the card's own tokens onto
+     the ledger roles declared in styles.css, so the redesign moves what a card
+     paints without this component learning a single value. A ledger block is
+     the page's own paper with no frame, no radius and no shadow — the rules
+     that separate its rows are drawn by the rows themselves, one hairline
+     each, which is what makes a ledger read as one continuous sheet rather
+     than as a stack of boxes. */
+  .feed-card[data-variant='ledger'],
+  .feed-card[data-variant='table'],
+  .feed-card[data-variant='board'],
+  .feed-card[data-variant='strip'] {
+    --card-surface: transparent;
+    --card-border-width: 0rem;
+    --card-radius: 0rem;
+    --card-shadow: none;
+    --card-padding: 0rem;
+    --card-gap: 0rem;
+    --card-ink: var(--ledger-ink);
+  }
+
+  /* The board and the strip open a gap the ledger does not: a grid of squares
+     needs air under the head it sits below, and the ticker needs the same
+     under the board. The ledger and the table draw their own separation with
+     rules instead, so a gap there would double it. */
+  .feed-card[data-variant='board'],
+  .feed-card[data-variant='strip'] {
+    --card-gap: var(--square-gap);
+  }
+
   .feed-card-header {
     display: grid;
     gap: var(--card-header-gap);
@@ -281,6 +311,18 @@
      the card's last region. */
   .feed-card-media:not(:last-child) {
     margin-block-end: 0;
+  }
+
+  /* A grid item's automatic minimum size is its MIN-CONTENT, so a region
+     holding an unbreakable row — a segmented control, a table head — refuses
+     to shrink and drags the card past the column, which the page then scrolls
+     sideways to reveal. Zero as the minimum lets every region be exactly the
+     card it was given, and anything genuinely too wide scrolls inside its own
+     box instead. */
+  .feed-card-header,
+  .feed-card-body,
+  .feed-card-footer {
+    min-inline-size: 0;
   }
 
   .feed-card-body {

@@ -7,6 +7,85 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.73] - 2026-09-03
+
+### Changed
+
+- The page is a ledger (owner directive, 2026-09-03, issue #287). The feed of
+  cards is replaced by one ruled sheet: a chrome row of section links between
+  two rules, a picture band, the name set as a masthead in Archivo at 900, five
+  numbered sections down the column, a closing band and a footer. Everything
+  that made a card a card — the raised plate, the seam, the radius, the padding
+  — is gone; what separates a row from the next is a hairline drawn in the same
+  ink the words are, and what separates a section is a two-pixel rule under its
+  number. Every part of it is a token in `styles.css`, so the four reading modes
+  carry the design with no mode-specific rule anywhere.
+- Professional Experience opens and closes. The four roles are ruled rows —
+  years, employer, role, place — and the accomplishments live in a drawer that
+  grows open when the row is pressed, collapsed by default. The employer link
+  moved inside the drawer: the row itself is the disclosure control now, and an
+  anchor inside a button is invalid content no keyboard can reach.
+- Projects is a ruled table of the four most recently pushed repositories, with
+  the roster it was chosen from counted in its head ("latest 4 of 7 · by last
+  push"). The roster is still the payload's, the order is still derived from
+  each row's own instant, and the captured rows are still the honest fallback.
+- Commits is its own section and it CYCLES. The contribution calendar leads it,
+  and a segmented control swaps the same heatmap between the contributions and
+  each token source's daily series — several pictures of one year, laid on one
+  53-week window so they can be read against each other. How many there are is
+  data: a source that publishes no daily record is offered no segment, because a
+  reserve is a promise that something is coming and for that source nothing is.
+  Each set states its own reading under the grid, and the recent commits follow
+  as ruled rows.
+- Trackers is a board of five turnable squares plus a scrolling strip. The
+  squares carry the lifetime totals, the per-source figures, the model split and
+  the session record, and each turns over to its own breakdown — the token
+  categories with their exact counts and shares. The strip runs every boss the
+  hiscores list, most killed first, led by the collection's own served name.
+- The heatmap is monochrome in every reading mode, and the busiest day of a
+  window wears the page's one highlight through an attribute of its own rather
+  than a sixth ramp level — so the ramp stays monotone in lightness while the
+  extreme is still marked. Every cell still prints its own count.
+- The chrome row is in the document's flow. It used to be a control pinned to
+  the viewport's corner, which cost a translucent plate (issue #219), a
+  reserved lane on every row of the page (issue #241) and then a second
+  positioning scheme below the handle breakpoint (issue #264). A row that
+  scrolls with the page needs none of the three, and they are removed rather
+  than restyled.
+
+### Added
+
+- Archivo, self-hosted, as the page's second face: a variable grotesque with
+  both a weight and a width axis, split into the same two character ranges the
+  mono face is split into and vendored beside its OFL licence. Figures, labels,
+  hashes and dates stay in JetBrains Mono; everything a person reads is Archivo.
+- Eight vendored band textures (419 KB total) from the owner's own Unsplash
+  wallpaper library, two per reading mode, cycled by the arrows on the band and
+  crossfaded between mounted layers so a mode switch moves no geometry.
+- A block may now read SEVERAL live panels at once (`panelsBlock`). The commits
+  section is the first: one picture built from two envelopes, through the same
+  visibility-aware `watchPanel` every single-panel block already uses.
+
+### Removed
+
+- `EntryLog`, `ActivityTracker`, `UsageTracker` and `StatTracker`, and the
+  adapters that fed only them. Their replacements are the five ledger surfaces;
+  every floor they carried — validated hrefs, formatting kept out of components,
+  locked icon sourcing, honest empty states, provenance by exception, the
+  reserved boxes — is pinned on the surface that replaced them.
+- The twenty-five skill icons, with the levels grid the owner cut. Third-party
+  art must never outlive the data that justifies it, and `ATTRIBUTION.md`
+  records how to re-vendor them the day a skills surface returns.
+- The windowing layer the retired trackers were the only readers of — the range
+  selector's ranges and columns, the coverage window and its column mapping,
+  and the readings and period folds written for the strips beneath them (1,022
+  lines net, `periods.ts` and its suite). `dayNumber` and `formatDateRange` are
+  what the module still is. The coverage window's own rule is superseded rather
+  than mislaid: the commits block lays all three of its sets on ONE 53-week
+  calendar so a reader cycling between them compares like with like, and
+  `docs/design-iteration.md` records why, beside the half of that rule the
+  redesign keeps.
+
 ## [0.1.72] - 2026-09-03
 
 ### Fixed

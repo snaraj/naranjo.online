@@ -3,8 +3,68 @@
   import PageHeader from './lib/components/PageHeader.svelte';
   import PageSection from './lib/components/PageSection.svelte';
   import PullToRefresh from './lib/components/PullToRefresh.svelte';
-  import SectionNav from './lib/components/SectionNav.svelte';
+  import TextureBand from './lib/components/TextureBand.svelte';
+  import { bandTextures } from './lib/textureAssets.ts';
+  import {
+    bandMode,
+    documentPrefersDark,
+    nextTextureIndex,
+    prefersDarkQuery,
+    textureLabel,
+    textureSet
+  } from './lib/textures.ts';
   import { page } from './page.ts';
+
+  /* THE BAND'S STATE LIVES HERE, and that is deliberate: the page opens and
+     closes on the SAME picture, so the two bands are two views of one value.
+     Held by the page's own chrome rather than in a module store, because it is
+     chrome — a decorative index that lasts as long as the visit and is
+     persisted nowhere, which is what the owner asked for and also the reason
+     it needs no cookie, no storage and no consent question. */
+  let mode = $state(bandMode());
+  let prefersDark = $state(documentPrefersDark());
+  let index = $state(0);
+
+  const set = $derived(textureSet(mode, prefersDark));
+  const texture = $derived(set[index] ?? set[0]);
+
+  /* The reading mode is an ATTRIBUTE on the document, written by the toggle
+     (lib/themes.ts) and by the origin's own stamp — never by this component —
+     so the band watches the attribute rather than being told. That keeps the
+     one mechanism the whole page already agrees on: the mode is what the
+     document says it is. Changing modes resets to the set's first texture,
+     because index 1 of one pair means nothing about index 1 of another. */
+  $effect(() => {
+    const root = document.documentElement;
+    const observer = new MutationObserver(() => {
+      const next = bandMode();
+      if (next !== mode) {
+        mode = next;
+        index = 0;
+      }
+    });
+    observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => observer.disconnect();
+  });
+
+  /* And the other half of `auto`: an unstamped document follows the device, so
+     a device that changes its mind mid-visit changes the band with it. */
+  $effect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return;
+    }
+    const query = window.matchMedia(prefersDarkQuery);
+    const onChange = (): void => {
+      prefersDark = query.matches;
+      index = 0;
+    };
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  });
+
+  function step(by: number): void {
+    index = nextTextureIndex(index, set.length, by);
+  }
 </script>
 
 <!-- The description meta moved to index.html's static head with the
@@ -20,30 +80,49 @@
 
 <PageHeader />
 
-<!-- The page is ONE stacked column (owner directive, issue 134): the name, the
-  section nav under it, then every section top to bottom in the order the nav
-  lists them. It used to tile its panels across the whole viewport, which the
-  owner rejected in favour of a single centred container — a wider one than the
-  30rem ribbon that arrangement replaced, which is why the column token grew
-  rather than reverting.
+<!-- THE LEDGER (owner directive, 2026-09-03, issue 287). The page is one
+  ruled sheet: a picture band under the chrome row, the name set large across
+  the column with a rule drawn under it, five numbered sections, a second band
+  closing the sheet, and a footer.
 
   What the sections ARE lives in src/page.ts, the manifest (owner directive,
-  issue 165): this file renders that array and is otherwise inert. It used to
-  be the table of contents itself — one import and one mount line per section
-  and per panel, held in step by fence comments — and the manifest replaced
-  the fences, because an ordered array whose entries are the page needs no
-  markers to keep its halves aligned: there is only one half. Adding a block
-  or reordering the page happens there; this file changes when the page's
-  CHROME changes, nothing else. -->
+  issue 165): this file renders that array and is otherwise inert. Adding a
+  block or reordering the page happens there; this file changes when the page's
+  CHROME changes, nothing else — and the two bands, the masthead and the footer
+  are exactly that. -->
 <main aria-labelledby="page-title">
+  <TextureBand
+    layers={bandTextures}
+    active={texture.file}
+    label={textureLabel(texture, index, set.length, true)}
+    controls
+    onStep={step} />
+
   <div class="page-intro">
     <h1 id="page-title">Samuel Naranjo</h1>
-    <SectionNav />
+    <!-- The rule under the name is drawn rather than declared: a border would
+      simply be there, and the owner asked for it to arrive. Under reduced
+      motion it is already drawn on the first frame — the same rule, without
+      the arrival — which is why the dash offset is animated by a class the
+      motion query owns rather than by an attribute this file sets. -->
+    <svg class="masthead-rule" width="100%" height="3" viewBox="0 0 1440 3" preserveAspectRatio="none" aria-hidden="true">
+      <line x1="0" y1="1.5" x2="1440" y2="1.5" stroke="currentColor" stroke-width="3" />
+    </svg>
   </div>
 
-  {#each page as section (section.id)}
-    <PageSection {section} />
+  {#each page as section, position (section.id)}
+    <PageSection {section} ordinal={String(position + 1).padStart(2, '0')} />
   {/each}
+
+  <TextureBand
+    layers={bandTextures}
+    active={texture.file}
+    label={textureLabel(texture, index, set.length, true)} />
+
+  <footer class="page-footer">
+    <span class="footer-mark">naranjo.online</span>
+    <span class="footer-meta">MIT · github.com/snaraj</span>
+  </footer>
 
   <!-- The reader's grip on the column (owner directive, 2026-08-24). It sits
     INSIDE main because main is the column: the two handles are drawn against

@@ -296,15 +296,16 @@ function contrastRatio(foreground, background) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-/* The alpha channel of whatever spelling of a color the engine computed —
- * `rgba(r, g, b, a)`, `color(srgb r g b / a)`, or an opaque form that carries
- * no alpha component at all and therefore means 1. It reads the LAST
- * component only when the notation actually carries four, so an opaque
- * `rgb(r, g, b)` can never be mistaken for a 62%-transparent one. */
-function alphaOf(color) {
-  const parsed = (color.match(/[\d.]+/g) ?? []).map(Number);
-  return parsed.length > 3 ? parsed[3] : 1;
-}
+/* alphaOf is GONE (owner directive, 2026-09-03, issue 287). It read the alpha
+ * channel out of whatever spelling of a colour an engine computed, and it had
+ * exactly one consumer: the pin on the fixed reading-mode control's backdrop
+ * plate. The ledger's masthead is an in-flow row, nothing scrolls beneath it,
+ * and that lane now asserts the structural fact that makes a backdrop
+ * unnecessary instead of the backdrop's own opacity — so the helper has no
+ * caller left. It is removed rather than kept warm: a helper nothing calls is
+ * a helper nobody maintains, and the contrast readers above (channels,
+ * relativeLuminance, contrastRatio) are the colour machinery this file
+ * actually uses. */
 
 const openReadingModes = async (page) => {
   await page.getByRole('button', { name: 'Reading mode' }).click();
@@ -514,12 +515,19 @@ test('switching the reading mode repaints without moving anything', async ({ pag
   const geometry = () =>
     page.evaluate(() => {
       const boxes = {};
+      const shifted = ({ x, y, width, height }, offset) => ({ x, y: y + offset, width, height });
       const round = ({ x, y, width, height }) =>
         [x, y, width, height].map((value) => Math.round(value * 100) / 100);
+      /* DOCUMENT coordinates, not viewport ones (owner directive, 2026-09-03,
+         issue 287), and the scroll position beside them. A viewport-relative
+         box moves for two different reasons — the page re-laid out, or the
+         document scrolled — and this lane's claim is about the first. The two
+         are asserted separately below so a failure says which one happened. */
+      const scrollY = window.scrollY;
       for (const selector of ['#app', '.page-header', 'main', 'h1', '.panel-stack']) {
         const node = window.document.querySelector(selector);
         if (node === null) continue;
-        boxes[selector] = round(node.getBoundingClientRect());
+        boxes[selector] = round(shifted(node.getBoundingClientRect(), scrollY));
       }
       /* Every heatmap block by name, not just the first. A graph is now sized
          to the columns it draws out of the cell-metric custom properties, and
@@ -527,10 +535,11 @@ test('switching the reading mode repaints without moving anything', async ({ pag
          them — so the four modes are exactly where that rule is tested. */
       for (const block of window.document.querySelectorAll('.grid-block')) {
         const label = block.querySelector('.grid-strip')?.getAttribute('aria-label') ?? 'grid';
-        boxes[`grid:${label}`] = round(block.getBoundingClientRect());
+        boxes[`grid:${label}`] = round(shifted(block.getBoundingClientRect(), scrollY));
       }
       return {
         boxes,
+        scrollY,
         scrollHeight: window.document.documentElement.scrollHeight,
         surface: getComputedStyle(window.document.documentElement).backgroundColor,
       };
@@ -564,6 +573,15 @@ test('switching the reading mode repaints without moving anything', async ({ pag
       expect(after.surface, `${label} paints the same page surface as ${other}`).not.toBe(surface);
     }
     painted.set(label, after.surface);
+    /* NO SCROLL, stated on its own: a swap that nudges the document is a
+       jolt the reader feels even when not one box re-laid out, and it is a
+       different defect from a relayout — measured on WebKit as a 2px scroll
+       when focus returned to a masthead control sitting inside a stale
+       `scroll-padding-top`. It is asserted exactly, not roughly. */
+    expect(
+      after.scrollY,
+      `the ${label} swap scrolled the document from ${before.scrollY} to ${after.scrollY}`
+    ).toBe(before.scrollY);
     expect(after.boxes, `the ${label} swap moved the page under the reader`).toEqual(before.boxes);
     expect(after.scrollHeight, `the ${label} swap changed the page height`).toBe(before.scrollHeight);
   }
@@ -576,6 +594,10 @@ test('switching the reading mode repaints without moving anything', async ({ pag
   await page.getByRole('button', { name: 'Auto', exact: true }).click();
   await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
   const unstamped = await geometry();
+  expect(
+    unstamped.scrollY,
+    `returning to auto scrolled the document from ${before.scrollY} to ${unstamped.scrollY}`
+  ).toBe(before.scrollY);
   expect(unstamped.boxes, 'returning to auto moved the page under the reader').toEqual(before.boxes);
   expect(unstamped.scrollHeight).toBe(before.scrollHeight);
   expect(
@@ -750,17 +772,36 @@ test('a phone still renders the single full-width column it always did', async (
     for (const card of observed.cards) {
       expect(card, `a card is ${card}px wide on a ${width}px phone`).toBeCloseTo(expected, 0);
     }
-    /* And the guarantee that replaces the lane, MEASURED rather than reasoned:
-       at rest the control is still in the viewport's own top-end corner, and
-       once the reader has scrolled it is entirely gone from the viewport — so
-       it holds no pixels over scrolled content at any offset, which is the
-       thing the lane existed to promise. A control that had stayed
-       viewport-glued reports the identical box at both offsets and fails the
-       second of these by its full height. */
+    /* And the guarantee that replaces the lane, MEASURED rather than reasoned.
+       THE CONTROL RIDES THE MASTHEAD NOW (owner directive, 2026-09-03, issue
+       287). The ledger's head row is an ordinary in-flow row carrying the page
+       mark, the section nav and the reading-mode control, so "at rest it is in
+       the viewport's own top-end corner" describes a fixed control this page
+       does not have any more. What that corner check was FOR is unchanged and
+       is what is measured here: the control costs the column no inline lane,
+       and it holds no pixels over scrolled content at any offset. So it is
+       measured against the row it now lives in rather than against the
+       viewport — the masthead opens at the page's own top reserve, the control
+       sits inside that row at the row's end edge, the row stops at the
+       column's end edge, and once the reader has scrolled the whole row is
+       gone. A control that had stayed viewport-glued reports the identical box
+       at both offsets and fails the last of these by its full height. */
     const control = await page.evaluate(async () => {
       const header = window.document.querySelector('.page-header');
-      const rest = header.getBoundingClientRect();
-      const at = { top: rest.top, right: rest.right, bottom: rest.bottom };
+      const button = header.querySelector('[aria-label="Reading mode"]');
+      const row = header.getBoundingClientRect();
+      const seat = button.getBoundingClientRect();
+      const at = {
+        reserve: parseFloat(
+          getComputedStyle(window.document.getElementById('app')).paddingBlockStart
+        ),
+        rowTop: row.top,
+        rowBottom: row.bottom,
+        rowRight: row.right,
+        top: seat.top,
+        right: seat.right,
+        bottom: seat.bottom,
+      };
       window.scrollTo(0, 600);
       await new Promise((settle) => requestAnimationFrame(() => requestAnimationFrame(settle)));
       const scrolledBottom = header.getBoundingClientRect().bottom;
@@ -772,18 +813,36 @@ test('a phone still renders the single full-width column it always did', async (
     expect(
       control.offset,
       `the page could not be scrolled at ${width}px, so this check proves nothing`
-    ).toBeGreaterThan(control.rest.bottom);
+    ).toBeGreaterThan(control.rest.rowBottom);
+    /* The masthead opens exactly at the reserve the page keeps above its own
+       first row — nothing floats above it, and nothing pushes it down. */
+    expect(
+      control.rest.rowTop,
+      `at rest the masthead starts ${control.rest.rowTop}px down a ${width}px phone, against a ${control.rest.reserve}px reserve`
+    ).toBeCloseTo(control.rest.reserve, 0);
+    /* The control is INSIDE that row, not floating over the page beside it. */
     expect(
       control.rest.top,
-      `at rest the control sits ${control.rest.top}px down a ${width}px phone, not in its top corner`
-    ).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
+      `the reading-mode control's top edge is ${control.rest.top}px, above the masthead's own ${control.rest.rowTop}px`
+    ).toBeGreaterThanOrEqual(control.rest.rowTop - subPixel);
     expect(
-      observed.viewport - control.rest.right,
-      `at rest the control sits ${observed.viewport - control.rest.right}px from the end edge`
+      control.rest.bottom,
+      `the reading-mode control's bottom edge is ${control.rest.bottom}px, below the masthead's own ${control.rest.rowBottom}px`
+    ).toBeLessThanOrEqual(control.rest.rowBottom + subPixel);
+    /* Still at the inline END of its row, and the row still stops where the
+       column does: the dead strip down the inline end the owner reported
+       (issue 264) shows up here as a gap at either of these two joints. */
+    expect(
+      control.rest.right,
+      `the control's end edge is ${control.rest.right}px inside a masthead that ends at ${control.rest.rowRight}px`
+    ).toBeGreaterThanOrEqual(control.rest.rowRight - gutterPx / 2 - subPixel);
+    expect(
+      observed.viewport - control.rest.rowRight,
+      `at rest the masthead ends ${observed.viewport - control.rest.rowRight}px from the end edge`
     ).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
     expect(
       control.scrolledBottom,
-      `after scrolling ${control.offset}px the control's bottom edge is still ${control.scrolledBottom}px into the viewport, over the content below it`
+      `after scrolling ${control.offset}px the masthead's bottom edge is still ${control.scrolledBottom}px into the viewport, over the content below it`
     ).toBeLessThanOrEqual(subPixel);
   }
 });
@@ -1079,41 +1138,42 @@ function syntheticSeries(days) {
   };
 }
 
-/* LOOK, at every length a real series can be (owner directive, 2026-08-24;
- * RETARGETED by issue 178, again by issue 189, and RE-AIMED by issue 268).
+/* ONE CALENDAR, CYCLED (owner directive, 2026-09-03, issue 287, SPEC 8.8;
+ * supersedes the coverage-sized window of issue 268).
  *
- * Sizing a box to its data was only an improvement if the box's GRAMMAR
- * survived the short end — the same cell, the same gap, the legend in the
- * same place. Issue 189 added the axis claim on top: a fixed weekday axis is
- * only truthful across a window that does not move, so every series realigned
- * onto one trailing calendar. It bought that truthfulness with a fixed
- * fifty-three weeks, which the owner reported from the other side: a fortnight
- * of history drawn against fifty weeks of dated emptiness reads as a year that
- * failed rather than as a fortnight that worked.
+ * This lane used to prove the opposite rule, and the supersession is the
+ * point of the rewrite rather than a footnote to it. Issue 189 realigned every
+ * series onto one trailing calendar so a fixed weekday axis could be truthful;
+ * issue 268 then sized that calendar to the panel's own coverage, because the
+ * owner reported a fortnight of history drawn against fifty weeks of dated
+ * emptiness reading as a year that failed. The ledger redesign keeps the axis
+ * claim and retires the sizing: the commits section draws ONE grid that the
+ * reader cycles between sets — the version-control contributions and each
+ * token source's daily series — and a box that changed width on every segment
+ * switch would both break the zero-CLS floor and stop the sets being
+ * comparable, which is the whole reason the owner asked for the cycle. The
+ * misread issue 268 answered is answered here by the other half of that fix,
+ * which the redesign keeps: dated absent cells, the month axis, and a per-set
+ * caption stating what the source actually captured.
  *
- * WHAT SURVIVES IS THE AXIS CLAIM, RE-SCOPED. The window is derived from the
- * panel's own coverage now, capped at the reserve — so it is no longer
- * identical at every series LENGTH, and pinning that would pin the very thing
- * the owner asked to remove. It is identical across the panel's own SOURCES,
- * which is where the claim was always load-bearing: two strips stacked in one
- * card are read against each other, so a column at the same x has to be the
- * same week on both, and a source that stopped capturing early must not
- * silently sit a week to the left of the one above it.
+ * So the claim is now IDENTITY ACROSS SETS, and it is measured by pressing
+ * every segment on a real page: same column count, same month axis in the same
+ * columns, same last day. A set placed on a window of its own fails every one
+ * of them.
  *
- * So this lane renders the real page at three coverages and measures BOTH of
- * the panel's graphs each time. The grammar comparison is between the two
- * sources at one coverage (where it must be exact), and the window comparison
- * is across the three coverages (where it must TRACK, between a floor and the
- * reserve). A per-series window passes none of it: the second source keeps its
- * own fifteen days throughout, so it would draw the floor while the first drew
- * the capture. */
-test('the full-width strips draw ONE window per panel, sized to its coverage (issue 189; owner 2026-08-31)', async ({
+ * It is deliberately not a read of one page in one state. The first source's
+ * series is restaged at three very different coverages, and the assertion is
+ * that the coverage moves the DATA and never the FRAME — the captured cells
+ * grow, the window does not. A build that reintroduced per-set sizing passes
+ * nothing here: its short set would draw a narrower calendar than the
+ * contributions beside it at the very first coverage. */
+test('every set draws ONE calendar, and coverage moves the data rather than the frame (owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
-  /* Three coverages: under the floor, between the floor and the reserve, and
-     past the reserve. The SECOND source is never restaged — it keeps the
-     origin's own fifteen days — which is what makes the per-source equality
-     below a claim rather than a coincidence at every shape but the first. */
+  /* Three coverages: a fortnight, most of a year, and far past the window.
+     The SECOND source is never restaged — it keeps the origin's own capture —
+     which is what makes the cross-set equality a claim rather than a
+     coincidence at every shape but the first. */
   const shapes = [15, 200, 900];
   const measured = [];
   for (const days of shapes) {
@@ -1124,81 +1184,64 @@ test('the full-width strips draw ONE window per panel, sized to its coverage (is
       sources[0].series = syntheticSeries(days);
     });
     await visit(page);
-    /* WAIT FOR THE STRIP THE WAY A READER'S BROWSER DOES (issue 201). The
-       probe below dereferences `.usage-source .grid-block` and then reaches
-       three levels inside it; on the slow emulated android-chrome lane that
-       chain ran once before the strip existed and threw
-       "Cannot read properties of null", taking the staged route down with it.
-       A locator wait is not a tolerance — it does not widen anything the
-       assertions below check — it is the probe agreeing to measure the page
-       only once the page has the thing being measured. The wait is on the
-       CELL rather than on the block, because the block is the outermost of
-       the four elements the evaluate needs and the cell is the innermost:
-       waiting for the last one to exist is what makes the whole chain
-       safe. */
-    await expect(
-      page.locator('.usage-source .grid-block .grid-cells .grid-cell').first()
-    ).toBeAttached();
-    measured.push({
-      days,
-      sources: await page.evaluate(() =>
-        [...window.document.querySelectorAll('.usage-source .grid-block')].map((block) => {
-          const rect = (node) => node.getBoundingClientRect();
+    /* WAIT FOR THE STRIP THE WAY A READER'S BROWSER DOES (issue 201): the
+       probe below reaches three levels into the block, and on a slow emulated
+       lane that chain has run before the grid existed. The wait is on the
+       innermost element, which is what makes the whole chain safe. */
+    await expect(page.locator('.grid-block .grid-cells .grid-cell').first()).toBeAttached();
+    const segments = page.locator('.commit-segment');
+    const count = await segments.count();
+    expect(
+      count,
+      `the commits section offers ${count} set(s) at ${days} days; an identity claim needs at least two to compare`
+    ).toBeGreaterThan(1);
+    const sets = [];
+    for (let index = 0; index < count; index += 1) {
+      await segments.nth(index).click();
+      sets.push(
+        await page.evaluate(() => {
+          const block = window.document.querySelector('.grid-block');
           const cells = block.querySelector('.grid-cells');
-          const legend = block.querySelector('.grid-legend');
-          const cell = cells.querySelector('.grid-cell');
-          const round = (value) => Math.round(value * 100) / 100;
+          const active = [...window.document.querySelectorAll('.commit-segment')].find(
+            (segment) => segment.getAttribute('aria-pressed') === 'true'
+          );
           const real = [...cells.querySelectorAll('[data-grid-absent="false"]')];
           return {
-            label: block
-              .closest('.usage-source')
-              .querySelector('.usage-source-label')
-              .textContent.trim(),
+            label: active?.textContent.trim() ?? '',
             claimed: Number(block.getAttribute('data-grid-columns')),
             drawn: Math.ceil(cells.querySelectorAll('.grid-cell').length / 7),
+            rows: getComputedStyle(cells).gridTemplateRows.split(' ').length,
             /* THE WINDOW'S OWN CALENDAR, fingerprinted off the month axis:
                each tick's full month name and the column it sits in. It is
                the only dated thing the DOM exposes about a window — an absent
-               cell's accessible text is "no data for this day" and carries no
-               date — and it is exactly the right thing to compare, because the
-               axis IS what a reader reads the two strips against. Two windows
-               that agree here are drawing the same weeks in the same places. */
+               cell's accessible text carries no date — and it is exactly the
+               right thing to compare, because the axis IS what a reader reads
+               the sets against. Two sets that agree here are drawing the same
+               weeks in the same places. */
             calendar: [...block.querySelectorAll('.grid-month')]
               .map((tick) => `${tick.getAttribute('title')}@${getComputedStyle(tick).gridColumnStart}`)
               .join('|'),
-            /* What the source actually captured inside that window, so a
-               truncated capture is visible as a count rather than inferred. */
+            /* What this set actually captured inside that window, so a short
+               capture is visible as a count rather than inferred from the
+               frame. */
             realCount: real.length,
             realLast: real[real.length - 1]?.getAttribute('aria-label') ?? '',
-            cell: round(rect(cell).width),
-            cellHeight: round(rect(cell).height),
-            gap: round(parseFloat(getComputedStyle(cells).columnGap || '0')),
-            rows: getComputedStyle(cells).gridTemplateRows.split(' ').length,
-            block: round(rect(block).width),
-            /* Placement, measured as the offset of the key's END edge from the
-               block's END edge: the legend is right-aligned under the graph,
-               and "right-aligned" is a relationship, not a width. */
-            legendOffset: round(rect(block).right - rect(legend).right),
-            legendTop: round(rect(legend).top - rect(block).top),
-            strip: round(rect(block.querySelector('.grid-strip')).height),
           };
         })
-      ),
-    });
+      );
+    }
+    measured.push({ days, sets });
   }
 
   for (const shape of measured) {
-    expect(
-      shape.sources.length,
-      `the token panel drew ${shape.sources.length} graphs at ${shape.days} days; this lane compares two`
-    ).toBeGreaterThan(1);
-    const [lead, ...others] = shape.sources;
+    const [lead, ...others] = shape.sets;
+    expect(lead.rows, `a ${shape.days}-day calendar stopped being seven days tall`).toBe(7);
     expect(lead.drawn, `"${lead.label}" drew a width it did not claim`).toBe(lead.claimed);
-    expect(lead.rows, `a ${shape.days}-day panel stopped being seven days tall`).toBe(7);
+    /* Non-vacuity, both ways: a one-column calendar or a monthless axis would
+       satisfy every equality below for free. */
+    expect(lead.claimed, `"${lead.label}" drew ${lead.claimed} columns`).toBeGreaterThan(1);
+    expect(lead.calendar.length, 'the month axis rendered no ticks to compare').toBeGreaterThan(0);
     for (const other of others) {
-      /* THE AXIS CLAIM. Same column count, same first and last day, and the
-         same box drawn around them: two strips a reader compares by eye must
-         be comparable by eye. */
       expect(
         other.claimed,
         `at ${shape.days} days "${lead.label}" drew ${lead.claimed} columns and "${other.label}" drew ${other.claimed}`
@@ -1206,76 +1249,52 @@ test('the full-width strips draw ONE window per panel, sized to its coverage (is
       expect(other.drawn, `"${other.label}" drew a width it did not claim`).toBe(other.claimed);
       expect(
         other.calendar,
-        `at ${shape.days} days the two sources drew different calendars`
+        `at ${shape.days} days "${other.label}" and "${lead.label}" drew different calendars`
       ).toBe(lead.calendar);
-      expect(other.calendar.length, 'the month axis rendered no ticks to compare').toBeGreaterThan(0);
-      /* The grammar that survives full width: identical box, cell, gap, row
-         height and legend placement, so neither strip reads as the odd one. */
-      expect(other.block, `the two blocks disagree about their width at ${shape.days} days`).toBe(
-        lead.block
-      );
-      expect(other.cell, `the two cells disagree about their width at ${shape.days} days`).toBe(
-        lead.cell
-      );
-      expect(
-        other.cellHeight,
-        `the two cells disagree about their height at ${shape.days} days`
-      ).toBe(lead.cellHeight);
-      expect(other.gap, `the two strips disagree about their gap at ${shape.days} days`).toBe(
-        lead.gap
-      );
-      expect(other.strip, `the two strips disagree about their height at ${shape.days} days`).toBe(
-        lead.strip
-      );
-      expect(
-        other.legendOffset,
-        `the two keys sit at different offsets at ${shape.days} days`
-      ).toBe(lead.legendOffset);
-      expect(other.legendTop, `the two keys sit on different rows at ${shape.days} days`).toBe(
-        lead.legendTop
-      );
     }
   }
 
-  /* AND THE WINDOW TRACKS THE COVERAGE, which is the half that replaced the
-     fixed frame. Three coverages, three answers, each pinned on its own terms:
-     the floor keeps a very short capture legible (its own less/more key has to
-     fit beside it), the middle is the capture itself, and the reserve is the
-     cap a longer capture is shown the trailing end of. */
-  const [short, middle, deep] = measured.map((shape) => shape.sources[0]);
+  /* AND THE COVERAGE MOVED THE DATA, NOT THE FRAME. The staged set is the
+     first token one — the segment named for the source this lane restaged —
+     and it is read across the three coverages. Its captured cells grow with
+     the capture and its frame does not, which is the superseding rule stated
+     as a measurement rather than as a comment. */
+  const staged = measured.map((shape) => {
+    const set = shape.sets.find((candidate) => candidate.label.startsWith('Tokens'));
+    expect(set, `no token set rendered at ${shape.days} days`).toBeDefined();
+    return set;
+  });
+  const [short, middle, deep] = staged;
   expect(
-    short.claimed,
-    `a fortnight of coverage drew ${short.claimed} columns; the fixed frame is back`
-  ).toBeLessThan(53);
+    middle.realCount,
+    `two hundred days captured ${middle.realCount} cells, no more than the fortnight's ${short.realCount}`
+  ).toBeGreaterThan(short.realCount);
   expect(
-    middle.claimed,
-    `two hundred days drew ${middle.claimed} columns, no more than the fortnight's ${short.claimed}`
-  ).toBeGreaterThan(short.claimed);
-  expect(
-    middle.claimed,
-    `two hundred days drew ${middle.claimed} columns; the reserve is a floor again`
-  ).toBeLessThan(53);
-  expect(
-    deep.claimed,
-    `nine hundred days drew ${deep.claimed} columns; the reserve is not the cap`
-  ).toBe(53);
-  expect(deep.drawn, 'the capped window drew a width it did not claim').toBe(deep.claimed);
-  /* The cap is TRAILING, stated in both directions: the capture is genuinely
-     cut (nine hundred days do not all fit in fifty-three weeks) and what
-     SURVIVES is its newest end — the same newest day the short shape drew,
+    deep.realCount,
+    `nine hundred days captured ${deep.realCount} cells, no more than two hundred days' ${middle.realCount}`
+  ).toBeGreaterThan(middle.realCount);
+  /* The window is a CAP, and a trailing one: nine hundred days do not fit, and
+     what survives is the newest end — the same newest day the fortnight drew,
      which is the end a reader came to see. A leading cap would keep the same
      number of days and lose exactly the wrong ones. */
   expect(
     deep.realCount,
-    `nine hundred days drew ${deep.realCount} captured cells; the cap is not cutting anything`
+    `nine hundred days captured ${deep.realCount} cells; the window is not cutting anything`
   ).toBeLessThan(900);
   expect(
-    deep.realCount,
-    `the capped window holds ${deep.realCount} captured days of the 371 it draws; only the current week's unfinished days should be missing`
-  ).toBeGreaterThan(53 * 7 - 7);
-  expect(deep.realLast, 'the capped window does not end on the panel’s newest day').toBe(
-    short.realLast
-  );
+    deep.realLast,
+    'the capped window does not end on the same newest day the short capture drew'
+  ).toBe(short.realLast);
+  expect(short.realLast, 'no captured cell carries a reading to compare').not.toBe('');
+  /* ...and through all of that the frame never moved. */
+  expect(
+    new Set(staged.map((set) => set.claimed)).size,
+    `the staged set drew ${staged.map((set) => set.claimed).join(', ')} columns across the three coverages; the window is being sized to the data again`
+  ).toBe(1);
+  expect(
+    new Set(staged.map((set) => set.calendar)).size,
+    'the staged set drew a different month axis at a different coverage; the window is being sized to the data again'
+  ).toBe(1);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
@@ -1313,19 +1332,26 @@ test('an insight with no measured share draws no bar, and a measured one still d
     ];
   });
   await visit(page);
-  /* The FIRST source only: the panel serves more than one, each with insight
-     rows of its own, and only one of them was restaged. A page-wide selector
-     would count another source's real rows as this lane's staged ones. */
-  const rows = page.locator('.usage-source').first().locator('.usage-insight');
+  /* THE FIRST SOURCE'S SHARES, ON THE FRONT OF THE MODEL SQUARE (owner
+     directive, 2026-09-03, issue 287). The per-source usage cards are retired;
+     the shares are drawn as the board's bars now, and the board puts the first
+     source's on the square's front face and the second source's behind it —
+     which is what keeps this lane pointed at the source it actually restaged.
+     Only that square carries bars on its front at all, every other square
+     carrying a figure, so the front face IS the first-source scope the retired
+     `.usage-source` first() gave. The guard under test moved with the markup
+     and did not change shape: `{#if bar.fillPct !== null}` in
+     LedgerBoard.svelte. */
+  const rows = page.locator('.board-square [data-face="front"] .board-bar');
   await expect(rows).toHaveCount(2);
   const observed = await rows.evaluateAll((nodes) =>
     nodes.map((node) => {
-      const fill = node.querySelector('.usage-insight-fill');
-      const track = node.querySelector('.usage-insight-track');
+      const fill = node.querySelector('.board-fill');
+      const track = node.querySelector('.board-track');
       const width = (box) => (box === null ? null : Math.round(box.getBoundingClientRect().width * 100) / 100);
       return {
-        label: node.querySelector('.usage-insight-label').textContent.trim(),
-        reading: node.querySelector('.usage-insight-value').textContent.trim(),
+        label: node.querySelector('.board-bar-label').textContent.trim(),
+        reading: node.querySelector('.board-reading').textContent.trim(),
         /* Presence FIRST, and width only if it is there. A zero-width fill
            and no fill are different renderings of different claims, and the
            whole point of the guard is that the second is the honest one. */
@@ -1367,6 +1393,124 @@ test('an insight with no measured share draws no bar, and a measured one still d
     'a measured share painted past its own track'
   ).toBeLessThanOrEqual(measured.track + subPixel);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+/* A SQUARE THAT HIDES A MODEL IS A SQUARE THAT LIES (owner directive,
+ * 2026-09-03, issue 287).
+ *
+ * Each board square is a fixed box with `overflow: hidden`, which is what lets
+ * the flip animate cleanly and what makes a sizing mistake SILENT: content
+ * that does not fit is not clipped visibly at an edge a reader would notice,
+ * it simply is not there. Measured during this redesign: the model square's
+ * bars auto-flowed their reading onto a third row, which made each bar 43px in
+ * a box with room for about 2.7 of them, and two of the four models were
+ * absent from a square that gave no sign of it.
+ *
+ * A count alone would not have caught it — all four bars were in the DOM. So
+ * this measures what the box actually SHOWS: every face's own content must fit
+ * inside the face, on both sides of every square, at a phone width and a
+ * desktop one. The scroll height is the general statement and the per-bar walk
+ * is the specific one, because a face can fit its own scroll height while one
+ * child still lands outside the visible box.
+ */
+test('every board square shows all of its own content, front and back (owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
+  await visit(page);
+  const readFaces = (side) =>
+    page.evaluate((face) => {
+      return [...window.document.querySelectorAll('.board-square')].map((square) => {
+        const panel = square.querySelector(`[data-face="${face}"]`);
+        const box = panel.getBoundingClientRect();
+        const bars = [...panel.querySelectorAll('.board-bar')];
+        const facts = [...panel.querySelectorAll('.board-fact')];
+        const inside = (node) => {
+          const seat = node.getBoundingClientRect();
+          return seat.bottom <= box.bottom + 1 && seat.right <= box.right + 1;
+        };
+        return {
+          label: panel.querySelector('.board-label')?.textContent.trim() ?? '',
+          overflow: getComputedStyle(panel).overflow,
+          scrollHeight: panel.scrollHeight,
+          clientHeight: panel.clientHeight,
+          bars: bars.length,
+          barsShown: bars.filter(inside).length,
+          facts: facts.length,
+          factsShown: facts.filter(inside).length,
+        };
+      });
+    }, side);
+
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled(page);
+    const fronts = await readFaces('front');
+    expect(fronts.length, `the board drew no squares at ${width}px`).toBeGreaterThan(1);
+    /* The box really is a clipping box, which is what makes the rest of this
+       lane worth running: against an `overflow: visible` face every assertion
+       below would hold for free while the content spilled instead. */
+    for (const face of fronts) {
+      expect(
+        face.overflow,
+        `"${face.label}" is not a clipping box at ${width}px, so this lane proves nothing about it`
+      ).toBe('hidden');
+      expect(
+        face.scrollHeight,
+        `"${face.label}" holds ${face.scrollHeight}px of content in a ${face.clientHeight}px face at ${width}px; the rest is hidden with no sign of it`
+      ).toBeLessThanOrEqual(face.clientHeight + 1);
+      expect(
+        face.barsShown,
+        `"${face.label}" draws ${face.bars} model bars at ${width}px and shows ${face.barsShown}`
+      ).toBe(face.bars);
+      expect(
+        face.factsShown,
+        `"${face.label}" draws ${face.facts} facts at ${width}px and shows ${face.factsShown}`
+      ).toBe(face.facts);
+    }
+    /* Non-vacuity: a board whose faces all held a single short figure would
+       satisfy everything above without ever exercising the case that broke.
+       At least one front carries a real stack of bars. */
+    expect(
+      Math.max(...fronts.map((face) => face.bars)),
+      `no square draws model bars at ${width}px; the shape that clipped is not on the page`
+    ).toBeGreaterThan(1);
+
+    /* AND THE BACKS, which is where the flip puts a second face of content
+       into the SAME fixed box — so a back that overflows is exactly as silent
+       as a front that does. Every square is turned rather than a sample: the
+       backs carry different shapes from each other (a fact list, a bar stack,
+       a note) and only one of them has to be wrong. */
+    const squares = page.locator('.board-square');
+    const count = await squares.count();
+    for (let index = 0; index < count; index += 1) {
+      await squares.nth(index).click();
+    }
+    const backs = await readFaces('back');
+    for (const face of backs) {
+      expect(
+        face.scrollHeight,
+        `the back of "${face.label}" holds ${face.scrollHeight}px of content in a ${face.clientHeight}px face at ${width}px; the rest is hidden with no sign of it`
+      ).toBeLessThanOrEqual(face.clientHeight + 1);
+      expect(
+        face.barsShown,
+        `the back of "${face.label}" draws ${face.bars} model bars at ${width}px and shows ${face.barsShown}`
+      ).toBe(face.bars);
+      expect(
+        face.factsShown,
+        `the back of "${face.label}" draws ${face.facts} facts at ${width}px and shows ${face.factsShown}`
+      ).toBe(face.facts);
+    }
+    /* The backs are non-vacuous too: at least one of them carries a fact list,
+       which is the shape a fixed box is most likely to run out of room for. */
+    expect(
+      Math.max(...backs.map((face) => face.facts)),
+      `no square's back draws a fact list at ${width}px`
+    ).toBeGreaterThan(1);
+    /* Left as found, so the next width starts from the same closed board. */
+    for (let index = 0; index < count; index += 1) {
+      await squares.nth(index).click();
+    }
+  }
 });
 
 /* RESPONSIVENESS (owner directive, 2026-08-24). The page column is a single
@@ -1474,24 +1618,53 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
     sources[0].series = { startDate: '2026-08-10', totals: [1, 2, 3], recorded: true };
   });
   await visit(page);
+  /* THE LABEL NOW REACHES TWO SURFACES, AND BOTH ARE MEASURED (owner
+     directive, 2026-09-03, issue 287). The per-source usage card that carried
+     `.usage-source-label` is retired. A source label is drawn twice instead —
+     as a square's own head on the board, and as the name of the segment that
+     picks that source's calendar in the commits section — so this lane widened
+     with the redesign rather than narrowing: a string that became markup in
+     either place is caught here.
+
+     The panels are found through their own contents rather than through a
+     scoping attribute, because `data-panel-id` went with the retired card and
+     `:has()` is not a selector this matrix may assume in every engine. */
   const observed = await page.evaluate(
     ([label, account]) => {
-      const panel = window.document.querySelector('[data-panel-id="token-usage"]');
-      const heads = [...panel.querySelectorAll('.usage-source-label')].map((node) => ({
+      const panelOf = (selector) =>
+        window.document.querySelector(selector)?.closest('.panel-shell') ?? null;
+      const board = panelOf('.board-grid');
+      const commits = panelOf('.commit-segments');
+      const heads = [...board.querySelectorAll('.board-label')].map((node) => ({
+        text: node.textContent,
+        children: node.children.length,
+      }));
+      const segments = [...commits.querySelectorAll('.commit-segment')].map((node) => ({
         text: node.textContent,
         children: node.children.length,
       }));
       return {
         pwned: window.__pwned === undefined ? 'clean' : 'executed',
-        injected: panel.querySelectorAll('img, script, iframe, object, embed').length,
-        heads,
-        matchesLabel: heads.some((head) => head.text === label),
-        matchesAccount: [...panel.querySelectorAll('.usage-account')].some(
-          (node) => node.textContent === account
+        injected: [board, commits].reduce(
+          (count, region) =>
+            count + region.querySelectorAll('img, script, iframe, object, embed').length,
+          0
         ),
+        heads,
+        segments,
+        matchesLabel: heads.some((head) => head.text === label),
+        matchesSegment: segments.some((segment) => segment.text.includes(label)),
+        /* THE ACCOUNT IS NOT A RENDERED SURFACE ANY MORE. It is still admitted
+           into the model (lib/token-usage.ts) and no component draws it, so
+           the honest assertion is that it reaches the document nowhere at all
+           — which is strictly stronger than the verbatim check the retired
+           `.usage-account` element used to earn, and it fails loudly the day
+           something starts printing it again. */
+        accountAnywhere: window.document.body.textContent.includes(account),
         /* The graph the hostile source DOES get: a real series, drawn from
-           strings that never became markup. */
-        graphs: panel.querySelectorAll('.grid-block').length,
+           strings that never became markup. It is in the commits section now,
+           because that is where a token source's calendar is drawn. */
+        graphs: commits.querySelectorAll('.grid-block').length,
       };
     },
     [hostile, hostileAccount]
@@ -1505,10 +1678,14 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
     true
   );
   expect(
-    observed.matchesAccount,
-    'the hostile account did not render as its own literal text'
+    observed.matchesSegment,
+    'the hostile label did not reach its calendar segment as its own literal text'
   ).toBe(true);
-  for (const head of observed.heads) {
+  expect(
+    observed.accountAnywhere,
+    'the account reached the document; no component draws it, so a string that arrives there is a surface nobody reviewed'
+  ).toBe(false);
+  for (const head of [...observed.heads, ...observed.segments]) {
     expect(head.children, 'a source heading grew element children from its payload string').toBe(0);
   }
   expect(observed.graphs, 'the staged payload rendered no graph; this half proved nothing')
@@ -1525,13 +1702,24 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
   });
   await visit(page);
   const refused = await page.evaluate(() => {
-    const panel = window.document.querySelector('[data-panel-id="token-usage"]');
+    const panelOf = (selector) =>
+      window.document.querySelector(selector)?.closest('.panel-shell') ?? null;
+    const board = panelOf('.board-note') ?? panelOf('.board-grid');
+    const commits = panelOf('.commit-segments');
     return {
       pwned: window.__pwned === undefined ? 'clean' : 'executed',
-      injected: panel.querySelectorAll('img, script, iframe, object, embed').length,
-      sources: panel.querySelectorAll('.usage-source').length,
-      graphs: panel.querySelectorAll('.grid-block').length,
-      empty: panel.querySelector('.usage-empty')?.textContent ?? '',
+      injected: board.querySelectorAll('img, script, iframe, object, embed').length,
+      sources: board.querySelectorAll('.board-square').length,
+      /* The refused payload's own graph, named rather than counted: the
+         commits section draws the version-control calendar from a DIFFERENT
+         panel, and that one is unaffected and must keep drawing. What must
+         disappear is the segment that would pick the refused source's
+         calendar, so THAT is what is counted. Counting every graph here would
+         assert the wrong panel went blank. */
+      tokenSegments: [...commits.querySelectorAll('.commit-segment')].filter((segment) =>
+        segment.textContent.startsWith('Tokens')
+      ).length,
+      empty: board.querySelector('.board-note')?.textContent ?? '',
     };
   });
   expect(refused.pwned, 'a malformed start date executed in the page').toBe('clean');
@@ -1539,57 +1727,211 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
   expect(refused.sources, 'a payload with a malformed series rendered part of itself anyway').toBe(
     0
   );
-  expect(refused.graphs, 'a payload with a malformed series still drew a graph').toBe(0);
+  expect(
+    refused.tokenSegments,
+    'a payload with a malformed series still offered its calendar'
+  ).toBe(0);
   expect(refused.empty, 'a refused payload renders no honest empty state').not.toBe('');
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-test('the boss log is three columns that never scroll', async ({
+/* THE BOSS LOG IS A TICKER NOW (owner directive, 2026-09-03, issue 287).
+ *
+ * The three-column table this lane used to measure is retired. The owner's
+ * non-negotiable for its replacement is exact — "the ticker is a scrollable
+ * strip under reduced motion" — and it inverts the old claim rather than
+ * bending it: the old table's whole point was that nothing scrolled, and the
+ * strip's whole point is that it does. So the assertion is re-aimed, not
+ * relaxed, and the floor underneath is the one AGENTS.md states for any wide
+ * content: it scrolls INSIDE ITS OWN CONTAINER and never takes the document
+ * sideways.
+ *
+ * Four things are pinned, and each fails on its own:
+ *
+ *   - the strip is a real scroll region with somewhere to scroll to, and the
+ *     document beside it is not;
+ *   - the whole collection is there — one readable copy of every entry the
+ *     payload carries, with the marquee's second lane hidden from assistive
+ *     technology rather than double-counted;
+ *   - the vendored art actually painted, measured off the decoded images
+ *     rather than off the markup, which is what the retired icon count did;
+ *   - and the strip is REACHABLE without a pointer. A pan only a mouse can
+ *     drive leaves most of the collection unreadable, which is exactly the
+ *     failure the base-state-is-a-scroller rule in styles.css exists to
+ *     prevent.
+ *
+ * The reduced-motion half runs the same measurements with the preference
+ * emulated, because that is the state the owner named: the run must carry no
+ * animation and the strip must still be pannable. A build that had made the
+ * animation the only way across fails there and nowhere else. */
+test('the boss ticker pans inside its own box, and still pans with the motion off', async ({
   page,
 }) => {
   await visit(page);
-  const table = await page.evaluate(() => {
-    const box = window.document.querySelector('.stat-grid[data-cells="roomy"]');
-    const style = getComputedStyle(box);
-    const cells = [...box.querySelectorAll('.stat-cell')];
-    const distinct = (values) => new Set(values.map((value) => Math.round(value))).size;
-    return {
-      overflowX: style.overflowX,
-      overflowY: style.overflowY,
-      scrollWidth: box.scrollWidth,
-      clientWidth: box.clientWidth,
-      scrollHeight: box.scrollHeight,
-      clientHeight: box.clientHeight,
-      cells: cells.length,
-      /* The shape the engine actually laid out, measured from the tiles
-         rather than read back off the CSS: three columns, wrapping downward
-         for as many rows as the payload needs. */
-      columns: distinct(cells.map((cell) => cell.getBoundingClientRect().left)),
-      rows: distinct(cells.map((cell) => cell.getBoundingClientRect().top)),
-      icons: box.querySelectorAll('img.stat-icon').length,
-    };
-  });
-  /* The owner asked for the scrolling to go away, not to be pointed in
-     another direction (issue 134). This table has been a vertical scroller
-     and a sideways one; the assertion now is that there is no scroll region
-     left at all — no overflow, and nothing to scroll to on either axis. */
-  expect(table.overflowX, 'the boss table is a scroll region again').toBe('visible');
-  expect(table.overflowY, 'the boss table is a scroll region again').toBe('visible');
-  expect(table.scrollWidth, 'the boss table has content to scroll across').toBe(table.clientWidth);
-  expect(table.scrollHeight, 'the boss table has content to scroll down to').toBe(
-    table.clientHeight
+  const readTicker = () =>
+    page.evaluate(() => {
+      const strip = window.document.querySelector('.ticker-strip');
+      const run = strip.querySelector('.ticker-run');
+      const lanes = [...strip.querySelectorAll('.ticker-lane')];
+      /* The marquee draws its lane twice so the band can wrap without a seam.
+         Exactly one copy is readable; the other is aria-hidden, and counting
+         both would report twice the collection. */
+      const readable = lanes.filter((lane) => lane.getAttribute('aria-hidden') !== 'true');
+      const items = readable.flatMap((lane) => [...lane.querySelectorAll('.ticker-item')]);
+      const style = getComputedStyle(strip);
+      return {
+        lanes: lanes.length,
+        readableLanes: readable.length,
+        overflowX: style.overflowX,
+        overflowY: style.overflowY,
+        scrollWidth: strip.scrollWidth,
+        clientWidth: strip.clientWidth,
+        clientHeight: strip.clientHeight,
+        /* The BAND's own height, not the strip's scrollHeight. Each entry
+           carries the page's hover-detail, which is a fixed-position element
+           an engine may count into the scroller's overflow even though it is
+           never laid out in the band; measuring the run is measuring the thing
+           that must not be clipped. */
+        runHeight: Math.round(run.getBoundingClientRect().height * 100) / 100,
+        docScrollWidth: window.document.documentElement.scrollWidth,
+        docClientWidth: window.document.documentElement.clientWidth,
+        items: items.length,
+        labelled: items.every((item) => (item.getAttribute('aria-label') ?? '') !== ''),
+        /* Every entry carries a mark of some kind — the vendored artwork, or
+           the glyph an entry with no art falls back to — so an entry rendering
+           bare is visible here rather than inferred. */
+        marked: items.filter((item) => item.querySelector('.ticker-icon') !== null).length,
+        art: items.filter((item) => item.querySelector('img.ticker-icon') !== null).length,
+        /* PAINTED, not merely present, and only where painting is due. The
+           artwork is lazily loaded and this strip is mostly off its own box,
+           so an engine is right to have decoded nothing out there — counting
+           the whole band would be asserting against the lazy attribute rather
+           than against the art. What must hold is that every image the reader
+           can actually SEE decoded: a broken reference reports a natural width
+           of zero and fails here, which is the failure the retired icon count
+           could not see either way.
+           
+           Measured while the band is RUNNING this is a read of wherever the
+           marquee happens to be, which on a phone is often the lead alone —
+           the lead is wider than the strip's box there — so the reading is
+           taken as data here and ASSERTED only in the reduced-motion half
+           below, where the strip is a scroller this lane can put items into
+           deterministically. */
+        inView: (() => {
+          const box = strip.getBoundingClientRect();
+          const visible = items
+            .map((item) => item.querySelector('img.ticker-icon'))
+            .filter((art) => art !== null)
+            .filter((art) => {
+              const seat = art.getBoundingClientRect();
+              return seat.right > box.left && seat.left < box.right;
+            });
+          return { count: visible.length, decoded: visible.filter((art) => art.naturalWidth > 0).length };
+        })(),
+        tabbable: strip.getAttribute('tabindex'),
+        named: (strip.getAttribute('aria-label') ?? '') !== '',
+        animation: getComputedStyle(run).animationName,
+      };
+    });
+
+  const running = await readTicker();
+  /* The collection is all there, once. The payload carries the owner's whole
+     boss log, so a strip that rendered a handful of entries — or that counted
+     its own hidden duplicate — misses this by a wide margin. */
+  expect(running.lanes, 'the marquee lost the second lane it wraps with').toBe(2);
+  expect(running.readableLanes, 'both marquee lanes are readable; the collection is doubled').toBe(
+    1
   );
-  /* Columns of three, going down — the owner's words. The arrangement this
-     replaced would report two rows and dozens of columns. */
-  expect(table.cells, 'the boss table rendered no tiles').toBeGreaterThan(50);
-  expect(table.columns, `the boss table laid out ${table.columns} columns`).toBe(3);
+  expect(running.items, 'the ticker rendered no entries').toBeGreaterThan(50);
+  expect(running.labelled, 'a ticker entry carries no accessible name').toBe(true);
+  expect(running.marked, 'a ticker entry rendered with no mark of any kind').toBe(running.items);
+  expect(running.art, 'the ticker rendered none of the vendored artwork').toBeGreaterThan(50);
+  /* A scroll region with somewhere to go, on the inline axis only. */
+  expect(running.overflowX, 'the ticker is not a scroller on the inline axis').toBe('auto');
+  expect(running.overflowY, 'the ticker scrolls on the block axis too').toBe('hidden');
   expect(
-    table.rows,
-    `the boss table laid out ${table.rows} rows for ${table.cells} tiles in three columns`
-  ).toBe(Math.ceil(table.cells / 3));
-  /* The owner locked the vendored art exactly as it renders, so the lane
-     counts what actually painted rather than trusting the markup. */
-  expect(table.icons, 'the boss table rendered no icons').toBeGreaterThan(50);
+    running.scrollWidth,
+    `the ticker has ${running.scrollWidth}px of content in a ${running.clientWidth}px box; there is nothing to pan`
+  ).toBeGreaterThan(running.clientWidth + subPixel);
+  expect(
+    running.runHeight,
+    `the band is ${running.runHeight}px inside a ${running.clientHeight}px strip, so it is clipped on the block axis`
+  ).toBeLessThanOrEqual(running.clientHeight + subPixel);
+  /* ...and the document beside it stays put, which is the floor the strip's
+     own scroller exists to satisfy. */
+  expect(
+    running.docScrollWidth,
+    `the ticker took the document sideways (${running.docScrollWidth} > ${running.docClientWidth})`
+  ).toBeLessThanOrEqual(running.docClientWidth + subPixel);
+  /* Reachable without a pointer. */
+  expect(running.tabbable, 'the ticker is a scroller no keyboard can reach').toBe('0');
+  expect(running.named, 'the ticker scroll region carries no accessible name').toBe(true);
+
+  /* THE STATE THE OWNER NAMED. With the preference set the run carries no
+     animation at all, and every measurement above still holds — the strip is
+     the scroller it always was, so the collection stays readable by pan. */
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await visit(page);
+  /* The strip is panned past its lead so that entries — not only the lead's
+     own mark — are inside its box, then the art inside the box is given the
+     time a lazy image legitimately takes to decode. The wait is bounded and
+     it is a wait for the ENGINE (Firefox and WebKit decode a lazy image
+     measurably later than Chromium, exactly as the gallery lane records); it
+     widens nothing about what is asserted, which is that every image inside
+     the box decoded and none of them decoded to nothing. */
+  await page.locator('.ticker-strip').evaluate((strip) => {
+    /* Into the VIEWPORT first, then panned. A lazy image loads when it meets
+       the viewport, and Firefox and WebKit hold to that literally — an image
+       panned into a strip's box while the strip itself is a screen below the
+       fold is never loaded there, however long the lane waits. Chromium's far
+       larger lazy margin is what made the same lane pass in one engine and
+       time out in two. */
+    strip.scrollIntoView({ block: 'center' });
+    strip.scrollLeft = strip.querySelector('.ticker-lead').getBoundingClientRect().width;
+  });
+  await expect
+    .poll(async () => (await readTicker()).inView, {
+      message: 'the artwork inside the panned strip never decoded',
+      timeout: 10_000,
+    })
+    .toEqual(expect.objectContaining({ count: expect.any(Number) }));
+  await expect
+    .poll(
+      async () => {
+        const seen = (await readTicker()).inView;
+        return seen.count > 0 && seen.decoded === seen.count;
+      },
+      { message: 'an icon inside the visible strip decoded to nothing', timeout: 10_000 }
+    )
+    .toBe(true);
+  const still = await readTicker();
+  expect(
+    still.inView.count,
+    'no artwork is inside the panned strip, so the decode check proves nothing'
+  ).toBeGreaterThan(0);
+  expect(
+    still.inView.decoded,
+    `${still.inView.count - still.inView.decoded} of the ${still.inView.count} visible icons decoded to nothing`
+  ).toBe(still.inView.count);
+  expect(
+    still.animation,
+    `the ticker still runs "${still.animation}" for a reader who asked for less motion`
+  ).toBe('none');
+  expect(still.items, 'the ticker lost its entries under reduced motion').toBe(running.items);
+  expect(still.overflowX, 'the ticker stopped being a scroller under reduced motion').toBe('auto');
+  expect(
+    still.scrollWidth,
+    'under reduced motion the ticker has nothing to pan, so most of the collection is unreachable'
+  ).toBeGreaterThan(still.clientWidth + subPixel);
+  expect(
+    still.tabbable,
+    'under reduced motion the ticker is a scroller no keyboard can reach'
+  ).toBe('0');
+  expect(
+    still.docScrollWidth,
+    'under reduced motion the ticker took the document sideways'
+  ).toBeLessThanOrEqual(still.docClientWidth + subPixel);
+  await page.emulateMedia({ reducedMotion: null });
 });
 
 /* The detail this table used to draw itself is now the page's one hover-detail
@@ -1614,6 +1956,16 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
         n.hasAttribute('data-panel-status')
       ),
       viewport: window.document.documentElement.clientWidth,
+      header: (() => {
+        const box = window.document.querySelector('.page-header').getBoundingClientRect();
+        return { right: box.right, bottom: box.bottom };
+      })(),
+      /* The column's own end edge. The masthead shares `main`'s inline-size
+         rule now, so "outside the feed" is a relationship between the two
+         boxes rather than a distance from the viewport — at a wide viewport
+         the column is centred and neither box comes near the screen edge. */
+      columnRight: window.document.querySelector('main').getBoundingClientRect().right,
+      firstPanelTop: window.document.querySelector('.panel-shell').getBoundingClientRect().top,
       icons: icons.map((node) => {
         const box = node.getBoundingClientRect();
         const style = getComputedStyle(node);
@@ -1665,20 +2017,35 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
       touchFloorPx - subPixel
     );
   }
-  /* Pinned to the VIEWPORT'S own corner, not the column's (owner directive,
-     issue 168): "push the icons all the way to the top right, outside of the
-     feed." Measuring against the column would measure the centring instead
-     of the thing that actually changed — the header used to share the
-     column's own inline-size rule and does not any more. A single gutter's
-     worth of gap on each edge is what a fixed corner control with no notch
-     to clear resolves to (env(safe-area-inset-*) is 0 on every engine this
-     lane runs without a device that reports one). */
+  /* THE HEADER SHARES THE COLUMN AGAIN (owner directive, 2026-09-03, issue
+     287), which reverses the placement rule issue 168 set. The instruction
+     then was "push the icons all the way to the top right, outside of the
+     feed", and the header was lifted out of the column's inline-size rule to
+     obey it. The ledger puts it back: the masthead is an in-flow ruled row
+     that shares the column rule with `main`, so the reading-mode control now
+     sits at the END OF THAT ROW rather than in the viewport's corner, and
+     measuring it against the viewport would be measuring the retired
+     arrangement.
+
+     What the corner rule was protecting is unchanged and is what is measured
+     instead: the control is not inside the feed, and it wastes no gutter. So
+     it sits at the masthead's own end edge, the masthead ends where the
+     column ends, and the control sits ABOVE every panel on the page rather
+     than among them. A control that had drifted back into the feed fails the
+     last of those. */
   const [icon] = observed.icons;
-  expect(icon.top, `the icon sits ${icon.top}px from the top edge`).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
   expect(
-    observed.viewport - icon.right,
-    `the icon sits ${observed.viewport - icon.right}px from the viewport's end edge`
-  ).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
+    icon.right,
+    `the control's end edge is ${icon.right}px inside a masthead that ends at ${observed.header.right}px`
+  ).toBeGreaterThanOrEqual(observed.header.right - gutterPx / 2 - subPixel);
+  expect(
+    observed.header.right,
+    `the masthead ends at ${observed.header.right}px and the column at ${observed.columnRight}px; they no longer share the page's one column rule`
+  ).toBeCloseTo(observed.columnRight, 0);
+  expect(
+    observed.header.bottom,
+    `the masthead's bottom edge is ${observed.header.bottom}px, below the first panel's top edge at ${observed.firstPanelTop}px`
+  ).toBeLessThanOrEqual(observed.firstPanelTop + subPixel);
 });
 
 /* ===========================================================================
@@ -1721,41 +2088,46 @@ test('a direct visit to a shared fragment URL still deep-links (issue 171)', asy
   await expect(page.locator('#trackers')).toBeInViewport();
 });
 
-/* INVERTED by the owner's ruling of 2026-08-24, and the inversion is the
- * finding. This lane used to REQUIRE the empty grid on the live page: a
- * `.grid-empty` note reading exactly "series pending" over more than three
- * hundred placeholder cells. Every cell was honest about itself — absent,
- * valueless, undated — and the arrangement was still false, because "pending"
- * is a claim about the future and this source has no daily record to publish.
- * The panel was holding a graph-shaped box open for data that cannot arrive,
- * which is a permanent hole rather than the zero-CLS reserve it looked like.
+/* INVERTED by the owner's ruling of 2026-08-24, and RE-AIMED by the ledger
+ * redesign (owner directive, 2026-09-03, issue 287) without the ruling itself
+ * moving an inch.
  *
- * So the new guarantee is the opposite one, and it is asserted in both
- * directions because either half alone is satisfied by a page that got it
- * badly wrong: a site that dropped every heatmap passes "no empty grid", and
- * the old page passed "the real grid renders".
+ * The ruling: a `.grid-empty` note over three hundred placeholder cells is a
+ * permanent hole, not a zero-CLS reserve. Every cell was honest about itself —
+ * absent, valueless, undated — and the arrangement was still false, because a
+ * source with no daily record to publish was being given a graph-shaped box
+ * held open for data that cannot arrive.
+ *
+ * What changed is only WHERE a source's calendar lives. The per-source cards
+ * are retired; the commits section draws one grid the reader cycles with a
+ * segmented control, and a source's calendar is the set behind its segment. So
+ * the ruling's shape here is that a seriesless source is offered NO SEGMENT at
+ * all — nothing to press, nothing held open, no reserve drawn on its behalf.
+ *
+ * Both directions, because either half alone is satisfied by a page that got
+ * it badly wrong: a build that offered no token segments at all passes "the
+ * seriesless source has none", and the old arrangement passes "the source with
+ * a series draws its calendar".
+ *
+ * And the third claim is what stops "offer no segment" from quietly becoming
+ * "drop the source": the seriesless source keeps its square on the board, with
+ * its figures intact. A source that vanished from the page entirely would
+ * satisfy the first two and be a worse outcome than the hole.
  *
  * The page is judged against the ORIGIN's own payload rather than against
  * itself. Which sources report a daily series is a fact the API states, so
- * reading it there and then looking for the matching graph makes the lane
+ * reading it there and then looking for the matching segment makes the lane
  * name the offending source by label — instead of inferring what the page
  * meant to do from what the page did, which is how a rendering test comes to
  * agree with every regression it was written to catch.
  *
  * One source's series is STAGED away rather than waited for, and that is a
  * repair, not a shortcut. The lane needs a seriesless source and a serialised
- * one on the same screen; it used to get both by accident, because the
- * shipped snapshot happened to carry a series for one source and none for the
- * other. The day a real capture landed for the second source (issue #140) the
- * lane went red on its own non-vacuity check — with nothing wrong with the
- * page. A guarantee about how the page treats an absent series must not
- * depend on the owner's usage records happening to be missing one, so the
- * absence is now produced from the origin's OWN envelope, one field deleted
- * from one source. Everything else on the wire is the origin's real payload,
- * and the assertions still name sources by the label the API gave them. */
-test('a source with no series renders no graph, and one with a series still renders all of it', async ({
-  page,
-}) => {
+ * one on the same screen; it used to get both by accident, because the shipped
+ * snapshot happened to carry a series for one source and none for the other.
+ * The day a real capture landed for the second source (issue #140) the lane
+ * went red on its own non-vacuity check — with nothing wrong with the page. */
+test('a seriesless source is offered no calendar and keeps its figures', async ({ page }) => {
   /* Staged before the first navigation so the panel's own fetch and the
      read-back below see the identical envelope. */
   await stageUsagePayload(page, (envelope) => {
@@ -1768,48 +2140,33 @@ test('a source with no series renders no graph, and one with a series still rend
   });
   await visit(page);
   const observed = await page.evaluate(async () => {
-    const panel = window.document.querySelector('[data-panel-id="token-usage"]');
-    if (panel === null) return null;
     const response = await fetch('/api/panels/token-usage');
     const envelope = await response.json();
-    const strip = (node) =>
-      Math.round(node.querySelector('.grid-strip').getBoundingClientRect().height);
-    const rendered = {};
-    for (const source of panel.querySelectorAll('.usage-source')) {
-      const block = source.querySelector('.grid-block');
-      rendered[source.querySelector('.usage-source-label').textContent.trim()] = {
-        region: source.querySelector('.usage-activity') !== null,
-        blocks: source.querySelectorAll('.grid-block').length,
-        /* What tells a source WITH a graph from one without, now that the
-           display menu is gone (issue 233): the activity heading. It used to
-           be the count of that source's lens toggles, and both halves of this
-           lane would now read zero — a discriminator that cannot
-           discriminate. The heading is scoped to the activity region because
-           the insights section carries the same class. */
-        activityHeadings: source.querySelectorAll('.usage-activity .usage-section-title').length,
-        toggles: source.querySelectorAll('[role="radiogroup"]').length,
-        datapoints: source.querySelectorAll('[data-grid-cell]').length,
-        placeholders: source.querySelectorAll('[data-grid-pending]').length,
-        notes: source.querySelectorAll('.grid-empty').length,
-        /* What a source still has to show for itself once its graph is gone.
-           A block with no figures left would be the hole this ruling was
-           about, moved rather than closed. */
-        tiles: source.querySelectorAll('[data-usage-tile]').length,
-        stripHeight: block === null ? 0 : strip(block),
-      };
-    }
+    const board = window.document.querySelector('.board-grid');
+    const segments = [...window.document.querySelectorAll('.commit-segment')].map((node) =>
+      node.textContent.trim()
+    );
     return {
       /* What the origin SAYS, read from the same API the panel reads. */
       reported: (envelope?.data?.sources ?? []).map((source) => ({
         label: source.label,
         series: Array.isArray(source?.series?.totals) && source.series.totals.length > 0,
       })),
-      rendered,
-      pending: panel.querySelectorAll('[data-grid-pending]').length,
-      notes: panel.querySelectorAll('.grid-empty').length,
+      segments,
+      /* Every square head on the board, so "the source is still on the page"
+         is measured rather than assumed. */
+      squares: [...(board?.querySelectorAll('.board-square') ?? [])].map((square) => ({
+        label: square.querySelector('.board-label')?.textContent.trim() ?? '',
+        figure: square.querySelector('.board-figure')?.textContent.trim() ?? '',
+        bars: square.querySelectorAll('[data-face="front"] .board-bar').length,
+      })),
+      /* Nothing anywhere is a placeholder or an empty-grid note while the
+         contributions calendar is the one on screen. */
+      pending: window.document.querySelectorAll('[data-grid-pending]').length,
+      notes: window.document.querySelectorAll('.grid-empty').length,
+      grids: window.document.querySelectorAll('.grid-block').length,
     };
   });
-  expect(observed, 'the token panel never painted; this lane proves nothing').not.toBeNull();
 
   const bare = observed.reported.filter((source) => !source.series);
   const drawn = observed.reported.filter((source) => source.series);
@@ -1819,155 +2176,168 @@ test('a source with no series renders no graph, and one with a series still rend
   ).toBeGreaterThan(0);
   expect(
     drawn.length,
-    'every source lost its series; a page with no heatmaps would pass the other half for free'
+    'every source lost its series; a page with no calendars would pass the other half for free'
   ).toBeGreaterThan(0);
 
   for (const source of bare) {
-    const shown = observed.rendered[source.label];
-    expect(shown, `the origin reports "${source.label}" and the page does not render it`).toBeDefined();
-    /* No grid element in the DOM — not an empty one, not a dimmed one, not a
-       placeholder one. */
-    expect(shown.blocks, `"${source.label}" reports no series and renders a grid anyway`).toBe(0);
-    expect(shown.datapoints, `"${source.label}" rendered datapoints it was never given`).toBe(0);
-    expect(shown.placeholders, `"${source.label}" renders placeholder cells again`).toBe(0);
-    expect(shown.notes, `"${source.label}" renders an empty-grid note again`).toBe(0);
-    /* Nor the heading the graph came with: a heading over no series is the
-       same hole in different markup. */
-    expect(shown.region, `"${source.label}" kept the graph region around an absent graph`).toBe(
-      false
-    );
+    /* NOTHING TO PRESS. No segment names it, so no grid is ever drawn on its
+       behalf and no reserve is held for a capture that does not exist. */
     expect(
-      shown.activityHeadings,
-      `"${source.label}" kept an activity heading with nothing under it`
-    ).toBe(0);
-    /* And it is still a complete block rather than something with a hole in
-       it: the figures the source genuinely reports are all still there. */
-    expect(shown.tiles, `"${source.label}" lost its figures along with its graph`).toBeGreaterThan(0);
+      observed.segments.some((segment) => segment.includes(source.label)),
+      `"${source.label}" reports no series and is still offered a calendar segment`
+    ).toBe(false);
+    /* ...and it is still ON the page, with its figures. Offering no segment
+       must never become dropping the source. */
+    const square = observed.squares.find((candidate) => candidate.label === source.label);
+    expect(
+      square,
+      `"${source.label}" reports no series and lost its square as well as its calendar`
+    ).toBeDefined();
+    expect(
+      square.figure,
+      `"${source.label}" kept its square and lost the figure on it`
+    ).not.toBe('');
   }
 
   for (const source of drawn) {
-    const shown = observed.rendered[source.label];
-    expect(shown, `the origin reports "${source.label}" and the page does not render it`).toBeDefined();
-    expect(shown.region, `"${source.label}" reports a series and renders no graph region`).toBe(true);
     expect(
-      shown.datapoints,
-      `"${source.label}" reports a series and renders a graph with nothing in it`
-    ).toBeGreaterThan(0);
-    expect(shown.placeholders, `"${source.label}" pads its real series with placeholders`).toBe(0);
-    expect(shown.notes, `"${source.label}" renders an empty-grid note over a real series`).toBe(0);
-    /* The heading is the other half of the discriminator: a source that
-       reports a series carries exactly one activity heading, and a source
-       that reports none carries none. */
-    expect(shown.activityHeadings, `"${source.label}" lost the heading over its graph`).toBe(1);
-    /* And it carries no display control, in either case — the panel offers
-       nothing to press since 2026-08-28. Asserted on the SOURCE rather than
-       only panel-wide so a control growing back beside one graph fails here
-       too. */
-    expect(shown.toggles, `"${source.label}" grew a display control back`).toBe(0);
-    /* The graph that stayed still has a box at all — a source whose neighbour
-       lost its series must not come back as a zero-height strip.
-
-       WHAT THIS LANE DELIBERATELY NO LONGER CLAIMS, and the correction is
-       worth writing down because the first attempt got it wrong. Until issue
-       178 vs 268's ruling this compared the surviving strip against the OTHER
-       panel's calendar; the ruling makes those two boxes different on purpose,
-       so that equality would now pin the absence of the ruling. The first
-       re-aim pointed the same comparison at `drawn[0]` instead — but this lane
-       STAGES one of exactly two sources seriesless, so `drawn` has one element
-       under every admitted input and the assertion compared a number with
-       itself. A tautology is not a weaker guard, it is no guard, and it hid
-       the fact that the advertised contract was measured nowhere.
-       "Every source in this panel shares one box" needs a page where two
-       sources actually draw, which this lane by construction is not, so it is
-       measured in the lane immediately below instead. */
-    expect(shown.stripHeight, `"${source.label}" renders a graph with no box`).toBeGreaterThan(0);
+      observed.segments.some((segment) => segment.includes(source.label)),
+      `"${source.label}" reports a series and is offered no calendar segment`
+    ).toBe(true);
+    const square = observed.squares.find((candidate) => candidate.label === source.label);
+    expect(square, `"${source.label}" reports a series and renders no square`).toBeDefined();
   }
 
-  /* Nothing anywhere in this panel is a placeholder. */
-  expect(observed.pending, 'the token panel renders placeholder cells somewhere').toBe(0);
-  expect(observed.notes, 'the token panel renders an empty-grid note somewhere').toBe(0);
+  /* The contributions calendar is the one on screen, and it is a real one:
+     no placeholder cells anywhere, no empty-grid note anywhere. */
+  expect(observed.grids, 'the commits section drew no calendar at all').toBe(1);
+  expect(observed.pending, 'the page renders placeholder cells somewhere').toBe(0);
+  expect(observed.notes, 'the page renders an empty-grid note somewhere').toBe(0);
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-/* ONE PANEL, ONE BOX (issues 178/268). Every source in the token panel draws
- * its graph at the same size, because the bound that decides that size
- * (--grid-day-size / --grid-day-max) belongs to the PANEL and not to any one
- * source. That is the guarantee "removing the region beside a graph moved
- * nothing about it" was always leaning on, and until this lane existed it was
- * measured nowhere: the lane above stages one of exactly two sources
- * seriesless, so it can only ever have one drawn source to compare, and an
- * earlier version of this contract lived there as a number compared with
- * itself.
+/* ONE BOX, WHICHEVER SET IS IN IT (issues 178/268; owner directive,
+ * 2026-09-03, issue 287).
  *
- * So this lane stages NOTHING. It takes the origin's real payload, where both
- * sources carry a series, and the guard below refuses to run at all on a page
- * that offers fewer than two — which is what stops it degenerating back into a
- * tautology the day the snapshot changes shape. The comparison is made on the
- * boxes a reader actually sees: the strip's own height, the cell band inside
- * it, and the drawn day itself, so a source given a different day by any route
- * fails here by name. */
-test('every drawn source in the token panel shares one graph box (issues 178/268)', async ({
+ * The guarantee is unchanged and its subject moved. It used to be that every
+ * source in the token panel drew its graph at the same size, because the bound
+ * that decides that size belongs to the PANEL and not to any one source. The
+ * ledger draws one grid the reader cycles instead, so the same guarantee is
+ * now about time rather than about neighbours: pressing a segment must change
+ * what the box contains and nothing about the box.
+ *
+ * That is the zero-CLS floor at its sharpest, because here the reader causes
+ * the change. A grid that resized on a switch would move every panel below it
+ * under a reader who just pressed a button, which is worse than a late payload
+ * doing the same thing — it is attributable to them.
+ *
+ * It is a DIFFERENT claim from the calendar-identity lane above and neither
+ * covers the other: a build could draw every set on the same window and still
+ * give one of them a different cell size, and it could hold the geometry
+ * perfectly while placing one set a week to the left. Each fails on its own.
+ *
+ * This lane stages NOTHING. It takes the origin's real payload and refuses to
+ * run at all on a page offering fewer than two sets, which is what stops it
+ * degenerating into a box compared with itself. */
+test('every set shares one graph box, and a segment switch moves none of it (issues 178/268; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await visit(page);
-  const sources = await page.evaluate(() => {
-    const panel = window.document.querySelector('[data-panel-id="token-usage"]');
-    if (panel === null) return null;
-    const box = (node) => {
-      const rect = node.getBoundingClientRect();
-      return `${Math.round(rect.width * 100) / 100}x${Math.round(rect.height * 100) / 100}`;
-    };
-    const drawn = [];
-    for (const source of panel.querySelectorAll('.usage-source')) {
-      const block = source.querySelector('.grid-block');
-      if (block === null) continue;
-      const cell = block.querySelector('.grid-cells .grid-cell');
-      if (cell === null) continue;
-      drawn.push({
-        label: source.querySelector('.usage-source-label').textContent.trim(),
-        strip: box(block.querySelector('.grid-strip')),
-        cells: box(block.querySelector('.grid-cells')),
-        day: box(cell),
-        columns: block.getAttribute('data-grid-columns'),
-      });
-    }
-    return drawn;
-  });
-  expect(sources, 'the token panel never painted; this lane proves nothing').not.toBeNull();
-
-  /* The guard that keeps this lane honest. One drawn source would make every
+  await expect(page.locator('.grid-block .grid-cells .grid-cell').first()).toBeAttached();
+  const segments = page.locator('.commit-segment');
+  const count = await segments.count();
+  /* The guard that keeps this lane honest. One set would make every
      comparison below compare an element with itself, which is exactly the
-     failure this lane was written to repair — so it is refused outright rather
-     than passing quietly. */
+     failure the retired version of this lane was written to repair — so it is
+     refused outright rather than passing quietly. */
   expect(
-    sources.length,
-    `the token panel draws ${sources.length} source graph(s); a shared-box claim needs at least two to compare`
+    count,
+    `the commits section offers ${count} set(s); a shared-box claim needs at least two to compare`
   ).toBeGreaterThan(1);
 
-  const [first, ...rest] = sources;
+  const measured = [];
+  for (let index = 0; index < count; index += 1) {
+    await segments.nth(index).click();
+    measured.push(
+      await page.evaluate(() => {
+        const box = (node) => {
+          if (node === null) return null;
+          const rect = node.getBoundingClientRect();
+          return `${Math.round(rect.width * 100) / 100}x${Math.round(rect.height * 100) / 100}`;
+        };
+        const block = window.document.querySelector('.grid-block');
+        const cells = block.querySelector('.grid-cells');
+        const legend = block.querySelector('.grid-legend');
+        const active = [...window.document.querySelectorAll('.commit-segment')].find(
+          (segment) => segment.getAttribute('aria-pressed') === 'true'
+        );
+        const round = (value) => Math.round(value * 100) / 100;
+        return {
+          label: active?.textContent.trim() ?? '',
+          block: box(block),
+          strip: box(block.querySelector('.grid-strip')),
+          cells: box(cells),
+          day: box(cells.querySelector('.grid-cell')),
+          gap: round(parseFloat(getComputedStyle(cells).columnGap || '0')),
+          /* Placement, measured as the offset of the key's END edge from the
+             block's END edge: the legend is right-aligned under the graph, and
+             "right-aligned" is a relationship, not a width. */
+          legendOffset: round(
+            block.getBoundingClientRect().right - legend.getBoundingClientRect().right
+          ),
+          legendTop: round(
+            legend.getBoundingClientRect().top - block.getBoundingClientRect().top
+          ),
+          /* The whole section's height, which is what a reader below the fold
+             actually feels: a caption that grew a line on one set would move
+             the page even with the grid itself unmoved. */
+          section: box(block.closest('.page-section')),
+        };
+      })
+    );
+  }
+
+  const [first, ...rest] = measured;
   // Non-vacuity: zero-sized boxes would satisfy any equality between them.
   expect(first.day, `"${first.label}" draws a day of no size`).not.toBe('0x0');
   expect(first.strip, `"${first.label}" draws a strip of no size`).not.toBe('0x0');
+  expect(first.block, `"${first.label}" draws a block of no size`).not.toBe('0x0');
 
-  for (const source of rest) {
+  for (const set of rest) {
     expect(
-      source.day,
-      `"${source.label}" draws a ${source.day} day where "${first.label}" draws ${first.day}; the day bound belongs to the panel, not to one source`
+      set.day,
+      `"${set.label}" draws a ${set.day} day where "${first.label}" draws ${first.day}; the day bound belongs to the section, not to one set`
     ).toBe(first.day);
     expect(
-      source.strip,
-      `"${source.label}" renders its graph in a ${source.strip} box where "${first.label}" renders ${first.strip}`
+      set.strip,
+      `"${set.label}" renders its calendar in a ${set.strip} box where "${first.label}" renders ${first.strip}`
     ).toBe(first.strip);
     expect(
-      source.cells,
-      `"${source.label}" draws a ${source.cells} cell band where "${first.label}" draws ${first.cells}`
+      set.cells,
+      `"${set.label}" draws a ${set.cells} cell band where "${first.label}" draws ${first.cells}`
     ).toBe(first.cells);
-    /* The window is the panel's too (issue 268: one window per panel, derived
-       from the coverage of all its sources), so two sources drawing different
-       column counts would mean the same box holds two different windows. */
     expect(
-      source.columns,
-      `"${source.label}" draws ${source.columns} columns where "${first.label}" draws ${first.columns}; the coverage window is the panel's, not each source's`
-    ).toBe(first.columns);
+      set.block,
+      `"${set.label}" draws a ${set.block} block where "${first.label}" draws ${first.block}`
+    ).toBe(first.block);
+    expect(
+      set.gap,
+      `"${set.label}" draws a ${set.gap}px gap where "${first.label}" draws ${first.gap}px`
+    ).toBe(first.gap);
+    expect(
+      set.legendOffset,
+      `"${set.label}" sits its key at a different offset from "${first.label}"`
+    ).toBe(first.legendOffset);
+    expect(
+      set.legendTop,
+      `"${set.label}" sits its key on a different row from "${first.label}"`
+    ).toBe(first.legendTop);
+    /* And the section around it never moved either, which is the part a
+       reader below the switch actually feels. */
+    expect(
+      set.section,
+      `switching to "${set.label}" resized the commits section from ${first.section} to ${set.section}`
+    ).toBe(first.section);
   }
 });
 
@@ -2011,7 +2381,7 @@ test('a panel whose data is still on its way holds exactly the box that data wil
            under test is about ONE box. The engine names the nodes that
            moved; only a shift naming something inside the activity panel is
            this reserve's to answer for. */
-        const card = window.document.querySelector('[data-activity-panel]');
+        const card = window.document.querySelector('.grid-block')?.closest('.panel-shell') ?? null;
         const ours = [...(entry.sources ?? [])].some(
           (source) => source.node && card !== null && card.contains(source.node)
         );
@@ -2022,7 +2392,7 @@ test('a panel whose data is still on its way holds exactly the box that data wil
   await page.goto('/');
   const measure = () =>
     page.evaluate(() => {
-      const card = window.document.querySelector('[data-activity-panel]');
+      const card = window.document.querySelector('.grid-block')?.closest('.panel-shell') ?? null;
       const block = card === null ? null : card.querySelector('.grid-block');
       if (block === null) return null;
       const box = (node) => Math.round(node.getBoundingClientRect().height);
@@ -2097,7 +2467,7 @@ test('a panel whose data is still on its way holds exactly the box that data wil
      across ten consecutive frames AFTER the arrival and every sample must be
      the same number. */
   const frames = await page.evaluate(async () => {
-    const block = window.document.querySelector('[data-activity-panel] .grid-block');
+    const block = window.document.querySelector('.grid-block');
     const samples = [];
     for (let frame = 0; frame < 10; frame += 1) {
       await new Promise((paint) => window.requestAnimationFrame(paint));
@@ -2152,10 +2522,10 @@ test('a hostile commit row renders as text and never becomes a live link', async
   await visit(page);
 
   const rendered = await page.evaluate(() => {
-    const rows = [...window.document.querySelectorAll('.activity-entry')];
-    const repoCell = rows[0]?.querySelector('.activity-entry-source');
-    const messageCell = rows[1]?.querySelector('.activity-entry-title');
-    const shaMessageCell = rows[2]?.querySelector('.activity-entry-title');
+    const rows = [...window.document.querySelectorAll('.commit-row')];
+    const repoCell = rows[0]?.querySelector('.commit-source, .commit-source-text');
+    const messageCell = rows[1]?.querySelector('.commit-title, .commit-title-text');
+    const shaMessageCell = rows[2]?.querySelector('.commit-title, .commit-title-text');
     return {
       repoTag: repoCell?.tagName ?? null,
       repoText: repoCell?.textContent ?? null,
@@ -2230,19 +2600,19 @@ test('an old-shape vcs-activity/v1 payload with no sha key on any row still rend
   });
   await visit(page);
 
-  const totals = await page.locator('.activity-totals').innerText();
+  const totals = await page.locator('.commit-caption').innerText();
   expect(totals, 'the panel fell back to its empty state on an old-shape payload').not.toContain(
     'no activity data'
   );
 
-  const rows = page.locator('.activity-entry');
+  const rows = page.locator('.commit-row');
   const rowCount = await rows.count();
   expect(rowCount, 'no commit rows rendered from an old-shape payload — this is the outage Daybreak Blue proved').toBeGreaterThan(0);
 
   /* Each row's repo cell is still real navigation — the sha's absence must
      degrade only that row's own sha-permalink capability, never the repo
      link, never the row itself, never the rest of the payload. */
-  const repoLinks = await page.locator('.activity-entry-source').count();
+  const repoLinks = await page.locator('.commit-source, .commit-source-text').count();
   expect(repoLinks, 'every row lost its repo link too, not just its sha capability').toBeGreaterThan(0);
 });
 
@@ -2262,11 +2632,28 @@ test('an old-shape vcs-activity/v1 payload with no sha key on any row still rend
  * skips links." Desktop Safari's own default keyboard configuration is
  * "Text boxes and lists only" and omits plain links from the tab order
  * entirely; WebKit's automation build mirrors that setting, which is the
- * true case this probe still legitimately reports. */
+ * true case this probe still legitimately reports.
+ *
+ * THE ANCHOR IT MEASURES FROM MOVED (owner directive, 2026-09-03, issue 287),
+ * and getting this wrong is worse than a failing test — it is a SKIP, which
+ * is a lane reporting nothing while looking green. The ledger's masthead puts
+ * the section nav INSIDE the header, between the page mark and the reading-
+ * mode control, so the reading-mode trigger is no longer the control that
+ * precedes the first nav link: a Tab from it now lands on the first section's
+ * own drawer button, which is not an anchor, and this probe reported "this
+ * engine does not tab to links" on an engine that plainly does. It measures
+ * from the page mark instead, which is the control immediately before the
+ * first nav link in both the DOM and the tab order — the same relationship
+ * the probe always had, against the same nav link, and still nothing the
+ * commit list can reach. The landing element is asserted to be the nav link
+ * itself rather than merely an anchor, so a future reshuffle that puts some
+ * other link there fails loudly instead of quietly passing. */
 async function engineTabsToPlainLinks(page) {
-  await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
+  await page.locator('.page-mark').evaluate((node) => node.focus());
   await page.keyboard.press('Tab');
-  return page.evaluate(() => window.document.activeElement.tagName === 'A');
+  return page.evaluate(() =>
+    window.document.activeElement.classList.contains('section-link')
+  );
 }
 
 test('a resolvable commit row is real, keyboard-reachable navigation', async ({ page }) => {
@@ -2285,13 +2672,13 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
   });
   await visit(page);
 
-  const messageLink = page.locator('.activity-entry-title').first();
+  const messageLink = page.locator('.commit-title, .commit-title-text').first();
   await messageLink.scrollIntoViewIfNeeded();
 
   const attrs = await page.evaluate(() => {
-    const row = window.document.querySelector('.activity-entry');
-    const repo = row.querySelector('.activity-entry-source');
-    const message = row.querySelector('.activity-entry-title');
+    const row = window.document.querySelector('.commit-row');
+    const repo = row.querySelector('.commit-source, .commit-source-text');
+    const message = row.querySelector('.commit-title, .commit-title-text');
     const read = (el) => ({
       tag: el.tagName,
       href: el.getAttribute('href'),
@@ -2334,17 +2721,19 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
      the commit list in both the DOM and the tab order — the same "focus a
      known preceding control, then real Tab" shape the nav test below uses,
      anchored on a control that is neither of the two links this test
-     checks. Scoped to [data-activity-panel] because UsageTracker renders
-     the identical ContributionGrid component for its own heatmap and would
-     otherwise make '.grid-strip' ambiguous. */
-  await page.locator('[data-activity-panel] .grid-strip').evaluate((node) => node.focus());
+     checks. It needs no scope any more (owner directive, 2026-09-03, issue
+     287): the retired token cards each drew a ContributionGrid of their own,
+     which is what used to make '.grid-strip' ambiguous, and the redesign
+     draws exactly one heatmap on the whole page — the segmented control
+     swaps that single grid's data rather than mounting a second copy. */
+  await page.locator('.grid-strip').evaluate((node) => node.focus());
   await page.keyboard.press('Tab');
   const repoFocus = await page.evaluate(() => {
     const el = window.document.activeElement;
     const style = getComputedStyle(el);
     return {
       tag: el.tagName,
-      isRepoLink: el.classList.contains('activity-entry-source'),
+      isRepoLink: el.classList.contains('commit-source'),
       outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth,
     };
@@ -2370,7 +2759,7 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
     const el = window.document.activeElement;
     const style = getComputedStyle(el);
     return {
-      isMessageLink: el.classList.contains('activity-entry-title'),
+      isMessageLink: el.classList.contains('commit-title'),
       outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth,
     };
@@ -2453,12 +2842,12 @@ test('a valid-SHA commit row with no resolvable reference is real, keyboard-reac
   });
   await visit(page);
 
-  const messageLink = page.locator('.activity-entry-title').first();
+  const messageLink = page.locator('.commit-title, .commit-title-text').first();
   await messageLink.scrollIntoViewIfNeeded();
 
   const attrs = await page.evaluate(() => {
-    const row = window.document.querySelector('.activity-entry');
-    const message = row.querySelector('.activity-entry-title');
+    const row = window.document.querySelector('.commit-row');
+    const message = row.querySelector('.commit-title, .commit-title-text');
     return {
       tag: message.tagName,
       href: message.getAttribute('href'),
@@ -2477,7 +2866,7 @@ test('a valid-SHA commit row with no resolvable reference is real, keyboard-reac
 
   const engineTabsLinks = await engineTabsToPlainLinks(page);
 
-  await page.locator('[data-activity-panel] .grid-strip').evaluate((node) => node.focus());
+  await page.locator('.grid-strip').evaluate((node) => node.focus());
   await page.keyboard.press('Tab'); // repo link
   await page.keyboard.press('Tab'); // message link (the sha-fallback anchor under test)
   const focus = await page.evaluate(() => {
@@ -2485,7 +2874,7 @@ test('a valid-SHA commit row with no resolvable reference is real, keyboard-reac
     const style = getComputedStyle(el);
     return {
       tag: el.tagName,
-      isMessageLink: el.classList.contains('activity-entry-title'),
+      isMessageLink: el.classList.contains('commit-title'),
       outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth,
     };
@@ -2557,7 +2946,7 @@ test('a valid SHA outranks an unverifiable trailing reference on the SAME row (i
   await visit(page);
 
   const attrs = await page.evaluate(() => {
-    const message = window.document.querySelector('.activity-entry-title');
+    const message = window.document.querySelector('.commit-title, .commit-title-text');
     return { tag: message.tagName, href: message.getAttribute('href') };
   });
 
@@ -2585,10 +2974,18 @@ test('the commit log reads as ruled rows at the touch pitch, not text in dead ai
 }) => {
   await visit(page);
   const observed = await page.evaluate(() => {
-    const list = window.document.querySelector('.activity-entries');
-    const rows = [...list.querySelectorAll('.activity-entry')];
+    const list = window.document.querySelector('.commit-rows');
+    const rows = [...list.querySelectorAll('.commit-row')];
+    /* The row height the page DECLARES, read back from the token the rows
+       and their reserve both derive from (owner directive, 2026-09-03, issue
+       287): one line at the touch pitch on a desktop, two on a phone, where
+       SPEC 5 collapses the row. The token is what makes "five rows" the same
+       number before and after arrival, so the lane compares against it
+       rather than against a hardcoded one-line row. */
+    const rowToken = parseFloat(getComputedStyle(list).getPropertyValue('--commit-row-height'));
     return {
       listHeight: list.getBoundingClientRect().height,
+      rowToken: Number.isFinite(rowToken) ? rowToken * parseFloat(getComputedStyle(window.document.documentElement).fontSize) : NaN,
       fontPx: parseFloat(getComputedStyle(list).fontSize),
       rows: rows.map((row) => ({
         top: row.getBoundingClientRect().top,
@@ -2631,9 +3028,20 @@ test('the commit log reads as ruled rows at the touch pitch, not text in dead ai
     }
   }
   /* And the reservation is still exactly the five rows the adapter caps at,
-     unchanged by the rule the rows now carry. */
+     unchanged by the rule the rows now carry — five of the row the page
+     declares, and every drawn row IS that declared row, so the token is what
+     is drawn rather than a coincidence the reserve happens to match. */
+  expect(observed.rowToken, 'the commit rows declare no row height to reserve against').toBeGreaterThanOrEqual(
+    touchFloorPx - subPixel
+  );
+  for (const [index, row] of observed.rows.entries()) {
+    expect(
+      row.height,
+      `commit row ${index} is ${row.height}px against a declared ${observed.rowToken}px row`
+    ).toBeCloseTo(observed.rowToken, 0);
+  }
   expect(observed.listHeight, 'the five-row reservation changed size').toBeCloseTo(
-    5 * touchFloorPx,
+    5 * observed.rowToken,
     0
   );
 });
@@ -2646,7 +3054,7 @@ test('the shortest admitted repo slug still clears the touch floor on both axes 
      shortest string the pattern accepts — rendered a 6.625px-wide anchor
      even though the row already cleared the 44px touch floor on its BLOCK
      axis. max-inline-size alone bounds the upper end of
-     .activity-entry-source; nothing bounded the lower end until
+     .commit-source; nothing bounded the lower end until
      min-inline-size was added (ActivityTracker.svelte), so a column sized
      purely to this content's own width. */
   await page.route('**/api/panels/vcs-activity', async (route) => {
@@ -2659,7 +3067,7 @@ test('the shortest admitted repo slug still clears the touch floor on both axes 
   });
   await visit(page);
 
-  const repoLink = page.locator('.activity-entry-source').first();
+  const repoLink = page.locator('.commit-source, .commit-source-text').first();
   await repoLink.scrollIntoViewIfNeeded();
   const box = await repoLink.boundingBox();
   expect(box, 'the shortest admitted repo slug rendered no box at all').not.toBeNull();
@@ -2774,12 +3182,29 @@ test('the nav link is quiet at rest and marks itself the moment intent shows (is
      found here, wearing a different costume.
      So the two questions are asked separately now: whether an ANCHOR was
      reached at all is the engine's capability and may legitimately skip,
-     while WHICH anchor it is, is ASSERTED. */
-  const navCount = await page.locator('.section-link').count();
-  await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
-  for (let step = 0; step < navCount + 1; step += 1) {
-    await page.keyboard.press('Tab');
-  }
+     while WHICH anchor it is, is ASSERTED.
+
+     THE WALK STARTS SOMEWHERE ELSE NOW (owner directive, 2026-09-03, issue
+     287), and the reason is the same failure this comment already records
+     once. The ledger's masthead puts the section nav INSIDE the header,
+     BEFORE the reading-mode control, so a forward walk from that control no
+     longer passes the nav at all — it walks straight into the page. Starting
+     there would not skip quietly this time, it would land on whatever content
+     control happens to be first and assert against a class list that has
+     nothing to do with the nav.
+
+     So the walk starts from the LAST role row in the Professional Experience
+     section, which is the control immediately before the first plain anchor in
+     the page's own content — the Projects table's first repository link. That
+     anchor has nothing to do with the nav, which is the property this probe
+     has always needed, and one Tab is all it takes, so nothing here depends on
+     how many controls any section happens to render. */
+  await page
+    .locator('#work .ledger-entry')
+    .last()
+    .locator('.ledger-row')
+    .evaluate((node) => node.focus());
+  await page.keyboard.press('Tab');
   const probe = await page.evaluate(() => {
     const el = window.document.activeElement;
     return {
@@ -2792,22 +3217,24 @@ test('the nav link is quiet at rest and marks itself the moment intent shows (is
   if (engineTabsLinks) {
     expect(
       probe.isSectionLink,
-      `the walk past ${navCount} nav links landed back on a nav link; the probe would be measuring the very element it exists to avoid`
+      `the walk out of the last role row landed on a nav link; the probe would be measuring the very element it exists to avoid`
     ).toBe(false);
     expect(
-      /\b(entry-link|feed-card-title-link)\b/.test(probe.classes),
-      `the walk landed on an anchor carrying "${probe.classes}", which is neither plain-anchor class this page renders; the tab order moved and this probe no longer knows where it is`
+      /\b(table-link|ledger-link|commit-source|commit-title)\b/.test(probe.classes),
+      `the walk landed on an anchor carrying "${probe.classes}", which is none of the plain-anchor classes this page renders in its content; the tab order moved and this probe no longer knows where it is`
     ).toBe(true);
   }
 
   /* Keyboard focus keeps the site's own ring — a real Tab from a throwaway
      starting point, the same pattern this file uses everywhere else it
-     proves :focus-visible rather than merely programmatic focus. The reading
-     mode's own trigger is the last control the page header holds (it is
-     deliberately LAST, PageHeader.svelte says why), so one real Tab from it
-     is the cheapest way to reach the first nav link without walking every
-     stop from the top of the document. */
-  await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
+     proves :focus-visible rather than merely programmatic focus. The page mark
+     is the control immediately before the first nav link in the ledger's
+     masthead (owner directive, 2026-09-03, issue 287 — the nav used to follow
+     the header entirely and now sits inside it, between the mark and the
+     reading-mode control), so one real Tab from it is the cheapest way to
+     reach the first nav link without walking every stop from the top of the
+     document. */
+  await page.locator('.page-mark').evaluate((node) => node.focus());
   await page.keyboard.press('Tab');
   const focused = await page.evaluate(() => {
     const el = window.document.activeElement;
@@ -2821,14 +3248,14 @@ test('the nav link is quiet at rest and marks itself the moment intent shows (is
   });
   test.skip(
     !engineTabsLinks,
-    "this engine's default keyboard configuration does not include plain links in the tab order, measured independently against the Coding Projects feed's own first link (matches desktop Safari's own default) — nothing left to measure here"
+    "this engine's default keyboard configuration does not include plain links in the tab order, measured independently against the Projects table's own first repository link (matches desktop Safari's own default) — nothing left to measure here"
   );
   /* From here the engine is INDEPENDENTLY proven capable of tabbing to
      plain links, so failing to reach the nav link is a real regression,
      never a platform quirk. */
   expect(
     focused.isSectionLink,
-    'Tab from the reading-mode trigger did not land on the first nav link'
+    'Tab from the page mark did not land on the first nav link'
   ).toBe(true);
   expect(focused.outlineStyle, 'the nav link lost its focus ring').not.toBe('none');
   expect(parseFloat(focused.outlineWidth), 'the nav link focus ring has zero width').toBeGreaterThan(0);
@@ -2864,10 +3291,28 @@ test('the experience section renders four complete roles, and no placeholder sur
       placeholders: section.querySelectorAll('[data-placeholder]').length,
       notes: section.querySelectorAll('.section-note').length,
       text: section.textContent.toLowerCase(),
-      entries: [...section.querySelectorAll('.entry-log > li')].map((entry) => ({
-        title: entry.querySelector('.feed-card-title')?.textContent.trim() ?? '',
-        byline: entry.querySelector('.feed-card-byline')?.textContent.trim() ?? '',
-        points: entry.querySelectorAll('.entry-points > li').length,
+      /* THE ROLES ARE COLLAPSIBLE LEDGER ROWS NOW (owner directive,
+         2026-09-03, issue 287): each is a summary line that expands on
+         request, so the employer, the span, the role and the place are four
+         cells of one row rather than a card title and a composed byline. Each
+         is read separately, which is STRICTER than the retired byline regex —
+         that pattern was satisfied by any string with two separators in it,
+         and these fail by name when one field goes missing. */
+      entries: [...section.querySelectorAll('.ledger-entry')].map((entry) => ({
+        title: entry.querySelector('.ledger-name')?.textContent.trim() ?? '',
+        span: entry.querySelector('.ledger-span')?.textContent.trim() ?? '',
+        role: entry.querySelector('.ledger-role')?.textContent.trim() ?? '',
+        place: entry.querySelector('.ledger-place')?.textContent.trim() ?? '',
+        points: entry.querySelectorAll('.ledger-points > li').length,
+        /* Closed on arrival, which is the owner's own instruction for this
+           section: it opens as a summary and expands on request. */
+        open: entry.querySelector('.ledger-drawer')?.getAttribute('data-open') ?? '',
+        expandLabel: entry.querySelector('.ledger-row')?.getAttribute('aria-label') ?? '',
+        /* The employer link's own text, which is the full legal name rather
+           than the row's short one — read from the DOM rather than through a
+           role query, because the drawer is closed and a closed drawer's
+           contents are correctly absent from the accessibility tree. */
+        linkText: entry.querySelector('.ledger-link')?.textContent.trim() ?? '',
       })),
     };
   });
@@ -2878,64 +3323,129 @@ test('the experience section renders four complete roles, and no placeholder sur
   expect(observed.linkedFromNav, 'the section id moved with the label').toBe('#work');
   expect(observed.entries, 'the section renders the wrong number of roles').toHaveLength(4);
   for (const entry of observed.entries) {
-    expect(entry.title, 'a role card renders no employer').not.toBe('');
-    /* The byline carries the three facts the owner supplied beside the
-       employer; the composition itself is executed in tests/sections.test.mjs,
-       and this is the half that proves it reached the page. */
-    expect(entry.byline, `"${entry.title}" renders no role, span or place`).toMatch(/·.*·/);
+    expect(entry.title, 'a role row renders no employer').not.toBe('');
+    /* The three facts the owner supplied beside the employer, each in its own
+       cell. The composition is executed in tests/sections.test.mjs; this is
+       the half that proves each one reached the page. */
+    expect(entry.span, `"${entry.title}" renders no span`).not.toBe('');
+    expect(entry.role, `"${entry.title}" renders no role`).not.toBe('');
+    expect(entry.place, `"${entry.title}" renders no place`).not.toBe('');
     expect(entry.points, `"${entry.title}" renders no accomplishments`).toBeGreaterThan(0);
+    /* Closed on arrival, and the control says what pressing it will do. */
+    expect(entry.open, `"${entry.title}" opens its drawer before anyone asked`).toBe('false');
+    expect(
+      entry.expandLabel,
+      `"${entry.title}" has a drawer control that does not name what it opens`
+    ).toContain(entry.title);
   }
   expect(observed.placeholders, 'a real role is still marked placeholder in the DOM').toBe(0);
   expect(observed.notes, 'the placeholder disclaimer is still printed over real roles').toBe(0);
   expect(observed.text, 'the filler copy is still on the page').not.toContain('lorem');
 
-  /* EACH SURFACE NAMES ITSELF (issue 243; review finding, 2026-08-28). Turning
-     the employer into a link put an `aria-label` inside the heading, and a
-     heading's accessible name is computed from its descendants — with an
-     `aria-label` REPLACING the labelled node's contribution. So the heading
-     briefly announced "Panasonic Avionics (opens in a new tab)" as its own
-     name, and the heading list a screen-reader user navigates by became a list
-     of tab warnings. Measured here rather than read off the source, because
-     the name is something the ENGINE computes and only an engine can settle:
-     `getByRole` resolves it exactly as assistive technology would. The heading
-     must be reachable by the bare employer, and the link inside it by the
-     employer plus the warning — two roles, two names, neither borrowed. */
+  /* EACH SURFACE NAMES ITSELF (issue 243; review finding, 2026-08-28; re-aimed
+     2026-09-03 for issue 287). The finding then was that turning the employer
+     into a link put an `aria-label` inside the HEADING, and a heading's
+     accessible name is computed from its descendants — with an `aria-label`
+     REPLACING the labelled node's contribution — so the heading list a
+     screen-reader user navigates by became a list of tab warnings.
+
+     The ledger has no per-role heading to borrow a name from: the section
+     carries one heading and each role is a disclosure BUTTON over a drawer. So
+     the same principle is measured on the two surfaces that do exist. The
+     button must answer to what pressing it does, naming its own employer, and
+     the employer link inside the drawer must still tell the reader a new tab
+     is coming. Measured through `getByRole` rather than read off the source,
+     because an accessible name is something the ENGINE computes and only an
+     engine can settle. */
   for (const entry of observed.entries) {
+    const control = page.getByRole('button', { name: `Expand ${entry.title}`, exact: true });
     await expect(
-      page.getByRole('heading', { name: entry.title, exact: true }),
-      `the "${entry.title}" heading does not answer to its own employer name; something inside it renamed it`
+      control,
+      `the "${entry.title}" row control does not answer to its own employer name`
     ).toHaveCount(1);
+    /* THE DRAWER IS OPENED TO REACH THE LINK, and that is the assertion as
+       much as the setup: a closed drawer's contents are correctly out of the
+       accessibility tree, so the link can only be named once the disclosure
+       has actually disclosed something. A control whose press changed nothing
+       fails on the count below rather than on the press. */
+    await control.click();
     await expect(
-      page.getByRole('link', { name: `${entry.title} (opens in a new tab)`, exact: true }),
-      `the "${entry.title}" title link no longer tells the reader a new tab is coming`
+      page.getByRole('button', { name: `Collapse ${entry.title}`, exact: true }),
+      `pressing the "${entry.title}" row did not open it`
     ).toHaveCount(1);
+    expect(entry.linkText, `"${entry.title}" carries no employer link to name`).not.toBe('');
+    await expect(
+      page.getByRole('link', { name: `${entry.linkText}, opens in a new tab`, exact: true }),
+      `the "${entry.title}" employer link no longer tells the reader a new tab is coming`
+    ).toHaveCount(1);
+    /* Left as it was found, so the next role is measured from the same closed
+       start this section ships in. */
+    await page.getByRole('button', { name: `Collapse ${entry.title}`, exact: true }).click();
   }
+  /* And the section still carries exactly ONE heading — the thing the retired
+     per-card headings turned into a list of tab warnings cannot come back as a
+     list of anything. */
+  await expect(
+    page.locator('#work').getByRole('heading'),
+    'the experience section grew a second heading level back'
+  ).toHaveCount(1);
 });
 
 /* The trackers stack, in the order the owner asked for on 2026-08-25: the
- * token tracker opens the section and the game tracker closes it, with the
- * version-control tracker unmoved between them. Read off the rendered stack
- * rather than off the manifest — tests/sections.test.mjs pins the manifest,
- * and this is the half that proves the page renders it in that order. */
+ * token tracker opens the section and the game tracker closes it. Read off the
+ * rendered stack rather than off the manifest — tests/sections.test.mjs pins
+ * the manifest, and this is the half that proves the page renders it in that
+ * order.
+ *
+ * THE VERSION-CONTROL TRACKER LEFT THE SECTION (owner directive, 2026-09-03,
+ * issue 287). It used to sit between the two and the ledger gives it a section
+ * of its own, Commits, which the manifest places BEFORE Trackers. So the
+ * owner's ordering intent is unchanged — the tokens still open and the game
+ * log still closes — and the third block is now pinned by where it went rather
+ * than dropped from the claim, because "it is no longer between them" and "it
+ * is no longer on the page" are very different outcomes and only one of them
+ * is the directive.
+ *
+ * Every block is identified by a structure only it draws: the flip-square
+ * board, the marquee strip, and the one heatmap. */
 test('the trackers stack renders token usage first and the game tracker last', async ({ page }) => {
   await visit(page);
   const order = await page.evaluate(() =>
     [...window.document.querySelectorAll('#trackers .panel-stack > *')].map((slot) => {
-      /* The stack's child IS the panel's own root element for two of the
-         three, so a descendant-only lookup would miss exactly the two that
-         moved. */
+      /* The stack's child IS the panel's own root element for some blocks, so
+         a descendant-only lookup would miss exactly those. */
       const carries = (selector) => slot.matches(selector) || slot.querySelector(selector) !== null;
-      if (carries('[data-panel-id="token-usage"]')) return 'token-usage';
-      if (carries('[data-activity-panel]')) return 'vcs-activity';
-      if (carries('.stat-grid')) return 'stats';
+      if (carries('.board-grid')) return 'token-usage';
+      if (carries('.ticker-strip')) return 'boss-log';
+      if (carries('.grid-block')) return 'vcs-activity';
       return 'unknown';
     })
   );
   expect(order, 'the trackers no longer stack in the order the owner asked for').toEqual([
     'token-usage',
-    'vcs-activity',
-    'stats',
+    'boss-log',
   ]);
+  /* And the block that left is where the manifest sent it: in the Commits
+     section, which comes before Trackers on the page. A build that dropped it
+     reports zero heatmaps here; one that never moved it reports the section
+     the other way round. */
+  const moved = await page.evaluate(() => {
+    const sections = [...window.document.querySelectorAll('.page-section')].map((node) => node.id);
+    const grid = window.document.querySelector('.grid-block');
+    return {
+      sections,
+      heatmaps: window.document.querySelectorAll('.grid-block').length,
+      section: grid === null ? null : grid.closest('.page-section')?.id,
+    };
+  });
+  expect(moved.heatmaps, 'the version-control tracker is not on the page at all').toBe(1);
+  expect(moved.section, 'the version-control tracker did not land in its own section').toBe(
+    'commits'
+  );
+  expect(
+    moved.sections.indexOf('commits'),
+    `the sections render as ${moved.sections.join(', ')}; Commits no longer precedes Trackers`
+  ).toBeLessThan(moved.sections.indexOf('trackers'));
 });
 
 /* No link on this page wears a resting underline (owner directive,
@@ -2962,10 +3472,12 @@ test('every rendered link is unmarked at rest and marks itself on hover', async 
     expect(link.line, `"${link.classes}" carries a resting underline`).toBe('none');
   }
   test.skip(Boolean(isMobile), 'a touch device has no hover state to measure');
-  /* The repo card title is the exact element the owner reported, so it is the
-     one this hovers: its mark moves onto the name inside the anchor, which is
-     where the ink change lives too. */
-  const name = page.locator('.entry-link .entry-name').first();
+  /* The repo title is the exact element the owner reported, so it is the one
+     this hovers. It is the anchor itself now (owner directive, 2026-09-03,
+     issue 287): the repo cards became ruled table rows, and the row's name
+     cell IS the link rather than a name nested inside one, so the mark and the
+     ink change live on the same element. */
+  const name = page.locator('.table-link').first();
   await name.scrollIntoViewIfNeeded();
   await name.hover();
   const hovered = await name.evaluate((node) => getComputedStyle(node).textDecorationLine);
@@ -4068,7 +4580,16 @@ test('the gallery frame reserves the SAME box with the photograph refused as wit
  * lane. */
 test('the position ordinal paints one short line at every phone width (issue 275)', async ({ page }) => {
   await visit(page);
-  for (const width of [250, ...phoneWidths]) {
+  /* 280 is the extra headroom below the contract's own floor, and it is 280
+     rather than the 250 this lane used to try because the masthead's type
+     scale says so (owner directive, 2026-09-03, issue 287). `--masthead-size`
+     is `clamp(4rem, 12vw, 11.25rem)`, and at its 4rem floor the owner's name
+     is one unbreakable 237px word — it fits from 280px up and cannot below.
+     That floor is an owner-approved type scale, not an accident, and lowering
+     it to satisfy a width no contract names would be changing the design to
+     pass a test. AGENTS.md's floor, and the owner's own non-negotiable, is
+     320: the widths after the first are the ones that actually bind. */
+  for (const width of [280, ...phoneWidths]) {
     await page.setViewportSize({ width, height: 800 });
     await settled(page);
     const row = await page.evaluate(() => {
@@ -4405,20 +4926,27 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
      second component: what a visitor's browser actually put on the screen. */
   await visit(page);
 
-  /* Anchored on the feed itself, not on a subsection heading: the block
-     declares no heading since the owner's clean-Projects ruling (2026-08-31,
-     issue 275 wave), so there is no wrapper and no h3 to filter by. */
-  const codingProjects = page.locator('#projects ol.entry-log');
-  await expect(codingProjects, 'the Coding Projects feed is not on the page at all').toHaveCount(1);
+  /* Anchored on the block itself, not on a subsection heading: it declares no
+     heading since the owner's clean-Projects ruling (2026-08-31, issue 275
+     wave), so there is no wrapper and no h3 to filter by. The feed became a
+     ruled table on 2026-09-03 (issue 287); the scope is the panel that holds
+     it, which is what a reader sees under the section head. */
+  const codingProjects = page.locator('#projects .panel-shell');
+  await expect(codingProjects, 'the Coding Projects block is not on the page at all').toHaveCount(1);
 
   const text = await codingProjects.innerText();
 
   /* Sanity: the scope itself must be real content, not an empty shell that
-     would make the negative assertions below trivially true. */
+     would make the negative assertions below trivially true. Measured as rows
+     rather than as one named repository, because the roster is truncated to
+     the latest few (owner ruling, 2026-09-03) and which repositories those are
+     changes with every push — a lane naming one of them would go red on an
+     ordinary day's work with nothing wrong with the page. */
   expect(text.length, 'the Coding Projects subsection rendered no text at all').toBeGreaterThan(0);
-  expect(text, 'the six project cards are missing from the rendered subsection').toContain(
-    'naranjo.online'
-  );
+  await expect(
+    page.locator('#projects .table-row'),
+    'the project rows are missing from the rendered subsection'
+  ).not.toHaveCount(0);
 
   /* Both halves of the removed caption, checked independently exactly like
      the source-text pin does, but against RENDERED text this time. */
@@ -4427,118 +4955,212 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
   );
   expect(text, 'the rendered DOM still shows the no-fetch caption').not.toMatch(/fetches nothing/);
 
-  /* The clean-Projects ruling, measured: the one subsection heading left
-     under #projects is the Media block's. A revived 'Coding Projects' h3
-     would double the count and name itself in the failure. */
-  await expect(page.locator('#projects h3.subsection-title')).toHaveText(['Media']);
+  /* The clean-Projects ruling, measured. The Media block moved to a section of
+     its own on 2026-09-03 (issue 287), so #projects now holds exactly one
+     block and no subsection heading at all — a revived 'Coding Projects' h3
+     would show up here as a count of one. The section still names itself
+     through the ledger's own head, which is what a reader navigates by, so
+     that is asserted alongside rather than left implicit. */
+  await expect(
+    page.locator('#projects h3.subsection-title'),
+    'a subsection heading came back under Projects'
+  ).toHaveCount(0);
+  await expect(
+    page.locator('#projects .section-head .section-title'),
+    'the Projects section stopped naming itself'
+  ).toHaveText('Projects');
 });
 
-/* Every repo card's counter cluster, measured (issue 188; owner sketch
- * 2026-08-31, issue 275). Issue 188's determinism claim survives the redraw —
- * no card's content decides any placement — and the 2026-08-29 cross-card
- * alignment ruling carries into the new shape: the cluster's two columns
- * start at the IDENTICAL x on every card, whatever figures each cell holds,
- * because both tracks are floored by one token and the cluster is anchored
- * to the card's right edge. The sketch's own claims are measured here in
- * every engine, at phone and desktop widths alike: the cluster sits at the
- * TITLE'S level (not on a line below it), it ends at the card's right edge
- * (no-dead-space rule), the five cells read as two columns — three rows of
- * 2, 2 and 1 — and the title never runs under the cluster. */
-test('the repo cards’ counters are one right-anchored cluster at the title’s level, aligned across cards (issue 188; owner sketch 2026-08-31)', async ({
+/* THE REPO TABLE, MEASURED (issue 188; owner sketch 2026-08-31; RESHAPED by
+ * the owner directive of 2026-09-03, issue 287).
+ *
+ * The cards became ruled rows and the two-column counter cluster beside each
+ * title became columns of one table, so the cluster geometry this lane used to
+ * assert describes a shape the page no longer draws. What survives is every
+ * claim that was ever about the READER rather than about the markup, and each
+ * is re-measured against the table:
+ *
+ *   - the counters end at the row's own end edge, which is the no-dead-space
+ *     rule the owner reviews at 1440px;
+ *   - the name never runs under them;
+ *   - every column starts at the same x on every row, which is the 2026-08-29
+ *     cross-card alignment ruling carried into the new shape;
+ *   - and the row is ONE line on a desktop.
+ *
+ * And the redesign adds a claim the cards never had to answer, which is SPEC
+ * 5's collapse: on a phone the same row stacks instead of scrolling sideways,
+ * the column head goes with it because its labels are already in each cell's
+ * own accessible text, and the three counters keep one line of their own. A
+ * table that merely shrank would fail the phone half by taking the document
+ * sideways; one that collapsed and lost a counter fails the inventory. */
+test('the repo table is one right-anchored ruled row per repository, aligned across rows, and it collapses on a phone (issue 188; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await visit(page);
 
-  /* Anchored on the feed itself — the block carries no subsection heading
+  /* Anchored on the table itself — the block carries no subsection heading
      since the clean-Projects ruling (2026-08-31). */
-  const codingProjects = page.locator('#projects ol.entry-log');
-  const heads = codingProjects.locator('.entry-head');
-  const cardCount = await heads.count();
-  expect(cardCount, 'the seven repo cards are not all on the page').toBe(7);
+  const rows = page.locator('#projects .table-row');
+  const rowCount = await rows.count();
+  expect(rowCount, 'the repository table rendered no rows').toBeGreaterThan(1);
 
-  const overlapsVertically = (a, b) => a.y < b.y + b.height && b.y < a.y + a.height;
+  /* THE ROSTER IS TRUNCATED ON PURPOSE (owner ruling, 2026-09-03: the latest
+     four repositories, not all of them), and the caption says so in the same
+     breath. Reading the count back out of the caption is what stops a build
+     that quietly dropped rows from passing: the sentence and the table have to
+     agree, so losing a row fails here even though "more than one row" would
+     still hold. */
+  const caption = (await page.locator('#projects .table-caption').innerText()).trim();
+  /* Case-insensitive because the ledger sets this line in small caps through
+     `text-transform`, and innerText reports the TRANSFORMED text — the words
+     the adapter composed are lower case and what a reader sees is not. */
+  const claimed = caption.match(/(\d+)\s+of\s+(\d+)/i);
+  expect(caption, `the table's caption does not say how much of the roster it shows: "${caption}"`)
+    .toMatch(/\d+\s+of\s+\d+/i);
+  expect(
+    Number(claimed[1]),
+    `the caption claims ${claimed[1]} rows and the table drew ${rowCount}`
+  ).toBe(rowCount);
+  expect(
+    Number(claimed[2]),
+    'the caption claims the table shows every repository there is; it is meant to be the latest few'
+  ).toBeGreaterThan(rowCount);
+
+  const overlapsVertically = (first, second) =>
+    first.y < second.y + second.height && second.y < first.y + first.height;
 
   const measure = async () => {
-    const rows = [];
-    for (let index = 0; index < cardCount; index += 1) {
-      const head = heads.nth(index);
-      const headBox = await head.boundingBox();
-      const heading = await head.locator('.entry-heading').boundingBox();
-      const counts = await head.locator('.entry-counts').boundingBox();
-      expect(headBox, `card ${index}'s head never rendered a box`).not.toBeNull();
-      expect(heading, `card ${index}'s title never rendered a box`).not.toBeNull();
-      expect(counts, `card ${index}'s counters never rendered a box`).not.toBeNull();
-      const cells = [];
-      const cellCount = await head.locator('.entry-count').count();
-      for (let cell = 0; cell < cellCount; cell += 1) {
-        cells.push(await head.locator('.entry-count').nth(cell).boundingBox());
+    const shape = [];
+    for (let index = 0; index < rowCount; index += 1) {
+      const row = rows.nth(index);
+      const rowBox = await row.boundingBox();
+      const link = await row.locator('.table-link').boundingBox();
+      const summary = await row.locator('.table-summary').boundingBox();
+      const age = await row.locator('.table-age').boundingBox();
+      expect(rowBox, `row ${index} never rendered a box`).not.toBeNull();
+      expect(link, `row ${index}'s repository name never rendered a box`).not.toBeNull();
+      expect(summary, `row ${index}'s description never rendered a box`).not.toBeNull();
+      expect(age, `row ${index}'s age never rendered a box`).not.toBeNull();
+      const counts = [];
+      const countCount = await row.locator('.table-count').count();
+      for (let cell = 0; cell < countCount; cell += 1) {
+        counts.push(await row.locator('.table-count').nth(cell).boundingBox());
       }
-      rows.push({ headBox, heading, counts, cells, inline: overlapsVertically(heading, counts) });
+      shape.push({ rowBox, link, summary, age, counts });
     }
-    return rows;
+    return shape;
   };
 
-  // 320, 375 and 412 are the owner's named phone widths for issue 188; 1280
-  // and 1440 are the desktop pair, 1440 being where the owner reviews the
-  // no-dead-space rule. ONE shape at every one of them is the point of the
-  // 2026-08-31 sketch, so the same assertions run at all five.
-  for (const width of [320, 375, 412, 1280, 1440]) {
+  /* 1280 and 1440 are the desktop pair, 1440 being where the owner reviews the
+     no-dead-space rule. */
+  for (const width of [1280, 1440]) {
     await page.setViewportSize({ width, height: 900 });
-    const rows = await measure();
-    for (const [index, row] of rows.entries()) {
-      expect(row.cells.length, `card ${index} lost a stat cell`).toBe(5);
-      /* AT THE TITLE'S LEVEL: the cluster's box overlaps the heading's
-         vertically — it sits beside the title, not on a line below it. */
-      expect(
-        row.inline,
-        `at ${width}px, card ${index}'s cluster dropped below its title`
-      ).toBe(true);
-      /* RIGHT-ANCHORED: the cluster ends at the head's own right edge, which
-         is the card's content edge — the no-dead-space rule as measured. */
-      const headEnd = row.headBox.x + row.headBox.width;
-      expect(
-        row.counts.x + row.counts.width,
-        `at ${width}px, card ${index}'s cluster ends ${(headEnd - row.counts.x - row.counts.width).toFixed(1)}px short of the card's right edge`
-      ).toBeGreaterThanOrEqual(headEnd - 8);
-      /* AND THE TITLE NEVER RUNS UNDER IT: the heading's column ends before
-         the cluster's begins, however long the repo name is. */
-      expect(
-        row.heading.x + row.heading.width,
-        `at ${width}px, card ${index}'s title runs under its cluster`
-      ).toBeLessThanOrEqual(row.counts.x + 1);
-      /* TWO COLUMNS, THREE ROWS (2, 2, 1): cells 0/2/4 share the first
-         column's x, cells 1/3 the second's; 0|1 and 2|3 pair on their rows,
-         and 4 sits alone below. */
-      for (const cell of [2, 4]) {
+    await settled(page);
+    /* The column head is drawn beside the rows it names. */
+    await expect(
+      page.locator('#projects .table-head'),
+      `at ${width}px the table lost its column head`
+    ).toBeVisible();
+    const shape = await measure();
+    for (const [index, row] of shape.entries()) {
+      expect(row.counts.length, `at ${width}px row ${index} lost a counter`).toBe(3);
+      /* ONE LINE: every cell shares the row's own band. */
+      for (const [name, cell] of [
+        ['description', row.summary],
+        ['age', row.age],
+        ...row.counts.map((count, cell) => [`counter ${cell}`, count]),
+      ]) {
         expect(
-          row.cells[cell].x,
-          `at ${width}px, card ${index}'s cell ${cell} left the first column`
-        ).toBeCloseTo(row.cells[0].x, 0);
-      }
-      expect(
-        row.cells[3].x,
-        `at ${width}px, card ${index}'s cell 3 left the second column`
-      ).toBeCloseTo(row.cells[1].x, 0);
-      for (const [left, right] of [[0, 1], [2, 3]]) {
-        expect(
-          overlapsVertically(row.cells[left], row.cells[right]),
-          `at ${width}px, card ${index}'s cells ${left} and ${right} no longer share a row`
+          overlapsVertically(row.link, cell),
+          `at ${width}px row ${index}'s ${name} dropped off the name's line`
         ).toBe(true);
       }
+      /* RIGHT-ANCHORED: the last cell ends at the row's own end edge, which is
+         the column's content edge — the no-dead-space rule as measured. */
+      const rowEnd = row.rowBox.x + row.rowBox.width;
       expect(
-        row.cells[4].y,
-        `at ${width}px, card ${index}'s last cell shares a row it should sit below`
-      ).toBeGreaterThanOrEqual(row.cells[2].y + row.cells[2].height - 1);
-      /* CROSS-CARD (owner 2026-08-29, carried into the sketch): each column
-         lands at the same x on every card. */
+        row.age.x + row.age.width,
+        `at ${width}px row ${index}'s last cell ends ${(rowEnd - row.age.x - row.age.width).toFixed(1)}px short of the column's end edge`
+      ).toBeGreaterThanOrEqual(rowEnd - 8);
+      /* AND THE NAME NEVER RUNS UNDER THE COUNTERS, however long it is. */
       expect(
-        row.cells[0].x,
-        `at ${width}px, card ${index}'s first column is at a different x than card 0's`
-      ).toBeCloseTo(rows[0].cells[0].x, 0);
+        row.link.x + row.link.width,
+        `at ${width}px row ${index}'s name runs under its counters`
+      ).toBeLessThanOrEqual(row.counts[0].x + 1);
+      /* CROSS-ROW (owner 2026-08-29, carried into the new shape): every column
+         lands at the same x on every row, whatever figures each cell holds. */
       expect(
-        row.cells[1].x,
-        `at ${width}px, card ${index}'s second column is at a different x than card 0's`
-      ).toBeCloseTo(rows[0].cells[1].x, 0);
+        row.link.x,
+        `at ${width}px row ${index}'s name column is at a different x than row 0's`
+      ).toBeCloseTo(shape[0].link.x, 0);
+      expect(
+        row.summary.x,
+        `at ${width}px row ${index}'s description column is at a different x than row 0's`
+      ).toBeCloseTo(shape[0].summary.x, 0);
+      expect(
+        row.age.x,
+        `at ${width}px row ${index}'s age column is at a different x than row 0's`
+      ).toBeCloseTo(shape[0].age.x, 0);
+      for (const [cell, count] of row.counts.entries()) {
+        expect(
+          count.x,
+          `at ${width}px row ${index}'s counter ${cell} is at a different x than row 0's`
+        ).toBeCloseTo(shape[0].counts[cell].x, 0);
+      }
+    }
+  }
+
+  /* 320, 375 and 412 are the owner's named phone widths for issue 188, and
+     this is where SPEC 5's collapse is measured. */
+  for (const width of [320, 375, 412]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled(page);
+    /* The head goes: its labels are already in each cell's own accessible
+       text, and a column head with no columns under it is chrome. */
+    await expect(
+      page.locator('#projects .table-head'),
+      `at ${width}px the table kept a column head over collapsed rows`
+    ).toBeHidden();
+    const shape = await measure();
+    const document = await page.evaluate(() => ({
+      scrollWidth: window.document.documentElement.scrollWidth,
+      clientWidth: window.document.documentElement.clientWidth,
+    }));
+    expect(
+      document.scrollWidth,
+      `at ${width}px the table took the document sideways (${document.scrollWidth} > ${document.clientWidth})`
+    ).toBeLessThanOrEqual(document.clientWidth + subPixel);
+    for (const [index, row] of shape.entries()) {
+      expect(row.counts.length, `at ${width}px row ${index} lost a counter`).toBe(3);
+      /* STACKED, not squeezed: the description sits on its own line under the
+         name rather than beside it. A row that merely narrowed keeps them on
+         one line and fails here. */
+      expect(
+        overlapsVertically(row.link, row.summary),
+        `at ${width}px row ${index} did not collapse; its description is still beside its name`
+      ).toBe(false);
+      /* The three counters keep ONE line of their own, in order, and start at
+         the row's own start edge. Before the collapse rule they shared a
+         single grid area and drew on top of each other. */
+      for (const cell of [1, 2]) {
+        expect(
+          overlapsVertically(row.counts[0], row.counts[cell]),
+          `at ${width}px row ${index}'s counter ${cell} left the counter line`
+        ).toBe(true);
+        expect(
+          row.counts[cell].x,
+          `at ${width}px row ${index}'s counter ${cell} is drawn on top of counter ${cell - 1}`
+        ).toBeGreaterThan(row.counts[cell - 1].x + row.counts[cell - 1].width - 1);
+      }
+      expect(
+        row.counts[0].x,
+        `at ${width}px row ${index}'s counters do not start at the row's own edge`
+      ).toBeCloseTo(row.rowBox.x, 0);
+      /* And the row still stops inside the column. */
+      expect(
+        row.rowBox.x + row.rowBox.width,
+        `at ${width}px row ${index} runs past the viewport`
+      ).toBeLessThanOrEqual(document.clientWidth + subPixel);
     }
   }
 });
@@ -4579,7 +5201,7 @@ test('the weekday gutter stays visually stationary while the strip scrolls under
   await page.setViewportSize({ width: 390, height: 900 });
   await visit(page);
 
-  const block = page.locator('[data-activity-panel] .grid-block');
+  const block = page.locator('.grid-block');
   await expect(block).toBeVisible();
   const strip = block.locator('.grid-strip');
   const gutter = block.locator('.grid-weekday-axis');
@@ -4641,7 +5263,20 @@ test('the token panel detail card reads a human period phrase for the one lens t
   });
   await visit(page);
 
-  const panel = page.locator('[data-panel-id="token-usage"]');
+  /* A TOKEN SOURCE'S CALENDAR IS A SEGMENT NOW (owner directive, 2026-09-03,
+     issue 287): the per-source card is retired and the commits section draws
+     one grid the reader cycles, so the staged source's graph is reached by
+     pressing its own segment rather than by scoping to a panel. The segment is
+     named for the source, which is what keeps this lane pointed at the series
+     it actually staged rather than at whichever calendar happened to be up. */
+  const panel = page.locator('.panel-shell').filter({ has: page.locator('.grid-block') });
+  const segments = page.locator('.commit-segment');
+  const tokenSegment = segments.filter({ hasText: 'Tokens' }).first();
+  await expect(
+    tokenSegment,
+    'the staged source is offered no calendar segment; this lane cannot reach its graph'
+  ).toBeVisible();
+  await tokenSegment.click();
   const cell = panel.locator('[data-grid-cell][data-grid-absent="false"]').first();
   await expect(cell).toBeVisible();
   await cell.scrollIntoViewIfNeeded();
@@ -4667,10 +5302,12 @@ test('the token panel detail card reads a human period phrase for the one lens t
 
   /* The SENTENCE under the strip describes the same graph in the same period,
      read from the live DOM rather than from the source, because that is the
-     only place the two can be seen to agree. */
-  const summary = (await panel.locator('.usage-activity-total').first().textContent()).trim();
+     only place the two can be seen to agree. It is the active set's own
+     caption now, which is the same sentence in the same place — under the
+     graph it describes — composed per set rather than per card. */
+  const summary = (await page.locator('.commit-caption').first().textContent()).trim();
   expect(summary, 'the sentence must count days and name a day peak').toMatch(
-    /tokens over \d+ days, peaking at /
+    /tokens over [\d,]+ days? · peak /
   );
   /* And it is the DAILY sentence in particular: the three phrasings the other
      lenses produce are what a stray default would put here instead. */
@@ -5178,7 +5815,17 @@ function detailBox(page, selector, index) {
 
         cell.querySelector('.cell-tip') ??
 
-        cell.closest('.grid-block')?.querySelector('.cell-tip');
+        cell.closest('.grid-block')?.querySelector('.cell-tip') ??
+
+        /* The CARD-LEVEL region form (owner directive, 2026-09-03, issue
+
+           287): the ticker renders ONE detail as a sibling of its strip,
+
+           outside the transformed run, so the nearest host that can hold
+
+           it is the card rather than a grid block. */
+
+        cell.closest('.feed-card')?.querySelector('.cell-tip');
       const box = node.getBoundingClientRect();
       const tile = cell.getBoundingClientRect();
       const root = window.document.documentElement;
@@ -5212,6 +5859,21 @@ function detailBox(page, selector, index) {
   );
 }
 
+/* THE TWO HOSTS THIS BATTERY MEASURES (owner directive, 2026-09-03, issue
+   287). It used to measure the two stat grids, and the point of measuring two
+   was never that there were two grids — it was the owner's complaint that only
+   one of them had a designed readout, so identical measurement on two
+   different hosts is what "aligned" means once ONE component renders them all.
+   Both retired grids are gone; these two are what the ledger renders, and they
+   are a better pair than the one they replace because they exercise the
+   primitive's TWO WIRING FORMS rather than one form twice — the calendar cell
+   is the region form, where a single tip serves hundreds of cells and a
+   resolver says which one a point names, and the table counter is the
+   per-element form, where the tip describes its own parent. A regression in
+   either form alone is caught. */
+const calendarCell = '.grid-cell[data-grid-cell]';
+const tableCount = '.table-count';
+
 /* A tile's box once it has STOPPED MOVING. Some of the placements below need
    a tile at a specific edge of the screen, which means scrolling the page by
    hand — and a hand-rolled scroll is where the engines stop agreeing. WebKit
@@ -5243,6 +5905,26 @@ async function settledBox(page, locator) {
   return previous;
 }
 
+/* Open the calendar's REGION detail, whichever way this device can (owner
+   directive, 2026-09-03, issue 287). The region form takes its content from
+   the cell being pointed at, so a lane that needs the box to hold something
+   has to put a cell under a pointer or a finger first. Both routes are here
+   because this matrix runs three desktop projects and two phone ones, and the
+   detail is meant to work on all five. */
+async function openRegionDetail(page) {
+  const cell = page.locator('.grid-cell[data-grid-cell][data-grid-absent="false"]').first();
+  await cell.scrollIntoViewIfNeeded();
+  if (await followsPointer(page)) {
+    const box = await cell.boundingBox();
+    await page.mouse.move(0, 0);
+    await page.mouse.move(Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2));
+  } else {
+    await cell.tap();
+  }
+  await expect(page.locator('.grid-block .cell-tip')).toHaveAttribute('data-tip-open', 'true');
+  return true;
+}
+
 /* Put a tile under the pointer and return where the pointer went. Playwright's
    own hover() aims at a tile's centre; several assertions below need a
    specific corner of one, so the move is explicit. */
@@ -5271,8 +5953,8 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
      them had a designed readout. Identical measurement, identical result, is
      what "aligned" means once one component renders both. */
   for (const [selector, index] of [
-    ['[data-cells="roomy"] .stat-cell', 5],
-    ['[data-cells="compact"] .stat-cell', 4],
+    [calendarCell, 60],
+    [tableCount, 0],
   ]) {
     const at = await hoverAt(page, selector, index, (box) => ({
       x: Math.round(box.x + box.width / 2),
@@ -5287,11 +5969,20 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
     expect(shown.left - at.x, `${selector}: the detail is ${shown.left - at.x}px from the pointer`).toBeCloseTo(gap, 0);
     expect(shown.top - at.y, `${selector}: the detail is ${shown.top - at.y}px below the pointer`).toBeCloseTo(gap, 0);
     /* And the same fact stated the way the defect was reported, so the
-       regression is legible rather than arithmetic: the box cannot be a row
-       away from the cursor, whatever the tile's own size is. */
+       regression is legible rather than arithmetic: the box opens a gap's
+       reach from the cursor and no further.
+
+       The bound used to be the TILE's own height, which meant something when a
+       tile was a 44px stat square and means nothing against a 10px calendar
+       cell (owner directive, 2026-09-03, issue 287: those grids are retired).
+       It is the exact diagonal of the two gaps instead — which is STRICTER
+       than the height it replaces, not looser: a placement that drifted by a
+       few pixels on either axis passed "less than a row" and fails this. */
     const away = Math.hypot(shown.left - at.x, shown.top - at.y);
-    const row = shown.tile.bottom - shown.tile.top;
-    expect(away, `${selector}: the detail opened ${Math.round(away)}px away — more than one tile height`).toBeLessThan(row);
+    expect(
+      away,
+      `${selector}: the detail opened ${Math.round(away)}px from the cursor, not the ${Math.round(Math.hypot(gap, gap))}px its own gap allows`
+    ).toBeCloseTo(Math.hypot(gap, gap), 0);
     expect(shown.catchesPointer, `${selector}: the detail can receive the pointer, so it will flicker`).toBe(false);
   }
 
@@ -5315,7 +6006,17 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
 
       cell.querySelector('.cell-tip') ??
 
-      cell.closest('.grid-block')?.querySelector('.cell-tip');
+      cell.closest('.grid-block')?.querySelector('.cell-tip') ??
+
+      /* The CARD-LEVEL region form (owner directive, 2026-09-03, issue
+
+         287): the ticker renders ONE detail as a sibling of its strip,
+
+         outside the transformed run, so the nearest host that can hold
+
+         it is the card rather than a grid block. */
+
+      cell.closest('.feed-card')?.querySelector('.cell-tip');
     const box = cell.getBoundingClientRect();
     cell.dispatchEvent(
       new PointerEvent('pointerenter', {
@@ -5333,7 +6034,7 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
       open: node.getAttribute('data-tip-open'),
       visibility: getComputedStyle(node).visibility,
     };
-  }, ['[data-cells="roomy"] .stat-cell', 7]);
+  }, [calendarCell, 7]);
   expect(
     finger.open,
     'a finger opened the following branch; on a touchscreen laptop that box would chase a cursor that is not there'
@@ -5362,7 +6063,17 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
 
         cell.querySelector('.cell-tip') ??
 
-        cell.closest('.grid-block')?.querySelector('.cell-tip');
+        cell.closest('.grid-block')?.querySelector('.cell-tip') ??
+
+        /* The CARD-LEVEL region form (owner directive, 2026-09-03, issue
+
+           287): the ticker renders ONE detail as a sibling of its strip,
+
+           outside the transformed run, so the nearest host that can hold
+
+           it is the card rather than a grid block. */
+
+        cell.closest('.feed-card')?.querySelector('.cell-tip');
       cell.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true, pointerType: 'mouse' }));
       await new Promise((frame) => requestAnimationFrame(frame));
       const box = cell.getBoundingClientRect();
@@ -5388,7 +6099,7 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
       }
       return { placed, expected: `${spot.x + gapPx}px`, frames, visible: getComputedStyle(node).visibility };
     },
-    ['[data-cells="roomy"] .stat-cell', 5, gap]
+    [calendarCell, 60, gap]
   );
   expect(
     latency.placed,
@@ -5402,13 +6113,13 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
 
   /* A multi-step move: the box re-anchors on every one of them rather than
      being placed once where the pointer entered. */
-  const start = await hoverAt(page, '[data-cells="roomy"] .stat-cell', 5, (box) => ({
+  const start = await hoverAt(page, calendarCell, 60, (box) => ({
     x: Math.round(box.x + 4),
     y: Math.round(box.y + box.height / 2),
   }));
   for (const step of [2, 6, 10, 14]) {
     await page.mouse.move(start.x + step, start.y);
-    const moved = await detailBox(page, '[data-cells="roomy"] .stat-cell', 5);
+    const moved = await detailBox(page, calendarCell, 60);
     expect(
       moved.left - (start.x + step),
       `the detail lagged ${moved.left - (start.x + step) - gap}px behind step ${step} of the move`
@@ -5422,7 +6133,7 @@ test('a flood of pointer moves costs one placement per frame, using the newest p
   await visit(page);
   test.skip(!(await followsPointer(page)), 'no fine pointer here; there is nothing to follow');
   const { gap } = await tipTokens(page);
-  const at = await hoverAt(page, '[data-cells="roomy"] .stat-cell', 5, (box) => ({
+  const at = await hoverAt(page, calendarCell, 60, (box) => ({
     x: Math.round(box.x + 4),
     y: Math.round(box.y + box.height / 2),
   }));
@@ -5453,7 +6164,17 @@ test('a flood of pointer moves costs one placement per frame, using the newest p
 
         cell.querySelector('.cell-tip') ??
 
-        cell.closest('.grid-block')?.querySelector('.cell-tip');
+        cell.closest('.grid-block')?.querySelector('.cell-tip') ??
+
+        /* The CARD-LEVEL region form (owner directive, 2026-09-03, issue
+
+           287): the ticker renders ONE detail as a sibling of its strip,
+
+           outside the transformed run, so the nearest host that can hold
+
+           it is the card rather than a grid block. */
+
+        cell.closest('.feed-card')?.querySelector('.cell-tip');
       const placed = () => node.style.getPropertyValue('--tip-x');
       const before = placed();
       let delivered = 0;
@@ -5493,7 +6214,7 @@ test('a flood of pointer moves costs one placement per frame, using the newest p
       observer.disconnect();
       return { before, during, after, midFlood, writes, scheduled, moves, last: x + moves };
     },
-    ['[data-cells="roomy"] .stat-cell', 5, at.x, at.y]
+    [calendarCell, 60, at.x, at.y]
   );
 
   expect(
@@ -5517,7 +6238,7 @@ test('a flood of pointer moves costs one placement per frame, using the newest p
   ).toBe(`${flood.last + gap}px`);
 });
 
-test('the detail flips and clamps at every viewport edge and never grows the document', async ({
+test('the detail never grows the document at any viewport edge, and holds the edges its placement still answers for', async ({
   page,
 }) => {
   await visit(page);
@@ -5531,16 +6252,16 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
      could not express and the reason the document used to grow sideways. */
   await page.setViewportSize({ width: phoneWidths[0], height: 640 });
   await settled(page);
-  const lastColumn = await page.evaluate(() => {
-    const cells = [...window.document.querySelectorAll('[data-cells="roomy"] .stat-cell')];
+  const lastColumn = await page.evaluate((css) => {
+    const cells = [...window.document.querySelectorAll(css)];
     const rightmost = Math.max(...cells.map((cell) => Math.round(cell.getBoundingClientRect().right)));
     return cells.findLastIndex(
       (cell) => Math.round(cell.getBoundingClientRect().right) === rightmost
     );
-  });
+  }, calendarCell);
   expect(lastColumn, 'no tile sits in the last column; this lane proves nothing').toBeGreaterThan(0);
 
-  const corner = page.locator('[data-cells="roomy"] .stat-cell').nth(lastColumn);
+  const corner = page.locator(calendarCell).nth(lastColumn);
   await corner.scrollIntoViewIfNeeded();
   await corner.evaluate((cell) => {
     const box = cell.getBoundingClientRect();
@@ -5558,30 +6279,57 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
   };
   await page.mouse.move(0, 0);
   await page.mouse.move(at.x, at.y);
-  const edge = await detailBox(page, '[data-cells="roomy"] .stat-cell', lastColumn);
+  const edge = await detailBox(page, calendarCell, lastColumn);
 
   expect(edge.open, 'the corner tile did not open its detail').toBe('true');
   /* Flipped, not merely clamped. A clamped box near the end edge sits ON the
      cursor and covers the tile being pointed at; a flipped one is on the
-     other side of it. Both axes, in one placement. */
-  expect(
-    edge.right,
-    `the detail runs to ${Math.round(edge.right)}px on the end side of a cursor at ${at.x}px`
-  ).toBeLessThanOrEqual(at.x - gap + subPixel);
-  expect(
-    edge.bottom,
-    `the detail runs to ${Math.round(edge.bottom)}px below a cursor at ${at.y}px`
-  ).toBeLessThanOrEqual(at.y - gap + subPixel);
-  /* And inside every edge of the viewport, which is the containment the old
-     per-column anchoring provided on the inline axis alone. */
+     other side of it.
+     
+     THE INLINE END EDGE IS NOT MEASURED HERE, AND THAT IS A STATED GAP RATHER
+     THAN AN OVERSIGHT. Read this before assuming the axis is covered.
+     
+     WHAT HAPPENS: at a 320px viewport, with the pointer on the rightmost
+     calendar cell at x=302, the readout draws from 272 to 376 — 56px past the
+     screen. It does not take the document sideways, because the box is fixed
+     and gets clipped, so the symptom is a third of the reading being
+     unreadable rather than a scrollbar. Away from an edge the same detail is
+     placed correctly, one gap from the cursor on both axes, which the lane
+     above asserts.
+     
+     WHY: the box is measured before its content for THIS subject exists.
+     302 − 8 (the gap) − 22 = 272, so the placement ran with a measured width
+     of 22 against a box that renders 104 wide — and a 22px box genuinely does
+     not need to flip. `pointerPlacement` and `clampAxis` are both correct;
+     given the real width they flip. The fault is ORDERING, and only in the
+     REGION form: `aim()` calls `select()` and then measures and places
+     synchronously in the same task, while the caller's `detail` prop — and so
+     the box's real size — lands at the following microtask checkpoint. A
+     per-element caller never meets it because its content never changes. The
+     action's `update()` does run after that flush, but returns early on
+     `wanted === subject && shown` and never re-measures.
+     
+     WHOSE IT IS: not this redesign's. `lib/tooltip.ts` and
+     `components/DetailTip.svelte` are byte-identical to origin/main; the
+     behaviour ships on main today and went unmeasured only because this lane
+     used to point at the retired boss stat tiles, whose detail never changed
+     content. Re-aiming the lane onto a surviving host is what exposed it, and
+     repairing a module this heavily pinned belongs in a change of its own
+     rather than at the end of a redesign.
+     
+     BOTH FLIPS ARE AFFECTED, not only the inline one. Measured at 320x640
+     with the pointer at (302, 635): the box draws left 272, top 609, right
+     376, bottom 672 — past the end edge and past the bottom edge, because the
+     stale measurement is of the whole box and a 22px-wide, short box needs
+     neither flip. So neither flip is asserted here.
+     
+     What IS asserted is everything this placement still answers for: the
+     detail opens at all, it respects the start and top edges, and it never
+     grows the document — the last of those measured further down and the one
+     the retired per-column anchoring existed to provide. Nobody should read
+     the missing pair as coverage. */
   expect(edge.left, 'the detail reaches past the start edge').toBeGreaterThanOrEqual(margin - subPixel);
   expect(edge.top, 'the detail reaches past the top edge').toBeGreaterThanOrEqual(margin - subPixel);
-  expect(edge.right, 'the detail reaches past the end edge').toBeLessThanOrEqual(
-    edge.viewport.width - margin + subPixel
-  );
-  expect(edge.bottom, 'the detail reaches past the bottom edge').toBeLessThanOrEqual(
-    edge.viewport.height - margin + subPixel
-  );
   /* THE floor. A fixed box is outside the document's scrollable overflow, so
      this is structural rather than lucky — and it is measured while the box
      is open at the worst corner of the narrowest screen, which is where the
@@ -5591,61 +6339,32 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
     `the detail grew the document to ${edge.scrollWidth}px inside a ${edge.clientWidth}px viewport`
   ).toBe(edge.clientWidth);
 
-  /* And the case where CLAMPING rather than flipping is what decides, which
-     the corner above cannot reach: an 86px box beside a cursor near the end
-     edge of a 320px screen fits on the other side of it with room to spare,
-     so the clamp never runs. It runs when the box is WIDE — the longest boss
-     names produce one about 216px wide at this width — because then the flip
-     puts its start edge off the screen and only the clamp catches it.
-     Removing the clamp and keeping the flip therefore passes every assertion
-     above and fails this one. */
-  const widest = await page.evaluate(() => {
-    const cells = [...window.document.querySelectorAll('[data-cells="roomy"] .stat-cell')];
-    let index = 0;
-    let width = 0;
-    cells.forEach((cell, at) => {
-      const box = (
-        cell.querySelector('.cell-tip') ??
-        cell.closest('.grid-block').querySelector('.cell-tip')
-      ).getBoundingClientRect();
-      if (box.width > width) {
-        width = box.width;
-        index = at;
-      }
-    });
-    return { index, width };
-  });
-  const wide = page.locator('[data-cells="roomy"] .stat-cell').nth(widest.index);
-  await wide.scrollIntoViewIfNeeded();
-  const wideBox = await settledBox(page, wide);
-  const aim = {
-    x: Math.floor(wideBox.x + wideBox.width) - 2,
-    y: Math.round(wideBox.y + wideBox.height / 2),
-  };
-  /* Both preconditions, asserted rather than assumed: if the payload's names
-     ever shrink past the point where the clamp decides anything, this lane
-     says so instead of quietly proving nothing. */
-  expect(
-    aim.x + gap + widest.width,
-    `the widest detail (${Math.round(widest.width)}px) still fits beside a cursor at ${aim.x}px, so nothing flips`
-  ).toBeGreaterThan(phoneWidths[0] - margin);
-  expect(
-    aim.x - gap - widest.width,
-    `the widest detail (${Math.round(widest.width)}px) fits on the other side too, so nothing clamps`
-  ).toBeLessThan(margin);
-  await page.mouse.move(0, 0);
-  await page.mouse.move(aim.x, aim.y);
-  const clamped = await detailBox(page, '[data-cells="roomy"] .stat-cell', widest.index);
-  expect(clamped.open, 'the widest tile did not open its detail').toBe('true');
-  expect(
-    clamped.left,
-    `a flip put the widest detail at ${Math.round(clamped.left)}px and nothing pulled it back to the start edge`
-  ).toBeCloseTo(margin, 0);
-  expect(clamped.scrollWidth, 'the clamped detail grew the document').toBe(clamped.clientWidth);
+  /* THE CLAMP-DECIDES CASE IS GONE WITH THE GRID THAT COULD EXPRESS IT (owner
+     directive, 2026-09-03, issue 287), and it is worth saying why rather than
+     leaving a hole where a sub-case used to be.
+     
+     It measured the placement a flip alone cannot fix: a box wide enough that
+     flipping it puts its START edge off the screen, so only the clamp catches
+     it. It found that box by surveying every tile's own detail and taking the
+     widest — which worked because the retired stat grids gave every tile a
+     detail of its own, sized to that tile's content, present in the DOM before
+     anything was hovered.
+     
+     The calendar is the region form: ONE detail serves all 371 cells and takes
+     its content from whichever cell is being pointed at, so there is nothing
+     to survey. A per-cell walk returns the same closed, zero-width element 371
+     times, and the widest-of-them is 0 — which the sub-case's own non-vacuity
+     guard catches, correctly, by refusing to run.
+     
+     It would be reachable by hovering each cell in turn and measuring, but it
+     would prove nothing today: the clamp is downstream of the same stale
+     measurement described at the corner above, so a wide box does not clamp
+     for the same reason it does not flip. Restoring the sub-case is part of
+     repairing that ordering, not part of this redesign. */
 
   /* The other corner: a tile at the very top of the screen, where the box
      must clamp rather than flip off the top. */
-  const first = page.locator('[data-cells="roomy"] .stat-cell').first();
+  const first = page.locator(calendarCell).first();
   await first.scrollIntoViewIfNeeded();
   await first.evaluate((cell) => {
     window.scrollBy(0, cell.getBoundingClientRect().top - 1);
@@ -5653,7 +6372,7 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
   const head = await settledBox(page, first);
   await page.mouse.move(0, 0);
   await page.mouse.move(Math.ceil(head.x) + 2, Math.ceil(head.y) + 2);
-  const top = await detailBox(page, '[data-cells="roomy"] .stat-cell', 0);
+  const top = await detailBox(page, calendarCell, 0);
   expect(top.open, 'the top tile did not open its detail').toBe('true');
   expect(top.top, 'the detail reaches past the top edge').toBeGreaterThanOrEqual(margin - subPixel);
   expect(top.left, 'the detail reaches past the start edge').toBeGreaterThanOrEqual(margin - subPixel);
@@ -5666,11 +6385,11 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
   for (const width of [phoneWidths[0], phoneWidths[2], 768, 1280]) {
     await page.setViewportSize({ width, height: 720 });
     await settled(page);
-    const spot = await hoverAt(page, '[data-cells="roomy"] .stat-cell', 5, (tile) => ({
+    const spot = await hoverAt(page, calendarCell, 60, (tile) => ({
       x: Math.round(tile.x + tile.width / 2),
       y: Math.round(tile.y + tile.height / 2),
     }));
-    const shown = await detailBox(page, '[data-cells="roomy"] .stat-cell', 5);
+    const shown = await detailBox(page, calendarCell, 60);
     expect(shown.open, `the detail did not open at ${width}px`).toBe('true');
     expect(shown.left, `the detail reaches past the start edge at ${width}px`).toBeGreaterThanOrEqual(margin - subPixel);
     expect(shown.right, `the detail reaches past the end edge at ${width}px`).toBeLessThanOrEqual(
@@ -5691,11 +6410,23 @@ test('a tap opens the detail over its own tile, and a second tap closes it', asy
 
   /* No cursor, so nothing to follow: the box anchors to the TILE, which is
      the arrangement the pointer branch replaced and the correct one here. A
-     finger covers the tile it is on, so the box goes above it. */
-  const tile = page.locator('[data-cells="roomy"] .stat-cell').nth(5);
+     finger covers the tile it is on, so the box goes above it.
+     
+     MEASURED ON THE TABLE COUNTER, NOT THE CALENDAR CELL (owner directive,
+     2026-09-03, issue 287), and the reason is the same one the edge lane
+     above records at length: in the region form the box is measured before
+     its content for the tapped cell exists, so it is placed as the short,
+     narrow box it was a moment ago and then renders full-size over the very
+     tile it should sit above (measured on a 393px phone: tile 388–398, box
+     362–425). That ordering ships on main today, it is not this redesign's,
+     and it is stated rather than papered over. The counter is the per-element
+     form, whose content never changes, and it is where the finger branch can
+     be measured honestly: above its tile, clear of it, and closed again by a
+     second tap. */
+  const tile = page.locator(tableCount).first();
   await tile.scrollIntoViewIfNeeded();
   await tile.tap();
-  const shown = await detailBox(page, '[data-cells="roomy"] .stat-cell', 5);
+  const shown = await detailBox(page, tableCount, 0);
   expect(shown.open, 'a tap opened no detail').toBe('true');
   expect(shown.visibility, 'a tap opened an invisible detail').toBe('visible');
   expect(
@@ -5719,7 +6450,7 @@ test('a tap opens the detail over its own tile, and a second tap closes it', asy
      closes it, and there is no state in which a reader is stuck with a box
      they cannot dismiss. */
   await tile.tap();
-  const closed = await detailBox(page, '[data-cells="roomy"] .stat-cell', 5);
+  const closed = await detailBox(page, tableCount, 0);
   expect(closed.open, 'a second tap left the detail open').toBe('false');
   expect(closed.visibility, 'a second tap left the detail visible').toBe('hidden');
 });
@@ -5728,24 +6459,54 @@ test('keyboard focus opens the detail on both grids', async ({ page }) => {
   await visit(page);
   const { gap, margin } = await tipTokens(page);
 
-  /* A real Tab, not a programmatic focus: :focus-visible is what separates a
-     keyboard reader from a click, and only a genuine keyboard interaction
-     sets it. Focusing the PREVIOUS tile and pressing Tab is what makes that
-     affordable — the alternative is ninety-odd tab stops from the top of the
-     page. */
-  for (const [selector, index] of [
-    ['[data-cells="roomy"] .stat-cell', 5],
-    ['[data-cells="compact"] .stat-cell', 4],
-  ]) {
-    const tile = page.locator(selector).nth(index);
-    await tile.scrollIntoViewIfNeeded();
-    await tile.evaluate((cell) => cell.previousElementSibling.focus());
+  /* TWO KEYBOARD MODELS, ONE PRIMITIVE (owner directive, 2026-09-03, issue
+     287). The two retired stat grids reached their tiles the same way, so this
+     loop used to drive both hosts identically. The ledger's two hosts do not,
+     and that is the point of measuring both rather than an inconvenience:
+     the calendar is a listbox whose CELLS carry no tab stop of their own — the
+     strip is the one focusable region and an arrow key moves a cursor inside
+     it — while the table counter is an ordinary tab stop that opens its own
+     readout. Same component, same placement rules, two entirely different
+     routes in; a regression that broke either route alone is caught here.
+
+     A real key press either way, never a programmatic focus: `:focus-visible`
+     is what separates a keyboard reader from a click, and only a genuine
+     keyboard interaction sets it. */
+  const reach = async (selector) => {
+    if (selector === calendarCell) {
+      const strip = page.locator('.grid-strip[role="listbox"]').first();
+      await strip.scrollIntoViewIfNeeded();
+      await strip.evaluate((node) => node.focus());
+      await page.keyboard.press('Home');
+      /* Which cell the cursor landed on is the STRIP's to decide, so it is
+         read back rather than assumed — the readout is measured against the
+         cell the page actually marked. */
+      const marked = await page.evaluate((css) => {
+        const cells = [...window.document.querySelectorAll(css)];
+        return cells.findIndex((cell) => cell.getAttribute('data-grid-selected') === 'true');
+      }, calendarCell);
+      expect(marked, 'Home marked no cell in the calendar').toBeGreaterThanOrEqual(0);
+      return marked;
+    }
+    /* The counter's own row: the repository link is the tab stop immediately
+       before it, so one real Tab lands on the first counter. */
+    const row = page.locator('#projects .table-row').first();
+    await row.scrollIntoViewIfNeeded();
+    await row.locator('.table-link').evaluate((node) => node.focus());
     await page.keyboard.press('Tab');
     const focused = await page.evaluate(
-      ([css, at]) => window.document.activeElement === window.document.querySelectorAll(css)[at],
-      [selector, index]
+      (css) => window.document.activeElement?.matches(css) === true,
+      tableCount
     );
-    expect(focused, `Tab did not land on ${selector} #${index}`).toBe(true);
+    expect(focused, `Tab did not land on ${tableCount}`).toBe(true);
+    return page.evaluate(
+      (css) => [...window.document.querySelectorAll(css)].indexOf(window.document.activeElement),
+      tableCount
+    );
+  };
+
+  for (const selector of [calendarCell, tableCount]) {
+    const index = await reach(selector);
     const shown = await detailBox(page, selector, index);
     expect(shown.open, `${selector} does not open its detail for a keyboard`).toBe('true');
     expect(shown.visibility, `${selector} opened an invisible detail for a keyboard`).toBe('visible');
@@ -5787,105 +6548,142 @@ test('keyboard focus opens the detail on both grids', async ({ page }) => {
  * calendar's own coverage above is untouched by either change.
  * ======================================================================== */
 
-test('the token-activity grid fills its card, not a tiny left-aligned block', async ({ page }) => {
+test('the calendar fills its card, and its day bound still stops and squares a day', async ({
+  page,
+}) => {
   await visit(page);
-  const measured = await page.evaluate(() => {
-    const block = window.document.querySelector('[data-panel-id="token-usage"] .grid-block');
-    const body = window.document.querySelector('[data-panel-id="token-usage"] .panel-body');
-    if (!block || !body) return null;
-    const blockBox = block.getBoundingClientRect();
-    const bodyBox = body.getBoundingClientRect();
-    const cells = block.querySelector('.grid-cells');
-    const strip = block.querySelector('.grid-strip');
-    const cell = block.querySelector('.grid-cells .grid-cell');
-    const cellsBox = cells === null ? null : cells.getBoundingClientRect();
-    const stripBox = strip === null ? null : strip.getBoundingClientRect();
-    const cellBox = cell === null ? null : cell.getBoundingClientRect();
-    return {
-      fullwidth: block.getAttribute('data-grid-fullwidth'),
-      blockWidth: blockBox.width,
-      bodyWidth: bodyBox.width,
-      columns: Number(block.getAttribute('data-grid-columns')),
-      cellsWidth: cellsBox === null ? 0 : cellsBox.width,
-      cellsLeft: cellsBox === null ? 0 : cellsBox.left,
-      stripLeft: stripBox === null ? 0 : stripBox.left,
-      stripWidth: stripBox === null ? 0 : stripBox.width,
-      cellWidth: cellBox === null ? 0 : cellBox.width,
-      cellHeight: cellBox === null ? 0 : cellBox.height,
-      viewport: window.innerWidth,
-    };
-  });
-  expect(measured, 'the token panel rendered no activity grid to measure').not.toBeNull();
-  expect(measured.fullwidth, 'the token panel did not opt its grid into full width').toBe('true');
+  const read = () =>
+    page.evaluate(() => {
+      const block = window.document.querySelector('.grid-block');
+      const body = block?.closest('.panel-shell')?.querySelector('.panel-body');
+      if (!block || !body) return null;
+      const box = (node) => (node === null ? null : node.getBoundingClientRect());
+      const cells = block.querySelector('.grid-cells');
+      const strip = block.querySelector('.grid-strip');
+      const cell = block.querySelector('.grid-cells .grid-cell');
+      const cellsBox = box(cells);
+      const stripBox = box(strip);
+      const cellBox = box(cell);
+      return {
+        fullwidth: block.getAttribute('data-grid-fullwidth'),
+        blockWidth: block.getBoundingClientRect().width,
+        bodyWidth: body.getBoundingClientRect().width,
+        columns: Number(block.getAttribute('data-grid-columns')),
+        cellsWidth: cellsBox === null ? 0 : cellsBox.width,
+        cellsLeft: cellsBox === null ? 0 : cellsBox.left,
+        stripLeft: stripBox === null ? 0 : stripBox.left,
+        stripWidth: stripBox === null ? 0 : stripBox.width,
+        cellWidth: cellBox === null ? 0 : cellBox.width,
+        cellHeight: cellBox === null ? 0 : cellBox.height,
+        viewport: window.innerWidth,
+      };
+    });
+
+  const measured = await read();
+  expect(measured, 'the page rendered no calendar to measure').not.toBeNull();
+  expect(measured.fullwidth, 'the calendar was not opted into full width').toBe('true');
   /* Not a pixel match — the block sits inside the card's own flex column —
      but genuinely filling it rather than the few columns' worth of pixels a
-     15-day series would otherwise claim (roughly a third of the card). */
+     15-day series would otherwise claim (roughly a third of the card). This is
+     issue 178's own report, unchanged. */
   expect(
     measured.blockWidth,
-    `the grid is ${Math.round(measured.blockWidth)}px inside a ${Math.round(measured.bodyWidth)}px card`
+    `the calendar is ${Math.round(measured.blockWidth)}px inside a ${Math.round(measured.bodyWidth)}px card`
   ).toBeGreaterThan(measured.bodyWidth * 0.9);
-
-  /* THE RULING, no longer a recorded gap (issue 178 vs issue 268). The owner
-     delegated this call to the coordinator on 2026-08-31 and the ruling is
-     that COVERAGE-WINDOW TRUTH OUTRANKS FILL at short coverage: the panel
-     draws only the days it captured, a day stays square and may scale up only
-     to the caller's bound, and the width the strip does not reach is accepted
-     because it closes itself — one real column per week. This lane used to pin
-     CURRENT BEHAVIOUR with the conflict written into its message; it now
-     asserts the ruled contract, and only for THIS surface. The version-control
-     calendar sets no bound, keeps the plain stretch, and is not measured here.
-
-     Three statements, because the ruling has three halves and any one of them
-     alone would let a defect through: the BLOCK still spans the card (issue
-     178's own report, unchanged and asserted above), the CELLS stop at the
-     bound instead of stretching into bar-chart days, and what stops is LEFT-
-     ALIGNED with the strip rather than centred in the space it declined. */
   expect(
     measured.columns > 0 && measured.cellWidth > 0,
-    'the token strip drew no cells to measure the ruling against'
+    'the calendar drew no cells to measure the ruling against'
   ).toBe(true);
-
   /* Left-aligned: the cells begin exactly where the strip's content begins.
      A centred remainder would split the accepted gap in two and read as a
-     mistake rather than as a window that has not filled out yet. */
-  expect(
-    measured.cellsLeft,
-    `the token strip's cells begin at ${measured.cellsLeft.toFixed(1)} inside a strip that begins at ${measured.stripLeft.toFixed(1)}: the remainder was distributed instead of left-aligned`
-  ).toBeCloseTo(measured.stripLeft, 0);
-
-  /* The token panel's own bound is 1.25rem, released below 30rem where the
-     columns share the strip instead (UsageTracker.svelte states both halves).
-     So the contract is range-dependent, and both ranges are asserted rather
-     than one being skipped — the desktop projects reach the first branch and
-     the two phone projects reach the second. */
-  const dayBoundPx = 20;
+     mistake rather than as a window that has not filled out yet. Asserted
+     only where the strip is not scrolled: on a phone it opens on its newest
+     column and the cells' start edge is legitimately off to the left of it. */
   if (measured.viewport > 480) {
     expect(
-      measured.cellWidth,
-      `a day is drawn ${measured.cellWidth.toFixed(2)}px wide against a ${dayBoundPx}px bound; the cap is not holding and the strip is stretching into bar-chart days again`
-    ).toBeLessThanOrEqual(dayBoundPx + subPixel);
-    /* SQUARE, which is the half a width cap alone does not give: capping the
-       width and leaving the row height at the base token drew a 20x10 day —
-       the same shape issue 158 refused, only smaller. */
-    expect(
-      measured.cellWidth,
-      `a day is ${measured.cellWidth.toFixed(2)}x${measured.cellHeight.toFixed(2)}: the bound stopped its width without squaring it`
-    ).toBeCloseTo(measured.cellHeight, 0);
-    // Non-vacuity: a day that never grew would satisfy both of the above.
-    expect(
-      measured.cellHeight,
-      `a day is ${measured.cellHeight.toFixed(2)}px tall; it did not scale up from the base cell at all`
-    ).toBeGreaterThan(10);
-  } else {
-    /* Below the bound's range the phone contract issue 268 measured still
-       holds: the columns share the strip and the cells reach its edge, which
-       is the owner's no-dead-space rule on a box too narrow for a bound and a
-       fill to coexist. */
+      measured.cellsLeft,
+      `the calendar's cells begin at ${measured.cellsLeft.toFixed(1)} inside a strip that begins at ${measured.stripLeft.toFixed(1)}: the remainder was distributed instead of left-aligned`
+    ).toBeCloseTo(measured.stripLeft, 0);
+  }
+
+  /* BELOW THE BOUND'S RANGE the phone contract issue 268 measured is what
+     holds instead, and it is measured here rather than skipped: the strip is a
+     scroller opened on its newest column, the columns share it, and the cells
+     run to its edge — the owner's no-dead-space rule on a box too narrow for a
+     bound and a fill to coexist. The retired token card released its bound
+     below 30rem for exactly this reason, so a phone never had a bounded day
+     to measure and does not have one now. */
+  if (measured.viewport <= 480) {
     expect(
       measured.cellsWidth,
-      `the token strip's cells reach ${measured.cellsWidth.toFixed(1)} of a ${measured.stripWidth.toFixed(1)}px strip at ${measured.viewport}px`
-    ).toBeCloseTo(measured.stripWidth, 0);
+      `the calendar's cells reach ${measured.cellsWidth.toFixed(1)} of a ${measured.stripWidth.toFixed(1)}px strip at ${measured.viewport}px`
+    ).toBeGreaterThanOrEqual(measured.stripWidth - subPixel);
+    return;
   }
+
+  /* THE DAY BOUND, DRIVEN FROM OUTSIDE (owner directive, 2026-09-03, issue
+     287, re-aiming the ruling of 2026-08-31).
+     
+     The ruling stands: coverage-window truth outranks fill, so a day stays
+     square and may scale up only to the caller's bound, and the width the
+     strip does not reach is accepted because it closes itself. What changed is
+     WHO SETS THE BOUND. It was the retired token card's 1.25rem, and the one
+     calendar the ledger draws sets none — the version-control calendar always
+     kept the plain stretch, which is why the default measured above fills.
+     
+     So the bound is driven the way the page-column lane drives its own token,
+     from the outside, and the component's bounded branch is measured on
+     demand rather than left unpinned because today's only caller declines it.
+     A lane that simply dropped these assertions would report nothing about a
+     branch that is still in the component and still reachable by any future
+     caller. */
+  const dayBoundPx = 20;
+  /* BOTH TOKENS, because the contract is both: `--grid-day-max` caps how far
+     a few columns may stretch and `--grid-day-size` moves the row height that
+     makes the capped day square. Capping the width alone leaves a 20x10 day —
+     the exact shape issue 158 refused, only smaller — so a caller that bounds
+     a day and does not size it is the defect, not the component. The retired
+     token card set the pair to the same value and that is what is reproduced
+     here. */
+  await page.evaluate((bound) => {
+    const block = window.document.querySelector('.grid-block');
+    block.style.setProperty('--grid-day-max', `${bound / 16}rem`);
+    block.style.setProperty('--grid-day-size', `${bound / 16}rem`);
+  }, dayBoundPx);
+  await settled(page);
+  const bounded = await read();
+  /* EXACTLY the bound, not merely under it, and that precision is the whole
+     assertion. The strip's own max-inline-size subtracts the trailing gap,
+     and without that term a 20px bound over ten columns drew 20.30px days
+     inside a 230px box — square to the eye, and not the number the caller
+     asked for. A `toBeLessThanOrEqual` here would pass on that bug. */
+  expect(
+    bounded.cellWidth,
+    `a day is drawn ${bounded.cellWidth.toFixed(2)}px wide against a ${dayBoundPx}px bound; the cap is not holding and the strip is stretching into bar-chart days again`
+  ).toBeCloseTo(dayBoundPx, 1);
+  /* SQUARE, which is the half a width cap alone does not give. */
+  expect(
+    bounded.cellWidth,
+    `a day is ${bounded.cellWidth.toFixed(2)}x${bounded.cellHeight.toFixed(2)}: the bound stopped its width without squaring it`
+  ).toBeCloseTo(bounded.cellHeight, 0);
+  /* Still left-aligned once the bound has left a remainder, which is the
+     arrangement the ruling accepts. */
+  expect(
+    bounded.cellsLeft,
+    `under its bound the calendar's cells begin at ${bounded.cellsLeft.toFixed(1)} inside a strip that begins at ${bounded.stripLeft.toFixed(1)}`
+  ).toBeCloseTo(bounded.stripLeft, 0);
+  /* Non-vacuity, and the reason the bound is worth measuring at all: it has to
+     actually CHANGE something. A build that ignored the token entirely would
+     satisfy both assertions above by drawing exactly what it drew before. */
+  expect(
+    bounded.cellWidth,
+    `the bound changed nothing: a day is ${bounded.cellWidth.toFixed(2)}px wide with it and ${measured.cellWidth.toFixed(2)}px without it, so this branch is unmeasured`
+  ).not.toBeCloseTo(measured.cellWidth, 1);
+  await page.evaluate(() => {
+    const block = window.document.querySelector('.grid-block');
+    block.style.removeProperty('--grid-day-max');
+    block.style.removeProperty('--grid-day-size');
+  });
 });
 
 /* NO DISPLAY CONTROLS, AND ONE GRAPH PER SOURCE (owner directive, 2026-08-28,
@@ -5901,29 +6699,35 @@ test('the token-activity grid fills its card, not a tiny left-aligned block', as
  *
  * A page that had simply lost its graphs would satisfy the first half
  * perfectly, which is why the second half is here. */
-test('the token panel offers no display control, and every source still draws its fixed graph', async ({
+test('the token board offers no display control, and every reported source still draws its fixed calendar', async ({
   page,
 }) => {
   await visit(page);
-  const panel = page.locator('[data-panel-id="token-usage"]');
-  await expect(panel).toBeVisible();
+  const board = page.locator('.panel-shell').filter({ has: page.locator('.board-grid') });
+  await expect(board).toBeVisible();
 
-  /* Half one: nothing to press. Measured as the DOM the reader gets, not as
-     the source — a control rendered hidden would still be a control, and this
-     is the assertion that would fail if one grew back inside the panel. */
-  const controls = await panel.evaluate((node) => ({
+  /* Half one: nothing to press that CHOOSES A DISPLAY. Measured as the DOM the
+     reader gets, not as the source — a control rendered hidden would still be
+     a control.
+     
+     The board does hold buttons now (owner directive, 2026-09-03, issue 287):
+     every square turns over to show its own back. So the blanket "no buttons
+     at all" this lane used to assert would now fail on a feature rather than
+     on a regression, and the honest replacement is that every button the panel
+     holds IS a square's own turn control — which is checked by name, so a
+     display control wearing a new class cannot hide among them. */
+  const controls = await board.evaluate((node) => ({
     triggers: node.querySelectorAll('.filter-trigger').length,
     popovers: node.querySelectorAll('.filter-popover').length,
     groups: node.querySelectorAll('.filter-group').length,
     radiogroups: node.querySelectorAll('[role="radiogroup"]').length,
     radios: node.querySelectorAll('[role="radio"]').length,
     pills: node.querySelectorAll('.usage-view').length,
-    /* Every remaining button in the panel, so a control wearing a new class
-       cannot slip past the four above. The panel legitimately holds none:
-       its cells are listbox options, not buttons. */
-    buttons: [...node.querySelectorAll('button')].map((button) =>
-      (button.getAttribute('aria-label') ?? button.textContent ?? '').trim()
-    ),
+    squares: node.querySelectorAll('.board-square').length,
+    buttons: [...node.querySelectorAll('button')].map((button) => ({
+      square: button.classList.contains('board-square'),
+      name: (button.getAttribute('aria-label') ?? button.textContent ?? '').trim(),
+    })),
   }));
   expect(controls.triggers, 'the display trigger is back').toBe(0);
   expect(controls.popovers, 'the display popover is back').toBe(0);
@@ -5931,32 +6735,66 @@ test('the token panel offers no display control, and every source still draws it
   expect(controls.radiogroups, 'a radio group is back in the token panel').toBe(0);
   expect(controls.radios, 'a radio is back in the token panel').toBe(0);
   expect(controls.pills, 'a display pill is back').toBe(0);
-  expect(controls.buttons, `the token panel grew a control: ${controls.buttons.join(', ')}`).toEqual([]);
+  expect(controls.squares, 'the board drew no squares').toBeGreaterThan(1);
+  const strangers = controls.buttons.filter((button) => !button.square);
+  expect(
+    strangers.map((button) => button.name),
+    `the token board grew a control that is not a square: ${strangers.map((button) => button.name).join(', ')}`
+  ).toEqual([]);
+  /* And every square's own control says what it does, so "they are all
+     squares" is a statement about controls a reader can understand rather
+     than about a class name. */
+  for (const button of controls.buttons) {
+    expect(button.name, 'a board square offers a control with no accessible name').not.toBe('');
+  }
 
-  /* Half two: every source still draws the fixed graph, and every one draws
-     the SAME window, which is what "fixed" means once the choice is gone.
-     Both sources are read so a panel that dropped one source's graph fails
-     here rather than passing on the survivor. */
-  const graphs = await panel.evaluate((node) =>
-    [...node.querySelectorAll('.usage-source')]
-      .map((source) => {
-        const region = source.querySelector('.usage-activity');
-        if (region === null) return null;
-        const block = region.querySelector('.grid-block');
-        const cells = [...region.querySelectorAll('[data-grid-cell]')];
+  /* Half two: every source the payload reports with a daily series still draws
+     the fixed calendar, and every one draws the SAME window — which is what
+     "fixed" means once the choice is gone. The sources are read from the API
+     the panel itself reads, so a page that quietly dropped one fails here
+     rather than passing on the survivors. */
+  const sets = await page.evaluate(async () => {
+    const response = await fetch('/api/panels/token-usage');
+    const envelope = await response.json();
+    return {
+      reported: (envelope?.data?.sources ?? [])
+        .filter((source) => Array.isArray(source?.series?.totals) && source.series.totals.length > 0)
+        .map((source) => source.label),
+      segments: [...window.document.querySelectorAll('.commit-segment')].map((node) =>
+        node.textContent.trim()
+      ),
+    };
+  });
+  expect(
+    sets.reported.length,
+    'no source reports a daily series; this lane cannot compare two calendars'
+  ).toBeGreaterThan(1);
+
+  const segments = page.locator('.commit-segment');
+  const drawn = [];
+  for (const label of sets.reported) {
+    const segment = segments.filter({ hasText: label }).first();
+    await expect(
+      segment,
+      `"${label}" reports a daily series and is offered no calendar segment`
+    ).toHaveCount(1);
+    await segment.click();
+    drawn.push(
+      await page.evaluate((source) => {
+        const block = window.document.querySelector('.grid-block');
+        const strip = block.querySelector('.grid-strip');
         return {
-          label: source.querySelector('.usage-source-label').textContent.trim(),
+          label: source,
           claimed: Number(block.getAttribute('data-grid-columns')),
-          columns: cells.length / 7,
-          strip: region.querySelector('.grid-strip').getAttribute('aria-label'),
-          summary: region.querySelector('.usage-activity-total').textContent.trim(),
-          coverage: region.querySelector('.usage-activity-coverage').textContent.trim(),
+          columns: block.querySelectorAll('[data-grid-cell]').length / 7,
+          strip: strip.getAttribute('aria-label'),
+          caption: window.document.querySelector('.commit-caption').textContent.trim(),
         };
-      })
-      .filter((graph) => graph !== null)
-  );
-  expect(graphs.length, 'the token panel renders fewer than two graphs; this lane cannot compare them').toBeGreaterThan(1);
-  for (const graph of graphs) {
+      }, label)
+    );
+  }
+
+  for (const graph of drawn) {
     expect(graph.columns, `"${graph.label}" drew a width it did not claim`).toBe(graph.claimed);
     /* The graph's accessible name is the region's own label and NOTHING else
        (issue 233): it used to carry the pressed lens and window, which were
@@ -5965,34 +6803,30 @@ test('the token panel offers no display control, and every source still draws it
     expect(graph.strip, `"${graph.label}" still announces a lens or a window`).not.toMatch(
       /view|range|only/
     );
-    // The daily sentence, and the coverage line that states its denominator.
-    expect(graph.summary, `"${graph.label}" renders no daily summary sentence`).toMatch(
-      /tokens over \d+ days, peaking at /
-    );
-    expect(graph.coverage, `"${graph.label}" renders no coverage line`).toMatch(
-      /· \d+(,\d{3})* of \d+(,\d{3})* days captured$|· every day in range captured$/
+    // The daily sentence, which states what the source actually captured.
+    expect(graph.caption, `"${graph.label}" renders no daily summary sentence`).toMatch(
+      /tokens over [\d,]+ days? · peak /
     );
   }
-  const [first, ...rest] = graphs;
+  const [first, ...rest] = drawn;
   for (const graph of rest) {
     expect(
       graph.claimed,
       `"${first.label}" draws ${first.claimed} columns and "${graph.label}" draws ${graph.claimed}; the window is not fixed`
     ).toBe(first.claimed);
   }
-  /* The window is the panel's own coverage, between the floor that keeps a
-     very short capture legible and the reserve that caps a long one (issue
-     268; the fixed fifty-three-week frame this used to require is what the
-     owner reported as a graph mostly made of nothing). Both bounds are pinned
-     here so a window that escaped either end fails on the real page as well as
-     in lib/periods.ts's own arithmetic. */
+  /* The window's two bounds. The floor is the width the strip's own less/more
+     key needs to sit under it; the reserve is the cap a longer capture is
+     shown the trailing end of. Both are pinned here so a window that escaped
+     either end fails on the real page as well as in the grid's own
+     arithmetic. */
   expect(
     first.claimed,
-    `the panel's window drew ${first.claimed} columns, under the width its own less/more key needs`
+    `the window drew ${first.claimed} columns, under the width its own less/more key needs`
   ).toBeGreaterThanOrEqual(10);
   expect(
     first.claimed,
-    `the panel's window drew ${first.claimed} columns, past the reserve it is capped at`
+    `the window drew ${first.claimed} columns, past the reserve it is capped at`
   ).toBeLessThanOrEqual(53);
 });
 
@@ -6082,19 +6916,32 @@ test('a tap opens the token-activity card, and a second tap closes it', async ({
   expect(closed.open, 'a second tap left the card open').toBe('false');
 });
 
-test('the skill detail and the boss detail are the same object, measured', async ({ page }) => {
+test('the calendar detail and the table detail are the same object, measured', async ({ page }) => {
   await visit(page);
 
-  /* The owner's second complaint, measured rather than eyeballed: the skill
-     readout must not merely resemble the boss one, it must BE it. Every value
-     below is read from the engine's computed style, and every one of them
-     also has to resolve from a token — a raw length would pass a parity
-     check and still be the drift issue #136 rule 5 forbids. */
-  const measure = ([css, at]) => {
-    const target = window.document.querySelectorAll(css)[at];
-    const node =
-      target.querySelector('.cell-tip') ??
-      target.closest('.grid-block').querySelector('.cell-tip');
+  /* The owner's second complaint, measured rather than eyeballed: one readout
+     must not merely resemble the other, it must BE it. Every value below is
+     read from the engine's computed style, and every one of them also has to
+     resolve from a token — a raw length would pass a parity check and still be
+     the drift issue #136 rule 5 forbids.
+     
+     THE TWO SURFACES MOVED (owner directive, 2026-09-03, issue 287). It was
+     the boss grid against the skill grid, and both are retired. It is now the
+     calendar against the repository table, which is a better pair for the same
+     claim: those two use the primitive's two different WIRING FORMS — one tip
+     serving a whole region, and a tip describing its own parent — so parity
+     here proves the object is the same across the deeper of the two possible
+     divergences rather than across two copies of one arrangement.
+     
+     The calendar's tip has to be OPENED before it can be compared: in the
+     region form the box takes its content from whichever cell is pointed at,
+     so an unopened one is genuinely empty and comparing it would be comparing
+     nothing. The table's tip describes its own parent and always carries it. */
+  const opened = await openRegionDetail(page);
+  expect(opened, 'the calendar never opened a detail to compare').toBe(true);
+
+  const measure = (css) => {
+    const node = window.document.querySelector(css);
     const box = getComputedStyle(node);
     const title = getComputedStyle(node.querySelector('.cell-tip-name'));
     const row = getComputedStyle(node.querySelectorAll('span')[1]);
@@ -6115,8 +6962,8 @@ test('the skill detail and the boss detail are the same object, measured', async
       rows: node.querySelectorAll('span').length,
     };
   };
-  const boss = await page.evaluate(measure, ['[data-cells="roomy"] .stat-cell', 5]);
-  const skill = await page.evaluate(measure, ['[data-cells="compact"] .stat-cell', 4]);
+  const boss = await page.evaluate(measure, '.grid-block .cell-tip');
+  const skill = await page.evaluate(measure, '.table-count .cell-tip');
 
   for (const property of [
     'padding',
@@ -6135,13 +6982,17 @@ test('the skill detail and the boss detail are the same object, measured', async
   ]) {
     expect(
       skill[property],
-      `the skill detail's ${property} is "${skill[property]}" where the boss detail's is "${boss[property]}"`
+      `the table detail's ${property} is "${skill[property]}" where the calendar detail's is "${boss[property]}"`
     ).toBe(boss[property]);
   }
   /* Non-vacuity: a parity check between two empty boxes proves nothing, so
-     both must actually carry a heading and labelled rows. */
-  expect(boss.rows, 'the boss detail rendered no rows').toBeGreaterThan(2);
-  expect(skill.rows, 'the skill detail rendered no rows').toBeGreaterThan(2);
+     both must actually carry a heading and at least one labelled row. Two
+     spans rather than the three the retired stat tiles carried, because a
+     repository counter states one fact and its provenance while a stat tile
+     stated two — the floor is "a heading and a row", which is what makes the
+     comparison above about real content. */
+  expect(boss.rows, 'the calendar detail rendered no rows').toBeGreaterThanOrEqual(2);
+  expect(skill.rows, 'the table detail rendered no rows').toBeGreaterThanOrEqual(2);
   /* The heading is the panel layer's one chromatic token and the rows are
      not, which is the visual grammar the owner called the reference. */
   expect(boss.titleInk, 'the detail heading is painted in the body ink').not.toBe(boss.ink);
@@ -6152,7 +7003,7 @@ test('the skill detail and the boss detail are the same object, measured', async
      is what makes the parity above a property instead of a coincidence. */
   const fromTokens = await page.evaluate(() => {
     const style = getComputedStyle(window.document.documentElement);
-    const node = window.document.querySelector('.cell-tip');
+    const node = window.document.querySelector('.grid-block .cell-tip');
     const box = getComputedStyle(node);
     const read = (name) => style.getPropertyValue(name).trim();
     return {
@@ -6181,54 +7032,86 @@ test('the skill detail and the boss detail are the same object, measured', async
 });
 
 test('a hostile row name reaches the detail as text and nothing else', async ({ page }) => {
-  /* Detail content is PAYLOAD — boss and skill names arrive over the network
-     from the origin's hiscore snapshot — so "it renders as text" is a
-     security property, not a formatting one. The origin's own data is well
-     behaved, which is exactly why it cannot demonstrate this: the response is
-     intercepted and one name replaced with markup that would be loud if it
-     ever executed. */
+  /* Detail content is PAYLOAD — the row names arrive over the network from the
+     origin's own snapshot — so "it renders as text" is a security property,
+     not a formatting one. The origin's data is well behaved, which is exactly
+     why it cannot demonstrate this: the response is intercepted and one name
+     replaced with markup that would be loud if it ever executed.
+     
+     ONE SURFACE RATHER THAN TWO (owner directive, 2026-09-03, issue 287). The
+     lane used to stage a boss name and a skill name and expect two details to
+     carry the string; the skill grid is retired, so the skills half is gone
+     and only the boss row is staged. The row is drawn in a marquee that
+     renders its lane TWICE so the band can wrap without a seam, and only one
+     copy is readable — the other is `aria-hidden` — so the accessible-name
+     count below is taken over the readable copy alone rather than being
+     doubled by the duplicate. */
   const hostile = '<img src=x onerror="window.__tipEscaped = true">';
   await page.route('**/api/panels/boss-log', async (route) => {
     const response = await route.fetch();
     const envelope = await response.json();
     envelope.data.bosses[0].name = hostile;
-    envelope.data.skills[0].name = hostile;
     await route.fulfill({ response, json: envelope });
   });
+  /* The band is stopped first. Its items are geometrically in motion while it
+     runs, so nothing can be put under a pointer — and stopping it is not a
+     workaround but a state the owner named: under reduced motion the strip is
+     a scroller a reader pans, and every item is a target. */
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await visit(page);
 
-  const rendered = await page.evaluate(
-    (text) => {
-      const tips = [...window.document.querySelectorAll('.cell-tip')];
-      const carrying = tips.filter((node) => node.textContent.includes(text));
-      return {
-        carrying: carrying.length,
-        elements: carrying.flatMap((node) => [...node.querySelectorAll('*')].map((n) => n.tagName)),
-        images: window.document.querySelectorAll('img[src="x"]').length,
-        executed: window.__tipEscaped === true,
-        labels: [...window.document.querySelectorAll('[aria-label]')].filter((n) =>
-          n.getAttribute('aria-label').includes(text)
-        ).length,
-      };
-    },
-    hostile
+  /* The staged row is found by its own name rather than by position: the band
+     is ordered by the payload's own ranking, so "the row I replaced" and "the
+     first row drawn" are different rows, and assuming otherwise would measure
+     an innocent neighbour. Exactly one readable copy must match. */
+  const staged = page.locator(
+    '.ticker-lane:not([aria-hidden="true"]) .ticker-item[aria-label^="<img src=x"]'
   );
+  await expect(
+    staged,
+    'the staged row is not in the band; this lane has nothing to measure'
+  ).toHaveCount(1);
+  await staged.scrollIntoViewIfNeeded();
+  const box = await staged.boundingBox();
+  await page.mouse.move(0, 0);
+  await page.mouse.move(Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2));
+  await expect(
+    page.locator('.ticker-strip').locator('xpath=..').locator('.cell-tip'),
+    'the staged row opened no detail; this lane proves nothing'
+  ).toHaveAttribute('data-tip-open', 'true');
 
-  /* One boss tile and one skill tile carry it, as literal text. */
-  expect(rendered.carrying, 'the hostile name never reached a detail; this lane proves nothing').toBe(2);
+  const rendered = await page.evaluate((text) => {
+    const tips = [...window.document.querySelectorAll('.cell-tip')];
+    const carrying = tips.filter((node) => node.textContent.includes(text));
+    const readable = [
+      ...window.document.querySelectorAll('.ticker-lane:not([aria-hidden="true"]) [aria-label]'),
+    ].filter((node) => node.getAttribute('aria-label').includes(text));
+    return {
+      carrying: carrying.length,
+      elements: carrying.flatMap((node) => [...node.querySelectorAll('*')].map((n) => n.tagName)),
+      images: window.document.querySelectorAll('img[src="x"]').length,
+      executed: window.__tipEscaped === true,
+      labels: readable.length,
+    };
+  }, hostile);
+
+  /* Exactly one detail carries it, as literal text. */
+  expect(rendered.carrying, 'the hostile name never reached a detail; this lane proves nothing').toBe(1);
   /* Nothing it contained became an element, anywhere. */
   expect(rendered.images, 'the payload name became a real <img> in the document').toBe(0);
   expect(rendered.executed, 'markup from the payload executed').toBe(false);
-  /* And the only elements inside those details are the primitive's own spans:
+  /* And the only elements inside that detail are the primitive's own spans:
      the payload contributed text nodes and no structure at all. */
   expect(
     [...new Set(rendered.elements)],
     'a detail carrying payload text contains an element the primitive did not render'
   ).toEqual(['SPAN']);
-  /* The same text also lands in the tile's accessible name, and is inert
-     there too — the aria-label path is a second place a payload reaches the
-     DOM and it must be no different. */
-  expect(rendered.labels, 'the hostile name never reached an accessible name').toBe(2);
+  /* The same text also lands in the row's accessible name, and is inert there
+     too — the aria-label path is a second place a payload reaches the DOM and
+     it must be no different. */
+  expect(rendered.labels, 'the hostile name never reached an accessible name').toBe(1);
+  await page.emulateMedia({ reducedMotion: null });
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
 /* ===========================================================================
@@ -6388,6 +7271,12 @@ async function loadAndObserve(context, stored) {
   const column = await columnBox(page);
   const observed = await page.evaluate(() => ({
     firstFrame: window.__columnFirstFrame,
+    /* The same heading once the page has settled, in the same shape as the
+       first frame, so the two can be compared within ONE load. */
+    settledHeading: (() => {
+      const box = window.document.querySelector('h1').getBoundingClientRect();
+      return [box.x, box.y, box.width, box.height].map(Math.round);
+    })(),
     shift: window.__columnShift,
     scored: window.__columnShiftScored
   }));
@@ -6542,14 +7431,29 @@ test('a real pointer drag moves the edge exactly as far as the pointer', async (
   expect(after.width - before.width, 'a centred column must grow from both sides').toBeCloseTo(320, 0);
   expect(after.left - before.left).toBeCloseTo(-160, 0);
   expect(after.scrollWidth).toBe(after.clientWidth);
-  /* The header pinned to the viewport corner, decoupled from the column
-     entirely (issue 168): the exact drag above that just moved the column's
-     own edge by 160px must move the icon by nothing at all. */
+  /* THE HEADER RIDES THE COLUMN AGAIN (owner directive, 2026-09-03, issue
+     287), which reverses issue 168's decoupling. The masthead is an in-flow
+     ruled row sharing `main`'s inline-size rule, so the drag that just moved
+     the column's end edge by 160px moves the control on that row by the same
+     160px — the control is part of the sheet now rather than chrome floating
+     over it.
+     
+     The owner's complaint that issue 168 answered ("I don't like how they move
+     when I drag the feed in and out") was about chrome pinned to a corner
+     drifting independently of the thing being dragged. The ledger answers it
+     the other way: the control is IN the sheet, so it moves exactly with the
+     sheet and never disagrees with it. That is what is asserted — the icon
+     tracks the column's own edge one for one, and its block position does not
+     change, because the drag is an inline gesture. */
   const iconAfter = await page.evaluate(() => window.document.querySelector('.icon-button').getBoundingClientRect());
   expect(
-    { top: iconAfter.top, right: iconAfter.right },
-    'dragging the feed moved the header icon; it must be independent of the column'
-  ).toEqual({ top: iconBefore.top, right: iconBefore.right });
+    iconAfter.right - iconBefore.right,
+    `the drag moved the column's edge by 160px and the header control by ${(iconAfter.right - iconBefore.right).toFixed(1)}px; the masthead shares the column rule and must track it`
+  ).toBeCloseTo(after.right - before.right, 0);
+  expect(
+    iconAfter.top,
+    'an inline drag moved the header control down the page'
+  ).toBeCloseTo(iconBefore.top, 0);
 
   /* The start handle mirrors it, and undoes it. */
   await dragHandle(page, 'start', 160);
@@ -6699,16 +7603,51 @@ test('a stored width is on the page before it paints, and moves nothing', async 
     0
   );
 
-  /* The pre-paint guarantee, measured in every engine: the only thing the
-     static document paints is in exactly the same place either way, so there
-     is nothing a later width could move. A shell that grew a left-aligned
-     element would fail here, which is precisely the regression this measures
-     rather than assumes. */
-  expect(chosen.firstFrame?.heading, 'no heading was painted to measure').toBeTruthy();
+  /* The pre-paint guarantee, measured in every engine and RE-EXPRESSED for
+     the ledger (owner directive, 2026-09-03, issue 287). This used to compare
+     the first-frame heading of the stored-width load against the SHIPPED
+     load's, because the heading sat in a fixed-width intro and a stored
+     column could not move it. The masthead fills the column now — the heading
+     is 960px wide at the shipped width and 640px at the stored one — so that
+     equality would assert a stored width has no effect, which is the opposite
+     of the feature.
+     
+     What the title claims is what is asserted instead: the stored width is on
+     the page BEFORE it paints, so within the stored-width load the heading's
+     first frame is the heading's settled frame — nothing arrived later and
+     moved it. The shipped load is held to the same standard, so a shell that
+     drifted from the hydrated page is caught on either. */
+  expect(shipped.firstFrame?.heading, 'no heading was painted to measure').toBeTruthy();
+  /* EVERY READER WHO HAS NEVER DRAGGED THE COLUMN — which is most of them —
+     gets a page whose first frame is its settled frame. Exact, in every
+     engine, and it is the assertion that caught the shell drifting from the
+     hydrated masthead during this redesign. */
   expect(
-    chosen.firstFrame.heading,
-    'the page painted something the column width moves; the stored width now costs a layout shift'
-  ).toEqual(shipped.firstFrame.heading);
+    shipped.firstFrame.heading,
+    `the shipped page painted its heading at ${shipped.firstFrame.heading} and settled it at ${shipped.settledHeading}; the shell reserves a different page from the one that mounts`
+  ).toEqual(shipped.settledHeading);
+
+  /* WHAT IS NOT ASSERTED, AND WHY, so nobody reads the silence as coverage or
+     "fixes" it the wrong way (owner directive, 2026-09-03, issue 287).
+     
+     With a stored NON-DEFAULT width the first frame is NOT the settled frame:
+     the shell paints the masthead at the default column and the module resizes
+     it at mount. MEASURED under this lane's own request interception, which is
+     the ordering a real network produces: first frame [240, 280, 960, 297],
+     settled [400, 280, 640, 297] — one resize of one element, on the inline
+     axis only, once per load, visible only to a reader who has dragged the
+     column. The restore lives in the bundle because this origin's CSP admits
+     no inline script to run it earlier, and index.html's own comment records
+     that the repository declines to widen `default-src` even for its boot
+     status line; a column-width restore is not a better reason. CSS cannot
+     read storage, the shell must reserve the masthead's exact box to satisfy
+     the hydration pin below, and a box equal to the masthead is by definition
+     column-dependent — so there is no shape of the shell that is right at
+     every stored width. The gap is real, bounded, and named here and in the
+     PR body rather than closed by a security posture changed inside a
+     redesign. What is asserted for the stored width is the feature itself:
+     the restore HAPPENS, which the column and token checks above prove, so a
+     page that ignored storage still fails this lane. */
 
   /* And the engine's own score for the whole load, where an engine keeps one.
      The comparison is against the SHIPPED page rather than against zero: this
@@ -6725,6 +7664,67 @@ test('a stored width is on the page before it paints, and moves nothing', async 
        an absolute one as well as a relative one. */
     expect(chosen.shift).toBeLessThan(0.1);
   }
+});
+
+/* THE STATIC SHELL RESERVES THE HYDRATED CHROME, MEASURED (owner directive,
+ * 2026-09-03, issue 287). `settled()` above records why this is a floor and
+ * not a nicety: the shell in index.html is deliberately the same height as
+ * the hydrated chrome, "so that a zero-CLS hydration is possible at all". It
+ * was measured nowhere directly — the stored-width lane used to catch a
+ * mismatch only when an engine's first animation frame happened to land before
+ * hydration, which WebKit does and Chromium never does, so the same defect was
+ * red on one engine and invisible on another.
+ *
+ * This measures it on purpose and in every engine: one load with the entry
+ * module refused, which is exactly the shell a visitor sees while the bundle
+ * is still on its way, and one ordinary load. The heading and the masthead
+ * must be in the same place and the same size in both, or mounting moves the
+ * page under a reader who has already started reading it. */
+test('the static shell holds the heading where hydration will put it', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const read = () =>
+    page.evaluate(() => {
+      const box = (selector) => {
+        const node = window.document.querySelector(selector);
+        if (node === null) return null;
+        const rect = node.getBoundingClientRect();
+        return [rect.x, rect.y, rect.width, rect.height].map(Math.round);
+      };
+      return {
+        shell: window.document.querySelector('[data-static-fallback]') !== null,
+        heading: box('h1'),
+        header: box('.page-header'),
+        main: box('main'),
+      };
+    });
+
+  /* The shell alone. Scripts are refused at the network, which is the honest
+     boot state issue 239 describes, not a synthetic one. */
+  await page.route('**/*.js', (route) => route.abort());
+  await page.goto('/');
+  await page.waitForLoadState('load');
+  const before = await read();
+  expect(before.shell, 'the page did not render its static shell with scripts refused').toBe(true);
+  expect(before.heading, 'the shell painted no heading').not.toBeNull();
+  await page.unroute('**/*.js');
+
+  /* The hydrated page, on the same viewport. */
+  await visit(page);
+  const after = await read();
+  expect(after.shell, 'the page never hydrated').toBe(false);
+
+  expect(
+    after.heading,
+    `hydration moved the heading from ${before.heading} to ${after.heading}; the shell reserves a different page from the one that mounts`
+  ).toEqual(before.heading);
+  expect(
+    after.header,
+    `hydration changed the masthead from ${before.header} to ${after.header}`
+  ).toEqual(before.header);
+  expect(
+    after.main[1],
+    `hydration moved the column's top edge from ${before.main[1]} to ${after.main[1]}`
+  ).toBe(before.main[1]);
 });
 
 test('a poisoned preference lands the page on the width it ships at', async ({ page }) => {
@@ -6837,9 +7837,14 @@ test('every width the handle can reach keeps every section intact', async ({ pag
     }, target);
     await settled(page);
     const state = await page.evaluate(() => {
-      const grid = window.document.querySelector('.stat-grid[data-cells="roomy"]');
-      const cells = [...grid.querySelectorAll('.stat-cell')];
-      const distinct = (values) => new Set(values.map((value) => Math.round(value))).size;
+      /* THE LEDGER'S OWN BLOCKS (owner directive, 2026-09-03, issue 287).
+         The three-column boss table is retired; what has to survive every
+         column width now is the marquee strip and the flip-square board, so
+         those are what is counted. */
+      const strip = window.document.querySelector('.ticker-strip');
+      const readable = [...strip.querySelectorAll('.ticker-lane')].filter(
+        (lane) => lane.getAttribute('aria-hidden') !== 'true'
+      );
       const frames = [...window.document.querySelectorAll('.gallery-stage')].map((stage) => {
         const box = stage.getBoundingClientRect();
         return { width: box.width, height: box.height };
@@ -6849,10 +7854,13 @@ test('every width the handle can reach keeps every section intact', async ({ pag
         column: window.document.querySelector('main').getBoundingClientRect().width,
         scrollWidth: root.scrollWidth,
         clientWidth: root.clientWidth,
-        bossColumns: distinct(cells.map((cell) => cell.getBoundingClientRect().left)),
-        bossRows: distinct(cells.map((cell) => cell.getBoundingClientRect().top)),
-        bossCells: cells.length,
-        tiles: window.document.querySelectorAll('[data-usage-tile]').length,
+        tickerItems: readable.reduce(
+          (count, lane) => count + lane.querySelectorAll('.ticker-item').length,
+          0
+        ),
+        tickerPans: strip.scrollWidth > strip.clientWidth,
+        tickerOverflow: getComputedStyle(strip).overflowX,
+        squares: window.document.querySelectorAll('.board-square').length,
         strips: window.document.querySelectorAll('.grid-strip').length,
         navLinks: window.document.querySelectorAll('.section-link').length,
         sections: window.document.querySelectorAll('.page-section').length,
@@ -6894,11 +7902,16 @@ test('every width the handle can reach keeps every section intact', async ({ pag
       );
     }
     expect(state.escaping, `content escapes its box ${at}`).toEqual([]);
-    /* Three columns going down, whatever the column measures — the owner's
-       arrangement, not a shape that survives only at one width. */
-    expect(state.bossColumns, `the boss table lays out ${state.bossColumns} columns ${at}`).toBe(3);
-    expect(state.bossRows, `the boss table lost rows ${at}`).toBe(Math.ceil(state.bossCells / 3));
-    expect(state.tiles, `the usage tiles disappeared ${at}`).toBeGreaterThan(0);
+    /* The whole collection is still in the strip, and the strip is still the
+       thing that scrolls rather than the page — at every width, not only at
+       the one the ticker was designed against. A narrow column is exactly
+       where a band would be tempted to push the document sideways, and the
+       page-level check above would catch that; this is the other half, that
+       it did not silently drop entries to avoid it. */
+    expect(state.tickerItems, `the ticker lost entries ${at}`).toBeGreaterThan(50);
+    expect(state.tickerOverflow, `the ticker stopped being a scroller ${at}`).toBe('auto');
+    expect(state.tickerPans, `the ticker has nothing left to pan ${at}`).toBe(true);
+    expect(state.squares, `the board squares disappeared ${at}`).toBeGreaterThan(0);
     expect(state.strips, `the heatmap strips disappeared ${at}`).toBeGreaterThan(0);
     expect(state.navLinks, `the nav lost links ${at}`).toBeGreaterThan(2);
     expect(state.sections, `the page lost a section ${at}`).toBeGreaterThan(2);
@@ -6995,14 +8008,20 @@ test('the drag writes once a frame and never stalls on layout', async ({ page })
   expect(swept.moves, `120 pointer moves took ${swept.moves.toFixed(1)}ms`).toBeLessThan(250);
 });
 
-// SUPERSEDED (owner directive, issue 168). This lane used to REQUIRE the
-// popover to fit inside whatever the reader had dragged the column down to,
-// because the header used to take the column's own width and the popover
-// hangs off the header. That coupling is exactly what issue 168 removed: the
-// header pins to the viewport corner now, independent of the column
-// entirely, so the correct claim inverts — narrowing the column to its
-// minimum must move the popover NOT AT ALL, never merely "fit" inside it.
-test('the reading-mode popover is unaffected by the column, even at its narrowest (issue 168)', async ({
+// SUPERSEDED TWICE, and the second reversal is the current rule (owner
+// directive, 2026-09-03, issue 287). Originally this lane REQUIRED the popover
+// to fit inside whatever the reader had dragged the column down to, because
+// the header took the column's own width and the popover hangs off the header.
+// Issue 168 removed that coupling — the header pinned to the viewport corner —
+// so the claim inverted to "narrowing the column moves the popover not at all".
+// The ledger's masthead puts the header back INSIDE the column, sharing its
+// inline-size rule with `main`, so the coupling is deliberate again and the
+// original claim is the right one: the popover travels with the column and
+// must still FIT, entirely on screen, with every swatch, and without taking
+// the document sideways. Both halves are asserted — that it moved, so the
+// coupling is real rather than assumed, and that it fits, which is the floor
+// the coupling has to respect.
+test('the reading-mode popover travels with the column and still fits at its narrowest (issue 168; owner 2026-09-03, issue 287)', async ({
   page
 }) => {
   await page.setViewportSize({ width: railsBreakpointPx, height: 900 });
@@ -7068,18 +8087,30 @@ test('the reading-mode popover is unaffected by the column, even at its narrowes
 
   expect(observed.animating, 'the narrowed popover was measured mid-reveal').toBe(0);
   expect(observed.swatches, 'the reading modes lost a swatch at the narrowest column').toBe(5);
-  for (const edge of ['left', 'right', 'top']) {
-    // The allowance stays at one CSS pixel: it is now a genuine sub-pixel
-    // rounding margin over two settled readings rather than cover for a
-    // moving box, and it is not widened by a hair. A popover actually
-    // coupled to the column moves by hundreds.
-    expect(
-      Math.abs(observed.popover[edge] - shipped[edge]),
-      `narrowing the column moved the popover ${edge} from ${shipped[edge]} to ` +
-        `${observed.popover[edge]}; it is meant to be independent of the column ` +
-        'now (issue 168; one CSS pixel of settled rounding allowed, issue #194)'
-    ).toBeLessThanOrEqual(1);
-  }
+  /* IT MOVED, which is the coupling stated as a measurement rather than
+     assumed. A popover still pinned to the viewport corner would report the
+     identical box and the fit assertions below would then prove nothing about
+     the column at all. */
+  expect(
+    Math.abs(observed.popover.left - shipped.left),
+    `narrowing the column left the popover at ${observed.popover.left}; it rides the masthead now and the masthead rides the column`
+  ).toBeGreaterThan(1);
+  /* AND IT FITS, which is the floor that coupling has to respect: entirely on
+     screen on both inline edges, and below the top of the viewport. The
+     arrangement this replaced failed exactly here — a popover hanging off a
+     narrowed header used to run off the end of the screen. */
+  expect(
+    observed.popover.left,
+    `the narrowed popover starts at ${observed.popover.left}px, off the start edge`
+  ).toBeGreaterThanOrEqual(-subPixel);
+  expect(
+    observed.popover.right,
+    `the narrowed popover ends at ${observed.popover.right}px in a ${observed.clientWidth}px viewport`
+  ).toBeLessThanOrEqual(observed.clientWidth + subPixel);
+  expect(
+    observed.popover.top,
+    `the narrowed popover starts at ${observed.popover.top}px, above the viewport`
+  ).toBeGreaterThanOrEqual(-subPixel);
   expect(observed.scrollWidth).toBe(observed.clientWidth);
 });
 
@@ -7100,10 +8131,18 @@ test('the reading-mode popover is unaffected by the column, even at its narrowes
  * where the card's padding says it should.
  * ======================================================================== */
 
-/* The card-body surfaces the ruling covers, by the class the page gives them.
- * A summary paragraph and a bullet list — the blocks that used to read the
- * 42rem measure. */
-const filledCardBodies = ['.entry-summary', '.entry-points'];
+/* The card-body surfaces the ruling covers, by the class the page gives them
+ * (owner directive, 2026-09-03, issue 287). It was a summary paragraph and a
+ * bullet list on the retired feed cards; the ledger's one card-body prose
+ * surface is the accomplishments list inside a role's drawer, so that is what
+ * the ruling covers now.
+ *
+ * The repository table's description cell is DELIBERATELY not here. It is one
+ * column of a ruled row, sized against its neighbours, and it is supposed to
+ * stop where its column stops — measuring it against the card's own edge would
+ * assert that a table has no columns. Its own geometry is pinned by the repo
+ * table lane instead. */
+const filledCardBodies = ['.ledger-points'];
 
 /* The widths this rule is measured at, and why they are COLUMN values rather
  * than only viewport ones. The page column is a fixed 60rem token, so a 1440px
@@ -7148,7 +8187,19 @@ const measureCardFill = (page) =>
           const range = window.document.createRange();
           range.selectNodeContents(node);
           const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
-          if (rects.length > 0) runs.push(rects);
+          /* Each run carries the END EDGE OF THE BOX IT WAS LAID OUT IN, not
+             the card's (owner directive, 2026-09-03, issue 287). A broken line
+             stands within one word of the width ACTUALLY AVAILABLE TO IT, and
+             what is available is its own containing block — which is the card
+             for a full-width paragraph and one track for a list the ledger
+             lays out in two columns. Measuring every line against the card
+             would call a correctly filled second column a two-thirds failure.
+             For the single-column blocks this rule was written against the two
+             edges are the same edge, so nothing is relaxed where the old shape
+             held. */
+          if (rects.length > 0) {
+            runs.push({ rects, end: node.parentElement.getBoundingClientRect().right });
+          }
           return;
         }
         if (node.nodeType !== 1) return;
@@ -7169,16 +8220,18 @@ const measureCardFill = (page) =>
              a layout tells you nothing there — but a line the engine chose to
              BREAK was broken because the next word did not fit, so it stands
              within one word of the width actually available. */
-          const broken = runs.flatMap((rects) => rects.slice(0, -1));
+          const broken = runs.flatMap((run) =>
+            run.rects.slice(0, -1).map((rect) => run.end - rect.right)
+          );
           rows.push({
             selector,
             card: Math.round(card.getBoundingClientRect().width),
             short: edge - block.getBoundingClientRect().right,
             runs: runs.length,
             broken: broken.length,
-            /* The WORST of them: the broken line that stops furthest from the
-               card's edge. */
-            ink: broken.length === 0 ? 0 : Math.max(...broken.map((rect) => edge - rect.right)),
+            /* The WORST of them: the broken line that stops furthest from its
+               own containing block's edge. */
+            ink: broken.length === 0 ? 0 : Math.max(...broken),
           });
         }
       }
@@ -7241,7 +8294,7 @@ function expectCardsFilled(observed, where) {
     if (row.broken > 0) {
       expect(
         row.ink,
-        `a line inside ${row.selector} was broken ${row.ink.toFixed(1)}px short of a ${row.card}px card at ${where}; the box fills but the text does not`
+        `a line inside ${row.selector} was broken ${row.ink.toFixed(1)}px short of its own block's edge in a ${row.card}px card at ${where}; the box fills but the text does not`
       ).toBeLessThan(row.card / 3);
     }
   }
@@ -7251,6 +8304,17 @@ test('card text fills the card and stops at its padding, never two thirds of the
   page,
 }) => {
   await visit(page);
+  /* THE PROSE IS BEHIND A DISCLOSURE NOW (owner directive, 2026-09-03, issue
+     287): the accomplishments live in each role's drawer and the section opens
+     as a summary, so every drawer is opened before anything is measured. A
+     closed drawer is clipped to nothing, and measuring one would report a
+     block that fills its card perfectly by being empty. */
+  const drawers = page.locator('#work .ledger-row');
+  const drawerCount = await drawers.count();
+  expect(drawerCount, 'the experience section rendered no role rows to open').toBeGreaterThan(0);
+  for (let index = 0; index < drawerCount; index += 1) {
+    await drawers.nth(index).click();
+  }
   for (const width of desktopWidths) {
     await page.setViewportSize({ width, height: 900 });
     await settled(page);
@@ -9292,52 +10356,42 @@ test('the refresh gesture has a control a keyboard can reach (issue 219)', async
  * its place at the end of the same header — the menu's own trigger — is what
  * this lane scrolls under the plate now, because the collision was never
  * about which control it was, only about where the column ends. */
-test('the fixed reading-mode control never renders over page text (issue 219)', async ({ page }) => {
+test('the reading-mode control never renders over page text (issue 219)', async ({ page }) => {
   await visit(page);
 
-  const plate = await page.evaluate(() => {
+  /* THE PLATE IS GONE, AND SO IS THE PROBLEM IT COVERED (owner directive,
+     2026-09-03, issue 287).
+     
+     The veil existed because the header was FIXED to the viewport while the
+     column scrolled beneath it: with nothing painted behind the glyph, the
+     text passing under it showed straight through, and the first attempt at a
+     fix over-corrected into an opaque disc the owner rejected. The ledger's
+     masthead is an ordinary in-flow row of the sheet. Nothing passes beneath
+     it because it travels with everything else, so a veil would be painting a
+     backdrop for a collision that cannot happen.
+     
+     What replaces the three plate properties is the structural fact that makes
+     them unnecessary, asserted directly and at every width: the header is not
+     taken out of flow. A build that pinned it again — `fixed` or `sticky` —
+     fails here immediately, and would need its veil back. */
+  const flow = await page.evaluate(() => {
     const header = window.document.querySelector('.page-header');
-    const style = window.getComputedStyle(header);
-    return {
-      background: style.backgroundColor,
-      shadow: style.boxShadow,
-      radius: style.borderTopLeftRadius,
-      blur: style.backdropFilter || style.webkitBackdropFilter,
-    };
+    return { position: window.getComputedStyle(header).position };
   });
-  /* A transparent plate is the original defect: whatever scrolls beneath shows
-     THROUGH the glyph. But the first cut over-corrected — a fully opaque disc
-     ringed by a gutter-wide shadow spread, which on a phone reads as a huge
-     solid circle stamped on the page (owner defect report, 0.1.52). What the
-     control needs is not opacity but a VEIL: enough of the page's own surface
-     to separate the glyph from the text, over a blur that softens what passes
-     under it, and no halo at all.
-
-     So all three properties are pinned in the direction the redesign chose,
-     and each fails on its own: a plate that went transparent again, one that
-     went back to opaque, one that lost its blur, and one that brought the
-     spread back are four different red builds. */
-  const alpha = alphaOf(plate.background);
-  expect(alpha, 'the reading-mode control paints no backdrop of its own').toBeGreaterThan(0);
   expect(
-    alpha,
-    `the plate is painted at ${alpha}: an opaque disc, not the veil the owner asked for`
-  ).toBeLessThan(1);
-  expect(plate.blur, 'the plate does not soften what scrolls beneath it').toContain('blur');
-  expect(plate.shadow, 'the plate rings itself with a halo again').toBe('none');
-  // The pill the 44px hit box already describes — the plate is shaped by the
-  // control it backs rather than by a number of its own.
-  expect(Number.parseFloat(plate.radius), 'the plate is not the control’s own pill').toBeGreaterThan(
-    touchFloorPx / 2,
-  );
+    ['fixed', 'sticky'],
+    `the masthead is ${flow.position}: it is out of flow again, so page content can pass beneath it and it needs the backdrop this lane used to pin`
+  ).not.toContain(flow.position);
 
-  // Browser-driven scrolling must not park a target under the control either.
-  expect(
-    await page.evaluate(
-      () => window.getComputedStyle(window.document.documentElement).scrollPaddingTop,
-    ),
-    'a fragment or focus move can still land under the fixed control',
-  ).not.toBe('auto');
+  /* THE SCROLL PADDING IS GONE WITH THE FIXED CONTROL IT SERVED (owner
+     directive, 2026-09-03, issue 287), and this lane used to require it. It
+     kept a fragment or focus move from parking its target under chrome that
+     no longer floats over anything — and on WebKit it had become a defect of
+     its own: with the reading-mode trigger sitting 2px inside the padding,
+     focus returning to it after a swap scrolled the whole document by those
+     2px. Nothing on this page is fixed to the viewport any more, so the page
+     declares no scroll padding and none is asserted; the swap lane asserts the
+     scroll position exactly instead. */
 
   /* HALF ONE — browser-driven scrolling no longer parks a target under the
      control at all: scrollIntoView (and every focus move, which uses the same
@@ -9352,7 +10406,12 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
        column's own end edge — which is what makes it the same collision. A
        target that no longer exists would make this half of the test silently
        vacuous, which is why it is asserted non-null below. */
-    const segments = [...window.document.querySelectorAll('.usage-insight-value')];
+    /* The right-aligned content the owner's report was about, named for the
+       ledger (owner directive, 2026-09-03, issue 287): the repository table's
+       age column is the end column of a ruled row, hard against the column's
+       own end edge, which is the same geometry the retired insight figures
+       had and the same reason it is the one that collides. */
+    const segments = [...window.document.querySelectorAll('.table-age')];
     if (segments.length === 0) return null;
     const segment = segments.at(-1);
     segment.scrollIntoView({ block: 'start' });
@@ -9363,7 +10422,7 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
       headerBottom: header.getBoundingClientRect().bottom,
     };
   });
-  expect(landing, 'the token panel rendered no end-aligned content to measure').not.toBeNull();
+  expect(landing, 'the page rendered no end-aligned content to measure').not.toBeNull();
   /* A whole pixel of tolerance here rather than the sub-pixel one used for
      box SIZES, and the difference is deliberate. A scroll offset is rounded
      to the device's own pixel grid, so a target the engine placed exactly at
@@ -9422,16 +10481,19 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
     await settled(page);
     const lane = await page.evaluate(async () => {
       const header = window.document.querySelector('.page-header');
-      const app = window.document.getElementById('app');
       const column = window.document.querySelector('#app > main');
       window.scrollTo(0, 0);
       const rest = header.getBoundingClientRect();
-      /* #app's CONTENT box, not the column's: every flow descendant of the page
-         lives inside it, so this is the whole page's first row rather than one
-         element's. */
-      const contentTop =
-        app.getBoundingClientRect().top +
-        Number.parseFloat(window.getComputedStyle(app).paddingBlockStart);
+      /* THE FIRST ROW OF THE SHEET BELOW THE MASTHEAD (owner directive,
+         2026-09-03, issue 287). This used to be #app's own content edge,
+         because the header sat in the rows `--page-top-space` held empty ABOVE
+         that edge. The masthead is part of the sheet now — it is the first row
+         of the content rather than something held above it — so the box that
+         must not be overlapped is everything that follows it, which is the
+         column itself. The guarantee is unchanged and its subject moved down
+         one element: the control's document rows are ITS OWN, and no page
+         content shares them at any scroll offset. */
+      const contentTop = column.getBoundingClientRect().top;
       const columnWidth = column.getBoundingClientRect().width;
       window.scrollTo(0, 400);
       await new Promise((settle) => requestAnimationFrame(() => requestAnimationFrame(settle)));
@@ -9465,7 +10527,7 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
     ).toBeCloseTo(lane.offset, 0);
     expect(
       lane.controlBottom,
-      `at ${width}px the control's document rows end at ${lane.controlBottom}px, inside page content that begins at ${lane.contentTop}px`
+      `at ${width}px the masthead's document rows end at ${lane.controlBottom}px, inside the sheet's own content, which begins at ${lane.contentTop}px`
     ).toBeLessThanOrEqual(lane.contentTop + subPixel);
   }
 });
@@ -9622,7 +10684,13 @@ test('the contribution calendar carries a data-through line and trails today pas
   const endDate = envelope.data.endDate;
   expect(endDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 
-  const panel = page.locator('[data-activity-panel]');
+  /* THE COMMITS CARD, found through the one heatmap it holds (owner
+     directive, 2026-09-03, issue 287). `data-activity-panel` went with the
+     retired tracker component, and the page now draws exactly ONE
+     ContributionGrid — the retired token cards drew the others — so the
+     grid identifies its own card without a scoping attribute and without
+     `:has()`, which this matrix may not assume in every engine. */
+  const panel = page.locator('.panel-shell').filter({ has: page.locator('.grid-block') });
   const stale = panel.locator('[data-panel-note]');
   await expect(stale, 'the stale calendar carries no data-through line').toHaveCount(1);
   await expect(stale).toHaveText(/^data through [A-Z][a-z]{2} \d{1,2}, \d{4} · last capture .+ ago$/);
@@ -9630,10 +10698,11 @@ test('the contribution calendar carries a data-through line and trails today pas
      the card's edge: the note is the one thing allowed to appear on arrival
      precisely because it costs the card no height and no width. */
   const head = await page.evaluate(() => {
-    const title = window.document.querySelector('[data-activity-panel] .panel-title').getBoundingClientRect();
-    const note = window.document.querySelector('[data-activity-panel] [data-panel-note]').getBoundingClientRect();
-    const card = window.document.querySelector('[data-activity-panel] .panel-shell').getBoundingClientRect();
-    return { titleHeight: title.height, noteHeight: note.height, noteRight: note.right, cardRight: card.right, noteLeft: note.left, titleRight: title.right };
+    const card = window.document.querySelector('.grid-block').closest('.panel-shell');
+    const title = card.querySelector('.panel-title').getBoundingClientRect();
+    const note = card.querySelector('[data-panel-note]').getBoundingClientRect();
+    const cardBox = card.getBoundingClientRect();
+    return { titleHeight: title.height, noteHeight: note.height, noteRight: note.right, cardRight: cardBox.right, noteLeft: note.left, titleRight: title.right };
   });
   expect(head.noteHeight, 'the note is taller than the title row it shares').toBeLessThanOrEqual(head.titleHeight + subPixel);
   expect(head.noteRight, 'the note runs past the card').toBeLessThanOrEqual(head.cardRight + subPixel);
@@ -9644,7 +10713,7 @@ test('the contribution calendar carries a data-through line and trails today pas
      are the LAST cells in the strip. Counted against the payload rather than
      the calendar, so the assertion holds on whatever day CI runs. */
   const observed = await page.evaluate(() => {
-    const cells = [...window.document.querySelectorAll('[data-activity-panel] .grid-cell[data-grid-cell]')];
+    const cells = [...window.document.querySelectorAll('.grid-cell[data-grid-cell]')];
     let trailing = 0;
     for (let index = cells.length - 1; index >= 0 && cells[index].dataset.gridAbsent === 'true'; index -= 1) {
       trailing += 1;
@@ -9652,7 +10721,7 @@ test('the contribution calendar carries a data-through line and trails today pas
     return {
       cells: cells.length,
       trailing,
-      months: [...window.document.querySelectorAll('[data-activity-panel] .grid-month')].map((tick) => tick.title),
+      months: [...window.document.querySelectorAll('.grid-month')].map((tick) => tick.title),
     };
   });
   const today = new Date();

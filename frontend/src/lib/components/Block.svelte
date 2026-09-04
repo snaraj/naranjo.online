@@ -28,6 +28,11 @@
   let { block }: { block: PageBlock } = $props();
 
   let envelope = $state<PanelEnvelope | null>(null);
+  /* One slot per bound panel for a multi-panel block, in the binding's own
+     order. Reassigned rather than mutated on every delivery, because a
+     rune-tracked array is what tells the derived props below that one of its
+     several sources answered. */
+  let envelopes = $state<readonly (PanelEnvelope | null)[]>([]);
   let runtime = $state<BlockProps | null>(null);
 
   $effect(() => {
@@ -35,6 +40,32 @@
       return;
     }
     return watchPanel(block.binding.panelId, (loaded) => (envelope = loaded));
+  });
+
+  $effect(() => {
+    const binding = block.binding;
+    if (binding.source !== 'panels') {
+      return;
+    }
+    /* Every panel is watched through the SAME watchPanel every single-panel
+       block uses — the visibility-aware, never-stacking, last-good-on-failure
+       delivery — so a block reading two panels is two ordinary subscriptions
+       rather than a second retrieval path. The slots start null and stay in
+       the binding's declared order, so the adapter always reads the same
+       position for the same panel however the two deliveries interleave. */
+    const slots: (PanelEnvelope | null)[] = binding.panelIds.map(() => null);
+    envelopes = slots.slice();
+    const stops = binding.panelIds.map((id, index) =>
+      watchPanel(id, (loaded) => {
+        slots[index] = loaded;
+        envelopes = slots.slice();
+      })
+    );
+    return () => {
+      for (const stop of stops) {
+        stop();
+      }
+    };
   });
 
   $effect(() => {
@@ -61,6 +92,9 @@
   const rendered = $derived.by(() => {
     if (block.binding.source === 'panel') {
       return block.binding.adapt(envelope);
+    }
+    if (block.binding.source === 'panels') {
+      return block.binding.adapt(envelopes);
     }
     if (block.binding.source === 'runtime') {
       return runtime ?? block.binding.fallback;

@@ -19,13 +19,7 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import {
-  bossDetail,
-  osrsStatsProps,
-  skillDetail,
-  summaryDetail,
-  skillSummary,
-} from '../src/lib/bossLog.ts';
+import { bossDetail, bossTickerProps } from '../src/lib/bossLog.ts';
 import {
   anchoredPlacement,
   clampAxis,
@@ -38,11 +32,11 @@ import {
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
-const [styles, tooltipSource, tipComponent, statTracker] = await Promise.all([
+const [styles, tooltipSource, tipComponent, ticker] = await Promise.all([
   read('../src/styles.css'),
   read('../src/lib/tooltip.ts'),
   read('../src/lib/components/DetailTip.svelte'),
-  read('../src/lib/components/StatTracker.svelte'),
+  read('../src/lib/components/Ticker.svelte'),
 ]);
 
 /* Every .svelte file under src/, discovered by walking the tree rather than
@@ -176,7 +170,17 @@ test('the placement tokens and their code fallback are the same two numbers', ()
   );
 });
 
-test('both grids build the same detail shape from the same nullable renderers', () => {
+/* THE STRIP BUILDS ONE DETAIL SHAPE FROM THE NULLABLE RENDERERS (owner
+ * directive, 2026-09-03, issue 287: the skills grid is cut, so there is one
+ * collection left rather than two).
+ *
+ * The claim this test carries is unchanged and is the one that mattered: a
+ * figure the hiscores do not report says so IN WORDS — "--" for a count
+ * nobody sent, "Unranked" for an account below the listing threshold — in the
+ * detail, in the visible figure and in the accessible name alike, rather than
+ * being rendered as a zero. Two different claims, two different renderings,
+ * and neither of them is a number the payload never carried. */
+test('the strip builds one detail shape from the same nullable renderers', () => {
   // A boss with every figure, including the optional score.
   assert.deepEqual(bossDetail({ name: 'Zulrah', kc: 1234, rank: 5678, score: 90 }), {
     name: 'Zulrah',
@@ -187,7 +191,7 @@ test('both grids build the same detail shape from the same nullable renderers', 
     ],
   });
   // An unranked row with no figure at all says both in words rather than
-  // rendering a zero, exactly as the tile and the accessible name do.
+  // rendering a zero, exactly as the item and the accessible name do.
   assert.deepEqual(bossDetail({ name: 'Sol Heredit', kc: null, rank: null }), {
     name: 'Sol Heredit',
     rows: [
@@ -195,44 +199,15 @@ test('both grids build the same detail shape from the same nullable renderers', 
       { label: 'Rank', value: 'Unranked' },
     ],
   });
-  // A skill: the same three-part grammar — a name, then labelled figures —
-  // which is the whole of what "the skill detail looks like the boss detail"
-  // means once one component renders both.
-  assert.deepEqual(skillDetail({ name: 'Attack', level: 99, rank: 124252, xp: 19794965 }), {
-    name: 'Attack',
-    rows: [
-      { label: 'Level', value: '99' },
-      { label: 'Rank', value: '124,252' },
-      { label: 'XP', value: '19,794,965' },
-    ],
-  });
-  // xp is optional on the payload rather than nullable, so a row the
+  // score is OPTIONAL on the payload rather than nullable, so a row the
   // hiscores never sent gets no line — never a fabricated zero.
-  assert.deepEqual(skillDetail({ name: 'Sailing', level: 72, rank: null }), {
-    name: 'Sailing',
-    rows: [
-      { label: 'Level', value: '72' },
-      { label: 'Rank', value: 'Unranked' },
-    ],
-  });
-  // A null xp is a REPORTED absence and still renders its row, as a dash.
-  assert.deepEqual(skillDetail({ name: 'Hunter', level: null, rank: null, xp: null }).rows, [
-    { label: 'Level', value: '--' },
-    { label: 'Rank', value: 'Unranked' },
+  assert.deepEqual(bossDetail({ name: 'Hespori', kc: 3, rank: 9 }).rows, [
+    { label: 'KC', value: '3' },
+    { label: 'Rank', value: '9' },
   ]);
-  // The totals cells: the short label the 320px column shows becomes the row
-  // label, and the full name becomes the heading the tile had no room for.
-  const [totalXp, overallRank] = skillSummary([
-    { name: 'Overall', level: 2277, rank: 138220, xp: 453846899 },
-  ]);
-  assert.deepEqual(summaryDetail(totalXp), {
-    name: 'Total XP',
-    rows: [{ label: 'XP', value: '453,846,899' }],
-  });
-  assert.deepEqual(summaryDetail(overallRank), {
-    name: 'Overall rank',
-    rows: [{ label: 'Rank', value: '138,220' }],
-  });
+  // A null score is a REPORTED absence and still renders no row, because the
+  // payload's own contract makes absence and null the same statement here.
+  assert.deepEqual(bossDetail({ name: 'Hespori', kc: 3, rank: 9, score: null }).rows.length, 2);
 });
 
 /* The tiles are data now (issue 165): the adapter builds every cell's detail
@@ -241,8 +216,8 @@ test('both grids build the same detail shape from the same nullable renderers', 
  * link the source pins on the component can no longer see — a component that
  * renders {cell.detail} faithfully proves nothing about WHICH detail the
  * adapter put there. */
-test('the adapter feeds every tile the same tested detail builders', () => {
-  const icons = { levels: new Map(), tallies: new Map() };
+test('the adapter feeds every item the same tested detail builder', () => {
+  const icons = new Map();
   const envelope = {
     schema: 'panel/v1',
     id: 'boss-log',
@@ -258,11 +233,8 @@ test('the adapter feeds every tile the same tested detail builders', () => {
       bosses: [{ name: 'Zulrah', kc: 1234, rank: 5678, score: 90 }],
     },
   };
-  const [levels, tallies] = osrsStatsProps(envelope, icons).grids;
-  assert.deepEqual(levels.cells[1].detail, skillDetail(envelope.data.skills[1]));
-  assert.deepEqual(tallies.cells[0].detail, bossDetail(envelope.data.bosses[0]));
-  const summary = skillSummary(envelope.data.skills);
-  assert.deepEqual(levels.closing.map((cell) => cell.detail), summary.map(summaryDetail));
+  const { items } = bossTickerProps(envelope, icons);
+  assert.deepEqual(items[0].detail, bossDetail(envelope.data.bosses[0]));
 });
 
 /* Tooltip content is PAYLOAD: boss and skill names arrive over the network
@@ -276,9 +248,8 @@ test('a hostile row name is data all the way to the DOM', () => {
   const hostile = '<img src=x onerror="fetch(`/steal`)">';
   const detail = bossDetail({ name: hostile, kc: 1, rank: 2 });
   assert.equal(detail.name, hostile, 'the builder must not mangle a name, only carry it');
-  assert.equal(skillDetail({ name: hostile, level: 1, rank: 2 }).name, hostile);
   // A value can be hostile too, in principle: the same rule covers both.
-  assert.equal(summaryDetail({ key: 'k', label: '</span><script>', name: hostile, value: hostile }).rows[0].value, hostile);
+  assert.equal(bossDetail({ name: 'Zulrah', kc: null, rank: null }).rows[0].value, '--');
   // The component interpolates every field, and nothing in the tree renders
   // a string as markup. {@html} is the ONLY Svelte construct that could,
   // which is why its absence is the whole assertion.
@@ -338,42 +309,115 @@ test('exactly one component in the tree implements a hover detail', () => {
   }
 });
 
-test('every tile in the stat tracker carries the shared detail and no browser tooltip', () => {
-  const tiles = [...statTracker.matchAll(/<li\b[\s\S]*?<\/li>/g)].map(([tile]) => tile);
-  // Two tile TEMPLATES render every tile of both grids now: a stat cell and
-  // the captioned closing cell. The walk used to find three, because each
-  // grid spelled its own; the merge is the strengthening — a detail added or
-  // dropped on one template moves every grid at once, so a grid can no
-  // longer drift away from the rule. Fewer than two means this walk stopped
-  // seeing one of them.
-  assert.equal(tiles.length, 2, `the stat tracker renders ${tiles.length} kinds of tile, not 2`);
-  for (const tile of tiles) {
-    assert.match(
-      tile,
-      /<DetailTip detail=\{cell\.detail\} \/>/,
-      `a tile renders no shared detail: ${tile.slice(0, 80)}…`
-    );
-    // The browser's own tooltip is what the skills used to have. Beside a
-    // real detail it double-tooltips — two boxes, one of them unstyled and
-    // half a second late — so its absence is pinned, not merely intended.
-    assert.doesNotMatch(
-      tile,
-      /\stitle=/,
-      `a tile still carries a title attribute, which double-tooltips beside the real detail: ${tile.slice(0, 80)}…`
-    );
-    // Both grids' tiles are keyboard-reachable, because the detail is.
-    assert.match(tile, /tabindex="0"/, 'a tile with a detail no keyboard can reach is half the feature');
-    assert.match(tile, /aria-label=\{cell\.label\}/, 'a tile must carry its whole row in its accessible name');
+/* elementEnd walks a tag's own nesting to find where it closes, so a claim
+ * about what is INSIDE an element is a claim about the tree rather than about
+ * how far a regex happened to run. */
+function elementEnd(source, openIndex, tag) {
+  const open = new RegExp(`<${tag}\\b`, 'g');
+  const close = new RegExp(`</${tag}>`, 'g');
+  open.lastIndex = openIndex;
+  close.lastIndex = openIndex;
+  let depth = 0;
+  let cursor = openIndex;
+  for (;;) {
+    open.lastIndex = cursor;
+    close.lastIndex = cursor;
+    const next = open.exec(source);
+    const shut = close.exec(source);
+    if (shut === null) return -1;
+    if (next !== null && next.index < shut.index) {
+      depth += 1;
+      cursor = next.index + 1;
+      continue;
+    }
+    depth -= 1;
+    cursor = shut.index + 1;
+    if (depth === 0) return shut.index + `</${tag}>`.length;
   }
-  // The old implementation is GONE from this component rather than
-  // overridden: no markup, no styling, no reveal rule, no per-column anchor.
-  assert.doesNotMatch(statTracker, /boss-tip|stat-tip/, 'the retired per-cell tooltip is back in the stat grids');
-  assert.doesNotMatch(
-    statTracker,
-    /nth-child\(3n/,
-    'the retired per-column anchoring is back in the stat grids; containment is viewport clamping now'
+}
+
+/* THE GRID BECAME A STRIP (owner directive, 2026-09-03, issue 287) and the
+ * pin came with it, item for item. What it proves is unchanged: every figure
+ * the payload carries is interrogable through the ONE detail primitive, and
+ * none of them carries the browser's own `title` — which has no touch trigger
+ * in any engine (issue 219) and, beside a real detail, double-tooltips with a
+ * second unstyled box half a second late.
+ *
+ * One item template renders the whole strip now, where the grid had two. That
+ * is the same strengthening the merge from three to two was: a detail added or
+ * dropped moves every item at once, so no part of the collection can drift
+ * away from the rule.
+ *
+ * WHERE the detail is rendered is now part of the claim, and it is not a
+ * matter of taste. `position: fixed` resolves against the viewport only while
+ * no ancestor is transformed, and this band's marquee IS a transform
+ * animation on `.ticker-run`, which makes that element the containing block
+ * for every fixed descendant inside it. A tip rendered per item was drawn 452
+ * pixels below where its pointer was — measured at 1280x900, off the bottom
+ * of the screen, with elementFromPoint returning the section behind it — and
+ * pausing on hover does not help, because the transform is still applied. So
+ * the strip uses the region form DetailTip already documents: ONE tip,
+ * rendered outside the animated element, resolving whichever item the pointer
+ * is over. This test refuses the regression in the only form it can take —
+ * a tip back inside the run. */
+test('every item in the ticker carries the shared detail and no browser tooltip', () => {
+  const items = [...ticker.matchAll(/<span\s+class="ticker-item"[\s\S]*?<\/span>\s*\{\/each\}/g)];
+  assert.equal(items.length, 1, `the ticker renders ${items.length} kinds of item, not 1`);
+  const item = items[0][0];
+  /* Every item is NAMED for the resolver, which is what makes one tip able to
+     describe any of them; an item the resolver cannot name is an item with no
+     detail at all. */
+  assert.match(item, /data-ticker-index=\{index\}/, 'an item the resolver cannot name has no detail');
+  assert.match(ticker, /target\.closest\('\[data-ticker-index\]'\)/, 'nothing resolves a pointer to an item');
+  /* Exactly one tip, wired in the region form: the host it listens on, the
+     resolver that names the subject, and the reporter that says which one —
+     drop any of the three and the tip resolves nothing and shows nobody
+     anything. */
+  assert.equal(
+    [...ticker.matchAll(/<DetailTip\b/g)].length,
+    1,
+    'the strip renders more than one detail; a transformed marquee can position none of them'
   );
-  assert.match(statTracker, /import DetailTip from '\.\/DetailTip\.svelte'/);
+  /* All FOUR region props, and `anchor` is not optional decoration: a caller
+     that resolves many subjects and does not say which one a focus landed on
+     is REFUSED by drivenBinding, and the refusal is a throw at bind time — an
+     action that never attaches and a strip whose detail silently never
+     opens, which is exactly what happened before this line existed. */
+  assert.match(
+    ticker,
+    /<DetailTip\s+detail=\{hoveredDetail\}\s+host=\{strip\}\s+resolve=\{resolveItem\}\s+select=\{noteItem\}\s+anchor=\{hoveredItem\}/
+  );
+  /* And it is OUTSIDE the animated run, proven by walking the run's own
+     nesting rather than by trusting the order two strings happen to appear
+     in. This is the assertion that fails the moment someone puts the detail
+     back where a transform can move it. */
+  const runOpen = ticker.indexOf('<div class="ticker-run">');
+  assert.ok(runOpen > 0, 'the marquee run is gone; this pin no longer describes the strip');
+  const runEnd = elementEnd(ticker, runOpen, 'div');
+  assert.ok(runEnd > runOpen, 'the run element does not close');
+  assert.ok(
+    ticker.indexOf('<DetailTip') > runEnd,
+    'the detail is inside the transformed marquee, where position: fixed resolves against the run rather than the viewport'
+  );
+  assert.doesNotMatch(
+    item,
+    /\stitle=/,
+    'an item carries a title attribute, which double-tooltips beside the real detail'
+  );
+  assert.match(item, /aria-label=\{item\.label\}/, 'an item must carry its whole row in its accessible name');
+  // The strip itself is the focus stop — one tab reaches a collection of
+  // seventy rather than seventy tab stops for one readout at a time, which is
+  // the same arrangement the heatmap makes for its 371 cells.
+  assert.match(ticker, /class="ticker-strip"[^>]*tabindex="0"/);
+  // The old implementation is GONE rather than overridden: no per-cell
+  // tooltip markup, no per-column anchoring.
+  assert.doesNotMatch(ticker, /boss-tip|stat-tip/, 'the retired per-cell tooltip is back');
+  assert.doesNotMatch(
+    ticker,
+    /nth-child\(3n/,
+    'the retired per-column anchoring is back; containment is viewport clamping now'
+  );
+  assert.match(ticker, /import DetailTip from '\.\/DetailTip\.svelte'/);
 });
 
 test('the detail follows a fine pointer and is anchored for everyone else', () => {

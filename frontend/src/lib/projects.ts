@@ -56,7 +56,13 @@
  * the owner's own origin and not this repository's tree at all. */
 
 import { ageDetail, relativeAge } from './age.ts';
-import { recordedOutOfBand, type EntryCount, type EntryLogProps } from './blocks.ts';
+import {
+  recordedOutOfBand,
+  type EntryCount,
+  type LedgerCount,
+  type LedgerTableProps,
+  type LedgerTableRow
+} from './blocks.ts';
 import { formatWhole } from './grid.ts';
 import { panelAge, panelKinds } from './panels.ts';
 import type { CodingProjectRow, CodingProjectsData, PanelEnvelope } from './panels';
@@ -458,29 +464,6 @@ export function parseCodingProjects(document: unknown): CodingProjectsData | nul
   return { repos };
 }
 
-/* projectEntry builds one feed entry from whichever sides exist: the captured
- * row, the live one, or both. Identity — the name, the URL, the accessible
- * name — derives from the name either side carries, which by this point has
- * passed the repository-name grammar, so the href is the fixed host constant
- * plus a segment that cannot escape it. The captured side contributes the
- * figures no listing reports; the live side contributes everything current. */
-function projectEntry(project: Project | undefined, live: CodingProjectRow | undefined, now?: number) {
-  const name = project?.name ?? live?.name ?? '';
-  const recorded = live === undefined || live.recorded === true;
-  return {
-    key: name,
-    title: name,
-    href: projectUrl({ name }),
-    linkLabel: projectLinkLabel({ name }),
-    glyph: 'code' as const,
-    counts: projectCounts(project, live, now),
-    /* A live row with an empty description means the repository has none,
-       which is a true thing to render as nothing rather than a reason to fall
-       back to a sentence the host no longer carries. */
-    summary: recorded ? (project?.description ?? live?.description ?? '') : live.description
-  };
-}
-
 /* One feed row's two sides: the captured record, the live one, or both. */
 type ProjectView = readonly [Project | undefined, CodingProjectRow | undefined];
 
@@ -528,30 +511,110 @@ export function projectsStaleNote(
   return age === '' ? 'stale · the last successful read is not current' : `stale · data as of ${age}`;
 }
 
-/* The adapter (issue 165, live since issue 242): the coding-projects envelope
- * in, EntryLog props out.
+
+/* ---------------------------------------------------------------------------
+ * The ledger table (owner directive, 2026-09-03, issue 287)
  *
- * THE ROSTER IS THE PAYLOAD'S (issue 281). A payload that passed admission
- * decides which repositories render — that is what lets a repository created
- * an hour ago appear with no release — and each of its rows is enriched with
- * the captured record where one exists. A null envelope, a wrong kind, or a
- * payload that fails admission all render the CAPTURED rows rather than
- * nothing: the fallback is a true thing to show — these figures were really
- * read, on the date recorded above, and the page says so with the provenance
- * mark — not a placeholder pretending to be data.
+ * The section became a ruled table of the four most recently pushed
+ * repositories rather than a feed of cards, and the head says so: "latest 4 of
+ * <total> · by last push", where the total is the roster the payload actually
+ * served — not a constant, and not the length of the captured list, because
+ * the number a reader is told the four were chosen FROM has to be the number
+ * that was really there.
  *
- * The ORDER is derived here rather than declared anywhere (issue 252): most
- * recently pushed first, against each row's effective instant, so the section
- * answers "what has the owner been working on" instead of "what order was this
- * file written in". Sorting at this layer rather than in the producer is what
- * lets it hold in every state — a live payload, a stale retained one, and no
- * payload at all — because this is the only layer where the live and captured
- * instants are both in hand.
+ * Everything the cards proved stays proved. The roster is still the payload's,
+ * the order is still derived from each row's effective instant, the captured
+ * face is still what renders when no payload arrived, the staleness line is
+ * still the same three honest states, and every href is still the fixed host
+ * constant plus a name that passed the repository grammar. What changed is the
+ * SHAPE the same facts are handed to a component in.
+ * ------------------------------------------------------------------------ */
+
+/* The shell heading before any envelope arrives, or when one arrives with an
+ * empty title; otherwise the ORIGIN's own title rides the envelope, exactly as
+ * every other panel's does. */
+export const projectsFallbackTitle = 'Coding projects';
+
+/* The table's column heads, in column order. They are the page's words for
+ * what each column holds, and they are here rather than in the component for
+ * the reason every label on this page is: a component that named a column
+ * would be a component that knows what it is showing. */
+export const projectTableHeads: readonly string[] = [
+  'Repository',
+  'Description',
+  'Stars',
+  'Open',
+  'PRs',
+  'Pushed'
+];
+
+/* How many rows the table shows. The owner asked for the four most recent
+ * (2026-09-03); the rest of the roster is still counted in the caption, so the
+ * page says what it is showing a selection OF rather than quietly showing a
+ * selection. */
+export const shownProjectRows = 4;
+
+export const projectsEmptyNote = 'no repositories reported';
+
+/* The row's own dash, for a repository whose description the host does not
+ * carry: an empty cell reads as a rendering fault, and this reads as what it
+ * is. */
+const noDescription = '—';
+
+/* The three counters the table draws, out of the five the card drew. The two
+ * that do not appear are not lost, they moved: the age has a column of its
+ * own, and the captured commit total left with the card that had room for it
+ * (owner directive, 2026-09-03 — the table's columns are the owner's list, and
+ * the commit total is not on it). Each keeps the glyph, the bare figure and
+ * the clipped words the terse-counter rule (issue 268) gave it. */
+function tableCount(count: EntryCount, glyph: LedgerCount['glyph']): LedgerCount {
+  const row: LedgerCount = {
+    key: count.key,
+    glyph,
+    value: count.value,
+    label: count.label,
+    detail: count.detail
+  };
+  return count.marked === undefined ? row : { ...row, marked: count.marked };
+}
+
+function tableCounts(counts: readonly EntryCount[]): LedgerCount[] {
+  const glyphs: readonly LedgerCount['glyph'][] = ['star', 'issue', 'pull'];
+  const rows: LedgerCount[] = [];
+  for (const glyph of glyphs) {
+    const found = counts.find((count) => count.glyph === glyph);
+    if (found !== undefined) {
+      rows.push(tableCount(found, glyph));
+    }
+  }
+  return rows;
+}
+
+/* The age column, taken from the same counter the card rendered — one
+ * derivation, two presentations, so the figure, its words, its provenance and
+ * the absolute instant behind it all stay the ones projectCounts built. An
+ * instant nobody reported keeps the honest dash it already had.
  *
- * `toSorted` rather than `sort`: `projects` is a module-level constant that
- * every other consumer reads, and sorting it in place would reorder theirs
- * too, once, at whichever render happened first. */
-export function codingProjectsProps(envelope: PanelEnvelope | null, now?: number): EntryLogProps {
+ * The one thing that did NOT come across is the live minute tick the card's
+ * counter carried (`since`, issue 268): the card was a long-lived surface a
+ * reader could leave open with a frozen "3h" on it, and the table is redrawn
+ * from a fresh envelope on the panels' own 60-second cadence — the same
+ * minute the tick was re-deriving against — so the age advances by the
+ * delivery rather than by a second clock inside the component. */
+function tableUpdated(counts: readonly EntryCount[]): LedgerCount {
+  const found = counts.find((count) => count.glyph === 'clock');
+  return found === undefined
+    ? {
+        key: 'updated',
+        glyph: 'clock',
+        value: unknownFigure,
+        label: 'last update not reported',
+        detail: { name: 'last update not reported', rows: [] }
+      }
+    : tableCount(found, 'clock');
+}
+
+export function projectTableProps(envelope: PanelEnvelope | null, now?: number): LedgerTableProps {
   const payload =
     envelope !== null && envelope.kind === panelKinds.codingProjects
       ? parseCodingProjects(envelope.data)
@@ -562,10 +625,33 @@ export function codingProjectsProps(envelope: PanelEnvelope | null, now?: number
       ? payload.repos.map((row) => [capturedByName.get(row.name), row] as const)
       : projects.map((project) => [project, undefined] as const);
   const ordered = views.toSorted((left, right) => viewInstant(right) - viewInstant(left));
+  const rows: LedgerTableRow[] = ordered.slice(0, shownProjectRows).map(([project, live]) => {
+    const name = project?.name ?? live?.name ?? '';
+    const recorded = live === undefined || live.recorded === true;
+    const counts = projectCounts(project, live, now);
+    const description = recorded
+      ? (project?.description ?? live?.description ?? '')
+      : live.description;
+    return {
+      key: name,
+      link: {
+        text: name,
+        href: projectUrl({ name }),
+        label: projectLinkLabel({ name })
+      },
+      summary: description.length > 0 ? description : noDescription,
+      updated: tableUpdated(counts),
+      counts: tableCounts(counts)
+    };
+  });
   return {
-    variant: 'compact',
-    titleLevel: 4,
-    entries: ordered.map(([project, live]) => projectEntry(project, live, now)),
+    title: envelope?.title || projectsFallbackTitle,
+    status: envelope?.status ?? 'unavailable',
+    generatedAt: envelope?.generatedAt,
+    heads: projectTableHeads,
+    rows,
+    caption: `latest ${rows.length} of ${ordered.length} · by last push`,
+    emptyNote: projectsEmptyNote,
     staleNote: projectsStaleNote(envelope, now)
   };
 }

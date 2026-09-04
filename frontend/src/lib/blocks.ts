@@ -25,7 +25,6 @@
  * no component import ever lands here — so node tests execute it directly. */
 
 import type { Component } from 'svelte';
-import type { FeedCardVariant } from './feed.ts';
 import type { GridCell } from './grid.ts';
 import type { PanelEnvelope, PanelStatus } from './panels';
 import type { TipDetail } from './tooltip.ts';
@@ -65,6 +64,22 @@ export type BlockBinding =
       readonly source: 'panel';
       readonly panelId: string;
       readonly adapt: (envelope: PanelEnvelope | null) => BlockProps | null;
+    }
+  | {
+      /* panels — one block reading SEVERAL live panels (owner directive,
+         2026-09-03, issue 287). The commits section cycles one calendar
+         between the version-control contributions and each token source's
+         daily series, which is one picture built from two envelopes; a block
+         that could only bind one panel would have forced either a second
+         section the owner did not ask for or a component that fetched for
+         itself. The envelopes arrive in the order panelIds names them, each
+         null until its own first delivery, so an adapter always receives a
+         complete array and decides for itself what a partial set renders as —
+         which is what keeps a slow second panel from blanking a section whose
+         first panel has already answered. */
+      readonly source: 'panels';
+      readonly panelIds: readonly string[];
+      readonly adapt: (envelopes: readonly (PanelEnvelope | null)[]) => BlockProps | null;
     }
   | {
       readonly source: 'runtime';
@@ -168,6 +183,24 @@ export function panelBlock<P extends BlockProps>(
   };
 }
 
+/* A block whose props derive from SEVERAL live panels at once. Generic over
+ * the component's own props exactly as panelBlock is, so an adapter that
+ * returns the wrong shape fails to compile rather than failing to render. */
+export function panelsBlock<P extends BlockProps>(
+  key: string,
+  component: Component<P>,
+  panelIds: readonly string[],
+  adapt: (envelopes: readonly (PanelEnvelope | null)[]) => P | null,
+  presentation: BlockPresentation = {}
+): PageBlock {
+  return {
+    key,
+    component: component as unknown as BlockComponent,
+    binding: { source: 'panels', panelIds, adapt },
+    ...presentation
+  };
+}
+
 /* The href one nav link carries. Trivial by design: it exists so the '#' is
  * written once, in a function a test can execute, rather than concatenated
  * inside a template where a lost character renders a link to the page root. */
@@ -180,69 +213,20 @@ export function sectionHref(target: Pick<PageSection, 'id'>): string {
  * the reader's vocabulary — a figure, a caption, a detail — never a domain's.
  * ======================================================================== */
 
-/* --- StatTracker: dense grids of icon-and-figure cells ------------------- */
+/* --- The ledger shapes (owner directive, 2026-09-03, issue 287) ---------
+ *
+ * The redesign made the page a ruled sheet: rows that open, a table, a
+ * cycling calendar over a commit log, a board of squares, a scrolling strip.
+ * Every one of those is a new PRESENTATION, so each gets its own props
+ * contract here and its own generic component — and not one of them names a
+ * job, a repository, a vendor or a game. The vocabulary below is the
+ * reader's: a span, a name, a place, a figure, a face, an item.
+ * ------------------------------------------------------------------------ */
 
-/* One cell: a small icon (or its initials fallback), a right-aligned figure,
- * the whole row as its accessible name, and the hover detail. */
-export type StatCell = {
-  readonly key: string;
-  /* Content-hashed asset URL; absent renders the glyph tile instead. */
-  readonly icon?: string;
-  /* The initials drawn when no icon ships for this row. */
-  readonly glyph: string;
-  readonly figure: string;
-  readonly label: string;
-  readonly detail: TipDetail;
-  /* A row its source lists without ranking it; muted, never hidden. */
-  readonly muted?: boolean;
-};
-
-/* A cell that closes the grid's last row with a captioned total: a short
- * caption where an icon would sit, sized to fit the narrowest column. */
-export type StatClosingCell = {
-  readonly key: string;
-  readonly caption: string;
-  readonly figure: string;
-  readonly label: string;
-  readonly detail: TipDetail;
-};
-
-export type StatGrid = {
-  readonly key: string;
-  /* The grid's accessible name. */
-  readonly label: string;
-  /* Cell scale: compact is the fixed-height readout grid (18px icons),
-   * roomy the taller tally grid (26px icons). */
-  readonly size: 'compact' | 'roomy';
-  readonly cells: readonly StatCell[];
-  readonly closing?: readonly StatClosingCell[];
-  /* Rendered instead of the grid when it has no cells; a grid without one
-   * renders empty rather than vanishing, so its box is never a surprise. */
-  readonly emptyNote?: string;
-};
-
-export type StatTrackerProps = {
-  readonly title: string;
-  readonly status: PanelStatus;
-  readonly generatedAt?: string;
-  readonly grids: readonly StatGrid[];
-  /* The loading or unavailable line, when there are no grids to render. */
-  readonly note?: string;
-};
-
-/* --- ActivityTracker: headline figures, a strip, an entry log ------------ */
-
-/* One headline figure: the emphasized number and the words that carry it —
- * the rest includes its own joining space or hyphen, so the two render as
- * one phrase. */
-export type ActivityFigure = {
-  readonly key: string;
-  readonly lead: string;
-  readonly rest: string;
-};
-
-/* One half of an entry row. A null href renders as plain text — the honest
- * state for a destination the information layer could not vouch for. */
+/* One half of a linked row. A null href renders as plain text — the honest
+ * state for a destination the information layer could not vouch for, and the
+ * reason every link on this page is a pair rather than a string: the accessible
+ * name travels with the address, so a component never invents one. */
 export type ActivityLink = {
   readonly text: string;
   readonly href: string | null;
@@ -250,186 +234,227 @@ export type ActivityLink = {
   readonly label: string;
 };
 
-export type ActivityEntry = {
+/* One openable row of a ledger: four columns of fact and a drawer of points.
+ * The row itself is the disclosure control, so nothing inside it may be
+ * interactive — the entry's outbound link therefore rides INSIDE the drawer
+ * (`link`), where it is a link in its own right rather than a control nested
+ * in a control, which is invalid and unreachable by a keyboard alike. */
+export type LedgerRow = {
+  readonly key: string;
+  /* The years, already written the way the source writes them. */
+  readonly span: string;
+  /* The short name the row leads with. */
+  readonly name: string;
+  /* The one-line description under (or beside) the name. */
+  readonly role: string;
+  /* Where it happened. */
+  readonly place: string;
+  /* What the drawer holds, one point each. */
+  readonly points: readonly string[];
+  /* The entry's own home on the web, rendered inside the drawer. */
+  readonly link?: ActivityLink;
+};
+
+export type LedgerLogProps = {
+  readonly rows: readonly LedgerRow[];
+  /* Rendered instead of the rows when there are none. */
+  readonly emptyNote: string;
+  /* The accessible words the chevron carries, in both states. Adapter-built
+   * so the component composes no sentence of its own. */
+  readonly expandLabel: string;
+  readonly collapseLabel: string;
+};
+
+/* One counter in a table row: a drawn glyph, its bare figure, the words the
+ * glyph replaced (kept for the accessibility tree, exactly as EntryCount keeps
+ * them), and the detail every figure on this page carries.
+ *
+ * `marked` and `detail` are the provenance-by-exception channel (issue 268),
+ * carried through the redesign unchanged: a figure captured out of band says
+ * so in its detail, in the page's one sentence for it, and never on the
+ * visible line. A counter that dropped them would be a figure quietly claiming
+ * a freshness the payload never promised. */
+export type LedgerCount = {
+  readonly key: string;
+  readonly glyph: 'star' | 'issue' | 'pull' | 'clock';
+  readonly value: string;
+  readonly label: string;
+  readonly detail: TipDetail;
+  readonly marked?: boolean;
+};
+
+export type LedgerTableRow = {
+  readonly key: string;
+  /* The row's leading cell, as navigation the information layer validated. */
+  readonly link: ActivityLink;
+  /* The single-line description; an empty string renders the honest dash. */
+  readonly summary: string;
+  /* How long since the row's own last change — the same counter the other
+   * three are, so its provenance and its exact instant reach a reader the same
+   * way theirs do. It sits in its own column rather than in the cluster. */
+  readonly updated: LedgerCount;
+  readonly counts: readonly LedgerCount[];
+};
+
+export type LedgerTableProps = {
+  readonly title: string;
+  readonly status: PanelStatus;
+  readonly generatedAt?: string;
+  /* The column heads, in column order, exactly as they render. */
+  readonly heads: readonly string[];
+  readonly rows: readonly LedgerTableRow[];
+  /* The head's right-hand line — what this table is a selection of. */
+  readonly caption: string;
+  readonly emptyNote: string;
+  readonly staleNote?: string;
+};
+
+/* One selectable calendar in the commits block: a heatmap and the sentence
+ * that reads it. Three of these render as one grid with a segmented control
+ * over it, so a set carries everything the shared grid needs. */
+export type CommitLogSet = {
+  readonly key: string;
+  readonly label: string;
+  readonly columns: GridCell[][];
+  /* The set's own reading, under the grid. */
+  readonly caption: string;
+  /* What one cell counts, singular. */
+  readonly noun: string;
+  /* The grid's accessible name. */
+  readonly stripLabel: string;
+  readonly emptyNote: string;
+  /* How this set's figures are written out — exact digits for a count,
+   * compacted for a nine-digit total. A function rather than a flag, because
+   * the component must format nothing itself. */
+  readonly format: (value: number) => string;
+};
+
+export type CommitLogRow = {
+  readonly key: string;
+  readonly age: string;
   readonly source: ActivityLink;
   readonly title: ActivityLink;
-  /* Already rendered as coarse relative age ("2h ago"). */
-  readonly age: string;
+  /* The short identity, display-only; the full one rides the href. */
+  readonly mark: string;
 };
 
-export type ActivityTrackerProps = {
+export type CommitLogProps = {
   readonly title: string;
   readonly status: PanelStatus;
   readonly generatedAt?: string;
-  readonly figures: readonly ActivityFigure[];
-  /* Rendered in the figures row when there are none. */
-  readonly figuresNote: string;
-  readonly strip: {
-    readonly columns: GridCell[][];
-    readonly noun: string;
-    readonly label: string;
-    readonly emptyNote: string;
-  };
-  readonly entries: readonly ActivityEntry[];
-  /* Rendered as the log's one row when there are no entries. */
-  readonly entriesNote: string;
-  /* The honest data-through line (issue 285), the same contract
-   * UsageTrackerProps.staleNote carries: adapter-built words the component
-   * renders above the figures, present exactly when the envelope itself
-   * proves the calendar stopped advancing. */
+  readonly sets: readonly CommitLogSet[];
+  readonly rows: readonly CommitLogRow[];
+  readonly rowsNote: string;
   readonly staleNote?: string;
 };
 
-/* --- UsageTracker: per-source tiles, meters, series, insights ------------ */
-
-export type UsageTile = {
-  readonly key: string;
-  readonly figure: string;
-  readonly label: string;
-  /* Marked figures carry the provenance-by-exception suffix. */
-  readonly marked: boolean;
-};
-
-export type UsageMeter = {
-  /* The drawn fill, already saturated at the track. */
-  readonly fillPct: number;
-  readonly severity: 'ok' | 'warning' | 'critical';
-  /* The true value beside the fill, so severity is never color alone. */
-  readonly reading: string;
-};
-
-/* One figure of a window's pair row: a named glyph, the compact figure, and
- * the word the glyph replaced. The component draws the glyph and clips the
- * word (owner directive, 2026-08-31: "week  in 5.4B  out 7.3M ... see how
- * weird that reads? instead use icons") — same split the entry counters
- * made at issue 268: the visible channel is glyph plus figure, the words
- * stay in the accessibility tree. The glyph is a NAME, not a drawing, so
- * this type stays domain-free the way EntryCount's glyph field is. */
-export type UsagePair = {
-  readonly key: string;
-  readonly glyph: 'flow-in' | 'flow-out';
-  readonly label: string;
-  readonly figure: string;
-};
-
-export type UsageWindow = {
-  readonly period: string;
-  /* "resets in 3h", or '' when the source reports no reset. */
-  readonly reset: string;
-  readonly meter?: UsageMeter;
-  readonly pairs: readonly UsagePair[];
-  /* The exact-figures tooltip the compacted pair row carries. */
-  readonly pairsLabel: string;
-};
-
-export type UsageInsight = {
+/* One proportional bar on a square's face: a label, a fill and the reading
+ * beside it. A NULL fill draws no bar at all — a zero-width bar is
+ * pixel-identical to a measured 0%, so an unknown proportion would look like
+ * a measured one (the same rule UsageInsight carries). */
+export type LedgerBar = {
   readonly key: string;
   readonly label: string;
-  readonly marked: boolean;
-  /* The drawn fill, or NULL when the proportion is unknown. Null is not zero:
-   * a zero-width bar is pixel-identical to a measured 0%, so a row whose
-   * denominator never existed would have drawn the same picture as one that
-   * genuinely contributed nothing. A null draws no bar at all, and the
-   * reading beside it carries the dash. */
   readonly fillPct: number | null;
   readonly reading: string;
+  readonly marked: boolean;
 };
 
-/* A daily series the component re-reads through its own lens toggle; the
- * lens math is lib/grid.ts, which knows no source either. */
-export type UsageSeries = {
-  readonly startDate: string;
-  readonly totals: readonly number[];
+/* One line of a square's back face. The optional slot is the fixed palette
+ * slot the ENTITY owns (--usage-cat-N), never its position in this list, so a
+ * category keeps its swatch whichever subset a source reports; a fact with no
+ * slot draws no swatch. Identity is never the swatch alone — the term is
+ * printed beside it, always. */
+export type LedgerFact = {
+  readonly key: string;
+  readonly term: string;
+  readonly value: string;
+  readonly slot?: number;
 };
 
-/* One accounting category of a source's series: the same days re-read
- * through one class of usage. Key, label, palette slot, dailies, and the
- * lens's own noun are all adapter-built data, so the component names no
- * category and formats no figure. The slot is the fixed palette slot the
- * ENTITY owns (--usage-cat-N), never its position in this payload, so a
- * category keeps its hue whichever subset a source reports. */
-export type UsageCategory = {
+/* A proportional reading with a SEVERITY: a window's utilization, drawn as a
+ * fill and printed as a figure beside it. The severity union is the page's
+ * whole severity vocabulary — the token layer declares one ink per member and
+ * a test closes the status-ink family over exactly this list, so adding a
+ * fourth state here demands a fourth declared ink on the same day. Colour is
+ * never the channel: the reading is printed next to the bar, always. */
+export type LedgerMeter = {
+  readonly fillPct: number;
+  readonly severity: 'ok' | 'warning' | 'critical';
+  readonly reading: string;
+  /* What the reading is OF — a period, already worded by the adapter. */
+  readonly label: string;
+};
+
+/* One square of the board: a front face and the face behind it. A square
+ * whose source said nothing renders dashes and its own note — never a zero,
+ * and never nothing. */
+export type LedgerSquare = {
   readonly key: string;
   readonly label: string;
-  readonly slot: number;
-  readonly totals: readonly number[];
-  /* The SINGULAR noun the reading under the strip uses while this lens is
-   * active — "input token", pluralized by the reading builder exactly as the
-   * region's own noun is.
-   *
-   * A noun rather than a finished SENTENCE, and that is the whole shape of
-   * the reconciliation between the category lens and the range control: an
-   * adapter cannot see which trailing window a reader chose, so a sentence
-   * built here would describe the entire capture while the graph above it
-   * drew ninety days of it. lib/periods.ts builds every reading from the
-   * cells actually drawn — one implementation, whichever lens is active —
-   * and this field is the only thing the category has to contribute to it. */
-  readonly noun: string;
-};
-
-/* One row of the composition strip: how the series' grand total divides
- * across categories. Weight drives the bar segment's flex share (the
- * category's own series total — the same integers the grid draws); figure
- * and tooltip carry the written count and share, so identity is never color
- * alone. */
-export type UsageCompositionRow = {
-  readonly key: string;
-  readonly label: string;
-  readonly slot: number;
-  readonly weight: number;
-  readonly figure: string;
-  readonly tooltip: string;
-};
-
-export type UsageActivity = {
-  readonly heading: string;
-  /* The strip's accessible name; the component appends the active lens. */
-  readonly label: string;
-  readonly noun: string;
-  readonly series: UsageSeries;
-  /* Present exactly when the source's series carries an admitted per-day
-   * category breakdown: the category lens options, in served order. */
-  readonly categories?: readonly UsageCategory[];
-  /* The composition strip's rows, present exactly when categories are. */
-  readonly composition?: readonly UsageCompositionRow[];
-};
-
-export type UsageSection = {
-  readonly key: string;
-  readonly label: string;
-  readonly sublabel?: string;
-  readonly tiles?: readonly UsageTile[];
-  /* The honest line for a source reporting no windows and no tiles. */
-  readonly note?: string;
-  readonly windows?: readonly UsageWindow[];
-  /* Present exactly when there is a series to draw: a heading and a lens
-   * toggle over nothing would be the hole the owner's ruling removed. */
-  readonly activity?: UsageActivity;
-  readonly insights?: {
-    readonly heading: string;
-    /* The range the proportions were measured over, when they were measured
-       at all: a live-derived set covers a declared window of the series and
-       says which, and a frozen release-time set carries no note because there
-       is no window it can honestly name. */
+  /* The front's headline, when the square has one. */
+  readonly figure?: string;
+  /* The line under it. */
+  readonly sub?: string;
+  /* A front made of bars instead of a headline figure. */
+  readonly bars?: readonly LedgerBar[];
+  /* A window's utilization, under the figure. Present exactly when the source
+   * reported a window with one; a source that reports no window draws no
+   * meter rather than a bar at zero. */
+  readonly meter?: LedgerMeter;
+  /* The whole square's accessible name, front and back together. */
+  readonly ariaLabel: string;
+  readonly back: {
+    readonly label: string;
+    readonly facts?: readonly LedgerFact[];
+    readonly bars?: readonly LedgerBar[];
     readonly note?: string;
-    readonly rows: readonly UsageInsight[];
   };
 };
 
-export type UsageTrackerProps = {
-  /* The wire id, carried as a data attribute for audits and lanes. */
-  readonly id: string;
+export type LedgerBoardProps = {
   readonly title: string;
   readonly status: PanelStatus;
   readonly generatedAt?: string;
-  readonly sections: readonly UsageSection[];
+  readonly squares: readonly LedgerSquare[];
   readonly emptyNote: string;
-  /* The honest data-through line, present exactly when the envelope itself
-   * proves the payload has stopped advancing (issue #276: a stalled capture
-   * pipeline used to render fresh-looking tiles with nothing anywhere saying
-   * the data was days old). Adapter-built, so the component renders words it
-   * never composes. */
   readonly staleNote?: string;
+  /* The words a square's own button carries in each state. */
+  readonly turnLabel: string;
+  readonly returnLabel: string;
+};
+
+/* One item of the scrolling strip: a small icon (or its initials fallback),
+ * a figure, and the hover detail every figure on this page carries. */
+export type TickerItem = {
+  readonly key: string;
+  readonly icon?: string;
+  readonly glyph: string;
+  readonly figure: string;
+  readonly label: string;
+  readonly detail: TipDetail;
+  /* The largest figure in the strip: the page's one highlight. */
+  readonly peak?: boolean;
+  /* A figure of zero — dimmed, never hidden, because a row its source lists
+   * with nothing against it is information. */
+  readonly quiet?: boolean;
+};
+
+export type TickerProps = {
+  /* The origin-served name of the thing the strip counts. */
+  readonly title: string;
+  readonly status: PanelStatus;
+  readonly generatedAt?: string;
+  /* The lead item's own line — the totals, already written. */
+  readonly lead: string;
+  readonly items: readonly TickerItem[];
+  readonly emptyNote: string;
+  readonly staleNote?: string;
+  /* The attribution the artwork travels with, rendered word for word wherever
+   * that artwork renders. Data, so the component quotes nothing. */
+  readonly notice: string;
+  /* The strip's accessible name. */
+  readonly label: string;
 };
 
 /* --- MediaGallery: one visible frame, prev/next, a click-to-enlarge lightbox
@@ -526,7 +551,7 @@ export type MediaGalleryProps = {
   readonly height: number;
 };
 
-/* --- EntryLog: a feed of titled entries ---------------------------------- */
+/* --- Counters, and the one word for a figure captured out of band -------- */
 
 /* The provenance-by-exception wording, spelled ONCE for the whole page (owner
  * directive, issue 268). A figure captured out of band says so, and it says so
@@ -571,52 +596,4 @@ export type EntryCount = {
    * on the visible row — it drives the provenance row inside the detail, which
    * is where the owner asked for it to live. */
   readonly marked?: boolean;
-};
-
-export type EntryLogEntry = {
-  readonly key: string;
-  readonly title: string;
-  /* A place, a source — whatever names the entry's origin. */
-  readonly byline?: string;
-  /* A linked entry renders its title as outbound navigation IN PLACE OF the
-   * card's own header: a mark, the name, and counters beside it. That shape
-   * carries no byline, which is exactly right for a repository card and wrong
-   * for anything whose meta line matters. */
-  readonly href?: string;
-  readonly linkLabel?: string;
-  /* The OTHER way a title can be navigation (issue 243): the ordinary card,
-   * byline and all, with its heading pointing somewhere. An entry declares one
-   * or the other; declaring `href` wins, because that branch renders the whole
-   * header itself and there is no heading left for this to reach. */
-  readonly titleHref?: string;
-  /* The mark drawn before a linked title; omitted means none. */
-  readonly glyph?: 'code';
-  readonly counts?: readonly EntryCount[];
-  /* The entry's paragraph, where it has one. */
-  readonly summary?: string;
-  /* The entry's own list of points, where a paragraph is the wrong shape:
-   * a role's accomplishments, a release's changes. Optional exactly like the
-   * paragraph is, and for the same reason — a card draws a region only when
-   * it has something in it — and an entry carrying neither is a call site
-   * with nothing to say, which tests/sections.test.mjs refuses for every
-   * entry this site actually ships. */
-  readonly points?: readonly string[];
-  /* Placeholder entries say so in the DOM, honest-states floor. */
-  readonly placeholder?: boolean;
-};
-
-export type EntryLogProps = {
-  readonly entries: readonly EntryLogEntry[];
-  /* The card look every entry shares (feed-card doctrine, issue 136). */
-  readonly variant?: FeedCardVariant;
-  /* The heading depth entries sit at in the document outline. */
-  readonly titleLevel?: 2 | 3 | 4 | 5 | 6;
-  /* The honest staleness line, present exactly when the adapter proved the
-   * log's information source is not current (issue 281 defect 2: an envelope
-   * honestly said stale while the rendered cards looked fresh). The same
-   * contract UsageTrackerProps.staleNote carries: adapter-built words the
-   * component renders and never composes, above the entries so the reader
-   * meets the caveat before the figures it qualifies. A static log — the
-   * work history — passes none and renders exactly as it always did. */
-  readonly staleNote?: string;
 };

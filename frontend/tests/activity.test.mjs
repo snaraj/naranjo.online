@@ -5,7 +5,6 @@ import { describe, it, test } from 'node:test';
 import {
   activityCells,
   activityEntriesNote,
-  activityFiguresNote,
   activityPanelId,
   commitPullRequestNumber,
   commitReferenceLinkLabel,
@@ -18,9 +17,9 @@ import {
   isValidCommitSha,
   isValidRepoSlug,
   parseVCSActivity,
-  shownEntryRows,
-  vcsActivityProps
+  shownEntryRows
 } from '../src/lib/activity.ts';
+import { commitLogProps } from '../src/lib/commits.ts';
 import { calendarColumns, pendingWeeks, toColumns } from '../src/lib/grid.ts';
 import { projectHost, projectHostLabel } from '../src/lib/projects.ts';
 import {
@@ -496,12 +495,18 @@ describe('isValidCommitSha / commitShaUrl', () => {
   });
 });
 
-const [component, manifest, binding, helpers, grid] = await Promise.all([
-  readFile(new URL('../src/lib/components/ActivityTracker.svelte', import.meta.url), 'utf8'),
+/* The calendar's own component and binding moved with the owner's ledger
+   redesign (2026-09-03, issue 287): the contribution calendar is one of three
+   the COMMITS section cycles between, so the component is CommitLog and the
+   binding is a multi-panel one. The adapter these pins execute moved with it,
+   to lib/commits.ts, where the two envelopes meet. */
+const [component, manifest, binding, helpers, grid, sheet] = await Promise.all([
+  readFile(new URL('../src/lib/components/CommitLog.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/page.ts', import.meta.url), 'utf8'),
-  readFile(new URL('../src/lib/blocks/vcsActivity.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../src/lib/blocks/commitLog.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/activity.ts', import.meta.url), 'utf8'),
-  readFile(new URL('../src/lib/components/ContributionGrid.svelte', import.meta.url), 'utf8')
+  readFile(new URL('../src/lib/components/ContributionGrid.svelte', import.meta.url), 'utf8'),
+  readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
 ]);
 
 // Browser execution is deliberately outside this dependency-free test; these
@@ -515,10 +520,16 @@ test('the calendar renders through the one shared grid component', () => {
   // heatmap uses — so the two grids cannot drift apart.
   assert.match(component, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
   assert.match(component, /<ContributionGrid/);
-  assert.match(component, /noun=\{strip\.noun\}/);
-  // Totals and streak ride beside the grid as plain text, so a count is
-  // never encoded by color alone. The words arrive as data with the figure.
-  assert.match(component, /<span><strong>\{figure\.lead\}<\/strong>\{figure\.rest\}<\/span>/);
+  assert.match(component, /noun=\{active\.noun\}/);
+  // ONE grid, not one per set: the segments swap the props the same instance
+  // renders, so the strip's scroll position, its keyboard cursor and its
+  // detail card all survive a set change instead of being three of each.
+  assert.equal((component.match(/<ContributionGrid/g) ?? []).length, 1);
+  // Totals and streak ride UNDER the grid as plain text, so a count is never
+  // encoded by color alone. The words arrive as data with the figure — one
+  // caption per set, because the set the reader chose is the set the sentence
+  // has to be about.
+  assert.match(component, /<p class="commit-caption">\{active\.caption\}<\/p>/);
 });
 
 test('the adapter renders the figures, the strip, and the noun the panel always showed', () => {
@@ -531,24 +542,27 @@ test('the adapter renders the figures, the strip, and the noun the panel always 
     generatedAt: '2026-08-11T00:12:00Z',
     data: goodActivity
   };
-  const rendered = vcsActivityProps(envelope);
+  const rendered = commitLogProps([envelope, null]);
   assert.equal(rendered.title, 'Fixture Activity');
   assert.equal(rendered.status, 'ok');
   assert.equal(rendered.generatedAt, '2026-08-11T00:12:00Z');
-  assert.deepEqual(
-    rendered.figures.map((figure) => figure.lead + figure.rest),
-    ['1,287 contributions', '9-day streak'],
-    'the two headline figures read exactly as the panel always has'
-  );
-  assert.equal(rendered.strip.noun, 'contribution');
-  assert.equal(rendered.strip.label, 'contribution calendar: 2 weeks of daily counts, newest last');
-  assert.deepEqual(rendered.strip.columns, toColumns(activityCells(parseVCSActivity(goodActivity))));
+  /* The two headline figures are the calendar's own CAPTION now (owner
+     directive, 2026-09-03, issue 287): the section cycles three calendars and
+     each one states its own reading under the grid, so a figures row belonging
+     to only one of them would go stale the moment a reader pressed a segment.
+     The words are the same words. */
+  const contributions = rendered.sets[0];
+  assert.equal(contributions.caption, '1,287 contributions · 9-day streak');
+  assert.equal(contributions.noun, 'contribution');
+  assert.equal(contributions.stripLabel, 'contribution calendar: 2 weeks of daily counts, newest last');
+  assert.deepEqual(contributions.columns, toColumns(activityCells(parseVCSActivity(goodActivity))));
   // The payload renders only under its pinned kind: a mislabeled envelope is
   // the honest empty state, exactly as the retired component decided it.
-  const mislabeled = vcsActivityProps({ ...envelope, kind: 'boss-log/v1' });
-  assert.deepEqual(mislabeled.figures, []);
-  assert.deepEqual(mislabeled.strip.columns, []);
-  assert.equal(mislabeled.strip.label, 'contribution calendar');
+  const mislabeled = commitLogProps([{ ...envelope, kind: 'boss-log/v1' }, null]);
+  assert.deepEqual(mislabeled.rows, []);
+  assert.deepEqual(mislabeled.sets[0].columns, []);
+  assert.equal(mislabeled.sets[0].stripLabel, 'contribution calendar');
+  assert.equal(mislabeled.sets[0].caption, 'activity data unavailable');
 });
 
 /* THE CALENDAR TELLS THE TRUTH WHEN ITS PRODUCER STOPS (issue 285). The live
@@ -580,10 +594,10 @@ test('a stalled payload draws its missing days as dated absences up to today, un
     data: stalled
   };
   const now = new Date('2026-09-03T10:00:00Z');
-  const rendered = vcsActivityProps(envelope, now);
+  const rendered = commitLogProps([envelope, null], now);
   assert.equal(rendered.staleNote, 'data through Aug 20, 2026 · last capture 14d ago');
 
-  const columns = rendered.strip.columns;
+  const columns = rendered.sets[0].columns;
   assert.equal(columns.length, pendingWeeks, 'the fixed trailing window lost its width');
   const last = columns.at(-1);
   assert.equal(last[0].date, '2026-08-30', 'the window does not end on the week that holds today');
@@ -601,14 +615,14 @@ test('a stalled payload draws its missing days as dated absences up to today, un
   // A fresh payload — endDate on the reader's today — renders exactly what it
   // always did: the anchor changes nothing when the producer is live.
   const fresh = { ...envelope, status: 'ok' };
-  const live = vcsActivityProps(fresh, new Date('2026-08-20T12:00:00Z'));
+  const live = commitLogProps([fresh, null], new Date('2026-08-20T12:00:00Z'));
   assert.equal(live.staleNote, undefined);
-  assert.deepEqual(live.strip.columns, calendarColumns(activityCells(parseVCSActivity(stalled))));
+  assert.deepEqual(live.sets[0].columns, calendarColumns(activityCells(parseVCSActivity(stalled))));
   // A producer a time zone ahead of the reader keeps its own end.
-  const ahead = vcsActivityProps(fresh, new Date('2026-08-19T23:30:00Z'));
-  assert.deepEqual(ahead.strip.columns, live.strip.columns);
+  const ahead = commitLogProps([fresh, null], new Date('2026-08-19T23:30:00Z'));
+  assert.deepEqual(ahead.sets[0].columns, live.sets[0].columns);
   // An ok envelope whose generatedAt has silently stopped advancing says so too.
-  assert.equal(vcsActivityProps(fresh, now).staleNote, 'data through Aug 20, 2026 · last capture 14d ago');
+  assert.equal(commitLogProps([fresh, null], now).staleNote, 'data through Aug 20, 2026 · last capture 14d ago');
   // The component hands the line to the shell's HEAD — the one row the card
   // already reserves — never to its body, whose every region is a fixed box
   // so the calendar's arrival costs no layout shift (the reserve lane).
@@ -620,16 +634,15 @@ test('a stalled payload draws its missing days as dated absences up to today, un
 });
 
 test('an empty commit list says so instead of showing invented history', () => {
-  assert.match(component, /\{#if entries\.length === 0\}/);
-  assert.match(component, /\{entriesNote\}/);
+  assert.match(component, /\{#if rows\.length === 0\}/);
+  assert.match(component, /\{rowsNote\}/);
   // The wording is the adapter's, verbatim from the retired component.
   assert.equal(activityEntriesNote, 'no recent commits reported');
-  assert.equal(activityFiguresNote, 'no activity data');
-  assert.equal(vcsActivityProps(null).entriesNote, 'no recent commits reported');
-  assert.equal(vcsActivityProps(null).figuresNote, 'no activity data');
-  assert.equal(vcsActivityProps(null).strip.emptyNote, 'activity data unavailable');
-  assert.equal(vcsActivityProps(null).title, 'Version-control activity');
-  assert.equal(vcsActivityProps(null).status, 'unavailable');
+  const empty = commitLogProps([null, null]);
+  assert.equal(empty.rowsNote, 'no recent commits reported');
+  assert.equal(empty.sets[0].emptyNote, 'activity data unavailable');
+  assert.equal(empty.title, 'Version-control activity');
+  assert.equal(empty.status, 'unavailable');
 });
 
 test('the cell ramp is themeable custom properties with the validated dark defaults', () => {
@@ -705,7 +718,13 @@ test('the strip owns fixed geometry and its own overflow', () => {
   // with, or the box and its contents are two different measurements again.
   assert.match(grid, /\.grid-months \{[^}]*margin: var\(--grid-month-gap, 0\.1875rem\) 0 0/);
   assert.match(grid, /\.grid-months \{[^}]*block-size: var\(--grid-month-size, 0\.75rem\)/);
-  assert.match(component, /\.activity-totals \{[^}]*block-size: 1\.25rem/);
+  /* The regions the calendar sits between keep their fixed boxes through the
+     ledger redesign (owner directive, 2026-09-03, issue 287); what changed is
+     which file states them, because the sheet's row rhythm is a page-level
+     decision several sections share (styles.css) rather than one component's.
+     The caption under the grid is the figures row's successor and holds the
+     same line's height. */
+  assert.match(sheet, /\.commit-caption \{[^}]*min-block-size: 1\.25rem/);
   // Five rows at the 44px touch floor (issue 157): every entry row can carry
   // two real links, so the fixed reservation grew from 5.625rem to
   // 13.75rem (5 * 2.75rem) rather than staying a decorative-text height. The
@@ -713,41 +732,57 @@ test('the strip owns fixed geometry and its own overflow', () => {
   // from shownEntryRows and the row's own floor — so the box and the number
   // of rows the adapter hands it cannot drift apart.
   const rowFloorRem = 2.75;
+  /* The reserve is DERIVED from the row's own pitch rather than restated, and
+     the pitch is a token because a phone row is taller — the repository stacks
+     over the subject there. A box computed from one width while its rows are
+     drawn at another is a box that clips its own last row, which is what this
+     recomputation refuses in both directions. */
   assert.match(
-    component,
-    new RegExp(`\\.activity-entries \\{[^}]*block-size: calc\\(${shownEntryRows} \\* ${rowFloorRem}rem\\)`)
+    sheet,
+    new RegExp(`\\.commit-rows \\{[^}]*block-size: calc\\(${shownEntryRows} \\* var\\(--commit-row-height\\)\\)`)
   );
-  assert.match(component, new RegExp(`\\.activity-entry \\{[^}]*min-block-size: ${rowFloorRem}rem`));
+  assert.match(sheet, /\.commit-row \{[^}]*block-size: var\(--commit-row-height\)/);
+  assert.match(sheet, new RegExp(`\\.commit-row \\{[^}]*min-block-size: var\\(--control-target\\)`));
+  assert.match(sheet, new RegExp(`--control-target: ${rowFloorRem}rem;`));
+  // Both pitches are declared, and the phone one is the taller of the two, or
+  // the reserve is a ceiling rather than a reserve.
+  const pitches = [...sheet.matchAll(/--commit-row-height: ([\d.]+)rem;/g)].map(([, value]) => Number(value));
+  assert.equal(pitches.length, 2, 'the row pitch is declared once; a phone row is taller than a desktop one');
+  assert.ok(pitches[1] > pitches[0], 'the phone pitch must be the taller one');
+  assert.ok(pitches[0] >= rowFloorRem, 'the row pitch dropped under the touch floor');
   // The row separator is an INSET SHADOW, never a border (owner directive,
   // 2026-08-25): a border would add its pixel to every row's box and five of
   // them would push the last row out of a reservation that is exactly five
   // rows tall — the zero-CLS reserve turned into a clipped row.
-  assert.match(component, /\.activity-entry \{[^}]*box-shadow: inset 0 -1px 0 var\(--panel-border/);
-  assert.match(component, /\.activity-entry:last-child \{[^}]*box-shadow: none/);
+  assert.match(sheet, /\.commit-row \{[^}]*box-shadow: inset 0 -1px 0 var\(--ledger-rule/);
+  assert.match(sheet, /\.commit-row:last-child \{[^}]*box-shadow: none/);
   assert.doesNotMatch(
-    component,
-    /\.activity-entry \{[^}]*border-block-end/,
+    sheet,
+    /\.commit-row \{[^}]*border-block-end/,
     'a row separator drawn as a border grows the row box the reservation is built on'
   );
   // The reservation and the row cap agree by construction: the adapter shows
   // at most the rows the fixed box holds.
   assert.equal(shownEntryRows, 5);
-  const overfull = vcsActivityProps({
-    schema: 'panel/v1',
-    id: activityPanelId,
-    kind: 'vcs-activity/v1',
-    title: 'Fixture Activity',
-    status: 'ok',
-    data: {
-      ...goodActivity,
-      recentCommits: Array.from({ length: 9 }, (_, index) => ({
-        repo: 'fixture-repo',
-        message: `fixture: subject ${index}`,
-        at: '2026-08-11T00:12:00Z'
-      }))
-    }
-  });
-  assert.equal(overfull.entries.length, 5, 'the payload may carry more rows; the rest do not render');
+  const overfull = commitLogProps([
+    {
+      schema: 'panel/v1',
+      id: activityPanelId,
+      kind: 'vcs-activity/v1',
+      title: 'Fixture Activity',
+      status: 'ok',
+      data: {
+        ...goodActivity,
+        recentCommits: Array.from({ length: 9 }, (_, index) => ({
+          repo: 'fixture-repo',
+          message: `fixture: subject ${index}`,
+          at: '2026-08-11T00:12:00Z'
+        }))
+      }
+    },
+    null
+  ]);
+  assert.equal(overfull.rows.length, 5, 'the payload may carry more rows; the rest do not render');
   // A wide window scrolls inside the strip, never the page.
   assert.match(grid, /\.grid-strip \{[^}]*overflow-x: auto/);
   // The panel is an ordinary block in the page's stack. It used to dock to
@@ -756,9 +791,8 @@ test('the strip owns fixed geometry and its own overflow', () => {
   // against that same reserve so the two could not disagree — two facts that
   // only existed because it floated. It takes the column's width now, so it
   // declares neither.
-  assert.match(component, /\.activity-tracker \{[^}]*display: block/);
   assert.doesNotMatch(component, /position: fixed/, 'the panel must not dock again');
-  assert.doesNotMatch(component, /--page-activity-gutter/, 'a card reserves no gutter');
+  assert.doesNotMatch(sheet, /--page-activity-gutter/, 'a card reserves no gutter');
 });
 
 test('every entry-row href is built by the validated helpers, and the component builds none', () => {
@@ -773,24 +807,27 @@ test('every entry-row href is built by the validated helpers, and the component 
   // is consulted only when no valid sha exists for the same row.
   const validSha = '0123456789abcdef0123456789abcdef01234567';
   const hostileSha = `${validSha.slice(0, 33)}"onmouseover="x`;
-  const hostile = vcsActivityProps({
-    schema: 'panel/v1',
-    id: activityPanelId,
-    kind: 'vcs-activity/v1',
-    title: 'Fixture Activity',
-    status: 'ok',
-    data: {
-      ...goodActivity,
-      recentCommits: [
-        { repo: 'evil.com/x', sha: '', message: 'release (#152)', at: '2026-08-11T00:12:00Z' },
-        { repo: 'naranjo.online', sha: '', message: 'fixture: subject line', at: '2026-08-11T00:12:00Z' },
-        { repo: 'naranjo.online', sha: '', message: 'release (#152)', at: '2026-08-11T00:12:00Z' },
-        { repo: 'naranjo.online', sha: validSha, message: 'a commit with no trailing reference', at: '2026-08-11T00:12:00Z' },
-        { repo: 'naranjo.online', sha: hostileSha, message: 'release (#152)', at: '2026-08-11T00:12:00Z' }
-      ]
-    }
-  });
-  const [badRepo, noReference, referenced, shaOnly, badSha] = hostile.entries;
+  const hostile = commitLogProps([
+    {
+      schema: 'panel/v1',
+      id: activityPanelId,
+      kind: 'vcs-activity/v1',
+      title: 'Fixture Activity',
+      status: 'ok',
+      data: {
+        ...goodActivity,
+        recentCommits: [
+          { repo: 'evil.com/x', sha: '', message: 'release (#152)', at: '2026-08-11T00:12:00Z' },
+          { repo: 'naranjo.online', sha: '', message: 'fixture: subject line', at: '2026-08-11T00:12:00Z' },
+          { repo: 'naranjo.online', sha: '', message: 'release (#152)', at: '2026-08-11T00:12:00Z' },
+          { repo: 'naranjo.online', sha: validSha, message: 'a commit with no trailing reference', at: '2026-08-11T00:12:00Z' },
+          { repo: 'naranjo.online', sha: hostileSha, message: 'release (#152)', at: '2026-08-11T00:12:00Z' }
+        ]
+      }
+    },
+    null
+  ]);
+  const [badRepo, noReference, referenced, shaOnly, badSha] = hostile.rows;
   assert.equal(badRepo.source.href, null, 'a hostile repo must never become an href');
   assert.equal(badRepo.source.text, 'evil.com/x', 'the text still renders, as text');
   assert.equal(badRepo.title.href, null, 'a hostile repo poisons the entry link too');
@@ -825,16 +862,19 @@ test('every entry-row href is built by the validated helpers, and the component 
   const hrefs = [...component.matchAll(/href=\{([^}]*)\}/g)].map(([, expression]) => expression);
   assert.deepEqual(
     hrefs.sort(),
-    ['entry.source.href', 'entry.title.href'],
+    ['row.source.href', 'row.title.href'],
     'the component may render exactly the two validated hrefs and construct neither'
   );
-  assert.match(component, /\{#if entry\.source\.href\}/);
-  assert.match(component, /<span class="activity-entry-source">\{entry\.source\.text\}<\/span>/);
-  assert.match(component, /\{#if entry\.title\.href\}/);
-  assert.match(
-    component,
-    /<span class="activity-entry-title" title=\{entry\.title\.text\}>\{entry\.title\.text\}<\/span>/
-  );
+  assert.match(component, /\{#if row\.source\.href\}/);
+  assert.match(component, /<span class="commit-source-text">\{row\.source\.text\}<\/span>/);
+  assert.match(component, /\{#if row\.title\.href\}/);
+  assert.match(component, /<span class="commit-title-text">\{row\.title\.text\}<\/span>/);
+  /* The short identity is DISPLAY-ONLY and the adapter decides it: a row whose
+     identity this module cannot vouch for prints the honest dash rather than a
+     truncated guess, and the component prints whatever it is handed. */
+  assert.equal(shaOnly.mark, validSha.slice(0, 7));
+  assert.equal(badSha.mark, '—');
+  assert.match(component, /<span class="commit-mark">\{row\.mark\}<\/span>/);
   // Text, never markup: this component must never reach for {@html} anywhere,
   // now that two of its fields are payload-controlled link targets.
   assert.doesNotMatch(component, /\{@html/, 'entry fields must never render as markup');
@@ -844,8 +884,8 @@ test('every entry-row href is built by the validated helpers, and the component 
   const relSafe = component.match(/rel="noopener noreferrer"/g) ?? [];
   assert.equal(targetBlank.length, 2, 'both the source and the title anchor must open a new tab');
   assert.equal(relSafe.length, 2, 'both anchors must carry rel="noopener noreferrer"');
-  assert.match(component, /aria-label=\{entry\.source\.label\}/);
-  assert.match(component, /aria-label=\{entry\.title\.label\}/);
+  assert.match(component, /aria-label=\{row\.source\.label\}/);
+  assert.match(component, /aria-label=\{row\.title\.label\}/);
 });
 
 test('activity sources stay local-origin and provider-neutral', () => {
@@ -945,23 +985,30 @@ test('the gutter is published before the application mounts, so no grid is re-la
   );
 });
 
-test('the manifest mounts the activity block exactly once, bound to its panel', () => {
-  // The fences retired with the table-of-contents App (issue 165): the
-  // manifest IS the mount list, so the pin moves to it. Exactly one block
-  // module binds the tracker to the panel id, and the trackers section lists
-  // that block exactly once.
-  const importLines = manifest.match(/^import \{ vcsActivity \} from '\.\/lib\/blocks\/vcsActivity\.ts';$/gm);
-  assert.equal(importLines?.length, 1, 'exactly one import line for the activity block');
-  const body = manifest.replace(/^import[^\n]*\n/gm, '');
+test('the manifest mounts the calendar block exactly once, bound to both its panels', () => {
+  /* The fences retired with the table-of-contents App (issue 165): the
+     manifest IS the mount list, so the pin lives on it. What moved (owner
+     directive, 2026-09-03, issue 287) is WHICH section the calendar is in and
+     how many panels its block reads: the contribution calendar leads its own
+     COMMITS section now, and the block binds two panels, because the segmented
+     control cycles the same grid between the contributions and each token
+     source's daily series. Exactly one block module does that binding, and the
+     section lists it exactly once. */
+  const importLines = manifest.match(/^import \{ commitLog \} from '\.\/lib\/blocks\/commitLog\.ts';$/gm);
+  assert.equal(importLines?.length, 1, 'exactly one import line for the commits block');
+  const body = manifest.replace(/^import[^\n]*\n/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.equal(
-    (body.match(/\bvcsActivity\b/g) ?? []).length,
+    (body.match(/\bcommitLog\b/g) ?? []).length,
     1,
-    'the manifest lists the activity block exactly once'
+    'the manifest lists the commits block exactly once'
   );
   assert.match(
     manifest,
-    /section\('trackers', 'Trackers', \[tokenUsage, vcsActivity, osrsStats\], \{ layout: 'stack' \}\)/,
-    'the trackers section lists the activity block in the stacked order the page renders'
+    /section\('commits', 'Commits', \[commitLog\], \{ layout: 'stack' \}\)/,
+    'the commits section lists the calendar block on its own'
   );
-  assert.match(binding, /panelBlock\(\s*'vcs-activity',\s*ActivityTracker,\s*activityPanelId,\s*vcsActivityProps\s*\)/);
+  assert.match(binding, /panelsBlock\(\s*'commit-log',\s*CommitLog,\s*commitPanelIds,/);
+  // The ids the binding declares are the ids the adapter unpacks, in order,
+  // named once so the two cannot disagree.
+  assert.match(helpers, /export const activityPanelId = 'vcs-activity'/);
 });

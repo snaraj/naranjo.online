@@ -30,13 +30,17 @@ an obstacle.
 
 1. **Data + adapter** — put the data (or the panel parsing) in a module
    under `frontend/src/lib/`, and beside it a pure adapter that returns one
-   of the props shapes in `frontend/src/lib/blocks.ts` (`StatTrackerProps`,
-   `EntryLogProps`, …). Pure means node can execute it: the unit suites
+   of the props shapes in `frontend/src/lib/blocks.ts` (`LedgerLogProps`,
+   `LedgerTableProps`, `CommitLogProps`, `LedgerBoardProps`, `TickerProps`,
+   `MediaGalleryProps`). Pure means node can execute it: the unit suites
    drive adapters directly.
 2. **Binding** — add a module under `frontend/src/lib/blocks/` that calls
-   `staticBlock(...)` (build-time data) or `panelBlock(...)` (a live panel
-   id plus the adapter). This is the one place the component, the data and
-   the domain name meet.
+   `staticBlock(...)` (build-time data), `panelBlock(...)` (a live panel id
+   plus the adapter), `panelsBlock(...)` (SEVERAL panel ids plus an adapter
+   that receives their envelopes in that order — the commits section reads
+   two), or `runtimeBlock(...)` (build-time props plus a one-shot runtime
+   read). This is the one place the component, the data and the domain name
+   meet.
 3. **Mount** — add the block to a section in `frontend/src/page.ts`.
 
 If no existing component fits, that is the moment to extend `blocks.ts`
@@ -51,6 +55,32 @@ are all custom properties there; components consume tokens and state no
 values of their own. Change the token, and every consumer moves at once. A
 per-instance tweak is a local token override at the call site, never a
 second rule.
+
+## Rules a later directive superseded
+
+A directive that stops being true has to say so where the next reader looks,
+or the code keeps half-implementing it and the next change re-litigates a
+decision the owner already made.
+
+**The per-panel coverage window is superseded (owner directive, 2026-09-03,
+issue 287).** Issue 268 gave each panel ONE window sized to what its sources
+had actually captured, so a fortnight of history drew a fortnight of columns
+rather than three columns against fifty weeks of dated emptiness. The ledger
+redesign replaces that rule for the commits block, on the owner's own
+instruction: the block owns three `columns` arrays — the contribution
+calendar and both token series — placed into the SAME 52/53-week window,
+with one grid bound to whichever segment the reader has selected. A window
+sized per set is incompatible with a single grid the reader cycles: the box
+would change width on every segment switch, which breaks the zero-CLS floor,
+and the sets would stop being comparable, which is the whole reason the cycle
+exists. The half of issue 268 that answered the misread is kept intact — the
+window's own dated absent cells, its month axis, and a per-set caption
+stating how many of the window's days that source captured. `grid.ts`'s
+`gridMinColumns` comment already recorded issue 189 superseding data-sizing
+"for any series `calendarColumns` can date"; this extends it to the token
+series now that they share the contributions calendar. `coverageWindow` and
+`coverageColumns` left `frontend/src/lib/periods.ts` with their tests rather
+than sitting dead behind a rule nothing applies.
 
 ## The dev loop
 

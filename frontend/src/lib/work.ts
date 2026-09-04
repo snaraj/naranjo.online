@@ -20,11 +20,23 @@
  * rather than a duty — are executed by tests/sections.test.mjs against this
  * module instead of being pattern matched through an each-block. */
 
-import type { EntryLogProps } from './blocks.ts';
+import type { LedgerLogProps } from './blocks.ts';
 
 export interface WorkEntry {
   /* The employer, and the entry's heading and keyed-each key. */
   readonly company: string;
+  /* The employer as the LEDGER names it, and the span as the ledger writes it
+   * (owner directive, 2026-09-03, issue 287). Neither is a new fact: both are
+   * shorter renderings of `company` and `dates` above, for a row that gives a
+   * name one column and a span another rather than a card that gives a
+   * sentence a whole line. They are DATA rather than a derivation because
+   * shortening a name is an editorial judgement — "University of Maryland,
+   * Baltimore County — LIDAR Research Group" has no mechanical short form, and
+   * a rule that guessed one would guess wrong on the next entry. The long
+   * forms stay authoritative: they are what the accessible name and the
+   * drawer's link carry. */
+  readonly short: string;
+  readonly years: string;
   /* The role held there. */
   readonly role: string;
   /* The span, as the owner writes it — a portfolio date range, never an
@@ -46,20 +58,11 @@ export interface WorkEntry {
   readonly points: readonly string[];
 }
 
-/* workByline is the one meta line under an entry's heading: the role, the
- * span and the place, in that order, joined by the page's own separator. It
- * is a function rather than a field so the three facts stay separate DATA —
- * a test reads each of them back out of the composed line, and a later design
- * that wants them in three boxes rewrites this and nothing else. */
-export const workBylineSeparator = ' · ';
-
-export function workByline(entry: WorkEntry): string {
-  return [entry.role, entry.dates, entry.location].join(workBylineSeparator);
-}
-
 export const workEntries: readonly WorkEntry[] = [
   {
     company: 'Panasonic Avionics Corporation',
+    short: 'Panasonic Avionics',
+    years: '2023 —',
     role: 'Software Engineer, Automation, DevOps and Tools',
     dates: 'July 2023 – Present',
     location: 'Irvine, CA',
@@ -75,6 +78,8 @@ export const workEntries: readonly WorkEntry[] = [
   },
   {
     company: 'Fathom5',
+    short: 'Fathom5',
+    years: '2022 – 23',
     role: 'Software Engineer, Condition Based Maintenance',
     dates: 'Mar 2022 – July 2023',
     location: 'Austin, TX',
@@ -89,6 +94,8 @@ export const workEntries: readonly WorkEntry[] = [
   },
   {
     company: 'OnTrajectory',
+    short: 'OnTrajectory',
+    years: '2019',
     role: 'Software Engineering Intern',
     dates: 'May 2019 – Aug 2019',
     location: 'Towson, MD',
@@ -100,6 +107,8 @@ export const workEntries: readonly WorkEntry[] = [
   },
   {
     company: 'University of Maryland, Baltimore County — LIDAR Research Group',
+    short: 'UMBC LIDAR Research Group',
+    years: '2017',
     role: 'Software Engineering Intern',
     dates: 'May 2017 – Aug 2017',
     location: 'Baltimore, MD',
@@ -111,28 +120,45 @@ export const workEntries: readonly WorkEntry[] = [
   }
 ];
 
-/* The adapter (issue 165): the rows above as EntryLog props. The company is
- * the entry's title, the composed byline carries role, span and place, and
- * the accomplishments arrive as the entry's own points list — the shape the
- * card renders, with no domain vocabulary in a single field name. The titles
- * sit at h3, directly under the section's own h2, and the default framed card
- * variant is deliberate: these are the page's primary records, not a compact
- * list.
+/* ---------------------------------------------------------------------------
+ * The ledger adapter (owner directive, 2026-09-03, issue 287)
  *
- * No entry carries `placeholder` any more, and that absence is the honest
- * state rather than the loss of one: the DOM marker existed to say "this is
- * filler under a real heading", and there is no filler left to mark. */
-export const workHistoryProps: EntryLogProps = {
-  entries: workEntries.map((entry) => ({
+ * The same four roles, in the same order, as ruled rows that open. What
+ * changed is the SHAPE: a span, a name, a role and a place across one line,
+ * with the accomplishments in a drawer under it rather than always on the
+ * page. The section is a summary that expands, which is what the owner asked
+ * for — four cards of six bullets each was most of a screen before a reader
+ * had chosen to read any of it.
+ *
+ * The employer link survives the change and moves INSIDE the drawer, because
+ * the row itself is now the disclosure control and an anchor inside a button
+ * is invalid content that no keyboard can reach. It is still the employer's
+ * own public home, still opened in a new tab, still announced as doing so.
+ *
+ * The two words the chevron says are here rather than in the component for the
+ * same reason every other label on this page is: a component that composed
+ * "Expand Fathom5" would be a component with an opinion about English.
+ * ------------------------------------------------------------------------ */
+
+export const workExpandLabel = 'Expand';
+export const workCollapseLabel = 'Collapse';
+export const workEmptyNote = 'no roles recorded';
+
+export const roleLedgerProps: LedgerLogProps = {
+  rows: workEntries.map((entry) => ({
     key: entry.company,
-    title: entry.company,
-    /* titleHref, not href (issue 243): the employer's name becomes navigation
-     * while the card keeps the byline that carries the role, the span and the
-     * place. EntryLog's `href` branch replaces the whole header region and
-     * would drop that line — see the note beside both fields in blocks.ts. */
-    titleHref: entry.site,
-    byline: workByline(entry),
-    points: entry.points
+    span: entry.years,
+    name: entry.short,
+    role: entry.role,
+    place: entry.location,
+    points: entry.points,
+    link: {
+      text: entry.company,
+      href: entry.site,
+      label: `${entry.company}, opens in a new tab`
+    }
   })),
-  titleLevel: 3
+  emptyNote: workEmptyNote,
+  expandLabel: workExpandLabel,
+  collapseLabel: workCollapseLabel
 };

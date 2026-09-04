@@ -1,32 +1,31 @@
 /* The coding-projects block (issue 165; live since issue 242): the generic
- * EntryLog bound to the coding-projects panel through its adapter in
+ * LedgerTable bound to the coding-projects panel through its adapter in
  * lib/projects.ts. The binding layer is the one place the component, the panel
  * id and the adapter meet; the component knows no repository and no host.
  *
- * It became a PANEL binding when the owner's live-data directive landed: the
- * origin now reads the repository metadata itself on the panels refresh
- * cadence, so a description the owner edits on the host reaches the page
- * without a release. Requirement 1 is untouched — the page reads this origin's
- * own /api/panels path like every other panel, and the repository URLs remain
- * link targets a human may click.
+ * It is a PANEL binding: the origin reads the repository metadata itself on
+ * the panels refresh cadence, so a description the owner edits on the host
+ * reaches the page without a release. Requirement 1 is untouched — the page
+ * reads this origin's own /api/panels path like every other panel, and the
+ * repository URLs remain link targets a human may click.
  *
  * The adapter renders the captured rows for a null, wrong-kinded, or
  * inadmissible envelope, so this block has no loading face and reserves
  * nothing: its first paint is already true, and the panel's arrival replaces
- * content without moving layout. */
+ * content without moving layout.
+ *
+ * The shape it renders changed with the ledger (owner directive, 2026-09-03,
+ * issue 287): a ruled table of the four most recently pushed repositories,
+ * with the roster it was selected from counted in the head, rather than a feed
+ * of cards. The adapter picks and orders; this line binds. */
 
 import { panelBlock, type PageBlock } from '../blocks.ts';
-import EntryLog from '../components/EntryLog.svelte';
-import { codingProjectsPanelId, codingProjectsProps } from '../projects.ts';
+import LedgerTable from '../components/LedgerTable.svelte';
+import { codingProjectsPanelId, projectTableProps } from '../projects.ts';
 
-/* No block heading (owner ruling, 2026-08-31, issue 275 wave: "remove coding
- * projects and just make it a clean Projects"). The cards sit directly under
- * the section's own "Projects" title; a "Coding Projects" h3 one line below
- * it said the same word twice. The panel ENVELOPE still carries its own
- * title — that is server-side metadata, not this page's outline. */
 export const codingProjects: PageBlock = panelBlock(
   'coding-projects',
-  EntryLog,
+  LedgerTable,
   codingProjectsPanelId,
-  (envelope) => codingProjectsProps(envelope)
+  (envelope) => projectTableProps(envelope)
 );

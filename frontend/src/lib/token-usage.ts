@@ -3,12 +3,13 @@
  * whatever these helpers return; it never computes, so a formatting or
  * admission bug is a one-file fix with a failing test beside it. */
 
+import { recordedOutOfBand } from './blocks.ts';
 import type {
-  UsageCategory,
-  UsageCompositionRow,
-  UsageSection,
-  UsageTrackerProps,
-  UsageWindow
+  LedgerBar,
+  LedgerBoardProps,
+  LedgerFact,
+  LedgerMeter,
+  LedgerSquare
 } from './blocks.ts';
 import { addDays, formatMagnitude, formatWhole } from './grid.ts';
 import { dayNumber, formatDateRange } from './periods.ts';
@@ -785,103 +786,6 @@ export const tokenUsageFallbackTitle = 'Token usage';
 export const tokenUsageEmptyNote = 'No usage data available.';
 export const tokenUsageSourceEmptyNote = 'No usage recorded for this source yet.';
 
-/* usageSection shapes one admitted source. Provenance marks are decided here
- * by EXCEPTION (provenanceIsMixed above): a source whose figures all share
- * one provenance marks none of them, and a mixed source marks exactly the
- * recorded ones. The activity region exists only when there is a series with
- * days in it — a heading and a lens toggle over nothing is the hole the
- * owner's 2026-08-24 ruling removed — and the summary sentence is built here,
- * lens-independent, because it describes the one daily series every lens
- * re-reads. */
-function usageWindowProps(entry: TokenUsageWindow): UsageWindow {
-  const meter =
-    entry.utilizationPct === undefined
-      ? undefined
-      : {
-          fillPct: meterFillPct(entry.utilizationPct),
-          severity: meterSeverity(entry.utilizationPct),
-          reading: formatUtilization(entry.utilizationPct)
-        };
-  return {
-    period: entry.period,
-    reset: resetsIn(entry.resetsAt),
-    meter,
-    /* The words became glyphs on the visible row (owner directive,
-       2026-08-31) — the label survives as each pair's clipped accessible
-       word, so a reader hears "input 5.4B" where the eye reads the arrow. */
-    pairs: [
-      { key: 'in', glyph: 'flow-in', label: 'input', figure: formatTokenCount(entry.inputTokens) },
-      { key: 'out', glyph: 'flow-out', label: 'output', figure: formatTokenCount(entry.outputTokens) }
-    ],
-    /* The one place an EXACT figure survives (owner directive, 2026-08-25):
-       the pair row above is compacted, and this is the tooltip a reader opens
-       when the compaction is not enough. Grouped rather than raw — it used to
-       render nine undelimited digits, which is a log line, not a figure. */
-    pairsLabel: `${formatWhole(entry.inputTokens)} input tokens, ${formatWhole(entry.outputTokens)} output tokens`
-  };
-}
-
-function usageSection(source: TokenUsageSource): UsageSection {
-  /* The rendered insight set is resolved BEFORE provenance is, because the
-     two are the same question asked in the right order: what figures does
-     this section show, and do they come from one place? Deriving the rows
-     first means a live-derived set is weighed by provenanceIsMixed exactly
-     as a served one is, instead of the marks being decided against figures
-     that were then replaced. */
-  const insights = renderedInsights(source);
-  const mixed = provenanceIsMixed({ ...source, insights });
-  const activity =
-    source.series && source.series.totals.length > 0
-      ? {
-          heading: 'Token activity',
-          label: `${source.label} token activity`,
-          noun: tokenActivityNoun,
-          series: { startDate: source.series.startDate, totals: source.series.totals },
-          categories: usageCategories(source.series),
-          composition: usageComposition(source.series)
-        }
-      : undefined;
-  return {
-    key: source.label,
-    label: source.label,
-    sublabel: source.account || undefined,
-    tiles:
-      source.stats && source.stats.length > 0
-        ? source.stats.map((stat) => ({
-            key: stat.key,
-            figure: formatStatValue(stat.value, stat.unit),
-            label: stat.label,
-            marked: mixed && stat.recorded === true
-          }))
-        : undefined,
-    note:
-      source.windows.length === 0 && (!source.stats || source.stats.length === 0)
-        ? tokenUsageSourceEmptyNote
-        : undefined,
-    windows: source.windows.length > 0 ? source.windows.map(usageWindowProps) : undefined,
-    activity,
-    insights:
-      insights.length > 0
-        ? {
-            heading: insightsHeading,
-            note: insightsNote(source.series),
-            rows: insights.map((insight) => ({
-              key: insight.label,
-              label: insight.label,
-              marked: mixed && insight.recorded === true,
-              /* A null draws NO bar rather than a zero-width one: a
-                 zero-width fill is visually identical to a measured zero,
-                 which is the exact confusion this change exists to remove. */
-              fillPct: insight.pct === null ? null : meterFillPct(insight.pct),
-              reading: formatShare(insight.pct)
-            }))
-          }
-        : undefined
-  };
-}
-
-const insightsHeading = 'Activity insights';
-
 /* renderedInsights answers which proportions this section actually shows.
  *
  * The panel has always had an insights row, and until the series carried a
@@ -908,93 +812,6 @@ function renderedInsights(source: TokenUsageSource): TokenUsageInsight[] {
     }));
   }
   return source.insights ?? [];
-}
-
-/* insightsNote states the DAYS the derived proportions were measured over,
- * and exists because they are measured over a window rather than over the
- * whole series: the model partition costs one integer per day per model, so
- * the origin serves a declared trailing window of it. A percentage whose
- * range is unstated invites the reader to assume the widest one, which is the
- * assumption most likely to be wrong here.
- *
- * Absent for the frozen fallback set, which is not measured over any window
- * this panel can name — a range invented for it would be exactly the
- * borrowed freshness the doctrine forbids. */
-function insightsNote(series: TokenUsageSeries | undefined): string | undefined {
-  if (!series || !series.models || series.models.length === 0) {
-    return undefined;
-  }
-  const first = series.models[0].startDate ?? series.startDate;
-  const last = addDays(series.startDate, series.totals.length - 1);
-  const range = formatDateRange(first, last);
-  return range === '' ? undefined : `share of tokens · ${range}`;
-}
-
-/* The sentence under the activity strip used to be built HERE, over the whole
- * series, and it moved to lib/periods.ts (issue 158) rather than growing a
- * second copy. The reason is the window control the strip now carries: an
- * adapter cannot see which trailing window a reader has chosen, so a sentence
- * written here would go on describing the whole capture while the graph above
- * it drew ninety days — the panel's own doctrine ("a figure says where it
- * came from") failing at the sentence level. periods.ts' activityReading
- * builds it from the cells actually drawn, in this adapter's own noun and
- * figure format, and the component renders that.
- *
- * That applies to the CATEGORY lens (issue #142) identically, and composing
- * the two is what settled it: a per-category sentence built here would have
- * been wrong in exactly the same way, one lens later. So a category carries
- * its own NOUN rather than its own sentence, activityReading pluralizes and
- * measures it from the same drawn cells, and the panel has one reading
- * implementation rather than one per lens.
- *
- * tokenActivityNoun is stated once for the same reason: the region's noun and
- * every category's noun phrase are built from it, so they cannot drift.
- */
-const tokenActivityNoun = 'token';
-
-/* usageCategories shapes the admitted per-day breakdown into the component's
- * category lens options: key, display label, the fixed palette slot the
- * entity owns, the dailies the lens draws, and the singular noun its reading
- * uses — all data, so the component names no category and formats no figure.
- * Undefined when the series carries no breakdown, so a source without
- * categories renders no lens row at all.
- *
- * The dailies are the served category's own, read directly. There is no
- * resolver step between the two: the served order IS the lens vocabulary the
- * component offers, and the component's own `activeLensCategory` does the one
- * lookup anybody performs — by key, over exactly this list, falling back to
- * the plain series for the total sentinel, for a series with no breakdown, and
- * for a stale key naming a category this source does not report. */
-function usageCategories(series: TokenUsageSeries): UsageCategory[] | undefined {
-  if (!series.categories || series.categories.length === 0) {
-    return undefined;
-  }
-  return series.categories.map((category) => ({
-    key: category.key,
-    label: categoryLabel(category.key),
-    slot: categorySlot(category.key),
-    totals: category.totals,
-    noun: `${categoryLabel(category.key)} ${tokenActivityNoun}`
-  }));
-}
-
-/* usageComposition shapes the composition strip's rows from categoryShares:
- * the bar weight is the category's own series total — the same integers the
- * grid draws — and the written figure and tooltip carry the count and share,
- * so identity is never color alone. */
-function usageComposition(series: TokenUsageSeries): UsageCompositionRow[] | undefined {
-  const shares = categoryShares(series);
-  if (shares.length === 0) {
-    return undefined;
-  }
-  return shares.map((share) => ({
-    key: share.key,
-    label: categoryLabel(share.key),
-    slot: categorySlot(share.key),
-    weight: share.total,
-    figure: `${formatTokenCount(share.total)} · ${formatShare(share.pct)}`,
-    tooltip: `${categoryLabel(share.key)}: ${formatTokenCount(share.total)} tokens (${formatShare(share.pct)})`
-  }));
 }
 
 /* The stale threshold and the line itself are the page's, not this panel's
@@ -1032,26 +849,304 @@ export function usageStaleNote(
   return panelStaleNote(status, generatedAt, usageDataThrough(sources), now);
 }
 
-/* tokenUsageProps renders the whole panel as data, or null before the first
- * envelope arrives — the retired component rendered nothing until then, and
- * the block host renders nothing for null, so the page's honest loading face
- * is unchanged. `now` is injectable for the tests; the block host's call
- * passes only the envelope. */
-export function tokenUsageProps(
+/* ---------------------------------------------------------------------------
+ * The board of squares (owner directive, 2026-09-03, issue 287)
+ *
+ * The tile grid became five turnable squares: a total, one per reported
+ * source, the model split, and the session record. Every figure on every face
+ * comes from a stat the payload actually carried, through the same formatter
+ * the tiles used, and a stat the payload does not carry renders as the dash it
+ * has always rendered as — never a zero, and never a hidden square.
+ *
+ * THE SQUARES ARE DERIVED FROM THE SOURCES, not enumerated. A payload
+ * reporting one source produces one source square; a third source appearing
+ * tomorrow produces a third, with no edit here and none in the component. What
+ * IS enumerated is the stat vocabulary — the keys the origin serves — because
+ * that is payload data this adapter is allowed to know and the component is
+ * not.
+ * ------------------------------------------------------------------------ */
+
+/* The stat keys each square claims, so no figure is shown twice on the board.
+ * Written as data rather than as a chain of conditionals: the origin's own
+ * key vocabulary (internal/panels), read here and nowhere else. */
+const lifetimeKey = 'lifetime';
+const peakDayKey = 'peak-day';
+const currentStreakKey = 'current-streak';
+const sessionKeys: readonly string[] = [
+  'sessions',
+  'active-days',
+  'tracked-days',
+  'longest-streak',
+  'longest-task'
+];
+
+export const boardTurnLabel = 'Turn';
+export const boardReturnLabel = 'Turn back';
+export const boardEmptyNote = tokenUsageEmptyNote;
+
+/* One stat by key, or undefined. */
+function statOf(source: TokenUsageSource, key: string): TokenUsageStat | undefined {
+  return source.stats?.find((stat) => stat.key === key);
+}
+
+/* A stat's written figure, or the page's own unknown mark. A stat that is
+ * absent and a stat whose value is null are the same claim — nobody reported
+ * this — and they render identically, which is the honest-states floor at the
+ * one place a square would otherwise be tempted to show a zero. */
+function statFigure(stat: TokenUsageStat | undefined): string {
+  return stat === undefined || stat.value === null ? unknownFigure : formatStatValue(stat.value, stat.unit);
+}
+
+/* The facts a square's back lists.
+ *
+ * A source whose series carries the per-day CATEGORY breakdown shows that: how
+ * its tokens divide across input, output and the two cache classes, each with
+ * its own count and share and its own fixed palette swatch. It is the retired
+ * composition strip in the ledger's grammar — same categoryShares, same fixed
+ * slots, same rule that identity rides the printed label rather than the
+ * colour — and it is what the owner's drawing asks the source squares to turn
+ * over to.
+ *
+ * A source with no breakdown falls back to whichever stats the front and the
+ * other squares did not already claim, so a payload that reports only stat
+ * tiles still turns over to something true. */
+function backFacts(source: TokenUsageSource): LedgerFact[] {
+  const shares = source.series ? categoryShares(source.series) : [];
+  if (shares.length > 0) {
+    return shares.map((share) => ({
+      key: share.key,
+      term: categoryLabel(share.key),
+      value: `${formatTokenCount(share.total)} · ${formatShare(share.pct)}`,
+      slot: categorySlot(share.key)
+    }));
+  }
+  const claimed = new Set<string>([lifetimeKey, peakDayKey, currentStreakKey, ...sessionKeys]);
+  return (source.stats ?? [])
+    .filter((stat) => !claimed.has(stat.key))
+    .map((stat) => ({ key: stat.key, term: stat.label, value: statFigure(stat) }));
+}
+
+/* One source's insight rows as bars. The same rows the tiles' insight region
+ * drew, through the same derivation (renderedInsights) and the same
+ * saturation, so the board and the retired panel would have said the identical
+ * thing. */
+function insightBars(source: TokenUsageSource): LedgerBar[] {
+  /* The rendered set is resolved BEFORE provenance is, because the two are the
+     same question asked in the right order: what figures does this square
+     show, and do they come from one place? Deriving the rows first means a
+     live-derived set is weighed exactly as a served one is, instead of the
+     marks being decided against figures that were then replaced. */
+  const insights = renderedInsights(source);
+  const mixed = provenanceIsMixed({ ...source, insights });
+  return insights.map((insight) => ({
+    key: insight.label,
+    label: insight.label,
+    fillPct: insight.pct === null ? null : meterFillPct(insight.pct),
+    reading: formatShare(insight.pct),
+    marked: mixed && insight.recorded === true
+  }));
+}
+
+/* THE PROVENANCE LINE (issue 268's wording, carried into the board).
+ *
+ * A figure captured out of band says so, in the page's one sentence for it,
+ * and it says so where the figures it qualifies are — the back of the square,
+ * under the breakdown a reader turned it over to see. It is not on the front:
+ * the owner removed the visible per-figure mark ("just remove it") and moved
+ * provenance to the surface a reader opens, which for a square is its back.
+ *
+ * The rule is provenance BY EXCEPTION, exactly as the tiles' was: a source
+ * whose every figure shares one provenance marks none of them, and a source
+ * that mixes them says so. The sentence is the shared constant; nothing here
+ * composes words. */
+function provenanceNote(source: TokenUsageSource, marked: boolean): string | undefined {
+  return marked || provenanceIsMixed({ ...source, insights: renderedInsights(source) })
+    ? recordedOutOfBand
+    : undefined;
+}
+
+/* Whether a source's own stats say they were captured out of band. */
+function recordedSource(source: TokenUsageSource): boolean {
+  return (source.stats ?? []).some((stat) => stat.recorded === true);
+}
+
+/* The sub-line under a source's lifetime figure: its current streak and its
+ * biggest single day, both from stats it reported. A source reporting neither
+ * gets no sub-line rather than a sentence full of dashes. */
+function sourceSubline(source: TokenUsageSource): string | undefined {
+  const streak = statOf(source, currentStreakKey);
+  const peak = statOf(source, peakDayKey);
+  const parts: string[] = [];
+  if (streak !== undefined && streak.value !== null) {
+    parts.push(`${formatWhole(streak.value)}-day streak`);
+  }
+  if (peak !== undefined && peak.value !== null) {
+    parts.push(`peak ${formatStatValue(peak.value, peak.unit)}`);
+  }
+  return parts.length === 0 ? undefined : parts.join(' · ');
+}
+
+/* A source's current usage window, drawn as a meter under its figure. It is
+ * the SAME reading the retired tile panel drew, through the same saturation
+ * and the same severity thresholds — a window the payload reports has a real
+ * utilization and a real reset, and dropping it with the tiles would have been
+ * the redesign quietly losing a capability rather than restyling one.
+ *
+ * A source reporting no window, or a window with no utilization, draws no
+ * meter: a bar at zero and a bar for a figure nobody reported are the same
+ * picture, and only one of them is true. */
+function sourceMeter(source: TokenUsageSource): LedgerMeter | undefined {
+  const window = source.windows.find((entry) => entry.utilizationPct !== undefined);
+  if (window === undefined || window.utilizationPct === undefined) {
+    return undefined;
+  }
+  const reset = resetsIn(window.resetsAt);
+  return {
+    fillPct: meterFillPct(window.utilizationPct),
+    severity: meterSeverity(window.utilizationPct),
+    reading: formatUtilization(window.utilizationPct),
+    label: reset === '' ? window.period : `${window.period} · ${reset}`
+  };
+}
+
+/* The lifetime total across every source that reported one. Undefined when no
+ * source did — the total square then shows the dash, because a sum of nothing
+ * is not zero tokens, it is no measurement. */
+function lifetimeTotal(sources: readonly TokenUsageSource[]): number | undefined {
+  let total: number | undefined;
+  for (const source of sources) {
+    const stat = statOf(source, lifetimeKey);
+    if (stat === undefined || stat.value === null) {
+      continue;
+    }
+    total = (total ?? 0) + stat.value;
+  }
+  return total;
+}
+
+export function tokenSquares(sources: readonly TokenUsageSource[]): LedgerSquare[] {
+  if (sources.length === 0) {
+    return [];
+  }
+  const total = lifetimeTotal(sources);
+  const squares: LedgerSquare[] = [
+    {
+      key: 'tracked',
+      label: 'Tokens tracked',
+      figure: total === undefined ? unknownFigure : formatTokenCount(total),
+      sub: 'all sources · lifetime',
+      ariaLabel: `Tokens tracked, all sources, lifetime: ${total === undefined ? unknownFigure : formatTokenCount(total)}`,
+      back: {
+        label: 'By source',
+        facts: sources.map((source) => ({
+          key: source.label,
+          term: source.label,
+          value: statFigure(statOf(source, lifetimeKey))
+        })),
+        note: sources.some(recordedSource) ? recordedOutOfBand : undefined
+      }
+    }
+  ];
+  for (const source of sources) {
+    const figure = statFigure(statOf(source, lifetimeKey));
+    const sub = sourceSubline(source);
+    const facts = backFacts(source);
+    squares.push({
+      key: `source-${source.label}`,
+      label: source.label,
+      figure,
+      meter: sourceMeter(source),
+      sub,
+      ariaLabel: `${source.label} lifetime tokens: ${figure}`,
+      back: {
+        label: `${source.label} breakdown`,
+        facts: facts.length > 0 ? facts : undefined,
+        note: facts.length > 0 ? provenanceNote(source, recordedSource(source)) : tokenUsageSourceEmptyNote
+      }
+    });
+  }
+  /* The model split: the first source's shares on the front, the second's
+     behind it. Two sources is what the payload carries today and the shape
+     survives either way — one source turns to its own empty note, and a third
+     source's shares stay on its own square rather than being silently
+     dropped, because the front is always sources[0] and the back sources[1]. */
+  const [first, second] = sources;
+  const frontBars = insightBars(first);
+  const backBars = second === undefined ? [] : insightBars(second);
+  if (frontBars.length > 0 || backBars.length > 0) {
+    squares.push({
+      key: 'models',
+      label: `Models · ${first.label}`,
+      bars: frontBars.length > 0 ? frontBars : undefined,
+      figure: frontBars.length > 0 ? undefined : unknownFigure,
+      ariaLabel: `Model shares for ${first.label}`,
+      back: {
+        label: second === undefined ? 'Models' : `Models · ${second.label}`,
+        bars: backBars.length > 0 ? backBars : undefined,
+        note:
+          backBars.length > 0
+            ? provenanceNote(second, backBars.some((bar) => bar.marked))
+            : tokenUsageSourceEmptyNote
+      }
+    });
+  }
+  /* The session record, from the first source that keeps one. */
+  const keeper = sources.find((source) => statOf(source, 'sessions') !== undefined) ?? first;
+  const sessions = statFigure(statOf(keeper, 'sessions'));
+  const active = statOf(keeper, 'active-days');
+  const tracked = statOf(keeper, 'tracked-days');
+  squares.push({
+    key: 'sessions',
+    label: 'Sessions',
+    figure: sessions,
+    sub:
+      active === undefined || tracked === undefined
+        ? undefined
+        /* Both figures already carry their own unit — the stat's `days` unit
+           is what formatStatValue writes — so the sentence must not add a
+           second one: "11 days active of 15 days tracked", never "15 days days
+           tracked". */
+        : `${statFigure(active)} active of ${statFigure(tracked)} tracked`,
+    ariaLabel: `Sessions: ${sessions}`,
+    back: {
+      label: 'Records',
+      facts: [
+        {
+          key: 'longest-task',
+          term: statOf(keeper, 'longest-task')?.label ?? 'Longest session',
+          value: statFigure(statOf(keeper, 'longest-task'))
+        },
+        {
+          key: 'longest-streak',
+          term: statOf(keeper, 'longest-streak')?.label ?? 'Longest streak',
+          value: statFigure(statOf(keeper, 'longest-streak'))
+        }
+      ]
+    }
+  });
+  return squares;
+}
+
+/* tokenSquaresProps renders the board as data, or null before the first
+ * envelope arrives — the same loading face every panel-bound block has: the
+ * host renders nothing for null rather than reserving a box for a payload it
+ * cannot describe yet. */
+export function tokenSquaresProps(
   envelope: PanelEnvelope | null,
   now: Date = new Date()
-): UsageTrackerProps | null {
+): LedgerBoardProps | null {
   if (envelope === null) {
     return null;
   }
   const sources = tokenUsageSources(envelope.data);
   return {
-    id: tokenUsagePanelId,
     title: envelope.title || tokenUsageFallbackTitle,
     status: envelope.status,
     generatedAt: envelope.generatedAt,
-    sections: sources.map(usageSection),
-    emptyNote: tokenUsageEmptyNote,
-    staleNote: usageStaleNote(envelope.status, envelope.generatedAt, sources, now)
+    squares: tokenSquares(sources),
+    emptyNote: boardEmptyNote,
+    staleNote: usageStaleNote(envelope.status, envelope.generatedAt, sources, now),
+    turnLabel: boardTurnLabel,
+    returnLabel: boardReturnLabel
   };
 }
