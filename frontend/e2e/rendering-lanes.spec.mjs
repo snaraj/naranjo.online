@@ -1582,10 +1582,29 @@ test('the picture band mounts the texture showing and the one it left, never the
       expect(band.active.length, `after step ${step + 1} exactly one layer is active`).toBe(1);
     }
   }
+  /* A READING-MODE SWITCH is the one move that brings a THIRD distinct file
+     within reach: each mode's set holds two textures, so the arrows alone can
+     never make the memory longer than two, and a band that quietly kept
+     three would pass every arrow step above. Two switches — each onto a set
+     the band has not shown — must leave it at exactly two layers still. */
+  for (const [label, id] of [
+    ['Dark', 'dark'],
+    ['Slate', 'slate'],
+  ]) {
+    await openReadingModes(page);
+    await page.getByRole('button', { name: label, exact: true }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', id);
+    await settled(page);
+    const switched = await readBands();
+    for (const band of switched) {
+      expect(band.layers, `after the ${label} switch a band mounts ${band.layers} layers; the picture and the one it left are two`).toBe(2);
+      expect(band.active.length, `after the ${label} switch exactly one layer is active`).toBe(1);
+    }
+  }
   const after = await readBands();
-  /* Non-vacuity: three steps through a set of two lands on the other
-     picture, so a band whose control did nothing would still show the
-     arrival texture and fail here. */
+  /* Non-vacuity: three steps and two mode switches later the band shows a
+     picture from another set, so a band whose controls did nothing would
+     still show the arrival texture and fail here. */
   expect(after[0].active[0], 'three steps later the band still shows the texture it arrived with').not.toBe(
     arrival[0].active[0]
   );

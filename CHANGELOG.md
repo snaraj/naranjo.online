@@ -90,8 +90,9 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - The image build runs its checks once, natively: both build stages pin
   `--platform=$BUILDPLATFORM` and the Go stage cross-compiles the static
   binary for the target, so the PR gate's `container` job no longer re-runs
-  the frontend suite and the Go tests under arm64 emulation (measured at
-  595 s of a 616 s job). The browser lanes run one runner per engine, each
+  the frontend suite and the Go tests under arm64 emulation: on this
+  change's own pull-request runs the job measured 710 s before and 107 s
+  after. The browser lanes run one runner per engine, each
   taking its device project, so the matrix finishes in the time of its
   slowest engine rather than the sum of five.
 - The rendering lanes measure the tile grid rather than the strip they were
