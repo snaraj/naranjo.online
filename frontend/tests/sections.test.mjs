@@ -1257,6 +1257,35 @@ test('the table renders its stale line in the reserved head, and only when it ha
   assert.equal(roleLedgerProps.staleNote, undefined, 'the static work history grew a stale note');
   // The line is a token-inked reading, not an italic apology.
   assert.match(styleBlock(shell), /\.panel-note \{[^}]*color: var\(--panel-muted/s);
+  /* THE ROW IS THE RESERVE WITHOUT A TITLE (owner directive, 2026-09-04,
+     issue 292): the Projects table renders no panel label, so the head's
+     height can no longer come from its h2. Pinned where it is decided — the
+     row wears the title's face and size and declares one line of it as its
+     minimum, the `lh` line box with an em fallback under it — and the
+     rendering lane "a panel head with no title keeps the reserved row"
+     measures it in every engine. Deleting either declaration left the whole
+     suite green while the head collapsed to whatever happened to be in it
+     (review finding 1, PR #293). */
+  const head = /\.panel-head \{([^}]*)\}/s.exec(styleBlock(shell));
+  assert.ok(head, 'PanelShell no longer styles .panel-head');
+  assert.match(head[1], /font-family: var\(--panel-title-family, inherit\);/, 'the head must wear the title face its lh is measured in');
+  assert.match(head[1], /font-size: var\(--panel-title-size, 0\.8125rem\);/, 'the head must wear the title size its lh is measured in');
+  assert.match(
+    head[1],
+    /min-block-size: 1\.3em;\s*min-block-size: 1lh;/,
+    'the head must reserve one title line — em fallback first, the lh line box under it'
+  );
+  assert.match(
+    shell,
+    /\{#if title\}<h2 class="panel-title">\{title\}<\/h2>\{\/if\}/,
+    'the title is optional; a bare head is the Projects table'
+  );
+  assert.match(
+    styleBlock(shell),
+    /\.panel-note \{[^}]*grid-column: 2;/s,
+    'the note must keep the end column when there is no title beside it'
+  );
+  assert.equal(projectTableProps(null).title, undefined, 'the Projects table grew a panel label back');
 });
 
 test('open issues and open pull requests are told with icons and a number (issue 252)', () => {

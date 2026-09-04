@@ -19,8 +19,9 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   `--page-rails-from`, stated at the same 67.5rem rather than derived from the
   shipped column.
 - The commits calendar is green in every reading mode: levels 1–4 walk one hue
-  away from the card, and the busiest day wears the palette's brightest green
-  through its own `--grid-cell-peak` slot rather than the page highlight. The
+  away from the card, and the busiest day wears the palette's most saturated
+  green (on the dark sheets also its lightest) through its own
+  `--grid-cell-peak` slot rather than the page highlight. The
   true dark's ramp is the one named exception to its hueless palette.
 - The favicon is the letters alone — `SN.` in the site's own Archivo at 900,
   extruded in ink under a paper face — with no field behind them.

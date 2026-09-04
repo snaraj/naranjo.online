@@ -5192,6 +5192,43 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
   ).toHaveText('Projects');
 });
 
+/* THE HEAD ROW IS THE RESERVE WITHOUT A TITLE (owner directive, 2026-09-04,
+ * issue 292). The Projects table renders no panel label, so its head holds
+ * only the stale line when there is one — and a row whose height came from
+ * its title alone would collapse to the note, then to nothing, and grow back
+ * the moment a note arrived, which is the zero-CLS floor breaking in the one
+ * row the shell keeps open for exactly that arrival. Measured rather than
+ * trusted: the bare head is exactly as tall as every titled head on the page,
+ * and stays so with its note taken away. Review finding 1 on PR #293 showed
+ * the declaration could be deleted with every suite green; the source pin in
+ * tests/sections.test.mjs and this lane are the two halves that close it. */
+test('a panel head with no title keeps the reserved row, with and without its note (issue 292)', async ({
+  page,
+}) => {
+  await visit(page);
+  const measured = await page.evaluate(() => {
+    const heads = [...window.document.querySelectorAll('.panel-head')];
+    const height = (head) => head.getBoundingClientRect().height;
+    const titled = heads.filter((head) => head.querySelector('.panel-title') !== null);
+    const bare = heads.filter((head) => head.querySelector('.panel-title') === null);
+    const before = bare.map(height);
+    for (const head of bare) head.querySelector('[data-panel-note]')?.remove();
+    const after = bare.map(height);
+    return { titled: titled.map(height), before, after };
+  });
+  expect(measured.titled.length, 'no titled panel head to measure the reserve against').toBeGreaterThan(0);
+  expect(measured.before.length, 'exactly one panel renders without a label: the Projects table').toBe(1);
+  const reserve = measured.titled[0];
+  for (const height of measured.titled) {
+    expect(height, 'titled heads disagree about the row height').toBeCloseTo(reserve, 1);
+  }
+  expect(measured.before[0], 'a head with no title is not as tall as one with').toBeCloseTo(reserve, 1);
+  expect(measured.after[0], 'taking the note away collapsed the head; the row is not reserved').toBeCloseTo(
+    reserve,
+    1
+  );
+});
+
 /* THE REPO TABLE, MEASURED (issue 188; owner sketch 2026-08-31; RESHAPED by
  * the owner directive of 2026-09-03, issue 287).
  *

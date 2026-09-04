@@ -283,7 +283,9 @@
      pale green day — and levels 1..4 walk one green hue away from the card:
      darker on the light sheet, brighter on the three dark ones, so the
      busiest days are the ones furthest from the paper in every mode. The
-     PEAK is the brightest green of all and its own token below, rather than
+     PEAK is the palette's most saturated green — on the three dark sheets
+     also its lightest; on the light sheet it sits between levels 1 and 2 in
+     luminance and separates by chroma — and its own token below, rather than
      the page's highlight: the busiest day of the window is the one cell the
      owner asked to glow, and a red tile in a green calendar would be a
      different picture from the one asked for. The true dark keeps its
@@ -844,10 +846,12 @@
      for, and would mean the level a cell is bucketed into depended on whether
      it happened to be the maximum. Two orthogonal facts, two channels: the
      LEVEL says how busy the day was, the PEAK says it was the busiest. The
-     count is printed in the cell either way, so neither is carried by colour
-     alone. The ink is the palette's brightest green (owner directive,
-     2026-09-04, issue 292), read through the same per-mode slot the levels
-     use rather than the page highlight. */
+     cell itself draws no figure: the count is every cell's accessible name
+     and the detail card's reading, so a reader who asks is never left with
+     the colour, while a reader who only looks reads both facts from it. The
+     ink is the palette's most saturated green (owner directive, 2026-09-04,
+     issue 292), read through the same per-mode slot the levels use rather
+     than the page highlight. */
   --grid-cell-peak: var(--color-grid-peak);
   --usage-cat-0: var(--color-cat-0);
   --usage-cat-1: var(--color-cat-1);
