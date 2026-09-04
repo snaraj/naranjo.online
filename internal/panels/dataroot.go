@@ -106,6 +106,64 @@ type FloorMarker struct {
 // nothing is replaced; the loop must not mark the panel stale over it.
 var errSeriesUnchanged = errors.New("data root: series file unchanged")
 
+// THE NARRATIVE SPEAKS A CLOSED VOCABULARY, NEVER THE DOCUMENT (issue #290;
+// 2026-09-04 security review, finding 1). Every refusal below carries the
+// original error for the caller that can act on it, but the cluster log hears
+// only the reason CODE: a validly sealed document is decrypted payload, and a
+// message shaped like `schema "…" is not …` would print a payload-derived
+// value into a log that is read far from the key. The codes name the STAGE
+// that refused, which is what an operator needs to pick the documented
+// ceremony, and nothing a document can choose reaches them.
+const (
+	reasonFloorUnreadable   = "floor-unreadable"
+	reasonFloorFuture       = "floor-future"
+	reasonFloorNotPersisted = "floor-not-persisted"
+	reasonSourceMissing     = "source-missing"
+	reasonSourceUnreadable  = "source-unreadable"
+	reasonSealRefused       = "seal-refused"
+	reasonDocumentRefused   = "document-refused"
+	reasonReplayRefused     = "replay-refused"
+	reasonSnapshotMissing   = "snapshot-unavailable"
+	// reasonRefused is the fallback for an error no stage classified. It
+	// exists so the log can never fall back to the message instead.
+	reasonRefused = "refused"
+)
+
+// dataRootReasons is the whole vocabulary, in one place, so a test can prove
+// every logged reason is a member and every member is a bare label.
+var dataRootReasons = []string{
+	reasonFloorUnreadable, reasonFloorFuture, reasonFloorNotPersisted,
+	reasonSourceMissing, reasonSourceUnreadable, reasonSealRefused,
+	reasonDocumentRefused, reasonReplayRefused, reasonSnapshotMissing, reasonRefused,
+}
+
+// dataRootRefusal binds one closed reason to the error that explains it.
+// Error() and Unwrap() keep the original text and sentinels for callers and
+// tests; only dataRootReason reads the code, and only the log consumes it.
+type dataRootRefusal struct {
+	reason string
+	err    error
+}
+
+func (r *dataRootRefusal) Error() string { return r.err.Error() }
+
+func (r *dataRootRefusal) Unwrap() error { return r.err }
+
+// refuse tags an error with its stage's reason.
+func refuse(reason string, err error) error {
+	return &dataRootRefusal{reason: reason, err: err}
+}
+
+// dataRootReason maps a data-root error to its closed reason. An error that
+// carries no tag reports the generic code rather than any part of its text.
+func dataRootReason(err error) string {
+	var refusal *dataRootRefusal
+	if errors.As(err, &refusal) {
+		return refusal.reason
+	}
+	return reasonRefused
+}
+
 // StartDataRoot launches the data-root loop with the production clock. It is
 // explicitly invoked by the composition root, never by construction, and a
 // canceled context stops the loop before any further read. The marker may be
@@ -206,14 +264,17 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 			degradedByLoop = true
 		}
 		reg.markStale(state)
-		cause := err.Error()
-		if cause == lastFailure {
+		// The transition key is the closed reason, never the message: the
+		// message may quote the document, and the same stage refusing the
+		// same way is the same transition however its text varies.
+		reason := dataRootReason(err)
+		if reason == lastFailure {
 			return
 		}
-		lastFailure = cause
+		lastFailure = reason
 		reg.logger.LogAttrs(ctx, slog.LevelWarn, "failed to fetch token usage",
 			slog.String("panel", dataRootPanelID),
-			slog.Any("error", err),
+			slog.String("reason", reason),
 			slog.Time("next_retry", now().Add(dataRootTTL)),
 		)
 	}
@@ -224,11 +285,13 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 		if restoreLastGood && degradedByLoop {
 			reg.markFresh(state)
 		}
-		current := state.current.Load().payload
+		// The record says which refusal cleared and what the envelope now
+		// reports. The document's own instant is payload and stays out; the
+		// envelope a reader can fetch carries it anyway.
 		reg.logger.LogAttrs(ctx, slog.LevelInfo, "token usage data root recovered",
 			slog.String("panel", dataRootPanelID),
-			slog.String("status", string(current.status)),
-			slog.String("generated_at", current.generatedAt),
+			slog.String("status", string(state.current.Load().payload.status)),
+			slog.String("cleared", lastFailure),
 			slog.Time("next_refresh", now().Add(dataRootTTL)),
 		)
 		lastFailure = ""
@@ -257,11 +320,11 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 				// published past — the exact downgrade findings 2 and 4
 				// reproduced — so the tick is refused and the envelope says
 				// so. The next tick retries the load.
-				reportFailure(fmt.Errorf("data root: the replay floor could not be loaded: %w", err))
+				reportFailure(refuse(reasonFloorUnreadable, fmt.Errorf("data root: the replay floor could not be loaded: %w", err)))
 				timer.Reset(dataRootTTL)
 				continue
 			case present && persisted.Instant.After(now().Add(dataRootFutureSkew)):
-				reportFailure(errors.New("data root: the replay floor claims a future capture instant"))
+				reportFailure(refuse(reasonFloorFuture, errors.New("data root: the replay floor claims a future capture instant")))
 				timer.Reset(dataRootTTL)
 				continue
 			case present:
@@ -314,7 +377,7 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 			// evidence it had just failed to find (2026-08-24 round-3
 			// review, finding 6).
 			if acceptedInProcess || markerPresent {
-				reportFailure(err)
+				reportFailure(refuse(reasonSourceMissing, err))
 			} else {
 				// A malformed pre-first-push candidate can disappear again.
 				// That returns the root to its benign cold state and restores
@@ -381,18 +444,24 @@ func (reg *Registry) embeddedUsageInstant(state *panelState) time.Time {
 // re-admits an older authentic file as fresh. A nil commit is the documented
 // process-memory mode, where there is no durable floor to get ahead of.
 func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal Unsealer, now func() time.Time, floor FloorState, allowEqual bool, commit func(FloorState) error) (FloorState, error) {
+	// Each stage tags its refusal with the closed reason the narrative may
+	// speak. An absent file and an unchanged file are the two outcomes the
+	// caller reads by sentinel, so they pass through untagged.
 	sealed, err := readBoundedFile(fsys, dataRootSeriesName, maxSealedSeriesBytes)
 	if err != nil {
-		return FloorState{}, err
+		if errors.Is(err, fs.ErrNotExist) {
+			return FloorState{}, err
+		}
+		return FloorState{}, refuse(reasonSourceUnreadable, err)
 	}
 	digest := sealedDigest(sealed)
 	plaintext, err := unseal(sealed)
 	if err != nil {
-		return FloorState{}, err
+		return FloorState{}, refuse(reasonSealRefused, err)
 	}
 	var document usageSeriesDocument
 	if err := decodeStrict(plaintext, &document); err != nil {
-		return FloorState{}, fmt.Errorf("data root: %w", err)
+		return FloorState{}, refuse(reasonDocumentRefused, fmt.Errorf("data root: %w", err))
 	}
 	instant, err := admitSeriesInstant(document, floor, digest, now(), allowEqual)
 	if err != nil {
@@ -400,19 +469,19 @@ func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal U
 	}
 	fallback, err := reg.loadSnapshotUsageData(state)
 	if err != nil {
-		return FloorState{}, err
+		return FloorState{}, refuse(reasonSnapshotMissing, err)
 	}
 	merged, provenance, err := mergeSeriesDocument(document, fallback, now())
 	if err != nil {
-		return FloorState{}, err
+		return FloorState{}, refuse(reasonDocumentRefused, err)
 	}
 	raw, err := json.Marshal(merged)
 	if err != nil {
-		return FloorState{}, err
+		return FloorState{}, refuse(reasonDocumentRefused, err)
 	}
 	canonical, err := decodeKindPayload(state.definition.kind, raw)
 	if err != nil {
-		return FloorState{}, err
+		return FloorState{}, refuse(reasonDocumentRefused, err)
 	}
 	served, err := state.definition.prepare(loadedPayload{
 		generatedAt: provenance,
@@ -420,7 +489,7 @@ func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal U
 		status:      StatusOK,
 	})
 	if err != nil {
-		return FloorState{}, err
+		return FloorState{}, refuse(reasonDocumentRefused, err)
 	}
 	accepted := FloorState{Instant: instant, Digest: digest}
 	// Commit the floor, THEN publish. A failed commit publishes nothing: the
@@ -428,7 +497,7 @@ func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal U
 	// serving, and the same file is retried on the next tick.
 	if commit != nil {
 		if err := commit(accepted); err != nil {
-			return FloorState{}, fmt.Errorf("data root: the replay floor could not be persisted, so the payload is not published: %w", err)
+			return FloorState{}, refuse(reasonFloorNotPersisted, fmt.Errorf("data root: the replay floor could not be persisted, so the payload is not published: %w", err))
 		}
 	}
 	state.current.Store(served)
@@ -495,18 +564,18 @@ func readBoundedFile(fsys fs.FS, name string, cap int64) ([]byte, error) {
 // the ambiguity instead of resolving it in the pusher's favour.
 func admitSeriesInstant(document usageSeriesDocument, floor FloorState, digest string, current time.Time, recovering bool) (time.Time, error) {
 	if document.Schema != usageSeriesSchema {
-		return time.Time{}, fmt.Errorf("data root: schema %q is not %q", document.Schema, usageSeriesSchema)
+		return time.Time{}, refuse(reasonDocumentRefused, fmt.Errorf("data root: schema %q is not %q", document.Schema, usageSeriesSchema))
 	}
 	instant, err := time.Parse(time.RFC3339, document.GeneratedAt)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("data root: generatedAt: %w", err)
+		return time.Time{}, refuse(reasonDocumentRefused, fmt.Errorf("data root: generatedAt: %w", err))
 	}
 	if instant.Equal(floor.Instant) {
 		switch {
 		case floor.Digest == "":
-			return time.Time{}, errors.New("data root: the series file shares the instant of a floor recorded without a document identity; refused")
+			return time.Time{}, refuse(reasonReplayRefused, errors.New("data root: the series file shares the instant of a floor recorded without a document identity; refused"))
 		case floor.Digest != digest:
-			return time.Time{}, errors.New("data root: the series file is a different document at the instant already accepted; refused")
+			return time.Time{}, refuse(reasonReplayRefused, errors.New("data root: the series file is a different document at the instant already accepted; refused"))
 		case !recovering:
 			return time.Time{}, errSeriesUnchanged
 		}
@@ -514,10 +583,10 @@ func admitSeriesInstant(document usageSeriesDocument, floor FloorState, digest s
 		// process published.
 	}
 	if instant.Before(floor.Instant) {
-		return time.Time{}, errors.New("data root: the series file is older than the data already accepted; replay refused")
+		return time.Time{}, refuse(reasonReplayRefused, errors.New("data root: the series file is older than the data already accepted; replay refused"))
 	}
 	if instant.After(current.Add(dataRootFutureSkew)) {
-		return time.Time{}, errors.New("data root: the series file claims a future capture instant")
+		return time.Time{}, refuse(reasonReplayRefused, errors.New("data root: the series file claims a future capture instant"))
 	}
 	return instant, nil
 }

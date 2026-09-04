@@ -373,13 +373,14 @@ test('the watcher is still the stop function every caller had before', async () 
   assert.equal(host.unsubscribes, 1);
 });
 
-test('the exported cadence stays inside its documented band', () => {
-  // Fast enough that a visitor sees new data promptly, slow enough that a
-  // long-open tab is not a load source. A change here is a conscious edit.
-  assert.ok(
-    panelRefreshIntervalMs >= 30_000 && panelRefreshIntervalMs <= 300_000,
-    'the panel poll must stay between 30s and 5m'
-  );
+test("the exported cadence is the owner's thirty-second freshness floor, exactly", () => {
+  // Issue #290 fixed the visible poll at the documented floor: the origin
+  // wakes the sealed data root every thirty seconds, so a slower browser poll
+  // would add a whole extra wait on top of it. A band let the old minute come
+  // back unnoticed (2026-09-04 security review, finding 2); the exact value
+  // is pinned, and a change here is a conscious edit of both this line and
+  // the rationale in lib/panels.ts.
+  assert.equal(panelRefreshIntervalMs, 30_000, 'the visible panel poll is exactly 30s');
 });
 
 // refreshPanels and the liveWatchers set that backed it were the page-level
