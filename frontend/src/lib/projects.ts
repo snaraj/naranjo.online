@@ -517,11 +517,10 @@ export function projectsStaleNote(
  * The ledger table (owner directive, 2026-09-03, issue 287)
  *
  * The section became a ruled table of the four most recently pushed
- * repositories rather than a feed of cards, and the head says so: "latest 4 of
- * <total> · by last push", where the total is the roster the payload actually
- * served — not a constant, and not the length of the captured list, because
- * the number a reader is told the four were chosen FROM has to be the number
- * that was really there.
+ * repositories rather than a feed of cards. The head used to count the roster
+ * they were chosen from ("latest 4 of <total> · by last push"); the owner cut
+ * that line (2026-09-04, issue 292), so the table shows its four and says
+ * nothing about the rest.
  *
  * Everything the cards proved stays proved. The roster is still the payload's,
  * the order is still derived from each row's effective instant, the captured
@@ -530,11 +529,6 @@ export function projectsStaleNote(
  * constant plus a name that passed the repository grammar. What changed is the
  * SHAPE the same facts are handed to a component in.
  * ------------------------------------------------------------------------ */
-
-/* The shell heading before any envelope arrives, or when one arrives with an
- * empty title; otherwise the ORIGIN's own title rides the envelope, exactly as
- * every other panel's does. */
-export const projectsFallbackTitle = 'Coding projects';
 
 /* The table's column heads, in column order. They are the page's words for
  * what each column holds, and they are here rather than in the component for
@@ -550,9 +544,7 @@ export const projectTableHeads: readonly string[] = [
 ];
 
 /* How many rows the table shows. The owner asked for the four most recent
- * (2026-09-03); the rest of the roster is still counted in the caption, so the
- * page says what it is showing a selection OF rather than quietly showing a
- * selection. */
+ * (2026-09-03). */
 export const shownProjectRows = 4;
 
 export const projectsEmptyNote = 'no repositories reported';
@@ -645,13 +637,15 @@ export function projectTableProps(envelope: PanelEnvelope | null, now?: number):
       counts: tableCounts(counts)
     };
   });
+  /* No title: the section head "02 / Projects" already names this table, and
+     the origin's own "Coding Projects" beneath it was one label too many
+     (owner directive, 2026-09-04, issue 292). The shell keeps the head row at
+     the title's height for the stale line. */
   return {
-    title: envelope?.title || projectsFallbackTitle,
     status: envelope?.status ?? 'unavailable',
     generatedAt: envelope?.generatedAt,
     heads: projectTableHeads,
     rows,
-    caption: `latest ${rows.length} of ${ordered.length} · by last push`,
     emptyNote: projectsEmptyNote,
     staleNote: projectsStaleNote(envelope, now)
   };

@@ -32,9 +32,10 @@ the prose at 400 with no second download.
 
 ## Band textures
 
-The eight photographs under `frontend/src/assets/textures/` — two per reading
-mode, cycled by the arrows on the band — are the owner's own wallpaper
-library, originally from Unsplash and used under the Unsplash Licence. Their
+The four photographs under `frontend/src/assets/textures/` — one per reading
+mode (owner directive, 2026-09-04, issue #292: the cycle box and the second
+picture of each pair are gone) — are the owner's own wallpaper library,
+originally from Unsplash and used under the Unsplash Licence. Their
 provenance, licence, encoding recipe and exact vendored weight are recorded
 beside the files in `frontend/src/assets/textures/SOURCES.md`, which is the
 document a reviewer should read: it states what was verified and claims
@@ -52,6 +53,21 @@ fan content:
 > Created using intellectual property belonging to Jagex Limited under the
 > terms of Jagex's Fan Content Policy. This content is not endorsed by or
 > affiliated with Jagex.
+
+The page no longer prints that sentence under the boss strip (owner directive,
+2026-09-04, issue #292); this document is where the attribution is kept, and a
+frontend test holds it here word for word.
+
+### The strip's lead figure (2026-09-04, issue #292)
+
+`frontend/src/assets/icons/gnome.png` leads the boss strip: the owner's pick,
+the wiki's own 64px thumbnail of `Gnome_(2).png` (the lead image of the Gnome
+page), **64×131, 8,864 bytes, unmodified**, requested through the same
+MediaWiki thumbnail path as the boss icons below. Same artwork owner, same
+licence story, same notice above. It stands the full height of the strip's
+lead item, and its dimensions are stated beside the file in
+`frontend/src/lib/blocks/bossTicker.ts` so the lead reserves its box before
+the picture arrives.
 
 ### The reviewed batch (2026-08-20, issue #78)
 

@@ -17,9 +17,16 @@
  * why, and re-vendoring them is a glob and an adapter here rather than a
  * component change, the day a skills surface returns. */
 
-import { panelBlock, type PageBlock } from '../blocks.ts';
+import gnomeUrl from '../../assets/icons/gnome.png?url';
+import { panelBlock, type PageBlock, type TickerMark } from '../blocks.ts';
 import { bossLogPanelId, bossTickerProps, type BossIconSet } from '../bossLog.ts';
 import Ticker from '../components/Ticker.svelte';
+
+/* The strip's lead figure (owner directive, 2026-09-04, issue 292): the
+ * wiki's own 64px thumbnail of the gnome, vendored beside the boss icons under
+ * the same policy (ATTRIBUTION.md). The dimensions are the file's, stated here
+ * with the file so the lead can reserve its box before the picture arrives. */
+const mark: TickerMark = { url: gnomeUrl, width: 64, height: 131 };
 
 function iconMap(files: Record<string, string>): Map<string, string> {
   const icons = new Map<string, string>();
@@ -39,5 +46,5 @@ const icons: BossIconSet = iconMap(
 );
 
 export const bossTicker: PageBlock = panelBlock('boss-ticker', Ticker, bossLogPanelId, (envelope) =>
-  bossTickerProps(envelope, icons)
+  bossTickerProps(envelope, icons, mark)
 );

@@ -7,6 +7,43 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.75] - 2026-09-04
+
+### Changed
+
+- The page ships at the column's ceiling (owner directive, 2026-09-04, issue
+  #292): `--page-column-base` is the 100rem `--page-column-max`, so a desktop
+  opens at the widest column the drag can reach with both gutters and both hit
+  lanes still on screen, and the drag only ever narrows it. Phones and tablets
+  render exactly as before. The handle breakpoint is its own token,
+  `--page-rails-from`, stated at the same 67.5rem rather than derived from the
+  shipped column.
+- The commits calendar is green in every reading mode: levels 1–4 walk one hue
+  away from the card, and the busiest day wears the palette's most saturated
+  green (on the dark sheets also its lightest) through its own
+  `--grid-cell-peak` slot rather than the page highlight. The
+  true dark's ramp is the one named exception to its hueless palette.
+- The favicon is the letters alone — `SN.` in the site's own Archivo at 900,
+  extruded in ink under a paper face — with no field behind them.
+- The boss ticker's lead is the Old School RuneScape gnome alone (owner pick),
+  vendored from the wiki like the boss icons and standing the strip's full
+  height, in place of the drawn two-ink glyph; the collection's name and
+  totals line that led the strip are gone (owner directive) — the panel head
+  above already names it.
+- The boss ticker's scrollbar is thin and drawn in the sheet's own two inks, so
+  a platform whose scrollbars take space no longer paints a system track under
+  the strip.
+
+### Removed
+
+- The texture cycle box on the top band, and with it the four textures only
+  that box could reach; each reading mode keeps one picture.
+- The Jagex Fan Content Policy sentence under the boss ticker (owner
+  directive); `ATTRIBUTION.md` remains the attribution record.
+- The "latest 4 of N · by last push" line under Coding Projects, and the
+  "Coding Projects" panel label itself: the section head names the table, and
+  the panel head keeps its reserved row for the stale line.
+
 ## [0.1.74] - 2026-09-04
 
 ### Changed

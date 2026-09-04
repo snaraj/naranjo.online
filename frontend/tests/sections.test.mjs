@@ -884,8 +884,8 @@ test('the seven repositories are the owner’s, at the addresses the owner gave'
      leaves the ordering claim to the test that exists for it.
 
      The table shows the four most recently pushed (owner directive of
-     2026-09-03, issue 287) and says so in its caption, so the roster it was
-     selected FROM is still counted on the page rather than silently dropped. */
+     2026-09-03, issue 287). The roster count it used to print above them is
+     gone (owner directive, 2026-09-04, issue 292). */
   const byPush = projects.toSorted(
     (left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt)
   );
@@ -901,11 +901,7 @@ test('the seven repositories are the owner’s, at the addresses the owner gave'
         project.description,
       ])
   );
-  assert.equal(
-    captured.caption,
-    `latest ${shownProjectRows} of ${projects.length} · by last push`,
-    'the head must say what the four rows are a selection of, and how large the roster is'
-  );
+  assert.equal(captured.caption, undefined, 'the roster caption came back (owner cut it, issue 292)');
   assert.deepEqual([...projectTableHeads], ['Repository', 'Description', 'Stars', 'Open', 'PRs', 'Pushed']);
   assert.match(ledgerTable, /target="_blank"/);
   assert.match(ledgerTable, /rel="noopener noreferrer"/);
@@ -1154,10 +1150,6 @@ test('the roster is the payload’s: a repository the module list has never hear
   assert.equal(byKey.get('stars').value, '1');
   assert.equal(byKey.get('issues').value, '2');
   assert.equal(byKey.get('pulls').value, '1');
-  /* The caption counts the roster the payload actually served, so a table of
-     one says one of one rather than borrowing the module list's seven (owner
-     directive of 2026-09-03, issue 287). */
-  assert.equal(rendered.caption, 'latest 1 of 1 · by last push');
   /* A repository the capture never saw still renders its live figures. The
      card carried a captured commit total the table has no column for, so what
      the honest-dash rule is read on here is the figure that CAN be absent from
@@ -1189,9 +1181,6 @@ test('a payload name outside the repository grammar refuses the whole payload', 
         .toSorted(),
       `a payload carrying the name ${JSON.stringify(name)} was not refused wholesale`
     );
-    // ...and the caption counts the CAPTURED roster, so the refusal is legible
-    // on the page rather than silently rendering four of an unknown number.
-    assert.equal(rendered.caption, `latest ${shownProjectRows} of ${projects.length} · by last push`);
   }
 });
 
@@ -1268,6 +1257,35 @@ test('the table renders its stale line in the reserved head, and only when it ha
   assert.equal(roleLedgerProps.staleNote, undefined, 'the static work history grew a stale note');
   // The line is a token-inked reading, not an italic apology.
   assert.match(styleBlock(shell), /\.panel-note \{[^}]*color: var\(--panel-muted/s);
+  /* THE ROW IS THE RESERVE WITHOUT A TITLE (owner directive, 2026-09-04,
+     issue 292): the Projects table renders no panel label, so the head's
+     height can no longer come from its h2. Pinned where it is decided — the
+     row wears the title's face and size and declares one line of it as its
+     minimum, the `lh` line box with an em fallback under it — and the
+     rendering lane "a panel head with no title keeps the reserved row"
+     measures it in every engine. Deleting either declaration left the whole
+     suite green while the head collapsed to whatever happened to be in it
+     (review finding 1, PR #293). */
+  const head = /\.panel-head \{([^}]*)\}/s.exec(styleBlock(shell));
+  assert.ok(head, 'PanelShell no longer styles .panel-head');
+  assert.match(head[1], /font-family: var\(--panel-title-family, inherit\);/, 'the head must wear the title face its lh is measured in');
+  assert.match(head[1], /font-size: var\(--panel-title-size, 0\.8125rem\);/, 'the head must wear the title size its lh is measured in');
+  assert.match(
+    head[1],
+    /min-block-size: 1\.3em;\s*min-block-size: 1lh;/,
+    'the head must reserve one title line — em fallback first, the lh line box under it'
+  );
+  assert.match(
+    shell,
+    /\{#if title\}<h2 class="panel-title">\{title\}<\/h2>\{\/if\}/,
+    'the title is optional; a bare head is the Projects table'
+  );
+  assert.match(
+    styleBlock(shell),
+    /\.panel-note \{[^}]*grid-column: 2;/s,
+    'the note must keep the end column when there is no title beside it'
+  );
+  assert.equal(projectTableProps(null).title, undefined, 'the Projects table grew a panel label back');
 });
 
 test('open issues and open pull requests are told with icons and a number (issue 252)', () => {

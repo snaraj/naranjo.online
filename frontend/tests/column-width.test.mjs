@@ -64,10 +64,11 @@ const shipped = {
   min: declaredToken('--page-column-min'),
   max: declaredToken('--page-column-max'),
   gutter: declaredToken('--page-gutter'),
-  rail: declaredToken('--page-rail-size')
+  rail: declaredToken('--page-rail-size'),
+  railsFrom: declaredToken('--page-rails-from')
 };
 
-// fakeHost is the browser seam: five token values, a root font size, a
+// fakeHost is the browser seam: six token values, a root font size, a
 // viewport, and a log of every write the module made.
 function fakeHost({ tokens = {}, rootFontPx = 16, viewportPx = 1920 } = {}) {
   const values = {
@@ -76,6 +77,7 @@ function fakeHost({ tokens = {}, rootFontPx = 16, viewportPx = 1920 } = {}) {
     '--page-column-max': `${shipped.max}rem`,
     '--page-gutter': `${shipped.gutter}rem`,
     '--page-rail-size': `${shipped.rail}rem`,
+    '--page-rails-from': `${shipped.railsFrom}rem`,
     ...tokens
   };
   const writes = [];
@@ -141,7 +143,8 @@ describe('the token layer is read, never restated', () => {
       '--page-column-min',
       '--page-column-max',
       '--page-gutter',
-      '--page-rail-size'
+      '--page-rail-size',
+      '--page-rails-from'
     ]) {
       assert.equal(
         readColumnTokens(fakeHost({ tokens: { [name]: '' } })),
@@ -161,9 +164,21 @@ describe('the token layer is read, never restated', () => {
 });
 
 describe('the rails exist only where there is room for them', () => {
-  it('derives the breakpoint from the column, its gutters and its two lanes', () => {
+  it('reads the breakpoint from its own token, because the shipped column is the ceiling', () => {
     const tokens = readTokens(fakeHost());
-    assert.equal(railsBreakpointRem(tokens), shipped.base + 2 * shipped.gutter + 2 * shipped.rail);
+    assert.equal(railsBreakpointRem(tokens), shipped.railsFrom);
+    /* THE PAGE SHIPS AT ITS CEILING (owner directive, 2026-09-04, issue 292).
+       The two tokens are held equal here so the ceiling cannot move without
+       the default moving with it — and the breakpoint used to be derived from
+       the shipped column plus its lanes, which with the default at the ceiling
+       would land at 107.5rem and strand every laptop under it with an
+       edge-to-edge column and no handle. The stated token stays well below
+       that sum, which is the whole reason it is stated. */
+    assert.equal(shipped.base, shipped.max, 'the page ships at its ceiling; the two tokens have moved apart');
+    assert.ok(
+      shipped.railsFrom < shipped.base + 2 * shipped.gutter + 2 * shipped.rail,
+      'the rails breakpoint must sit below the shipped column plus its lanes, or no laptop gets a handle'
+    );
   });
 
   it('builds the same query the stylesheet asks', () => {

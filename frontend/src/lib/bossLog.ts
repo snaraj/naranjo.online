@@ -7,7 +7,7 @@
  * internal/panels/types.go: the hiscores legitimately return no figure, and
  * null is data that must survive the round trip. */
 
-import type { TickerItem, TickerProps } from './blocks.ts';
+import type { TickerItem, TickerMark, TickerProps } from './blocks.ts';
 import { bossInitials, bossSlug } from './bossIcons.ts';
 import { formatWhole } from './grid.ts';
 import type { BossLogData, BossLogEntry, BossLogSkill, PanelEnvelope } from './panels';
@@ -116,42 +116,16 @@ export const bossLogUnavailableNote = 'Boss data is unavailable right now.';
  * a count of zero is dimmed rather than dropped, because a boss the hiscores
  * list with nothing against it is information the grid always showed.
  *
- * The account is still never read. It is not in this file, it is not in the
- * lead line, and it is not in any accessible name.
+ * The account is still never read. It is not in this file and it is not in
+ * any accessible name. The lead line that counted bosses fought and kills is
+ * gone (owner directive, 2026-09-04, issue 292: noise); the strip leads with
+ * the collection's figure alone.
  * ------------------------------------------------------------------------ */
-
-/* The Jagex Fan Content Policy notice, word for word from ATTRIBUTION.md.
- * It travels with the artwork: the icons are Jagex intellectual property used
- * as fan content, so wherever they render this renders under them. It is DATA
- * on the props rather than a string in the component for the same reason every
- * other word on this page is — but it is also the one string here that may
- * never be paraphrased, and a frontend test compares it byte for byte with the
- * document it is quoted from. */
-export const bossLogFanContentNotice =
-  "Created using intellectual property belonging to Jagex Limited under the terms of Jagex's Fan Content Policy. This content is not endorsed by or affiliated with Jagex.";
 
 export const bossLogEmptyBossesNote = 'No boss kills reported.';
 
 /* The strip's accessible name. */
 export const bossLogStripLabel = 'Boss kill counts, most killed first';
-
-/* The lead line: how many of the listed bosses have ever been fought, out of
- * how many the hiscores list, and the total kills across them. Every one of
- * the three is counted from the payload's own rows — an unreported count is
- * neither fought nor added, which is what keeps "fought" a claim the data
- * supports rather than a row count. */
-export function bossTotalsLine(bosses: readonly BossLogEntry[]): string {
-  let fought = 0;
-  let kills = 0;
-  for (const boss of bosses) {
-    if (boss.kc === null || boss.kc === undefined || boss.kc <= 0) {
-      continue;
-    }
-    fought += 1;
-    kills += boss.kc;
-  }
-  return `${formatWhole(fought)} of ${formatWhole(bosses.length)} bosses fought · ${formatWhole(kills)} kills`;
-}
 
 /* The strip's order: most killed first, then by name, so a redraw of the same
  * payload is byte-identical and two bosses on the same count do not swap
@@ -189,12 +163,15 @@ export function bossTickerItems(
 
 /* bossTickerProps renders the strip as data, in the same three faces the grid
  * had: no envelope yet, an envelope with no payload, and a payload. */
-export function bossTickerProps(envelope: PanelEnvelope | null, icons: BossIconSet): TickerProps {
+export function bossTickerProps(
+  envelope: PanelEnvelope | null,
+  icons: BossIconSet,
+  mark?: TickerMark
+): TickerProps {
   const base = {
-    lead: '',
     items: [] as TickerItem[],
-    notice: bossLogFanContentNotice,
-    label: bossLogStripLabel
+    label: bossLogStripLabel,
+    mark
   };
   if (envelope === null) {
     return {
@@ -219,7 +196,6 @@ export function bossTickerProps(envelope: PanelEnvelope | null, icons: BossIconS
     title: envelope.title || bossLogFallbackTitle,
     status: envelope.status,
     generatedAt: envelope.generatedAt,
-    lead: bossTotalsLine(data.bosses),
     items: bossTickerItems(data.bosses, icons),
     emptyNote: bossLogEmptyBossesNote
   };

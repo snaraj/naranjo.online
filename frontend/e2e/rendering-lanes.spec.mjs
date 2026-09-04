@@ -1539,16 +1539,19 @@ test('every board square shows all of its own content, front and back (owner 202
   }
 });
 
-/* TWO LAYERS, NOT THE SET (owner directive, 2026-09-03, issue 287). The
- * picture band crossfades between two decoded images, and it used to mount
- * every vendored texture in both bands to do it — eight files fetched on a
- * first paint that would show one. It now mounts the texture showing and the
- * one it last showed, which is all a crossfade needs. This lane measures the
- * rule rather than trusting the component: one layer on arrival, two after a
- * step, still two after more steps, exactly one of them active, and the
- * active picture really changing — so a band that quietly went back to
- * mounting its whole set fails on the first count. */
-test('the picture band mounts the texture showing and the one it left, never the whole set (owner 2026-09-03, issue 287)', async ({
+/* TWO LAYERS, NOT THE SET (owner directive, 2026-09-03, issue 287; one
+ * picture per mode since 2026-09-04, issue 292). The picture band crossfades
+ * between two decoded images, and it used to mount every vendored texture in
+ * both bands to do it — every file fetched on a first paint that would show
+ * one. It mounts the texture showing and the one it last showed, which is all
+ * a crossfade needs. This lane measures the rule rather than trusting the
+ * component: one layer on arrival, two after a reading-mode switch, still two
+ * after more switches, exactly one of them active, and the active picture
+ * really changing — so a band that quietly went back to mounting its whole
+ * set fails on the first count. The cycle box is gone with issue 292: a band
+ * carries no control at all, and the reading mode is the only thing that
+ * changes its picture. */
+test('the picture band mounts the texture showing and the one it left, never the whole set, and carries no control (owner 2026-09-03, issue 287; 2026-09-04, issue 292)', async ({
   page,
 }) => {
   await visit(page);
@@ -1557,7 +1560,7 @@ test('the picture band mounts the texture showing and the one it left, never the
       [...window.document.querySelectorAll('.band')].map((band) => {
         const layers = [...band.querySelectorAll('.band-layer')];
         return {
-          controls: band.getAttribute('data-band-controls'),
+          controls: band.querySelectorAll('button, a, input, [tabindex]').length,
           layers: layers.length,
           active: layers
             .filter((layer) => layer.getAttribute('data-band-active') === 'true')
@@ -1570,26 +1573,16 @@ test('the picture band mounts the texture showing and the one it left, never the
   for (const band of arrival) {
     expect(band.layers, `a band mounts ${band.layers} layers on arrival; one picture needs one`).toBe(1);
     expect(band.active.length, 'exactly one layer is the picture showing').toBe(1);
+    expect(band.controls, 'a band carries a control; the cycle box was cut (owner 2026-09-04, issue 292)').toBe(0);
   }
-  const next = page.locator('.band[data-band-controls="true"] .band-step[aria-label="Next texture"]');
-  await expect(next, 'the top band carries the cycle control').toHaveCount(1);
-  for (let step = 0; step < 3; step += 1) {
-    await next.click();
-    await settled(page);
-    const during = await readBands();
-    for (const band of during) {
-      expect(band.layers, `after step ${step + 1} a band mounts ${band.layers} layers; a crossfade needs two`).toBe(2);
-      expect(band.active.length, `after step ${step + 1} exactly one layer is active`).toBe(1);
-    }
-  }
-  /* A READING-MODE SWITCH is the one move that brings a THIRD distinct file
-     within reach: each mode's set holds two textures, so the arrows alone can
-     never make the memory longer than two, and a band that quietly kept
-     three would pass every arrow step above. Two switches — each onto a set
-     the band has not shown — must leave it at exactly two layers still. */
+  /* A READING-MODE SWITCH is the one move that changes the picture, and three
+     of them bring three files the band has not shown within reach — so a band
+     that quietly kept every picture it ever showed would pass the first switch
+     and fail the second. Each switch must leave it at exactly two layers. */
   for (const [label, id] of [
     ['Dark', 'dark'],
     ['Slate', 'slate'],
+    ['Sepia', 'sepia'],
   ]) {
     await openReadingModes(page);
     await page.getByRole('button', { name: label, exact: true }).click();
@@ -1602,10 +1595,10 @@ test('the picture band mounts the texture showing and the one it left, never the
     }
   }
   const after = await readBands();
-  /* Non-vacuity: three steps and two mode switches later the band shows a
-     picture from another set, so a band whose controls did nothing would
-     still show the arrival texture and fail here. */
-  expect(after[0].active[0], 'three steps later the band still shows the texture it arrived with').not.toBe(
+  /* Non-vacuity: three mode switches later the band shows another mode's
+     picture, so a band that ignored the mode would still show the arrival
+     texture and fail here. */
+  expect(after[0].active[0], 'three switches later the band still shows the texture it arrived with').not.toBe(
     arrival[0].active[0]
   );
   expect(after.map((band) => band.active[0]), 'both bands show the same texture').toEqual(
@@ -5199,6 +5192,43 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
   ).toHaveText('Projects');
 });
 
+/* THE HEAD ROW IS THE RESERVE WITHOUT A TITLE (owner directive, 2026-09-04,
+ * issue 292). The Projects table renders no panel label, so its head holds
+ * only the stale line when there is one — and a row whose height came from
+ * its title alone would collapse to the note, then to nothing, and grow back
+ * the moment a note arrived, which is the zero-CLS floor breaking in the one
+ * row the shell keeps open for exactly that arrival. Measured rather than
+ * trusted: the bare head is exactly as tall as every titled head on the page,
+ * and stays so with its note taken away. Review finding 1 on PR #293 showed
+ * the declaration could be deleted with every suite green; the source pin in
+ * tests/sections.test.mjs and this lane are the two halves that close it. */
+test('a panel head with no title keeps the reserved row, with and without its note (issue 292)', async ({
+  page,
+}) => {
+  await visit(page);
+  const measured = await page.evaluate(() => {
+    const heads = [...window.document.querySelectorAll('.panel-head')];
+    const height = (head) => head.getBoundingClientRect().height;
+    const titled = heads.filter((head) => head.querySelector('.panel-title') !== null);
+    const bare = heads.filter((head) => head.querySelector('.panel-title') === null);
+    const before = bare.map(height);
+    for (const head of bare) head.querySelector('[data-panel-note]')?.remove();
+    const after = bare.map(height);
+    return { titled: titled.map(height), before, after };
+  });
+  expect(measured.titled.length, 'no titled panel head to measure the reserve against').toBeGreaterThan(0);
+  expect(measured.before.length, 'exactly one panel renders without a label: the Projects table').toBe(1);
+  const reserve = measured.titled[0];
+  for (const height of measured.titled) {
+    expect(height, 'titled heads disagree about the row height').toBeCloseTo(reserve, 1);
+  }
+  expect(measured.before[0], 'a head with no title is not as tall as one with').toBeCloseTo(reserve, 1);
+  expect(measured.after[0], 'taking the note away collapsed the head; the row is not reserved').toBeCloseTo(
+    reserve,
+    1
+  );
+});
+
 /* THE REPO TABLE, MEASURED (issue 188; owner sketch 2026-08-31; RESHAPED by
  * the owner directive of 2026-09-03, issue 287).
  *
@@ -5233,26 +5263,23 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
   expect(rowCount, 'the repository table rendered no rows').toBeGreaterThan(1);
 
   /* THE ROSTER IS TRUNCATED ON PURPOSE (owner ruling, 2026-09-03: the latest
-     four repositories, not all of them), and the caption says so in the same
-     breath. Reading the count back out of the caption is what stops a build
-     that quietly dropped rows from passing: the sentence and the table have to
-     agree, so losing a row fails here even though "more than one row" would
-     still hold. */
-  const caption = (await page.locator('#projects .table-caption').innerText()).trim();
-  /* Case-insensitive because the ledger sets this line in small caps through
-     `text-transform`, and innerText reports the TRANSFORMED text — the words
-     the adapter composed are lower case and what a reader sees is not. */
-  const claimed = caption.match(/(\d+)\s+of\s+(\d+)/i);
-  expect(caption, `the table's caption does not say how much of the roster it shows: "${caption}"`)
-    .toMatch(/\d+\s+of\s+\d+/i);
-  expect(
-    Number(claimed[1]),
-    `the caption claims ${claimed[1]} rows and the table drew ${rowCount}`
-  ).toBe(rowCount);
-  expect(
-    Number(claimed[2]),
-    'the caption claims the table shows every repository there is; it is meant to be the latest few'
-  ).toBeGreaterThan(rowCount);
+     four repositories, not all of them). The line that used to say so above
+     the table is gone (owner directive, 2026-09-04, issue 292), so the bound
+     is read from the origin's own envelope instead: the table draws exactly
+     the smaller of four and the roster the payload served, and that roster is
+     larger than what is drawn — a build that quietly dropped a row, or one
+     that quietly drew them all, fails here. */
+  await expect(page.locator('#projects .table-caption'), 'the roster caption came back').toHaveCount(0);
+  const roster = await page.evaluate(async () => {
+    const response = await fetch('/api/panels/coding-projects');
+    const envelope = await response.json();
+    return Array.isArray(envelope?.data?.repos) ? envelope.data.repos.length : null;
+  });
+  expect(roster, 'the origin served no roster to bound the table against').not.toBeNull();
+  expect(rowCount, `the table drew ${rowCount} rows of a ${roster}-repository roster`).toBe(
+    Math.min(4, roster)
+  );
+  expect(roster, 'the roster is meant to be larger than the four the table shows').toBeGreaterThan(rowCount);
 
   const overlapsVertically = (first, second) =>
     first.y < second.y + second.height && second.y < first.y + first.height;
@@ -7359,11 +7386,18 @@ test('a hostile row name reaches the detail as text and nothing else', async ({ 
  * and at phone size — and whether the reader ever sees it move.
  * ======================================================================== */
 
-// The narrowest viewport with room for the column, its gutters and both hit
-// lanes: 60 + 2x1 + 2x2.75 rem. Pinned against the tokens in
-// tests/column-width.test.mjs; used here as the width at which a handle is
-// first expected to exist.
+// The viewport width the rails exist from: --page-rails-from, stated at
+// 67.5rem in styles.css now that the shipped column is the ceiling (issue 292)
+// and pinned against that token in tests/column-width.test.mjs; used here as
+// the width at which a handle is first expected to exist.
 const railsBreakpointPx = 67.5 * 16;
+
+// The shipped column at a given viewport (owner directive, 2026-09-04, issue
+// 292: the page ships at its ceiling): the 100rem token or the viewport less
+// its two gutters and two hit lanes, whichever is smaller — the same bracket
+// styles.css and columnWidth.ts each hold on their own side.
+const shippedColumnPx = (column) =>
+  Math.min(100 * column.rem, column.clientWidth - (2 * 1 + 2 * 2.75) * column.rem);
 
 // The storage entry the reader's preference lives in. The grammar it accepts
 // is executed in tests/column-width.test.mjs; these lanes only need the name.
@@ -7564,7 +7598,11 @@ test('each column edge carries a handle, flush with the column and painting noth
     expect(handle.label, 'a handle with no accessible name').toBeTruthy();
     expect(handle.focusable, 'a splitter no keyboard can reach').toBe(0);
     expect(handle.min).toBeLessThan(handle.now);
-    expect(handle.now).toBeLessThan(handle.max);
+    /* AT the ceiling, not under it: the page ships at its maximum (owner
+       directive, 2026-09-04, issue 292), so at rest the value IS the range's
+       top and the splitter can only move one way. */
+    expect(handle.now).toBeLessThanOrEqual(handle.max);
+    expect(handle.now, 'the page did not ship at its ceiling').toBeCloseTo(handle.max, 0);
     expect(handle.now, 'the reported width is not the width on screen').toBeCloseTo(column.width, 0);
     expect(handle.markContent, `the ${handle.edge} handle still paints a bar`).toBe('none');
   }
@@ -7648,23 +7686,26 @@ test('a real pointer drag moves the edge exactly as far as the pointer', async (
      they move when I drag the feed in and out"). */
   const iconBefore = await page.evaluate(() => window.document.querySelector('.icon-button').getBoundingClientRect());
 
-  await dragHandle(page, 'end', 160);
+  /* INWARD, because the page ships at its ceiling (owner directive,
+     2026-09-04, issue 292) and there is nothing to drag out into: the end
+     handle is pulled 160px toward the middle. */
+  await dragHandle(page, 'end', -160);
   const after = await columnBox(page);
 
   /* The edge tracks the finger one for one, which for a CENTRED column means
-     the width grew by twice the travel. Both halves are asserted: the width
-     doubling alone would also be satisfied by an edge racing ahead of the
+     the width shrank by twice the travel. Both halves are asserted: the width
+     halving alone would also be satisfied by an edge racing ahead of the
      pointer. */
-  expect(after.right - before.right, 'the grabbed edge did not follow the pointer').toBeCloseTo(160, 0);
-  expect(after.width - before.width, 'a centred column must grow from both sides').toBeCloseTo(320, 0);
-  expect(after.left - before.left).toBeCloseTo(-160, 0);
+  expect(after.right - before.right, 'the grabbed edge did not follow the pointer').toBeCloseTo(-160, 0);
+  expect(after.width - before.width, 'a centred column must shrink from both sides').toBeCloseTo(-320, 0);
+  expect(after.left - before.left).toBeCloseTo(160, 0);
   expect(after.scrollWidth).toBe(after.clientWidth);
   /* THE HEADER RIDES THE COLUMN AGAIN (owner directive, 2026-09-03, issue
      287), which reverses issue 168's decoupling. The masthead is an in-flow
      ruled row sharing `main`'s inline-size rule, so the drag that just moved
      the column's end edge by 160px moves the control on that row by the same
-     160px — the control is part of the sheet now rather than chrome floating
-     over it.
+     160px, in the same direction — the control is part of the sheet now
+     rather than chrome floating over it.
      
      The owner's complaint that issue 168 answered ("I don't like how they move
      when I drag the feed in and out") was about chrome pinned to a corner
@@ -7683,8 +7724,9 @@ test('a real pointer drag moves the edge exactly as far as the pointer', async (
     'an inline drag moved the header control down the page'
   ).toBeCloseTo(iconBefore.top, 0);
 
-  /* The start handle mirrors it, and undoes it. */
-  await dragHandle(page, 'start', 160);
+  /* The start handle mirrors it, and undoes it: pulled 160px outward, it
+     gives the column back the 320px the end handle took. */
+  await dragHandle(page, 'start', -160);
   const undone = await columnBox(page);
   expect(undone.width, 'the start handle does not mirror the end one').toBeCloseTo(before.width, 0);
 
@@ -7758,6 +7800,11 @@ test('the keyboard resizes the column, and a double click puts it back', async (
      locator.focus(), whose wait is bounded only by the test timeout.) */
   await expect(handles(page)).toHaveCount(2);
   const shipped = await columnBox(page);
+  /* THE PAGE SHIPS AT ITS CEILING (owner directive, 2026-09-04, issue 292), so
+     at rest there is nothing to widen INTO: the first key that changes anything
+     narrows, and a press toward the ceiling from the ceiling is refused rather
+     than drifting. */
+  expect(shipped.width, 'the page did not ship at its ceiling').toBeCloseTo(shippedColumnPx(shipped), 0);
 
   const end = page.locator('.column-handle[data-edge="end"]');
   await end.focus();
@@ -7765,39 +7812,49 @@ test('the keyboard resizes the column, and a double click puts it back', async (
 
   /* The arrows move the SPLITTER (WAI-ARIA Window Splitter): right on the end
      handle widens, left narrows, and the reported value follows the box. */
-  await page.keyboard.press('ArrowRight');
-  const widened = await columnBox(page);
-  expect(widened.width, 'ArrowRight on the end handle did not widen the column').toBeGreaterThan(
+  await page.keyboard.press('ArrowLeft');
+  const narrowed = await columnBox(page);
+  expect(narrowed.width, 'ArrowLeft on the end handle did not narrow the column').toBeLessThan(
     shipped.width
   );
-  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowRight');
   expect((await columnBox(page)).width).toBeCloseTo(shipped.width, 0);
+  await page.keyboard.press('ArrowRight');
+  expect(
+    (await columnBox(page)).width,
+    'ArrowRight at the ceiling moved the column past it'
+  ).toBeCloseTo(shipped.width, 0);
 
   /* The start handle answers the same keys in the opposite direction, because
      "left" is a direction in the window and not in the column. */
   const start = page.locator('.column-handle[data-edge="start"]');
   await start.focus();
-  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowRight');
   expect(
     (await columnBox(page)).width,
-    'ArrowLeft on the start handle must widen, not narrow'
-  ).toBeGreaterThan(shipped.width);
-  await page.keyboard.press('ArrowRight');
+    'ArrowRight on the start handle must narrow, not widen'
+  ).toBeLessThan(shipped.width);
+  await page.keyboard.press('ArrowLeft');
 
   await page.keyboard.press('Home');
   const home = await columnBox(page);
   await page.keyboard.press('End');
   const end2 = await columnBox(page);
   expect(home.width, 'Home did not take the column to its minimum').toBeLessThan(shipped.width);
-  expect(end2.width, 'End did not take the column to its maximum').toBeGreaterThan(shipped.width);
+  expect(end2.width, 'End did not take the column back to its maximum, the shipped width').toBeCloseTo(
+    shipped.width,
+    0
+  );
   const reported = await page.evaluate(() =>
     Number(window.document.querySelector('.column-handle').getAttribute('aria-valuenow'))
   );
   expect(reported, 'the splitter reports a width it is not at').toBeCloseTo(end2.width, 0);
 
   /* Double click resets, which is the convention every split view already
-     taught this reader. */
-  await end.dblclick();
+     taught this reader. From the minimum, so the reset is a move this lane can
+     see rather than a no-op at the ceiling. */
+  await page.keyboard.press('Home');
+  await start.dblclick();
   const reset = await columnBox(page);
   expect(reset.width, 'a double click did not return the shipped column').toBeCloseTo(
     shipped.width,
@@ -7827,7 +7884,7 @@ test('a stored width is on the page before it paints, and moves nothing', async 
   );
   expect(chosen.column.token).toBe('40rem');
   expect(shipped.column.width, 'a page with no preference must ship at its own column').toBeCloseTo(
-    60 * shipped.column.rem,
+    shippedColumnPx(shipped.column),
     0
   );
 
@@ -7987,7 +8044,7 @@ test('a poisoned preference lands the page on the width it ships at', async ({ p
     await settled(fresh);
     const column = await columnBox(fresh);
     expect(column.width, `${JSON.stringify(poison)} produced a ${column.width}px column`).toBeCloseTo(
-      60 * column.rem,
+      shippedColumnPx(column),
       0
     );
     expect(column.scrollWidth).toBe(column.clientWidth);
@@ -8020,8 +8077,10 @@ test('a phone gets no handle and the page it has always had', async ({ page }) =
        page reserved for the fixed reading-mode control — and issue 264 retired
        it: below the handle breakpoint the control is document-glued, so it
        costs the column nothing. Every width in this list sits below that
-       breakpoint, which is exactly the range the re-aim applies to. */
-    expect(column.width).toBeCloseTo(Math.min(60 * column.rem, width - gutterPx), 0);
+       breakpoint, which is exactly the range the re-aim applies to. The
+       100rem token is far above every width here (issue 292), so the min()
+       is the viewport's, exactly as it always was on a phone. */
+    expect(column.width).toBeCloseTo(Math.min(100 * column.rem, width - gutterPx), 0);
     expect(column.scrollWidth).toBe(column.clientWidth);
   }
   /* And the boundary is where the stylesheet says it is, not near it. */
@@ -8381,14 +8440,14 @@ test('the reading-mode popover travels with the column and still fits at its nar
 const filledCardBodies = ['.ledger-points'];
 
 /* The widths this rule is measured at, and why they are COLUMN values rather
- * than only viewport ones. The page column is a fixed 60rem token, so a 1440px
- * and a 1920px viewport lay out the identical 960px column and the identical
- * 934px card — measuring both proves the fill is viewport-independent and
- * nothing else. The axis that genuinely changes a card's width is the reader's
- * own column drag, so the sweep drives that token directly, exactly as the
- * strip lane above drives it: the shipped default, and the 100rem ceiling,
- * where a re-introduced cap would leave the widest dead band this page can
- * produce (measured: 902px of a 1574px card). */
+ * than only viewport ones. The page ships at its 100rem ceiling now (issue
+ * 292), bounded by each viewport's own lanes, so the viewport loop measures
+ * the fill at two bounded widths. The axis that genuinely changes a card's
+ * width is the reader's own column drag, so the sweep drives that token
+ * directly as well, exactly as the strip lane above drives it: 60rem, the
+ * width the page used to ship at and a mid-range a reader can narrow to, and
+ * the 100rem ceiling, where a re-introduced cap would leave the widest dead
+ * band this page can produce (measured: 902px of a 1574px card). */
 const filledColumnWidths = ['60rem', '100rem'];
 
 /* One measurement pass over every card on the page. Returns one row per
@@ -8557,9 +8616,9 @@ test('card text fills the card and stops at its padding, never two thirds of the
     expectCardsFilled(await measureCardFill(page), `a ${width}px viewport`);
   }
   /* The reader's own column, across its range. This is the axis the viewport
-     loop above cannot reach: both of those widths resolve to the same 60rem
-     column, so without this the rule would only ever have been measured at one
-     card width. */
+     loop above cannot reach: at both of those widths the column is whatever
+     the viewport's lanes leave it, so without this the rule would never be
+     measured at a width the reader chose. */
   for (const column of filledColumnWidths) {
     await page.evaluate((value) => {
       window.document.documentElement.style.setProperty('--page-column-width', value);
