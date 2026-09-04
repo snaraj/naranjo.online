@@ -5226,26 +5226,23 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
   expect(rowCount, 'the repository table rendered no rows').toBeGreaterThan(1);
 
   /* THE ROSTER IS TRUNCATED ON PURPOSE (owner ruling, 2026-09-03: the latest
-     four repositories, not all of them), and the caption says so in the same
-     breath. Reading the count back out of the caption is what stops a build
-     that quietly dropped rows from passing: the sentence and the table have to
-     agree, so losing a row fails here even though "more than one row" would
-     still hold. */
-  const caption = (await page.locator('#projects .table-caption').innerText()).trim();
-  /* Case-insensitive because the ledger sets this line in small caps through
-     `text-transform`, and innerText reports the TRANSFORMED text — the words
-     the adapter composed are lower case and what a reader sees is not. */
-  const claimed = caption.match(/(\d+)\s+of\s+(\d+)/i);
-  expect(caption, `the table's caption does not say how much of the roster it shows: "${caption}"`)
-    .toMatch(/\d+\s+of\s+\d+/i);
-  expect(
-    Number(claimed[1]),
-    `the caption claims ${claimed[1]} rows and the table drew ${rowCount}`
-  ).toBe(rowCount);
-  expect(
-    Number(claimed[2]),
-    'the caption claims the table shows every repository there is; it is meant to be the latest few'
-  ).toBeGreaterThan(rowCount);
+     four repositories, not all of them). The line that used to say so above
+     the table is gone (owner directive, 2026-09-04, issue 292), so the bound
+     is read from the origin's own envelope instead: the table draws exactly
+     the smaller of four and the roster the payload served, and that roster is
+     larger than what is drawn — a build that quietly dropped a row, or one
+     that quietly drew them all, fails here. */
+  await expect(page.locator('#projects .table-caption'), 'the roster caption came back').toHaveCount(0);
+  const roster = await page.evaluate(async () => {
+    const response = await fetch('/api/panels/coding-projects');
+    const envelope = await response.json();
+    return Array.isArray(envelope?.data?.repos) ? envelope.data.repos.length : null;
+  });
+  expect(roster, 'the origin served no roster to bound the table against').not.toBeNull();
+  expect(rowCount, `the table drew ${rowCount} rows of a ${roster}-repository roster`).toBe(
+    Math.min(4, roster)
+  );
+  expect(roster, 'the roster is meant to be larger than the four the table shows').toBeGreaterThan(rowCount);
 
   const overlapsVertically = (first, second) =>
     first.y < second.y + second.height && second.y < first.y + first.height;
@@ -7564,7 +7561,11 @@ test('each column edge carries a handle, flush with the column and painting noth
     expect(handle.label, 'a handle with no accessible name').toBeTruthy();
     expect(handle.focusable, 'a splitter no keyboard can reach').toBe(0);
     expect(handle.min).toBeLessThan(handle.now);
-    expect(handle.now).toBeLessThan(handle.max);
+    /* AT the ceiling, not under it: the page ships at its maximum (owner
+       directive, 2026-09-04, issue 292), so at rest the value IS the range's
+       top and the splitter can only move one way. */
+    expect(handle.now).toBeLessThanOrEqual(handle.max);
+    expect(handle.now, 'the page did not ship at its ceiling').toBeCloseTo(handle.max, 0);
     expect(handle.now, 'the reported width is not the width on screen').toBeCloseTo(column.width, 0);
     expect(handle.markContent, `the ${handle.edge} handle still paints a bar`).toBe('none');
   }
@@ -7648,23 +7649,26 @@ test('a real pointer drag moves the edge exactly as far as the pointer', async (
      they move when I drag the feed in and out"). */
   const iconBefore = await page.evaluate(() => window.document.querySelector('.icon-button').getBoundingClientRect());
 
-  await dragHandle(page, 'end', 160);
+  /* INWARD, because the page ships at its ceiling (owner directive,
+     2026-09-04, issue 292) and there is nothing to drag out into: the end
+     handle is pulled 160px toward the middle. */
+  await dragHandle(page, 'end', -160);
   const after = await columnBox(page);
 
   /* The edge tracks the finger one for one, which for a CENTRED column means
-     the width grew by twice the travel. Both halves are asserted: the width
-     doubling alone would also be satisfied by an edge racing ahead of the
+     the width shrank by twice the travel. Both halves are asserted: the width
+     halving alone would also be satisfied by an edge racing ahead of the
      pointer. */
-  expect(after.right - before.right, 'the grabbed edge did not follow the pointer').toBeCloseTo(160, 0);
-  expect(after.width - before.width, 'a centred column must grow from both sides').toBeCloseTo(320, 0);
-  expect(after.left - before.left).toBeCloseTo(-160, 0);
+  expect(after.right - before.right, 'the grabbed edge did not follow the pointer').toBeCloseTo(-160, 0);
+  expect(after.width - before.width, 'a centred column must shrink from both sides').toBeCloseTo(-320, 0);
+  expect(after.left - before.left).toBeCloseTo(160, 0);
   expect(after.scrollWidth).toBe(after.clientWidth);
   /* THE HEADER RIDES THE COLUMN AGAIN (owner directive, 2026-09-03, issue
      287), which reverses issue 168's decoupling. The masthead is an in-flow
      ruled row sharing `main`'s inline-size rule, so the drag that just moved
      the column's end edge by 160px moves the control on that row by the same
-     160px — the control is part of the sheet now rather than chrome floating
-     over it.
+     160px, in the same direction — the control is part of the sheet now
+     rather than chrome floating over it.
      
      The owner's complaint that issue 168 answered ("I don't like how they move
      when I drag the feed in and out") was about chrome pinned to a corner
@@ -7683,8 +7687,9 @@ test('a real pointer drag moves the edge exactly as far as the pointer', async (
     'an inline drag moved the header control down the page'
   ).toBeCloseTo(iconBefore.top, 0);
 
-  /* The start handle mirrors it, and undoes it. */
-  await dragHandle(page, 'start', 160);
+  /* The start handle mirrors it, and undoes it: pulled 160px outward, it
+     gives the column back the 320px the end handle took. */
+  await dragHandle(page, 'start', -160);
   const undone = await columnBox(page);
   expect(undone.width, 'the start handle does not mirror the end one').toBeCloseTo(before.width, 0);
 
@@ -8002,7 +8007,7 @@ test('a poisoned preference lands the page on the width it ships at', async ({ p
     await settled(fresh);
     const column = await columnBox(fresh);
     expect(column.width, `${JSON.stringify(poison)} produced a ${column.width}px column`).toBeCloseTo(
-      60 * column.rem,
+      shippedColumnPx(column),
       0
     );
     expect(column.scrollWidth).toBe(column.clientWidth);
