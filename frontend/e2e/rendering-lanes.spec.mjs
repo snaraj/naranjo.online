@@ -23,31 +23,27 @@ const textEntryFloorPx = 16;
 // The comfortable minimum for a finger, in CSS pixels.
 const touchFloorPx = 44;
 
-/* The gallery stage's ceiling: 28rem at this page's unmodified 16px root,
- * --gallery-stage-size's value in MediaGallery.svelte.
+/* THE 448px STAGE CAP IS GONE (owner directive, 2026-09-03, issue 287).
+ * galleryStageCapPx pinned --gallery-stage-size, the 28rem ceiling the single
+ * visible frame was sized by, and it was written here as a literal rather
+ * than read back off the page because Daybreak Blue's review of PR #161
+ * proved the self-referential shape lets a 28rem -> 280rem mutation survive:
+ * expectation and behaviour move together when both derive from the one
+ * mutated token.
  *
- * It replaces the 20rem --card-media-max-block-size cap this constant used to
- * carry (issue 157). The gallery stopped borrowing the feed card's 16:9 media
- * box on 2026-08-28 — the owner's drawings are portrait scans, and a wide
- * frame either cropped them or drowned them in dead side space, so the stage
- * is now a SQUARE sized by its own token and the picture is `contain` inside
- * it. The cap moved with the box; the reason this is a literal did not.
+ * The frame it capped is retired. The gallery is a GRID of square tiles that
+ * spans the reading column, and a cap on that grid would put back the dead
+ * gutter the owner's no-dead-space rule forbids — the grid filling its column
+ * is the point of the redesign, not an accident of it. What replaces the cap
+ * is the opposite measurement, and it is still independent of every token:
+ * the grid's own right edge against the COLUMN's, and the cells' widths
+ * against each other, in the fill lane below.
  *
- * A gallery-cap assertion below compares a MEASURED box against this fixed
- * number, never against getComputedStyle(stage).maxBlockSize read back from
- * the same page — Daybreak Blue's review of PR #161 proved that
- * self-referential shape lets a 28rem -> 280rem mutation survive undetected,
- * because the expectation and the rendered behavior move together when both
- * derive from the one (mutated) token. */
-const galleryStageCapPx = 448;
-
-/* THE FILM'S STAGE IS THE SAME STAGE (owner directive, 2026-08-28, issue 243:
- * "make it one single block that doesn't expand, reduce based on the media").
- * The three constants that lived here — a 432x768 widescreen box and its
- * 1.7778 aspect — are gone with the token pair that produced them, and the
- * film is now measured against galleryStageCapPx like everything else. The
- * shape the film itself has is the ITEM's, and it is answered by letterboxing
- * inside the block rather than by resizing it. */
+ * The film's box went the same way. A film is a tile like any other now, so
+ * the three constants that once described its widescreen stage — and then the
+ * shared square cap that replaced them (issue 243) — are answered by
+ * comparing a film's tile against the still's tile beside it, two boxes of
+ * one page rather than any number this file states. */
 
 /* One gallery/v1 manifest carrying a still and a film, served from the media
  * volume's own mutable path so the page takes the route it takes in
@@ -62,23 +58,25 @@ const galleryStageCapPx = 448;
  * asserting the operator's pipeline rather than this build. Publishing a
  * fixture film into the repository to change that would also be exactly the
  * heavy media requirement 11 keeps out of git. */
-/* THE ITEMS CARRY CAPTIONS, and the fixture's blindness to them is why the
- * zero-shift lane below passed against a site that visibly moved (issue 265).
- * A gallery/v1 item may carry a title and a description; neither of these two
- * did, so "moving between a still and a film shifts the document by nothing"
- * measured a page with no caption to shift it — one added field flipped the
- * same lane from 0 to 50px red.
- * The two are DELIBERATELY UNEQUAL, and the taller one is deliberately
- * SECOND: the reservation is the tallest caption in the CURRENT SET, so a
- * mutation that reserved only the first item's caption, or only the current
- * item's, is caught by moving onto the film rather than by the fixture
- * happening to be symmetric. */
-/* BOTH ITEMS NAME ONE EXPLICIT SET (issue 275). Without it the component's
- * kind-derived default would split this fixture into a Drawings strip and a
- * Videos strip, and every mixed-strip walk below — still onto film, film onto
- * still, the caption reservation across kinds — would silently measure a
- * one-item strip instead. A shared explicit set is exactly how an operator
- * publishes a mixed strip, so the fixture exercises that admitted path. */
+/* THE ITEMS CARRY TITLES AND A DESCRIPTION, and where they may appear is now
+ * exactly one place: the stage's meta block. The tile grid has no caption
+ * lane — the lane, and the zero-shift lane that measured it, went with the
+ * strip (owner directive, 2026-09-03, issue 287) — so an item's words reach
+ * a reader only when that item is opened, which is a still and never a film.
+ * The film's description is kept for precisely that reason: it is the copy
+ * that must NOT render anywhere, on a page where the film is on screen the
+ * whole time, and a fixture with nothing to leak could not show that.
+ * The two are DELIBERATELY UNEQUAL and the taller one is deliberately SECOND,
+ * as they were: a lane that only ever measured the first item's metadata is
+ * one a mutation walks straight past. */
+/* BOTH ITEMS NAME ONE EXPLICIT SET (issue 275), which is what puts a still
+ * and a film in the SAME tile row: an operator publishes a mixed set exactly
+ * this way, and without the field the component's kind-derived default would
+ * split the fixture into Photographs and Videos and every mixed-row
+ * measurement below would silently be taken against a one-tile row.
+ * The set control's own lane serves this fixture with the field STRIPPED, so
+ * the two-set branch is exercised by the same data through the same admitted
+ * path rather than by a second fixture nobody else uses. */
 const galleryManifestFixture = {
   schema: 'gallery/v1',
   items: [
@@ -235,19 +233,22 @@ async function visit(page) {
   await settled(page);
 }
 
-/* Whether this project's emulated device is one the gallery's stage pair is
- * SHOWN on — the same query the stylesheet keys the pair's visibility to,
- * which is lib/tooltip.ts's finePointerQuery. Capability, never project name
- * (this file's own doctrine). */
-function finePointer(page) {
-  return page.evaluate(() => window.matchMedia('(hover: hover) and (pointer: fine)').matches);
-}
+/* finePointer is GONE (owner directive, 2026-09-03, issue 287), and it is
+ * removed rather than kept warm for the same reason alphaOf was: a helper
+ * nothing calls is a helper nobody maintains. It answered "is this project's
+ * emulated device one the gallery's stage pair is SHOWN on", which was a real
+ * question only while the pair was gated behind a fine pointer — the
+ * 2026-08-31 sketch retired that gate (issue 275) and the tile grid has no
+ * capability-gated control at all, so its last caller went with the strip.
+ * The pointer capability IS still asked, by followsPointer further down this
+ * file, which is the detail-tip battery's own question and has callers. */
 
-/* Moves the strip to the item whose position label is `label`, through the
- * stage pair — a control every device shows since the 2026-08-31 sketch
- * retired the dots and their capability gate with them (issue 275). The walk
- * is bounded by the longest strip this suite serves, so a label nothing
- * carries fails loudly on the arrival check rather than looping. */
+/* Moves the OPEN STAGE to the still whose count line reads `label`, through
+ * the dialog's own next control (owner directive, 2026-09-03, issue 287: the
+ * strip and its position row are gone, and paging is something only the
+ * enlarged surface does now). The walk is bounded by the longest set this
+ * suite serves, so a label nothing carries fails loudly on the arrival check
+ * rather than looping. */
 async function goToItem(page, label) {
   const count = page.locator('.gallery-count');
   const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
@@ -3486,225 +3487,295 @@ test('every rendered link is unmarked at rest and marks itself on hover', async 
   );
 });
 
-test('the gallery shows exactly one loaded photograph, never eight stacked (issue 176)', async ({ page }) => {
+/* ===========================================================================
+ * THE GALLERY IS A TILE GRID AND A STAGE (owner directive, 2026-09-03,
+ * issue 287)
+ *
+ * Every lane below used to drive one visible frame with a swipe strip under
+ * it. The frame is gone: the sheet's last section draws the first few squares
+ * of the chosen set beside one control tile, and the stage is a native
+ * <dialog> a tile opens. What the rulings of issues 176, 202, 219, 233, 241,
+ * 243, 265 and 275 were FOR survives that move and is re-aimed here — one
+ * full-size picture at a time, the full derivative fetched only on demand,
+ * nothing autoplaying, a film inline behind one control, every box reserved
+ * before a byte arrives, prev/next as real 44px targets with the swipe as an
+ * addition to them, Escape and the backdrop and the close mark all closing,
+ * focus handed back to the tile that opened the stage. What was about the
+ * STRIP itself is deleted rather than re-pointed, each with the reason on the
+ * line where the lane used to be, because a lane re-aimed at a surface that
+ * cannot have the defect is a lane that reports green for nothing.
+ * ======================================================================== */
+
+test('the gallery mounts one thumbnail per tile and exactly one enlarged photograph, never eight stacked (issue 176; owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
   await visit(page);
-  // Vendored WebP, not a media-route fetch: the picture actually decodes,
-  // which the old remote-media "pending frame" case could never measure. It
-  // is also `loading="lazy"` (issue 176), and engines differ on how far
-  // ahead of the viewport a lazy image is fetched — Firefox measurably later
-  // than Chromium/WebKit here — so this polls for decode rather than
-  // asserting it the instant the page settles.
-  const image = page.locator('img.gallery-image');
-  await image.scrollIntoViewIfNeeded();
+  // Vendored WebP, not a media-route fetch: the pictures actually decode,
+  // which the old remote-media "pending frame" case could never measure. They
+  // are also `loading="lazy"` (issue 176), and engines differ on how far ahead
+  // of the viewport a lazy image is fetched — Firefox measurably later than
+  // Chromium/WebKit here — so this polls for decode rather than asserting it
+  // the instant the page settles.
+  const grid = page.locator('.gallery-grid');
+  await grid.scrollIntoViewIfNeeded();
+  const thumbs = page.locator('img.gallery-thumb');
   await expect
-    .poll(async () => image.evaluate((img) => img.complete && img.naturalWidth > 0), {
-      message: 'the vendored preview never finished decoding',
-      timeout: 10_000,
-    })
+    .poll(
+      async () =>
+        thumbs.evaluateAll((nodes) =>
+          nodes.length > 0 && nodes.every((img) => img.complete && img.naturalWidth > 0)
+        ),
+      { message: 'the vendored previews never finished decoding', timeout: 10_000 }
+    )
     .toBe(true);
+
   const observed = await page.evaluate(() => {
-    const frames = [...window.document.querySelectorAll('.gallery-image-button')];
-    const images = [...window.document.querySelectorAll('img.gallery-image')];
-    const counter = window.document.querySelector('.gallery-count');
-    const counterStyle = counter === null ? null : getComputedStyle(counter);
-    const counterBox = counter === null ? null : counter.getBoundingClientRect();
-    /* The track the stage centres itself in, measured rather than read off a
-       token, because it is the thing the stage's own cap has to be compared
-       AGAINST. Since issue 241 the track IS the frame: the arrows moved out of
-       this row and into the control row under the work, so the whole of it
-       belongs to the stage. */
-    const row = window.document.querySelector('.gallery-frame');
-    const track = row.getBoundingClientRect().width;
+    const gridNode = window.document.querySelector('.gallery-grid');
+    const tiles = [...window.document.querySelectorAll('.gallery-tile')];
+    const images = [...window.document.querySelectorAll('img.gallery-thumb')];
     return {
-      arrowsInFrame: row.querySelectorAll(':scope > .icon-button').length,
-      frameCount: frames.length,
-      imageCount: images.length,
-      track,
-      count: counter?.textContent?.trim(),
-      /* The counter is still in the tree and still says where the reader is —
-         it is the position's aria-live voice — but it is CLIPPED out of view;
-         the visible mark is the bare ordinal (owner sketch 2026-08-31). */
-      counterWidth: counterBox === null ? null : counterBox.width,
-      counterClip: counterStyle === null ? null : counterStyle.clipPath,
-      ordinal: window.document.querySelector('.gallery-ordinal')?.textContent?.trim() ?? null,
-      ordinalHidden:
-        window.document.querySelector('.gallery-ordinal')?.getAttribute('aria-hidden') ?? null,
+      declared: gridNode.getAttribute('data-gallery-tiles'),
+      tiles: tiles.length,
+      images: images.length,
+      /* One picture per tile, and every one of them the PREVIEW derivative:
+         the point of the row is that eight masters are not stacked into it. */
+      perTile: tiles.map((tile) => tile.querySelectorAll('img.gallery-thumb').length),
+      lazy: images.map((image) => image.getAttribute('loading')),
       fit: images.map((image) => getComputedStyle(image).objectFit),
-      sizes: frames.map((frame) => {
-        const box = frame.getBoundingClientRect();
-        return { width: box.width, height: box.height };
-      }),
+      previews: images.every((image) => /-preview-/.test(image.currentSrc)),
+      masters: images.filter((image) => /-full-/.test(image.currentSrc)).length,
+      /* Nothing enlarged exists until a tile is opened, which is the other
+         half of "one loaded photograph": the closed page mounts no stage at
+         all, so there is no second copy of anything to load. */
+      enlarged: window.document.querySelectorAll('.gallery-lightbox-image').length,
+      note: window.document.querySelector('.gallery-control-note')?.textContent?.trim() ?? null,
+      controls: window.document.querySelectorAll('.gallery-control').length,
     };
   });
-  expect(observed.frameCount, 'the gallery must render exactly one visible frame, never eight').toBe(1);
-  expect(observed.imageCount, 'exactly one <img> may be mounted in the feed frame').toBe(1);
-  expect(
-    observed.arrowsInFrame,
-    'an arrow is back inside the frame, taking inline size from the work it points at'
-  ).toBe(0);
-  /* The sentence survives as the live region — an assistive reader is told
-     what KIND of item a move landed on — clipped rather than painted; the
-     visible mark is the bare ordinal the owner drew ("1/n", 2026-08-31),
-     aria-hidden so a move is never announced twice. */
-  expect(observed.count).toBe('Photograph 1 of 8');
-  expect(
-    observed.counterWidth,
-    `the counter paints ${observed.counterWidth}px of visible text beside the ordinal`
-  ).toBeLessThanOrEqual(1 + subPixel);
-  expect(observed.counterClip, 'the counter is not clipped, only shrunk').toContain('inset');
-  expect(observed.ordinal, 'the visible 1/n mark is gone').toBe('1 / 8');
-  expect(observed.ordinalHidden, 'the ordinal speaks over the live region').toBe('true');
-  /* The box is reserved before the byte arrives, and since 2026-08-28 it is a
-     SQUARE stage rather than the feed's 16:9 media box: the owner's drawings
-     are portrait scans, so a wide frame cropped them ("the art is cut off
-     significantly") or surrounded them with dead space. The stage takes the
-     SMALLER of its 1fr track and its own 28rem token, and the picture is
-     `contain` inside it — whole, never cropped — which is why a single 4K
-     photograph still costs the page no layout shift. */
-  const [box] = observed.sizes;
-  expect(box.height, 'the gallery frame reserves no height').toBeGreaterThan(0);
-  expect(observed.fit, 'the photograph is cropped to fill its stage instead of shown whole').toEqual([
-    'contain',
-  ]);
-  expect(
-    box.height,
-    `the gallery stage is ${box.width.toFixed(1)}x${box.height.toFixed(1)}, not the square the owner asked for`
-  ).toBeCloseTo(box.width, 0);
-  const expectedWidth = Math.min(observed.track, galleryStageCapPx);
-  expect(
-    box.width,
-    `the gallery stage is ${box.width.toFixed(1)}px inside a ${observed.track.toFixed(1)}px track, not the expected ${expectedWidth.toFixed(1)}px`
-  ).toBeCloseTo(expectedWidth, 0);
-  /* The cap must be doing real work somewhere, not coincidentally matching
-     the track — but this test runs across every project, including the phone
-     emulations, whose own viewport genuinely renders a track under 300px wide
-     (MEASURED: 242px on an iPhone 13), where the cap is correctly inert.
-     Gating on the track's own MEASURED width — a layout fact independent of
-     whatever the size token currently says — rather than on the project name
-     (this file's own capability-over-project-name doctrine) restricts the
-     strict-inequality proof to viewports wide enough to exercise it, without
-     ever weakening what it proves there: on a desktop-width track this still
-     fails exactly as hard against the 28rem -> 280rem mutant, which would let
-     the stage grow to the full track. */
-  if (observed.track > galleryStageCapPx) {
-    expect(
-      box.width,
-      `the stage filled its whole ${observed.track.toFixed(1)}px track; the size cap did not engage`
-    ).toBeLessThan(observed.track);
-  }
+
+  expect(observed.tiles, 'the gallery rendered a number of tiles other than the four it declares').toBe(4);
+  expect(observed.declared, 'the grid stopped declaring how many tiles it drew').toBe('4');
+  expect(observed.controls, 'the row lost its control tile, or grew a second one').toBe(1);
+  expect(observed.images, 'the row mounts a number of pictures other than one per tile').toBe(4);
+  expect(observed.perTile, 'a tile mounts something other than exactly one picture').toEqual([1, 1, 1, 1]);
+  expect(observed.lazy, 'a thumbnail stopped being lazy, so the row costs a reader who never reaches it').toEqual(
+    ['lazy', 'lazy', 'lazy', 'lazy']
+  );
+  expect(observed.fit, 'a thumbnail is letterboxed inside its square instead of filling it').toEqual(
+    ['cover', 'cover', 'cover', 'cover']
+  );
+  expect(observed.previews, 'a tile is showing something other than the preview derivative').toBe(true);
+  expect(observed.masters, 'a full-size master is mounted in the tile row').toBe(0);
+  expect(observed.enlarged, 'an enlarged picture is mounted before anybody opened one').toBe(0);
+  /* The row says what it is showing OF, honestly: four of the eight the
+     vendored set carries, and where the other four are. */
+  expect(observed.note, 'the control tile stopped saying how much of the set the row shows').toBe(
+    '4 of 8 shown · open one to page through all'
+  );
+
+  // ...and opening one mounts exactly ONE enlarged picture, not eight.
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
+  await expect(page.locator('.gallery-lightbox-image')).toHaveCount(1);
+  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 8');
 });
 
-test('prev/next cycle the visible photograph without leaving the page', async ({ page }) => {
+/* THE FULL DERIVATIVE IS FETCHED ON DEMAND AND NOT BEFORE (issue 176, issue
+ * 241; owner directive, 2026-09-03, issue 287).
+ *
+ * The old frame proved this by mounting one <img> at a time. A grid mounts
+ * four, so the claim has to be made where it is now decided — in the network,
+ * against the requests an engine actually issued. The vendored set names the
+ * two derivatives apart (`-preview-` against `-full-`), so this needs no
+ * fixture and no route interception to read: a request either happened before
+ * the press or it did not. */
+test('a tile costs a reader its preview and the master arrives only when one is opened (issue 176; owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
+  const requested = [];
+  page.on('request', (request) => {
+    const name = request.url().split('/').pop();
+    if (/^gallery-\d+-(full|preview)-/.test(name ?? '')) {
+      requested.push(name);
+    }
+  });
   await visit(page);
-  const image = page.locator('img.gallery-image');
-  const before = await image.getAttribute('src');
-  /* The moving control is the device's own: the stage pair where a fine
-     pointer shows it, the dots where touch hides it (owner, 2026-08-29).
-     What this lane holds either way is the cycle itself — the visible
-     photograph changes and comes back, with no navigation, no lightbox. */
-  // The pair is on every device since the 2026-08-31 sketch (issue 275).
+  const tile = page.locator('.gallery-tile[data-gallery-kind="image"]').first();
+  await tile.scrollIntoViewIfNeeded();
+  await expect
+    .poll(() => requested.filter((name) => name.includes('-preview-')).length, {
+      message: 'no preview was ever requested, so this lane measured no loading at all',
+      timeout: 10_000,
+    })
+    .toBeGreaterThan(0);
+
+  const before = requested.filter((name) => name.includes('-full-'));
+  expect(
+    before,
+    `the row pulled ${before.length} full-size master(s) nobody asked to see: ${before.join(', ')}`
+  ).toEqual([]);
+
+  await tile.click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
+  /* And the press pulls exactly one — the picture that was opened, not the
+     set. A neighbour-warming scheme would show up here as two or three. */
+  await expect
+    .poll(() => requested.filter((name) => name.includes('-full-')).length, {
+      message: 'opening a tile requested no master at all, so the stage is showing the thumbnail',
+      timeout: 15_000,
+    })
+    .toBe(1);
+  expect(
+    requested.filter((name) => name.includes('-full-'))[0],
+    'the stage pulled a master other than the tile that was opened'
+  ).toMatch(/^gallery-01-full-/);
+});
+
+test('prev/next cycle the enlarged photograph without leaving the page (issue 176; owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
+  await visit(page);
+  const url = page.url();
+  const dialog = page.locator('dialog.gallery-lightbox');
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(dialog).toBeVisible();
+  const enlarged = page.locator('img.gallery-lightbox-image');
+  const before = await enlarged.getAttribute('src');
+
   await page.getByRole('button', { name: 'Next photograph' }).click();
   await expect(page.locator('.gallery-count')).toHaveText('Photograph 2 of 8');
-  const after = await image.getAttribute('src');
-  expect(after, 'next must actually change which photograph is visible').not.toBe(before);
+  const after = await enlarged.getAttribute('src');
+  expect(after, 'next must actually change which photograph is enlarged').not.toBe(before);
   await page.getByRole('button', { name: 'Previous photograph' }).click();
   await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 8');
-  const backToStart = await image.getAttribute('src');
-  expect(backToStart).toBe(before);
+  expect(await enlarged.getAttribute('src')).toBe(before);
+  /* WITHOUT LEAVING THE PAGE, which is the half the title is about: the stage
+     is still open and the document is still the one the reader arrived on. */
+  await expect(dialog).toHaveJSProperty('open', true);
+  expect(page.url(), 'paging the stage navigated the page').toBe(url);
 });
 
 /* THE STAGE PAIR, ON EVERY DEVICE (owner sketch 2026-08-31, issue 275; the
  * desktop half was owner 2026-08-29: "on the web browser, I lost the ability
  * to move through the images/videos, only on full screen I can do it").
  *
- * The desktop defect that first brought the pair back is structural,
- * MEASURED on this exact binary: a mouse drag across the still never became
- * a swipe — the native image drag took it after one pointermove and the
- * browser sent pointercancel — so a fine-pointer reader's only in-strip
- * control was a 12px chevron. The 2026-08-31 sketch then retired the dot
- * row, which had been the phone's press equivalent, so the capability gate
- * that hid the pair from touch devices retired with it: this lane now
- * drives the same repair on EVERY project — two visible 44px buttons ON the
- * work that page stills and films alike, a playing film included, with the
- * handover taken back. */
-test('the stage pair pages every kind, on every device, inside 44px targets (owner sketch 2026-08-31)', async ({
+ * RE-AIMED at the stage the pair now lives on (owner directive, 2026-09-03,
+ * issue 287). The "pages every KIND" half is deleted rather than moved: a
+ * film is never in the dialog now — it plays in its own tile — so a lane that
+ * paged a playing film through this pair would be driving a route the design
+ * does not have. What is left is every claim that was about the READER: two
+ * real 44px targets, visible on every device rather than gated behind a fine
+ * pointer, sitting ON the picture's own edges instead of adrift in a track,
+ * and a set that WRAPS in both directions so neither end is a dead stop.
+ *
+ * The absent branch rides the same lane, because "when there is more than one
+ * still" is the condition the pair is drawn under: the manifest fixture holds
+ * exactly one still, and a stage with nothing to page to must offer no pair
+ * and no count at all rather than two controls that do nothing. */
+test('the stage pair pages the set inside 44px targets on every device, wraps both ways, and is absent when there is nowhere to go (owner sketch 2026-08-31; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
-  await serveGalleryManifest(page);
   await visit(page);
-  const stage = page.locator('.gallery-stage');
-  await stage.scrollIntoViewIfNeeded();
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  const dialog = page.locator('dialog.gallery-lightbox');
+  await expect(dialog).toBeVisible();
   const previous = page.locator('.gallery-nav[data-gallery-nav="previous"]');
   const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
   await expect(previous).toHaveCount(1);
   await expect(next).toHaveCount(1);
-
-  /* Visible, at the touch floor, and ON the stage rather than adrift in the
-     track — each control's centre sits within the stage's own span, which is
-     the adjacency the pre-241 arrows lost by 212px. */
   await expect(previous).toBeVisible();
   await expect(next).toBeVisible();
-  const stageBox = await stage.boundingBox();
+
+  /* At the touch floor, and ON the work rather than adrift beside it — each
+     control's centre sits within the picture's own span, which is the
+     adjacency the pre-241 arrows lost by 212px. */
+  const picture = await page.locator('img.gallery-lightbox-image').boundingBox();
   for (const control of [previous, next]) {
     const box = await control.boundingBox();
-    expect(box.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-    expect(box.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+    expect(box.width, 'a stage control fell under the touch floor').toBeGreaterThanOrEqual(
+      touchFloorPx - subPixel
+    );
+    expect(box.height, 'a stage control fell under the touch floor').toBeGreaterThanOrEqual(
+      touchFloorPx - subPixel
+    );
     const centre = box.x + box.width / 2;
-    expect(centre, 'a nav control sits off the work’s own span').toBeGreaterThanOrEqual(stageBox.x - subPixel);
+    expect(centre, 'a nav control sits off the work’s own span').toBeGreaterThanOrEqual(
+      picture.x - subPixel
+    );
     expect(centre, 'a nav control sits off the work’s own span').toBeLessThanOrEqual(
-      stageBox.x + stageBox.width + subPixel
+      picture.x + picture.width + subPixel
     );
   }
 
-  // Pages a still onto a film, a film onto a still, wrapping both ways...
+  /* IT WRAPS, both ways, and the walk is the whole set rather than one step:
+     eight presses of next return the reader to where they started, and one
+     press of previous from the first item lands on the last. */
+  for (let step = 1; step < 8; step += 1) {
+    await next.click();
+    await expect(page.locator('.gallery-count')).toHaveText(`Photograph ${step + 1} of 8`);
+  }
   await next.click();
-  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
-  await next.click();
-  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
-  await previous.click();
-  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
-
-  /* ...and pages a PLAYING film, which is the owner's "only on full screen I
-     can do it" made impossible to reintroduce: the pair sits above the
-     player, so no fullscreen and no lightbox is ever required to leave a
-     film. Leaving through it runs goTo(), which takes the handover back —
-     the returning film is behind its veil with no native controls declared,
-     exactly as the issue-243 walk demands of every other route. */
-  await page.locator('.gallery-play').click();
-  await expect
-    .poll(async () => page.locator('video').evaluate((node) => node.controls), {
-      message: 'the play press never handed the player its controls',
-      timeout: 5_000,
-    })
-    .toBe(true);
-  await next.click();
-  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
-  await previous.click();
-  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
   await expect(
-    page.locator('.gallery-film-veil'),
-    'paging away from a playing film did not hand its surface back'
-  ).toHaveCount(1);
-  expect(
-    await page.locator('video').evaluate((node) => node.controls),
-    'the returned film still declares the controls it was handed before the reader paged away'
-  ).toBe(false);
+    page.locator('.gallery-count'),
+    'the end of the set is a dead stop instead of a wrap'
+  ).toHaveText('Photograph 1 of 8');
+  await previous.click();
+  await expect(
+    page.locator('.gallery-count'),
+    'the start of the set is a dead stop instead of a wrap'
+  ).toHaveText('Photograph 8 of 8');
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
 
+  /* AND THE ABSENT BRANCH, on a set with exactly one still: the fixture's
+     other item is a film, which never reaches this stage, so there is nowhere
+     to page to and nothing may be drawn that says otherwise. */
+  await serveGalleryManifest(page);
+  await visit(page);
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(dialog).toBeVisible();
+  await expect(
+    page.locator('.gallery-nav'),
+    'a stage with one still still draws a pair of controls that can only return to it'
+  ).toHaveCount(0);
+  await expect(
+    page.locator('.gallery-count'),
+    'a stage with one still counts a position nobody can move'
+  ).toHaveCount(0);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-/* THE SET DROPDOWN (owner sketch 2026-08-31, issue 275): a small control
- * above the frame choosing which set the strip shows. This lane serves the
- * fixture UNTAGGED, so the sets under test are the kind-derived defaults —
- * the still is a Drawing, the film a Video — which is both halves of the
- * data-driven claim at once: entries exist exactly for what the manifest
- * holds, and nothing (no OldSchool RuneScape, no empty promise) is listed
- * for a set nobody has published. The owner weighed the open menu briefly
- * overlapping the stage and took it; what that trade must never cost is
- * layout — opening the menu grows the document by nothing. */
-test('the set dropdown filters the strip, overlays without moving the page, and lists only sets that exist (issue 275)', async ({
+/* THE SET CONTROL (owner sketch 2026-08-31, issue 275; RE-AIMED by the owner
+ * directive of 2026-09-03, issue 287). The dropdown became the control tile's
+ * own switch — one pressed button per set, in the row, with no menu to open
+ * and therefore no overlap to trade against. What the ruling was FOR is
+ * unchanged and is what this measures: an entry exists exactly for a set
+ * something is published in, choosing one really filters the row, and the
+ * choice costs the page no layout.
+ *
+ * It serves the fixture UNTAGGED, so the sets under test are the kind-derived
+ * defaults — the still is a Photograph, the film a Video — which is both
+ * halves of the data-driven claim at once: entries exist for what the
+ * manifest holds, and nothing (no OldSchool RuneScape, no empty promise) is
+ * listed for a set nobody has published. The one-set branch is measured on
+ * the vendored bootstrap row first, because a switch offering a choice of one
+ * is a control that lies about having a choice. */
+test('the set switch lists only sets that exist, filters the row without moving the page, and offers no choice when there is one set (issue 275; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
+  await visit(page);
+  const grid = page.locator('.gallery-grid');
+  await grid.scrollIntoViewIfNeeded();
+  /* ONE SET, so no switch at all — the set is NAMED instead, which is the
+     honest-states floor applied to a control: a button nobody can press to
+     any effect is worse than a label. */
+  await expect(
+    page.locator('.gallery-set'),
+    'a set switch is drawn for a row with only one set to choose'
+  ).toHaveCount(0);
+  await expect(page.locator('.gallery-sets')).toHaveCount(0);
+  await expect(page.locator('.gallery-set-name')).toHaveText('Photographs');
+
   await page.route('**/media/mutable/gallery/manifest.json', (route) =>
     route.fulfill({
       status: 200,
@@ -3716,60 +3787,97 @@ test('the set dropdown filters the strip, overlays without moving the page, and 
     })
   );
   await visit(page);
-  const button = page.locator('.gallery-set-button');
-  await button.scrollIntoViewIfNeeded();
-  await expect(button).toBeVisible();
-  await expect(button).toContainText('Drawings');
-  const buttonBox = await button.boundingBox();
-  expect(buttonBox.width + subPixel, 'the set button is under the touch floor').toBeGreaterThanOrEqual(
-    touchFloorPx
-  );
-  expect(buttonBox.height + subPixel, 'the set button is under the touch floor').toBeGreaterThanOrEqual(
-    touchFloorPx
-  );
-  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 1');
+  await grid.scrollIntoViewIfNeeded();
+  const sets = page.locator('.gallery-set');
+  await expect(
+    sets,
+    'the switch lists a set the manifest never published, or lost one it did'
+  ).toHaveText(['Photographs · 1', 'Videos · 1']);
+  await expect(page.locator('.gallery-set-name')).toHaveCount(0);
+  await expect(page.locator('.gallery-sets')).toHaveAttribute('aria-label', 'Media set');
+  for (const index of [0, 1]) {
+    const box = await sets.nth(index).boundingBox();
+    expect(box.width + subPixel, 'a set button is under the touch floor').toBeGreaterThanOrEqual(
+      touchFloorPx
+    );
+    expect(box.height + subPixel, 'a set button is under the touch floor').toBeGreaterThanOrEqual(
+      touchFloorPx
+    );
+  }
+  /* The chosen set says so in the accessibility tree, not by ink alone — the
+     dataviz floor applied to a control (AGENTS.md, "a value is never encoded
+     by color alone"). */
+  await expect(sets.nth(0)).toHaveAttribute('aria-pressed', 'true');
+  await expect(sets.nth(1)).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('.gallery-tile[data-gallery-kind="image"]')).toHaveCount(1);
+  await expect(page.locator('.gallery-tile[data-gallery-kind="video"]')).toHaveCount(0);
 
   const heightBefore = await page.evaluate(() => window.document.documentElement.scrollHeight);
-  await button.click();
-  const menu = page.locator('.gallery-set-menu');
-  await expect(menu).toBeVisible();
-  await expect(page.locator('.gallery-set-option')).toHaveText(['Drawings', 'Videos']);
-  const heightOpen = await page.evaluate(() => window.document.documentElement.scrollHeight);
-  expect(heightOpen, 'opening the set menu grew the document').toBe(heightBefore);
-
-  /* Choosing filters the strip — the film set holds the film — closes the
-     menu, renames the button, and hands focus back to it, so the keyboard
-     is never stranded in a control that just unmounted. */
-  await page.locator('.gallery-set-option', { hasText: 'Videos' }).click();
-  await expect(menu).toHaveCount(0);
-  await expect(page.locator('.gallery-count')).toHaveText('Film 1 of 1');
-  await expect(button).toContainText('Videos');
+  const gridBefore = await grid.boundingBox();
+  await sets.nth(1).click();
+  await expect(sets.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect(sets.nth(0)).toHaveAttribute('aria-pressed', 'false');
+  /* Choosing really filters the row: the film set holds the film and nothing
+     else, and the still is gone rather than merely dimmed. */
+  await expect(page.locator('.gallery-tile[data-gallery-kind="video"]')).toHaveCount(1);
+  await expect(page.locator('.gallery-tile[data-gallery-kind="image"]')).toHaveCount(0);
   expect(
-    await page.evaluate(() => window.document.activeElement?.className ?? ''),
+    await page.evaluate(() => window.document.documentElement.scrollHeight),
+    'choosing a set grew the document'
+  ).toBe(heightBefore);
+  const gridAfter = await grid.boundingBox();
+  expect(
+    { x: Math.round(gridAfter.x), width: Math.round(gridAfter.width), height: Math.round(gridAfter.height) },
+    'choosing a set moved or resized the row it filters'
+  ).toEqual({
+    x: Math.round(gridBefore.x),
+    width: Math.round(gridBefore.width),
+    height: Math.round(gridBefore.height),
+  });
+  /* AND THE KEYBOARD IS NEVER STRANDED BY A CHOICE. The buttons are keyed by
+     the set they name, so pressing one does not unmount it — which is exactly
+     what the retired dropdown had to repair by hand, and what this shape gets
+     for free. A real Enter on a focused button is what proves it: a CLICK
+     cannot, because macOS WebKit does not focus a <button> on a mouse press
+     at all (MEASURED: activeElement is the body there), and that is an engine
+     policy rather than anything this page decides.
+     It doubles as the keyboard half of the control — the switch is reachable
+     and operable without a pointer, on every engine. */
+  await sets.nth(0).focus();
+  await page.keyboard.press('Enter');
+  await expect(sets.nth(0)).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.gallery-tile[data-gallery-kind="image"]')).toHaveCount(1);
+  expect(
+    await page.evaluate(() => {
+      const buttons = [...window.document.querySelectorAll('.gallery-set')];
+      return buttons.indexOf(window.document.activeElement);
+    }),
     'the choice stranded keyboard focus'
-  ).toContain('gallery-set-button');
+  ).toBe(0);
 
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-test('clicking the photograph opens a real modal dialog with a larger, unframed image; Escape closes it', async ({
+test('opening a tile shows a real modal dialog with a larger, unframed photograph; Escape closes it and hands the tile back its focus (issue 202; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await visit(page);
   const dialog = page.locator('dialog.gallery-lightbox');
   await expect(dialog).not.toBeVisible();
-  /* The strip's picture has to have decoded before the comparison below, which
-     reads its intrinsic ratio to work out how much of its square stage the
-     photograph actually paints. */
-  const strip = page.locator('img.gallery-image');
-  await strip.scrollIntoViewIfNeeded();
+  /* The tile's picture has to have decoded before the comparison below, which
+     is between two PAINTED areas rather than two boxes. */
+  const tile = page.locator('.gallery-tile[data-gallery-kind="image"]').first();
+  await tile.scrollIntoViewIfNeeded();
+  const thumb = tile.locator('img.gallery-thumb');
   await expect
-    .poll(async () => strip.evaluate((img) => img.complete && img.naturalWidth > 0), {
+    .poll(async () => thumb.evaluate((img) => img.complete && img.naturalWidth > 0), {
       message: 'the vendored preview never finished decoding',
       timeout: 10_000,
     })
     .toBe(true);
-  await page.locator('.gallery-image-button').click();
+  const tileBox = await tile.boundingBox();
+
+  await tile.click();
   await expect(dialog).toBeVisible();
   // A native <dialog> shown with showModal() reports itself open, and its
   // ::backdrop is what makes the rest of the page inert to a pointer.
@@ -3777,88 +3885,84 @@ test('clicking the photograph opens a real modal dialog with a larger, unframed 
   expect(modal, 'the dialog did not open as a real top-layer modal').toBe(true);
   const enlarged = page.locator('img.gallery-lightbox-image');
   await expect(enlarged).toBeVisible();
-  const [previewBox, enlargedBox, frame] = await Promise.all([
-    /* The PAINTED picture in the strip, not the box around it (issue 241).
-       The stage is a square and the photograph is `contain` inside it, so the
-       element's box has always been larger than the picture it shows — and
-       since the stage took back the width the arrows used to occupy, that
-       difference is big enough on a phone to make a box-to-box comparison
-       claim the enlargement shrank the photograph. What "larger" means here
-       is the pixels a reader can see, so the contain fit is computed from the
-       element's own intrinsic ratio. */
-    page.evaluate(() => {
-      const image = window.document.querySelector('img.gallery-image');
-      const box = image.getBoundingClientRect();
-      const ratio = image.naturalWidth / image.naturalHeight;
-      const painted = box.width / box.height > ratio
-        ? { width: box.height * ratio, height: box.height }
-        : { width: box.width, height: box.width / ratio };
-      return painted;
-    }),
-    enlarged.boundingBox(),
-    page.evaluate(() => {
-      const wrapper = window.document.querySelector('.gallery-lightbox-border');
-      const style = getComputedStyle(wrapper);
-      const wrapperBox = wrapper.getBoundingClientRect();
-      const imageBox = wrapper.querySelector('.gallery-lightbox-image').getBoundingClientRect();
-      return {
-        borderWidth: Number.parseFloat(style.borderTopWidth),
-        background: style.backgroundColor,
-        padding: [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft].map(
-          Number.parseFloat
-        ),
-        band: {
-          width: wrapperBox.width - imageBox.width,
-          height: wrapperBox.height - imageBox.height,
-        },
-      };
-    }),
-  ]);
-  // "Larger" is measured, not assumed: the enlarged image's rendered area
-  // must exceed the feed frame's, on every viewport this lane runs.
+  const enlargedBox = await enlarged.boundingBox();
+
+  /* "Larger" is measured, not assumed. The tile's thumbnail is `object-fit:
+     cover`, so the picture it paints IS its square box — no contain
+     arithmetic to do, and the comparison is between the pixels a reader can
+     actually see in each of the two states. */
   expect(
     enlargedBox.width * enlargedBox.height,
-    'the enlarged photograph is not measurably larger than the feed frame'
-  ).toBeGreaterThan(previewBox.width * previewBox.height);
+    `the enlarged photograph paints ${Math.round(enlargedBox.width * enlargedBox.height)}px² against the tile's ${Math.round(tileBox.width * tileBox.height)}px²`
+  ).toBeGreaterThan(tileBox.width * tileBox.height);
+
   /* And it is UNFRAMED (owner directive, 2026-08-28: "get rid of those ugly
      outlines"). Issue 176's v1 painted a "static, simple, almost
      non-existent" border here and this lane pinned that it was real; the
-     three --gallery-frame-* tokens that decide it are now width 0, colour
-     transparent and padding 0, so what the enlarged work wears against the
-     scrim is nothing at all.
-     The wrapper survives — it is still the one place a future patterned
-     border would be a token edit — so the pin is that it ADDS nothing: no
-     line, no fill, and not one pixel of band around the picture. Each of the
-     three tokens fails this on its own if it comes back. */
-  expect(frame.borderWidth, 'the enlarged photograph wears a border again').toBe(0);
-  expect(frame.background, 'the frame wrapper paints a mat behind the photograph').toMatch(
+     wrapper that carried it — .gallery-lightbox-border and its three
+     --gallery-frame-* tokens — is gone with the redesign, so what the pin
+     becomes is that nothing took its place: the picture sits directly in its
+     <picture>, wearing no line and no mat, on a dialog that paints no surface
+     of its own behind it. Each half fails on its own if a frame returns. */
+  const frame = await page.evaluate(() => {
+    const image = window.document.querySelector('.gallery-lightbox-image');
+    const style = getComputedStyle(image);
+    const dialogNode = window.document.querySelector('dialog.gallery-lightbox');
+    const stage = window.document.querySelector('.gallery-stage');
+    const imageBox = image.getBoundingClientRect();
+    const stageBox = stage.getBoundingClientRect();
+    return {
+      wrappers: window.document.querySelectorAll('.gallery-lightbox-border').length,
+      borders: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth].map(
+        Number.parseFloat
+      ),
+      padding: [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft].map(
+        Number.parseFloat
+      ),
+      dialogBackground: getComputedStyle(dialogNode).backgroundColor,
+      /* The stage adds no band of its own around the picture either, which is
+         where a reintroduced mat would actually land now. */
+      band: {
+        width: stageBox.width - imageBox.width,
+        height: stageBox.height - imageBox.height,
+      },
+    };
+  });
+  expect(frame.wrappers, 'the retired frame wrapper came back around the photograph').toBe(0);
+  expect(frame.borders, 'the enlarged photograph wears a border again').toEqual([0, 0, 0, 0]);
+  expect(frame.padding, 'the enlarged photograph reserves a band inside its own box').toEqual([0, 0, 0, 0]);
+  expect(frame.dialogBackground, 'the dialog paints a mat behind the photograph').toMatch(
     /rgba\(0, 0, 0, 0\)|transparent/
   );
-  expect(frame.padding, 'the frame wrapper reserves a band around the photograph').toEqual([0, 0, 0, 0]);
   /* Half a CSS pixel of allowance rather than this file's usual hundredth,
      because this is a difference between two boxes on a scaled device: the
      Pixel 5 lane snaps layout to its 2.75x grid and reported a 0.03125px band
      around an image that has no padding at all. Half a pixel cannot hide a
-     frame — the smallest band any of these tokens can produce is a quarter-rem
-     of padding on both sides, which is 8px. */
+     frame — the smallest band the retired tokens could produce was a
+     quarter-rem of padding on both sides, which is 8px. */
   const bandGrainPx = 0.5;
   expect(
     Math.max(frame.band.width, frame.band.height),
-    `the frame wrapper is ${frame.band.width}x${frame.band.height} larger than the photograph inside it`
+    `the stage is ${frame.band.width}x${frame.band.height} larger than the photograph inside it`
   ).toBeLessThanOrEqual(bandGrainPx);
 
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
-  /* And focus comes back to the frame it was invoked from (issue 202). The
-     native dialog's own restoration cannot be relied on here: a mouse click
-     does not focus a <button> on macOS WebKit, so on the engine every iOS
-     browser runs the "previously focused element" is the body — this
-     assertion is exactly what fails if the component stops restoring it
-     explicitly. */
-  const focused = await page.evaluate(() =>
-    window.document.activeElement?.classList.contains('gallery-image-button')
-  );
-  expect(focused, 'Escape left focus somewhere other than the frame that opened the lightbox').toBe(true);
+  /* And focus comes back to the TILE it was invoked from (issue 202), the
+     exact one rather than any of them. The native dialog's own restoration
+     cannot be relied on here: a mouse click does not focus a <button> on
+     macOS WebKit, so on the engine every iOS browser runs the "previously
+     focused element" is the body — this assertion is exactly what fails if
+     the component stops restoring it explicitly. */
+  const focused = await page.evaluate(() => {
+    const active = window.document.activeElement;
+    const tiles = [...window.document.querySelectorAll('.gallery-tile')];
+    return { index: tiles.indexOf(active), label: active?.getAttribute?.('aria-label') ?? null };
+  });
+  expect(
+    focused.index,
+    `Escape left focus on "${focused.label}" rather than on the tile that opened the stage`
+  ).toBe(0);
 });
 
 /* ===========================================================================
@@ -3874,18 +3978,29 @@ test('clicking the photograph opens a real modal dialog with a larger, unframed 
  * this measures the real offset on every engine the matrix runs, across all
  * three ways the dialog can be closed.
  *
- * It drives the STILL's stage deliberately: the lightbox is images-only since
- * this same PR made films play in the strip, so the surface this lane is
- * about is the one a still still opens.
+ * It drives a STILL's tile deliberately, and that is no longer a choice about
+ * which surface to prefer: since the 2026-09-03 redesign a film plays in its
+ * own tile and the dialog is stills only, so a still's tile is the only thing
+ * that opens this at all. The focus half is asserted by IDENTITY rather than
+ * by class — the tile that was pressed, not merely something that looks like
+ * one — because a grid has four of them and a restore to the wrong one is
+ * exactly the defect a class check cannot see.
  * ======================================================================== */
-test('opening and closing the enlarged media leaves the reader exactly where they were (issue 233)', async ({
+test('opening and closing the enlarged media leaves the reader exactly where they were, focus included (issue 233; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await visit(page);
   const dialog = page.locator('dialog.gallery-lightbox');
-  const frame = page.locator('.gallery-image-button').first();
-  await frame.scrollIntoViewIfNeeded();
+  /* The THIRD tile, not the first: a restore that always lands on the row's
+     first tile would satisfy this lane from the first tile and fail a reader
+     who opened any other. */
+  const tile = page.locator('.gallery-tile[data-gallery-kind="image"]').nth(2);
+  await tile.scrollIntoViewIfNeeded();
   await settled(page);
+  await page.evaluate(() => {
+    const tiles = [...window.document.querySelectorAll('.gallery-tile')];
+    window.__opener = tiles[2];
+  });
 
   const scrollY = () => page.evaluate(() => Math.round(window.scrollY));
   const start = await scrollY();
@@ -3897,8 +4012,9 @@ test('opening and closing the enlarged media leaves the reader exactly where the
   ).toBeGreaterThan(150);
 
   for (const close of ['escape', 'the close control', 'a backdrop click']) {
-    await frame.click();
+    await tile.click();
     await expect(dialog).toHaveJSProperty('open', true);
+    await expect(page.locator('.gallery-count')).toHaveText('Photograph 3 of 8');
     /* The defect was HERE, one step before the one the owner reported: the
        dialog took the reader with it as it opened. */
     expect(await scrollY(), `opening the lightbox moved the page from ${start}`).toBe(start);
@@ -3933,229 +4049,209 @@ test('opening and closing the enlarged media leaves the reader exactly where the
        never focused the button, so the reader lands on the document body.
        WebKit is therefore the engine this half is about, and it is the engine
        every iOS browser runs. */
-    const focused = await page.evaluate(
-      () => window.document.activeElement?.className ?? 'none'
-    );
-    expect(focused, `closing by ${close} left focus on "${focused}"`).toContain(
-      'gallery-image-button'
-    );
+    const focused = await page.evaluate(() => ({
+      same: window.document.activeElement === window.__opener,
+      where: window.document.activeElement?.getAttribute?.('aria-label') ?? window.document.activeElement?.tagName ?? 'none',
+    }));
+    expect(
+      focused.same,
+      `closing by ${close} left focus on "${focused.where}" rather than on the tile that opened the stage`
+    ).toBe(true);
   }
 });
 
-/* A FILM MOUNTS INLINE, IN THE BLOCK A STILL GETS, BEHIND ONE CONTROL
- * (issue 233; re-aimed under issue 243).
+/* A FILM IS A TILE, PLAYED WHERE IT SITS, BEHIND ONE CONTROL (issue 233,
+ * issue 243; RE-AIMED by the owner directive of 2026-09-03, issue 287).
  *
- * The header this lane carried described the design the owner reversed, and a
- * comment that describes retired intent is worse than none — a reader trusts
- * it and reasons from a shape the code no longer has. So it is rewritten to
- * the shape actually measured below, and the history is stated rather than
- * quietly dropped.
+ * The owner's rulings this lane carries are unchanged and every one of them
+ * outlived the strip: "make it one single block that doesn't expand, reduce
+ * based on the media" (2026-08-28), "the sensitive area should only be the
+ * button and not the entire video", and nothing anywhere ever autoplaying.
+ * What changed is the block. A film no longer shares a stage with a still —
+ * it has its OWN square tile in the same grid, so "one single block" becomes
+ * the strongest form of itself: a film's tile and a still's tile are on
+ * screen together and must be the identical box, measured side by side in one
+ * layout rather than across a navigation.
  *
- * WHAT IT USED TO SAY: the film's stage was to be "the wider and larger of the
- * two shapes" — 768x432 against a still's 448 square — under the 0.1.54
- * directive to "treat them like youtube videos... in this small minimal
- * version, which should be enlarged", and the decorative play mark was to be
- * gone because the native controls stood in for it.
- *
- * WHAT IT PROVES NOW, in a real engine, on a gallery whose items came down a
+ * What it proves, in a real engine, on a gallery whose items came down a
  * manifest exactly as the operator's own would:
- *   - the film mounts as one real inline <video> inside the CURRENT item's own
- *     stage — never in a dialog, never eight at once;
- *   - the retired decorative mark stays retired, and the ONE control a film
- *     carries is the play control inside the veil (owner, 2026-08-28: "the
- *     sensitive area should only be the button and not the entire video");
- *   - native controls are NOT declared yet — they arrive on the handover, which
- *     the gesture walk at the end of this file drives and measures;
+ *   - the film mounts as one real inline <video> inside its own tile — never
+ *     in the dialog, never one of eight;
+ *   - the ONE control a film carries is the play control, at the touch floor,
+ *     over the poster;
+ *   - native controls are NOT declared until the press, and the press is what
+ *     declares them, in the tile, with no dialog opening behind it;
  *   - nothing autoplays, measured (no attribute, still paused, time 0);
  *   - the source ladder is the manifest's own order, sizes and poster;
- *   - the stage is the IDENTICAL box the still's was — one block that does not
- *     resize with its media (owner, 2026-08-28: "make it one single block that
- *     doesn't expand, reduce based on the media"), with the film reduced inside
- *     it by `object-fit: contain`.
+ *   - the tile is the IDENTICAL box the still's tile is, with the film
+ *     reduced inside it by `object-fit: contain`, before AND after the press.
  *
- * Both items ride one navigation so the two stages are compared as two states
- * of ONE page rather than against numbers this file states — the same
- * discipline the reservation lane below uses. */
-test('a film mounts inline in the same block a still gets, behind one play control (issue 233, 243)', async ({
+ * The e2e origin serves no media volume, so the fixture's files 404. That is
+ * deliberate rather than a gap: every assertion here is about the element,
+ * its attributes, its reserved box and the control beside it, all of which
+ * are byte-independent by this page's own zero-CLS floor, and publishing a
+ * fixture film into the repository to change that would be exactly the heavy
+ * media requirement 11 keeps out of git. */
+test('a film is a tile of its own square, plays inline behind one control, and never reaches the stage (issue 233, 243; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await serveGalleryManifest(page);
   await visit(page);
+  const grid = page.locator('.gallery-grid');
+  await grid.scrollIntoViewIfNeeded();
 
-  const stage = page.locator('.gallery-stage');
-  await stage.scrollIntoViewIfNeeded();
+  // The manifest replaced the vendored set wholesale, so the row is the
+  // fixture's own: one still, one film, one control tile.
+  await expect(page.locator('.gallery-tile')).toHaveCount(2);
+  await expect(page.locator('.gallery-control-note')).toHaveText('2 items');
 
-  // The manifest replaced the vendored set wholesale, so the strip opens on
-  // its first item — the still — and the counter says how many there are.
-  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
-  const still = await page.evaluate(() => {
-    const node = window.document.querySelector('.gallery-stage');
-    const box = node.getBoundingClientRect();
-    return {
-      kind: node.getAttribute('data-gallery-kind'),
-      width: box.width,
-      height: box.height,
-      buttons: window.document.querySelectorAll('.gallery-image-button').length,
-      videos: window.document.querySelectorAll('video').length,
-      marks: window.document.querySelectorAll('.gallery-play-mark').length,
-    };
-  });
-  expect(still.kind, 'a still’s stage does not declare its own kind').toBe('image');
-  expect(still.buttons, 'a still lost the enlarge button it has always had').toBe(1);
-  expect(still.videos, 'a still’s stage mounts a player').toBe(0);
-  expect(
-    still.height,
-    `the still’s stage is ${still.width.toFixed(1)}x${still.height.toFixed(1)}, not the square it keeps`
-  ).toBeCloseTo(still.width, 0);
-
-  /* The control names the item it will REACH (issue 241), and it is the
-     stage pair on every device now (issue 275) — pressing it by that name is
-     this lane's proof the kind-aware naming reaches a real engine, on every
-     project in the matrix. */
-  await page.getByRole('button', { name: 'Next film' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
-
-  const film = await page.evaluate(() => {
-    const node = window.document.querySelector('.gallery-stage');
-    const box = node.getBoundingClientRect();
+  const shape = await page.evaluate(() => {
+    const round = (box) => ({
+      width: Math.round(box.width * 10) / 10,
+      height: Math.round(box.height * 10) / 10,
+    });
+    const still = window.document.querySelector('.gallery-tile[data-gallery-kind="image"]');
+    const film = window.document.querySelector('.gallery-tile[data-gallery-kind="video"]');
     const video = window.document.querySelector('video');
-    const player = video === null ? null : video.getBoundingClientRect();
     return {
-      kind: node.getAttribute('data-gallery-kind'),
-      width: box.width,
-      height: box.height,
+      still: round(still.getBoundingClientRect()),
+      stillTag: still.tagName,
+      film: round(film.getBoundingClientRect()),
+      filmTag: film.tagName,
       videos: window.document.querySelectorAll('video').length,
-      marks: window.document.querySelectorAll('.gallery-play-mark').length,
-      buttons: window.document.querySelectorAll('.gallery-image-button').length,
       dialogVideos: window.document.querySelectorAll('dialog video').length,
-      player:
-        video === null
-          ? null
-          : {
-              tag: video.tagName,
-              controls: video.controls,
-              autoplay: video.autoplay,
-              /* The ATTRIBUTE, not the IDL mirror. Gecko implements the
-                 attribute's behaviour but exposes no `playsInline` property,
-                 so reading the property here reported `undefined` on Firefox
-                 (MEASURED) — and the stage-1 floor is about the declaration
-                 anyway, which is what every engine agrees on. */
-              playsinline: video.hasAttribute('playsinline'),
-              preload: video.preload,
-              paused: video.paused,
-              currentTime: video.currentTime,
-              poster: video.getAttribute('poster'),
-              inStage: node.contains(video),
-              sources: [...video.querySelectorAll('source')].map((source) => ({
-                src: source.getAttribute('src'),
-                type: source.getAttribute('type'),
-                media: source.getAttribute('media'),
-                /* What the ENGINE makes of that query at this viewport, which
-                   is the only thing that decides whether the rung is a
-                   candidate at all. */
-                eligible: source.media === '' || window.matchMedia(source.media).matches,
-              })),
-              width: player.width,
-              height: player.height,
-            },
+      inTile: film.contains(video),
+      plays: window.document.querySelectorAll('.gallery-play').length,
+      /* A film's tile is not a button: it must not carry the enlarge press
+         that would eat the play control's own. */
+      opens: film.matches('button'),
+      player: {
+        controls: video.controls,
+        autoplay: video.autoplay,
+        /* The ATTRIBUTE, not the IDL mirror. Gecko implements the attribute's
+           behaviour but exposes no `playsInline` property, so reading the
+           property here reported `undefined` on Firefox (MEASURED) — and the
+           stage-1 floor is about the declaration anyway, which is what every
+           engine agrees on. */
+        playsinline: video.hasAttribute('playsinline'),
+        preload: video.preload,
+        paused: video.paused,
+        currentTime: video.currentTime,
+        poster: video.getAttribute('poster'),
+        fit: getComputedStyle(video).objectFit,
+        box: round(video.getBoundingClientRect()),
+        sources: [...video.querySelectorAll('source')].map((source) => ({
+          src: source.getAttribute('src'),
+          type: source.getAttribute('type'),
+          media: source.getAttribute('media'),
+          /* What the ENGINE makes of that query at this viewport, which is
+             the only thing that decides whether the rung is a candidate. */
+          eligible: source.media === '' || window.matchMedia(source.media).matches,
+        })),
+      },
     };
   });
 
-  /* THE MARK IS GONE, on the item it used to be drawn on. */
-  expect(film.marks, 'the decorative play mark is painted on a film again').toBe(0);
-
-  /* THE PLAYER IS REAL, INLINE, AND IN THE STRIP — not in a dialog, and not
-     one of eight: exactly one <video> exists on the whole page, and it is
-     inside the current item's own stage. */
-  expect(film.kind, 'a film’s stage does not declare its own kind').toBe('video');
-  expect(film.videos, 'the strip mounts a number of players other than exactly one').toBe(1);
-  expect(film.dialogVideos, 'the lightbox mounts a player again').toBe(0);
-  expect(film.buttons, 'a film’s stage still carries the enlarge button that would eat its presses').toBe(0);
-  /* The one control a film DOES carry, and the owner's "the sensitive area
-     should only be the button": exactly one play control, inside the veil. */
-  await expect(page.locator('.gallery-film-veil .gallery-play')).toHaveCount(1);
-  expect(film.player.tag).toBe('VIDEO');
-  expect(film.player.inStage, 'the player is not inside the stage it is supposed to fill').toBe(true);
-  /* THE CONTROLS ARE NOT DECLARED YET — re-aimed (issue 243). They arrive when
-     the reader presses play; before that the veil owns the surface so a swipe
-     can cross the film without contesting a seek bar. The lane that drives the
-     handover and measures the controls appearing is at the end of this file
-     with the other gesture walks. */
-  expect(film.player.controls, 'a film shows native controls under its own swipe surface').toBe(false);
-  expect(film.player.playsinline, 'the player would go fullscreen on a phone instead of playing in place').toBe(true);
-  expect(film.player.preload).toBe('metadata');
+  /* THE PLAYER IS REAL, INLINE, AND IN ITS OWN TILE — not in the dialog, and
+     not one of eight: exactly one <video> exists on the whole page. */
+  expect(shape.stillTag, 'a still’s tile stopped being the button that opens the stage').toBe('BUTTON');
+  expect(shape.filmTag, 'a film’s tile is a button, so a press on the film would open a stage it never reaches').toBe('DIV');
+  expect(shape.opens, 'a film’s tile carries the enlarge press that would eat its play control').toBe(false);
+  expect(shape.videos, 'the row mounts a number of players other than exactly one').toBe(1);
+  expect(shape.dialogVideos, 'the stage mounts a player again').toBe(0);
+  expect(shape.inTile, 'the player is not inside the tile it is supposed to fill').toBe(true);
+  expect(shape.plays, 'a film carries a number of controls other than the one play control').toBe(1);
 
   /* NOTHING EVER AUTOPLAYS, measured rather than read off the source: the
      element declares no autoplay AND has not started itself. */
-  expect(film.player.autoplay, 'the player declares autoplay').toBe(false);
-  expect(film.player.paused, 'the player started without the reader pressing anything').toBe(true);
-  expect(film.player.currentTime, 'the player advanced without being asked').toBe(0);
+  expect(shape.player.autoplay, 'the player declares autoplay').toBe(false);
+  expect(shape.player.paused, 'the player started without the reader pressing anything').toBe(true);
+  expect(shape.player.currentTime, 'the player advanced without being asked').toBe(0);
+  expect(shape.player.controls, 'a film shows native controls before the reader asked for them').toBe(false);
+  expect(
+    shape.player.playsinline,
+    'the player would go fullscreen on a phone instead of playing in place'
+  ).toBe(true);
+  expect(shape.player.preload).toBe('metadata');
 
   /* THE LADDER IS THE MANIFEST'S OWN, in its own order, with the poster the
      manifest published rather than the item's large still. */
-  expect(film.player.sources.map((source) => source.type)).toEqual([
+  expect(shape.player.sources.map((source) => source.type)).toEqual([
     'video/mp4; codecs="hvc1"',
     'video/mp4',
     'video/mp4',
   ]);
-  expect(film.player.sources[0].src).toContain(`/media/immutable/${'f'.repeat(64)}/gallery/film-2160.mp4`);
-  expect(film.player.sources[1].src).toContain(`/media/immutable/${'0'.repeat(64)}/gallery/film-1080.mp4`);
-  expect(film.player.sources[2].src).toContain(`/media/immutable/${'1'.repeat(64)}/gallery/film-720.mp4`);
-  expect(film.player.poster).toContain(`/media/immutable/${'e'.repeat(64)}/gallery/film-poster.webp`);
+  expect(shape.player.sources[0].src).toContain(`/media/immutable/${'f'.repeat(64)}/gallery/film-2160.mp4`);
+  expect(shape.player.sources[1].src).toContain(`/media/immutable/${'0'.repeat(64)}/gallery/film-1080.mp4`);
+  expect(shape.player.sources[2].src).toContain(`/media/immutable/${'1'.repeat(64)}/gallery/film-720.mp4`);
+  expect(shape.player.poster).toContain(`/media/immutable/${'e'.repeat(64)}/gallery/film-poster.webp`);
 
   /* THE LADDER ALSO STATES A SIZE (issue 241), and the engine agrees with the
      arithmetic. The queries are the manifest's own numbers through the item's
      declared aspect; the floor carries none, so some rung always matches. */
-  expect(film.player.sources.map((source) => source.media)).toEqual([
+  expect(shape.player.sources.map((source) => source.media)).toEqual([
     '(min-width: 1920px)',
     '(min-width: 1280px)',
     null,
   ]);
-  const eligible = film.player.sources.filter((source) => source.eligible);
-  expect(eligible.length, 'no rung is eligible at this viewport; the film is unplayable').toBeGreaterThan(0);
   expect(
-    film.player.sources.at(-1).eligible,
+    shape.player.sources.filter((source) => source.eligible).length,
+    'no rung is eligible at this viewport; the film is unplayable'
+  ).toBeGreaterThan(0);
+  expect(
+    shape.player.sources.at(-1).eligible,
     'the smallest rung is gated behind a query, so a narrow viewport can be offered nothing'
   ).toBe(true);
 
-  /* ONE BLOCK — RE-AIMED (issue 243). This used to require the film's stage to
-     be WIDESCREEN AND ENLARGED, 768x432 against the still's 448 square, and
-     the owner reversed it after seeing it live: "the art box changes heights
-     depending on it being a video or art... make it one single block that
-     doesn't expand, reduce based on the media."
-     So the measurement inverts. The film's stage must be the IDENTICAL box the
-     still's was, at whatever this project's viewport allows, and the film
-     reduces inside it. Measured rather than read off a token, and compared
-     against the box measured earlier in this same run, so a mutation to
-     either side of the comparison shows up as a difference. */
+  /* ONE BLOCK, and the strongest form of it: the two tiles are on screen
+     together, so the comparison is between two boxes of ONE layout rather
+     than between two states of a navigation. The film reduces inside its
+     square by `contain`, which is the owner's "reduce based on the media". */
   expect(
-    film.width,
-    `a film’s stage is ${film.width.toFixed(1)}px wide against a still’s ${still.width.toFixed(1)}px; the block changes size with the media`
-  ).toBeCloseTo(still.width, 1);
+    shape.film,
+    `a film’s tile is ${shape.film.width}x${shape.film.height} against a still’s ${shape.still.width}x${shape.still.height}; the block changes size with the media`
+  ).toEqual(shape.still);
+  expect(shape.player.box, 'the player does not fill the tile it was given').toEqual(shape.film);
   expect(
-    film.height,
-    `a film’s stage is ${film.height.toFixed(1)}px tall against a still’s ${still.height.toFixed(1)}px; the block changes size with the media`
-  ).toBeCloseTo(still.height, 1);
-  // The player fills the stage it was given, so the reserved box is the box —
-  // and `object-fit: contain` is what reduces the film inside it.
-  expect(film.player.width).toBeCloseTo(film.width, 0);
-  expect(film.player.height).toBeCloseTo(film.height, 0);
-  expect(
-    await page.locator('.gallery-player').evaluate((node) => getComputedStyle(node).objectFit),
-    'the film fills the block by being cropped rather than by being reduced'
+    shape.player.fit,
+    'the film fills its tile by being cropped rather than by being reduced'
   ).toBe('contain');
 
-  /* AND THE BLOCK IS STILL THE WHOLE FRAME (issue 241). The arrows used to
-     flank the stage inside this row and took 116px of a 288px card with them,
-     which left a film 172px wide and 97px tall. With the arrows in the control
-     row the stage takes the frame's inline size, up to the shared cap. */
-  const frameWidth = await page.evaluate(
-    () => window.document.querySelector('.gallery-frame').getBoundingClientRect().width
+  /* THE PRESS IS THE ONE SENSITIVE AREA, and it is the whole handover the
+     owner reported: pressing the play control declares the native controls,
+     retires the control that was pressed, and changes nothing about the box.
+     The film itself may or may not decode — the origin serves no media volume
+     and the sources 404 — so what is measured is the handover, which is the
+     part this component owns. */
+  const play = page.locator('.gallery-play');
+  const playBox = await play.boundingBox();
+  expect(playBox.width + subPixel, 'the play control is under the touch floor').toBeGreaterThanOrEqual(
+    touchFloorPx
   );
-  expect(
-    film.width,
-    `the film stage is ${film.width.toFixed(1)}px inside a ${frameWidth.toFixed(1)}px frame`
-  ).toBeCloseTo(Math.min(frameWidth, galleryStageCapPx), 0);
+  expect(playBox.height + subPixel, 'the play control is under the touch floor').toBeGreaterThanOrEqual(
+    touchFloorPx
+  );
+  await expect(play).toHaveAttribute('aria-label', 'Play A film, served by the lane');
+  await play.click();
+  await expect
+    .poll(async () => page.locator('video').evaluate((node) => node.controls), {
+      message: 'the play press never handed the player its controls',
+      timeout: 5_000,
+    })
+    .toBe(true);
+  await expect(
+    play,
+    'the play control still sits over a player that is now the reader’s to drive'
+  ).toHaveCount(0);
+  /* AND IT PLAYED WHERE IT SITS: no dialog opened behind the press, and the
+     tile is the box it always was. */
+  await expect(page.locator('dialog.gallery-lightbox')).not.toBeVisible();
+  const afterPress = await page.evaluate(() => {
+    const film = window.document.querySelector('.gallery-tile[data-gallery-kind="video"]');
+    const box = film.getBoundingClientRect();
+    return { width: Math.round(box.width * 10) / 10, height: Math.round(box.height * 10) / 10 };
+  });
+  expect(afterPress, 'handing the film its controls resized the tile it plays in').toEqual(shape.film);
 
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
@@ -4174,7 +4270,12 @@ test('a film mounts inline in the same block a still gets, behind one play contr
  * per project, so the phone lanes and the desktop lanes assert the same rule
  * and neither is a special case. The files 404 (the e2e origin serves no media
  * volume), which is exactly right here: this measures resource SELECTION, and
- * selection happens before a single byte of the file is read. */
+ * selection happens before a single byte of the file is read.
+ *
+ * The walk onto the film is gone with the strip (owner directive, 2026-09-03,
+ * issue 287): the film has its own tile and `preload="metadata"` sends the
+ * element after a rendition the moment the row mounts, so the selection this
+ * lane is about happens without anybody navigating anywhere. */
 test('a phone never pulls the 4K rung, and the smallest rung is reachable at all (issue 241)', async ({
   page,
 }) => {
@@ -4185,8 +4286,8 @@ test('a phone never pulls the 4K rung, and the smallest rung is reachable at all
   });
   await serveGalleryManifest(page);
   await visit(page);
+  await page.locator('.gallery-tile[data-gallery-kind="video"]').scrollIntoViewIfNeeded();
 
-  await goToItem(page, 'Film 2 of 2');
   // preload="metadata" means the element goes and gets one, so this waits for
   // the selection to have happened rather than for a fixed time.
   await expect
@@ -4220,150 +4321,78 @@ test('a phone never pulls the 4K rung, and the smallest rung is reachable at all
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-test('the gallery frame is centred in its track, with no dead gutter (issue 202)', async ({ page }) => {
-  /* The owner's complaint, measured: the frame's inline size is TRANSFERRED
-     from its block cap through aspect-ratio, so on a column wider than
-     35.5rem the button is narrower than its own 1fr track. Before this
-     landed it sat at the track's start edge — 568.9px of frame at the left
-     of an 842px track at a 1280px viewport, 273px of dead space on the right
-     alone. Both gutters are measured against the ARROWS that bound the
-     track, so this compares two rendered boxes and derives its expectation
-     from neither the stylesheet nor a token. */
-  await visit(page);
-  const frame = page.locator('.gallery-image-button');
-  await frame.scrollIntoViewIfNeeded();
-  const observed = await page.evaluate(() => {
-    /* The gutters are measured against the FRAME's own edges since issue
-       241; the touch-floor half of this lane now bounds the stage pair,
-       which is the control that remains after the dot row's retirement
-       (issue 275). Two rendered boxes still, and an expectation derived
-       from neither the stylesheet nor a token. */
-    const row = window.document.querySelector('.gallery-frame').getBoundingClientRect();
-    const button = window.document.querySelector('.gallery-image-button').getBoundingClientRect();
-    const controls = [...window.document.querySelectorAll('.gallery-nav')].map((control) =>
-      control.getBoundingClientRect()
-    );
-    return {
-      left: button.left - row.left,
-      right: row.right - button.right,
-      controls: controls.map((control) => ({ width: control.width, height: control.height })),
-    };
-  });
-  expect(observed.left, 'the frame sits against the start edge of its track').toBeGreaterThanOrEqual(0);
-  expect(
-    observed.left,
-    `the gutters are ${observed.left.toFixed(1)}px and ${observed.right.toFixed(1)}px — the frame is off centre`
-  ).toBeCloseTo(observed.right, 0);
-  /* Centring must not have been bought by shrinking the controls that
-     remain: both stage-pair buttons still clear the touch floor at every
-     viewport this lane runs. */
-  expect(observed.controls.length, 'the gallery lost its stage pair').toBe(2);
-  for (const control of observed.controls) {
-    expect(control.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-    expect(control.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-  }
-});
-
-/* ZERO SHIFT ACROSS A KIND CHANGE (issue 241, re-aimed at issue 265).
+/* THE GRID FILLS ITS COLUMN (issue 202, re-aimed by the owner directive of
+ * 2026-09-03, issue 287, and by the owner's standing no-dead-space rule:
+ * content short of its container's right edge is a defect).
  *
- * MEASURED on 0.1.54: a still's stage is a square and a film's is 16:9, and
- * each reserved its own box — so pressing next across the boundary resized the
- * document under the reader, -105.9px at a 390px viewport and +105.9px coming
- * back. The reservation now sits on the frame, which knows nothing about kind,
- * and this measures the document itself rather than any box: the whole page's
- * scroll height, and the top of the section BELOW the gallery, which is what a
- * reader actually watches move.
- *
- * AND IT PASSED WHILE THE SITE MOVED, which is the second thing this lane now
- * records. The owner watched the section jump on every item change of the live
- * 0.1.65 origin — 50px at 1440, 69px at 390 — and this lane was green
- * throughout, because the fixture above carried no captions and the caption
- * was the mover: a conditional sibling that existed only for the items that
- * had something to say. The fixture now captions both items, unequally, so
- * the same three measurements it always took are taken against a page that
- * has something to shift; the caption's own box joins them, so a failure
- * names the mover instead of only the movement. */
-test('moving between a still and a film shifts the document by nothing (issue 241)', async ({ page }) => {
-  await serveGalleryManifest(page);
+ * The complaint this lane was born from — "568.9px of frame at the left of an
+ * 842px track, 273px of dead space on the right alone" — was answered for the
+ * old frame by CENTRING it, which is the best a box with a transferred inline
+ * size can do. The tile grid does not need centring because it does not fall
+ * short: its five tracks are `minmax(0, 1fr)` of the column, so the right
+ * answer is the stronger one, and it is what the redesign is FOR. Both edges
+ * are measured against the reading column's own, and the cells against each
+ * other, so nothing here derives from the stylesheet or a token. */
+test('the gallery grid fills the reading column edge to edge, in five equal cells on a desktop (issue 202; owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
   await visit(page);
-  await page.locator('.gallery-frame').scrollIntoViewIfNeeded();
-  await settled(page);
-
-  const shape = () =>
-    page.evaluate(() => {
-      const frame = window.document.querySelector('.gallery-frame').getBoundingClientRect();
-      const stage = window.document.querySelector('.gallery-stage').getBoundingClientRect();
-      const below = window.document.querySelector('#trackers');
-      const caption = window.document.querySelector('.gallery-caption');
+  for (const width of desktopWidths) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled(page);
+    const observed = await page.evaluate(() => {
+      const round = (value) => Math.round(value * 100) / 100;
+      const grid = window.document.querySelector('.gallery-grid').getBoundingClientRect();
+      const column = window.document.querySelector('main').getBoundingClientRect();
+      const cells = [...window.document.querySelectorAll('.gallery-tile, .gallery-control')].map(
+        (cell) => {
+          const box = cell.getBoundingClientRect();
+          return { x: round(box.x), y: round(box.y), width: round(box.width) };
+        }
+      );
       return {
-        document: window.document.documentElement.scrollHeight,
-        frame: Math.round(frame.height * 10) / 10,
-        stage: { width: Math.round(stage.width * 10) / 10, height: Math.round(stage.height * 10) / 10 },
-        below: below === null ? null : Math.round(below.getBoundingClientRect().top + window.scrollY),
-        /* The lane the caption is rendered into (issue 265). It is reserved
-           for the whole SET rather than for the current item, so its height is
-           one number for every item — and a null here would mean the box went
-           back to being conditional. */
-        caption:
-          caption === null ? null : Math.round(caption.getBoundingClientRect().height * 10) / 10,
-        kind: window.document.querySelector('.gallery-stage').getAttribute('data-gallery-kind'),
+        left: round(grid.left - column.left),
+        right: round(column.right - grid.right),
+        cells,
+        rows: [...new Set(cells.map((cell) => Math.round(cell.y)))].length,
+        columns: [...new Set(cells.map((cell) => Math.round(cell.x)))].length,
       };
     });
-
-  const still = await shape();
-  expect(still.kind).toBe('image');
-  await goToItem(page, 'Film 2 of 2');
-  const film = await shape();
-  expect(film.kind).toBe('video');
-  await goToItem(page, 'Photograph 1 of 2');
-  const back = await shape();
-
-  /* NON-VACUITY, RE-AIMED (issue 243). This used to demand that the two
-     stages be DIFFERENT SHAPES — the film shorter than the still — because
-     that difference was what the lane existed to absorb. The owner then ruled
-     the difference itself out: "make it one single block that doesn't expand".
-     So the shapes are now identical by design, and the old guard would refuse
-     the very fix it was written to protect.
-     What replaces it is the stronger statement the new design supports: the
-     kind really did change (already asserted above, image then video then
-     image), and the block did not change WITH it. A mutation that gives a film
-     its own box again is caught by the frame and stage comparisons below, and
-     by the dedicated one-block lane earlier in this file. */
-  expect(
-    film.stage,
-    `a film renders a ${film.stage.width}x${film.stage.height} stage against a still's ${still.stage.width}x${still.stage.height}; the visible block changes size with the media`
-  ).toEqual(still.stage);
-  expect(back.kind, 'the strip did not come back to the still it started on').toBe('image');
-
-  /* NON-VACUITY, THE CAPTION HALF (issue 265): the fixture's two items carry
-     DIFFERENT captions, so the lane below is measuring a page that has
-     something to shift. A reservation that had gone back to the current
-     item's own caption would report a height of nothing here for the still. */
-  expect(still.caption, 'the caption box is conditional again, so this lane measures nothing').not.toBeNull();
-  expect(still.caption, 'the reserved caption lane has no height at all').toBeGreaterThan(0);
-
-  for (const [label, state] of [
-    ['the film', film],
-    ['the still, coming back', back],
-  ]) {
+    const at = `at ${width}px`;
+    /* ONE PIXEL, and it is a rounding allowance rather than a tolerance for
+       dead space: the gutter the owner reported was 273px, and the smallest
+       gap this grid could leave from a real regression is one whole track. */
     expect(
-      state.frame,
-      `${label} changed the reserved frame from ${still.frame}px to ${state.frame}px`
-    ).toBeCloseTo(still.frame, 0);
-    expect(
-      state.document,
-      `${label} changed the document height from ${still.document}px to ${state.document}px`
-    ).toBe(still.document);
-    expect(
-      state.below,
-      `${label} moved the section under the gallery from ${still.below} to ${state.below}`
-    ).toBe(still.below);
-    expect(
-      state.caption,
-      `${label} resized the caption lane from ${still.caption}px to ${state.caption}px; the item is moving the box again`
-    ).toBeCloseTo(still.caption, 0);
+      observed.right,
+      `the grid stops ${observed.right}px short of the column's right edge ${at}`
+    ).toBeLessThanOrEqual(1);
+    expect(observed.right, `the grid runs past the column's right edge ${at}`).toBeGreaterThanOrEqual(-1);
+    expect(observed.left, `the grid starts ${observed.left}px inside the column ${at}`).toBeLessThanOrEqual(1);
+    expect(observed.left, `the grid starts ${observed.left}px outside the column ${at}`).toBeGreaterThanOrEqual(-1);
+    /* FIVE CELLS, ONE ROW, EQUAL WIDTHS — four tiles beside one control tile,
+       which is what makes the row fill the column with no track left over. */
+    expect(observed.cells.length, `the row holds ${observed.cells.length} cells ${at}`).toBe(5);
+    expect(observed.rows, `the five cells wrapped onto ${observed.rows} rows ${at}`).toBe(1);
+    expect(observed.columns, `the row draws ${observed.columns} columns ${at}`).toBe(5);
+    const widths = observed.cells.map((cell) => cell.width);
+    for (const [index, cell] of widths.entries()) {
+      expect(
+        cell,
+        `cell ${index + 1} is ${cell}px against cell 1's ${widths[0]}px ${at}; the tracks are not equal`
+      ).toBeCloseTo(widths[0], 0);
+    }
   }
 });
+
+/* THE STILL-ONTO-FILM ZERO-SHIFT LANE IS DELETED (owner directive,
+ * 2026-09-03, issue 287: the strip is gone). It measured the document, the
+ * reserved frame, the caption lane and the section below the gallery across a
+ * navigation from a still to a film and back — a navigation the tile grid
+ * does not have, because a still and a film are on screen at the same time
+ * and neither replaces the other. The claim it was protecting is not dropped,
+ * it is made stronger and measured elsewhere: the film lane above compares
+ * a film's tile against the still's tile in ONE layout, which no reservation
+ * bug can satisfy by moving both boxes together. */
 
 /* THE PAGE DOES NOT SCROLL BEHIND THE LIGHTBOX (issue 241).
  *
@@ -4387,8 +4416,8 @@ test('the document holds still while the lightbox is open, and is unchanged afte
   const canWheel = !(browserName === 'webkit' && isMobile);
   await visit(page);
   const dialog = page.locator('dialog.gallery-lightbox');
-  const frame = page.locator('.gallery-image-button').first();
-  await frame.scrollIntoViewIfNeeded();
+  const tile = page.locator('.gallery-tile[data-gallery-kind="image"]').first();
+  await tile.scrollIntoViewIfNeeded();
   await settled(page);
 
   const scrollY = () => page.evaluate(() => Math.round(window.scrollY));
@@ -4441,7 +4470,7 @@ test('the document holds still while the lightbox is open, and is unchanged afte
     !answered,
     `${browserName} does not move the page from a synthetic scroll here, so neither half of this lane could mean anything on it`
   );
-  await frame.scrollIntoViewIfNeeded();
+  await tile.scrollIntoViewIfNeeded();
   await settled(page);
 
   const start = await scrollY();
@@ -4464,8 +4493,12 @@ test('the document holds still while the lightbox is open, and is unchanged afte
     });
   const shapeBefore = await columnShape();
 
-  await frame.click();
+  await tile.click();
   await expect(dialog).toHaveJSProperty('open', true);
+  /* The lock is an ATTRIBUTE on the document element, written by an effect so
+     it cannot be left behind — asserted in both directions below, because a
+     lock that is never released is the same defect wearing the other face. */
+  await expect(page.locator('html')).toHaveAttribute('data-modal-open', 'true');
 
   expect(await columnShape(), 'opening the lightbox moved the page under the reader').toEqual(shapeBefore);
 
@@ -4487,6 +4520,7 @@ test('the document holds still while the lightbox is open, and is unchanged afte
 
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveJSProperty('open', false);
+  await expect(page.locator('html')).not.toHaveAttribute('data-modal-open', /.*/);
   expect(await scrollY(), 'closing the lightbox left the reader somewhere else').toBe(start);
   expect(await columnShape(), 'closing the lightbox moved the page under the reader').toEqual(shapeBefore);
   /* And the lock is RELEASED, not merely ineffective: the page scrolls again.
@@ -4507,122 +4541,149 @@ test('the document holds still while the lightbox is open, and is unchanged afte
   await expect.poll(scrollY, { message: 'the page never scrolls again after the lightbox closes' }).toBeLessThan(start);
 });
 
-/* The gallery frame's box and its two gutters, measured as one shape. Used
- * twice by the reservation lane below — once with every gallery byte
- * refused, once with them served — so the comparison is between two
- * MEASURED states of the same page rather than against any number this file
- * or the stylesheet states. */
-async function galleryFrameShape(page) {
-  await page.locator('.gallery-image-button').scrollIntoViewIfNeeded();
+/* Every cell of the row, measured as one shape. Used twice by the reservation
+ * lane below — once with every gallery byte refused, once with them served —
+ * so the comparison is between two MEASURED states of the same page rather
+ * than against any number this file or the stylesheet states. */
+async function galleryRowShape(page) {
+  await page.locator('.gallery-grid').scrollIntoViewIfNeeded();
   return page.evaluate(() => {
     const round = (value) => Math.round(value * 10) / 10;
-    const row = window.document.querySelector('.gallery-frame').getBoundingClientRect();
-    const frame = window.document.querySelector('.gallery-image-button').getBoundingClientRect();
+    const grid = window.document.querySelector('.gallery-grid').getBoundingClientRect();
     return {
-      width: round(frame.width),
-      height: round(frame.height),
-      // The gutters against the frame's own edges (issue 241): the arrows that
-      // used to bound this track now live in the control row under the work.
-      left: round(frame.left - row.left),
-      right: round(row.right - frame.right),
-      // And the reservation itself, which is the box the page is laid out
-      // from whether or not a byte ever lands.
-      reserved: round(row.height),
+      grid: { width: round(grid.width), height: round(grid.height) },
+      /* Each cell relative to the row's own origin, never in viewport
+         coordinates: a panel painting elsewhere on the page would move every
+         absolute y at once and make this read as a gallery shift it is not. */
+      cells: [...window.document.querySelectorAll('.gallery-tile, .gallery-control')].map((cell) => {
+        const box = cell.getBoundingClientRect();
+        return {
+          x: round(box.left - grid.left),
+          y: round(box.top - grid.top),
+          width: round(box.width),
+          height: round(box.height),
+        };
+      }),
     };
   });
 }
 
-test('the gallery frame reserves the SAME box with the photograph refused as with it served (issue 202)', async ({
+/* EVERY TILE RESERVES ITS SQUARE BEFORE A BYTE ARRIVES (issue 202, re-aimed
+ * by the owner directive of 2026-09-03, issue 287).
+ *
+ * The gap the #204 adversarial review found (finding 3): the zero-CLS
+ * reservation was pinned at source only, and a centring lane survives the
+ * naive `justify-self: center` regression because a zero-width box still has
+ * two equal gutters. This closes it where the evidence was actually gathered —
+ * an ALIGNED grid item is sized by its CONTENT, so with the bytes refused
+ * that regression measured 0x0 on Gecko, 194.6x109.4 on Blink and 0x0 on
+ * WebKit, none of which equals the served box.
+ *
+ * There are four boxes to hold now rather than one, and that is a stronger
+ * question than the frame's was: a reservation that came from the picture
+ * rather than from the track would leave the row shorter, re-flow the cells
+ * beside it, and move the control tile — all of which this reads, cell by
+ * cell, against the page's own other state. */
+test('every tile reserves the SAME square with its picture refused as with it served (issue 202; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
-  /* The gap the #204 adversarial review found (finding 3): the zero-CLS
-     reservation was pinned at source only, and the centring lane above
-     survives the naive `justify-self: center` regression because a zero-width
-     box still has two equal gutters. This closes it where the evidence was
-     actually gathered — an ALIGNED grid item is sized by its CONTENT, so with
-     the bytes refused that regression measures 0x0 on Gecko, 194.6x109.4 on
-     Blink and 0x0 on WebKit, none of which equals the served box. The
-     expectation is the page's own other state, so nothing here can drift with
-     a token the way a stylesheet-derived number would. */
   await page.route('**/gallery-*.webp', (route) => route.abort());
   await visit(page);
-  const refused = await galleryFrameShape(page);
-  expect(
-    refused.width,
-    'the frame reserved no width at all with the photograph refused'
-  ).toBeGreaterThan(0);
-  expect(refused.height, 'the frame reserved no height with the photograph refused').toBeGreaterThan(0);
+  const refused = await galleryRowShape(page);
+  expect(refused.cells.length, 'the row rendered no cells with the pictures refused').toBe(5);
+  for (const [index, cell] of refused.cells.entries()) {
+    expect(
+      cell.width,
+      `cell ${index + 1} reserved no width at all with its picture refused`
+    ).toBeGreaterThan(0);
+    expect(
+      cell.height,
+      `cell ${index + 1} reserved no height with its picture refused`
+    ).toBeGreaterThan(0);
+  }
 
   await page.unroute('**/gallery-*.webp');
   await visit(page);
-  const image = page.locator('img.gallery-image');
-  await image.scrollIntoViewIfNeeded();
+  const thumbs = page.locator('img.gallery-thumb');
+  await page.locator('.gallery-grid').scrollIntoViewIfNeeded();
   await expect
-    .poll(async () => image.evaluate((img) => img.complete && img.naturalWidth > 0), {
-      message: 'the vendored preview never finished decoding',
-      timeout: 10_000,
-    })
+    .poll(
+      async () =>
+        thumbs.evaluateAll((nodes) =>
+          nodes.length > 0 && nodes.every((img) => img.complete && img.naturalWidth > 0)
+        ),
+      { message: 'the vendored previews never finished decoding', timeout: 10_000 }
+    )
     .toBe(true);
-  const served = await galleryFrameShape(page);
+  const served = await galleryRowShape(page);
 
   expect(
     refused,
-    `the frame is ${refused.width}x${refused.height} without the photograph and ${served.width}x${served.height} with it — the box is not reserved, it is discovered`
+    `the row is ${refused.grid.width}x${refused.grid.height} without its pictures and ${served.grid.width}x${served.grid.height} with them — the boxes are not reserved, they are discovered`
   ).toEqual(served);
 });
 
-/* THE POSITION ROW, AT EVERY WIDTH THIS SITE SUPPORTS (issue 275, replacing
- * the retired dot row's lane). The visible mark is the bare ordinal the
- * owner drew ("1/n"), so the row that used to carry 396px of controls now
- * carries one short paragraph — measured painted, one line, aria-hidden
- * beside the clipped live sentence, and never a page-level horizontal
- * scroll. The controls the floor bounds are the stage pair, in their own
- * lane. */
-test('the position ordinal paints one short line at every phone width (issue 275)', async ({ page }) => {
+/* THE ROW FOLDS TO TWO ACROSS, AT EVERY WIDTH THIS SITE SUPPORTS (issue 275,
+ * re-aimed by the owner directive of 2026-09-03, issue 287, which replaced
+ * the position row this lane used to sweep with the grid's own phone form).
+ *
+ * The claim that survives the ordinal's retirement is the one that was ever
+ * about the reader: whatever the gallery draws, it draws it INSIDE the page
+ * at every width the contract names, and never takes the document sideways.
+ * The phone form adds a second claim of its own — the mock's two tiles across
+ * rather than five squeezed ones — and it is measured as the number of
+ * distinct column origins the engine actually laid out, which is a fact about
+ * the rendered row rather than about the token that produced it. */
+test('the gallery row folds to two tiles across on a phone, at every width this site supports (issue 275; owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
   await visit(page);
-  /* 280 is the extra headroom below the contract's own floor, and it is 280
-     rather than the 250 this lane used to try because the masthead's type
-     scale says so (owner directive, 2026-09-03, issue 287). `--masthead-size`
-     is `clamp(4rem, 12vw, 11.25rem)`, and at its 4rem floor the owner's name
-     is one unbreakable 237px word — it fits from 280px up and cannot below.
-     That floor is an owner-approved type scale, not an accident, and lowering
-     it to satisfy a width no contract names would be changing the design to
-     pass a test. AGENTS.md's floor, and the owner's own non-negotiable, is
-     320: the widths after the first are the ones that actually bind. */
-  for (const width of [280, ...phoneWidths]) {
+  for (const width of phoneWidths) {
     await page.setViewportSize({ width, height: 800 });
     await settled(page);
     const row = await page.evaluate(() => {
-      const ordinal = window.document.querySelector('.gallery-ordinal');
-      const box = ordinal === null ? null : ordinal.getBoundingClientRect();
+      const round = (value) => Math.round(value * 100) / 100;
+      const root = window.document.documentElement;
+      const grid = window.document.querySelector('.gallery-grid').getBoundingClientRect();
+      const column = window.document.querySelector('main').getBoundingClientRect();
+      const cells = [...window.document.querySelectorAll('.gallery-tile, .gallery-control')].map(
+        (cell) => {
+          const box = cell.getBoundingClientRect();
+          return { x: Math.round(box.x), y: Math.round(box.y), width: round(box.width) };
+        }
+      );
+      const rows = new Map();
+      for (const cell of cells) {
+        rows.set(cell.y, (rows.get(cell.y) ?? 0) + 1);
+      }
       return {
-        text: ordinal?.textContent?.trim() ?? null,
-        hidden: ordinal?.getAttribute('aria-hidden') ?? null,
-        painted: box !== null && box.width > 0 && box.height > 0,
-        /* Counted as LINE BOXES, not as height over line-height: the ordinal
-           carries no explicit line-height, so its computed value is the word
-           `normal`, which parses to NaN and would fail this lane on every
-           engine while the paragraph renders perfectly. A Range over the text
-           yields one client rect per rendered line in all five engines. */
-        lines:
-          ordinal === null
-            ? null
-            : (() => {
-                const range = window.document.createRange();
-                range.selectNodeContents(ordinal);
-                return [...range.getClientRects()].filter((rect) => rect.width > 0).length;
-              })(),
-        documentScrolls:
-          window.document.documentElement.scrollWidth > window.document.documentElement.clientWidth,
+        columns: [...new Set(cells.map((cell) => cell.x))].length,
+        perRow: [...rows.values()],
+        widths: cells.map((cell) => cell.width),
+        right: round(column.right - grid.right),
+        left: round(grid.left - column.left),
+        documentScrolls: root.scrollWidth > root.clientWidth,
+        overflow: root.scrollWidth - root.clientWidth,
       };
     });
-    expect(row.text, `the ordinal is gone at ${width}px`).toBe('1 / 8');
-    expect(row.hidden, 'the ordinal speaks over the live region').toBe('true');
-    expect(row.painted, `the ordinal paints nothing at ${width}px`).toBe(true);
-    expect(row.lines, `the ordinal wrapped at ${width}px`).toBe(1);
+    expect(row.columns, `the row draws ${row.columns} columns at ${width}px, not the two the phone form asks for`).toBe(2);
+    /* Five cells in two columns is two full rows and a last one holding the
+       remainder — what must never happen is a row holding more than two. */
+    for (const [index, count] of row.perRow.entries()) {
+      expect(count, `row ${index + 1} holds ${count} cells at ${width}px`).toBeLessThanOrEqual(2);
+    }
+    expect(row.perRow.filter((count) => count === 2).length, `no row is full at ${width}px`).toBeGreaterThan(0);
+    for (const [index, cell] of row.widths.entries()) {
+      expect(
+        cell,
+        `cell ${index + 1} is ${cell}px against cell 1's ${row.widths[0]}px at ${width}px`
+      ).toBeCloseTo(row.widths[0], 0);
+    }
+    expect(row.right, `the row stops ${row.right}px short of the column at ${width}px`).toBeLessThanOrEqual(1);
+    expect(row.left, `the row starts ${row.left}px inside the column at ${width}px`).toBeLessThanOrEqual(1);
     expect(
       row.documentScrolls,
-      `the page itself scrolls sideways at ${width}px; the position row took the document with it`
+      `the page itself scrolls sideways at ${width}px, by ${row.overflow}px; the gallery row took the document with it`
     ).toBe(false);
   }
 });
@@ -4639,7 +4700,7 @@ test('the position ordinal paints one short line at every phone width (issue 275
 test('a phone enlarges to the preview and a wide screen to the master (issue 241)', async ({ page }) => {
   await serveGalleryManifest(page);
   await visit(page);
-  await page.locator('.gallery-image-button').click();
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
   const enlarged = page.locator('img.gallery-lightbox-image');
   await expect(enlarged).toBeVisible();
   const chosen = await page.evaluate(() => ({
@@ -4669,11 +4730,16 @@ test('a phone enlarges to the preview and a wide screen to the master (issue 241
 test('two fingers on the artwork can still zoom it (issue 241)', async ({ page }) => {
   /* `touch-action: pan-y` hands the compositor the vertical axis and refuses
      everything else — including the pinch a reader makes to look closer at a
-     drawing, on the one element anybody would ever try it on. The value is
-     read back off the engine rather than off the stylesheet, because an engine
-     that did not understand `pinch-zoom` would DROP the declaration, and the
-     base under it is what this proves survived either way. */
+     drawing, on the one element anybody would ever try it on. The artwork
+     moved into the dialog with the redesign (owner directive, 2026-09-03,
+     issue 287), so the surface under test is the stage inside the OPEN
+     lightbox; the claim is unchanged, and so is the reason the value is read
+     back off the engine rather than off the stylesheet — an engine that did
+     not understand `pinch-zoom` would DROP the declaration, and the base under
+     it is what this proves survived either way. */
   await visit(page);
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
   const declared = await page.evaluate(
     () => getComputedStyle(window.document.querySelector('.gallery-stage')).touchAction
   );
@@ -4685,7 +4751,7 @@ test('the lightbox close mark is small, off the artwork, and still a 44px target
   page,
 }) => {
   await visit(page);
-  await page.locator('.gallery-image-button').click();
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
   const dialog = page.locator('dialog.gallery-lightbox');
   await expect(dialog).toBeVisible();
 
@@ -4696,13 +4762,16 @@ test('the lightbox close mark is small, off the artwork, and still a 44px target
     };
     const control = window.document.querySelector('.gallery-lightbox-close');
     const mark = window.document.querySelector('.gallery-close-mark');
-    const border = window.document.querySelector('.gallery-lightbox-border');
     const image = window.document.querySelector('.gallery-lightbox-image');
     const dialogNode = window.document.querySelector('dialog.gallery-lightbox');
     return {
       hit: rect(control),
       mark: rect(mark),
-      border: rect(border),
+      /* The artwork itself is what the mark must stay off, now that the frame
+         wrapper it used to be measured against is retired (owner directive,
+         2026-09-03, issue 287). It is the tighter of the two comparisons: the
+         wrapper carried no band, so the picture's own box IS the box the old
+         assertion was really about. */
       image: rect(image),
       controlBackground: getComputedStyle(control).backgroundColor,
       markBackground: getComputedStyle(mark).backgroundColor,
@@ -4739,16 +4808,15 @@ test('the lightbox close mark is small, off the artwork, and still a 44px target
   );
 
   /* "It pollutes the image" — answered as geometry rather than taste: the
-     painted mark's box does not intersect the framed photograph's box at
-     all. */
+     painted mark's box does not intersect the photograph's box at all. */
   const intersects =
-    observed.mark.left < observed.border.right &&
-    observed.mark.right > observed.border.left &&
-    observed.mark.top < observed.border.bottom &&
-    observed.mark.bottom > observed.border.top;
+    observed.mark.left < observed.image.right &&
+    observed.mark.right > observed.image.left &&
+    observed.mark.top < observed.image.bottom &&
+    observed.mark.bottom > observed.image.top;
   expect(
     intersects,
-    `the close mark (${observed.mark.top.toFixed(1)}-${observed.mark.bottom.toFixed(1)}) overlaps the framed photograph (${observed.border.top.toFixed(1)}-${observed.border.bottom.toFixed(1)})`
+    `the close mark (${observed.mark.top.toFixed(1)}-${observed.mark.bottom.toFixed(1)}) overlaps the photograph (${observed.image.top.toFixed(1)}-${observed.image.bottom.toFixed(1)})`
   ).toBe(false);
   // It is at the photograph's TOP-RIGHT, not merely somewhere else.
   expect(observed.mark.bottom).toBeLessThanOrEqual(observed.image.top + subPixel);
@@ -4772,141 +4840,202 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
      depicts. So the present branch and the absent branch are both exercised
      against the real DOM. */
   await visit(page);
-  const frame = page.locator('.gallery-image-button');
-  await frame.scrollIntoViewIfNeeded();
+  const grid = page.locator('.gallery-grid');
+  await grid.scrollIntoViewIfNeeded();
 
-  /* Absent, on the feed surface, and this is the SET's answer rather than the
-     current item's (issue 265). The reserved lane is what stops an item change
-     moving the page — but this set is the vendored bootstrap gallery, in which
-     NOBODY has anything to say, so there is no lane to hold open and reserving
-     one would charge the page a constant empty band (MEASURED at +12px of
-     document height, one section row gap for a zero-height box).
-     The captioned half of the same contract is measured by the zero-shift lane
-     earlier in this file, which serves a manifest whose items DO carry
-     captions and holds the document to the pixel across every item change. */
-  expect(
-    await page.locator('.gallery-caption').count(),
-    'a set with nothing to say still reserved a caption band',
-  ).toBe(0);
-  expect(
-    await page.locator('.gallery-caption p').count(),
-    'a caption line rendered for a set whose items have nothing to say',
-  ).toBe(0);
-  /* AND THE BLOCK ENDS AT ITS DOTS. The count above would still pass if the
-     gallery had left some other empty box behind it, so the geometry says the
-     same thing independently: the last flow box inside the gallery's own
-     subsection is the position row, which is exactly the shape the page had
-     before anything was reserved. */
+  /* ABSENT ON THE ROW, and it is the row's whole answer now: the caption lane
+     the strip carried is retired with it (owner directive, 2026-09-03, issue
+     287), so an item's words reach a reader only on the stage they open. The
+     row must therefore carry NO caption surface at all — not an empty one,
+     which would charge the page a constant band for nothing (MEASURED at
+     +12px of document height for a zero-height box), and not a populated one
+     either. The tiles' only text is the label an assistive reader is given. */
+  await expect(
+    page.locator('.gallery-caption'),
+    'a caption band came back onto the tile row'
+  ).toHaveCount(0);
+  const rowText = await grid.evaluate((node) => {
+    const cells = [...node.querySelectorAll('.gallery-tile')];
+    return cells.map((cell) => cell.innerText.trim()).join('');
+  });
+  expect(rowText, 'a tile painted copy of its own').toBe('');
+
+  /* AND THE ROW IS THE LAST THING IN ITS BLOCK. The count above would still
+     pass if the gallery had left some other empty box behind it, so the
+     geometry says the same thing independently: nothing after the grid takes
+     any part in layout — the dialog is `display: none` while closed and
+     nothing else may be there. */
   const trailing = await page.evaluate(() => {
-    const position = window.document.querySelector('.gallery-position');
-    const block = position.parentElement;
+    const gridNode = window.document.querySelector('.gallery-grid');
+    const block = gridNode.parentElement;
     return {
       blockBottom: block.getBoundingClientRect().bottom,
-      positionBottom: position.getBoundingClientRect().bottom,
-      /* Every box after the dots must take no part in layout — the lightbox
-         is `display: none` while closed and nothing else may be there. */
+      gridBottom: gridNode.getBoundingClientRect().bottom,
       inFlowAfter: [...block.children]
-        .slice([...block.children].indexOf(position) + 1)
+        .slice([...block.children].indexOf(gridNode) + 1)
         .filter((node) => window.getComputedStyle(node).display !== 'none')
         .map((node) => node.className.toString()),
     };
   });
-  expect(trailing.inFlowAfter, 'the gallery left a box in flow after its dots').toEqual([]);
+  expect(trailing.inFlowAfter, 'the gallery left a box in flow after its row').toEqual([]);
   expect(
     trailing.blockBottom,
-    `the gallery block runs ${trailing.blockBottom - trailing.positionBottom}px past its own dots`,
-  ).toBeCloseTo(trailing.positionBottom, 1);
+    `the gallery block runs ${trailing.blockBottom - trailing.gridBottom}px past its own row`
+  ).toBeCloseTo(trailing.gridBottom, 1);
 
-  /* Zero CLS across the whole cycle: the frame and the counter occupy the
-     identical box for every one of the eight items, so nothing an item does
-     or does not carry moves the picture. */
-  const geometry = [];
+  /* PRESENT ON THE STAGE: the link the manifest gave, and only the link —
+     for every one of the eight, not for the one that happens to open first.
+     Zero CLS rides along: paging the whole set never moves the row behind the
+     scrim, which is what a reader sees the moment they close it. */
+  const rowBefore = await galleryRowShape(page);
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
   for (let step = 0; step < 8; step += 1) {
-    geometry.push(
-      await page.evaluate(() => {
-        /* Measured as RELATIONSHIPS inside the block, never as viewport
-           coordinates: a panel painting elsewhere on the page would move
-           every absolute y at once and make this test read as a gallery
-           shift it is not. What must not move is the frame's own size, its
-           two gutters, and how far the counter sits under it. */
-        const round = (value) => Math.round(value * 100) / 100;
-        const row = window.document.querySelector('.gallery-frame').getBoundingClientRect();
-        const frame = window.document.querySelector('.gallery-image-button').getBoundingClientRect();
-        const counter = window.document.querySelector('.gallery-count').getBoundingClientRect();
-        return {
-          width: round(frame.width),
-          height: round(frame.height),
-          // The gutters against the frame's own edges since issue 241: the two
-          // arrows that used to bound this row moved under the work, so the
-          // relationship that must not move is the picture inside its frame.
-          left: round(frame.left - row.left),
-          right: round(row.right - frame.right),
-          reserved: round(row.height),
-          counterHeight: round(counter.height),
-          counterGap: round(counter.top - frame.bottom),
-          /* The caption's own CONTENT, item by item: the box is reserved for
-             every item now (issue 265), and what must still be absent for an
-             item with nothing to say is every line inside it. */
-          captionLines: window.document.querySelectorAll('.gallery-caption p').length,
-        };
-      })
+    const meta = await page.evaluate(() => {
+      const link = window.document.querySelector('.gallery-meta-link');
+      const box = link.getBoundingClientRect();
+      return {
+        blocks: window.document.querySelectorAll('.gallery-lightbox-meta').length,
+        titles: window.document.querySelectorAll('.gallery-meta-title').length,
+        texts: window.document.querySelectorAll('.gallery-meta-text').length,
+        count: window.document.querySelector('.gallery-count')?.getAttribute('aria-live') ?? null,
+        text: link.textContent.trim(),
+        href: link.getAttribute('href'),
+        target: link.getAttribute('target'),
+        rel: link.getAttribute('rel'),
+        label: link.getAttribute('aria-label'),
+        height: box.height,
+        ink: getComputedStyle(link).color,
+      };
+    });
+    const at = `on item ${step + 1}`;
+    expect(meta.blocks, `the metadata block did not render ${at}`).toBe(1);
+    expect(meta.titles, `a title element rendered for an item with no title ${at}`).toBe(0);
+    expect(meta.texts, `a description element rendered for an item with no description ${at}`).toBe(0);
+    expect(meta.count, 'the position line stopped announcing itself').toBe('polite');
+    expect(meta.text).toBe('Lorem Picsum source');
+    expect(meta.href).toMatch(/^https:\/\/picsum\.photos\/seed\/naranjo-gallery-\d{2}\/3840\/2160$/);
+    expect(meta.target).toBe('_blank');
+    expect(meta.rel, 'the outbound link can reach back into this page').toBe('noopener noreferrer');
+    expect(meta.label).toBe('Lorem Picsum source (opens in a new tab)');
+    expect(meta.height, `the link is under the touch floor ${at}`).toBeGreaterThanOrEqual(
+      touchFloorPx - subPixel
     );
+    // It reads against the scrim it sits on, which is near-black in every mode.
+    expect(meta.ink).toBe('rgb(255, 255, 255)');
     await goToItem(page, `Photograph ${((step + 1) % 8) + 1} of 8`);
   }
-  const [first] = geometry;
-  for (const [index, state] of geometry.entries()) {
-    expect(state.captionLines, `item ${index + 1} rendered caption copy nobody wrote`).toBe(0);
-    expect(state, `the gallery block reshaped between item 1 and item ${index + 1}`).toEqual(first);
-  }
-
-  // Present, on the lightbox surface: the link the manifest gave, and only
-  // the link.
-  await page.locator('.gallery-image-button').click();
-  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
-  const meta = await page.evaluate(() => {
-    const link = window.document.querySelector('.gallery-meta-link');
-    const box = link.getBoundingClientRect();
-    return {
-      blocks: window.document.querySelectorAll('.gallery-lightbox-meta').length,
-      titles: window.document.querySelectorAll('.gallery-meta-title').length,
-      texts: window.document.querySelectorAll('.gallery-meta-text').length,
-      text: link.textContent.trim(),
-      href: link.getAttribute('href'),
-      target: link.getAttribute('target'),
-      rel: link.getAttribute('rel'),
-      label: link.getAttribute('aria-label'),
-      height: box.height,
-      ink: getComputedStyle(link).color,
-    };
-  });
-  expect(meta.blocks, 'the metadata block did not render for an item that has metadata').toBe(1);
-  expect(meta.titles, 'a title element rendered for an item with no title').toBe(0);
-  expect(meta.texts, 'a description element rendered for an item with no description').toBe(0);
-  expect(meta.text).toBe('Lorem Picsum source');
-  expect(meta.href).toMatch(/^https:\/\/picsum\.photos\/seed\/naranjo-gallery-\d{2}\/3840\/2160$/);
-  expect(meta.target).toBe('_blank');
-  expect(meta.rel, 'the outbound link can reach back into this page').toBe('noopener noreferrer');
-  expect(meta.label).toBe('Lorem Picsum source (opens in a new tab)');
-  expect(meta.height, 'the link is under the touch floor').toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-  // It reads against the scrim it sits on, which is near-black in every mode.
-  expect(meta.ink).toBe('rgb(255, 255, 255)');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('dialog.gallery-lightbox')).not.toBeVisible();
+  expect(
+    await galleryRowShape(page),
+    'paging the whole set through the stage reshaped the row behind it'
+  ).toEqual(rowBefore);
 });
 
 test('the lightbox also closes on a backdrop click and its own close button', async ({ page }) => {
   await visit(page);
   const dialog = page.locator('dialog.gallery-lightbox');
-  await page.locator('.gallery-image-button').click();
+  const tile = page.locator('.gallery-tile[data-gallery-kind="image"]').first();
+  await tile.click();
   await expect(dialog).toBeVisible();
   await page.getByRole('button', { name: 'Close enlarged photograph' }).click();
   await expect(dialog).not.toBeVisible();
 
-  await page.locator('.gallery-image-button').click();
+  await tile.click();
   await expect(dialog).toBeVisible();
   // A click on the dialog element itself, outside its content box, is the
   // backdrop — clicking at the very top-left corner of the viewport lands
   // there whatever size the enlarged photograph happens to render at.
   await page.mouse.click(2, 2);
   await expect(dialog).not.toBeVisible();
+});
+
+/* A READING MODE REPAINTS THE GALLERY AND MOVES NONE OF IT (owner directive,
+ * 2026-09-03, issue 287; the zero-CLS floor of AGENTS.md's "Frontend and UX
+ * floors").
+ *
+ * The page-wide swap lane earlier in this file measures the chrome, the
+ * column and the heatmap blocks; it does not reach the gallery, and the
+ * gallery is exactly where a mode is most tempted to move something — the
+ * tiles sit on `--gallery-stage-ground`, which IS one of the tokens a reading
+ * mode overrides, and the control tile is drawn in the ledger's hairline
+ * palette. A reading-mode block may declare only custom properties and
+ * `color-scheme` (AGENTS.md, "Frontend and UX floors"), which is what makes a
+ * zero-CLS swap structural rather than a promise; this lane is what an engine
+ * did with that rule, on the one gallery surface whose ground changes with
+ * the mode. */
+test('switching the reading mode repaints the gallery without moving any of it (owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
+  await visit(page);
+  const shape = () =>
+    page.evaluate(() => {
+      const round = (value) => Math.round(value * 100) / 100;
+      const scrollY = window.scrollY;
+      const boxed = (node) => {
+        const box = node.getBoundingClientRect();
+        return [round(box.x), round(box.y + scrollY), round(box.width), round(box.height)];
+      };
+      const grid = window.document.querySelector('.gallery-grid');
+      return {
+        grid: boxed(grid),
+        cells: [...window.document.querySelectorAll('.gallery-tile, .gallery-control')].map(boxed),
+        ground: getComputedStyle(window.document.querySelector('.gallery-tile')).backgroundColor,
+        scrollY,
+        scrollHeight: window.document.documentElement.scrollHeight,
+      };
+    });
+
+  const before = await shape();
+  expect(before.cells.length, 'the gallery rendered no cells; this lane measures nothing').toBe(5);
+
+  /* EVERY stamped mode, each compared against the ORIGINAL rather than
+     against its predecessor, so a drift that accumulates a fraction at a time
+     cannot hide inside a chain of individually equal steps. */
+  const grounds = new Map();
+  for (const [label, id] of [
+    ['Dark', 'dark'],
+    ['Slate', 'slate'],
+    ['Sepia', 'sepia'],
+    ['Light', 'light'],
+  ]) {
+    await openReadingModes(page);
+    await page.getByRole('button', { name: label, exact: true }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', id);
+    const after = await shape();
+    expect(
+      after.scrollY,
+      `the ${label} swap scrolled the document from ${before.scrollY} to ${after.scrollY}`
+    ).toBe(before.scrollY);
+    expect(after.grid, `the ${label} swap moved or resized the gallery row`).toEqual(before.grid);
+    expect(after.cells, `the ${label} swap moved a tile under the reader`).toEqual(before.cells);
+    expect(after.scrollHeight, `the ${label} swap changed the page height`).toBe(before.scrollHeight);
+    grounds.set(label, after.ground);
+  }
+  /* NON-VACUITY: the modes really do repaint the tile's own ground, so
+     "nothing moved" is a statement about a surface that changed rather than
+     about one nothing touched. Measured across the four rather than per step,
+     because four modes painting one ground would satisfy a per-step
+     comparison while three of them did not exist. */
+  expect(
+    new Set(grounds.values()).size,
+    `the four reading modes paint ${new Set(grounds.values()).size} distinct grounds under the tiles`
+  ).toBeGreaterThan(1);
+
+  /* Auto is the way back, and it is the ABSENCE of a stamp rather than a
+     fifth palette — so what it has to prove is that un-stamping is as free of
+     layout effect as stamping. */
+  await openReadingModes(page);
+  await page.getByRole('button', { name: 'Auto', exact: true }).click();
+  await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
+  const unstamped = await shape();
+  expect(unstamped.grid, 'returning to auto moved the gallery row').toEqual(before.grid);
+  expect(unstamped.cells, 'returning to auto moved a tile under the reader').toEqual(before.cells);
+  expect(unstamped.scrollHeight).toBe(before.scrollHeight);
+  expect(unstamped.ground, 'auto no longer paints what the unstamped page painted on arrival').toBe(
+    before.ground
+  );
 });
 
 test('the Coding Projects subsection renders no capture-date or no-fetch caption, in the actual DOM (issue 167, Daybreak Blue round 3 finding 4)', async ({
@@ -7845,10 +7974,20 @@ test('every width the handle can reach keeps every section intact', async ({ pag
       const readable = [...strip.querySelectorAll('.ticker-lane')].filter(
         (lane) => lane.getAttribute('aria-hidden') !== 'true'
       );
-      const frames = [...window.document.querySelectorAll('.gallery-stage')].map((stage) => {
-        const box = stage.getBoundingClientRect();
+      /* The gallery's TILES, since the frame they used to be one of retired
+         (owner directive, 2026-09-03, issue 287). The row is measured against
+         its own column here rather than against a ceiling: every cell keeps
+         its square and the row keeps filling the column, at every width a
+         reader can drag the page down to. */
+      const gridBox = window.document.querySelector('.gallery-grid').getBoundingClientRect();
+      const tiles = [...window.document.querySelectorAll('.gallery-tile')].map((tile) => {
+        const box = tile.getBoundingClientRect();
         return { width: box.width, height: box.height };
       });
+      const galleryFill = {
+        left: Math.round((gridBox.left - window.document.querySelector('main').getBoundingClientRect().left) * 10) / 10,
+        right: Math.round((window.document.querySelector('main').getBoundingClientRect().right - gridBox.right) * 10) / 10,
+      };
       const root = window.document.documentElement;
       return {
         column: window.document.querySelector('main').getBoundingClientRect().width,
@@ -7868,7 +8007,8 @@ test('every width the handle can reach keeps every section intact', async ({ pag
           const rail = handle.getBoundingClientRect();
           return { left: rail.left, right: rail.right };
         }),
-        frames,
+        tiles,
+        galleryFill,
         /* Nothing anywhere escapes its own box: the same containment rule the
            phone lane proves, asked at every width a reader can produce. */
         escaping: [...window.document.querySelectorAll('body *')]
@@ -7915,37 +8055,34 @@ test('every width the handle can reach keeps every section intact', async ({ pag
     expect(state.strips, `the heatmap strips disappeared ${at}`).toBeGreaterThan(0);
     expect(state.navLinks, `the nav lost links ${at}`).toBeGreaterThan(2);
     expect(state.sections, `the page lost a section ${at}`).toBeGreaterThan(2);
-    /* The pictures still reserve the box they will fill, and since
-       2026-08-28 that box is a SQUARE stage rather than the feed card's 16:9
-       media frame (owner: the drawings are portrait scans, and a wide frame
-       cropped them). Squareness is the property under test at every column
-       width: whatever the track does, the stage keeps its ratio and stops
-       at its own ceiling, so a narrow column shrinks the work rather than
-       distorting it and a wide one stops growing instead of reproducing the
-       complaint the cap exists to fix. galleryStageCapPx is the literal cap
-       value, never the page's own computed style (see its declaration for
-       why) — this is what makes the assertion below independent, rather
-       than the self-referential shape Daybreak Blue's review of PR #161
-       found: a mutation that widened the token could no longer widen its own
-       expectation along with it.
-       (This viewport is the narrow "rails" one the handle needs to exist at
-       all — MEASURED: even the widest column this sweep can reach keeps the
-       stage's track under ~570px, so the cap engages here only at the wider
-       end. The unambiguous "the cap is doing real work, not coincidentally
-       equal to the track" proof lives in the dedicated single-frame test
-       above instead, at a viewport wide enough to make that margin real.) */
-    expect(state.frames.length, `the gallery rendered no frame ${at}`).toBe(1);
-    for (const frame of state.frames) {
+    /* The pictures still reserve the boxes they will fill, and since
+       2026-09-03 those boxes are a ROW of squares rather than one capped
+       stage (owner directive, issue 287). Two properties are under test at
+       every column width, and neither is a number this file or the
+       stylesheet states: every tile stays SQUARE, so a narrow column shrinks
+       the work rather than distorting it, and the row still reaches both of
+       the column's edges, so no width a reader can drag to reopens the dead
+       gutter the redesign closed. The 448px ceiling this block used to
+       compare against is gone with the frame it capped — a cap on a row that
+       is supposed to span its column would BE the defect — and what replaced
+       it as the independent expectation is the column itself, measured on
+       the same page in the same pass. */
+    expect(state.tiles.length, `the gallery rendered no tiles ${at}`).toBeGreaterThan(0);
+    for (const [index, tile] of state.tiles.entries()) {
+      expect(tile.width, `gallery tile ${index + 1} reserves nothing ${at}`).toBeGreaterThan(0);
       expect(
-        frame.height,
-        `the gallery stage is ${frame.width.toFixed(1)}x${frame.height.toFixed(1)} ${at}, not square`
-      ).toBeCloseTo(frame.width, 0);
-      expect(
-        frame.width,
-        `the gallery stage grew to ${frame.width.toFixed(1)}px ${at}, past its ${galleryStageCapPx}px ceiling`
-      ).toBeLessThanOrEqual(galleryStageCapPx + subPixel);
-      expect(frame.width, `the gallery stage reserves nothing ${at}`).toBeGreaterThan(0);
+        tile.height,
+        `gallery tile ${index + 1} is ${tile.width.toFixed(1)}x${tile.height.toFixed(1)} ${at}, not square`
+      ).toBeCloseTo(tile.width, 0);
     }
+    expect(
+      state.galleryFill.right,
+      `the gallery row stops ${state.galleryFill.right}px short of the column ${at}`
+    ).toBeLessThanOrEqual(1);
+    expect(
+      state.galleryFill.left,
+      `the gallery row starts ${state.galleryFill.left}px inside the column ${at}`
+    ).toBeLessThanOrEqual(1);
   }
 });
 
@@ -9055,16 +9192,31 @@ test('a wide grid still pans natively, and never takes the page sideways (issue 
   );
 });
 
-/* DEFECT 2. Nothing was swipeable. The gallery shows one photograph and had
- * only two arrow buttons to move between them. */
-test('the gallery advances on a swipe and settles back on a fidget (issue 219)', async ({
+/* DEFECT 2. Nothing was swipeable. The gallery showed one photograph and had
+ * only two arrow buttons to move between them.
+ *
+ * RE-AIMED at the surface a swipe now belongs to (owner directive,
+ * 2026-09-03, issue 287): the tile row is a grid a reader scrolls past, and
+ * the thing with a next and a previous is the STAGE. The gesture that was
+ * added for defect 2 moved there with it, and so did both halves of what this
+ * lane has always proved — a deliberate drag turns the page, and a fidget
+ * does not.
+ *
+ * The settle half changed shape rather than going away. The strip followed
+ * the finger and eased home, so "settled back" was a transform read off the
+ * outgoing item; the stage is commit-only — `move` and `settle` are empty, on
+ * purpose, because a picture anchored to the viewport that slid with the
+ * finger would slide off it — so the same claim is now that NOTHING is
+ * displaced at all, at any point, which is the stronger statement and the one
+ * a returning drag-follow would fail. */
+test('the stage advances on a swipe and stays put on a fidget (issue 219; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await visit(page);
-  const stage = page.locator('.gallery-stage').first();
-  await stage.scrollIntoViewIfNeeded();
-
-  const counter = page.locator('.gallery-count').first();
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
+  const stage = page.locator('.gallery-stage');
+  const counter = page.locator('.gallery-count');
   const readIndex = async () => (await counter.innerText()).trim();
   const start = await readIndex();
 
@@ -9075,12 +9227,7 @@ test('the gallery advances on a swipe and settles back on a fidget (issue 219)',
   // declaration the whole feature rests on.
   expect(
     await stage.evaluate((node) => window.getComputedStyle(node).touchAction),
-    'the gallery stage stopped handing vertical panning to the page',
-    /* `contain` rather than an exact match since issue 241: the declaration is
-       now `pan-y pinch-zoom`, so a two-finger zoom on the artwork is no longer
-       refused. What this half is about is unchanged and still fails on its
-       own — losing pan-y would hand the page's vertical scrolling to the
-       gesture layer, whatever else the value said. */
+    'the gallery stage stopped handing vertical panning to the page'
   ).toContain('pan-y');
 
   /* A finger, dispatched as real PointerEvents with pointerType "touch".
@@ -9119,354 +9266,161 @@ test('the gallery advances on a swipe and settles back on a fidget (issue 219)',
   // A real leftward drag: down, several moves (a single jump is not a drag and
   // the binding is right to ignore it), up.
   await drag([0.8, 0.7, 0.55, 0.4, 0.25].map((at) => box.x + box.width * at));
-  await page.waitForTimeout(320);
-  const advanced = await readIndex();
-  expect(advanced, 'a leftward swipe did not advance the gallery').not.toBe(start);
+  await expect(counter, 'a leftward swipe did not advance the stage').not.toHaveText(start);
 
-  // A FIDGET — a few pixels, slowly — must put the surface back and change
-  // nothing. This is the half that stops a carousel turning on every touch.
-  // Slow AND short: 11px over 180ms clears neither the distance nor the
-  // velocity test, which is exactly what a fidget is.
+  // A FIDGET — a few pixels, slowly — must change nothing. This is the half
+  // that stops a carousel turning on every touch. Slow AND short: 11px over
+  // 180ms clears neither the distance nor the velocity test, which is exactly
+  // what a fidget is.
   const held = await readIndex();
   const from = box.x + box.width * 0.6;
   await drag([from, from - 4, from - 8, from - 11], 60);
   await page.waitForTimeout(320);
   expect(await readIndex(), 'a small slow drag turned the page anyway').toBe(held);
 
-  // ...and the surface is back where it started, with no residual offset. A
-  // gallery left displaced is the pull-to-refresh defect in another costume.
-  const resting = await page.evaluate(() => {
-    const button = window.document.querySelector('.gallery-image-button');
-    const matrix = new DOMMatrixReadOnly(window.getComputedStyle(button).transform);
-    return matrix.m41;
-  });
-  expect(Math.abs(resting), 'the gallery did not settle back to its resting position').toBeLessThan(1);
-});
-
-/* THE TURN GOES FORWARD (issue 265, defect 5). Layer 1 owns the arithmetic —
- * where the incoming item starts, and that the clamp keeps it on the right
- * side — and this owns the one thing only an engine can answer: what the
- * reader's own display actually painted in the frames after they let go.
- * MEASURED on 0.1.65 in all five engines: 120-202px of travel in the wrong
- * direction per swipe, over a 200ms settle, because the new item mounted at
- * the OLD drag offset and eased home from there. */
-test('a committed swipe brings the new item in from its own side (issue 265)', async ({ page }) => {
-  await visit(page);
-  const stage = page.locator('.gallery-stage').first();
-  await stage.scrollIntoViewIfNeeded();
-  const counter = page.locator('.gallery-count').first();
-  const before = (await counter.innerText()).trim();
-
-  const box = await stage.boundingBox();
-  const walk = await page.evaluate(
-    async ([left, width, y]) => {
-      const stageNode = window.document.querySelector('.gallery-stage');
-      const send = (type, x) =>
-        stageNode.dispatchEvent(
-          new PointerEvent(type, {
-            pointerId: 61,
-            pointerType: 'touch',
-            clientX: x,
-            clientY: y,
-            bubbles: true,
-          }),
-        );
-      /* The PAINTED offset, read off the element the reader is looking at
-         rather than off the custom property that feeds it: a transition
-         resolves to its current animated value here, which is exactly the
-         travel this lane is about. */
-      const offset = () =>
-        new DOMMatrixReadOnly(
-          window.getComputedStyle(window.document.querySelector('.gallery-image-button')).transform,
-        ).m41;
-      const frame = () => new Promise((resolve) => window.requestAnimationFrame(resolve));
-
-      send('pointerdown', left + width * 0.8);
-      for (const at of [0.7, 0.55, 0.4, 0.25]) {
-        send('pointermove', left + width * at);
-        await frame();
-      }
-      const dragged = offset();
-      send('pointerup', left + width * 0.25);
-      const painted = [];
-      for (let step = 0; step < 3; step += 1) {
-        await frame();
-        painted.push(offset());
-      }
-      return { dragged, painted };
-    },
-    [box.x, box.width, box.y + box.height / 2],
-  );
-
-  /* Non-vacuity, both halves: the drag really pulled the surface leftward,
-     and the release really turned the page. A gesture that committed nothing
-     would settle to zero and satisfy the assertion below for the wrong
-     reason. */
-  expect(walk.dragged, 'the drag never moved the surface, so nothing was released from anywhere').toBeLessThan(0);
-  await expect(counter, 'the swipe did not turn the page').not.toHaveText(before);
-
-  /* THE ASSERTION: not one painted frame after the turn sits on the side the
-     finger came FROM. The drag went left, so every frame of the arrival is at
-     or right of centre and travels toward it. */
-  for (const [step, at] of walk.painted.entries()) {
-    expect(
-      at + subPixel,
-      `frame ${step + 1} after a leftward turn painted the new item at ${at}px, on the side the gesture came from — it is sliding in backwards`,
-    ).toBeGreaterThanOrEqual(0);
-  }
-});
-
-/* THE MOTION BATTERY, LAYER 2 (issue 243). The layer scheme is written out in
- * tests/gesture.test.mjs's header; the short of it is that layer 1 owns every
- * DECISION the gesture layer makes, exhaustively and in microseconds, and this
- * layer owns only what an engine has to answer: did a real cascade let the
- * touch through, did the real transform come back to zero, did the real
- * document hold still. Everything added here is multiplied by five projects,
- * so each of these is ONE walk and no walk repeats a layer-1 case. */
-test('a film swipes like a still until the reader presses play (issue 243)', async ({ page }) => {
-  /* The owner's report, driven end to end: "you cannot swipe out of a video,
-     it instead starts to play immediately... the sensitive area should only be
-     the button and not the entire video." */
-  await serveGalleryManifest(page);
-  await visit(page);
-  const stage = page.locator('.gallery-stage');
-  await stage.scrollIntoViewIfNeeded();
-
-  // Onto the film, by the dot that names it (the stage pair is hidden on the
-  // touch-primary projects this walk matters most on).
-  await goToItem(page, 'Film 2 of 2');
-  await expect(page.locator('.gallery-film-veil')).toHaveCount(1);
-
-  const box = await stage.boundingBox();
-  const drag = (offsets) =>
-    page.evaluate(
-      ([xs, y]) => {
-        const surface = window.document.querySelector('.gallery-film-veil') ?? window.document.querySelector('.gallery-stage');
-        const send = (type, x) =>
-          surface.dispatchEvent(
-            new PointerEvent(type, { pointerId: 31, pointerType: 'touch', clientX: x, clientY: y, bubbles: true })
-          );
-        send('pointerdown', xs[0]);
-        for (const x of xs.slice(1)) send('pointermove', x);
-        send('pointerup', xs.at(-1));
-      },
-      [offsets, box.y + box.height / 2]
-    );
-
-  /* A DRAG ACROSS THE FILM TURNS THE STRIP. This is the whole reversal: on
-     0.1.55 the film's stage carried no binding at all and this walk left the
-     counter exactly where it was. */
-  await drag([0.8, 0.65, 0.45, 0.25].map((at) => box.x + box.width * at));
-  await page.waitForTimeout(320);
-  await expect(
-    page.locator('.gallery-count'),
-    'a swipe across a film did not move the strip'
-  ).toHaveText('Photograph 1 of 2');
-
-  // Back to the film, and check the film is still paused after all that: a
-  // drag must never have started anything.
-  await goToItem(page, 'Film 2 of 2');
-  expect(
-    await page.locator('video').evaluate((node) => node.paused),
-    'dragging across a film started it playing'
-  ).toBe(true);
-
-  /* AND THE PRESS IS THE ONE SENSITIVE AREA. Pressing the play control hands
-     the surface over: the veil goes, and the native controls arrive with it.
-     The film itself may or may not decode here — the lane's origin serves no
-     media volume and the sources 404 — so what is measured is the HANDOVER,
-     which is the part the owner reported and the part this component owns. */
-  await page.locator('.gallery-play').click();
-  await expect(
-    page.locator('.gallery-film-veil'),
-    'the swipe surface stayed over the player after the reader asked for the controls'
-  ).toHaveCount(0);
-  await expect
-    .poll(async () => page.locator('video').evaluate((node) => node.controls), {
-      message: 'the player never received the controls the press handed it',
-      timeout: 5_000,
+  /* ...and NOTHING WAS EVER DISPLACED. The commit-only binding writes no
+     offset at all, so the picture, the stage around it and the dialog holding
+     both must every one of them sit at an identity transform after a
+     committed turn and after a refused one alike. A reintroduced drag-follow
+     — or a settle that failed to come home, which is the pull-to-refresh
+     defect in another costume — shows up here as a translation. */
+  const resting = await page.evaluate(() =>
+    ['dialog.gallery-lightbox', '.gallery-stage', '.gallery-lightbox-image'].map((selector) => {
+      const node = window.document.querySelector(selector);
+      const matrix = new DOMMatrixReadOnly(window.getComputedStyle(node).transform);
+      return { selector, x: matrix.m41, y: matrix.m42 };
     })
-    .toBe(true);
-
-  /* AND LEAVING THE FILM TAKES THE HANDOVER BACK (review finding, 2026-08-28).
-     A played film used to be a one-way door: `playingKey` was only cleared on
-     `ended`, so a reader who pressed play, moved to the still, and came back
-     found the controls still declared and the veil gone — the swipe dead end
-     the owner reported, reachable again two navigations later. The repair is
-     structural (every index move runs through `goTo`, which clears the key),
-     and this walk is the exact sequence, in a real engine: play, leave, return,
-     and the film must be back behind its veil with no controls declared. */
-  await goToItem(page, 'Photograph 1 of 2');
-  await goToItem(page, 'Film 2 of 2');
-  await expect(
-    page.locator('.gallery-film-veil'),
-    'a film played once never gets its swipe surface back; the strip is a dead end there'
-  ).toHaveCount(1);
-  expect(
-    await page.locator('video').evaluate((node) => node.controls),
-    'the returned film still declares the native controls it was handed two navigations ago'
-  ).toBe(false);
-  // ...and the returning film has not started itself either, which is the
-  // absence pin the handover must not be allowed to smuggle past.
-  expect(
-    await page.locator('video').evaluate((node) => node.paused),
-    'the returned film is playing without the reader pressing anything'
-  ).toBe(true);
-
-  await page.unrouteAll({ behavior: 'ignoreErrors' });
-});
-
-test('a dragged gallery writes its offset once a frame, not once an event (issue 243)', async ({
-  page,
-}) => {
-  /* The owner's "swiping is NOT very smooth on the phone", measured in an
-     engine. A finger reports far more moves than a display draws, and each one
-     used to write a custom property on the stage — which invalidates style for
-     its whole subtree. The moves are dispatched in SEPARATE tasks on purpose:
-     a synchronous burst is coalesced by the framework's own batching and would
-     measure nothing about this repair. */
-  await visit(page);
-  const stage = page.locator('.gallery-stage').first();
-  await stage.scrollIntoViewIfNeeded();
-  const box = await stage.boundingBox();
-
-  const swept = await page.evaluate(
-    async ([left, width, midY]) => {
-      const node = window.document.querySelector('.gallery-stage');
-      const writes = [];
-      let frames = 0;
-      const original = CSSStyleDeclaration.prototype.setProperty;
-      CSSStyleDeclaration.prototype.setProperty = function patched(name, value, priority) {
-        if (name === '--gallery-drag') writes.push(value);
-        return original.call(this, name, value, priority);
-      };
-      let counting = true;
-      const count = () => {
-        frames += 1;
-        if (counting) window.requestAnimationFrame(count);
-      };
-      window.requestAnimationFrame(count);
-      const send = (type, x) =>
-        node.dispatchEvent(
-          new PointerEvent(type, { pointerId: 41, pointerType: 'touch', clientX: x, clientY: midY, bubbles: true })
-        );
-      send('pointerdown', left + width * 0.85);
-      // Prove the gesture horizontal first, then a flood of small steps, each
-      // in its own task.
-      send('pointermove', left + width * 0.7);
-      const moves = 30;
-      for (let step = 1; step <= moves; step += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        send('pointermove', left + width * 0.7 - step);
-      }
-      send('pointerup', left + width * 0.7 - moves);
-      counting = false;
-      CSSStyleDeclaration.prototype.setProperty = original;
-      return { writes: writes.length, frames, moves };
-    },
-    [box.x, box.width, box.y + box.height / 2]
   );
-
-  /* One write per painted frame, plus the release's own flush home. An
-     uncoalesced handler writes once per EVENT, which is `moves` — several
-     times the frame count over the same span. */
-  expect(
-    swept.writes,
-    `${swept.moves} pointer moves across ${swept.frames} frames produced ${swept.writes} style writes`
-  ).toBeLessThanOrEqual(swept.frames + 2);
-  /* ...and the measurement is not vacuous in either direction: frames really
-     did run (so the ceiling is a real one), and the flood really did outnumber
-     them (so there was something to coalesce). */
-  expect(swept.frames, 'no frame ran during the drag; the ceiling above is meaningless').toBeGreaterThan(1);
-  expect(
-    swept.moves,
-    'the flood produced no more events than frames; this lane cannot see a lost throttle'
-  ).toBeGreaterThan(swept.frames);
-  /* And the surface came home, which is the property no optimisation may cost.
-     The wait is the settle's own token duration plus slack — the offset is
-     handed back to zero synchronously on release, and what takes time is the
-     CSS transition drawing it there. */
-  await page.waitForTimeout(320);
-  const resting = await page.evaluate(() => {
-    const button = window.document.querySelector('.gallery-image-button');
-    return new DOMMatrixReadOnly(window.getComputedStyle(button).transform).m41;
-  });
-  expect(Math.abs(resting), 'the coalesced drag left the surface displaced').toBeLessThan(1);
+  for (const surface of resting) {
+    expect(
+      Math.abs(surface.x) + Math.abs(surface.y),
+      `${surface.selector} is displaced by ${surface.x},${surface.y} after the gesture`
+    ).toBeLessThan(1);
+  }
 });
 
-test('the gallery is reachable without a gesture, and says where it is (issue 219; issue 275)', async ({
+/* THE ARRIVAL-DIRECTION LANE IS DELETED (owner directive, 2026-09-03, issue
+ * 287: the strip is gone). "A committed swipe brings the new item in from its
+ * own side" (issue 265, defect 5) measured the frames an engine painted after
+ * a release, because the strip mounted the incoming item at the old drag
+ * offset and eased it home from the wrong direction — 120-202px of backwards
+ * travel per swipe on 0.1.65. The stage has no drag offset to mount anything
+ * at and no settle to ease: `move` and `settle` are empty and a turn is a
+ * state change, so there is no travel to have a direction. The arithmetic
+ * that produced the defect (entryOffset, boundedDrag) is still owned by
+ * tests/gesture.test.mjs, which is where it belongs while nothing paints it.
+ *
+ * THE FILM-SWIPE LANE IS DELETED with it. "A film swipes like a still until
+ * the reader presses play" (issue 243) was about a film sharing the strip's
+ * one stage behind a veil that carried the gesture: no stage is shared now, a
+ * film sits in its own tile, and .gallery-film-veil does not exist. The two
+ * claims inside it that were about the READER are both kept — a press is the
+ * only thing that starts a film, and the press is what hands over the native
+ * controls — and both are measured in the film-tile lane earlier in this file,
+ * on the surface that actually has them.
+ *
+ * THE OFFSET-WRITE LANE IS DELETED with both. "A dragged gallery writes its
+ * offset once a frame, not once an event" (issue 243) counted --gallery-drag
+ * writes against painted frames, and the owner's "swiping is NOT very smooth
+ * on the phone" was a style invalidation per pointermove. A binding whose
+ * `move` is empty writes nothing at all, per frame or per event, which is the
+ * limit that lane was pushing toward; frameCoalescer itself is still exercised
+ * exhaustively, and deterministically, by tests/gesture.test.mjs. */
+
+test('the gallery is reachable without a gesture, and says where it is (issue 219; issue 275; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await visit(page);
-  const counter = page.locator('.gallery-count').first();
-  const ordinal = page.locator('.gallery-ordinal').first();
-  const previous = page.locator('.gallery-nav[data-gallery-nav="previous"]');
-  const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
+  const dialog = page.locator('dialog.gallery-lightbox');
+  const counter = page.locator('.gallery-count');
 
-  /* The press equivalent of the swipe is the stage pair, on EVERY device
-     since the 2026-08-31 sketch retired the dot row (issue 275) — real
-     buttons, visible, at the touch floor on both axes. */
-  for (const control of [previous, next]) {
-    await expect(control).toBeVisible();
-    const box = await control.boundingBox();
-    expect(box.width + subPixel, 'a stage control is under the touch floor').toBeGreaterThanOrEqual(
-      touchFloorPx,
-    );
-    expect(box.height + subPixel, 'a stage control is under the touch floor').toBeGreaterThanOrEqual(
-      touchFloorPx,
+  /* EVERY TILE IS A REAL BUTTON — a tab stop with no roving apparatus to get
+     wrong — and it says what pressing it will do rather than leaving a reader
+     to infer it from a picture with an empty alt. */
+  const tiles = page.locator('.gallery-tile[data-gallery-kind="image"]');
+  await expect(tiles).toHaveCount(4);
+  const labels = await tiles.evaluateAll((nodes) =>
+    nodes.map((node) => ({ tag: node.tagName, label: node.getAttribute('aria-label') }))
+  );
+  for (const [index, tile] of labels.entries()) {
+    expect(tile.tag, `tile ${index + 1} is not a button, so a keyboard cannot reach it`).toBe('BUTTON');
+    expect(tile.label, `tile ${index + 1} does not say what opening it will show`).toMatch(
+      /^Open photograph: /
     );
   }
 
-  /* Pressing one navigates — the POINTER equivalent, exercised — and the
-     visible ordinal moves in step with the clipped live sentence, so "says
-     where it is" holds on both channels at once. */
-  const before = (await counter.innerText()).trim();
-  await next.click();
-  await page.waitForTimeout(150);
-  expect((await counter.innerText()).trim(), 'the stage pair did not navigate').not.toBe(before);
-  await expect(ordinal).toHaveText('2 / 8');
+  /* A REAL ENTER OPENS THE STAGE — the keyboard equivalent of the press, and
+     the thing a click test cannot prove (issue 219 review round 2,
+     finding 3). */
+  await tiles.first().focus();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toBeVisible();
+  await expect(counter).toHaveText('Photograph 1 of 8');
+  await expect(counter, 'the position stopped announcing itself').toHaveAttribute(
+    'aria-live',
+    'polite'
+  );
 
-  /* AND THE KEYBOARD ONE, WHICH A CLICK CANNOT PROVE (issue 219 review
-     round 2, finding 3): the pair are ordinary buttons — tab stops with no
-     roving apparatus to get wrong — so a real Enter on a focused control
-     must page exactly as a press does. */
+  /* The stage pair are ordinary buttons too, so an Enter on a focused control
+     pages exactly as a press does. */
+  const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
   await next.focus();
   await page.keyboard.press('Enter');
-  await page.waitForTimeout(150);
-  await expect(ordinal).toHaveText('3 / 8');
-  await expect(counter).toHaveText('Photograph 3 of 8');
+  await expect(counter).toHaveText('Photograph 2 of 8');
 
-  // And so do the arrow keys on the frame itself.
-  const frame = page.locator('.gallery-image-button').first();
-  await frame.focus();
-  const held = (await counter.innerText()).trim();
+  // And so do the arrow keys, anywhere inside the open stage.
   await page.keyboard.press('ArrowRight');
-  await page.waitForTimeout(150);
-  expect((await counter.innerText()).trim(), 'the arrow keys do not drive the gallery').not.toBe(held);
+  await expect(counter).toHaveText('Photograph 3 of 8');
+  await page.keyboard.press('ArrowLeft');
+  await expect(counter).toHaveText('Photograph 2 of 8');
+
+  /* ...and Escape leaves by the same road it came in on, handing the tile
+     back its focus so the reader is never stranded on the document body. */
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+  expect(
+    await page.evaluate(() => {
+      const tileNodes = [...window.document.querySelectorAll('.gallery-tile')];
+      return tileNodes.indexOf(window.document.activeElement);
+    }),
+    'Escape left focus somewhere other than the tile that opened the stage'
+  ).toBe(0);
 });
 
-/* Finding 4. A SWIPE ATE THE READER'S NEXT ACTIVATION. The frame is a button
- * and a drag across it ends in a click nobody meant, so a claimed drag
- * suppresses exactly one click — but a touch swipe past the platform's slop
- * produces NO click, and the suppression simply waited for whatever came
- * next. MEASURED in both engines at 390x844: swipe (counter 1/8 -> 2/8),
- * focus the frame, press a real Enter, and the lightbox did not open.
+/* Finding 4. A SWIPE ATE THE READER'S NEXT ACTIVATION. A drag across a
+ * control ends in a click nobody meant, so a real drag suppresses exactly one
+ * click — but a touch swipe past the platform's slop produces NO click, and
+ * the suppression simply waited for whatever came next. MEASURED in both
+ * engines at 390x844: swipe the gallery, focus the control, press a real
+ * Enter, and nothing happened.
+ *
+ * RE-AIMED at the stage (owner directive, 2026-09-03, issue 287). The control
+ * a stray click can now reach is not the picture — the picture is not a
+ * button any more — it is the prev/next pair sitting INSIDE the swipe
+ * surface, which is if anything the sharper form of the same trap: the drag
+ * ends with the finger over the control it would otherwise press.
  *
  * Both halves are here, because the cheap repair is to stop suppressing at
- * all — which hands back the accidental click the suppression exists to
+ * all — which hands back the accidental turn the suppression exists to
  * prevent. */
-test('a swipe does not eat the next activation, and still eats its own click (issue 219)', async ({
+test('a swipe does not eat the next activation, and still eats its own click (issue 219; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await visit(page);
-  const stage = page.locator('.gallery-stage').first();
-  await stage.scrollIntoViewIfNeeded();
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
+  const stage = page.locator('.gallery-stage');
+  const counter = page.locator('.gallery-count');
   const box = await stage.boundingBox();
   const midY = box.y + box.height / 2;
   const xs = [0.8, 0.7, 0.55, 0.4, 0.25].map((at) => box.x + box.width * at);
-  const counter = page.locator('.gallery-count').first();
-  const dialogOpen = () =>
-    page.evaluate(() => window.document.querySelector('.gallery-lightbox').open);
+  /* The position as a NUMBER, so a lane can say how many turns happened
+     rather than only that something changed — which is the whole question
+     when a suppressed click and a delivered one both leave the counter
+     somewhere other than where it started. */
+  const position = async () =>
+    Number(/Photograph (\d+) of/.exec((await counter.innerText()).trim())[1]);
+  const turns = (from, to) => (to - from + 8) % 8;
 
   /* A hand. Playwright's touchscreen API offers only tap() and its mouse API
      cannot produce a touch pointer at all, so the HAND is synthesised and
@@ -9475,7 +9429,7 @@ test('a swipe does not eat the next activation, and still eats its own click (is
     page.evaluate(
       ([offsets, y, kind, detail]) => {
         const node = window.document.querySelector('.gallery-stage');
-        const button = window.document.querySelector('.gallery-image-button');
+        const control = window.document.querySelector('.gallery-nav[data-gallery-nav="next"]');
         const send = (type, x) =>
           node.dispatchEvent(
             new PointerEvent(type, {
@@ -9494,53 +9448,58 @@ test('a swipe does not eat the next activation, and still eats its own click (is
         /* The drag's OWN compatibility click, dispatched in the same task as
            its pointerup — which is exactly how a user agent orders them for a
            mouse, and therefore the only honest way to ask whether the
-           suppression still works. */
+           suppression still works. It lands on the control the finger ended
+           over, which is the press a reader never meant to make. */
         if (detail !== null) {
-          button.dispatchEvent(new MouseEvent('click', { detail, bubbles: true, cancelable: true }));
+          control.dispatchEvent(new MouseEvent('click', { detail, bubbles: true, cancelable: true }));
         }
       },
       [xs, midY, pointerType, thenClickDetail],
     );
 
-  const start = (await counter.innerText()).trim();
+  const start = await position();
   await drive('touch', null);
-  await page.waitForTimeout(320);
-  expect((await counter.innerText()).trim(), 'the swipe did not turn the page').not.toBe(start);
+  await expect(counter, 'the swipe did not turn the page').not.toHaveText(`Photograph ${start} of 8`);
+  const afterSwipe = await position();
 
-  /* An ordinary press of the frame, after that swipe. A touch swipe produces
+  /* An ordinary press of the control, after that swipe. A touch swipe produces
      no click, so the suppression the gesture armed was still waiting — and
      this is the press it ate. */
-  await page.locator('.gallery-image-button').first().click();
-  await page.waitForTimeout(250);
-  expect(await dialogOpen(), 'a swipe ate the reader’s next press of the frame').toBe(true);
-  await page.evaluate(() => window.document.querySelector('.gallery-lightbox').close());
-  await page.waitForTimeout(200);
+  await page.locator('.gallery-nav[data-gallery-nav="next"]').click();
+  await expect(counter).toHaveText(`Photograph ${((afterSwipe % 8) + 1)} of 8`);
 
   // The same question from the keyboard, which is where it was measured: a
   // real Enter, after a real swipe.
+  const beforeKeyboard = await position();
   await drive('touch', null);
-  await page.waitForTimeout(320);
-  await page.locator('.gallery-image-button').first().focus();
+  await expect(counter).not.toHaveText(`Photograph ${beforeKeyboard} of 8`);
+  const afterSecondSwipe = await position();
+  await page.locator('.gallery-nav[data-gallery-nav="next"]').focus();
   await page.keyboard.press('Enter');
-  await page.waitForTimeout(200);
-  expect(await dialogOpen(), 'a swipe ate the reader’s next keyboard activation').toBe(true);
-  await page.evaluate(() => window.document.querySelector('.gallery-lightbox').close());
-  await page.waitForTimeout(200);
+  await expect(
+    counter,
+    'a swipe ate the reader’s next keyboard activation'
+  ).toHaveText(`Photograph ${((afterSecondSwipe % 8) + 1)} of 8`);
 
-  // ...and the suppression is not simply gone: a drag's own click, in the
-  // task that ended it, must still be swallowed.
+  /* ...and the suppression is not simply gone: a drag's own click, in the
+     task that ended it, must still be swallowed. The drag itself turns the
+     page once; a delivered trailing click would turn it twice. */
+  const beforeDrag = await position();
   await drive('mouse', 1);
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(250);
+  const afterDrag = await position();
   expect(
-    await dialogOpen(),
-    'a drag’s own click reached the control; the accidental open is back',
-  ).toBe(false);
+    turns(beforeDrag, afterDrag),
+    `a mouse drag moved the stage ${turns(beforeDrag, afterDrag)} places; its own trailing click reached the control`
+  ).toBe(1);
 
   // While an ordinary click, after that gesture is over, still works — or the
-  // assertion above would be satisfied by a control that never opens at all.
-  await page.locator('.gallery-image-button').first().click();
-  await page.waitForTimeout(250);
-  expect(await dialogOpen(), 'the frame stopped opening on an ordinary click').toBe(true);
+  // assertion above would be satisfied by a control that never pages at all.
+  await page.locator('.gallery-nav[data-gallery-nav="next"]').click();
+  await expect(
+    counter,
+    'the stage pair stopped paging on an ordinary click'
+  ).toHaveText(`Photograph ${((afterDrag % 8) + 1)} of 8`);
 });
 
 /* Finding 5. MODIFIER CHORDS ARE THE BROWSER'S AND THE PLATFORM'S. Both new
@@ -10193,10 +10152,16 @@ test('off the top, no start target arms a pull — the gesture surfaces included
   page,
 }) => {
   await visit(page);
-  /* The two child surfaces with their own touch handling, plus the plain
-     column: the ruling's "off the top, none does" must hold exactly where a
-     competing gesture makes claiming most tempting. */
-  for (const selector of ['.gallery-stage', '.grid-strip', 'main']) {
+  /* The gallery's row, the heatmap strip with its own touch handling, and the
+     plain column: the ruling's "off the top, none does" must hold exactly
+     where a competing gesture makes claiming most tempting.
+     The row replaces the strip's stage here (owner directive, 2026-09-03,
+     issue 287). It carries no gesture of its own any more — the swipe went to
+     the stage inside the dialog, which cannot be open while the page is being
+     dragged — but it is still a surface a reader's thumb lands on, and a pull
+     that claimed a drag over it would be exactly as wrong as one that claimed
+     a drag over the column. */
+  for (const selector of ['.gallery-grid', '.grid-strip', 'main']) {
     const box = await page.evaluate((sel) => {
       const el = window.document.querySelector(sel);
       if (el === null) {
@@ -10219,13 +10184,19 @@ test('off the top, no start target arms a pull — the gesture surfaces included
   }
 });
 
-test('a horizontal swipe over the Media strip still swipes, downward drift and all (issue 277)', async ({
+test('a horizontal swipe over the enlarged photograph still swipes, downward drift and all (issue 277; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
+  /* The Media strip this lane was written against is retired; the surface
+     that still arbitrates a horizontal drag against the page's own gestures
+     is the STAGE, so that is where the drifting swipe is driven now. The
+     ruling is untouched: a swipe whose finger wanders downward is still a
+     swipe, and the pull must keep its hands off it. */
   await visit(page);
-  const stage = page.locator('.gallery-stage').first();
-  await stage.scrollIntoViewIfNeeded();
-  const counter = page.locator('.gallery-count').first();
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
+  const stage = page.locator('.gallery-stage');
+  const counter = page.locator('.gallery-count');
   const before = (await counter.innerText()).trim();
   const box = await stage.boundingBox();
 
@@ -10264,14 +10235,14 @@ test('a horizontal swipe over the Media strip still swipes, downward drift and a
     { left: box.x, width: box.width, y },
   );
 
-  await expect(counter, 'a drifting horizontal swipe no longer turns the gallery').not.toHaveText(
+  await expect(counter, 'a drifting horizontal swipe no longer turns the stage').not.toHaveText(
     before,
   );
   const claimed = await page.evaluate(() => ({
     pulling: window.document.documentElement.hasAttribute('data-pulling'),
     pull: window.document.documentElement.style.getPropertyValue('--page-pull'),
   }));
-  expect(claimed.pulling, 'the pull claimed a horizontal swipe over the Media strip').toBe(false);
+  expect(claimed.pulling, 'the pull claimed a horizontal swipe over the enlarged photograph').toBe(false);
   expect(['', '0px']).toContain(claimed.pull);
 });
 
@@ -10622,50 +10593,23 @@ test('the first cancelable touchmove decides the touch, and a real pull at the t
   expect(scroll.scrollY, 'the browser did not scroll a drag it claimed').toBeLessThan(600);
 });
 
-test('a real gallery swipe finds its incoming picture already decoded, even on a slow network (issue 285)', async ({
-  page,
-  browserName,
-}) => {
-  test.skip(browserName !== 'chromium', 'only Chromium exposes its touch input pipeline and network shaping to a lane');
-  await visit(page);
-  const stage = page.locator('.gallery-stage').first();
-  await stage.scrollIntoViewIfNeeded();
-  await page.waitForTimeout(300);
-  const client = await page.context().newCDPSession(page);
-  await client.send('Network.enable');
-  /* A throttled 3G: the measured 480ms of blank stage came from exactly this
-     shape, and a warm desktop cache is what hid the defect for two releases. */
-  await client.send('Network.emulateNetworkConditions', {
-    offline: false,
-    downloadThroughput: (500 * 1024) / 8,
-    uploadThroughput: (500 * 1024) / 8,
-    latency: 400,
-  });
-  await page.evaluate(() => {
-    window.__stage = [];
-    (function loop() {
-      const image = window.document.querySelector('.gallery-stage img.gallery-image');
-      window.__stage.push({
-        ordinal: window.document.querySelector('.gallery-ordinal')?.textContent?.trim(),
-        decoded: image !== null && image.naturalWidth > 0,
-      });
-      window.requestAnimationFrame(loop);
-    })();
-  });
-  const box = await stage.boundingBox();
-  const cx = Math.round(box.x + box.width / 2);
-  const cy = Math.round(box.y + box.height / 2);
-  await realTouchDrive(client, straightLine(cx + 60, cy, -160, 0, 10), 16);
-  await expect(page.locator('.gallery-ordinal')).toHaveText('2 / 8');
-  await page.waitForTimeout(600);
-  const frames = await page.evaluate(() => window.__stage);
-  const commit = frames.findIndex((frame) => frame.ordinal === '2 / 8');
-  expect(commit, 'the swipe never committed').toBeGreaterThan(0);
-  const after = frames.slice(commit);
-  expect(after.length, 'no frame was recorded after the commit').toBeGreaterThan(5);
-  const blank = after.filter((frame) => !frame.decoded).length;
-  expect(blank, `the incoming picture was blank for ${blank} frames after the commit`).toBe(0);
-});
+/* THE NEIGHBOUR-WARMING LANE IS DELETED (owner directive, 2026-09-03, issue
+ * 287: the strip is gone). "A real gallery swipe finds its incoming picture
+ * already decoded, even on a slow network" (issue 285) drove a real Chromium
+ * touch across the strip on a throttled 3G and required zero blank frames
+ * after the commit, because the strip warmed its neighbours and the lane
+ * proved the warming reached a real engine.
+ *
+ * There are no neighbours to warm. The stage pages between pictures whose
+ * previews the reader has ALREADY loaded — the tile row IS the preview set —
+ * and the enlarged <img> carries its own preview as a CSS background, so what
+ * paints while the master decodes is the picture the reader was just looking
+ * at, at every network speed rather than only the ones a warm cache happened
+ * to cover. A lane asserting "never blank" against a background-image would
+ * be measuring the engine's compositing rather than this build, and the
+ * question it was really asking — does a reader pay for a master they never
+ * open — is measured directly by the master-on-demand lane earlier in this
+ * file. */
 
 /* THE CALENDAR SAYS WHEN ITS DATA STOPPED, AND SHOWS THE DAYS SINCE (issue
  * 285). This lane's origin serves the embedded snapshot exactly as a cold

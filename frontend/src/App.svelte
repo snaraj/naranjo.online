@@ -120,7 +120,7 @@
     label={textureLabel(texture, index, set.length, true)} />
 
   <footer class="page-footer">
-    <span class="footer-mark">naranjo.online</span>
+    <span class="footer-mark">naranjo.online v{__SITE_VERSION__}</span>
     <span class="footer-meta">MIT · github.com/snaraj</span>
   </footer>
 

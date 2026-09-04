@@ -29,11 +29,11 @@ export interface Texture {
  * whichever palette the device asked for (resolvedTheme below). */
 export const textureSets: Readonly<Record<ThemeId, readonly Texture[]>> = {
   light: [
-    { file: 'light-iridescent.jpg', name: 'iridescent' },
+    { file: 'light-spikes.jpg', name: 'spikes' },
     { file: 'light-plaster.jpg', name: 'plaster' }
   ],
   dark: [
-    { file: 'dark-glass.jpg', name: 'glass' },
+    { file: 'dark-refraction.jpg', name: 'refraction' },
     { file: 'dark-wave.jpg', name: 'wave' }
   ],
   slate: [

@@ -695,7 +695,7 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
   // light's text is SLATE's surface and vice versa — one occurrence per
   // palette slot, still zero per consumer.
   const uniqueValues = [
-    '#efefe8', '#e6e6dd', '#d8d8cd', '#87877c', '#3d434f', // light ramp
+    '#f1efe7', '#e7e4da', '#d9d5c9', '#87877c', '#3d434f', // light ramp
     // The true dark. Every one of these is a grey — red, green and blue
     // equal — which is the whole claim the mode makes and the one a repaint
     // toward navy would have to break to get past here.
@@ -730,7 +730,7 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
   for (const value of uniqueValues) {
     assert.equal(occurrences(styles, value), 1, `${value} must be defined exactly once`);
   }
-  for (const anchor of ['#f7f7f2', '#10131a']) {
+  for (const anchor of ['#faf9f5', '#10131a']) {
     assert.equal(occurrences(styles, anchor), 2, `anchor ${anchor} fills exactly two palette slots`);
   }
 

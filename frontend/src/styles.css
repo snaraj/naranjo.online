@@ -123,10 +123,10 @@
  * twice below because light's text is slate's surface and vice versa — one
  * occurrence per palette slot, never per consumer. */
 :root {
-  --palette-light-surface: #f7f7f2;
-  --palette-light-surface-raised: #efefe8;
-  --palette-light-surface-overlay: #e6e6dd;
-  --palette-light-border: #d8d8cd;
+  --palette-light-surface: #faf9f5;
+  --palette-light-surface-raised: #f1efe7;
+  --palette-light-surface-overlay: #e7e4da;
+  --palette-light-border: #d9d5c9;
   /* Repainted at issue 138. border-strong is a non-text UI boundary, so WCAG
      2.2 SC 1.4.11 sets its floor at 3:1 against the surface it sits on, and
      three of the four palettes were below it — measured against each mode's
@@ -172,7 +172,7 @@
   --palette-slate-border: #2a3040;
   --palette-slate-border-strong: #5f6a84;
   --palette-slate-accent: #b9c2d4;
-  --palette-slate-text: #f7f7f2;
+  --palette-slate-text: #faf9f5;
 
   /* Sepia: placeholder palette seeded from the wiki's browntown values. */
   --palette-sepia-surface: #1b1612;
@@ -373,7 +373,6 @@
      covered by a rail nobody asked for. Three named layers say that, and a
      component reading a raw number instead is still the defect this scale
      exists to prevent. */
-  --layer-base: 0;
   --layer-rail: 10;
   --layer-menu: 30;
 
@@ -564,7 +563,6 @@
      breakpoint token with it (both are pinned ABSENT, by name, in
      tests/sections.test.mjs — which is why this comment does not spell
      them). */
-  --entry-count-min: 3.25rem;
   --card-title-family: var(--font-mono);
   --card-title-size: 1.0625rem;
   --card-title-weight: 650;
@@ -838,7 +836,6 @@
      belongs to, and it was rendering at the same 0.8125rem as the prose it
      titles. Declared here rather than left to a component fallback, because
      this is a dimension the owner tunes. */
-  --usage-source-label-size: 1rem;
 
   /* The hover-detail token layer. The detail that hangs off a tile is one
      primitive (lib/components/DetailTip.svelte), so like the card above it
@@ -1835,71 +1832,21 @@ h1 {
    branch by reading mode for the same reason that sibling does not -- it is
    read against the scrim, which is the same near-black in every mode. */
 :root {
-  /* Frameless since 2026-08-28 (owner: "get rid of those ugly outlines"):
-     width and padding at zero keep the enlarged work edge-to-edge against
-     the scrim. The tokens stay — a future patterned border is still a token
-     edit here alone. */
-  --gallery-frame-width: 0px;
-  --gallery-frame-color: transparent;
-  /* Zero with the width, not left at the card radius: a frameless work has
-     no frame to round, and the strip's stage already shows square corners —
-     an enlarged copy keeping a 3px curve the strip lost was the one place
-     the outline survived its own removal. */
-  --gallery-frame-radius: 0px;
-  --gallery-frame-padding: 0rem;
-  --gallery-frame-image: none;
-  /* The stage's own shape (owner directive, 0.1.52: "more like a square
-     than a rectangle"). Declared HERE, not left to the component's var()
-     fallbacks, because every other dimension of this gallery is a global
-     token and the two that now decide its whole silhouette must not be the
-     exception. Size is the square's edge; aspect multiplies the inline axis,
-     so 1 IS the square and a later widescreen stage is one token edit. */
-  --gallery-stage-size: 28rem;
-  --gallery-stage-aspect: 1;
-  /* THERE IS NO SECOND STAGE SHAPE, and its absence is the load-bearing part
-     (owner directive, 2026-08-28, issue 243: "make it one single block that
-     doesn't expand, reduce based on the media").
-     A --gallery-stage-size-video / --gallery-stage-aspect-video pair lived
-     here for two releases and gave a film a 768x432 stage against a still's
-     448x448. It answered a real complaint -- a 16:9 film inside a square sits
-     between two bands of ground -- but it answered it by changing the size of
-     the one object on the page the owner watches, 320px wider and 16px
-     shorter on every press of the next arrow. The owner weighed the two and
-     ruled for the constant block.
-     Nothing replaces the pair. That is the point: with no film-specific
-     expression anywhere, the block CANNOT expand for a film, and restoring a
-     per-kind size means reintroducing tokens here rather than editing a
-     number somewhere. The film reduces inside the block instead, by the
-     `object-fit: contain` its player already carried, against the ground
-     below. */
-  /* The GROUND a film sits on (issue 239). The film stage carried no
-     background at all, so it was transparent: a poster still in flight left
-     the page's own surface showing through a 768x432 hole, which reads as a
-     broken image rather than as a frame that has not arrived yet. The same
-     transparency showed through the bands `object-fit: contain` leaves
-     whenever a film's ratio is not exactly the stage's — so the stage paints
-     a ground of its own in every mode.
-
-     WHICH ground branches by reading mode (owner ruling 2026-08-31,
-     superseding the earlier every-player-is-dark rationale that lived
-     here): the light page projects onto the white anthropic.com opens on,
-     an ivory a few points off this site's own light surface, so an
-     in-flight poster reads as a quiet pale box rather than a black
-     monolith — a trade the owner weighed and ruled for; the three dark
-     reading modes keep the shared near-black, a film's letterbox having no
-     reason to lighten there. The token is deliberately NOT declared in this
-     block: this :root block sits after the reading-mode blocks and would
-     beat their remaps on source order at equal specificity, so the light
-     value lives with the palettes, before them, where the pin measures its
-     position. */
-  /* The desktop prev/next pair (owner, 2026-08-29: "bring back the buttons
-     but chose to hide them by default in mobile"). The retired
-     --gallery-arrow-size sized the 12px chevron ink that stopped reading as
-     a button at all; these size its replacement, the disc pair on the stage
-     itself, shown only to hover-and-fine-pointer devices. Same grammar and
-     same non-branching rationale as --gallery-play-button-*: the discs sit
-     on the artwork's own ground in every reading mode. The inset is how far
-     each disc tucks in from the stage's edge. */
+  /* THE GALLERY IS A ROW OF TILES (owner directive, 2026-09-03, issue 287):
+     the first few of the chosen set as squares, beside one control tile, in
+     one grid whose column count is the only number that changes between the
+     reading width and a phone. Every tile reserves its square before a byte
+     arrives, so arrival moves nothing. */
+  --gallery-columns: 5;
+  --gallery-tile-gap: 0.5rem;
+  --gallery-tile-aspect: 1;
+  --gallery-control-gap: 0.5rem;
+  --gallery-control-pad: 0.75rem;
+  /* The GROUND a tile and a film sit on (issue 239) is --gallery-stage-ground,
+     declared with the palettes because it branches by reading mode. */
+  /* The stage's prev/next pair: the disc inside the 44px target, its ink, its
+     rest opacity, and how far each disc tucks in from the picture's edge. Not
+     branched by reading mode: it sits on the artwork's own ground. */
   --gallery-nav-size: 2.25rem;
   --gallery-nav-surface: rgba(0, 0, 0, 0.55);
   --gallery-nav-ink: white;
@@ -1907,12 +1854,7 @@ h1 {
   --gallery-nav-inset: 0.375rem;
   /* The film's play control (issue 243): the painted disc inside the 44px
      target, the ink on it, and how far the triangle is nudged off centre so a
-     right-pointing glyph reads centred in a circle. The disc is LARGER than
-     the gallery's other ink because it is the one control a reader has to
-     find on the artwork itself rather than in a control row, and it is
-     translucent at rest so it never becomes the picture. Not branched by
-     reading mode, exactly as --gallery-scrim and --gallery-stage-ground are
-     not: it sits on the film's own dark ground in every mode. */
+     right-pointing glyph reads centred in a circle. */
   --gallery-play-button-size: 3rem;
   --gallery-play-button-surface: rgba(0, 0, 0, 0.55);
   --gallery-play-button-ink: white;
@@ -1924,30 +1866,15 @@ h1 {
   --gallery-close-size: 1.125rem;
   --gallery-close-lane: 1.5rem;
   --gallery-close-rest-opacity: 0.55;
-  --gallery-caption-gap: 0.125rem;
-  --gallery-caption-space: 0.25rem;
   --gallery-meta-gap: 0.125rem;
   --gallery-meta-space: 0.5rem;
   --gallery-meta-ink: white;
   --gallery-meta-link-padding: 0.5rem;
   --gallery-lightbox-max-inline: min(94vw, 90rem);
-  /* How long a released swipe takes to settle (issue 219). A token like every
-     other dimension of this card, so the FEEL of the gesture is tunable from
-     the token layer rather than from the component — the same rule
-     --tip-pointer-gap follows for the detail card. Short enough to read as a
-     snap rather than a slide; a reduced-motion reader gets no transition at
-     all, which MediaGallery.svelte decides with a media query. */
-  --gallery-settle-duration: 200ms;
   /* --gallery-image-max-block is the fixed cap only; the dynamic-unit upgrade
      stays a literal inside its own @supports guard in MediaGallery.svelte,
-     unlike every token above. A custom property accepts any value syntax
-     unconditionally (the coordinator's own finding just above, about
-     --header-inset-*), so declaring an 80svh DEFAULT here would sit outside
-     any @supports guard while still being textually indistinguishable from
-     an unguarded progressive value to this repository's own guard-pin
-     (tests/experience.test.mjs) — which is right to be strict about it: nothing
-     else in this stylesheet tokenizes a dynamic-unit fallback, and inventing
-     the first one is a bigger change than this quality pass asked for. */
+     because a custom property accepts any value syntax unconditionally and
+     would sit outside any guard this repository's guard-pin can see. */
   --gallery-image-max-block: 40rem;
 }
 
@@ -2602,6 +2529,23 @@ h1 {
   color: var(--ledger-bg);
 }
 
+/* THE FAR FACE IS HIDDEN BY VISIBILITY, NOT ONLY BY BACKFACE CULLING. WebKit
+   flattens the 3D context inside a <button>, so backface-visibility never
+   applies there and the back face painted mirrored over the front at rest —
+   the whole board unreadable on every iOS browser (found by screenshot,
+   2026-09-03). So the face the reader is not looking at is simply invisible:
+   swapped at the flip's midpoint under motion (the delay below), instantly
+   otherwise. The cull stays for the engines that honour it; nothing depends
+   on it any more. */
+.board-face[data-face='back'],
+.board-square[data-turned='true'] .board-face[data-face='front'] {
+  visibility: hidden;
+}
+
+.board-square[data-turned='true'] .board-face[data-face='back'] {
+  visibility: visible;
+}
+
 .board-label {
   font-family: var(--font-mono);
   font-size: var(--ledger-label-size);
@@ -2830,6 +2774,11 @@ h1 {
 /* --- The phone (owner's first requirement) ------------------------------- */
 
 @media (max-width: 45rem) {
+  /* Two tiles across on a phone. Declared AFTER the gallery token block above,
+     because an earlier declaration at equal specificity loses to it. */
+  :root {
+    --gallery-columns: 2;
+  }
   .band {
     block-size: var(--band-height-phone);
   }
@@ -3082,6 +3031,10 @@ h1 {
 
   .board-pivot {
     transition: transform var(--flip-duration) var(--ledger-ease);
+  }
+
+  .board-face {
+    transition: visibility 0s linear calc(var(--flip-duration) / 2);
   }
 
   .commit-grid {

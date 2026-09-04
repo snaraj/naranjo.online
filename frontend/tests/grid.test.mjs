@@ -10,9 +10,7 @@ import {
   calendarColumns,
   cellLabel,
   cellPeriod,
-  daysInMonth,
   formatMagnitude,
-  formatMonthLabel,
   formatWhole,
   gridCursorTarget,
   gridLevel,
@@ -25,11 +23,9 @@ import {
   pendingColumns,
   pendingWeeks,
   seriesCells,
-  seriesViews,
   stripColumns,
   stripIndexAt,
   toColumns,
-  viewColumns,
   weekdayAxis,
   weekStartsOn
 } from '../src/lib/grid.ts';
@@ -64,59 +60,6 @@ function twoColumns() {
     ]
   ];
 }
-
-test('viewColumns reads one series three ways, on ALIGNED COLUMNS rather than array position (issue 189)', () => {
-  const columns = twoColumns();
-
-  // Daily is the series itself, copied rather than aliased — a caller may
-  // freely mutate what it gets back without corrupting the input columns.
-  const daily = viewColumns(columns, 'daily');
-  assert.deepEqual(daily, columns);
-  assert.notEqual(daily[0], columns[0], 'the daily lens must copy each column, never alias it');
-  assert.notEqual(daily[0][0], columns[0][0], 'the daily lens must copy each cell, never alias it');
-
-  // Weekly: every REAL cell in a column shows that column's own sum — 28 for
-  // the full first week (1+2+...+7), 10 for the second (only one real day).
-  const weekly = viewColumns(columns, 'weekly');
-  assert.deepEqual(
-    weekly[0].map((cell) => cell.value),
-    [28, 28, 28, 28, 28, 28, 28],
-    'every real cell in a full column must carry that column total'
-  );
-  assert.deepEqual(
-    weekly[1].map((cell) => cell.value),
-    [10, 0, 0, 0, 0, 0, 0],
-    'a short trailing week sums only its real cells, not the absent padding'
-  );
-  // Absence itself must survive the lens untouched — a level cannot paint
-  // for a day the window does not cover, in any view.
-  for (const cell of weekly[1].slice(1)) {
-    assert.equal(cell.absent, true);
-  }
-
-  // Cumulative: a running total across real cells only, in window order —
-  // 1, 3, 6, 10, 15, 21, 28 through the first week, then +10 = 38 on the one
-  // real day of the second, absent cells left alone.
-  const cumulative = viewColumns(columns, 'cumulative');
-  assert.deepEqual(
-    cumulative[0].map((cell) => cell.value),
-    [1, 3, 6, 10, 15, 21, 28]
-  );
-  assert.equal(cumulative[1][0].value, 38, 'the running total must carry across the column boundary');
-  for (const cell of cumulative[1].slice(1)) {
-    assert.equal(cell.absent, true);
-    assert.equal(cell.value, 0, 'an absent cell must not be handed a running total it never earned');
-  }
-
-  // No columns is no columns, in every lens.
-  for (const view of seriesViews) {
-    assert.deepEqual(viewColumns([], view), []);
-  }
-});
-
-test('series views are a closed set', () => {
-  assert.deepEqual([...seriesViews], ['daily', 'weekly', 'monthly', 'cumulative']);
-});
 
 test('levels quantize against the peak, and nothing is level 0 by accident', () => {
   assert.equal(gridLevel(0, 100), 0, 'no activity is level 0');
@@ -347,16 +290,6 @@ test('cell text always carries the count, so color is never the only encoding', 
   assert.equal(cellLabel({ value: 1, date: '2026-08-12' }, 'contribution'), '1 contribution on Aug 12');
   assert.equal(cellLabel({ value: 0, date: '2026-08-12' }, 'contribution'), '0 contributions on Aug 12');
   assert.equal(cellLabel({ value: 12000, date: '' }, 'token'), '12,000 tokens');
-  assert.equal(
-    cellLabel({ value: 5, date: '2026-08-12' }, 'token', 'cumulative'),
-    '5 tokens through week of Aug 9, 2026',
-    'an aggregated reading must say which reading it is, in the same phrase the reference designs use'
-  );
-  assert.equal(
-    cellLabel({ value: 28, date: '2026-08-12' }, 'token', 'weekly'),
-    '28 tokens week of Aug 9, 2026',
-    'the weekly reading names its own week, without cumulative’s "through" prefix'
-  );
   assert.equal(cellLabel({ value: 0, date: '', absent: true }, 'token'), 'no data for this day');
 });
 
@@ -364,151 +297,13 @@ test('cell text always carries the count, so color is never the only encoding', 
 // cellLabel's accessible text and the token panel's DetailTip card (issue
 // 189) — pinning it directly here is what keeps the two readable
 // independently of cellLabel's own concatenation.
-test('cellPeriod reads the view-scoped phrase the reference designs pair with a value (issue 189)', () => {
-  assert.equal(cellPeriod({ value: 1, date: '2026-08-13' }, 'daily'), 'on Aug 13');
-  // Aug 13, 2026 is a Thursday; its calendar week (weekStartsOn = Sunday)
-  // starts on Aug 9.
-  assert.equal(
-    cellPeriod({ value: 1, date: '2026-08-13' }, 'weekly'),
-    'week of Aug 9, 2026',
-    'a Thursday belongs to the week that started the Sunday before it'
-  );
-  // Aug 16, 2026 is itself a Sunday, so it is already its own week start.
-  assert.equal(cellPeriod({ value: 1, date: '2026-08-16' }, 'weekly'), 'week of Aug 16, 2026');
-  assert.equal(cellPeriod({ value: 1, date: '2026-08-13' }, 'cumulative'), 'through week of Aug 9, 2026');
-  assert.equal(cellPeriod({ value: 1, date: '' }, 'daily'), '', 'an undated cell has no calendar phrase');
-  assert.equal(cellPeriod({ value: 1, date: '' }, 'weekly'), '');
-  // A week start can fall in the prior month, and the phrase must say so.
-  assert.equal(
-    cellPeriod({ value: 1, date: '2026-08-01' }, 'weekly'),
-    'week of Jul 26, 2026',
-    'Aug 1, 2026 is a Saturday; its week starts the Sunday before, in July'
-  );
+test('cellPeriod reads the day phrase the reference designs pair with a value (issue 189)', () => {
+  assert.equal(cellPeriod({ value: 1, date: '2026-08-13' }), 'on Aug 13');
+  assert.equal(cellPeriod({ value: 1, date: '' }), '', 'an undated cell has no calendar phrase');
   // A hostile-string date that cannot be calendar-parsed still degrades to
   // the raw string rather than throwing or blanking it (the same
   // never-corrupt-a-payload floor formatCalendarDate documents).
-  assert.equal(cellPeriod({ value: 1, date: 'not-a-date' }, 'daily'), 'on not-a-date');
-});
-
-/* The monthly lens (issue 158) — the period the source CLIs cycle to and this
- * grid could not reach, because a month is the one calendar period that is
- * NOT the column a contribution strip is built from. */
-test('the monthly lens sums real calendar months across column boundaries', () => {
-  // Two columns straddling a month boundary: Aug 30-31 then Sep 1-5, with one
-  // absent day inside September and the week's tail absent.
-  const columns = [
-    [
-      { value: 0, date: '2026-08-29', absent: true },
-      { value: 5, date: '2026-08-30' },
-      { value: 7, date: '2026-08-31' },
-      { value: 1, date: '2026-09-01' },
-      { value: 2, date: '2026-09-02' },
-      { value: 0, date: '2026-09-03', absent: true },
-      { value: 4, date: '2026-09-04' }
-    ],
-    [
-      { value: 8, date: '2026-09-05' },
-      { value: 0, date: '2026-09-06', absent: true },
-      { value: 0, date: '2026-09-07', absent: true },
-      { value: 0, date: '2026-09-08', absent: true },
-      { value: 0, date: '2026-09-09', absent: true },
-      { value: 0, date: '2026-09-10', absent: true },
-      { value: 0, date: '2026-09-11', absent: true }
-    ]
-  ];
-  const monthly = viewColumns(columns, 'monthly');
-  // August's real days are 30 and 31: 12. September's are 1, 2, 4 and 5: 15 —
-  // summed ACROSS the column boundary, which is the whole point: a weekly
-  // lens would have reported one number for a column holding both months.
-  assert.deepEqual(
-    monthly[0].map((cell) => cell.value),
-    [0, 12, 12, 15, 15, 0, 15]
-  );
-  assert.deepEqual(
-    monthly[1].map((cell) => cell.value),
-    [15, 0, 0, 0, 0, 0, 0],
-    'the second column carries the same September total, not its own sum'
-  );
-  // Absent cells keep their absence and their zero in this lens exactly as in
-  // every other: a hole cannot be handed a total it never contributed to.
-  assert.equal(monthly[0][0].absent, true);
-  assert.equal(monthly[0][5].absent, true);
-  assert.equal(monthly[0][5].days, undefined, 'an absent cell must carry no coverage claim');
-  // And every real cell records how many of its month's days the window
-  // actually covered — the honest half, read back by cellPeriod below.
-  assert.equal(monthly[0][1].days, 2, 'August contributed two covered days here');
-  assert.equal(monthly[0][3].days, 4, 'September contributed four covered days here');
-  assert.equal(monthly[1][0].days, 4);
-  // The input is never mutated, in this lens like every other.
-  assert.equal(columns[0][1].value, 5);
-  assert.equal(columns[0][1].days, undefined);
-  assert.deepEqual(viewColumns([], 'monthly'), []);
-});
-
-test('a monthly cell says which month it is, and how much of that month it really covers', () => {
-  // A whole month reads plainly. February 2026 is 28 days; a cell claiming 28
-  // covered days is a complete month and needs no fraction.
-  assert.equal(
-    cellPeriod({ value: 9, date: '2026-02-14', days: 28 }, 'monthly'),
-    'in Feb 2026',
-    'a fully covered month must not be labelled with a fraction'
-  );
-  // A partial month says so — the window's edge months and a capture gap are
-  // both smaller than the month's name implies.
-  assert.equal(
-    cellPeriod({ value: 9, date: '2026-02-14', days: 12 }, 'monthly'),
-    'in Feb 2026 (12 of 28 days)'
-  );
-  // Leap February is 29, so the same 28 days is now a PARTIAL month. A month
-  // length taken from an average would get this wrong in both directions.
-  assert.equal(
-    cellPeriod({ value: 9, date: '2028-02-14', days: 28 }, 'monthly'),
-    'in Feb 2028 (28 of 29 days)'
-  );
-  assert.equal(cellPeriod({ value: 9, date: '2028-02-14', days: 29 }, 'monthly'), 'in Feb 2028');
-  // The year is part of the label, not decoration: a multi-year strip holds
-  // more than one August, and a bare month name is ambiguous exactly where
-  // the history is long enough for it to matter.
-  assert.equal(cellPeriod({ value: 9, date: '2025-08-03', days: 31 }, 'monthly'), 'in Aug 2025');
-  assert.notEqual(
-    cellPeriod({ value: 9, date: '2025-08-03', days: 31 }, 'monthly'),
-    cellPeriod({ value: 9, date: '2026-08-03', days: 31 }, 'monthly')
-  );
-  // No coverage claim at all reads as the plain month rather than as a
-  // fabricated fraction.
-  assert.equal(cellPeriod({ value: 9, date: '2026-02-14' }, 'monthly'), 'in Feb 2026');
-  // An undated cell has no calendar phrase, in this lens like the others; a
-  // hostile string degrades to itself rather than being blanked or thrown on.
-  assert.equal(cellPeriod({ value: 9, date: '' }, 'monthly'), '');
-  assert.equal(cellPeriod({ value: 9, date: '2026-13-01', days: 3 }, 'monthly'), 'in 2026-13-01');
-  assert.equal(cellPeriod({ value: 9, date: 'not-a-date' }, 'monthly'), 'in not-a-date');
-  // The accessible text folds the same phrase in, so a screen reader hears
-  // the coverage the sighted tooltip shows.
-  assert.equal(
-    cellLabel({ value: 12, date: '2026-02-14', days: 12 }, 'token', 'monthly'),
-    '12 tokens in Feb 2026 (12 of 28 days)'
-  );
-});
-
-test('month lengths come from the calendar, never from an average', () => {
-  assert.equal(daysInMonth('2026-01-31'), 31);
-  assert.equal(daysInMonth('2026-02-01'), 28);
-  assert.equal(daysInMonth('2028-02-01'), 29, '2028 is a leap year');
-  assert.equal(daysInMonth('2000-02-01'), 29, '2000 is divisible by 400 and IS a leap year');
-  assert.equal(daysInMonth('1900-02-01'), 28, '1900 is divisible by 100 and is NOT a leap year');
-  assert.equal(daysInMonth('2026-04-01'), 30);
-  assert.equal(daysInMonth('2026-12-01'), 31);
-  // A bare month is enough; a nonsense month or a non-date is refused rather
-  // than guessed at.
-  assert.equal(daysInMonth('2026-06'), 30);
-  assert.equal(daysInMonth('2026-13'), null);
-  assert.equal(daysInMonth('2026-00'), null);
-  assert.equal(daysInMonth('not-a-date'), null);
-  assert.equal(daysInMonth(''), null);
-  assert.equal(formatMonthLabel('2026-08-13'), 'Aug 2026');
-  assert.equal(formatMonthLabel('2026-08'), 'Aug 2026');
-  assert.equal(formatMonthLabel('2026-13-01'), null);
-  assert.equal(formatMonthLabel('nope'), null);
+  assert.equal(cellPeriod({ value: 1, date: 'not-a-date' }), 'on not-a-date');
 });
 
 test('thousands grouping is locale-independent', () => {
@@ -559,15 +354,15 @@ test('a magnitude is written the way a person reads one', () => {
   // accessible text of one cell can never be two different numbers — and the
   // default is still exact, for the grid that counts commits.
   const cell = { value: 627_742_457, date: '2026-08-11' };
-  assert.equal(cellLabel(cell, 'token', 'daily'), '627,742,457 tokens on Aug 11');
+  assert.equal(cellLabel(cell, 'token'), '627,742,457 tokens on Aug 11');
   assert.equal(
-    cellLabel(cell, 'token', 'daily', formatMagnitude),
+    cellLabel(cell, 'token', formatMagnitude),
     '627.7M tokens on Aug 11'
   );
   // An absent cell has no value to format, and no formatter is ever asked for
   // one: the honesty floor sits ahead of the formatting step.
   assert.equal(
-    cellLabel({ value: 0, date: '2026-08-11', absent: true }, 'token', 'daily', () => 'INVENTED'),
+    cellLabel({ value: 0, date: '2026-08-11', absent: true }, 'token', () => 'INVENTED'),
     'no data for this day'
   );
 });
@@ -802,7 +597,7 @@ test('payload strings reach the grid as text, never as markup', () => {
   // escapes; pinning the spelling keeps a later edit from hand-rolling one.
   // Anchored on the attribute boundary, not on the substring, so a mutant
   // that renames the attribute cannot satisfy a loose match.
-  assert.match(grid, /\saria-label=\{cellLabel\(cell, noun, view, formatValue\)\}/);
+  assert.match(grid, /\saria-label=\{cellLabel\(cell, noun, formatValue\)\}/);
   // The card is the OTHER place a payload string lands, and it takes the same
   // route: DetailTip interpolates every field as text, and the grid hands it
   // a built object rather than markup. Issue 219 moved the readout from the

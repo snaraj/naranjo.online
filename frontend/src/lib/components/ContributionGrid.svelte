@@ -114,7 +114,6 @@
     stripIndexAt,
     weekdayAxis,
     type GridCell,
-    type SeriesView,
     type StripGeometry,
     type ValueFormat
   } from '../grid';
@@ -125,7 +124,6 @@
   let {
     columns,
     noun = 'contribution',
-    view = 'daily' as SeriesView,
     label,
     emptyNote = 'no activity data',
     fullWidth = false,
@@ -134,7 +132,6 @@
   }: {
     columns: GridCell[][];
     noun?: string;
-    view?: SeriesView;
     label: string;
     emptyNote?: string;
     /* How a cell's figure is written out, in the card AND in the accessible
@@ -429,7 +426,7 @@
               label: '',
               value: selectedCell.absent ? 'no data' : formatValue(selectedCell.value)
             },
-            { label: '', value: cellPeriod(selectedCell, view) }
+            { label: '', value: cellPeriod(selectedCell) }
           ]
         }
   );
@@ -652,7 +649,7 @@
               data-grid-peak={!cell.absent && peak > 0 && cell.value === peak ? 'true' : undefined}
               role="option"
               aria-selected={selected === index}
-              aria-label={cellLabel(cell, noun, view, formatValue)}
+              aria-label={cellLabel(cell, noun, formatValue)}
             ></span>
           {/each}
         </div>

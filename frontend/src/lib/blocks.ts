@@ -549,6 +549,8 @@ export type MediaGalleryProps = {
   /* The intrinsic box every frame declares, so arrival moves nothing. */
   readonly width: number;
   readonly height: number;
+  /* How many tiles the row shows of the chosen set (owner mock: four). */
+  readonly tiles?: number;
 };
 
 /* --- Counters, and the one word for a figure captured out of band -------- */

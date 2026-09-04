@@ -466,3 +466,45 @@ test('the document states how many panels have not answered yet', async () => {
     }
   }
 });
+
+/* ONE LOOP PER PANEL PER HOST (owner directive, 2026-09-03, issue 287): the
+ * commits cycler and the token board both read token-usage, and the origin
+ * should hear from this page once per tick for that panel, not once per
+ * block. The second reader joins the first reader's loop, hears the last
+ * envelope at once, and the loop outlives either reader alone. */
+test('two readers of one panel share one loop, and the loop stops with its last reader', async () => {
+  const host = fakeHost();
+  const first = [];
+  const second = [];
+  const stopFirst = watchPanel('token-usage', (envelope) => first.push(envelope.status), { host });
+  await flush();
+  const stopSecond = watchPanel('token-usage', (envelope) => second.push(envelope.status), { host });
+  await flush();
+  assert.deepEqual(host.requests, ['/api/panels/token-usage'], 'the second reader must not start a second read');
+  assert.equal(host.scheduled.length, 1, 'one repeating timer for one panel, however many blocks read it');
+  assert.deepEqual(second, ['ok'], 'a late reader hears the envelope already in hand, without a fetch');
+
+  host.scheduled[0].callback();
+  await flush();
+  assert.equal(host.requests.length, 2, 'one tick is one read for both readers');
+  assert.deepEqual(first, ['ok', 'ok']);
+  assert.deepEqual(second, ['ok', 'ok']);
+
+  stopFirst();
+  host.scheduled[0].callback();
+  await flush();
+  assert.equal(host.requests.length, 3, 'the loop survives the first reader leaving');
+  assert.deepEqual(first, ['ok', 'ok'], 'a stopped reader hears nothing further');
+  assert.deepEqual(second, ['ok', 'ok', 'ok']);
+
+  stopSecond();
+  assert.deepEqual(host.canceled, [0], 'the last reader leaving cancels the one timer');
+  assert.equal(host.unsubscribes, 1);
+
+  // A different panel, or the same panel on a different host, is its own loop.
+  const other = fakeHost();
+  const stopOther = watchPanel('token-usage', () => {}, { host: other });
+  await flush();
+  assert.deepEqual(other.requests, ['/api/panels/token-usage']);
+  stopOther();
+});

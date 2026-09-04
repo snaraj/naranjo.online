@@ -78,4 +78,16 @@ describe('vite.config command-scoping', () => {
       else process.env.DEV_API_PORT = previous;
     }
   });
+
+  it('the footer version is the VERSION file, baked in at build time (issue 287)', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const version = (await readFile(new URL('../../VERSION', import.meta.url), 'utf8')).trim();
+    assert.match(version, /^\d+\.\d+\.\d+$/);
+    const buildCfg = viteConfig({ command: 'build', mode: 'production' });
+    assert.equal(buildCfg.define.__SITE_VERSION__, JSON.stringify(version));
+    // The page prints it from the constant and never a literal of its own.
+    const app = await readFile(new URL('../src/App.svelte', import.meta.url), 'utf8');
+    assert.match(app, /naranjo\.online v\{__SITE_VERSION__\}/);
+    assert.doesNotMatch(app, /v\d+\.\d+\.\d+/);
+  });
 });

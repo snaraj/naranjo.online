@@ -959,7 +959,7 @@ test('the contribution grid is one component every calendar renders', () => {
   // `var(--grid-cell-N, #hex)` — strictly stronger than the bare
   // `--grid-cell-N` sweep that stood here, and mutation-tested there.
   // Never color alone, and a day outside the window is a hole, not a zero.
-  assert.match(grid, /aria-label=\{cellLabel\(cell, noun, view, formatValue\)\}/);
+  assert.match(grid, /aria-label=\{cellLabel\(cell, noun, formatValue\)\}/);
   // THE BROWSER TOOLTIP IS GONE, AND ITS ABSENCE IS THE PIN (issue 219).
   // `title=` used to carry every calendar cell's reading and 96% of the token
   // strip's. It has NO touch trigger in any engine, so on a phone those cells
@@ -1047,13 +1047,13 @@ test('the one calendar takes the full width and names its card from the active s
     grid,
     /aria-activedescendant=\{selected >= 0 \? `\$\{gridId\}-cell-\$\{selected\}` : undefined\}/
   );
-  // The card shows the value AND the view-scoped period phrase, both rows
-  // label-less, from the ONE function that phrase comes from.
+  // The card shows the value AND the day phrase, both rows label-less, from
+  // the ONE function that phrase comes from.
   assert.match(
     grid,
     /value: selectedCell\.absent \? 'no data' : formatValue\(selectedCell\.value\)/
   );
-  assert.match(grid, /\{ label: '', value: cellPeriod\(selectedCell, view\) \}/);
+  assert.match(grid, /\{ label: '', value: cellPeriod\(selectedCell\) \}/);
 });
 
 /* ONE WINDOW FOR EVERY SERIES, AND NO WAY TO RE-ASK IT (owner directive,

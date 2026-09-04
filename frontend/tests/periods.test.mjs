@@ -21,7 +21,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { dayNumber, formatDateRange } from '../src/lib/periods.ts';
-import { calendarColumns, seriesCells, viewColumns } from '../src/lib/grid.ts';
 
 test('a date is admitted by round trip, so a well-shaped impossible day is refused', () => {
   // The positive case, and the property every caller relies on: consecutive
@@ -65,57 +64,4 @@ test('a date range is written at the shortest honest length, and an impossible o
   assert.equal(formatDateRange('2026-13-01', '2026-13-05'), '');
   assert.equal(formatDateRange('', '2026-08-24'), '');
   assert.equal(formatDateRange('2026-08-24', 'tomorrow'), '');
-});
-
-/* PARKED HERE, and it belongs in tests/grid.test.mjs. Its subject is
- * lib/grid.ts's monthly lens, not this module — it only ever lived here
- * because the retired rangeColumns was the convenient way to build a windowed
- * series, and that is now calendarColumns directly. It is kept rather than
- * dropped because these are the only rows anywhere that read the lens ACROSS
- * A YEAR BOUNDARY: grid.test.mjs pins month-boundary summation, coverage
- * days, leap-February length and the year in a month's label, but nothing
- * there proves two same-named months a year apart stay two figures. */
-test('months are read across a year boundary, with the edge months flagged as partial', () => {
-  // Dec 20 2025 through Jan 10 2026: 22 days, one token each, spanning a year
-  // boundary — the case a bare month name cannot describe.
-  const cells = seriesCells('2025-12-20', new Array(22).fill(1));
-  const windowed = calendarColumns(cells, 10);
-  const monthly = viewColumns(windowed, 'monthly');
-  const byDate = new Map(monthly.flat().map((cell) => [cell.date, cell]));
-
-  // December contributed 12 captured days (Dec 20..31), January 10 (Jan 1..10).
-  assert.equal(byDate.get('2025-12-20').value, 12);
-  assert.equal(byDate.get('2025-12-31').value, 12);
-  assert.equal(byDate.get('2026-01-01').value, 10);
-  assert.equal(byDate.get('2026-01-10').value, 10);
-  assert.equal(byDate.get('2025-12-20').days, 12);
-  assert.equal(byDate.get('2026-01-01').days, 10);
-  // Neither edge month is whole, and both say so — a partial month totalled
-  // silently is the interpolation this doctrine forbids, wearing a month's
-  // name.
-  assert.ok(byDate.get('2025-12-20').days < 31);
-  assert.ok(byDate.get('2026-01-01').days < 31);
-  // The two Decembers of a two-year capture never collapse into one figure.
-  const twoYears = viewColumns(
-    calendarColumns(seriesCells('2024-12-01', new Array(400).fill(2)), 60),
-    'monthly'
-  );
-  const across = new Map(
-    twoYears
-      .flat()
-      .filter((cell) => !cell.absent)
-      .map((cell) => [cell.date, cell])
-  );
-  assert.equal(across.get('2024-12-01').value, 62, 'December 2024 is 31 covered days at 2 each');
-  assert.equal(across.get('2025-12-01').value, 62, 'December 2025 is its own month, not the same one');
-  assert.equal(across.get('2024-12-01').days, 31);
-  assert.equal(across.get('2025-12-01').days, 31);
-  // A leap February is 29 covered days, never 28.
-  const leap = viewColumns(
-    calendarColumns(seriesCells('2028-02-01', new Array(29).fill(1)), 10),
-    'monthly'
-  );
-  const february = leap.flat().find((cell) => cell.date === '2028-02-29');
-  assert.equal(february.value, 29);
-  assert.equal(february.days, 29);
 });

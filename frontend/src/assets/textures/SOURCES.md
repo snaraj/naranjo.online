@@ -15,15 +15,15 @@ That is what was verified for this set; nothing more is claimed.
 
 **Encoding.** Each file is re-encoded locally to a wide crop (1400–1600px on
 the long edge, roughly 4:1, the band's own proportion) at JPEG quality ~80,
-with all EXIF/metadata stripped. Total vendored weight: 419 KB across eight
-files, the largest 73 KB — inside the small-asset ceiling this tree's own
+with all EXIF/metadata stripped. Total vendored weight: 454,936 bytes (455 KB) across eight
+files, the largest 81 KB — inside the small-asset ceiling this tree's own
 README states, and a fraction of one gallery derivative.
 
 | File | Reading mode | Original |
 | --- | --- | --- |
-| `light-iridescent.jpg` | light | iridescent-glass.jpg |
+| `light-spikes.jpg` | light | abstract-purple-and-gold-wavy-forms-with-spiked-chain.jpg (owner pick, 2026-09-03) |
 | `light-plaster.jpg` | light | plaster-wall.jpg |
-| `dark-glass.jpg` | dark | dark-glass.jpg |
+| `dark-refraction.jpg` | dark | transparent-blue-curved-shapes-with-light-refraction-against-a-black.jpg (owner pick, 2026-09-03) |
 | `dark-wave.jpg` | dark | dark-wave.jpg |
 | `slate-fluid.jpg` | slate | fluid-ink.jpg |
 | `slate-stars.jpg` | slate | night-stars.jpg |

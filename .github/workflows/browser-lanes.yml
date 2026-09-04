@@ -41,11 +41,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # One runner per engine (owner directive, 2026-09-03, issue 287): the five
+  # projects took nine minutes in a row, and the two device projects are the
+  # same engines at phone metrics, so each engine's runner takes its device
+  # project too and the matrix finishes in the time of its slowest engine.
   lanes:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        engine:
+          - { install: chromium, projects: chromium android-chrome }
+          - { install: firefox, projects: firefox }
+          - { install: webkit, projects: webkit ios-safari }
+    name: lanes (${{ matrix.engine.install }})
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,7 +108,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.runner.outputs.version }}
+          key: playwright-${{ runner.os }}-${{ steps.runner.outputs.version }}-${{ matrix.engine.install }}
       - name: Install the three engines
         working-directory: frontend
         # Chromium (Chrome and Edge), Firefox and WebKit (Safari and every

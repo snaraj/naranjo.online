@@ -446,7 +446,67 @@ export interface PanelWatcher {
  *     data lands.
  *   - After stop() nothing is delivered, even from a read already in flight,
  *     so an unmounted component can never write to a dead state. */
+/* ONE LOOP PER PANEL PER HOST (owner directive, 2026-09-03, issue 287). Two
+ * blocks can read the same panel — the commits cycler and the token board both
+ * read token-usage — and the origin should hear from this page once per tick
+ * per panel, not once per block. So watchPanel hands the second reader the
+ * loop the first one started: same fetcher, same tick, same last envelope
+ * delivered on subscription, and the loop stops when its last reader does.
+ * The share is keyed on the host object as well as the id, so a caller that
+ * brings its own host — every test does — never hears another host's
+ * fetcher, and refreshPanels still refreshes each real loop exactly once. */
+type SharedLoop = {
+  readonly subscribers: Set<(envelope: PanelEnvelope) => void>;
+  last: PanelEnvelope | null;
+  stop: PanelWatcher;
+};
+const sharedLoops = new WeakMap<object, Map<string, SharedLoop>>();
+
 export function watchPanel<Data = unknown>(
+  id: string,
+  onEnvelope: (envelope: PanelEnvelope<Data>) => void,
+  options: PanelWatchOptions = {}
+): PanelWatcher {
+  const hostKey: object = options.host ?? defaultWatchHost;
+  const loops = sharedLoops.get(hostKey) ?? new Map<string, SharedLoop>();
+  sharedLoops.set(hostKey, loops);
+  const key = `${options.intervalMs ?? ''}|${id}`;
+  let loop = loops.get(key);
+  if (loop === undefined) {
+    const subscribers = new Set<(envelope: PanelEnvelope) => void>();
+    const started: SharedLoop = { subscribers, last: null, stop: undefined as unknown as PanelWatcher };
+    started.stop = startWatch<unknown>(
+      id,
+      (envelope) => {
+        started.last = envelope;
+        for (const subscriber of [...subscribers]) {
+          subscriber(envelope);
+        }
+      },
+      options
+    );
+    loops.set(key, started);
+    loop = started;
+  }
+  const subscriber = onEnvelope as (envelope: PanelEnvelope) => void;
+  loop.subscribers.add(subscriber);
+  if (loop.last !== null) {
+    subscriber(loop.last);
+  }
+  const shared = loop;
+  return Object.assign(
+    () => {
+      shared.subscribers.delete(subscriber);
+      if (shared.subscribers.size === 0 && loops.get(key) === shared) {
+        loops.delete(key);
+        shared.stop();
+      }
+    },
+    { refresh: () => shared.stop.refresh() }
+  );
+}
+
+function startWatch<Data = unknown>(
   id: string,
   onEnvelope: (envelope: PanelEnvelope<Data>) => void,
   options: PanelWatchOptions = {}
