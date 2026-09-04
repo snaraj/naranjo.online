@@ -901,7 +901,7 @@ class LifetimeStatsTest(unittest.TestCase):
     because the origin refuses a document that leaves a lifetime-class tile
     unrefreshed: a cache that stops carrying this accounting must stop the
     push loudly at the producer, not feed the origin a document it rejects on
-    every five-minute tick.
+    every thirty-second tick.
     """
 
     def document(self, **overrides):
@@ -1009,7 +1009,7 @@ class HistoryStoreTest(unittest.TestCase):
     Every source the pipeline reads is volatile: transcript trees are
     retention-pruned, and the roll-up cache has been measured discarding a
     month of days in one recompute. Re-deriving the series from those sources
-    every hour therefore serves a history that silently gets SHORTER — days
+    on every run therefore serves a history that silently gets SHORTER — days
     that were captured, sealed and served become zeros the moment their last
     local evidence is deleted, which is the defect the owner reported on
     2026-08-28. The store is the pipeline's own durable memory, and this
@@ -2584,8 +2584,8 @@ class FinalOpenIsDescriptorRootedTest(unittest.TestCase):
 
     def test_a_post_check_fifo_swap_is_refused(self):
         # Not merely a privacy question: opening a fifo read-only BLOCKS
-        # until a writer appears, so a swapped-in fifo would hang this hourly
-        # unattended job forever. O_NONBLOCK is what makes the open return,
+        # until a writer appears, so a swapped-in fifo would hang this
+        # scheduled unattended job forever. O_NONBLOCK makes the open return,
         # and the descriptor fstat is what refuses the leaf as not a regular
         # file — before any read. This test hangs against a build without
         # O_NONBLOCK, which is how it earns its place.

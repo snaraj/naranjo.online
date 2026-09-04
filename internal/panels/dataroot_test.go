@@ -1323,11 +1323,12 @@ func TestDataRootLoopServesRefreshesAndDegrades(t *testing.T) {
 		}
 
 		// A push lands; the next wake serves it.
-		fsys.swap(seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:04:00Z"))))
+		firstAt := time.Now().UTC().Format(time.RFC3339)
+		fsys.swap(seriesFS(sealDocument(t, synctestDocument(firstAt))))
 		time.Sleep(dataRootTTL)
 		synctest.Wait()
 		envelope, data := decodeServedUsage(t, state)
-		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:04:00Z" {
+		if envelope.Status != StatusOK || envelope.GeneratedAt != firstAt {
 			t.Fatalf("after push: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
 		}
 		if data.Sources[0].Series.StartDate != "2026-08-15" {
@@ -1335,7 +1336,8 @@ func TestDataRootLoopServesRefreshesAndDegrades(t *testing.T) {
 		}
 
 		// The file is replaced by tampered bytes: stale, last good retained.
-		tampered := sealDocument(t, synctestDocument("2000-01-01T00:09:00Z"))
+		tamperedAt := time.Now().UTC().Format(time.RFC3339)
+		tampered := sealDocument(t, synctestDocument(tamperedAt))
 		tampered[len(tampered)-1] ^= 0x01
 		fsys.swap(seriesFS(tampered))
 		time.Sleep(dataRootTTL)
@@ -1344,35 +1346,36 @@ func TestDataRootLoopServesRefreshesAndDegrades(t *testing.T) {
 		if envelope.Status != StatusStale {
 			t.Fatalf("after tamper: status %q, want stale", envelope.Status)
 		}
-		if data.Sources[0].Series.StartDate != "2026-08-15" || envelope.GeneratedAt != "2000-01-01T00:04:00Z" {
+		if data.Sources[0].Series.StartDate != "2026-08-15" || envelope.GeneratedAt != firstAt {
 			t.Fatal("tampered push displaced the last good payload")
 		}
 
 		// A newer valid push recovers to ok.
-		fsys.swap(seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:14:00Z"))))
+		recoveredAt := time.Now().UTC().Format(time.RFC3339)
+		fsys.swap(seriesFS(sealDocument(t, synctestDocument(recoveredAt))))
 		time.Sleep(dataRootTTL)
 		synctest.Wait()
-		if envelope, _ = decodeServedUsage(t, state); envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:14:00Z" {
+		if envelope, _ = decodeServedUsage(t, state); envelope.Status != StatusOK || envelope.GeneratedAt != recoveredAt {
 			t.Fatalf("after recovery: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
 		}
 
 		// A rollback to the previously served file is a replay: refused,
 		// last good kept, stale said.
-		fsys.swap(seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:04:00Z"))))
+		fsys.swap(seriesFS(sealDocument(t, synctestDocument(firstAt))))
 		time.Sleep(dataRootTTL)
 		synctest.Wait()
 		envelope, _ = decodeServedUsage(t, state)
-		if envelope.Status != StatusStale || envelope.GeneratedAt != "2000-01-01T00:14:00Z" {
+		if envelope.Status != StatusStale || envelope.GeneratedAt != recoveredAt {
 			t.Fatalf("after replay: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
 		}
 
 		// Cancellation stops the loop: a later valid push is never read.
 		cancel()
 		synctest.Wait()
-		fsys.swap(seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:19:00Z"))))
+		fsys.swap(seriesFS(sealDocument(t, synctestDocument(time.Now().UTC().Format(time.RFC3339)))))
 		time.Sleep(4 * dataRootTTL)
 		synctest.Wait()
-		if envelope, _ = decodeServedUsage(t, state); envelope.GeneratedAt != "2000-01-01T00:14:00Z" {
+		if envelope, _ = decodeServedUsage(t, state); envelope.GeneratedAt != recoveredAt {
 			t.Fatal("a canceled loop kept reading")
 		}
 	})
@@ -1551,11 +1554,12 @@ func TestDataRootMarksStaleWhenAnAcceptedFileDisappears(t *testing.T) {
 		}
 
 		// A push lands and is published.
-		fsys.swap(seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:20:00Z"))))
+		firstAt := time.Now().UTC().Format(time.RFC3339)
+		fsys.swap(seriesFS(sealDocument(t, synctestDocument(firstAt))))
 		time.Sleep(dataRootTTL)
 		synctest.Wait()
 		envelope, data := decodeServedUsage(t, state)
-		if envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:20:00Z" {
+		if envelope.Status != StatusOK || envelope.GeneratedAt != firstAt {
 			t.Fatalf("after push: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
 		}
 		if data.Sources[0].Series.StartDate != "2026-08-15" {
@@ -1571,7 +1575,7 @@ func TestDataRootMarksStaleWhenAnAcceptedFileDisappears(t *testing.T) {
 		if envelope.Status != StatusStale {
 			t.Fatalf("a deleted runtime document left status %q, want stale", envelope.Status)
 		}
-		if envelope.GeneratedAt != "2000-01-01T00:20:00Z" || data.Sources[0].Series.StartDate != "2026-08-15" {
+		if envelope.GeneratedAt != firstAt || data.Sources[0].Series.StartDate != "2026-08-15" {
 			t.Fatalf("the last good payload was not retained: generatedAt %q series %+v", envelope.GeneratedAt, data.Sources[0].Series)
 		}
 
@@ -1584,10 +1588,11 @@ func TestDataRootMarksStaleWhenAnAcceptedFileDisappears(t *testing.T) {
 
 		// A later push recovers to ok, so staleness is a state and not a
 		// one-way trap.
-		fsys.swap(seriesFS(sealDocument(t, synctestDocument("2000-01-01T00:40:00Z"))))
+		recoveredAt := time.Now().UTC().Format(time.RFC3339)
+		fsys.swap(seriesFS(sealDocument(t, synctestDocument(recoveredAt))))
 		time.Sleep(dataRootTTL)
 		synctest.Wait()
-		if envelope, _ = decodeServedUsage(t, state); envelope.Status != StatusOK || envelope.GeneratedAt != "2000-01-01T00:40:00Z" {
+		if envelope, _ = decodeServedUsage(t, state); envelope.Status != StatusOK || envelope.GeneratedAt != recoveredAt {
 			t.Fatalf("after recovery: status %q generatedAt %q", envelope.Status, envelope.GeneratedAt)
 		}
 	})

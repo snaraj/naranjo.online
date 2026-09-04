@@ -855,7 +855,7 @@ func TestFloorPayloadRefusesEveryMalformedShape(t *testing.T) {
 // TestPanelsFloorNoticeReachesTheCompositionRoot pins the accessor the
 // server exposes to cmd/server, not just the classifier beneath it: a
 // notice computed at start must still be readable afterwards, because the
-// composition root logs it once and the loop itself stays silent.
+// composition root logs it once; runtime failures use separate transition logs.
 func TestPanelsFloorNoticeReachesTheCompositionRoot(t *testing.T) {
 	t.Parallel()
 	site, err := New(testsupport.FrontendFS())

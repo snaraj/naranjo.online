@@ -380,7 +380,7 @@ MAX_RECORD_LINES = 5_000_000
 # It stays a bound, and the two beside it are why it can afford to be a
 # generous one: the walk is STREAMING (no file is held whole), the per-LINE
 # bound is what keeps memory finite, and the file and line counts below still
-# stop a pathological tree. This one bounds the WORK an unattended hourly job
+# stop a pathological tree. This one bounds the WORK of the unattended job
 # may do, so it is sized to leave real headroom over a growing record rather
 # than to sit just above today's.
 MAX_RECORD_BYTES = 16 << 30
@@ -431,7 +431,7 @@ ACTIVITY_CACHE_USAGE_FIELDS = (
 # pipeline reads is VOLATILE: the transcript trees are retention-pruned on
 # their tools' own schedules, and the first tool's roll-up cache has been
 # measured discarding a month of days in one recompute. A pipeline that
-# re-derives the whole series from those sources every hour therefore serves
+# re-derives the whole series from those sources on every run therefore serves
 # a history that silently gets SHORTER — days that WERE captured, sealed and
 # served become zeros the moment their last local evidence is deleted, which
 # is exactly the defect the owner reported on 2026-08-28. The store is the
@@ -804,7 +804,7 @@ def open_record_file(record, counters):
         regular file, so a fifo or device swapped in is refused rather than
         read. `O_NONBLOCK` rides along for that case specifically and is not
         decoration: opening a fifo read-only BLOCKS until a writer appears,
-        so without it a swapped-in fifo would hang this hourly unattended job
+        so without it a swapped-in fifo would hang this unattended job
         forever instead of being refused. It has no effect on the regular
         files this tool actually reads, and the descriptor is closed before
         any read whenever fstat says the leaf is not one;

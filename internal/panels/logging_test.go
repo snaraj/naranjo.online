@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -240,6 +241,77 @@ func TestRefreshLoopSummarizesSuccessAndIdle(t *testing.T) {
 	})
 }
 
+// TestDataRootFailureLogsOnceAndSameDocumentRecovers covers the origin-side
+// silence that made a landed but refused usage push indistinguishable from a
+// frozen scheduler. One bad ciphertext warns with its cause exactly once no
+// matter how many ticks it survives; restoring the exact accepted ciphertext
+// writes one recovery transition and returns the envelope to ok without
+// waiting for a newer capture.
+func TestDataRootFailureLogsOnceAndSameDocumentRecovers(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		out := &safeBuffer{}
+		registry, state := usageDataRootRegistry(t, synctestSnapshot)
+		registry.logger = slog.New(slog.NewJSONHandler(out, nil))
+		accepted := sealDocument(t, synctestDocument("2000-01-01T00:00:00Z"))
+		fsys := &lockedFS{inner: seriesFS(accepted)}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		registry.startDataRoot(ctx, fsys, productionUnsealer(dataRootTestKeyHex), nil, time.Now)
+		synctest.Wait()
+
+		tampered := append([]byte(nil), accepted...)
+		tampered[len(tampered)-1] ^= 0x01
+		fsys.swap(seriesFS(tampered))
+		time.Sleep(dataRootTTL)
+		synctest.Wait()
+		if envelope, _ := decodeServedUsage(t, state); envelope.Status != StatusStale {
+			t.Fatalf("tampered source left status %q, want stale", envelope.Status)
+		}
+		// The identical failure survives more ticks but produces no duplicate
+		// WARN records.
+		time.Sleep(3 * dataRootTTL)
+		synctest.Wait()
+
+		fsys.swap(seriesFS(accepted))
+		time.Sleep(dataRootTTL)
+		synctest.Wait()
+		if envelope, _ := decodeServedUsage(t, state); envelope.Status != StatusOK {
+			t.Fatalf("restored accepted source left status %q, want ok", envelope.Status)
+		}
+
+		records := refreshLogRecords(t, out.String())
+		failures := 0
+		recoveries := 0
+		for _, record := range records {
+			switch record["msg"] {
+			case "failed to fetch token usage":
+				failures++
+				// A tampered ciphertext fails at the seal, and the record says
+				// exactly that and nothing about the bytes: no error text, no
+				// document field (2026-09-04 security review, finding 1).
+				if record["level"] != "WARN" || record["panel"] != dataRootPanelID || record["reason"] != reasonSealRefused || record["next_retry"] == nil {
+					t.Errorf("failure record = %v", record)
+				}
+				if _, leaked := record["error"]; leaked {
+					t.Errorf("failure record carries the error text: %v", record)
+				}
+			case "token usage data root recovered":
+				recoveries++
+				if record["level"] != "INFO" || record["status"] != string(StatusOK) || record["cleared"] != reasonSealRefused || record["next_refresh"] == nil {
+					t.Errorf("recovery record = %v", record)
+				}
+				if _, leaked := record["generated_at"]; leaked {
+					t.Errorf("recovery record carries the document's instant: %v", record)
+				}
+			}
+		}
+		if failures != 1 || recoveries != 1 {
+			t.Fatalf("records contain %d failures and %d recoveries, want one each: %s", failures, recoveries, out.String())
+		}
+		assertNoUpstreamURL(t, out.String())
+	})
+}
+
 // TestFetchAttemptNarratesHostStatusAndBytes pins the per-attempt DEBUG
 // detail: source role, bare host, upstream status, byte count, and duration
 // — and, by the shared privacy pin, that the endpoint's path and query
@@ -362,7 +434,7 @@ func TestCommitSourceFailureWarnsWithRepoLabel(t *testing.T) {
 		t.Fatalf("NewFetchSource() error = %v", err)
 	}
 	source.setLogger(slog.New(slog.NewJSONHandler(&out, nil)))
-	rows, _, attempted, fresh := source.commitSection(t.Context(), &scriptedDoer{}, source.specs.vcs.Commits, time.Now().UTC())
+	rows, _, attempted, fresh := source.commitSection(t.Context(), &scriptedDoer{}, func(string) string { return "" }, source.specs.vcs.Commits, time.Now().UTC())
 	if !attempted || fresh || len(rows) != 0 {
 		t.Fatalf("commitSection with a failing transport = %d rows, attempted %t, fresh %t; want an attempted, degraded round", len(rows), attempted, fresh)
 	}
@@ -418,10 +490,14 @@ func TestCommitSourceWarnSurvivesProductionURLError(t *testing.T) {
 			Headers:     map[string]string{"Accept": "text/html"},
 			ContentType: "text/html",
 			Commits: &vcsCommitsFetchSpec{
-				Headers:     map[string]string{"Accept": "application/json"},
-				ContentType: "application/json",
-				Max:         4,
-				Sources:     []vcsCommitSourceSpec{{Repo: "fixture-repo", Endpoint: "https://api.example.test/repos/fixture/commits?account=" + urlErrorQuerySecret}},
+				Headers:                         map[string]string{"Accept": "application/json"},
+				KeyEnvName:                      "FIXTURE_COMMITS_TOKEN",
+				KeyHeader:                       "Authorization",
+				KeyPrefix:                       "Bearer ",
+				AuthenticatedMinIntervalMinutes: 1,
+				ContentType:                     "application/json",
+				Max:                             4,
+				Sources:                         []vcsCommitSourceSpec{{Repo: "fixture-repo", Endpoint: "https://api.example.test/repos/fixture/commits?account=" + urlErrorQuerySecret}},
 			},
 		}},
 	)
@@ -429,7 +505,8 @@ func TestCommitSourceWarnSurvivesProductionURLError(t *testing.T) {
 		t.Fatalf("NewFetchSource() error = %v", err)
 	}
 	source.setLogger(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	_, _, attempted, fresh := source.commitSection(t.Context(), urlErrorDoer{}, source.specs.vcs.Commits, time.Now().UTC())
+	const credential = "commit-credential-sentinel-eeee"
+	_, _, attempted, fresh := source.commitSection(t.Context(), urlErrorDoer{}, func(string) string { return credential }, source.specs.vcs.Commits, time.Now().UTC())
 	if !attempted || fresh {
 		t.Fatalf("commitSection = attempted %t, fresh %t; want an attempted, degraded round", attempted, fresh)
 	}
@@ -440,6 +517,9 @@ func TestCommitSourceWarnSurvivesProductionURLError(t *testing.T) {
 	errText, _ := record["error"].(string)
 	if !strings.Contains(errText, "fetch api.example.test") || !strings.Contains(errText, "connection reset by peer") {
 		t.Errorf("sanitized error = %q, want the host and the transport cause", errText)
+	}
+	if strings.Contains(out.String(), credential) {
+		t.Error("the commit credential reached the refresh narrative")
 	}
 	assertNoUpstreamURL(t, out.String())
 }
@@ -486,5 +566,118 @@ func TestDirectlyDrivenSourcesStayQuiet(t *testing.T) {
 	// call, which the race detector would flag if it raced anything.
 	if got := state.fetch.log(); got != discardLogger {
 		t.Fatalf("an un-injected source resolved logger %v, want the discard default", got)
+	}
+}
+
+// TestDataRootNarrativeCarriesNoPayloadData is the privacy matrix the
+// 2026-09-04 security review asked for (finding 1): validly sealed documents
+// that each smuggle a sentinel into a different field the old narrative
+// quoted — the schema, the capture instant, a source label, a derived key, a
+// captured stat key — plus a replay and a broken seal. Every one runs through
+// the REAL loop with a real unsealer, and the whole log is then searched for
+// the sentinel: it must not appear, the WARN must carry a reason from the
+// closed vocabulary, and no record may carry error text at all.
+func TestDataRootNarrativeCarriesNoPayloadData(t *testing.T) {
+	const sentinel = "sealed-payload-sentinel-291"
+	cases := []struct {
+		name   string
+		mutate func(document map[string]any)
+		seal   func(t *testing.T, document map[string]any) []byte
+		reason string
+	}{
+		{name: "schema", reason: reasonDocumentRefused, mutate: func(document map[string]any) { document["schema"] = sentinel }},
+		{name: "generatedAt", reason: reasonDocumentRefused, mutate: func(document map[string]any) { document["generatedAt"] = sentinel }},
+		{name: "source label", reason: reasonDocumentRefused, mutate: func(document map[string]any) {
+			sources := document["sources"].(map[string]any)
+			sources[sentinel] = sources["alpha"]
+			delete(sources, "alpha")
+		}},
+		{name: "derived key", reason: reasonDocumentRefused, mutate: func(document map[string]any) {
+			alphaSection(document)["derived"].(map[string]any)[sentinel] = 1
+		}},
+		{name: "captured stat key", reason: reasonDocumentRefused, mutate: func(document map[string]any) {
+			alphaSection(document)["stats"].(map[string]any)[sentinel] = 1
+		}},
+		{name: "replay of an older instant", reason: reasonReplayRefused, mutate: func(document map[string]any) {
+			for _, section := range document["sources"].(map[string]any) {
+				section.(map[string]any)["capturedAt"] = "1990-01-01T00:00:00Z"
+			}
+			document["generatedAt"] = "1990-01-01T00:00:00Z"
+		}},
+		{name: "broken seal", reason: reasonSealRefused, mutate: func(document map[string]any) { document["schema"] = sentinel }, seal: func(t *testing.T, document map[string]any) []byte {
+			sealed := sealDocument(t, document)
+			sealed[len(sealed)-1] ^= 0x01
+			return sealed
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				out := &safeBuffer{}
+				registry, state := usageDataRootRegistry(t, synctestSnapshot)
+				registry.logger = slog.New(slog.NewJSONHandler(out, nil))
+				document := synctestDocument("2000-01-01T00:00:00Z")
+				tc.mutate(document)
+				sealed := sealDocument(t, document)
+				if tc.seal != nil {
+					sealed = tc.seal(t, document)
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				registry.startDataRoot(ctx, seriesFS(sealed), productionUnsealer(dataRootTestKeyHex), nil, time.Now)
+				synctest.Wait()
+				time.Sleep(dataRootTTL)
+				synctest.Wait()
+				if envelope, _ := decodeServedUsage(t, state); envelope.Status != StatusStale {
+					t.Fatalf("refused document left status %q, want stale", envelope.Status)
+				}
+				logged := out.String()
+				if strings.Contains(logged, sentinel) {
+					t.Fatalf("the narrative quotes the document: %s", logged)
+				}
+				records := refreshLogRecords(t, logged)
+				failure := findRecord(records, "failed to fetch token usage")
+				if failure == nil {
+					t.Fatalf("no WARN in %q", logged)
+				}
+				if failure["reason"] != tc.reason {
+					t.Errorf("reason = %v, want %q", failure["reason"], tc.reason)
+				}
+				for _, record := range records {
+					if _, leaked := record["error"]; leaked {
+						t.Errorf("record carries error text: %v", record)
+					}
+					if _, leaked := record["generated_at"]; leaked {
+						t.Errorf("record carries a document instant: %v", record)
+					}
+				}
+			})
+		})
+	}
+}
+
+// TestDataRootReasonsAreBareLabels pins the vocabulary itself: every reason
+// is a short lowercase label with no format verb, quote or space, so no
+// member can ever carry a document value, and an untagged error maps to the
+// generic code rather than to its message.
+func TestDataRootReasonsAreBareLabels(t *testing.T) {
+	t.Parallel()
+	seen := map[string]bool{}
+	for _, reason := range dataRootReasons {
+		for _, r := range reason {
+			if !(r >= 'a' && r <= 'z') && r != '-' {
+				t.Errorf("reason %q is not a bare label", reason)
+			}
+		}
+		if seen[reason] {
+			t.Errorf("reason %q is listed twice", reason)
+		}
+		seen[reason] = true
+	}
+	if got := dataRootReason(errors.New("data root: schema \"" + "not-in-the-log" + "\" is not usage-series/v1")); got != reasonRefused {
+		t.Errorf("an untagged error maps to %q, want %q", got, reasonRefused)
+	}
+	if got := dataRootReason(fmt.Errorf("wrapped: %w", refuse(reasonReplayRefused, errors.New("x")))); got != reasonReplayRefused {
+		t.Errorf("a wrapped tag maps to %q, want %q", got, reasonReplayRefused)
 	}
 }

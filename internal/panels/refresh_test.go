@@ -620,6 +620,39 @@ func TestUsageRefreshSkipsUnkeyedSourcesAndMerges(t *testing.T) {
 	})
 }
 
+// TestUsageSourcesShareOneRateBudget proves the multi-source envelope cannot
+// split into separately timed refreshes. A second credential appearing inside
+// the first round's budget makes no partial request and therefore cannot
+// replace the already-live first source with its recorded snapshot. Once the
+// one group budget expires, both sources advance together.
+func TestUsageSourcesShareOneRateBudget(t *testing.T) {
+	t.Parallel()
+	source := usageFetchSource(t)
+	source.specs.usage.MinIntervalMinutes = 5
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	doer := &scriptedDoer{bodies: []string{fixtureUsagePage, fixtureUsagePage, fixtureUsagePage}}
+	oneKey := fakeLookup(map[string]string{"PANEL_TEST_KEY_A": "fixture-key"})
+	bothKeys := fakeLookup(map[string]string{
+		"PANEL_TEST_KEY_A": "fixture-key",
+		"PANEL_TEST_KEY_B": "fixture-key",
+	})
+
+	first, err := source.refreshUsage(t.Context(), doer, oneKey, now)
+	if err != nil || first.status != StatusStale || doer.next != 1 {
+		t.Fatalf("first partial round = status %q, attempts %d, error %v; want stale/1/nil", first.status, doer.next, err)
+	}
+	if _, err := source.refreshUsage(t.Context(), doer, bothKeys, now.Add(time.Minute)); !errors.Is(err, errNothingDue) {
+		t.Fatalf("second round inside the group budget = %v, want errNothingDue", err)
+	}
+	if doer.next != 1 {
+		t.Fatalf("a newly available source split the budgeted round: attempts = %d, want 1", doer.next)
+	}
+	complete, err := source.refreshUsage(t.Context(), doer, bothKeys, now.Add(5*time.Minute))
+	if err != nil || complete.status != StatusOK || doer.next != 3 {
+		t.Fatalf("complete round after budget = status %q, attempts %d, error %v; want ok/3/nil", complete.status, doer.next, err)
+	}
+}
+
 // fakeLookup returns an environment lookup over the given map only.
 func fakeLookup(values map[string]string) func(string) string {
 	return func(key string) string { return values[key] }

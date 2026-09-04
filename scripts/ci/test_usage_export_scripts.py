@@ -938,6 +938,15 @@ class InstallAnchorTest(unittest.TestCase):
         self.assertNotIn("__PUSH_SCRIPT__", result.stdout)
         self.assertNotIn("__LOG_DIR__", result.stdout)
 
+    def test_the_schedule_runs_each_minute_without_a_second_launcher(self):
+        result = run_script(INSTALL, ["--render-only"], env=self.env())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "<key>StartInterval</key>\n    <integer>60</integer>",
+            result.stdout,
+            "the rendered agent must wake the single launchd job each minute",
+        )
+
     def test_an_installer_run_from_a_worktree_still_anchors_the_primary_checkout(self):
         # The exact reviewed hazard: the installer itself lives in a
         # disposable worktree. Its render must not mention that worktree.

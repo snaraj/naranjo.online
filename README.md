@@ -209,20 +209,22 @@ The **token-usage** producers need credentials outright. A source whose
 credential is absent is simply skipped — never an error, never a fabricated
 number.
 
-Mounted panels re-read their envelope roughly once a minute and stop entirely
+Mounted panels re-read their envelope every thirty seconds and stop entirely
 while the tab is hidden. Because each response carries a digest ETag, an
 unchanged panel costs a conditional request and a bodyless `304`.
 
-Upstream is a different clock, and deliberately a slower one. The refresh loop
-wakes on the shared cadence (`ttlMinutes`), but each producer additionally
-carries its OWN rate budget — `minIntervalMinutes` in
-`internal/panels/config/fetch.json` — and a wake that finds every endpoint
-still inside its budget contacts nothing at all. The budget is spent per
-ATTEMPT rather than per success, so a failing upstream is retried no faster
-than a healthy one is polled. The shipped figures are a quarter hour for the
-contribution calendar and the game hiscores, and ten minutes for the commit
-lists; a test computes the worst-case hourly request count per host from that
-configuration and fails if it passes half the documented budget for that host.
+Upstream is a different clock. The refresh loop wakes each minute
+(`ttlMinutes`), but each producer additionally carries its OWN rate budget —
+`minIntervalMinutes` in `internal/panels/config/fetch.json` — and a wake that
+finds every endpoint still inside its budget contacts nothing at all. The
+budget is spent per ATTEMPT rather than per success, so a failing upstream is
+retried no faster than a healthy one is polled. Credentialed GitHub producers
+use the one-minute authenticated budget; an absent credential falls back
+before reservation to the conservative public budgets (a quarter hour for the
+calendar and repository metadata, ten minutes for commit lists). Game
+hiscores stay at a quarter hour and dormant credentialed usage sources at five
+minutes. Tests compute both anonymous and authenticated worst-case hourly cost
+from that configuration and fail before either reviewed budget is approached.
 
 Every outbound answer is bounded before it is believed: an exact declared
 media type, a per-endpoint byte cap, a per-attempt timeout, a 200-only status
@@ -332,12 +334,12 @@ no configuration file at all — `-F /dev/null`, every option stated
 explicitly, and the resolved configuration checked with `ssh -G` before a
 connection is opened — to a node path the chart projects into the pod as a
 read-only `local` PersistentVolume/PersistentVolumeClaim pair on the
-platform's enumerated StorageClass. The origin re-reads that file every five minutes, unseals it with
-`PANELS_DATA_KEY` (read at decrypt time only, from a Secret the chart
-references but never contains), strict-decodes it under the pipeline's single
-128 KiB sealed-payload ceiling and a monotonic replay floor, and serves the
-result — so the token-usage panel
-refreshes without a release and without any egress from the cluster.
+platform's enumerated StorageClass. The origin re-reads that file every thirty
+seconds, unseals it with `PANELS_DATA_KEY` (read at decrypt time only, from a
+Secret the chart references but never contains), strict-decodes it under the
+pipeline's single 128 KiB sealed-payload ceiling and a monotonic replay floor,
+and serves the result — so the token-usage panel refreshes without a release
+and without any egress from the cluster.
 
 Fail-closed at every absence: no `PANELS_DATA_ROOT`, no key, no file, or a
 file that is tampered, replayed, oversized, or malformed all leave the last
@@ -515,7 +517,9 @@ received`, `server drained`, and a final `server exited` /
 `server stopped`. Background panel refreshes log per-cycle outcomes at
 INFO, failures at WARN with the error chain and next retry time, and
 per-attempt `server.address`/`http.response.status_code`/
-`http.response.body.size` detail at DEBUG.
+`http.response.body.size` detail at DEBUG. The sealed token-usage data root
+logs each new failure cause once at WARN and the corresponding recovery at
+INFO, without logging ciphertext, plaintext, keys, or host paths.
 
 **W3C trace context, hand-rolled and spec-exact.** A valid version-00
 `traceparent` (lowercase hex, exact field lengths, version not `ff`,

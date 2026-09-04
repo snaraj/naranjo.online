@@ -1,6 +1,6 @@
 {
   "hosts": ["secure.runescape.com", "github.com", "api.github.com", "api.anthropic.com", "api.openai.com"],
-  "ttlMinutes": 5,
+  "ttlMinutes": 1,
   "timeoutSeconds": 10,
   "maxBytes": 524288,
   "initialBackoffSeconds": 60,
@@ -47,15 +47,20 @@
       "keyEnvName": "GITHUB_PANELS_TOKEN",
       "keyHeader": "Authorization",
       "keyPrefix": "Bearer ",
+      "authenticatedMinIntervalMinutes": 1,
       "headers": { "Accept": "application/json", "Content-Type": "application/json" },
       "maxBytes": 262144,
       "contentType": "application/json"
     },
     "commits": {
       "headers": { "Accept": "application/json" },
+      "keyEnvName": "GITHUB_PANELS_TOKEN",
+      "keyHeader": "Authorization",
+      "keyPrefix": "Bearer ",
       "maxBytes": 262144,
       "contentType": "application/json",
       "minIntervalMinutes": 10,
+      "authenticatedMinIntervalMinutes": 1,
       "max": 9,
       "sources": [
         {
@@ -84,9 +89,11 @@
     "keyPrefix": "Bearer ",
     "maxBytes": 262144,
     "contentType": "application/json",
-    "minIntervalMinutes": 15
+    "minIntervalMinutes": 15,
+    "authenticatedMinIntervalMinutes": 1
   },
   "tokenUsage": {
+    "minIntervalMinutes": 5,
     "sources": [
       {
         "label": "anthropic",

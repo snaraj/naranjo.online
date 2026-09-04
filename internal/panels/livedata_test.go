@@ -122,14 +122,15 @@ func liveTestConfig() FetchConfig {
 // shipped configuration's shape exactly.
 func calendarSpec() *vcsCalendarFetchSpec {
 	return &vcsCalendarFetchSpec{
-		Endpoint:    "https://api.example.test/graphql",
-		Query:       "query($from: DateTime!, $to: DateTime!) { calendar }",
-		KeyEnvName:  "FIXTURE_CALENDAR_TOKEN",
-		KeyHeader:   "Authorization",
-		KeyPrefix:   "Bearer ",
-		Headers:     map[string]string{"Accept": "application/json", "Content-Type": "application/json"},
-		MaxBytes:    1 << 17,
-		ContentType: "application/json",
+		Endpoint:                        "https://api.example.test/graphql",
+		Query:                           "query($from: DateTime!, $to: DateTime!) { calendar }",
+		KeyEnvName:                      "FIXTURE_CALENDAR_TOKEN",
+		KeyHeader:                       "Authorization",
+		KeyPrefix:                       "Bearer ",
+		AuthenticatedMinIntervalMinutes: 1,
+		Headers:                         map[string]string{"Accept": "application/json", "Content-Type": "application/json"},
+		MaxBytes:                        1 << 17,
+		ContentType:                     "application/json",
 	}
 }
 
@@ -323,6 +324,149 @@ func TestAnUnsetCalendarCredentialFallsBackHonestly(t *testing.T) {
 	if len(doer.at("/graphql")) != 0 {
 		t.Error("the credentialed endpoint was contacted with no credential to send")
 	}
+}
+
+// TestAuthenticatedGitHubCadenceFallsBackBeforeReservation proves the fast
+// path and its safety valve together. With the configured credential present,
+// each GitHub-backed source is due again at one minute and sends the key only
+// in its dedicated header. With the same configuration but no value in the
+// environment, a one-minute wake spends no anonymous request: the longer
+// public reservation was taken before the first request left the process.
+func TestAuthenticatedGitHubCadenceFallsBackBeforeReservation(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	credential := func(string) string { return "fixture-token-value" }
+	anonymous := func(string) string { return "" }
+
+	t.Run("calendar", func(t *testing.T) {
+		t.Parallel()
+		start := firstSunday(now.AddDate(0, 0, -calendarWindowDays))
+		days := int(now.Sub(start)/(24*time.Hour)) + 1
+		answers := map[string]cannedAnswer{
+			"/graphql":       {contentType: "application/json", body: calendarAnswer(start, days, 1, nil)},
+			"/contributions": {contentType: "text/html", body: fixtureContributions(t)},
+		}
+		build := func(t *testing.T) *FetchSource {
+			t.Helper()
+			source, err := NewFetchSource(SnapshotSource{Name: "snapshots/vcs-activity.json"}, liveTestConfig(),
+				panelFetchSpecs{vcs: activitySpec(calendarSpec())})
+			if err != nil {
+				t.Fatalf("build source: %v", err)
+			}
+			return source
+		}
+
+		authDoer := newCapturingDoer(answers)
+		authSource := build(t)
+		for _, at := range []time.Time{now, now.Add(time.Minute)} {
+			if _, err := authSource.refreshActivity(t.Context(), authDoer, credential, at); err != nil {
+				t.Fatalf("credentialed refresh at %v: %v", at, err)
+			}
+		}
+		if requests := authDoer.at("/graphql"); len(requests) != 2 {
+			t.Fatalf("credentialed one-minute wakes made %d requests, want 2", len(requests))
+		} else {
+			for _, request := range requests {
+				if got := request.header.Get("Authorization"); got != "Bearer fixture-token-value" {
+					t.Errorf("credentialed request header = %q", got)
+				}
+			}
+		}
+
+		publicDoer := newCapturingDoer(answers)
+		publicSource := build(t)
+		if _, err := publicSource.refreshActivity(t.Context(), publicDoer, anonymous, now); err != nil {
+			t.Fatalf("public first refresh: %v", err)
+		}
+		if _, err := publicSource.refreshActivity(t.Context(), publicDoer, anonymous, now.Add(time.Minute)); !errors.Is(err, errNothingDue) {
+			t.Fatalf("public one-minute wake = %v, want nothing due", err)
+		}
+		if got := len(publicDoer.at("/contributions")); got != 1 {
+			t.Errorf("public one-minute wakes made %d requests, want 1", got)
+		}
+	})
+
+	t.Run("projects", func(t *testing.T) {
+		t.Parallel()
+		answers := map[string]cannedAnswer{
+			"/users/owner/repos": {contentType: "application/json", body: listingAnswer(
+				listedRepo{name: "alpha", description: `"alpha"`, stars: 1, pushedAt: "2026-08-27T10:00:00Z"},
+			)},
+		}
+		build := func(t *testing.T) *FetchSource {
+			t.Helper()
+			source, err := NewFetchSource(SnapshotSource{Name: "snapshots/coding-projects.json"}, liveTestConfig(),
+				panelFetchSpecs{projects: projectsSpec()})
+			if err != nil {
+				t.Fatalf("build source: %v", err)
+			}
+			return source
+		}
+
+		authDoer := newCapturingDoer(answers)
+		authSource := build(t)
+		for _, at := range []time.Time{now, now.Add(time.Minute)} {
+			if _, err := authSource.refreshProjects(t.Context(), authDoer, credential, at); err != nil {
+				t.Fatalf("credentialed refresh at %v: %v", at, err)
+			}
+		}
+		if requests := authDoer.at("/users/owner/repos"); len(requests) != 2 {
+			t.Fatalf("credentialed one-minute wakes made %d requests, want 2", len(requests))
+		} else if got := requests[1].header.Get("Authorization"); got != "Bearer fixture-token-value" {
+			t.Errorf("credentialed request header = %q", got)
+		}
+
+		publicDoer := newCapturingDoer(answers)
+		publicSource := build(t)
+		if _, err := publicSource.refreshProjects(t.Context(), publicDoer, anonymous, now); err != nil {
+			t.Fatalf("public first refresh: %v", err)
+		}
+		if _, err := publicSource.refreshProjects(t.Context(), publicDoer, anonymous, now.Add(time.Minute)); !errors.Is(err, errNothingDue) {
+			t.Fatalf("public one-minute wake = %v, want nothing due", err)
+		}
+		if got := len(publicDoer.at("/users/owner/repos")); got != 1 {
+			t.Errorf("public one-minute wakes made %d requests, want 1", got)
+		}
+	})
+
+	t.Run("commits", func(t *testing.T) {
+		t.Parallel()
+		configure := func(t *testing.T) *FetchSource {
+			t.Helper()
+			_, state := activityFetchRegistry(t, 10)
+			spec := state.fetch.specs.vcs.Commits
+			spec.KeyEnvName = "FIXTURE_COMMITS_TOKEN"
+			spec.KeyHeader = "Authorization"
+			spec.KeyPrefix = "Bearer "
+			spec.AuthenticatedMinIntervalMinutes = 1
+			return state.fetch
+		}
+
+		authDoer := newCapturingDoer(activityAnswers(t))
+		authSource := configure(t)
+		for _, at := range []time.Time{now, now.Add(time.Minute)} {
+			if _, _, attempted, fresh := authSource.commitSection(t.Context(), authDoer, credential, authSource.specs.vcs.Commits, at); !attempted || !fresh {
+				t.Fatalf("credentialed commit refresh at %v = attempted %t fresh %t", at, attempted, fresh)
+			}
+		}
+		if requests := authDoer.at("/repos/first/commits"); len(requests) != 2 {
+			t.Fatalf("credentialed one-minute wakes made %d requests, want 2", len(requests))
+		} else if got := requests[1].header.Get("Authorization"); got != "Bearer fixture-token-value" {
+			t.Errorf("credentialed request header = %q", got)
+		}
+
+		publicDoer := newCapturingDoer(activityAnswers(t))
+		publicSource := configure(t)
+		if _, _, attempted, _ := publicSource.commitSection(t.Context(), publicDoer, anonymous, publicSource.specs.vcs.Commits, now); !attempted {
+			t.Fatal("public first refresh attempted nothing")
+		}
+		if _, _, attempted, _ := publicSource.commitSection(t.Context(), publicDoer, anonymous, publicSource.specs.vcs.Commits, now.Add(time.Minute)); attempted {
+			t.Fatal("public one-minute wake spent an anonymous request")
+		}
+		if got := len(publicDoer.at("/repos/first/commits")); got != 1 {
+			t.Errorf("public one-minute wakes made %d requests, want 1", got)
+		}
+	})
 }
 
 // TestACredentialedCalendarFailureNeverSilentlyNarrowsTheFigure pins the
@@ -569,6 +713,7 @@ func TestTheCredentialedCalendarSpecFailsClosed(t *testing.T) {
 		{"a query that ignores the window's end", func(s *vcsCalendarFetchSpec) { s.Query = "query($from: DateTime!) { calendar }" }, calendarToVariable},
 		{"no credential named", func(s *vcsCalendarFetchSpec) { s.KeyEnvName = "" }, "keyEnvName"},
 		{"no header for the credential to ride in", func(s *vcsCalendarFetchSpec) { s.KeyHeader = "" }, "keyHeader"},
+		{"an authenticated cadence outside the reviewed band", func(s *vcsCalendarFetchSpec) { s.AuthenticatedMinIntervalMinutes = 100000 }, "reviewed"},
 		{"no declared answer type", func(s *vcsCalendarFetchSpec) { s.ContentType = "" }, "contentType"},
 		{"a credential smuggled into the static headers", func(s *vcsCalendarFetchSpec) {
 			s.Headers = map[string]string{"Authorization": "Bearer smuggled"}
@@ -612,15 +757,16 @@ func TestAGetProducerNeverBecomesAPost(t *testing.T) {
 // shipped configuration's shape.
 func projectsSpec() *codingProjectsFetchSpec {
 	return &codingProjectsFetchSpec{
-		ListingEndpoint:    "https://api.example.test/users/owner/repos?per_page=30&sort=pushed",
-		Account:            "owner",
-		Headers:            map[string]string{"Accept": "application/json"},
-		KeyEnvName:         "FIXTURE_PROJECTS_TOKEN",
-		KeyHeader:          "Authorization",
-		KeyPrefix:          "Bearer ",
-		MaxBytes:           1 << 17,
-		ContentType:        "application/json",
-		MinIntervalMinutes: 15,
+		ListingEndpoint:                 "https://api.example.test/users/owner/repos?per_page=30&sort=pushed",
+		Account:                         "owner",
+		Headers:                         map[string]string{"Accept": "application/json"},
+		KeyEnvName:                      "FIXTURE_PROJECTS_TOKEN",
+		KeyHeader:                       "Authorization",
+		KeyPrefix:                       "Bearer ",
+		MaxBytes:                        1 << 17,
+		ContentType:                     "application/json",
+		MinIntervalMinutes:              15,
+		AuthenticatedMinIntervalMinutes: 1,
 	}
 }
 
@@ -1321,6 +1467,9 @@ func TestTheCodingProjectsSpecFailsClosed(t *testing.T) {
 		{"an ungrammatical exclusion", func(s *codingProjectsFetchSpec) { s.Exclude = []string{"bad name"} }, "grammar"},
 		{"the same exclusion twice", func(s *codingProjectsFetchSpec) { s.Exclude = []string{"twice", "twice"} }, "excluded twice"},
 		{"a credential with nowhere to ride", func(s *codingProjectsFetchSpec) { s.KeyHeader = "" }, "declared together"},
+		{"an authenticated cadence without a credential", func(s *codingProjectsFetchSpec) {
+			s.KeyEnvName, s.KeyHeader = "", ""
+		}, "requires a configured credential"},
 		{"a header outside the public-producer list", func(s *codingProjectsFetchSpec) {
 			s.Headers = map[string]string{"Authorization": "Bearer smuggled"}
 		}, "not permitted"},
@@ -1328,6 +1477,7 @@ func TestTheCodingProjectsSpecFailsClosed(t *testing.T) {
 			s.ListingEndpoint = "https://exfiltrate.example.test/users/owner/repos"
 		}, "allowlist"},
 		{"a cadence outside the reviewed band", func(s *codingProjectsFetchSpec) { s.MinIntervalMinutes = 100000 }, "reviewed"},
+		{"an authenticated cadence outside the reviewed band", func(s *codingProjectsFetchSpec) { s.AuthenticatedMinIntervalMinutes = 100000 }, "reviewed"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -1876,5 +2026,186 @@ func TestAnUnsolicited304IsARefusedStatus(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "status 304") {
 		t.Fatalf("refusal = %v, want the status named", err)
+	}
+}
+
+// TestCredentialChangesReselectTheReservation crosses the two credential
+// modes on ONE source per role, which the steady-state tests above never do
+// (2026-09-04 security review round 2, finding 1). The budget is chosen per
+// attempt from the credential present for that attempt and counts from the
+// last request whoever made it: losing the token one minute after an
+// authenticated request must NOT let an anonymous request through inside the
+// public budget, and gaining the token one minute after an anonymous request
+// must let the one-minute authenticated budget apply at once. All three
+// GitHub roles share the mechanism, so all three are crossed.
+func TestCredentialChangesReselectTheReservation(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	credential := func(string) string { return "fixture-token-value" }
+	anonymous := func(string) string { return "" }
+	start := firstSunday(now.AddDate(0, 0, -calendarWindowDays))
+	days := int(now.Sub(start)/(24*time.Hour)) + 1
+
+	type role struct {
+		name   string
+		public time.Duration
+		paths  []string
+		build  func(t *testing.T) (*FetchSource, *capturingDoer)
+		// wake is one refresh attempt; it reports whether a request was made.
+		wake func(t *testing.T, source *FetchSource, doer *capturingDoer, env func(string) string, at time.Time) bool
+	}
+	roles := []role{
+		{
+			name:   "calendar",
+			public: 15 * time.Minute,
+			paths:  []string{"/graphql", "/contributions"},
+			build: func(t *testing.T) (*FetchSource, *capturingDoer) {
+				t.Helper()
+				source, err := NewFetchSource(SnapshotSource{Name: "snapshots/vcs-activity.json"}, liveTestConfig(),
+					panelFetchSpecs{vcs: activitySpec(calendarSpec())})
+				if err != nil {
+					t.Fatalf("build source: %v", err)
+				}
+				return source, newCapturingDoer(map[string]cannedAnswer{
+					"/graphql":       {contentType: "application/json", body: calendarAnswer(start, days, 1, nil)},
+					"/contributions": {contentType: "text/html", body: fixtureContributions(t)},
+				})
+			},
+			wake: func(t *testing.T, source *FetchSource, doer *capturingDoer, env func(string) string, at time.Time) bool {
+				t.Helper()
+				_, err := source.refreshActivity(t.Context(), doer, env, at)
+				if errors.Is(err, errNothingDue) {
+					return false
+				}
+				if err != nil {
+					t.Fatalf("refresh at %v: %v", at, err)
+				}
+				return true
+			},
+		},
+		{
+			name:   "projects",
+			public: 15 * time.Minute,
+			paths:  []string{"/users/owner/repos"},
+			build: func(t *testing.T) (*FetchSource, *capturingDoer) {
+				t.Helper()
+				source, err := NewFetchSource(SnapshotSource{Name: "snapshots/coding-projects.json"}, liveTestConfig(),
+					panelFetchSpecs{projects: projectsSpec()})
+				if err != nil {
+					t.Fatalf("build source: %v", err)
+				}
+				return source, newCapturingDoer(map[string]cannedAnswer{
+					"/users/owner/repos": {contentType: "application/json", body: listingAnswer(
+						listedRepo{name: "alpha", description: `"alpha"`, stars: 1, pushedAt: "2026-08-27T10:00:00Z"},
+					)},
+				})
+			},
+			wake: func(t *testing.T, source *FetchSource, doer *capturingDoer, env func(string) string, at time.Time) bool {
+				t.Helper()
+				_, err := source.refreshProjects(t.Context(), doer, env, at)
+				if errors.Is(err, errNothingDue) {
+					return false
+				}
+				if err != nil {
+					t.Fatalf("refresh at %v: %v", at, err)
+				}
+				return true
+			},
+		},
+		{
+			name:   "commits",
+			public: 10 * time.Minute,
+			paths:  []string{"/repos/first/commits"},
+			build: func(t *testing.T) (*FetchSource, *capturingDoer) {
+				t.Helper()
+				_, state := activityFetchRegistry(t, 10)
+				spec := state.fetch.specs.vcs.Commits
+				spec.KeyEnvName = "FIXTURE_COMMITS_TOKEN"
+				spec.KeyHeader = "Authorization"
+				spec.KeyPrefix = "Bearer "
+				spec.AuthenticatedMinIntervalMinutes = 1
+				return state.fetch, newCapturingDoer(activityAnswers(t))
+			},
+			wake: func(t *testing.T, source *FetchSource, doer *capturingDoer, env func(string) string, at time.Time) bool {
+				t.Helper()
+				_, _, attempted, _ := source.commitSection(t.Context(), doer, env, source.specs.vcs.Commits, at)
+				return attempted
+			},
+		},
+	}
+	// The calendar's anonymous and credentialed requests go to different
+	// paths, so the request one wake made is found by the path that grew.
+	count := func(doer *capturingDoer, paths []string) int {
+		total := 0
+		for _, path := range paths {
+			total += len(doer.at(path))
+		}
+		return total
+	}
+	newest := func(t *testing.T, doer *capturingDoer, paths []string, before map[string]int) recordedRequest {
+		t.Helper()
+		for _, path := range paths {
+			if made := doer.at(path); len(made) > before[path] {
+				return made[len(made)-1]
+			}
+		}
+		t.Fatal("no path grew, so the wake made no request")
+		return recordedRequest{}
+	}
+	seen := func(doer *capturingDoer, paths []string) map[string]int {
+		before := make(map[string]int, len(paths))
+		for _, path := range paths {
+			before[path] = len(doer.at(path))
+		}
+		return before
+	}
+
+	for _, role := range roles {
+		t.Run(role.name, func(t *testing.T) {
+			t.Parallel()
+			t.Run("losing the credential keeps the public budget counting from the last request", func(t *testing.T) {
+				t.Parallel()
+				source, doer := role.build(t)
+				if !role.wake(t, source, doer, credential, now) {
+					t.Fatal("the credentialed first wake made no request")
+				}
+				if role.wake(t, source, doer, anonymous, now.Add(time.Minute)) {
+					t.Fatal("an anonymous wake one minute after a credentialed request made a request inside the public budget")
+				}
+				if got := count(doer, role.paths); got != 1 {
+					t.Fatalf("requests after the held wake = %d, want 1", got)
+				}
+				before := seen(doer, role.paths)
+				if !role.wake(t, source, doer, anonymous, now.Add(role.public)) {
+					t.Fatalf("the public budget of %v elapsed from the last request and no request was made", role.public)
+				}
+				if got := count(doer, role.paths); got != 2 {
+					t.Fatalf("requests after the public budget elapsed = %d, want 2", got)
+				}
+				if got := newest(t, doer, role.paths, before).header.Get("Authorization"); got != "" {
+					t.Errorf("an anonymous attempt carried a credential header %q", got)
+				}
+			})
+			t.Run("gaining the credential selects the authenticated budget", func(t *testing.T) {
+				t.Parallel()
+				source, doer := role.build(t)
+				if !role.wake(t, source, doer, anonymous, now) {
+					t.Fatal("the anonymous first wake made no request")
+				}
+				before := seen(doer, role.paths)
+				if !role.wake(t, source, doer, credential, now.Add(time.Minute)) {
+					t.Fatal("a credentialed wake one minute after an anonymous request was held on the public budget")
+				}
+				if got := count(doer, role.paths); got != 2 {
+					t.Fatalf("requests after the credentialed wake = %d, want 2", got)
+				}
+				if got := newest(t, doer, role.paths, before).header.Get("Authorization"); got != "Bearer fixture-token-value" {
+					t.Errorf("credentialed request header = %q", got)
+				}
+				if role.wake(t, source, doer, credential, now.Add(90*time.Second)) {
+					t.Fatal("a credentialed wake thirty seconds later made a request inside the one-minute authenticated budget")
+				}
+			})
+		})
 	}
 }
