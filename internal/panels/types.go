@@ -628,6 +628,13 @@ type FetchConfig struct {
 // and one mebibyte is far beyond every configured endpoint's real size.
 const maxFetchBodyBytes = 1 << 20
 
+// reservation is one role's last admitted attempt: the instant it was taken
+// and the interval it was taken with.
+type reservation struct {
+	at       time.Time
+	interval time.Duration
+}
+
 // FetchSource is the live-data source: an embedded snapshot fallback that
 // serves from cold start as StatusStale, plus the configuration for a
 // background refresh loop that replaces it with freshly fetched, strictly
@@ -666,11 +673,24 @@ type FetchSource struct {
 	// refreshes directly.
 	mu sync.Mutex
 	// gates maps a rate-budget role to the earliest instant an endpoint in
-	// that role may next be CONTACTED. Reservations are taken per attempt,
-	// not per success: a failing upstream must not be retried faster than a
-	// healthy one, which is precisely how a retry ladder walks into a rate
-	// limit.
+	// that role may next be CONTACTED because the upstream said so: it is
+	// written only by the rate-limit cooldown, never by an ordinary
+	// reservation, so an unset cadence can never switch a cooldown off.
 	gates map[string]time.Time
+	// attempts maps a rate-budget role to its LAST reservation: when it was
+	// taken and the interval it was taken with. Reservations are taken per
+	// attempt, not per success: a failing upstream must not be retried faster
+	// than a healthy one, which is precisely how a retry ladder walks into a
+	// rate limit. The instant is remembered rather than a precomputed "next",
+	// because the interval that applies is chosen per attempt from the
+	// credential present for THAT attempt (issue #290; 2026-09-04 security
+	// review round 2, finding 1): a credential that has gone must leave the
+	// public budget counting from the last request, and one that has arrived
+	// must be allowed its authenticated budget, neither of which a "next"
+	// written under the previous mode could express. The interval rides along
+	// for the one attempt that declares no cadence of its own, which honors
+	// the budget already taken rather than none.
+	attempts map[string]reservation
 	// calendar is the last successfully mapped contribution payload, kept so
 	// a cycle where only the commit half is due can serve the calendar it
 	// already has instead of asking for it again.

@@ -200,6 +200,7 @@ func NewFetchSource(fallback SnapshotSource, config FetchConfig, specs panelFetc
 		config:   config,
 		specs:    specs,
 		gates:    make(map[string]time.Time, 3),
+		attempts: make(map[string]reservation, 3),
 	}, nil
 }
 
@@ -468,12 +469,22 @@ func (s *FetchSource) log() *slog.Logger {
 // let a failing upstream be retried at full rate, which is exactly how a
 // polite client turns into a rate-limited one.
 //
+// THE INTERVAL IS THE CALLER'S FOR THIS ATTEMPT, AND THE BUDGET COUNTS FROM
+// THE LAST ATTEMPT (2026-09-04 security review round 2, finding 1). The
+// reservation used to be stored as a precomputed "next" instant, which made
+// the budget a property of the PREVIOUS attempt's mode: a credential lost
+// one minute after an authenticated request let an anonymous request through
+// inside the public budget, and a credential gained one minute after an
+// anonymous request stayed locked behind the public one. Now the role
+// remembers only when it last tried, and each attempt asks whether the
+// interval selected for ITS credential has elapsed since then.
+//
 // A zero or negative interval means the role declares no cadence of its own
 // and is governed by the refresh loop alone — the behavior every endpoint had
 // before per-endpoint budgets existed. It does NOT mean the role is ungated:
-// an existing reservation is still honored, because the other thing that
-// writes one is the rate-limit cooldown, and a cooldown an unset config field
-// could switch off would be exactly the silent security toggle this repository
+// a rate-limit cooldown is still honored, and so is a budget an earlier
+// attempt already took, because a reservation an unset config field could
+// switch off would be exactly the silent security toggle this repository
 // bans. Only the WRITING of a new reservation is conditional.
 func (s *FetchSource) reserve(role string, now time.Time, interval time.Duration) bool {
 	s.mu.Lock()
@@ -481,13 +492,22 @@ func (s *FetchSource) reserve(role string, now time.Time, interval time.Duration
 	if next, ok := s.gates[role]; ok && now.Before(next) {
 		return false
 	}
+	if last, ok := s.attempts[role]; ok {
+		window := interval
+		if window <= 0 {
+			window = last.interval
+		}
+		if window > 0 && now.Before(last.at.Add(window)) {
+			return false
+		}
+	}
 	if interval <= 0 {
 		return true
 	}
-	if s.gates == nil {
-		s.gates = make(map[string]time.Time, 3)
+	if s.attempts == nil {
+		s.attempts = make(map[string]reservation, 3)
 	}
-	s.gates[role] = now.Add(interval)
+	s.attempts[role] = reservation{at: now, interval: interval}
 	return true
 }
 
