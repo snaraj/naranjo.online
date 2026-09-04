@@ -9,9 +9,11 @@
 
 /* assetSlug canonicalizes a display name into the lowercase hyphenated form
  * icon files are named by, e.g. "Chambers of Xeric" into chambers-of-xeric
- * and "TzKal-Zuk" into tzkal-zuk. One rule for both tables: an icon file is
- * always named by exactly the data name it serves, so the two directories
- * can never drift into two different naming conventions. */
+ * and "TzKal-Zuk" into tzkal-zuk. It was one rule for two tables until the
+ * owner cut the skills grid (2026-09-03, issue 287); it stays one rule because
+ * an icon file is always named by exactly the data name it serves, and the
+ * the skills directory was deleted with that surface (ATTRIBUTION.md records
+ * why), so there is one table and one rule again. */
 function assetSlug(name: string): string {
   return name
     .toLowerCase()
@@ -21,11 +23,6 @@ function assetSlug(name: string): string {
 
 /* bossSlug names a file under assets/icons/bosses. */
 export function bossSlug(name: string): string {
-  return assetSlug(name);
-}
-
-/* skillSlug names a file under assets/icons/skills. */
-export function skillSlug(name: string): string {
   return assetSlug(name);
 }
 

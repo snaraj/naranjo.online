@@ -1,22 +1,35 @@
-<!-- PageHeader carries the page's chrome: the reading mode, small and
-  icon-only, pinned to the viewport's top-end corner (owner directive, issue
-  168) — OUTSIDE the feed column and independent of its width, so dragging
-  the feed never moves it. It used to sit IN the document flow, taking the
-  column's own width; the fixed position (styles.css, since the static shell
-  renders the same empty row before any icon hydrates into it) is what
-  removes that coupling at its cause, rather than picking a different offset
-  for the drift to reappear in.
+<!-- PageHeader is the ledger's chrome row (owner directive, 2026-09-03, issue
+  287): a wordmark at the start, the section nav across the middle, and the
+  place plus the reading mode at the end, between two rules.
 
-  It used to carry a second control, a manual "refresh all trackers" button,
-  which is gone (owner directive, issue 179): the site is responsive on its
-  own, and a data-retrieval failure now logs an error (see panels.ts'
-  loadPanel) rather than waiting on a visitor to notice and press something.
-  That was also the last reason this row needed to reserve room for two
-  icons side by side — one now fills it. -->
+  It used to be one icon pinned to the viewport's top-end corner (issue 168),
+  out of the document flow so dragging the column could not move it. The ledger
+  gives it a real row across the top of the sheet instead, which answers the
+  same complaint differently: the row spans the page rather than sitting beside
+  the column, so the column's width does not reach it either — and a row that
+  is IN the flow costs no reserve arithmetic, no plate behind it, and cannot
+  pass over content the reader scrolls, which is the whole class of defect
+  issue 219 and issue 264 were both about.
+
+  The nav moved here from under the name for the same reason: the ledger's own
+  drawing puts the five section links in this row, and a nav in the chrome is a
+  nav that stays one line at every width instead of wrapping under a masthead
+  that is already the tallest thing on the page. It scrolls sideways inside
+  itself on a phone rather than wrapping, so the row's height is the same at
+  every width.
+
+  The place is the owner's own portfolio location, the same public fact the
+  work entries carry. -->
 <script lang="ts">
   import ThemeMenu from '../ThemeMenu.svelte';
+  import SectionNav from './SectionNav.svelte';
 </script>
 
 <header class="page-header">
-  <ThemeMenu />
+  <a class="page-mark" href="#page-title">SN.</a>
+  <SectionNav />
+  <div class="page-chrome">
+    <span class="page-place">Irvine, CA</span>
+    <ThemeMenu />
+  </div>
 </header>

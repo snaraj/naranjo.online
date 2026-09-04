@@ -24,18 +24,26 @@ import test from 'node:test';
 import { relativeAge } from '../src/lib/age.ts';
 import { recordedOutOfBand, section, sectionHref, staticBlock } from '../src/lib/blocks.ts';
 import { feedCardRegions, feedCardVariants, formatIsoDate } from '../src/lib/feed.ts';
-import { workByline, workBylineSeparator, workEntries, workHistoryProps } from '../src/lib/work.ts';
+import {
+  roleLedgerProps,
+  workCollapseLabel,
+  workEntries,
+  workExpandLabel,
+} from '../src/lib/work.ts';
 import {
   codingProjectsPanelId,
-  codingProjectsProps,
   projectCounts,
   projectHost,
   projectLinkLabel,
   projects,
   projectsCapturedOn,
+  projectsEmptyNote,
   projectsStaleAfterMs,
   projectsStaleNote,
+  projectTableHeads,
+  projectTableProps,
   projectUrl,
+  shownProjectRows,
 } from '../src/lib/projects.ts';
 import {
   galleryHeight,
@@ -47,26 +55,47 @@ import {
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
-const [app, styles, manifest, feedCard, sectionNav, pageSectionSource, blockHost, entryLog, mediaGallery] =
-  await Promise.all([
-    read('../src/App.svelte'),
-    read('../src/styles.css'),
-    read('../src/page.ts'),
-    read('../src/lib/components/FeedCard.svelte'),
-    read('../src/lib/components/SectionNav.svelte'),
-    read('../src/lib/components/PageSection.svelte'),
-    read('../src/lib/components/Block.svelte'),
-    read('../src/lib/components/EntryLog.svelte'),
-    read('../src/lib/components/MediaGallery.svelte'),
-  ]);
+/* The ledger's own components (owner directive of 2026-09-03, issue 287):
+   EntryLog drew the work history AND the projects feed as cards, and both
+   surfaces became ruled rows — a log whose rows open, and a table. Every pin
+   that described the card's markup is re-pointed at whichever of the two
+   replaced it. */
+const [
+  app,
+  styles,
+  manifest,
+  feedCard,
+  sectionNav,
+  pageSectionSource,
+  pageHeader,
+  blockHost,
+  ledgerLog,
+  ledgerTable,
+  mediaGallery,
+] = await Promise.all([
+  read('../src/App.svelte'),
+  read('../src/styles.css'),
+  read('../src/page.ts'),
+  read('../src/lib/components/FeedCard.svelte'),
+  read('../src/lib/components/SectionNav.svelte'),
+  read('../src/lib/components/PageSection.svelte'),
+  read('../src/lib/components/PageHeader.svelte'),
+  read('../src/lib/components/Block.svelte'),
+  read('../src/lib/components/LedgerLog.svelte'),
+  read('../src/lib/components/LedgerTable.svelte'),
+  read('../src/lib/components/MediaGallery.svelte'),
+]);
 
 /* The binding modules that introduce each block to the page; they import
  * components, so they are source-pinned rather than executed. */
 const workSource = await read('../src/lib/work.ts');
 
-const [workBinding, artBinding, projectsBinding, galleryModule] = await Promise.all([
+const [workBinding, mediaBinding, projectsBinding, galleryModule] = await Promise.all([
   read('../src/lib/blocks/workHistory.ts'),
-  read('../src/lib/blocks/artGallery.ts'),
+  /* Renamed with its section (owner directive of 2026-09-03, issue 287): the
+     gallery is the sheet's own fifth section rather than half of Projects, so
+     the block that mounts it is named for the media it carries. */
+  read('../src/lib/blocks/mediaGallery.ts'),
   read('../src/lib/blocks/codingProjects.ts'),
   /* The data module is executed above; its SOURCE is read too, because the
      optionality of a TypeScript field is erased before Node ever sees it —
@@ -75,14 +104,33 @@ const [workBinding, artBinding, projectsBinding, galleryModule] = await Promise.
   read('../src/lib/gallery.ts'),
 ]);
 
-/* The generic components this architecture renders the page through. */
+/* The generic components this architecture renders the page through. The
+   content half is the ledger's five now (owner directive of 2026-09-03, issue
+   287) where it used to be the entry log and the gallery; every sweep below
+   that walked the old pair walks all of them, so the redesign added surfaces
+   to these guards rather than removing any. */
+const [commitLog, ledgerBoard, ticker] = await Promise.all([
+  read('../src/lib/components/CommitLog.svelte'),
+  read('../src/lib/components/LedgerBoard.svelte'),
+  read('../src/lib/components/Ticker.svelte'),
+]);
+
+const contentComponents = {
+  LedgerLog: ledgerLog,
+  LedgerTable: ledgerTable,
+  CommitLog: commitLog,
+  LedgerBoard: ledgerBoard,
+  Ticker: ticker,
+  MediaGallery: mediaGallery,
+};
+
 const introduced = {
   FeedCard: feedCard,
   SectionNav: sectionNav,
   PageSection: pageSectionSource,
+  PageHeader: pageHeader,
   Block: blockHost,
-  EntryLog: entryLog,
-  MediaGallery: mediaGallery,
+  ...contentComponents,
 };
 
 /* Every component in the tree, discovered by walking it rather than listed by
@@ -115,29 +163,38 @@ const manifestSections = [...manifest.matchAll(
 // The manifest, the nav, and the sections it points at
 // ---------------------------------------------------------------------------
 
-test('the manifest names the owner’s three sections, in the order the page stacks them', () => {
+/* FIVE SECTIONS, updated deliberately for the owner directive of 2026-09-03
+ * (issue 287): the ledger gives each of the owner's five headings a numbered
+ * section of its own. Commits leaves the trackers stack to lead a section that
+ * cycles one calendar between three daily series, and the gallery leaves
+ * Projects, where it had been a subheading, for the sheet's last section. The
+ * IDS of the three surviving sections do not move — an id is the fragment a
+ * nav link jumps to and an address a reader may already have shared. */
+test('the manifest names the owner’s five sections, in the order the page stacks them', () => {
   assert.deepEqual(
     manifestSections.map((entry) => entry.label),
-    ['Professional Experience', 'Projects', 'Trackers'],
+    ['Professional Experience', 'Projects', 'Commits', 'Trackers', 'Gallery'],
     'the section labels are the owner’s words and their order is the page’s order'
   );
   assert.deepEqual(
     manifestSections.map((entry) => entry.id),
-    ['work', 'projects', 'trackers']
+    ['work', 'projects', 'commits', 'trackers', 'gallery']
   );
   assert.deepEqual(
     manifestSections.map((entry) => entry.blocks),
     [
       ['workHistory'],
-      ['codingProjects', 'artGallery'],
-      ['tokenUsage', 'vcsActivity', 'osrsStats'],
+      ['codingProjects'],
+      ['commitLog'],
+      ['tokenSquares', 'bossTicker'],
+      ['mediaGallery'],
     ],
     'each section holds exactly its blocks; reordering the page is moving one name here'
   );
   assert.deepEqual(
     manifestSections.map((entry) => entry.layout),
-    ['flow', 'flow', 'stack'],
-    'the trackers section is the one panel stack'
+    ['flow', 'flow', 'stack', 'stack', 'flow'],
+    'the two panel stacks are the sections whose blocks share one column'
   );
   // The constructors the manifest is written in, executed with its own ids:
   // the id in, the id out, the layout defaulted to flow, and the href built
@@ -196,7 +253,14 @@ test('every nav link lands on the section the manifest renders', () => {
   assert.match(sectionNav, /href=\{sectionHref\(section\)\}/);
   assert.match(sectionNav, /class="section-link"/);
   assert.match(pageSectionSource, /<section class="page-section" id=\{section\.id\}/);
-  assert.match(app, /\{#each page as section \(section\.id\)\}\s*<PageSection \{section\} \/>/);
+  /* The ordinal the ledger's section head prints is derived from the
+     manifest's own position (owner directive of 2026-09-03, issue 287), so a
+     section moved in src/page.ts renumbers itself and two sections can never
+     claim the same number. */
+  assert.match(
+    app,
+    /\{#each page as section, position \(section\.id\)\}\s*<PageSection \{section\} ordinal=\{String\(position \+ 1\)\.padStart\(2, '0'\)\} \/>/
+  );
   // No component may spell a section of its own beside the manifest: one
   // renderer, zero hardcoded ids, or the counting guarantee above is gone.
   for (const [name, source] of Object.entries(componentSources)) {
@@ -242,10 +306,20 @@ test('scroll restoration is turned off once, so a refresh cannot silently reposi
   assert.match(sectionNav, /history\.scrollRestoration = 'manual'/);
 });
 
-test('the page stacks the name, the nav and the sections in one column', () => {
-  // The nav sits WITH the name (owner sketch: the links are under it), not one
-  // page gap away from it.
-  assert.match(app, /<div class="page-intro">\s*<h1 id="page-title">[^<]+<\/h1>\s*<SectionNav \/>/);
+test('the page stacks the chrome row, the name and the sections in one column', () => {
+  /* THE NAV MOVED INTO THE CHROME ROW (owner directive of 2026-09-03, issue
+     287): the ledger's drawing puts the five section links between the
+     wordmark and the reading mode, and a nav in a row that is the sheet's own
+     top rule stays one line at every width instead of wrapping under a
+     masthead that is already the tallest thing on the page. It is the SAME
+     component reading the SAME manifest — only its mount point moved — so
+     every pin below about what a link is and does is untouched. */
+  assert.match(pageHeader, /<SectionNav \/>/, 'the nav is no longer in the chrome row');
+  assert.doesNotMatch(app, /<SectionNav/, 'the nav is mounted twice');
+  // The name keeps its own block, and the rule the owner asked to be DRAWN
+  // under it is part of that block rather than a border somewhere else.
+  assert.match(app, /<div class="page-intro">\s*<h1 id="page-title">[^<]+<\/h1>/);
+  assert.match(app, /<svg class="masthead-rule"/);
   // The trackers are one section of the page rather than the whole of it, and
   // the panel stack renders behind the manifest's one stack layout.
   assert.match(
@@ -258,12 +332,29 @@ test('the page stacks the name, the nav and the sections in one column', () => {
     /<h2 class="section-title" id=\{`\$\{section\.id\}-title`\}>\{section\.label\}<\/h2>/,
     'every section opens with its manifest label'
   );
-  // A section link has to be a real touch target: 44px on both axes, as a
-  // minimum rather than a fixed box so an enlarged base font grows it.
+  /* The ledger's numbered head wraps that heading (owner directive of
+     2026-09-03, issue 287) and the number is drawn BESIDE it, hidden from
+     assistive technology: the heading's accessible name is what a screen
+     reader navigates the page by, and "01 Professional Experience" is a worse
+     name than the label for exactly the reader who cannot see that the sheet
+     is numbered. The h2, its class and its id — which the section's own
+     aria-labelledby points at — are unchanged. */
+  assert.match(
+    pageSectionSource,
+    /<div class="section-head">\s*<span class="section-number" aria-hidden="true">\{ordinal\}<\/span>/
+  );
+  /* A section link has to be a real touch target: 44px on both axes, as a
+     minimum rather than a fixed box so an enlarged base font grows it. It
+     reads the ledger's one control token now (owner directive of 2026-09-03,
+     issue 287) instead of restating the length, so BOTH halves are pinned —
+     the link reads the token, and the token is the floor. A link that read a
+     token which had quietly become 32px would pass a check on either half
+     alone. */
   const link = /\.section-link\s*\{([^}]*)\}/.exec(styles);
   assert.ok(link, 'the section links are not styled where this pin expects them');
-  assert.match(link[1], /min-block-size:\s*2\.75rem/);
-  assert.match(link[1], /min-inline-size:\s*2\.75rem/);
+  assert.match(link[1], /min-block-size:\s*var\(--control-target\)/);
+  assert.match(link[1], /min-inline-size:\s*var\(--control-target\)/);
+  assert.match(styles, /--control-target:\s*2\.75rem;/);
 });
 
 test('the nav link carries no idle underline, but hover and focus still mark it as a link (issue 157)', () => {
@@ -278,7 +369,12 @@ test('the nav link carries no idle underline, but hover and focus still mark it 
     /text-decoration:\s*underline/,
     'hover must add back the affordance the idle state no longer carries'
   );
-  assert.match(hover[1], /color:\s*var\(--color-brand\)/, 'hover keeps its brand-ink affordance too');
+  /* The ink hover reaches for is the ledger's one highlight now (owner
+     directive of 2026-09-03, issue 287) rather than the brand orange, which
+     the redesign spends on nothing: the sheet is monochrome and the highlight
+     is its single chromatic mark. Both are defined tokens in every reading
+     mode, so this is a change of which token, never of whether one. */
+  assert.match(hover[1], /color:\s*var\(--ledger-highlight\)/, 'hover keeps its ink affordance too');
 
   // The site's own focus ring must survive this change untouched — a nav
   // link is still a link the moment keyboard focus lands on it.
@@ -396,17 +492,27 @@ test('every variant the card admits is a variant it styles', () => {
   const [base, ...others] = feedCardVariants;
   assert.equal(base, 'framed', 'the base variant is the one the plain rule paints');
   assert.match(cardStyles, /\.feed-card\s*\{/, 'the base card rule is missing');
+  /* A variant may share its rule with a sibling (owner directive of
+     2026-09-03, issue 287: the four ledger looks remap the same three tokens
+     to nothing and differ only in the one or two they add), so the selector is
+     admitted followed by a comma as well as by a brace. What is pinned is
+     unchanged: every variant the type admits reaches a rule, and a variant
+     that reaches none is a silent no-op. */
   for (const variant of others) {
     assert.match(
       cardStyles,
-      new RegExp(`\\.feed-card\\[data-variant='${variant}'\\]\\s*\\{`),
+      new RegExp(`\\.feed-card\\[data-variant='${variant}'\\]\\s*[,{]`),
       `the ${variant} variant maps to no rule; a variant that styles nothing is a silent no-op`
     );
   }
   // A variant may only REMAP tokens. One that restated a value would be a
   // second place to change that value, which is the drift the token layer
   // exists to prevent.
-  for (const [, body] of cardStyles.matchAll(/\.feed-card\[data-variant='[a-z]+'\]\s*\{([^}]*)\}/g)) {
+  const variantRules = [
+    ...cardStyles.matchAll(/\.feed-card\[data-variant='[a-z]+'\](?:,\s*\.feed-card\[data-variant='[a-z]+'\])*\s*\{([^}]*)\}/g),
+  ];
+  assert.ok(variantRules.length > 0, 'no variant rule was found; this walk is broken');
+  for (const [, body] of variantRules) {
     for (const [, property] of body.matchAll(/(?:^|;)\s*([a-z-]+)\s*:/g)) {
       assert.ok(
         property.startsWith('--'),
@@ -491,26 +597,50 @@ test('the card token defaults are global, and resolve through the reading modes'
   // one family rather than restating it.
   assert.match(styles, /--font-mono:\s*'JetBrains Mono',/);
   assert.match(styles, /font-family:\s*var\(--font-mono\)/);
-  // The face is self-hosted: every @font-face source resolves inside the
-  // bundle (requirement 1 — no CDN), and each of the four faces declares the
-  // variable weight span so the ramp's 650s render as drawn, not snapped.
-  for (const face of styles.match(/@font-face \{[^}]*\}/gs) ?? []) {
+  /* THE PAGE HAS TWO FAMILIES NOW (owner directive of 2026-09-03, issue 287):
+     the ledger sets anything MEASURED — a figure, a date, a hash, a label — in
+     the mono face, and anything a person READS in Archivo. Six faces, not
+     four: the mono family's two styles by two character ranges, plus Archivo's
+     one style by the same two ranges.
+
+     Every claim the four-face pin made is made of all six and one more is
+     added. Each is self-hosted inside the bundle (requirement 1 — no CDN);
+     each declares a variable WEIGHT SPAN, so the ramp's 650s and the
+     masthead's 900 render as drawn rather than snapped to a static cut; each
+     swaps rather than holding first paint invisible; and Archivo additionally
+     declares its variable WIDTH span, because the masthead reads that axis and
+     a face that shipped without it would silently synthesize the width. */
+  const faces = styles.match(/@font-face \{[^}]*\}/gs) ?? [];
+  assert.equal(faces.length, 6, 'expected four JetBrains Mono faces and two Archivo faces');
+  let variableWidthFaces = 0;
+  for (const face of faces) {
     assert.match(face, /src: url\('\.\/assets\/fonts\//, 'a webfont loads from outside the bundle');
-    assert.match(face, /font-weight: 100 800/, 'a face lost its variable weight span');
+    assert.match(face, /font-weight: 100 (?:800|900)/, 'a face lost its variable weight span');
     assert.match(face, /font-display: swap/, 'a face would hold first paint invisible');
+    if (/font-stretch: 62% 125%/.test(face)) {
+      variableWidthFaces += 1;
+    }
   }
   assert.equal(
-    (styles.match(/@font-face/g) ?? []).length,
+    faces.filter((face) => /font-weight: 100 800/.test(face)).length,
     4,
-    'expected the four JetBrains Mono faces (two styles by two character ranges)'
+    'the four mono faces must carry the 100-800 weight span the type ramp is drawn against'
   );
+  assert.equal(variableWidthFaces, 2, 'both Archivo faces must declare the width axis the masthead reads');
+  // And the second family is a token like the first, so a stack is chosen in
+  // exactly one place.
+  assert.match(styles, /--font-sans:\s*'Archivo',/);
+  assert.match(styles, /font-family:\s*var\(--font-sans\)/);
 });
 
+/* Six content components now instead of two (owner directive of 2026-09-03,
+ * issue 287) — the structural closure got WIDER with the redesign, not
+ * narrower: every surface the ledger introduced renders through the same card
+ * primitive the entry log and the gallery did, so a look is still a variant
+ * plus its tokens rather than a component that builds its own chrome. */
 test('every content component renders through the card primitive', () => {
-  for (const [name, source] of Object.entries({
-    EntryLog: entryLog,
-    MediaGallery: mediaGallery,
-  })) {
+  assert.ok(Object.keys(contentComponents).length >= 6, 'the content-component walk lost a surface');
+  for (const [name, source] of Object.entries(contentComponents)) {
     assert.match(
       source,
       /import FeedCard from '\.\/FeedCard\.svelte'/,
@@ -553,7 +683,13 @@ test('every content component renders through the card primitive', () => {
 test('the experience section carries four complete real entries, newest first', () => {
   assert.equal(workEntries.length, 4, 'the owner supplied exactly four roles');
   for (const entry of workEntries) {
-    for (const field of ['company', 'role', 'dates', 'location', 'site']) {
+    /* `short` and `years` joined the row for the ledger (owner directive of
+       2026-09-03, issue 287): a row gives a name one column and a span
+       another, where a card gave both to one sentence. Neither is a new FACT —
+       each is a shorter rendering of the long form beside it — and both are
+       required rather than optional so a later entry cannot ship without one
+       and quietly render an empty column. */
+    for (const field of ['company', 'short', 'years', 'role', 'dates', 'location', 'site']) {
       assert.ok(entry[field].trim().length > 0, `an experience entry has an empty ${field}`);
     }
     /* The employer's own home on the web (issue 243), and it is checked rather
@@ -608,90 +744,97 @@ test('the experience section carries four complete real entries, newest first', 
       `${name} still carries placeholder copy or its note`
     );
   }
-  for (const entry of workHistoryProps.entries) {
-    assert.equal(entry.placeholder, undefined, 'a real role is still marked placeholder');
-  }
   // The block declares no section note at all now: staticBlock's presentation
   // argument is where one would go, and there is nothing left to disclaim.
+  // It binds the ledger log (owner directive of 2026-09-03, issue 287).
   assert.match(
     workBinding,
-    /staticBlock\('work-history', EntryLog, workHistoryProps\)/,
+    /staticBlock\('work-history', LedgerLog, roleLedgerProps\)/,
     'the experience block still declares a section note'
   );
-  // The MARKER stays in the component, because it is the generic primitive's
-  // honest-state channel and a future placeholder entry must still be able to
-  // say so; what changed is that nothing ships one.
-  assert.match(entryLog, /data-placeholder=\{entry\.placeholder \? 'true' : undefined\}/);
 
-  // The adapter: the employer is the card's title, the composed byline is its
-  // meta line, and the accomplishments are its points. The byline is read
-  // BACK APART here — each of the three facts must be findable in the line the
-  // card renders, so a composition that silently dropped the location or the
-  // dates fails rather than merely looking different.
+  /* THE ADAPTER, read back FACT BY FACT (owner directive of 2026-09-03, issue
+     287). The card composed one byline out of the role, the span and the
+     place, and the pin read that line back apart so a composition that
+     silently dropped one of the three failed rather than merely looking
+     different. The row gives each of them its own column, so the same three
+     facts are pinned as the three fields they became — which is the same
+     claim with one fewer place to lose something in. */
   assert.deepEqual(
-    workHistoryProps.entries.map((entry) => [
-      entry.key,
-      entry.title,
-      entry.titleHref,
-      entry.byline,
-      entry.points
-    ]),
+    roleLedgerProps.rows.map((row) => [row.key, row.span, row.name, row.role, row.place, row.points]),
     workEntries.map((entry) => [
       entry.company,
-      entry.company,
-      entry.site,
-      workByline(entry),
-      entry.points
+      entry.years,
+      entry.short,
+      entry.role,
+      entry.location,
+      entry.points,
     ])
   );
-  for (const entry of workEntries) {
-    const parts = workByline(entry).split(workBylineSeparator);
-    assert.deepEqual(parts, [entry.role, entry.dates, entry.location]);
-  }
-  assert.equal(workHistoryProps.titleLevel, 3, 'experience entries head straight under the section h2');
-  assert.equal(workHistoryProps.variant, undefined, 'experience entries keep the framed default card');
-  /* The unlinked branch, now also forwarding titleHref (issue 243). Every
-     prop is named individually rather than as one string so a dropped
-     forward is a failure rather than a reformat, and `byline` is the one that
-     carries the whole point: the OTHER way to link a title — EntryLog's
-     `href` branch — replaces the header region and would take the role, the
-     span and the place with it. */
-  const unlinkedCard = /<FeedCard\s+\{variant\}\s+title=([\s\S]*?)>/.exec(entryLog)?.[1] ?? '';
-  assert.ok(unlinkedCard.length > 0, 'the unlinked card is not where this pin expects it');
-  for (const prop of ['{entry.title}', 'titleHref={entry.titleHref}', 'byline={entry.byline}', '{titleLevel}']) {
-    assert.ok(unlinkedCard.includes(prop), `the unlinked entry card no longer passes ${prop}`);
-  }
+  /* THE EMPLOYER LINK SURVIVES AND MOVES (issue 243, carried into the ledger):
+     the row itself is the disclosure control now, and an anchor inside a
+     button is invalid content no keyboard can reach — so the link renders
+     inside the drawer, still the employer's own public home, still opened in a
+     new tab, still saying so in its accessible name. */
+  assert.deepEqual(
+    roleLedgerProps.rows.map((row) => [row.link.text, row.link.href, row.link.label]),
+    workEntries.map((entry) => [
+      entry.company,
+      entry.site,
+      `${entry.company}, opens in a new tab`,
+    ])
+  );
+  assert.match(ledgerLog, /<a\s+class="ledger-link"/);
+  assert.match(ledgerLog, /target="_blank"/);
+  assert.match(ledgerLog, /rel="noopener noreferrer"/);
+  assert.match(ledgerLog, /aria-label=\{row\.link\.label\}/);
+  assert.deepEqual(
+    [...ledgerLog.matchAll(/href=\{([^}]*)\}/g)].map(([, expression]) => expression),
+    ['row.link.href'],
+    'the ledger may render exactly the one validated href and construct none'
+  );
+  /* The chevron's words are DATA, so the component composes no sentence: a
+     component that wrote "Expand Fathom5" would be a component with an opinion
+     about English. */
+  assert.equal(roleLedgerProps.expandLabel, workExpandLabel);
+  assert.equal(roleLedgerProps.collapseLabel, workCollapseLabel);
+  assert.match(ledgerLog, /aria-label=\{`\$\{open \? collapseLabel : expandLabel\} \$\{row\.name\}`\}/);
+  /* And the row is a REAL disclosure: a button with aria-expanded, so the
+     drawer is operable by keyboard and announced as a state rather than being
+     a div that happens to listen for clicks. */
+  assert.match(ledgerLog, /<button\s+class="ledger-row"\s+type="button"\s+aria-expanded=\{open\}/);
+  // Collapsed by default: the section opens as a summary and expands on
+  // request, which is what the owner asked for.
+  assert.match(ledgerLog, /let opened = \$state\(new Set<string>\(\)\)/);
+  // An empty roster says so rather than rendering nothing at all.
+  assert.equal(roleLedgerProps.emptyNote.trim().length > 0, true);
+  assert.match(ledgerLog, /\{#if rows\.length === 0\}\s*<p class="ledger-note">\{emptyNote\}<\/p>/);
 });
 
-test('an entry draws only the body regions it has, and every shipped entry has one', () => {
-  // The card's own doctrine, one level in: a region is drawn only when it
-  // holds something, so an entry with points and no paragraph must not render
-  // an empty <p>, and an entry with a paragraph and no points must not render
-  // an empty <ul>. Both branches are in the one shared body snippet, so the
-  // linked and the unlinked card cannot grow different bodies.
-  assert.match(entryLog, /\{#snippet body\(entry: EntryLogEntry\)\}/);
-  assert.match(entryLog, /\{#if entry\.summary\}\s*<p class="entry-summary">\{entry\.summary\}<\/p>/);
-  assert.match(entryLog, /\{#if entry\.points && entry\.points\.length > 0\}/);
-  assert.equal(
-    (entryLog.match(/\{@render body\(entry\)\}/g) ?? []).length,
-    2,
-    'the two card shapes no longer share one body'
-  );
-  // And nothing this site ships is an entry with neither: an empty body is a
-  // call site with nothing to say, and the type cannot refuse it, so this
-  // does — over every adapter that feeds the log.
-  for (const [name, props] of Object.entries({
-    workHistoryProps,
-    codingProjectsProps: codingProjectsProps(null),
-  })) {
-    assert.ok(props.entries.length > 0, `${name} feeds the log no entries at all`);
-    for (const entry of props.entries) {
-      assert.ok(
-        (entry.summary ?? '').trim().length > 0 || (entry.points ?? []).length > 0,
-        `${name} ships "${entry.key}" with neither a paragraph nor points`
-      );
-    }
+/* THE SAME DOCTRINE, ONE SHAPE FEWER (owner directive of 2026-09-03, issue
+ * 287). The card carried two body regions — a paragraph and a points list —
+ * and drew each only when it held something, because a card that reserved an
+ * empty <p> for content it did not have was the defect. The ledger splits
+ * those two across two surfaces: the log's drawer holds the points, the
+ * table's row holds the one-line summary. So the claim below is the same claim
+ * against each of them — nothing this site ships is a row with nothing to say
+ * — checked over every adapter that feeds either. */
+test('a row draws only the body it has, and every shipped row has one', () => {
+  // The drawer is a region drawn from data, and the row's own points are what
+  // fill it; an entry with none would open onto an empty box.
+  assert.match(ledgerLog, /\{#each row\.points as point, index \(index\)\}/);
+  for (const row of roleLedgerProps.rows) {
+    assert.ok(row.points.length > 0, `the ledger ships "${row.key}" with an empty drawer`);
   }
+  // The table's summary is the other half, and a repository the host carries
+  // no description for renders the honest dash rather than an empty cell.
+  for (const row of projectTableProps(null).rows) {
+    assert.ok(
+      row.summary.trim().length > 0,
+      `the projects table ships "${row.key}" with neither a description nor a dash`
+    );
+  }
+  assert.match(ledgerTable, /<span class="table-summary">\{row\.summary\}<\/span>/);
 });
 
 // ---------------------------------------------------------------------------
@@ -732,30 +875,46 @@ test('the seven repositories are the owner’s, at the addresses the owner gave'
     projectLinkLabel(projects[0]),
     'naranjo.online on GitHub, opens in a new tab'
   );
-  const captured = codingProjectsProps(null);
-  // Compared against the feed's OWN order (issue 252) rather than the module
-  // list's, because they are no longer the same thing: the module list is a
-  // maintenance order and the feed is sorted by last push. Sorting the
-  // expectation the same way keeps this test about identity — every entry's
-  // title, address and accessible name derived from the captured row — and
-  // leaves the ordering claim to the test that exists for it.
+  const captured = projectTableProps(null);
+  /* Compared against the feed's OWN order (issue 252) rather than the module
+     list's, because they are no longer the same thing: the module list is a
+     maintenance order and the table is sorted by last push. Sorting the
+     expectation the same way keeps this test about identity — every row's
+     name, address and accessible name derived from the captured row — and
+     leaves the ordering claim to the test that exists for it.
+
+     The table shows the four most recently pushed (owner directive of
+     2026-09-03, issue 287) and says so in its caption, so the roster it was
+     selected FROM is still counted on the page rather than silently dropped. */
   const byPush = projects.toSorted(
     (left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt)
   );
+  assert.equal(shownProjectRows, 4);
   assert.deepEqual(
-    captured.entries.map((entry) => [entry.title, entry.href, entry.linkLabel, entry.summary]),
-    byPush.map((project) => [project.name, projectUrl(project), projectLinkLabel(project), project.description])
+    captured.rows.map((row) => [row.link.text, row.link.href, row.link.label, row.summary]),
+    byPush
+      .slice(0, shownProjectRows)
+      .map((project) => [
+        project.name,
+        projectUrl(project),
+        projectLinkLabel(project),
+        project.description,
+      ])
   );
-  assert.equal(captured.variant, 'compact');
-  assert.equal(captured.titleLevel, 4, 'project entries sit under the subsection h3');
-  assert.match(entryLog, /target="_blank"/);
-  assert.match(entryLog, /rel="noopener noreferrer"/);
-  assert.match(entryLog, /aria-label=\{entry\.linkLabel\}/);
-  // The log renders the href it is handed and never assembles one.
+  assert.equal(
+    captured.caption,
+    `latest ${shownProjectRows} of ${projects.length} · by last push`,
+    'the head must say what the four rows are a selection of, and how large the roster is'
+  );
+  assert.deepEqual([...projectTableHeads], ['Repository', 'Description', 'Stars', 'Open', 'PRs', 'Pushed']);
+  assert.match(ledgerTable, /target="_blank"/);
+  assert.match(ledgerTable, /rel="noopener noreferrer"/);
+  assert.match(ledgerTable, /aria-label=\{row\.link\.label\}/);
+  // The table renders the href it is handed and never assembles one.
   assert.deepEqual(
-    [...entryLog.matchAll(/href=\{([^}]*)\}/g)].map(([, expression]) => expression),
-    ['entry.href'],
-    'the entry log may render exactly the one validated href and construct none'
+    [...ledgerTable.matchAll(/href=\{([^}]*)\}/g)].map(([, expression]) => expression),
+    ['row.link.href'],
+    'the table may render exactly the one validated href and construct none'
   );
 });
 
@@ -815,13 +974,25 @@ test('a count of one is a count of one thing', () => {
   const leading = projects.toSorted(
     (left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt)
   )[0];
-  assert.deepEqual(
-    codingProjectsProps(null, noon).entries[0].counts.map((count) => count.label),
-    projectCounts(leading, undefined, noon).map((count) => count.label)
+  /* THE TABLE DRAWS FOUR OF THE FIVE COUNTERS (owner directive of 2026-09-03,
+     issue 287: the columns are the owner's own list — Stars, Open, PRs,
+     Pushed). The age has a column of its own rather than a place in the
+     cluster, and the captured commit total left with the card that had room
+     for it. What did NOT change is where each figure comes from: every one of
+     them is still projectCounts' own counter, carried across whole — the same
+     figure, the same sentence, the same detail, the same provenance mark. */
+  const leadingRow = projectTableProps(null, noon).rows[0];
+  const tableCounters = [leadingRow.counts[0], leadingRow.updated, ...leadingRow.counts.slice(1)];
+  const cardCounters = projectCounts(leading, undefined, noon).filter(
+    (count) => count.glyph !== 'node'
   );
   assert.deepEqual(
-    codingProjectsProps(null).entries[0].counts.map((count) => count.glyph),
-    ['star', 'clock', 'node', 'issue', 'pull'],
+    tableCounters.map((count) => count.label),
+    cardCounters.map((count) => count.label)
+  );
+  assert.deepEqual(
+    tableCounters.map((count) => count.glyph),
+    ['star', 'clock', 'issue', 'pull'],
     'each count names its generic glyph; the drawing is the component’s'
   );
   /* EVERY counter is terse now (issue 268): the glyph and a bare figure on the
@@ -829,7 +1000,7 @@ test('a count of one is a count of one thing', () => {
      Both channels are checked, because dropping either one is the failure —
      the figure alone leaves the glyph carrying the meaning for a screen
      reader, and the words alone are the noise the owner removed. */
-  for (const count of codingProjectsProps(null, noon).entries[0].counts) {
+  for (const count of tableCounters) {
     assert.ok(
       typeof count.value === 'string' && count.value.length > 0,
       `${count.key} renders no visible figure`
@@ -838,9 +1009,9 @@ test('a count of one is a count of one thing', () => {
     assert.equal(count.detail.name, count.label, `${count.key}'s detail does not name its phrase`);
   }
   // The figure is TEXT beside the glyph, never carried by the glyph alone.
-  assert.match(entryLog, /\{count\.value\}/);
-  assert.match(entryLog, /\{count\.label\}/);
-  assert.match(entryLog, /aria-hidden="true"/);
+  assert.match(ledgerTable, /\{count\.value\}/);
+  assert.match(ledgerTable, /\{count\.label\}/);
+  assert.match(ledgerTable, /aria-hidden="true"/);
 });
 
 test('a figure the origin recorded says so in its detail, never on the visible line (issue 268)', () => {
@@ -849,11 +1020,16 @@ test('a figure the origin recorded says so in its detail, never on the visible l
      interaction away, into the same detail primitive the stat tiles use — so
      this pin is in two halves and both matter. */
   const noon = Date.parse('2026-08-27T12:00:00Z');
-  const captured = codingProjectsProps(null, noon).entries[0].counts;
-  const commits = captured.find((count) => count.key === 'commits');
-  assert.equal(commits.marked, true, 'the commit total is captured however fresh the row is');
+  /* The captured face marks EVERY figure it carries, because none of them was
+     fetched live. The commit total the card used to show left with the card
+     (owner directive of 2026-09-03, issue 287), so the star tally is what this
+     pin reads now — the same claim about the same channel, on a figure the
+     table still draws. */
+  const captured = projectTableProps(null, noon).rows[0].counts;
+  const stars = captured.find((count) => count.key === 'stars');
+  assert.equal(stars.marked, true, 'the captured face is captured however the row is drawn');
   assert.deepEqual(
-    commits.detail.rows,
+    stars.detail.rows,
     [{ label: '', value: recordedOutOfBand }],
     'a recorded figure carries no provenance row in its detail'
   );
@@ -861,8 +1037,11 @@ test('a figure the origin recorded says so in its detail, never on the visible l
   assert.equal(recordedOutOfBand, 'recorded out of band, not fetched live');
   // And nothing on the visible line says it: the mark, its class and its
   // browser tooltip are gone from the component rather than merely unused.
-  assert.doesNotMatch(entryLog, /entry-recorded/);
-  assert.doesNotMatch(entryLog, /·\s*recorded/);
+  assert.doesNotMatch(ledgerTable, /entry-recorded|table-recorded/);
+  assert.doesNotMatch(ledgerTable, /·\s*recorded/);
+  // The reader still reaches it, through the page's one hover-detail
+  // primitive rather than through a browser tooltip no phone can open.
+  assert.match(ledgerTable, /<DetailTip detail=\{count\.detail\} \/>/);
   /* A DASH gets no provenance row. "not reported" and "recorded out of band"
      are different claims, and only one of them can be true of a figure that
      does not exist. */
@@ -879,14 +1058,18 @@ test('the feed leads with the repository pushed most recently (issue 252)', () =
   // The captured list's own order and its push order DISAGREE, which is what
   // makes this fail when the sort is removed rather than pass by luck; the
   // second assertion below refuses to let that stop being true silently.
-  const captured = codingProjectsProps(null).entries.map((entry) => entry.title);
+  const captured = projectTableProps(null).rows.map((row) => row.link.text);
   const expected = projects
     .toSorted((left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt))
     .map((project) => project.name);
-  assert.deepEqual(captured, expected);
+  // The table shows the four most recent of that order (owner directive of
+  // 2026-09-03, issue 287); the ORDER it selects from is the whole roster's,
+  // which is what makes "leads with" a claim about the data rather than about
+  // the four rows that happen to be drawn.
+  assert.deepEqual(captured, expected.slice(0, shownProjectRows));
   assert.notDeepEqual(
     captured,
-    projects.map((project) => project.name),
+    projects.slice(0, shownProjectRows).map((project) => project.name),
     'the captured list happens to be in push order, so this test proves nothing; reorder the fixture'
   );
 
@@ -910,8 +1093,8 @@ test('the feed leads with the repository pushed most recently (issue 252)', () =
     }
   };
   assert.deepEqual(
-    codingProjectsProps(envelope).entries.map((entry) => entry.title),
-    projects.map((project) => project.name),
+    projectTableProps(envelope).rows.map((row) => row.link.text),
+    projects.slice(0, shownProjectRows).map((project) => project.name),
     'the feed ordered by the captured instants while the panel carried newer ones'
   );
 
@@ -925,8 +1108,8 @@ test('the feed leads with the repository pushed most recently (issue 252)', () =
     }
   };
   assert.deepEqual(
-    codingProjectsProps(stale).entries.map((entry) => entry.title),
-    expected,
+    projectTableProps(stale).rows.map((row) => row.link.text),
+    expected.slice(0, shownProjectRows),
     'a recorded row was ordered by an instant it was not vouching for'
   );
 });
@@ -960,34 +1143,33 @@ test('the roster is the payload’s: a repository the module list has never hear
     openIssues: 2,
     openPulls: 1,
   };
-  const rendered = codingProjectsProps(projectsEnvelope([fresh]), now);
-  assert.equal(rendered.entries.length, 1, 'the payload decides the roster, not the module list');
-  const [entry] = rendered.entries;
-  assert.equal(entry.title, 'born-this-morning');
-  assert.equal(entry.href, `${projectHost}/born-this-morning`);
-  assert.equal(entry.linkLabel, 'born-this-morning on GitHub, opens in a new tab');
+  const rendered = projectTableProps(projectsEnvelope([fresh]), now);
+  assert.equal(rendered.rows.length, 1, 'the payload decides the roster, not the module list');
+  const [entry] = rendered.rows;
+  assert.equal(entry.link.text, 'born-this-morning');
+  assert.equal(entry.link.href, `${projectHost}/born-this-morning`);
+  assert.equal(entry.link.label, 'born-this-morning on GitHub, opens in a new tab');
   assert.equal(entry.summary, fresh.description);
   const byKey = new Map(entry.counts.map((count) => [count.key, count]));
   assert.equal(byKey.get('stars').value, '1');
   assert.equal(byKey.get('issues').value, '2');
   assert.equal(byKey.get('pulls').value, '1');
-  // No capture exists for this repository, so the commit counter is the
-  // honest dash — "not recorded" is a different claim than any number.
-  assert.equal(byKey.get('commits').value, '—');
-  assert.equal(byKey.get('commits').label, 'commit total not recorded');
-  assert.deepEqual(byKey.get('commits').detail.rows, [], 'a dash carries no provenance row');
-  // And a payload row for a KNOWN repository still gets its captured commit
-  // total beside its live figures.
-  const known = codingProjectsProps(
-    projectsEnvelope([
-      { name: projects[0].name, description: 'live text', stars: 5, pushedAt: '2026-09-01T11:00:00Z' },
-    ]),
+  /* The caption counts the roster the payload actually served, so a table of
+     one says one of one rather than borrowing the module list's seven (owner
+     directive of 2026-09-03, issue 287). */
+  assert.equal(rendered.caption, 'latest 1 of 1 · by last push');
+  /* A repository the capture never saw still renders its live figures. The
+     card carried a captured commit total the table has no column for, so what
+     the honest-dash rule is read on here is the figure that CAN be absent from
+     a live row: an open-work tally the payload does not carry. */
+  const noTallies = projectTableProps(
+    projectsEnvelope([{ ...fresh, openIssues: undefined, openPulls: undefined }]),
     now
   );
-  assert.equal(
-    known.entries[0].counts.find((count) => count.key === 'commits').value,
-    String(projects[0].commits)
-  );
+  const absent = noTallies.rows[0].counts.find((count) => count.key === 'issues');
+  assert.equal(absent.value, '—');
+  assert.equal(absent.label, 'open issues not reported');
+  assert.deepEqual(absent.detail.rows, [], 'a dash carries no provenance row');
 });
 
 test('a payload name outside the repository grammar refuses the whole payload', () => {
@@ -997,12 +1179,19 @@ test('a payload name outside the repository grammar refuses the whole payload', 
   // is wholesale — the captured face renders, never a half-parsed roster.
   const good = { name: 'fine', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z' };
   for (const name of ['evil name', 'a/../b', '..', '.', '', 'x'.repeat(101), 'sla/sh']) {
-    const rendered = codingProjectsProps(projectsEnvelope([good, { ...good, name }]));
+    const rendered = projectTableProps(projectsEnvelope([good, { ...good, name }]));
     assert.deepEqual(
-      rendered.entries.map((entry) => entry.title).toSorted(),
-      projects.map((project) => project.name).toSorted(),
+      rendered.rows.map((row) => row.link.text).toSorted(),
+      projects
+        .toSorted((left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt))
+        .slice(0, shownProjectRows)
+        .map((project) => project.name)
+        .toSorted(),
       `a payload carrying the name ${JSON.stringify(name)} was not refused wholesale`
     );
+    // ...and the caption counts the CAPTURED roster, so the refusal is legible
+    // on the page rather than silently rendering four of an unknown number.
+    assert.equal(rendered.caption, `latest ${shownProjectRows} of ${projects.length} · by last push`);
   }
 });
 
@@ -1010,11 +1199,11 @@ test('a card looks stale when its envelope says so (issue 281, defect 2)', () =>
   const now = Date.parse('2026-09-01T12:30:00Z');
   const repos = [{ name: 'fine', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z' }];
   // A fresh ok panel carries no note, and neither does the pre-envelope face.
-  assert.equal(codingProjectsProps(projectsEnvelope(repos), now).staleNote, undefined);
-  assert.equal(codingProjectsProps(null, now).staleNote, undefined);
+  assert.equal(projectTableProps(projectsEnvelope(repos), now).staleNote, undefined);
+  assert.equal(projectTableProps(null, now).staleNote, undefined);
   // The non-ok fixture: the origin says stale, and the card SAYS SO, dated by
   // the envelope's own generatedAt — status plus timestamp, nothing invented.
-  const stale = codingProjectsProps(
+  const stale = projectTableProps(
     projectsEnvelope(repos, { status: 'stale', generatedAt: '2026-09-01T07:30:00Z' }),
     now
   );
@@ -1025,24 +1214,24 @@ test('a card looks stale when its envelope says so (issue 281, defect 2)', () =>
   // distinguish the origin's verdict from mere aging. This fixture can: five
   // minutes old, well inside the threshold, the note must come from the
   // status. Review receipt 5497788881 caught this input missing.
-  const freshStale = codingProjectsProps(
+  const freshStale = projectTableProps(
     projectsEnvelope(repos, { status: 'stale', generatedAt: '2026-09-01T12:25:00Z' }),
     now
   );
   assert.equal(freshStale.staleNote, 'stale · data as of 5m ago');
   // Unavailable renders the captured face and says which face it is.
-  const unavailable = codingProjectsProps(
+  const unavailable = projectTableProps(
     projectsEnvelope([], { status: 'unavailable', generatedAt: undefined, data: null }),
     now
   );
   assert.equal(unavailable.staleNote, 'live repository data unavailable · showing captured figures');
-  assert.equal(unavailable.entries.length, projects.length);
+  assert.equal(unavailable.rows.length, shownProjectRows);
   // An ok envelope whose generatedAt stopped advancing is the wedged-loop
   // state a status alone cannot see: past the threshold the card says so.
   const wedged = projectsEnvelope(repos, {
     generatedAt: new Date(now - projectsStaleAfterMs - 60_000).toISOString(),
   });
-  assert.match(codingProjectsProps(wedged, now).staleNote, /^stale · data as of /);
+  assert.match(projectTableProps(wedged, now).staleNote, /^stale · data as of /);
   // Executed at the seam too: the note builder itself, from both sides of
   // the threshold, so the boundary is arithmetic rather than luck.
   assert.equal(
@@ -1055,21 +1244,30 @@ test('a card looks stale when its envelope says so (issue 281, defect 2)', () =>
   );
 });
 
-test('the entry log renders the stale line above the entries, and only when it has one', () => {
-  // Structural, against the component source (the same way the usage
-  // tracker's data-through line is pinned): the note renders conditionally,
-  // carries its audit attribute, and sits before the list so the reader
-  // meets the caveat before the figures it qualifies. A static log passes
-  // none and renders exactly as it always did.
-  assert.match(entryLog, /\{#if staleNote\}/);
-  assert.match(entryLog, /data-entry-log-stale/);
+/* THE STALE LINE MOVED TO THE ONE ROW EVERY PANEL ALREADY RESERVES (owner
+ * directive of 2026-09-03, issue 287). The entry log rendered it above its own
+ * list; the ledger's blocks render through PanelShell, whose head is the row
+ * the card holds open for exactly "a later addition beside the title" — which
+ * is where the calendar's own data-through line already went at issue 285. One
+ * idiom, one place, one geometry, and it costs no layout shift because the row
+ * is reserved whether or not there is a line for it.
+ *
+ * The claim is unchanged: the note renders only when the adapter proved there
+ * is one, it reaches the reader BEFORE the figures it qualifies, and a static
+ * surface passes none. */
+test('the table renders its stale line in the reserved head, and only when it has one', async () => {
+  const shell = await read('../src/lib/components/PanelShell.svelte');
+  assert.match(ledgerTable, /<PanelShell \{title\} \{status\} \{generatedAt\} note=\{staleNote\}>/);
+  assert.match(shell, /\{#if note\}<span class="panel-note" data-panel-note>\{note\}<\/span>\{\/if\}/);
   assert.ok(
-    entryLog.indexOf('data-entry-log-stale') < entryLog.indexOf('<ol class="entry-log"'),
-    'the stale line renders after the entries it qualifies'
+    shell.indexOf('data-panel-note') < shell.indexOf('<div class="panel-body">'),
+    'the stale line renders after the figures it qualifies'
   );
-  assert.equal(workHistoryProps.staleNote, undefined, 'the static work history grew a stale note');
+  // The static work history has no envelope and therefore no line to render;
+  // its props carry no channel for one at all.
+  assert.equal(roleLedgerProps.staleNote, undefined, 'the static work history grew a stale note');
   // The line is a token-inked reading, not an italic apology.
-  assert.match(styleBlock(entryLog), /\.entry-log-stale \{[^}]*color: var\(--card-meta-ink\)/s);
+  assert.match(styleBlock(shell), /\.panel-note \{[^}]*color: var\(--panel-muted/s);
 });
 
 test('open issues and open pull requests are told with icons and a number (issue 252)', () => {
@@ -1110,95 +1308,126 @@ test('open issues and open pull requests are told with icons and a number (issue
   // The component draws both glyphs in the page's own language — one ink,
   // bound to currentColor — so a forced-colours or monochrome render keeps
   // them, and marks them decorative because the accessible name is the text.
-  for (const glyph of ["count.glyph === 'issue'", "count.glyph === 'pull'"]) {
-    assert.ok(entryLog.includes(glyph), `the entry log draws no ${glyph} branch`);
+  for (const glyph of ["count.glyph === 'star'", "count.glyph === 'issue'"]) {
+    assert.ok(ledgerTable.includes(glyph), `the table draws no ${glyph} branch`);
   }
   assert.equal(
-    [...entryLog.matchAll(/(?:fill|stroke)="(?!none)([^"]*)"/g)].every(
+    [...ledgerTable.matchAll(/(?:fill|stroke)="(?!none)([^"]*)"/g)].every(
       ([, paint]) => paint === 'currentColor'
     ),
     true,
     'a glyph paints an ink that is not currentColor'
   );
-  // The words are hidden by CLIPPING, never by display:none or hidden, both of
-  // which would take them out of the accessibility tree and leave the glyph
-  // carrying the figure alone.
-  assert.match(entryLog, /<span class="entry-count-words">\{count\.label\}<\/span>/);
-  assert.match(styleBlock(entryLog), /\.entry-count-words \{[^}]*clip-path: inset\(50%\)/s);
-  assert.doesNotMatch(styleBlock(entryLog), /\.entry-count-words \{[^}]*display: none/s);
+  /* The words are hidden by CLIPPING, never by display:none or hidden, both of
+     which would take them out of the accessibility tree and leave the glyph
+     carrying the figure alone. The class moved with the surface (owner
+     directive of 2026-09-03, issue 287) and its rule moved to styles.css with
+     every other page-level row decision; the technique is byte-identical. */
+  assert.match(ledgerTable, /<span class="table-clipped">\{count\.label\}<\/span>/);
+  assert.match(styles, /\.table-clipped \{[^}]*clip-path: inset\(50%\)/s);
+  assert.doesNotMatch(styles, /\.table-clipped \{[^}]*display: none/s);
 });
 
-test('the counters are one right-anchored cluster at the title’s level, decided by no card’s content (issue 188; owner sketch 2026-08-31)', () => {
-  const style = styleBlock(entryLog);
-  /* Issue 188's claim survives the owner's 2026-08-31 sketch (issue 275): no
-     placement in the card head depends on content. The head is ONE grid at
-     every width — the title column shrinkable to nothing, the cluster sized
-     by its own floored tracks — so there is still nothing for a title's
-     length to decide, and no width switch exists to reintroduce a second
-     shape. */
-  const entryHeadBlocks = [...style.matchAll(/\.entry-head\s*\{([^}]*)\}/g)].map(([, body]) => body);
-  assert.equal(entryHeadBlocks.length, 1, 'the head has grown a second shape again');
-  assert.match(entryHeadBlocks[0], /display:\s*grid/);
+/* THE CLUSTER BECAME COLUMNS (owner directive of 2026-09-03, issue 287), and
+ * issue 188's claim survives the move in the form the new shape can carry it.
+ *
+ * What issue 188 was about: nothing in the card's head could be placed by its
+ * CONTENT — a long repository name must not push the counters, and the head
+ * must not switch to a second layout at some width. A grid whose tracks are
+ * declared once answered both.
+ *
+ * The table answers both the same way and more strictly: every counter sits in
+ * a track the TABLE declares, identical on every row, so a figure cannot move
+ * anything and there is nothing for a name's length to decide. The one thing
+ * that did change is deliberate and is the owner's first requirement: the row
+ * DOES restack on a phone. That is a width decision, not a content one — every
+ * row takes the same shape at the same width — and it is what keeps a
+ * six-column table off a 320px screen without scrolling the page sideways,
+ * which is the floor a second layout was banned to protect in the first place.
+ *
+ * The accessibility half got stronger rather than weaker. The card put each
+ * counter's whole sentence one interaction away, in a detail a reader had to
+ * focus the tile to reach; the table keeps that detail AND carries the same
+ * sentence unconditionally in the accessibility tree, clipped beside the
+ * figure, so the words are there whether or not anyone reaches for them. */
+test('the table places every counter in a declared track, and no figure moves anything (issue 188; issue 287)', () => {
+  const noonPlacement = Date.parse('2026-08-27T12:00:00Z');
+  const rowRules = [...styles.matchAll(/\.table-head,\s*\n\.table-row \{([^}]*)\}/g)].map(
+    ([, body]) => body
+  );
+  assert.equal(rowRules.length, 1, 'the row has grown a second base shape again');
+  assert.match(rowRules[0], /display:\s*grid/);
   assert.match(
-    entryHeadBlocks[0],
-    /grid-template-columns:\s*minmax\(0, 1fr\) auto/,
-    'the title column must shrink under a long name instead of pushing the cluster'
+    rowRules[0],
+    /grid-template-columns:\s*[0-9.]+rem minmax\(0, 1fr\)/,
+    'the description column must shrink under a long line instead of pushing the counters'
   );
-  assert.equal(
-    [...style.matchAll(/@(?:media|container)[^{]*\{\s*\.entry-(?:head|counts)\s*\{/g)].length,
-    0,
-    'the head or cluster is width-switched again; the one-layout rule (2026-08-29, re-drawn 2026-08-31) says it may not be'
-  );
-
-  /* THE CLUSTER (owner sketch, issue 275: "icons + number", concise, at the
-     card's top-right). Two columns, both floored by the ONE token declared
-     in styles.css, so the cluster reads the same geometry on every card and
-     the live age counter can tick without moving a pixel — nothing is
-     measured from a figure. */
-  const counts = /\.entry-counts\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.match(counts, /display:\s*grid/, 'the cluster is content-placed flex');
-  assert.match(
-    counts,
-    /grid-template-columns:\s*repeat\(2, minmax\(var\(--entry-count-min\), auto\)\)/,
-    'the two tracks are not floored by the one shared token, so cards can disagree about where a column starts'
-  );
-  /* The retired full-width table may not creep back: no full-card span, no
-     scroll lane, no surplus to distribute. */
-  assert.doesNotMatch(counts, /inline-size:\s*100%/);
-  assert.doesNotMatch(counts, /justify-content/);
-  assert.doesNotMatch(style, /--entry-count-columns|--breakpoint-entry-columns/);
-  assert.doesNotMatch(styles, /--entry-count-columns|--breakpoint-entry-columns/);
-  /* The floor is declared in styles.css — the token layer, where the owner
-     tunes it — and it must FIT: two floored tracks plus their column gap
-     inside the narrowest card the phone lanes measure (226px at a 320
-     viewport), so the cluster never needs the breakpoint this shape
-     retired. The gap read here is --card-meta-gap's column half, resolved
-     the way the component resolves it. */
-  const [, floorValue] = /--entry-count-min:\s*([0-9.]+)rem;/.exec(styles) ?? [];
-  assert.ok(floorValue, 'styles.css must declare --entry-count-min in rem');
-  const floorPx = Number.parseFloat(floorValue) * 16;
-  const [, , columnGap] = /--card-meta-gap:\s*([0-9.]+)rem\s+([0-9.]+)rem;/.exec(styles) ?? [];
-  assert.ok(columnGap, '--card-meta-gap no longer carries a row and a column half');
+  /* The head and the rows are laid on the SAME track list — one declaration
+     for both — so a column head can never sit over a different column than the
+     figures it names. */
   assert.ok(
-    2 * floorPx + Number.parseFloat(columnGap) * 16 < 226,
-    `two floored tracks plus the gap (${2 * floorPx + Number.parseFloat(columnGap) * 16}px) must fit the 226px card a 320px phone renders`
+    styles.includes('.table-head,\n.table-row {'),
+    'the head and the rows no longer share one track declaration'
   );
-  /* THE CELL IS ITS TRACK (issue 268, unchanged by the move): a block-level
-     flex cell fills the track it was given, so the second column's cells end
-     together at the card's right edge — where the cluster is anchored — and
-     the browser lanes measure them there. */
-  const countRule = /\.entry-count\s*\{([^}]*position:\s*relative[^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.match(countRule, /display:\s*flex;/, 'the counter shrinks to its content instead of filling its column');
-  assert.doesNotMatch(countRule, /display:\s*inline-flex/);
-  /* And a digit may not jitter the column it sits in: the counters read
-     tabular figures. That is a LIVE requirement now rather than a precaution —
-     the freshness counter re-renders every minute, so "9m" becoming "10m"
-     would nudge its neighbours once a minute forever without it. */
-  assert.match(countRule, /font-variant-numeric:\s*tabular-nums/);
-  /* Every counter is a focus stop, so every counter wears the ring — the twin
-     of .stat-cell's, because the affordance the owner asked for ("like the
-     token count on the other trackers") is that one. */
-  assert.match(style, /\.entry-count:focus-visible\s*\{[^}]*outline:/);
+  /* ONE PHONE WIDTH, however many blocks express it: a sheet with two
+     max-width breakpoints is a sheet whose parts disagree about where a phone
+     ends, which is the drift a single-layout rule was protecting against. The
+     WIDTHS are compared, not the block count — the chrome row drops its
+     location label at the same width the rows restack at, and those are two
+     decisions about one boundary. */
+  /* The BOUNDARY MOVED from 40rem to 45rem (owner directive of 2026-09-03,
+     issue 287), and it moved because it was measured rather than chosen: the
+     wide row's own tracks — 15rem for the name, four counter columns, five
+     1.5rem gaps — come to 680px, so a page column narrower than that overflows
+     the document sideways, which happened between 641px and 711px. The
+     restack now happens at 720px, where the wide layout genuinely stops
+     fitting. */
+  const phoneWidths = new Set(
+    [...styles.matchAll(/@media \(max-width: ([^)]+)\)/g)].map(([, width]) => width.trim())
+  );
+  assert.equal(phoneWidths.size, 1, `the sheet disagrees about where a phone ends: ${[...phoneWidths].join(', ')}`);
+  assert.match(styles, /@media \(max-width: 45rem\)[\s\S]*?\.table-head \{\s*display: none;/);
+  assert.match(styles, /@media \(max-width: 45rem\)[\s\S]*?\.table-row \{[^}]*grid-template-areas:/);
+  /* And the phone's restack places each counter in a track of its own. Three
+     counters sharing ONE grid area are three counters drawn on top of each
+     other — measured at 390px before this pin existed — so the count of them
+     is held at both ends: the desktop track list reserves exactly three, and
+     the phone names exactly three placements. */
+  assert.equal(projectTableProps(null, noonPlacement).rows[0].counts.length, 3);
+  for (const nth of [3, 4, 5]) {
+    assert.match(
+      styles,
+      new RegExp(`@media \\(max-width: 45rem\\)[\\s\\S]*?\\.table-count:nth-child\\(${nth}\\) \\{\\s*grid-area:`),
+      `the phone gives the row's child ${nth} no track of its own`
+    );
+  }
+
+  /* A digit may not jitter the column it sits in: the counters read tabular
+     figures. That is a LIVE requirement rather than a precaution — the
+     freshness figure is re-derived on every panel delivery, so "9m" becoming
+     "10m" would nudge its neighbours once a minute forever without it. */
+  const counts = /\.table-count \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.match(counts, /font-variant-numeric:\s*tabular-nums/);
+
+  /* And every counter's whole sentence is in the accessibility tree without
+     anyone reaching for it, CLIPPED rather than hidden: display:none or
+     [hidden] would take the words out of the tree and leave the glyph carrying
+     the figure alone, which is the dataviz floor breaking. */
+  const noon = Date.parse('2026-08-27T12:00:00Z');
+  const row = projectTableProps(null, noon).rows[0];
+  for (const count of [...row.counts, row.updated]) {
+    assert.ok(count.label.trim().length > 0, `${count.key} carries no sentence for the tree`);
+  }
+  assert.match(ledgerTable, /<span class="table-clipped">\{count\.label\}<\/span>/);
+  /* Both are focus stops (owner directive, 2026-09-03, issue 287): each
+     carries a detail, and a detail only a pointer can open is half the
+     feature — the same reason the retired stat tiles carried a tabindex. */
+  assert.match(ledgerTable, /<span class="table-age" tabindex="0" aria-label=\{row\.updated\.label\}>/);
+  assert.match(ledgerTable, /<span class="table-count" tabindex="0" aria-label=\{count\.label\}>/);
+  assert.match(styles, /\.table-count:focus-visible,\s*\.table-age:focus-visible \{[^}]*outline: 2px solid var\(--color-accent\)/);
+  const clipped = /\.table-clipped \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.match(clipped, /clip-path:\s*inset\(50%\)/);
+  assert.doesNotMatch(clipped, /display:\s*none/);
 });
 
 test('projectsCapturedOn is a well-formed date, and formatIsoDate renders every stated date honestly', () => {
@@ -1228,7 +1457,7 @@ test('the Coding Projects feed renders no capture-date or no-fetch caption (issu
   // binding's presentation, which must declare no note line at all. The
   // rendered-DOM guard lives in e2e/rendering-lanes.spec.mjs, against what a
   // visitor's browser actually painted.
-  const renderedData = JSON.stringify(codingProjectsProps(null));
+  const renderedData = JSON.stringify(projectTableProps(null));
   assert.doesNotMatch(
     renderedData,
     /Counts captured from/,
@@ -1317,10 +1546,10 @@ test('the gallery receives resolved URLs through the adapter, and never builds i
   // URLs through import.meta.glob — the same pattern osrsStats.ts's icon
   // maps use, because the bundler owns that resolution — so the component
   // never sees a file name or a path of its own.
-  assert.match(artBinding, /import\.meta\.glob\('\.\.\/\.\.\/assets\/images\/gallery\/\*\.webp'/);
-  assert.match(artBinding, /previewSrc: resolve\(photo\.previewSrc\)/);
-  assert.match(artBinding, /fullSrc: resolve\(photo\.src\)/);
-  assert.match(mediaGallery, /src=\{item\.previewSrc\}/, 'the feed frame renders the adapter’s URL, never its own');
+  assert.match(mediaBinding, /import\.meta\.glob\('\.\.\/\.\.\/assets\/images\/gallery\/\*\.webp'/);
+  assert.match(mediaBinding, /previewSrc: resolve\(photo\.previewSrc\)/);
+  assert.match(mediaBinding, /fullSrc: resolve\(photo\.src\)/);
+  assert.match(mediaGallery, /src=\{tile\.previewSrc\}/, 'the tile renders the adapter’s URL, never its own');
   assert.doesNotMatch(mediaGallery, /\.webp|import\.meta\.glob/, 'the component must not know a file name of its own');
   assert.match(mediaGallery, /alt=\{item\.alt\}/);
 });
@@ -1350,148 +1579,12 @@ test('exactly the reviewed sixteen WebP files (plus the sources manifest) are ve
   assert.ok(total <= 16 * 1024 * 1024, `the vendored set is ${total} bytes, over the 16MB total ceiling`);
 });
 
-test('exactly one frame is ever visible — never eight stacked', () => {
-  // A photograph rendered through an {#each} is the regression this guards
-  // against; the component renders exactly one <img> for the feed frame,
-  // keyed to whichever index state currently holds, and none of the seven
-  // others.
-  // The guard is that no MEDIA element is ever mounted inside a loop over the
-  // items — that is the weight regression, and it is what "eight stacked"
-  // meant. It used to be spelled as "no {#each items as" at all, which was a
-  // proxy: issue 219's position dots iterate the items to draw one 6px mark
-  // each, mount no bytes, and are exactly the visible position affordance a
-  // swipeable surface owes.
-  //
-  // THE TRADE, STATED HONESTLY rather than sold as a strengthening (issue 219
-  // review round 2, finding 10). This is BROADER for content — any loop over
-  // the items may now carry non-media markup, and an <img>, <video> or
-  // <source> inside one is caught where the old spelling only knew that a
-  // loop existed — and NARROWER for naming, because it still matches on the
-  // literal `{#each items as`. A loop written over a differently-named
-  // binding is not checked by either version, and calling that "harder to
-  // slip past whatever the loop is called" was simply untrue. The lightbox's
-  // own `{#each item.video.sources}` is why the sweep cannot be widened to
-  // every loop: that one legitimately contains <source> elements, one item at
-  // a time, which is the opposite of the regression. The load-bearing pin for
-  // the real rule is the count assertion below — exactly one `.gallery-image`
-  // in the file — and it is name-blind.
-  for (const [loop] of mediaGallery.matchAll(/\{#each (?:items|visible|sets) as[\s\S]*?\{\/each\}/g)) {
-    assert.doesNotMatch(
-      loop,
-      /<img|<video|<source/,
-      'the feed frame must not mount a media element for every item at once'
-    );
-  }
-  assert.equal(
-    [...mediaGallery.matchAll(/class="gallery-image"/g)].length,
-    1,
-    'exactly one visible-frame <img> may exist in the markup'
-  );
-  assert.match(mediaGallery, /let index = \$state\(0\)/);
-  /* The frame shows the CLAMPED position of the VISIBLE set (issue 275):
-     rendering happens before any effect can repair state, so the read
-     itself must survive the strip shrinking underneath it. */
-  assert.match(mediaGallery, /const shown = \$derived\(Math\.min\(index, Math\.max\(0, total - 1\)\)\)/);
-  assert.match(mediaGallery, /const item = \$derived\(visible\[shown\]\)/);
-});
-
-test('prev/next are icon-only, and both wrap around the eight photographs', () => {
-  /* RE-AIMED, not relaxed (issue 241). The two labels used to be the literal
-     strings "Previous photograph" and "Next photograph", and on the volume's
-     own gallery four of nine items are films — so the only channel a reader
-     using assistive technology has was stating something false about them.
-     The names are now derived from the item each arrow will REACH, which is a
-     strictly stronger claim than the literals were: it still produces exactly
-     those two strings for a set of stills (the vendored bootstrap set, and
-     e2e/rendering-lanes.spec.mjs presses them by that name), and it cannot
-     produce them for a film. Both halves are pinned — the derivation, and the
-     absence of a hardcoded noun on either control. */
-  assert.match(mediaGallery, /aria-label=\{`Previous \$\{itemNoun\(visible\[previousIndex\]\)\}`\}/);
-  assert.match(mediaGallery, /aria-label=\{`Next \$\{itemNoun\(visible\[nextIndex\]\)\}`\}/);
-  assert.doesNotMatch(
-    mediaGallery,
-    /aria-label="(?:Previous|Next) \w+"/,
-    'an arrow names a kind literally again, so it will lie about half the strip'
-  );
-  /* The noun itself, and the field it reads: `video` is the same discriminator
-     the stage's own kind attribute is built from, so the word and the element
-     cannot disagree about what an item is. */
-  assert.match(
-    mediaGallery,
-    /function itemNoun\(candidate: MediaGalleryItem\): string \{\s*return candidate\.video === undefined \? 'photograph' : 'film';/,
-    'the label noun is no longer derived from the item’s own kind'
-  );
-  // The neighbours are derived with wrap-around arithmetic from the CLAMPED
-  // position, so a label can never name an item the press will not reach.
-  assert.match(mediaGallery, /const previousIndex = \$derived\(\(shown - 1 \+ total\) % total\)/);
-  assert.match(mediaGallery, /const nextIndex = \$derived\(\(shown \+ 1\) % total\)/);
-  // Text-free navigation affordance (issue 176): the controls carry an
-  // accessible name, never visible label prose.
-  assert.doesNotMatch(mediaGallery, />Next</);
-  assert.doesNotMatch(mediaGallery, />Previous</);
-  /* Both moves hand THE DERIVED NEIGHBOUR to goTo (issue 243 review finding
-     1 kept the reset; issue 275 unified the arithmetic): the wrap lives in
-     the two derivations pinned above, and the moves spend them, so the label
-     and the landing place are one computation rather than two that agree. */
-  assert.match(mediaGallery, /function next\(\): void \{\s*goTo\(nextIndex\);/, 'next must land on the derived neighbour');
-  assert.match(
-    mediaGallery,
-    /function previous\(\): void \{\s*goTo\(previousIndex\);/,
-    'previous must land on the derived neighbour'
-  );
-});
-
-test('the position speaks its KIND and draws its ordinal (issue 241; owner sketch 2026-08-31)', () => {
-  /* The live region is the only thing announced on a move, and it reads the
-     item rather than assuming it — issue 241's claim, surviving the dots'
-     retirement (issue 275) on the one surface that still speaks. */
-  assert.match(
-    mediaGallery,
-    /function positionLabel\(at: number\): string \{[\s\S]*?const noun = itemNoun\(visible\[at\]\);/,
-    'the position label no longer derives its noun from the item'
-  );
-  assert.match(
-    mediaGallery,
-    /<p class="gallery-count" aria-live="polite">\{positionLabel\(shown\)\}<\/p>/,
-    'the live region announces a bare ratio again, so a move says nothing about what it landed on'
-  );
-  /* THE VISIBLE MARK IS THE ORDINAL (owner sketch: "1/n"), aria-hidden
-     because the live region above already speaks the whole sentence —
-     announcing both would say every move twice. It renders only when there
-     is a strip to be positioned in. */
-  assert.match(
-    mediaGallery,
-    /<p class="gallery-ordinal" aria-hidden="true">\{shown \+ 1\} \/ \{total\}<\/p>/,
-    'the visible 1/n counter is gone or speaks over the live region'
-  );
-  /* And the dots are RETIRED, not renamed: no dot markup, no radio pattern,
-     no dot keyboard — the stage pair is the press equivalent now. */
-  assert.doesNotMatch(mediaGallery, /gallery-dot|radiogroup|onDotsKeydown/);
-});
-
 /* The enlarged branch, extracted whole. Issue 202 nested a further {#if}
  * inside it (the optional metadata block), and the non-greedy extraction
  * this replaces stopped at that inner {/if} — it would still have found
  * item.fullSrc, so it would still have PASSED while measuring a fraction of
  * the branch it names. Anchoring on the dialog's closing tag and taking the
  * greedy span keeps the pin honest as the branch grows. */
-const enlargedBranch = (source) =>
-  /\{#if enlarged\}([\s\S]*)\{\/if\}\s*<\/dialog>/.exec(source)?.[1] ?? '';
-
-test('clicking the photograph enlarges it; only the full derivative loads on demand', () => {
-  assert.match(mediaGallery, /onclick=\{\(\) => \(enlarged = true\)\}/);
-  // The full derivative mounts only inside the enlarged branch — never
-  // alongside the small preview the feed frame always shows.
-  const enlargedBlock = enlargedBranch(mediaGallery);
-  assert.ok(enlargedBlock.length > 0, 'the enlarged branch is not where this pin expects it');
-  assert.match(enlargedBlock, /src=\{item\.fullSrc\}/, 'the full derivative must load inside the enlarged branch');
-  assert.doesNotMatch(
-    mediaGallery.replace(enlargedBlock, ''),
-    /item\.fullSrc/,
-    'the full derivative must not load anywhere outside the enlarged branch'
-  );
-  assert.match(mediaGallery, /src=\{item\.previewSrc\}/, 'the feed frame must show the small preview');
-});
 
 /* The component's own markup, with every HTML comment removed. Prose about
  * an attribute is not that attribute, and the gallery's header comment
@@ -1513,19 +1606,6 @@ test('clicking the photograph enlarges it; only the full derivative loads on dem
  * own — a demonstration written that way is a second incomplete sanitizer,
  * correctly flagged as one, and counting is the better evidence anyway: it
  * measures the real implementation rather than a hand-rolled imitation. */
-function stripComments(markup) {
-  let stripped = markup;
-  let previous;
-  let passes = 0;
-  do {
-    previous = stripped;
-    stripped = previous.replace(/<!--[\s\S]*?-->/g, '');
-    passes += 1;
-  } while (stripped !== previous);
-  return { markup: stripped, passes };
-}
-
-const galleryMarkup = stripComments(mediaGallery).markup;
 
 /* PROSE-FREE SOURCE, for the walks that decide something from a POSITION in
  * the text rather than from a pattern anywhere in it. stripComments above only
@@ -1583,751 +1663,18 @@ const galleryMarkup = stripComments(mediaGallery).markup;
  * carries lastIndex: handing one instance to both a replace and a matchAll
  * is a state bug waiting for a third caller, and building a fresh one per
  * site costs nothing in a test. */
-const scriptRegionSource = '(<script\\b[^>]*>)([\\s\\S]*?)(<\\/script\\b[^>]*>)';
-const scriptRegions = () => new RegExp(scriptRegionSource, 'gi');
-
-function stripLineComments(source) {
-  return source.replace(scriptRegions(), (whole, open, body, close) => {
-    let out = '';
-    let quote = null;
-    for (let at = 0; at < body.length; at += 1) {
-      const char = body[at];
-      if (quote !== null) {
-        out += char;
-        if (char === '\\') {
-          out += body[at + 1] ?? '';
-          at += 1;
-        } else if (char === quote) {
-          quote = null;
-        }
-        continue;
-      }
-      if (char === "'" || char === '"' || char === '`') {
-        quote = char;
-        out += char;
-        continue;
-      }
-      if (char === '/' && body[at + 1] === '/') {
-        // To the end of the line, and the newline itself is KEPT: the walks
-        // that read this text measure positions, and swallowing a line
-        // terminator would join two statements into one.
-        const end = body.indexOf('\n', at);
-        if (end < 0) return `${open}${out}${close}`;
-        at = end - 1;
-        continue;
-      }
-      out += char;
-    }
-    return `${open}${out}${close}`;
-  });
-}
-
-const galleryCode = stripLineComments(
-  stripComments(mediaGallery).markup.replace(/\/\*[\s\S]*?\*\//g, ' ')
-);
-
-test('the prose-free source strips line comments only where // is a comment (issue 246)', () => {
-  /* THE EXACT MUTANT the finding names: a `//` comment carrying `<button`
-     above a loose glyph. Against the previous strip the enclosure walk found
-     that prose and reported the glyph as enclosed — a surviving mutant. */
-  const mutant = stripLineComments(
-    ['<script>', '  // <button that is prose, not a control', '</script>', '<svg></svg>'].join('\n')
-  );
-  assert.doesNotMatch(mutant, /<button/, 'a // comment inside <script> still reaches the walks');
-
-  /* THE SAME COMMENT, IN A TAG SPELLED DIFFERENTLY. HTML tag names are
-     case-insensitive, so <SCRIPT> is script — and a strip that only knew the
-     lowercase spelling would hand this block straight through with its
-     comment intact, reintroducing the defect above through the spelling of
-     the tag rather than through the comment. Every casing that a browser
-     treats as one, this must treat as one.
-
-     The last four rows are the end tag's own family, which is wider than
-     the casing question. A parser ends a script block at `</script >`, at
-     `</script\t\n bar>` and at `</script/>` alike — the junk before the `>`
-     is ignored, not disqualifying — so a strip that recognises only the
-     bare spelling runs PAST the real end of the block and keeps walking
-     markup as if it were code. Each row here is one spelling a browser
-     already accepts. */
-  for (const [open, close] of [
-    ['<SCRIPT>', '</SCRIPT>'],
-    ['<Script>', '</script>'],
-    ['<script>', '</SCRIPT >'],
-    ['<script>', '</script >'],
-    ['<script>', '</script\t\n bar>'],
-    ['<script>', '</script/>'],
-    ['<SCRIPT>', '</SCRIPT\tBAR>'],
-  ]) {
-    assert.doesNotMatch(
-      stripLineComments([open, '  // <button that is prose, not a control', close].join('\n')),
-      /<button/,
-      `a // comment inside ${open}…${close} still reaches the walks; the tag filter knows only one spelling`
-    );
-  }
-  /* …and the boundary that keeps that tolerance from turning into a prefix
-     match. `</scriptfoo>` is NOT an end tag — a parser reads a different
-     tag name and the script block continues — so the comment below it is
-     still inside the block and must still be stripped. Drop the `\b` and
-     the region ends at the impostor, the rest of the block is read as
-     markup, and the loose `<button` reaches the walks. */
-  assert.doesNotMatch(
-    stripLineComments(
-      ['<script>', '  let x = "</scriptfoo>";', '  // <button that is prose', '</script>'].join('\n')
-    ),
-    /<button/,
-    '</scriptfoo> ended the block; it names a different tag and ends nothing'
-  );
-
-  /* And the other direction, so the casing tolerance cannot become a licence
-     to strip outside script: markup is still markup whatever its case.
-     Deliberately an UNQUOTED URL in an element's BODY, which is the only
-     placement that can tell this apart — a URL in an attribute rides in the
-     opening tag, which the replacer preserves verbatim, and a quoted one is
-     protected by the string tracking, so either would pass against a filter
-     that had stopped caring which tag it was in at all. That exact mutant
-     survived the first draft of this assertion. */
-  for (const [markup, kept] of [
-    ['<P>see https://example.invalid/d for more</P>', 'https://example.invalid/d for more'],
-    ['<div>https://example.invalid/e</div>', 'https://example.invalid/e'],
-  ]) {
-    assert.ok(
-      stripLineComments(markup).includes(kept),
-      `${markup} was scanned as script; only <script> regions may lose a //`
-    );
-  }
-
-  /* And the property the naive repair would destroy. Both of these are places
-     `//` is NOT a comment, so both must survive whole — the line as well as
-     the URL, because a truncated line loses whatever followed it. */
-  const kept = stripLineComments(
-    [
-      '<script>',
-      '  const href = "https://example.invalid/a";',
-      '</script>',
-      '<a href="https://example.invalid/b">x</a>',
-      '<style>.x { background: url("https://example.invalid/c"); }</style>',
-    ].join('\n')
-  );
-  for (const letter of ['a', 'b', 'c']) {
-    assert.match(
-      kept,
-      new RegExp(`https://example\\.invalid/${letter}`),
-      `a // that is not a comment was stripped (case ${letter}); the naive "cut after //" repair is what this must never become`
-    );
-  }
-  assert.match(kept, /<a href="[^"]*">x<\/a>/, 'markup after a URL was truncated');
-
-  // Non-vacuity against the REAL subject: the component's own script does
-  // carry line comments, and not one of them survives into what the walks
-  // below read. Both halves are needed — the first proves this strip has
-  // something to do here at all, the second that it did it.
-  const scriptBody = (source) =>
-    [...source.matchAll(scriptRegions())].map(([, , body]) => body).join('\n');
-  assert.match(
-    scriptBody(stripComments(mediaGallery).markup),
-    /(?:^|\n)\s*\/\//,
-    "MediaGallery's script no longer carries a line comment at all; this strip would be unexercised"
-  );
-  assert.doesNotMatch(
-    scriptBody(galleryCode),
-    /(?:^|\n)\s*\/\//,
-    'a line comment survived into the source the enclosure and assignment walks read'
-  );
-});
-
-test('the comment strip these pins depend on runs to a fixed point (issue 207)', () => {
-  // Non-vacuity for the loop above, stated as the regression it prevents.
-  // This input needs TWO effective passes: the first removes the inner
-  // comment and splices `<!--` out of the `<!` before it and the `--` after
-  // it, leaving a whole live comment that hides a `<video`; the second
-  // removes that. A single-pass strip would hand the "must be present" pins
-  // commented-out markup and they would be satisfied by prose.
-  const spliced = stripComments('<div><!<!-- x -->-- <video --></div>');
-  // Three, because the count includes the terminating pass that changes
-  // nothing — which is the pass that proves convergence was reached.
-  assert.equal(spliced.passes, 3, 'the strip must iterate, not run once');
-  assert.equal(spliced.markup, '<div></div>');
-  assert.doesNotMatch(spliced.markup, /<video/);
-  // And the subject the pins actually read: no comment survives in it.
-  assert.doesNotMatch(galleryMarkup, /<!--/, 'the gallery markup these pins read must be comment-free');
-});
-
-test('a moving item PLAYS in the strip — exactly one video, the current item’s, never in the dialog (issue 233)', () => {
-  /* RE-AIMED, not relaxed (issue 233, owner directive 2026-08-28). The pin
-     this replaces required a film to be a poster in the strip and a <video>
-     only inside the enlarged branch. The owner asked for the opposite — play
-     it where it sits — so the rule this file enforces moved with it, and what
-     the old rule was actually protecting is what the new one still says: the
-     strip may never carry a video PER ITEM. Both halves are here, because
-     either alone is the other's regression.
-
-     Half one: exactly ONE <video> exists in the whole markup, and it is
-     inside the current item's own stage. `item` is the single item `index`
-     names, so one element in that branch is one element on the page however
-     many items the manifest publishes — and navigating unmounts it. */
-  assert.equal(
-    [...galleryMarkup.matchAll(/<video\b/g)].length,
-    1,
-    'the gallery mounts a number of <video> elements other than exactly one'
-  );
-  assert.match(
-    galleryMarkup,
-    /\{#if item\.video\}[\s\S]*?data-gallery-kind="video"[\s\S]*?<video/,
-    'the player is not inside the current item’s own video stage'
-  );
-  // Name-blind about the LOOP for the same reason the .gallery-image count
-  // is: no media element may be mounted once per item.
-  for (const [loop] of galleryMarkup.matchAll(/\{#each items as[\s\S]*?\{\/each\}/g)) {
-    assert.doesNotMatch(loop, /<img|<video|<source/, 'a media element is mounted for every item at once');
-  }
-
-  /* Half two: the DIALOG is stills only. The branch that used to mount a
-     <video> there is gone rather than left unreachable, so the enlarged
-     surface can carry neither element. */
-  const enlargedBlock = enlargedBranch(galleryMarkup);
-  assert.ok(enlargedBlock.length > 0, 'the enlarged branch is not where this pin expects it');
-  assert.doesNotMatch(enlargedBlock, /<video/, 'the lightbox mounts a player again; a film plays in the strip');
-  /* The <source> half, RE-AIMED rather than dropped (issue 241). The enlarged
-     surface now carries a <picture> so a phone is offered the preview instead
-     of the master, and a <picture> is built from <source> elements — so the
-     blanket ban would refuse the responsive image along with the player it was
-     written about. What it was actually protecting is the shape a VIDEO rung
-     has: `src` plus `type`. Every <source> in this branch must instead be an
-     image rendition — `srcset`, no `src`, no media type — which a video rung
-     can never satisfy, and which the ban's own subject therefore still fails. */
-  const enlargedSources = [...enlargedBlock.matchAll(/<source\b[^>]*>/g)].map(([tag]) => tag);
-  assert.ok(enlargedSources.length > 0, 'the enlarged surface offers no rendition choice at all');
-  for (const tag of enlargedSources) {
-    assert.match(tag, /\bsrcset=/, `the lightbox carries a non-image <source>: ${tag}`);
-    assert.doesNotMatch(tag, /\bsrc=/, `the lightbox carries a video-shaped <source>: ${tag}`);
-    assert.doesNotMatch(tag, /\btype=/, `the lightbox carries a media-typed <source>: ${tag}`);
-  }
-  assert.match(enlargedBlock, /<picture>/, 'the enlarged renditions are not inside a <picture>');
-
-  /* The element is KEYED on the item, which is what makes "navigating away
-     unmounts it" true between two FILMS as well: swapping <source> children
-     under a live <video> does not re-run resource selection, so an unkeyed
-     branch would keep the previous film's bytes under the new poster. */
-  assert.match(galleryMarkup, /\{#key item\.key\}/, 'the player is reused across items');
-
-  /* NO PLAY TRIANGLE IS DECORATION — RE-AIMED, and the re-aim is stated
-     because the letter of the old pin would have been satisfiable without
-     honouring it (issue 243).
-     What the owner objected to in 0.1.53 was a mark that PROMISED a press
-     happening somewhere else: "remove the play icon from all videos, its just
-     there doing nothing". The old pin expressed that as an absence — no
-     class, no triangle path, no token — and issue 243 puts a triangle back,
-     because the same owner then asked for a play control that is the ONLY
-     sensitive area on a film. Renaming the class and redrawing the path would
-     pass the old assertions while restoring exactly the object they were
-     written against, so the assertion moves to the property that actually
-     distinguishes the two: every play triangle in this file is inside a
-     <button> that starts the film, and no drawn mark sits loose on a poster.
-     The retired names stay retired below, so the old shape cannot come back
-     under its own identity either.
-
-     COMMENT-BLIND, and that is load-bearing rather than tidiness: this walk
-     decides enclosure from the NEAREST PRECEDING `<button` in the text, and
-     three of this component's own explanatory comments contain the literal
-     `<button>` in prose. Against the raw source a loose triangle inserted just
-     after `{#if !playing}` found one of those as its "enclosing" control and
-     survived green — a real surviving mutant, caught by review rather than by
-     this pin, and repaired by reading the same bytes the compiler does. */
-  const playGlyphs = [...galleryCode.matchAll(/<svg[\s\S]*?<\/svg>/g)].filter(([svg]) =>
-    /<path d="M\d[^"]*"\s+fill="currentColor"/.test(svg)
-  );
-  assert.ok(playGlyphs.length > 0, 'the film has no play glyph at all; the control has no visible mark');
-  for (const [glyph] of playGlyphs) {
-    const at = galleryCode.indexOf(glyph);
-    const enclosing = galleryCode.slice(0, at);
-    const opened = [...enclosing.matchAll(/<button\b|<\/button>/g)].at(-1)?.[0];
-    assert.equal(
-      opened,
-      '<button',
-      'a filled glyph is painted outside any control; a mark that promises a press happening elsewhere is the defect issue 233 removed'
-    );
-  }
-  assert.doesNotMatch(mediaGallery, /gallery-play-mark/, 'the decorative play mark is back under its own name');
-  assert.doesNotMatch(mediaGallery, /M9 7\.5l8 4\.5-8 4\.5z/, 'the retired decorative triangle is drawn again');
-  for (const token of ['--gallery-play-size', '--gallery-play-inset', '--gallery-play-surface', '--gallery-play-ink']) {
-    assert.ok(!mediaGallery.includes(token), `${token} outlived the mark it sized`);
-    assert.ok(!styles.includes(token), `styles.css still declares ${token}`);
-  }
-});
-
-test('ONE stage box: no expression anywhere gives a film a different one (issue 243)', () => {
-  /* SUPERSEDES 'a film’s stage takes the video token pair' (issue 233), and
-     the reversal is the owner's own: "make it one single block that doesn't
-     expand, reduce based on the media". The retired pin required a film to be
-     sized by --gallery-stage-*-video, a 768x432 stage against a still's
-     448x448 — which answered a real complaint (a 16:9 film inside a square
-     sits between two bands of ground) by changing the size of the one object
-     on the page the owner watches, on every press of the next arrow.
-     What replaces it is an ABSENCE pin, because that is the only form that
-     makes the owner's sentence structural: if no expression anywhere sizes a
-     film differently, the block cannot expand for one. */
-  const style = styleBlock(mediaGallery);
-  /* The arithmetic is stated ONCE and reads the two custom properties,
-     exactly as before — that half is unchanged and still the reason there is
-     one piece of stage geometry on this page. Since 2026-08-29 the ONE
-     statement is the --gallery-stage-inline property on the frame, because
-     the desktop nav pair positions against the same number the stage is
-     sized by; both consumers read the property, so a second copy of the
-     expression cannot appear on either side without this count going red. */
-  assert.equal(
-    [...style.matchAll(/--gallery-stage-inline:\s*min\(100%, calc\(var\(--gallery-stage-size, 28rem\) \* var\(--gallery-stage-aspect, 1\)\)\);/g)]
-      .length,
-    1,
-    'the stage-width expression must be declared exactly once, on the frame'
-  );
-  assert.match(
-    style,
-    /\.gallery-stage\s*\{[^}]*inline-size:\s*var\(--gallery-stage-inline, 100%\)/,
-    'the stage no longer takes its width from the one shared expression'
-  );
-  assert.match(style, /aspect-ratio: var\(--gallery-stage-aspect, 1\)/);
-  assert.match(style, /max-block-size: var\(--gallery-stage-size, 28rem\)/);
-  assert.ok(styles.includes('--gallery-stage-size: 28rem;'));
-  assert.ok(styles.includes('--gallery-stage-aspect: 1;'));
-
-  /* THE SIZE MAY NOT BE SELECTED BY KIND. The kind rule survives — it picks
-     the GROUND a film is letterboxed against — so this is not "no kind rule"
-     but the narrower and correct "no kind rule that touches the box". Each of
-     the four properties is named, because redeclaring the tokens and setting
-     the resulting lengths directly are different mutations with the identical
-     visible effect. */
-  const kindRule = /\.gallery-stage\[data-gallery-kind='video'\]\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.ok(kindRule.length > 0, 'the film stage rule is not where this pin expects it');
-  for (const property of [
-    '--gallery-stage-size',
-    '--gallery-stage-aspect',
-    'aspect-ratio',
-    'inline-size',
-    'block-size',
-    'max-block-size',
-    'max-inline-size'
-  ]) {
-    assert.doesNotMatch(
-      kindRule,
-      new RegExp(`(?:^|[;\\s])${property}\\s*:`),
-      `a film's stage sets ${property} of its own; the block expands for a film again`
-    );
-  }
-
-  /* And the retired tokens are GONE from the token layer, not merely unread.
-     A default left declared in styles.css is one component edit away from
-     bringing the second shape back, and this pin would not see that edit. */
-  for (const token of ['--gallery-stage-size-video', '--gallery-stage-aspect-video']) {
-    assert.ok(!styles.includes(`${token}:`), `styles.css still declares ${token}, so the second stage shape is one edit away`);
-    assert.ok(!mediaGallery.includes(token), `the gallery still reads ${token}`);
-  }
-
-  /* THE MEDIA REDUCES INSIDE THE BOX, which is the other half of the owner's
-     sentence and the reason a constant block is not a crop. `contain` letters
-     a film inside the stage; `cover` would fill the same box by cutting the
-     film, and a cropped film is a different film. */
-  const player = /\.gallery-player\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.ok(player.length > 0, 'the player rule is not where this pin expects it');
-  assert.match(player, /object-fit:\s*contain;/, 'the film is cropped to the block instead of reduced inside it');
-  assert.match(player, /inline-size:\s*100%;/);
-  assert.match(player, /block-size:\s*100%;/);
-});
-
-test('a film is swipeable until the reader hands the surface to the player (issue 243)', () => {
-  /* SUPERSEDES 'the player owns its own surface: no swipe binding, no button,
-     no gallery arrow keys' (issue 233), on the owner's ruling: "you cannot
-     swipe out of a video, it instead starts to play immediately... the
-     sensitive area should only be the button and not the entire video".
-     The retired pin refused a swipe binding on a film's stage outright, and
-     its reasoning was sound — a horizontal drag along a seek bar is exactly
-     what lib/gesture.ts claims, and the action captures the pointer the moment
-     it claims. What it got wrong was SCOPE: it disarmed the whole stage for
-     the whole life of the item, including all the time before the reader has
-     shown any interest in playing anything.
-     So the protection is now expressed as a STATE — an element that exists
-     for exactly as long as the swipe should be available — and this pin holds
-     both ends of it: the veil swipes, and the veil is gone the moment there
-     are native controls to contest. */
-  const videoStage = /data-gallery-kind="video"([\s\S]*?)\n          <\/div>/.exec(galleryMarkup)?.[1] ?? '';
-  assert.ok(videoStage.length > 0, 'the film’s stage is not where this pin expects it');
-
-  // THE VEIL SWIPES, exactly as the still's stage does.
-  assert.match(
-    videoStage,
-    /<div class="gallery-film-veil" use:swipeHorizontal=\{swipe\}>/,
-    'a film’s swipe surface is gone; the owner’s "you cannot swipe out of a video" is back'
-  );
-  assert.match(
-    galleryMarkup,
-    /<div\s+class="gallery-stage"\s+data-gallery-kind="image"[\s\S]*?use:swipeHorizontal=\{swipe\}/,
-    'the still’s stage lost the swipe it has always had'
-  );
-
-  /* THE VEIL AND THE CONTROLS ARE MUTUALLY EXCLUSIVE, which is what keeps the
-     retired pin's real concern satisfied. Both halves read the same one piece
-     of state, so there is no arrangement of the markup in which a swipe
-     surface sits over a live seek bar. */
-  assert.match(videoStage, /\{#if !playing\}/, 'the veil is not gated on the play state at all');
-  assert.match(
-    videoStage,
-    /controls=\{playing\}/,
-    'the player declares controls unconditionally, so a seek bar exists under the veil'
-  );
-
-  /* THE ONLY SENSITIVE AREA IS THE BUTTON — the owner's exact requirement.
-     The veil holds precisely one control, and it is the play control.
-
-     The extraction really is the veil now, and the review is why it says so:
-     the first cut had no capture group at all, so `?.[1]` was always undefined
-     and the whole video stage stood in for it. That was stricter than
-     advertised rather than weaker — nothing outside the veil carries a button
-     either — but a scope the comment claims and the code does not have is a
-     pin nobody can reason about. */
-  const veil = /<div class="gallery-film-veil"[^>]*>([\s\S]*?)\n {14}<\/div>/.exec(videoStage)?.[1];
-  assert.ok(
-    veil !== undefined && veil.trim().length > 0,
-    'the veil block is not where this pin expects it; the scope below would silently widen to the whole stage'
-  );
-  assert.doesNotMatch(veil, /<video/, 'the extracted veil swallowed the player, so its scope is not the veil');
-  assert.equal(
-    [...veil.matchAll(/<button/g)].length,
-    1,
-    'a film’s swipe surface carries a number of controls other than exactly the one play button'
-  );
-  assert.match(veil, /class="gallery-play"/, 'the film’s one control is not the play control');
-
-  /* PLAY IS STARTED FROM ONE PLACE, and only from a press. There is no other
-     call to play() in the file, which is what keeps "nothing autoplays" a
-     property of the source rather than of a review. */
-  assert.equal(
-    [...mediaGallery.matchAll(/\.play\(\)/g)].length,
-    1,
-    'the player is started from more than one place'
-  );
-  assert.match(
-    mediaGallery,
-    /function startFilm\(\): void \{\s*playingKey = item\.key;\s*void playerEl\?\.play\(\)/,
-    'the handover is not the single press-driven start this pin expects'
-  );
-
-  /* ENDED HANDS THE SURFACE BACK; PAUSE DOES NOT. The asymmetry is deliberate
-     (see the issue 243 block in the component): restoring the veil on pause
-     would put a swipe surface over the controls the reader stopped the film
-     to use, and cost them their position on every pause. */
-  assert.match(videoStage, /onended=\{onFilmEnded\}/, 'a finished film never gets its swipe surface back');
-  assert.doesNotMatch(videoStage, /onpause=/, 'pausing snatches the controls back from a reader who is using them');
-
-  /* AND NO FILM INHERITS ANOTHER'S SURFACE STATE. Two independent halves, and
-     the first cut of issue 243 shipped only one of them — which is why the
-     second is pinned here rather than trusted.
-
-     Half one, the DERIVATION: `playing` is true only while the key names the
-     current item, so no mount/unmount ordering can render a film carrying
-     another film's state. */
-  assert.match(
-    mediaGallery,
-    /const playing = \$derived\(playingKey !== undefined && playingKey === item\.key\)/,
-    'the play state is not bound to the item it belongs to'
-  );
-  /* Half two, the RESET, and the review finding it exists for: a derivation
-     SUPPRESSES a stale key, it does not clear one, so returning to a film
-     played once re-armed it with no press. The key is cleared where the index
-     moves — and `index` is assigned in exactly ONE place in the component, so
-     a control added later cannot move the strip without handing the surface
-     back. That count is the pin: routing every caller through goTo is what
-     makes the reset structural rather than five call sites somebody has to
-     remember. */
-  assert.match(
-    mediaGallery,
-    /function goTo\(at: number\): void \{\s*index = at;\s*playingKey = undefined;\s*\}/,
-    'the one function that moves the strip does not hand the film surface back'
-  );
-  const indexWrites = [...galleryCode.matchAll(/(?<![\w$.])index\s*=(?!=)/g)];
-  assert.equal(
-    indexWrites.length,
-    2,
-    `the component assigns \`index\` ${indexWrites.length} times; it must be exactly twice — its $state declaration and the assignment inside goTo — or a move through the strip can skip the reset`
-  );
-  assert.match(galleryCode, /let index = \$state\(0\);/, 'the index declaration moved');
-  /* And every mover calls it, named individually so a silent revert of any
-     one of them is a failure rather than a count that still happens to add
-     up: the two arrows, the set choice landing on the new strip's start
-     (issue 275), and the shrink guard bringing a stale position home. */
-  for (const caller of [
-    /function next\(\): void \{\s*goTo\(nextIndex\);/,
-    /function previous\(\): void \{\s*goTo\(previousIndex\);/,
-    /chosenSet = name;\s*goTo\(0\);/,
-    /if \(index >= total && total > 0\) \{\s*goTo\(0\);/
-  ]) {
-    assert.match(galleryCode, caller, `a control moves the strip without going through goTo: ${caller}`);
-  }
-
-  /* The keyboard equivalence, which the retired design left a film without:
-     the strip's arrow handler is on the play control as well as on the
-     enlarge button, so a film is no worse off by keyboard than a still. Once
-     the player has the surface the arrows are the player's, exactly as
-     before — the veil, and the handler with it, is gone by then. The desktop
-     nav pair carries the same handler (2026-08-29), so all four are the
-     strip's keyboard surface and the count pins the roster. */
-  assert.match(galleryMarkup, /class="gallery-image-button"[\s\S]*?onkeydown=\{onFrameKeydown\}/);
-  assert.match(galleryMarkup, /class="gallery-play"[\s\S]*?onkeydown=\{onFrameKeydown\}/);
-  assert.equal([...galleryMarkup.matchAll(/onkeydown=\{onFrameKeydown\}/g)].length, 4);
-
-  /* And the invariant that keeps the retired lightbox branch unreachable
-     rather than merely unused: the dialog cannot be left open on a film. */
-  assert.match(
-    mediaGallery,
-    /if \(enlarged \&\& item\.video !== undefined\) \{\s*enlarged = false;/,
-    'the lightbox can still be left open on a film it cannot show'
-  );
-});
-
-test('the strip owns its settle: a new grab ends it, and a turn enters forward (issue 265)', () => {
-  /* Three measured defects meet in this one binding, and each of them is a
-     line here rather than a behaviour a reader has to catch.
-
-     D6/D7 — `settling` arms the CSS transition, and it was cleared only by a
-     free-running setTimeout nobody held. A swipe begun inside that window
-     dragged through a still-armed transition (MEASURED at 66-93px of lag
-     between finger and picture), and one settle's timer could disarm the
-     NEXT settle mid-flight. The timer is owned now: cleared before it is
-     re-armed, and ended early by the one event that always comes first. */
-  assert.match(galleryCode, /down: \(\) => endSettle\(\)/, 'a new grab no longer ends the settle it interrupted');
-  assert.match(
-    galleryCode,
-    /function endSettle\(\): void \{\s*clearTimeout\(settleTimer\);\s*settleTimer = undefined;\s*settling = false;/,
-    'ending the settle leaves its timer running, so it can still disarm the next one'
-  );
-  assert.match(
-    galleryCode,
-    /function armSettle\(\): void \{\s*clearTimeout\(settleTimer\);/,
-    'a settle is armed without cancelling the timer already running'
-  );
-  assert.doesNotMatch(
-    galleryCode,
-    /setTimeout\(\(\) => \(settling = false\)/,
-    'the unowned free-running settle timer is back'
-  );
-
-  /* D5 — a committed turn used to mount the new item at the OLD drag offset,
-     so it slid in BACKWARDS from the side it had just left (120-202px of
-     wrong-way travel per swipe). The entry offset is the arithmetic in
-     lib/gesture.ts, taken BEFORE the index moves because it is built from the
-     offset the finger left behind. */
-  assert.match(
-    galleryCode,
-    /entering = entryOffset\(dragX, direction, swipe\.span\(\)\);/,
-    'the incoming item does not enter from its own side'
-  );
-  assert.match(galleryCode, /import \{ entryOffset, swipeHorizontal \} from '\.\.\/gesture\.ts';/);
-  /* And the ORDER, which is the whole repair: the entry position is written
-     with the transition off, flushed to the engine by a forced box read, and
-     only then does the transition arm and the offset go to zero. Both writes
-     inside one style recalc would animate from wherever the element already
-     was, which is the defect. */
-  assert.match(
-    galleryCode,
-    /endSettle\(\);\s*dragX = entering;\s*await tick\(\);\s*stageEl\?\.getBoundingClientRect\(\);/,
-    'the entry position is never flushed, so the turn animates from the old offset again'
-  );
-  assert.match(
-    galleryCode,
-    /entering = 0;\s*armSettle\(\);\s*dragX = 0;/,
-    'the settle does not arm the transition before travelling home'
-  );
-  // A reader who asked for less motion is handed the destination, not a
-  // two-step jump: no entry offset at all.
-  assert.match(
-    galleryCode,
-    /if \(entering !== 0 && !reducedMotion\(\)\) \{/,
-    'a reduced-motion reader is given the entry jump anyway'
-  );
-});
-
-test('the prev/next pair lives on the stage, on every device, inside 44px targets (owner sketch 2026-08-31)', () => {
-  const style = styleBlock(mediaGallery);
-  /* The owner's 2026-08-31 sketch (issue 275) draws the arrows at the
-     stage's sides with no device carve-out, and the dot row's retirement is
-     what makes that structural: the pair is now the gesture's ONE
-     press-and-keyboard equivalent, so a capability gate hiding it from a
-     phone would leave the swipe with no equivalent at all. The 2026-08-29
-     hidden-by-default rule retired with the dots that justified it. */
-  const navRule = /\.gallery-nav\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.match(navRule, /display:\s*grid;/, 'the nav pair no longer renders');
-  assert.doesNotMatch(
-    navRule,
-    /display:\s*none/,
-    'the nav pair is hidden again; with the dots retired that leaves the swipe no press equivalent'
-  );
-  assert.equal(
-    [...style.matchAll(/@media[^{]*\{\s*\.gallery-nav\b/g)].length,
-    0,
-    'the pair is capability-gated again (2026-08-29 rule); the 2026-08-31 sketch shows it on every device'
-  );
-  assert.match(navRule, /min-inline-size:\s*2\.75rem;/, 'the pair lost its 44px inline target');
-  assert.match(navRule, /min-block-size:\s*2\.75rem;/, 'the pair lost its 44px block target');
-  /* At the STAGE's edges, from the same one expression the stage is sized
-     by — see the ONE-stage-box pin above for the declaration count. */
-  assert.match(
-    style,
-    /inset-inline-start:\s*calc\(\(100% - var\(--gallery-stage-inline\)\) \/ 2 \+ var\(--gallery-nav-inset, 0\.375rem\)\)/,
-    'the previous control no longer sits at the stage’s own edge'
-  );
-  assert.match(
-    style,
-    /inset-inline-end:\s*calc\(\(100% - var\(--gallery-stage-inline\)\) \/ 2 \+ var\(--gallery-nav-inset, 0\.375rem\)\)/,
-    'the next control no longer sits at the stage’s own edge'
-  );
-  /* The painted disc reads the token family, styles.css declares it, and the
-     ink is smaller than the disc, which is smaller than the target — the
-     same shrink-the-ink-never-the-target trade every gallery control makes. */
-  const discRule = /\.gallery-nav-disc\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.match(discRule, /inline-size: var\(--gallery-nav-size, 2\.25rem\);/);
-  assert.match(discRule, /block-size: var\(--gallery-nav-size, 2\.25rem\);/);
-  assert.match(discRule, /background: var\(--gallery-nav-surface, rgba\(0, 0, 0, 0\.55\)\);/);
-  assert.match(discRule, /opacity: var\(--gallery-nav-rest-opacity, 0\.7\);/);
-  for (const token of [
-    '--gallery-nav-size: 2.25rem;',
-    '--gallery-nav-surface: rgba(0, 0, 0, 0.55);',
-    '--gallery-nav-ink: white;',
-    '--gallery-nav-rest-opacity: 0.7;',
-    '--gallery-nav-inset: 0.375rem;'
-  ]) {
-    assert.ok(styles.includes(token), `styles.css does not declare ${token}`);
-  }
-  // Both chevrons declare the same painted box, sized to sit inside the disc.
-  assert.equal(
-    [...mediaGallery.matchAll(/width="16" height="16"/g)].length,
-    2,
-    'the two nav chevrons do not both declare the disc-sized glyph'
-  );
-  /* And the pair NAVIGATES — through the same two functions everything else
-     uses, so goTo()'s handover reset covers a press on either button. The
-     one-index-write pin above is what makes this sufficient. */
-  assert.match(galleryMarkup, /data-gallery-nav="previous"\s+onclick=\{previous\}/);
-  assert.match(galleryMarkup, /data-gallery-nav="next"\s+onclick=\{next\}/);
-  /* The retired control-row chevrons stay retired, and the dots' own tokens
-     went with the dots (issue 275). Declaration-or-read forms only (name
-     plus colon, or inside var()), so a history note in prose does not count
-     as a token coming back. */
-  for (const retired of ['--gallery-arrow-size', '--gallery-dot-size', '--gallery-dot-active-scale']) {
-    const pattern = new RegExp(`${retired}\\s*[:,)]`);
-    assert.doesNotMatch(style, pattern, `the retired token ${retired} is read again`);
-    assert.doesNotMatch(styles, pattern, `styles.css still declares the retired token ${retired}`);
-  }
-  assert.match(styles, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
-});
-
-test('nothing in the gallery ever autoplays, and reduced motion is structural (issue 207)', () => {
-  // The strongest form this assertion has: the ATTRIBUTE cannot appear
-  // anywhere in the file, so there is no conditional, muted, or
-  // "just-for-the-poster" branch that could reintroduce it. Reduced motion is
-  // then honoured by construction rather than by a media query — there is no
-  // motion until a reader presses play, and a reader pressing play asked.
-  assert.doesNotMatch(galleryMarkup, /autoplay/i, 'no autoplay attribute may exist anywhere in the gallery markup');
-  /* RE-AIMED (issue 243): the attribute is now `controls={playing}`, so the
-     native controls are HANDED OVER on a press rather than declared up front.
-     The claim this half makes is unchanged — a reader who plays a film gets
-     real controls — and it is strictly narrower, because the value must be
-     the play state rather than any truthy expression somebody could write. */
-  assert.match(galleryMarkup, /<video[\s\S]*?\n\s+controls=\{playing\}\n/, 'the video must hand over native controls');
-  assert.match(
-    galleryMarkup,
-    /<video[\s\S]*?\n\s+playsinline\n/,
-    'the video must play inline (rendering lanes stage 1)'
-  );
-  assert.match(
-    galleryMarkup,
-    /<video[\s\S]*?preload="metadata"/,
-    'the video preloads only metadata: the enlarge click asked for a working player, not yet the film'
-  );
-  assert.match(galleryMarkup, /poster=\{item\.video\.posterSrc\}/);
-});
-
-test('the film stage paints a ground of its own, so a poster in flight is not a white hole (issue 239)', () => {
-  const style = styleBlock(mediaGallery);
-  const filmStage = /\.gallery-stage\[data-gallery-kind='video'\]\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.ok(filmStage.length > 0, 'the film stage rule is not where this pin expects it');
-  /* The rule the defect was: the stage declared no background, so the
-     reservation was transparent and the page's own near-white surface showed
-     through a 768x432 hole while a poster was still in flight. */
-  assert.match(
-    filmStage,
-    /background:\s*var\(--gallery-stage-ground\)/,
-    'the film stage paints no ground of its own; a poster still in flight shows the page through the reservation'
-  );
-  /* The value is a GLOBAL token like every other dimension the stage reads,
-     so it is tuned in styles.css and the component states no colour. Since
-     the owner's light-mode ruling (2026-08-31, the issue-275 wave: "really
-     ugly black lines in light mode") the token BRANCHES by reading mode, so
-     both halves are measured rather than asserted. The :root default is the
-     exact white anthropic.com opens on — its compiled CSS's ivory-light
-     swatch — because the owner named that value; and every dark reading
-     mode must remap the token, by reference as the color roles do, onto a
-     shared projection ground that is genuinely dark. A form either pin
-     cannot measure fails loudly rather than passing by default. */
-  const declared = /--gallery-stage-ground:\s*(rgb\([^)]*\));/.exec(styles)?.[1]?.trim();
-  assert.equal(
-    declared,
-    'rgb(250, 249, 245)',
-    `the light-mode --gallery-stage-ground is "${declared}"; the owner ruled it the white anthropic.com opens on`
-  );
-  /* CASCADE ORDER, measured — the fault the PR-278 review caught running: a
-     bare :root block and a [data-theme] block tie at (0,1,0) specificity, so
-     the LATER one wins, and a light declaration written after the mode
-     blocks silently beats all three explicit dark remaps while every
-     textual pin here stays green (the token is still declared everywhere —
-     it just loses). The declaration must therefore precede the first mode
-     block in source. */
-  const lightAt = styles.indexOf('--gallery-stage-ground: rgb(250, 249, 245);');
-  const firstModeBlock = styles.search(/\[data-theme="[a-z]+"\]\s*\{/);
-  assert.ok(firstModeBlock >= 0, 'no [data-theme] block found; the mode architecture moved under this pin');
-  assert.ok(
-    lightAt >= 0 && lightAt < firstModeBlock,
-    'the light --gallery-stage-ground declaration must come BEFORE every [data-theme] block: written after them it wins the (0,1,0) tie on source order and paints a chosen dark mode’s letterbox ivory'
-  );
-  const projection = /--palette-projection-ground:\s*([^;]+);/.exec(styles)?.[1]?.trim();
-  const channels = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(projection ?? '');
-  assert.ok(
-    channels,
-    `--palette-projection-ground is "${projection}", which this pin cannot resolve to channels; state it as rgb(r, g, b) so its darkness can be measured`
-  );
-  for (const channel of channels.slice(1).map(Number)) {
-    assert.ok(
-      channel <= 64,
-      `--palette-projection-ground is "${projection}"; the dark modes' letterbox must be a dark ground, and a light one is the white hole issue 239 removed`
-    );
-  }
-  /* One remap per dark-family block — the OS auto mapping, dark, slate,
-     sepia — counted rather than located: a mode that misses the remap falls
-     through to the light ivory, silently, in that mode only, which is the
-     exact fault class the reading-mode parity pin exists for. */
-  const remaps = styles.match(/--gallery-stage-ground:\s*var\(--palette-projection-ground\)/g) ?? [];
-  assert.equal(
-    remaps.length,
-    4,
-    'every dark reading-mode block must remap the stage ground onto the shared projection value'
-  );
-  /* Zero CLS: the ground paints the box the three declarations above already
-     measured, so this rule may not restate a size of its own. */
-  assert.doesNotMatch(
-    filmStage,
-    /(?:^|[;{])\s*(?:inline-size|block-size|width|height|aspect-ratio|padding|margin)\s*:/,
-    'the film stage rule states a dimension of its own; the reservation is built from the two stage tokens and nothing else'
-  );
-});
 
 test('the source ladder renders in the manifest’s own order, never re-ranked (issue 207)', () => {
   // The browser takes the first source it can decode, so ORDER is the
   // preference. A sort, filter or reverse here would silently hand a reader
   // different bytes than the operator published.
-  assert.match(mediaGallery, /\{#each item\.video\.sources as source \(source\.src\)\}/);
+  assert.match(mediaGallery, /\{#each tile\.video\.sources as source \(source\.src\)\}/);
   /* The rung now also declares WHICH VIEWPORT may ask for it (issue 241), and
      that is an addition to the ladder rather than a re-ranking of it: the
      attribute is bound straight from the source the adapter built, so the
      component still neither computes a breakpoint nor moves a rung. */
   assert.match(mediaGallery, /<source src=\{source\.src\} type=\{source\.type\} media=\{source\.media\} \/>/);
-  for (const forbidden of [/item\.video\.sources\.sort/, /item\.video\.sources\.filter/, /item\.video\.sources\.reverse/]) {
+  for (const forbidden of [/video\.sources\.sort/, /video\.sources\.filter/, /video\.sources\.reverse/]) {
     assert.doesNotMatch(mediaGallery, forbidden, 'the component must not re-rank the manifest’s source ladder');
   }
   assert.doesNotMatch(
@@ -2343,21 +1690,21 @@ test('the Media block renders the vendored set first and lets a runtime manifest
   // and the volume's manifest is a one-shot read that may replace them. A
   // read that answers null changes nothing, which is why an absent media
   // volume looks like a gallery instead of a fault.
-  assert.match(artBinding, /runtimeBlock\(/);
-  assert.match(artBinding, /loadGalleryManifest\(\)/);
-  assert.match(artBinding, /if \(items === null\) \{\n\s+return null;/);
+  assert.match(mediaBinding, /runtimeBlock\(/);
+  assert.match(mediaBinding, /loadGalleryManifest\(\)/);
+  assert.match(mediaBinding, /if \(items === null\) \{\n\s+return null;/);
   // The adapter still resolves the vendored file names through the bundler,
   // and still never assembles a media URL of its own: the manifest reader
   // built those through lib/media.ts before this module saw them.
-  assert.match(artBinding, /import\.meta\.glob\('\.\.\/\.\.\/assets\/images\/gallery\/\*\.webp'/);
-  assert.doesNotMatch(artBinding, /\/media\/|mediaUrl\(/, 'the adapter must never build a media URL itself');
+  assert.match(mediaBinding, /import\.meta\.glob\('\.\.\/\.\.\/assets\/images\/gallery\/\*\.webp'/);
+  assert.doesNotMatch(mediaBinding, /\/media\/|mediaUrl\(/, 'the adapter must never build a media URL itself');
   /* The poster choice is DELEGATED (issue 239). The rule now lives beside the
      manifest field it reads, where gallery-manifest.test.mjs EXECUTES it
      against real admitted items; this layer only binds the answer to a prop.
      The branch is extracted rather than swept whole, because `item.full` is a
      legitimate read two lines above it — the still a reader enlarges to — and
      a file-wide ban would forbid the correct use along with the wrong one. */
-  const filmBranch = /if \(item\.kind === 'video'[\s\S]*?\n {2}\}/.exec(artBinding)?.[0] ?? '';
+  const filmBranch = /if \(item\.kind === 'video'[\s\S]*?\n {2}\}/.exec(mediaBinding)?.[0] ?? '';
   assert.ok(filmBranch.length > 0, 'the adapter’s film branch is not where this pin expects it');
   assert.match(
     filmBranch,
@@ -2375,17 +1722,17 @@ test('the Media block renders the vendored set first and lets a runtime manifest
   // sort, a toSorted. The mapping expression is pinned exactly, so a rewrite
   // that inserts anything between `item.sources` and `.map` is a diff.
   assert.match(
-    artBinding,
+    mediaBinding,
     /sources: item\.sources\.map\(\(source, at\) => \{/,
     'the ladder must be mapped straight through, with nothing between the manifest order and the props'
   );
   assert.match(
-    artBinding,
+    mediaBinding,
     /src: source\.url,\n\s+type: source\.type/,
     'a rung’s url and media type must come straight off the admitted source'
   );
   for (const forbidden of [/\.reverse\(/, /\.sort\(/, /\.toSorted\(/, /\.toReversed\(/]) {
-    assert.doesNotMatch(artBinding, forbidden, 'the adapter must not reorder items or renditions');
+    assert.doesNotMatch(mediaBinding, forbidden, 'the adapter must not reorder items or renditions');
   }
   /* The size question is DELEGATED, exactly as the poster choice above is: the
      rule that decides which viewport may ask for which rung lives beside the
@@ -2395,13 +1742,13 @@ test('the Media block renders the vendored set first and lets a runtime manifest
   assert.match(filmBranch, /const media = galleryVideoSourceMedia\(item\);/);
   assert.match(filmBranch, /const query = media\[at\];/);
   assert.doesNotMatch(
-    artBinding,
+    mediaBinding,
     /min-width|source\.height/,
     'the adapter derives a breakpoint of its own instead of reading the one the manifest module states'
   );
   /* And the preview's own width travels with the item, which is the one number
      the enlarged surface needs to stop sending every reader the master. */
-  assert.match(artBinding, /previewWidth: item\.preview\.width/);
+  assert.match(mediaBinding, /previewWidth: item\.preview\.width/);
 });
 
 test('the runtime binding renders its fallback until a non-null replacement arrives', () => {
@@ -2415,448 +1762,11 @@ test('the runtime binding renders its fallback until a non-null replacement arri
   assert.match(blockHost, /mounted = false/, 'a block torn down mid-flight must not write into a gone component');
 });
 
-test('the lightbox is a native <dialog>: Escape/backdrop/close all close it, arrow keys navigate', () => {
-  assert.match(mediaGallery, /<dialog[\s\S]*?bind:this=\{dialogEl\}/);
-  assert.match(mediaGallery, /dialogEl\.showModal\(\)/);
-  assert.match(mediaGallery, /dialogEl\.close\(\)/);
-  // The dialog's own 'close' event — which fires for Escape as much as for
-  // an explicit close() — is the single place `enlarged` resets, so no
-  // closing path can desync it from the dialog's real open state.
-  assert.match(mediaGallery, /onclose=\{onDialogClose\}/);
-  assert.match(mediaGallery, /async function onDialogClose\(\): Promise<void> \{\s*enlarged = false;/);
-  assert.match(mediaGallery, /event\.key === 'ArrowRight'/);
-  assert.match(mediaGallery, /event\.key === 'ArrowLeft'/);
-  assert.match(mediaGallery, /event\.target === dialogEl/, 'a genuine backdrop click must close the dialog');
-  assert.match(mediaGallery, /aria-label=\{item\.alt\}/, 'the dialog needs an accessible name naming which photograph');
-});
-
-test('the frame border is tokens only — the component states no width, color, radius, padding or image of its own', () => {
-  const style = styleBlock(mediaGallery);
-  const border = /\.gallery-lightbox-border\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.ok(border.length > 0, 'the border rule is not where this pin expects it');
-  for (const token of [
-    '--gallery-frame-width',
-    '--gallery-frame-color',
-    '--gallery-frame-radius',
-    '--gallery-frame-padding',
-    '--gallery-frame-image',
-  ]) {
-    assert.match(border, new RegExp(`var\\(${token}\\)`), `the border rule does not read ${token}`);
-    assert.match(styles, new RegExp(`${token}:`), `styles.css is missing a default for ${token}`);
-  }
-  // border-image's initial value is 'none': the token IS the extension
-  // point, so the default asks for nothing extra rather than a component
-  // change being required to add a future pattern.
-  assert.match(styles, /--gallery-frame-image:\s*none;/);
-});
-
-test('the lightbox scrim, close control and size caps are tokens too (coordinator quality pass on #186)', () => {
-  // The frame border was tokens-only from the start; these three siblings in
-  // the same component were literals until this pass caught up to it — same
-  // doctrine (issue 136: every style dimension is a token), same file.
-  const style = styleBlock(mediaGallery);
-  const rules = {
-    lightbox: /\.gallery-lightbox\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
-    backdrop: /\.gallery-lightbox::backdrop\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
-    image: /\.gallery-lightbox-image\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
-    close: /\.gallery-lightbox-close\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
-    /* Issue 202 moved the painted surface off the 44px hit box and onto the
-       small mark inside it; the token obligation moved with it rather than
-       being dropped, which is why this rule joined the list instead of
-       --gallery-close-surface leaving it. */
-    closeMark: /\.gallery-close-mark\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
-    /* Issue 202's own new surfaces. They shipped for one revision reading
-       tokens that had no home in the layer — the #204 review's finding 1 —
-       so they join the list here rather than the obligation staying prose. */
-    caption: /\.gallery-caption\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
-    /* The lane inside it (issue 265): the caption's own gap moved onto the
-       per-item lane when the box became a reserved stack, and the token
-       obligation moved with the declaration exactly as --gallery-close-surface
-       did at issue 202 — the rule that USES a dimension is the rule that owes
-       it a token. */
-    captionLane: /\.gallery-caption-lane\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
-    meta: /\.gallery-lightbox-meta\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
-    metaLink: /\.gallery-meta-link\s*\{([^}]*)\}/.exec(style)?.[1] ?? '',
-  };
-  for (const [rule, body] of Object.entries(rules)) {
-    assert.ok(body.length > 0, `the ${rule} rule is not where this pin expects it`);
-  }
-  const expectations = [
-    ['lightbox', '--gallery-lightbox-max-inline'],
-    ['backdrop', '--gallery-scrim'],
-    ['image', '--gallery-image-max-block'],
-    ['closeMark', '--gallery-close-surface'],
-    ['close', '--gallery-close-ink'],
-    /* The nine promoted by issue 202. Each is asserted the same way as its
-       elders — read by the rule that uses it AND declared in the layer — so
-       a future dimension cannot quietly live as a component literal again. */
-    ['lightbox', '--gallery-close-lane'],
-    ['closeMark', '--gallery-close-size'],
-    ['closeMark', '--gallery-close-rest-opacity'],
-    ['captionLane', '--gallery-caption-gap'],
-    ['caption', '--gallery-caption-space'],
-    ['meta', '--gallery-meta-gap'],
-    ['meta', '--gallery-meta-space'],
-    ['meta', '--gallery-meta-ink'],
-    ['metaLink', '--gallery-meta-link-padding'],
-  ];
-  for (const [rule, token] of expectations) {
-    assert.match(rules[rule], new RegExp(`var\\(${token}`), `the ${rule} rule does not read ${token}`);
-    assert.match(styles, new RegExp(`${token}:`), `styles.css is missing a default for ${token}`);
-  }
-  // The dynamic-unit upgrade stays a literal inside its own @supports guard
-  // (not tokenized — see the note beside --gallery-image-max-block in
-  // styles.css), so this pin checks the guard directly rather than a token.
-  const dynamicImage = /@supports[^{]*\{\s*\.gallery-lightbox-image\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.match(dynamicImage, /max-block-size:\s*80svh/, 'the dynamic-unit upgrade lost its guarded literal');
-  // Deliberately not reading-mode-branched: a scrim behind an enlarged
-  // photograph and its close control read the same near-black regardless of
-  // theme, exactly like the photograph itself is not re-tinted per mode.
-  assert.match(styles, /--gallery-scrim:\s*rgba\(0, 0, 0, 0\.7\);/);
-  assert.match(styles, /--gallery-close-surface:\s*rgba\(0, 0, 0, 0\.5\);/);
-  assert.match(styles, /--gallery-close-ink:\s*white;/);
-  /* The metadata ink is the colour the #204 review singled out: its only
-     definition anywhere used to be a literal inside a component. It reads
-     against the same near-black scrim its sibling above does, so it states
-     one value here rather than branching per reading mode. */
-  assert.match(styles, /--gallery-meta-ink:\s*white;/);
-  /* A promotion must be a token MOVE, never a look change: each new default
-     is the exact fallback the component still carries for it. */
-  for (const [token, value] of [
-    ['--gallery-close-size', '1.125rem'],
-    ['--gallery-close-lane', '1.5rem'],
-    ['--gallery-close-rest-opacity', '0.55'],
-    ['--gallery-caption-gap', '0.125rem'],
-    ['--gallery-caption-space', '0.25rem'],
-    ['--gallery-meta-gap', '0.125rem'],
-    ['--gallery-meta-space', '0.5rem'],
-    ['--gallery-meta-link-padding', '0.5rem'],
-  ]) {
-    const declared = new RegExp(`${token}:\\s*${value.replace('.', '\\.')};`).test(styles);
-    assert.ok(declared, `styles.css declares no ${token}: ${value}`);
-    const fallback = new RegExp(`var\\(${token},\\s*${value.replace('.', '\\.')}\\)`).test(style);
-    assert.ok(fallback, `the component's var(${token}) fallback is no longer ${value}, so the layer and the component disagree`);
-  }
-});
-
 // ---------------------------------------------------------------------------
 // Projects, the art half: the gallery EXPERIENCE (owner directives
 // 2026-08-25, issue 202) — a centred frame, a close mark that is not stamped
 // on the artwork, and metadata that is absent when it is absent.
 // ---------------------------------------------------------------------------
-
-test('the visible frame is centred in its track, so no gutter is dead space (issue 202)', () => {
-  /* The defect the owner saw: aspect-ratio TRANSFERS the frame's block cap
-     into an inline cap, so on a wide column the button is narrower than its
-     own 1fr track and stretch degenerates to start alignment — MEASURED at
-     1280px before this landed: a 568.9px frame at the left of an 842px
-     track. Nothing but an explicit centring keeps the two gutters equal, so
-     that declaration is what this pins; e2e/rendering-lanes.spec.mjs
-     measures the resulting boxes on three engines. */
-  const style = styleBlock(mediaGallery);
-  const stage = /\.gallery-stage\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.ok(stage.length > 0, 'the stage rule is not where this pin expects it');
-  assert.match(
-    stage,
-    /margin-inline:\s*auto/,
-    'the frame does not centre itself in its track, so a column wider than the frame leaves the whole surplus on one side'
-  );
-  /* The centring must not have cost the reservation. An ALIGNED grid item is
-     sized by its content, so centring the button directly would have made
-     the reserved box depend on the lazy image — measured as 0x0 on Gecko.
-     The stage's width is definite instead, and it is derived from the same
-     two tokens the reserved box is, so the width and the ratio cannot drift
-     apart. */
-  /* The gallery's box is its OWN token pair since 2026-08-28 (owner: the art
-     stage is near-square, not the feed's 16:9) — same construction, so the
-     width and the ratio still cannot drift apart, and the reservation stays
-     byte-independent. The expression itself lives on the frame since
-     2026-08-29 (the nav pair positions against the same number); what this
-     pin still holds is that the stage's width is DEFINITE — the shared
-     property, whose declaration the ONE-stage-box pin counts, with a
-     definite fallback — never content-sized. */
-  assert.match(
-    stage,
-    /inline-size:\s*var\(--gallery-stage-inline, 100%\)/,
-    'the stage states no definite width, so the frame reserves nothing until the photograph loads'
-  );
-  for (const property of ['aspect-ratio: var(--gallery-stage-aspect, 1)', 'max-block-size: var(--gallery-stage-size, 28rem)']) {
-    assert.ok(stage.includes(property), `the reserved box lost "${property}" when it moved onto the stage`);
-  }
-  /* And the control inside states no size of ITS own — a <button> is a form
-     control whose auto inline size is fit-content, so a size here would put
-     the reservation back under the image's control. */
-  const frameButton = /\.gallery-image-button\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.ok(frameButton.length > 0, 'the frame-button rule is not where this pin expects it');
-  assert.match(frameButton, /inset:\s*0/, 'the frame button no longer fills the box that was reserved for it');
-  assert.doesNotMatch(
-    frameButton,
-    /(^|[\s;])(inline-size|block-size|width|height|aspect-ratio):/,
-    'the frame button sizes itself, so the reserved box is whatever fits inside the button instead'
-  );
-  /* `inset: 0` only fills anything while the button is absolutely positioned,
-     and this pin exists because composing issue 207 with this rule declared
-     `position` TWICE — `absolute` from the reservation, then `relative` for
-     the moving-item mark's containing block, which wins by order. The button
-     fell back into flow at fit-content and the frame measured 569px off
-     centre in Firefox and WebKit at 1440px: the exact dead gutter this test
-     was written to prevent, reintroduced through a property nobody re-read.
-     Absolutely positioned boxes are already containing blocks for absolutely
-     positioned descendants, so one declaration serves both purposes. */
-  assert.match(
-    frameButton,
-    /(^|[\s;])position:\s*absolute/,
-    'the frame button is not absolutely positioned, so `inset: 0` fills nothing and the reserved box collapses to the button’s content'
-  );
-  assert.equal(
-    (frameButton.match(/(^|[\s;])position:/g) ?? []).length,
-    1,
-    'the frame button declares `position` more than once; the last one wins and the reservation is decided by declaration order'
-  );
-  /* The frame the stage is centred in, RE-AIMED (issue 241). It used to be a
-     three-column row — arrow, 1fr track, arrow — and the centring mattered
-     because the stage was narrower than that track. The arrows have left the
-     row, so the track IS the frame; the alignment still matters for exactly
-     the same reason (the stage's inline size is capped by its own token) and
-     is now stated as `place-items: center` beside the reservation. */
-  const frame = /\.gallery-frame\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.match(frame, /place-items:\s*center/, 'the stage is no longer centred in the frame');
-  assert.doesNotMatch(
-    frame,
-    /grid-template-columns/,
-    'the frame declares a track arrangement again; the arrows live in the control row now'
-  );
-});
-
-test('the frame reserves ONE box, so changing kind moves nothing (issue 241)', () => {
-  /* The zero-CLS defect this closes, measured: a still's stage is a square and
-     a film's is 16:9, so pressing next across the boundary resized the
-     document — -105.9px at a 390px viewport going still to film, +105.9px
-     coming back. Reserving on the STAGE can never fix that, because the stage
-     is the thing whose shape the kind changes. So the reservation moved up to
-     the frame, which is item-blind and kind-blind by construction: it names no
-     kind attribute, and it is built from the SAME size token the still's own
-     stage is, so the taller of the two shapes is what the page is laid out
-     from and neither stage can exceed it. */
-  const style = styleBlock(mediaGallery);
-  const frame = /\.gallery-frame\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.ok(frame.length > 0, 'the frame rule is not where this pin expects it');
-  // Anchored for the same reason the dot row's zero is, below: `min-inline-size:
-  // 100%` contains this string and reserves nothing.
-  assert.match(
-    frame,
-    /^\s*inline-size:\s*100%/m,
-    'the frame no longer fills the card, so its reservation follows content'
-  );
-  /* The semicolon is load-bearing: `aspect-ratio: 1` also matches "1.7778",
-     which is the film's own ratio and exactly the mutation this pin exists to
-     refuse — a frame shaped like one of the two kinds is the defect. */
-  assert.match(frame, /aspect-ratio:\s*1;/, 'the frame reserves no shape of its own, or reserves one kind’s shape');
-  assert.match(
-    frame,
-    /max-block-size:\s*var\(--gallery-stage-size, 28rem\)/,
-    'the frame’s reservation is not built from the same token the still’s stage is, so the two may disagree'
-  );
-  /* The reservation may not be selected by kind, in either direction: a rule
-     that gave a film a different frame would be this defect written twice. */
-  assert.doesNotMatch(
-    style,
-    /\.gallery-frame\[data-gallery-kind/,
-    'the frame’s box is chosen by the item’s kind again'
-  );
-  assert.doesNotMatch(
-    galleryMarkup,
-    /<div class="gallery-frame"[^>]*data-gallery-kind/,
-    'the frame declares a kind, so the box the page is laid out from can change with the item'
-  );
-  /* And the stage inside it cannot exceed the reservation — which since issue
-     243 is a stronger statement than it was, because there is now exactly ONE
-     stage box and it is built from the same token the frame is. The old form
-     of this compared a film's own block token against the square's; with the
-     film's token retired, what is left to prove is that the two boxes are
-     built from the SAME source, so they cannot disagree at any value.
-
-     Read from the stylesheet rather than written here, for the reason the
-     retired form recorded: the first version of this assertion compared two
-     literals — `assert.ok(27 < 28, …)` — which no mutation of any source file
-     could turn red. A pin that claims to hold something must be able to
-     fail. */
-  const stageRule = /\.gallery-stage\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.ok(stageRule.length > 0, 'the stage rule is not where this pin expects it');
-  const frameCap = /max-block-size:\s*var\((--[\w-]+),/.exec(frame)?.[1];
-  const stageCap = /max-block-size:\s*var\((--[\w-]+),/.exec(stageRule)?.[1];
-  assert.ok(frameCap, 'the frame states no block cap this pin can read');
-  assert.equal(
-    stageCap,
-    frameCap,
-    `the stage is capped by ${stageCap} inside a frame reserving ${frameCap}; the two can disagree and the stage can overflow the box the page was laid out from`
-  );
-  const declared = new RegExp(`${frameCap}:\\s*([0-9.]+)rem;`).exec(styles);
-  assert.ok(declared, `styles.css declares no ${frameCap}, so the reservation resolves to nothing`);
-});
-
-test('the set control is quiet chrome, its menu the page’s one popover grammar, and the artwork accepts a pinch (issue 275; issue 241)', () => {
-  const style = styleBlock(mediaGallery);
-  /* THE SET CONTROL (owner sketch, 2026-08-31: "sleek, small"): the button
-     paints nothing of its own — no border, no fill, meta-step type — and
-     still carries the 44px floor by minimums, the same
-     shrink-the-ink-never-the-target trade every quiet control on this page
-     makes. */
-  const setButton = /\.gallery-set-button\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.ok(setButton.length > 0, 'the set button rule is not where this pin expects it');
-  assert.match(setButton, /background:\s*transparent;/, 'the set button paints a surface of its own');
-  assert.match(setButton, /min-inline-size:\s*2\.75rem;/, 'the set button lost its 44px inline target');
-  assert.match(setButton, /min-block-size:\s*2\.75rem;/, 'the set button lost its 44px block target');
-  assert.match(setButton, /font-size:\s*var\(--card-meta-size\);/, 'the set button restates a type step');
-  /* The open menu moves NOTHING: absolutely positioned out of flow (the
-     owner weighed the brief overlap of the stage and took it), on the
-     page's shared popover tokens rather than values of its own. */
-  const setMenu = /\.gallery-set-menu\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.match(setMenu, /position:\s*absolute;/, 'an open menu reflows the page instead of overlaying it');
-  assert.match(setMenu, /border-radius:\s*var\(--theme-menu-radius\);/, 'the menu invents its own curve');
-  assert.match(setMenu, /padding:\s*var\(--swatch-popover-padding\);/, 'the menu invents its own padding');
-  /* Each option is a real ≥44px control, and the chosen one is marked by
-     weight — never by color alone (dataviz floor). */
-  const setOption = /\.gallery-set-option\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.match(setOption, /min-block-size:\s*2\.75rem;/, 'an option is under the touch floor');
-  assert.match(style, /\.gallery-set-option\[aria-selected='true'\]\s*\{[^}]*font-weight/);
-
-  /* THE PINCH. `pan-y` alone refuses a two-finger zoom on the one element a
-     reader would ever try it on. The base declaration under it is not
-     decoration: an engine that does not know `pinch-zoom` drops the whole
-     declaration, and without a base that would hand the horizontal axis back
-     to the browser and leave the swipe fighting it. */
-  const stage = [...style.matchAll(/\.gallery-stage\s*\{([^}]*)\}/g)].map(([, body]) => body).join('\n');
-  assert.match(
-    stage,
-    /touch-action:\s*pan-y;[\s\S]*touch-action:\s*pan-y pinch-zoom;/,
-    'the artwork refuses a pinch, or upgrades to one with no base under it'
-  );
-});
-
-test('the media sets are data: kind-derived by default, named by the manifest, chrome only when there is a choice (issue 275)', () => {
-  /* The default is derived from the same field the stage's own kind is, so
-     an untagged manifest and the vendored bootstrap set render exactly as
-     they always did — one Drawings strip, no dropdown, no new chrome. */
-  assert.match(
-    galleryCode,
-    /return candidate\.set \?\? \(candidate\.video === undefined \? 'Drawings' : 'Videos'\);/,
-    'an item without a set no longer falls into the kind-derived default'
-  );
-  /* The set menu's chord discipline. The always-rendered chord sweep in the
-     rendering lanes cannot reach a menu that mounts only while open on a
-     multi-set strip, and its comment defers to THIS pin by name — so the
-     guard the comment cites must actually be asserted somewhere, or the
-     deferral is a citation to nothing (PR-278 review, finding 3). The
-     keydown handler's first act is handing browser chords back to the
-     browser. */
-  assert.match(
-    galleryCode,
-    /function onSetMenuKeydown\(event: KeyboardEvent\): void \{\n\s*if \(isChord\(event\)\) \{\n\s*return;/,
-    'the set menu’s keydown no longer opens by refusing chords; the lanes’ sweep comment cites a guard that is not there'
-  );
-  /* First appearance wins, verbatim, and no entry is invented: a set exists
-     exactly when something is in it (honest-states floor), and the strip is
-     the chosen set's items alone. */
-  assert.match(galleryCode, /const sets = \$derived\(\[\.\.\.new Set\(items\.map\(setOf\)\)\]\);/);
-  assert.match(
-    galleryCode,
-    /const visible = \$derived\(items\.filter\(\(candidate\) => setOf\(candidate\) === activeSet\)\);/
-  );
-  /* A chosen name that no longer names a set resolves to the first set
-     rather than to an empty stage. */
-  assert.match(
-    galleryCode,
-    /chosenSet !== undefined && sets\.includes\(chosenSet\) \? chosenSet : sets\[0\]/
-  );
-  assert.match(
-    galleryMarkup,
-    /\{#if sets\.length > 1\}\s*<div class="gallery-set"/,
-    'a single-set gallery draws set chrome for a choice that does not exist'
-  );
-  /* The control is the listbox pattern: the button declares the popup and
-     its state, each option carries the selection, and the roving stop sits
-     on the choice. */
-  assert.match(galleryMarkup, /aria-haspopup="listbox"/);
-  assert.match(galleryMarkup, /aria-expanded=\{setMenuOpen\}/);
-  assert.match(galleryMarkup, /role="listbox"[\s\S]*?aria-label="Choose a media set"/);
-  assert.match(galleryMarkup, /role="option"[\s\S]*?aria-selected=\{name === activeSet\}/);
-  assert.match(galleryMarkup, /tabindex=\{name === activeSet \? 0 : -1\}/);
-  /* Escape and focus leaving the control both close it, and a choice hands
-     focus back to the button — the menu can never strand the keyboard. */
-  assert.match(galleryCode, /if \(event\.key === 'Escape'\) \{[\s\S]*?setButtonEl\?\.focus\(\);/);
-  assert.match(galleryCode, /function onSetFocusout\(event: FocusEvent\): void \{/);
-  assert.match(galleryMarkup, /onfocusout=\{onSetFocusout\}/);
-  /* And the adapter passes the manifest's word through untouched, the same
-     absent-means-absent ride the other optional metadata takes. */
-  assert.match(artBinding, /if \(item\.set !== undefined\) \{\s*rendered\.set = item\.set;/);
-});
-
-test('the lightbox close control paints a small mark, never a disc over the photograph (issue 202)', () => {
-  const style = styleBlock(mediaGallery);
-  const close = /\.gallery-lightbox-close\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  const mark = /\.gallery-close-mark\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.ok(close.length > 0 && mark.length > 0, 'the close rules are not where this pin expects it');
-
-  /* The hit box paints nothing of its own. It used to BE the visible chrome —
-     a 2.75rem filled disc — which is precisely what the owner called ugly. */
-  assert.match(close, /background:\s*none/, 'the close control paints a surface of its own again');
-  assert.doesNotMatch(close, /border-radius/, 'the close control wears a disc of its own again');
-
-  /* Half or smaller, stated as a resolvable length rather than a promise:
-     1.125rem against the 2.75rem hit box the .icon-button shape still
-     supplies, which is what keeps the touch floor while shrinking the paint. */
-  const size = /--gallery-close-size,\s*([\d.]+)rem/.exec(mark)?.[1];
-  assert.ok(size !== undefined, 'the close mark states no size this pin can measure');
-  assert.ok(
-    Number.parseFloat(size) <= 2.75 / 2,
-    `the close mark is ${size}rem against a 2.75rem control — the owner asked for at least half off`
-  );
-  for (const axis of ['inline-size', 'block-size']) {
-    assert.match(mark, new RegExp(`${axis}:\\s*var\\(--gallery-close-size`), `the mark does not size its ${axis}`);
-  }
-
-  /* The mark tucks into the reserved lane above the frame — that lane, and
-     the start-end alignment that puts the mark in it, are together why the
-     mark never overlaps the picture. */
-  const lightbox = /\.gallery-lightbox\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.match(lightbox, /padding:\s*var\(--gallery-close-lane/, 'the lightbox reserves no lane for the close mark');
-  assert.match(close, /place-items:\s*start end/, 'the mark is not aligned into the lane it was given');
-
-  // Still a control, still named, still the shared 44px shape.
-  assert.match(mediaGallery, /class="icon-button gallery-lightbox-close"/);
-  assert.match(mediaGallery, /aria-label="Close enlarged photograph"/);
-  assert.match(styles, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
-});
-
-test('Escape closes the lightbox and hands focus back to the frame it came from (issue 202)', () => {
-  /* The dialog's native focus restoration is not enough on its own: a mouse
-     click does not focus a <button> on macOS WebKit, so "the previously
-     focused element" is the body there and a reader who presses Escape lands
-     nowhere. The component keeps the invoking button and focuses it on the
-     dialog's own close event — the one path Escape, the close control and a
-     backdrop click all pass through. */
-  assert.match(mediaGallery, /bind:this=\{frameButtonEl\}/, 'the invoking frame button is not captured');
-  /* The restore waits a tick and falls through to the player, and both halves
-     are load-bearing since issue 233. A lightbox can now close BECAUSE the
-     stage is about to stop being a still — arrowing the open dialog onto a
-     film closes it — so the element focus is owed to may not exist yet at the
-     moment the close event fires, and the element that will exist is the
-     player rather than the button. Focusing the outgoing button would land
-     the reader on the body, which is the exact defect this pin was written
-     for, arriving by a new route. */
-  /* The play control joins the fall-through at issue 243, and it is placed
-     BEFORE the player deliberately: while the veil is up the player renders no
-     controls, so focusing it would land a keyboard reader on an element they
-     cannot operate. The order is the order of what a reader can actually
-     press — enlarge button, play control, player. */
-  assert.match(
-    mediaGallery,
-    /async function onDialogClose\(\): Promise<void> \{\s*enlarged = false;\s*await tick\(\);\s*\(frameButtonEl \?\? playButtonEl \?\? playerEl\)\?\.focus\(\);/,
-    'closing the lightbox does not return focus to the surface it came from'
-  );
-  assert.match(mediaGallery, /import \{ tick \} from 'svelte';/, 'the restore cannot wait for the DOM it restores into');
-});
 
 test('gallery metadata is optional in the data, and every row states only what SOURCES.md verifies', () => {
   for (const [i, entry] of galleryPhotos.entries()) {
@@ -2887,114 +1797,6 @@ test('gallery metadata is optional in the data, and every row states only what S
   }
 });
 
-test("the caption's BOX is reserved for every item; content absent when the item has none (issue 265)", () => {
-  /* RE-AIMED, NOT RELAXED (issue 265). This pin used to enforce the caption's
-     CONTAINER being conditional on the current item — issue 202's deliberate
-     trade, "reserve space only when the specific item has something to show".
-     The owner overruled that from a live review: a captioned item arriving
-     pushed the whole document up and down (MEASURED at 50px on 1440 and 69px
-     on 390), and the ruling is that the frame must already hold the box.
-     Every assertion about CONTENT below is untouched and still exactly as
-     strict — nothing is fabricated, nothing is defaulted, an item with no
-     title still renders no title. What moved is the one assertion that was
-     enforcing the defect.
-     The whole contract, pinned where it is decided. Each field is guarded on
-     its OWN {#if}: a single combined guard would render an empty <p> for a
-     description-less item that happens to carry a title. */
-  for (const field of ['shot.title', 'shot.description', 'item.title', 'item.description', 'item.link']) {
-    assert.ok(
-      mediaGallery.includes(`{#if ${field}}`),
-      `${field} is rendered without a guard of its own, so an item lacking it renders an empty row`
-    );
-  }
-  /* THE BOX IS NOT CONDITIONAL, AND THE LANES ARE THE RESERVATION. Every
-     item's caption renders into one stacked grid cell — one lane per item,
-     all in `grid-area: 1 / 1` — so the row is as tall as the tallest caption
-     THIS SET can render and the current item cannot change it. Hiding by
-     VISIBILITY rather than by display is the mechanism: a `display: none`
-     lane would take no space and the reservation would be nothing at all. */
-  assert.doesNotMatch(
-    mediaGallery,
-    /\{#if hasCaption\}\s*<div class="gallery-caption">/,
-    'the caption box is conditional on the current item again, so an item change moves the document'
-  );
-  assert.match(
-    mediaGallery,
-    /<div class="gallery-caption">\s*\{#each visible as shot, at \(shot\.key\)\}/,
-    'the caption box no longer holds one lane per item, so it is sized by whichever item is showing'
-  );
-  /* THE ONE QUESTION THE BOX ASKS IS THE VISIBLE SET'S. A set nobody
-     captioned has no lane to hold open, and reserving one charged the page a
-     constant empty band (+12px on the vendored bootstrap gallery). The guard
-     reads `visible`, never `item`, so within a set the answer cannot change
-     and an ITEM change still moves nothing — the two moments the box may
-     move are a manifest load and the reader's own set choice (issue 275),
-     both explicit. A guard on the current item would be the defect itself,
-     which is what the assertion above refuses. */
-  assert.match(
-    mediaGallery,
-    /\{#if captionedSet\}\s*<div class="gallery-caption">/,
-    'the caption box is reserved for a set with nothing to say, which is an empty band'
-  );
-  assert.match(
-    galleryCode,
-    /const captionedSet = \$derived\(visible\.some\(hasCaptionCopy\)\);/,
-    'whether a caption box exists is not derived from the visible set'
-  );
-  /* ONE DEFINITION of what counts as a caption, asked by both questions: two
-     copies is how the reserved lane and the rendered content drift apart. */
-  assert.match(
-    galleryCode,
-    /function hasCaptionCopy\(candidate: MediaGalleryItem\): boolean \{\s*return Boolean\(candidate\.title\) \|\| Boolean\(candidate\.description\);/,
-    'the caption rule is not stated in one place'
-  );
-  assert.match(mediaGallery, /data-current=\{at === shown \? 'true' : undefined\}/);
-  assert.match(mediaGallery, /aria-hidden=\{at === shown \? undefined : 'true'\}/, 'every item’s caption is announced at once');
-  const captionStyle = styleBlock(mediaGallery);
-  const lane = /\.gallery-caption-lane\s*\{([^}]*)\}/.exec(captionStyle)?.[1] ?? '';
-  assert.match(lane, /grid-area:\s*1 \/ 1/, 'the lanes are not stacked, so the box is the sum of every caption');
-  assert.match(lane, /visibility:\s*hidden/, 'a lane that is not current still paints');
-  assert.doesNotMatch(lane, /display:\s*none/, 'a display:none lane reserves nothing');
-  /* Stretch is the grid default and it would spread ONE item's paragraphs
-     down the height of the tallest lane — a one-line caption floating apart
-     from its own picture. */
-  assert.match(lane, /align-content:\s*start/, 'a short caption is stretched down the reserved lane');
-  assert.match(
-    captionStyle,
-    /\.gallery-caption-lane\[data-current\]\s*\{\s*visibility:\s*visible/,
-    'the current item’s caption is never revealed'
-  );
-  // The lightbox's container stays conditional: it is a modal surface with
-  // nothing below it to move, so an item with no metadata renders no band.
-  assert.match(mediaGallery, /\{#if hasMeta\}\s*<div class="gallery-lightbox-meta">/);
-  assert.match(mediaGallery, /const hasCaption = \$derived\(hasCaptionCopy\(item\)\)/);
-  assert.match(mediaGallery, /const hasMeta = \$derived\(hasCaption \|\| item\.link !== undefined\)/);
-  /* No default anywhere on the path: a ?? or a literal placeholder is how an
-     honest empty state becomes a fabricated one. Both names the component
-     reads a row by are swept — `item` for the current one, `shot` for the
-     reserved lanes — so the reservation cannot become the place a dash is
-     quietly written. */
-  for (const field of ['title', 'description', 'link']) {
-    assert.doesNotMatch(
-      mediaGallery,
-      new RegExp(`(item|shot)\\.${field}\\s*(\\?\\?|\\|\\|)\\s*['"\`]`),
-      `the component substitutes copy of its own for a missing ${field}`
-    );
-    assert.doesNotMatch(
-      artBinding,
-      new RegExp(`${field}:\\s*[^,\\n]*(\\?\\?|\\|\\|)`),
-      `the adapter defaults ${field}, so absence never reaches the component`
-    );
-    assert.match(artBinding, new RegExp(`${field}: photo\\.${field}`), `the adapter drops ${field} on the way through`);
-  }
-  // The caption is the LAST thing in the block, after the counter, so even
-  // the reserved lane sits below everything a reader is looking at.
-  assert.ok(
-    mediaGallery.indexOf('class="gallery-caption"') > mediaGallery.indexOf('class="gallery-count"'),
-    'the caption sits above the counter, so the reserved lane pushes the frame down the page'
-  );
-});
-
 test('a metadata link is real outbound navigation, isolated and named (issue 202)', () => {
   const meta = /<div class="gallery-lightbox-meta">([\s\S]*?)<\/div>/.exec(mediaGallery)?.[1] ?? '';
   assert.ok(meta.length > 0, 'the lightbox metadata block is not where this pin expects it');
@@ -3007,118 +1809,30 @@ test('a metadata link is real outbound navigation, isolated and named (issue 202
   assert.match(meta, />\{item\.link\.label\}</);
 });
 
-test('the visible frame reserves its box before any byte arrives, and lazy-loads', () => {
-  // The box is reserved before a byte arrives, and the ratio the stylesheet
-  // holds open is the ratio the markup declares — two statements of one
-  // shape that cannot disagree because both read the same token every media
-  // card on the page shares.
-  const style = styleBlock(mediaGallery);
-  assert.match(style, /aspect-ratio:\s*var\(--gallery-stage-aspect, 1\)/);
-  // The cap (issue 157) is a SECOND, independent ceiling on the same
-  // reservation, not a second timing: it still resolves before any byte
-  // arrives, through the gallery's own stage token (near-square since
-  // 2026-08-28; the 16:9 feed tokens stay with the feed cards).
-  assert.match(style, /max-block-size:\s*var\(--gallery-stage-size, 28rem\)/);
-  // The intrinsic box the markup DECLARES moved to a per-item value with
-  // issue 207, because a runtime manifest's items each carry their own
-  // dimensions. It is a size hint, not the reservation: the reservation is
-  // the token pair above, identical for every item, which is why swapping the
-  // vendored set for a volume-served one shifts nothing.
-  assert.match(mediaGallery, /const itemWidth = \$derived\(item\.width \?\? width\)/);
-  assert.match(mediaGallery, /const itemHeight = \$derived\(item\.height \?\? height\)/);
-  assert.match(mediaGallery, /width=\{itemWidth\}/);
-  assert.match(mediaGallery, /height=\{itemHeight\}/);
-  assert.match(mediaGallery, /loading="lazy"/);
-  assert.match(mediaGallery, /decoding="async"/);
-});
-
-/* THE INCOMING NEIGHBOURS ARE DECODED BEFORE A SWIPE ASKS THEM TO ARRIVE
- * (issue 285). The stage mounts one <img> and swaps its src on a commit — the
- * one-frame rule above — and that src was never requested before the commit,
- * so under a phone's network the entry animation slid an EMPTY frame in
- * (MEASURED at 480ms of blank stage on a throttled 3G). The two items a swipe
- * can reach are warmed off-DOM the moment they become neighbours; the browser
- * lane measures the arrival, this pins the mechanism to those two items. */
-test('the gallery warms exactly its two neighbours, posters for films, and never the whole set (issue 285)', () => {
-  const warming = /const warmed = new Map<string, HTMLImageElement>\(\);\s*\$effect\(\(\) => \{([\s\S]*?)\n  \}\);/.exec(
-    mediaGallery
-  );
-  assert.ok(warming, 'the neighbour-warming effect is gone');
-  const body = warming[1];
-  assert.match(body, /\[visible\[previousIndex\], visible\[nextIndex\]\]/, 'the warmed set is not the two neighbours');
-  assert.match(body, /neighbour\.video === undefined \? neighbour\.previewSrc : neighbour\.video\.posterSrc/);
-  assert.match(body, /new Image\(\)/);
-  assert.match(body, /image\.decoding = 'async'/);
-  assert.doesNotMatch(body, /visible\.map|for \(const \w+ of visible\)|items\.map/, 'the whole set is warmed');
-  // Off-DOM by construction: the one-frame rule counts markup, and the
-  // warmed images must never enter it.
-  assert.doesNotMatch(body, /appendChild|document\./);
-});
-
-test('the gallery frame cap is pinned at its literal value, independent of computed style', () => {
-  // Daybreak Blue's review of PR #161 found e2e coverage that read
-  // getComputedStyle(...).maxHeight from the very stylesheet under test and
-  // derived its OWN expectation from that reading, so a mutation widening
-  // the cap (20rem -> 200rem) moved the expectation and the rendered
-  // behavior together and the suite never noticed. This test pins the
-  // LITERAL value the design chose — 20rem, 320px at this page's
-  // unmodified 16px root — straight out of the source text; the e2e
-  // assertions in rendering-lanes.spec.mjs hardcode the same literal 320
-  // rather than reading it back from the DOM, so a widened cap is a diff
-  // against a fixed number in two independent places, not against itself
-  // in one.
-  assert.match(
-    styles,
-    /--card-media-max-block-size:\s*20rem;/,
-    'the gallery cap token must read exactly 20rem — a change here must be a deliberate design edit, verified against the e2e literal too'
-  );
-});
-
-/* WHERE THE LIGHTBOX IS ANCHORED, which is where the owner's "when I close
- * the media, it returns me to the top of the page" was decided (0.1.52,
- * issue 233). An author `position: relative` beats the UA's `dialog:modal
- * { position: fixed }` on cascade ORIGIN whatever the specificity, so that
- * `position: fixed` never applied. What the engines computed instead was
- * `absolute` (MEASURED, both), which put the box in the document's own
- * coordinate space at the top of the page, and showModal() scrolled the
- * reader there to focus the first control inside it. MEASURED at a 1280x720
- * viewport on the live 0.1.52 origin:
- * scrollY 1943 before the click, 0 while the dialog was open, on Chromium and
- * WebKit alike. The rendered half of this floor is
- * e2e/rendering-lanes.spec.mjs, which measures a real engine's scroll across
- * all three close paths; neither half replaces the other — this one binds
- * every engine, including the ones no runner has. */
-test('the enlarged lightbox is anchored to the viewport, never to the document (issue 233)', () => {
-  const rule = /\.gallery-lightbox\s*\{([^}]*)\}/.exec(mediaGallery);
-  assert.ok(rule, 'the lightbox lost the rule that places it');
-  assert.match(
-    rule[1],
-    /position:\s*fixed;/,
-    'a modal dialog is placed against the viewport; anything else scrolls the reader to wherever the box landed in the document'
-  );
-  assert.doesNotMatch(
-    rule[1],
-    /position:\s*(?:relative|absolute|static);/,
-    'an author position other than fixed overrides the UA modal placement on cascade origin, which is the defect itself'
-  );
-  // Centred by the same two declarations a UA uses for a modal, stated in the
-  // component so the placement is its own claim rather than an inherited one.
-  assert.match(rule[1], /inset:\s*0;/, 'the lightbox states no insets, so its centring is whatever the engine defaults to');
-  assert.match(rule[1], /margin:\s*auto;/, 'the lightbox states no auto margins, so it cannot centre itself');
-});
-
 // ---------------------------------------------------------------------------
 // The media binding
 // ---------------------------------------------------------------------------
 
-test('the media block introduces itself with its heading, and only its heading', () => {
-  assert.match(artBinding, /heading: 'Media'/);
+/* THE GALLERY IS ITS OWN SECTION NOW (owner directive of 2026-09-03, issue
+ * 287), so the block declares no heading at all — and that is the same ruling
+ * the owner already made for the coding projects on 2026-08-31 ("remove coding
+ * projects and just make it a clean Projects"), applied for the same reason:
+ * a block heading reading "Media" one line under the section's own "Gallery"
+ * title says the word twice.
+ *
+ * The presentation CHANNEL survives untouched — PageSection still renders a
+ * subsection head for any block that declares one — so the day a section
+ * carries two named blocks again it is a manifest edit, not a component one.
+ * What is pinned is that this block declares none of the three. */
+test('the media block declares no heading, intro or note of its own', () => {
+  assert.doesNotMatch(mediaBinding, /heading:/);
   // The retired intro/note provenance lines do not come back (issue 176):
   // the gallery's whole content is the frame itself now, and the licence
   // lives in gallery.ts's own doc comment and SOURCES.md — a maintainer
   // fact, not something a visitor came here to read (the same ruling issue
   // 167 already made for the Coding Projects capture note).
-  assert.doesNotMatch(artBinding, /intro:|note:/);
+  assert.doesNotMatch(mediaBinding, /intro:|note:/);
+  // The channel itself stays, so a named block can still introduce itself.
   assert.match(pageSectionSource, /<h3 class="subsection-title">\{block\.heading\}<\/h3>/);
 });
 
@@ -3130,4 +1844,133 @@ test('the coding-projects block declares no heading of its own (owner ruling, 20
      'Coding Projects'` fields elsewhere in this suite are the panel's own
      server-side metadata and are NOT what this pin is about. */
   assert.doesNotMatch(projectsBinding, /heading:/);
+});
+
+/* THE GALLERY IS A ROW OF TILES (owner directive, 2026-09-03, issue 287). The
+ * single visible frame of issues 176/202/219/243/265 is superseded by a grid of
+ * reserved square tiles beside one control tile, with the native dialog as the
+ * stage. These pins keep what those rulings were FOR — one full-size picture at
+ * a time, bytes only on demand, films inline and never autoplaying, reserved
+ * boxes, 44px controls, sets as data, tokens for every dimension — and pin the
+ * behaviour rather than the markup wherever the source lets them. */
+const galleryStyle = styleBlock(mediaGallery);
+
+test('the gallery is a row of reserved square tiles beside one control tile, and the row is the column (owner directive, 2026-09-03, issue 287)', () => {
+  assert.match(mediaGallery, /tiles = 4 \}: MediaGalleryProps = \$props\(\)/, 'the mock draws four tiles; the count is a prop with that default');
+  assert.match(mediaGallery, /visible\.slice\(0, Math\.max\(1, tiles\)\)/);
+  assert.match(mediaGallery, /<div class="gallery-grid" data-gallery-tiles=\{shownTiles\.length\}>/);
+  assert.match(mediaGallery, /<button\s+type="button"\s+class="gallery-tile"\s+data-gallery-kind="image"/);
+  assert.match(mediaGallery, /class="gallery-thumb"\s+src=\{tile\.previewSrc\}\s+alt=""[\s\S]*?loading="lazy"\s+decoding="async"/, 'a thumbnail is decoration inside a labelled button, lazy and async');
+  assert.match(mediaGallery, /aria-label=\{`Open \$\{itemNoun\(tile\)\}: \$\{tile\.alt\}`\}/);
+  assert.match(galleryStyle, /\.gallery-grid \{[^}]*grid-template-columns: repeat\(var\(--gallery-columns\), minmax\(0, 1fr\)\)/, 'the row fills the column; no gutter is dead');
+  assert.match(galleryStyle, /\.gallery-tile \{[^}]*aspect-ratio: var\(--gallery-tile-aspect\)/, 'every tile reserves its square before a byte arrives');
+  assert.match(styles, /--gallery-columns: 5;/);
+  const phoneColumns = styles.indexOf('--gallery-columns: 2;');
+  assert.ok(phoneColumns > styles.indexOf('--gallery-columns: 5;'), 'a phone folds the same tiles to two across — declared AFTER the token block, or the cascade hands the phone five columns');
+  assert.match(styles.slice(styles.lastIndexOf('@media (max-width: 45rem)', phoneColumns), phoneColumns), /^@media \(max-width: 45rem\) \{[\s\S]*:root \{\s*$/m, 'and inside the phone block, on :root');
+  assert.equal((mediaGallery.match(/class="gallery-control"/g) ?? []).length, 1);
+  assert.match(mediaGallery, /`\$\{shownTiles\.length\} of \$\{visible\.length\} shown · open one to page through all`/, 'the control tile says how much of the set the row shows');
+});
+
+test('opening a tile is the only way onto the stage, a native <dialog> that loads the full derivative only then', () => {
+  assert.match(mediaGallery, /onclick=\{\(event\) => open\(tile, event\.currentTarget\)\}/);
+  assert.match(mediaGallery, /<dialog\s+bind:this=\{dialogEl\}\s+class="gallery-lightbox"[\s\S]*?onclose=\{onDialogClose\}\s+onkeydown=\{onDialogKeydown\}\s+onclick=\{onBackdropClick\}/);
+  assert.match(mediaGallery, /if \(enlarged && !dialogEl\.open\) dialogEl\.showModal\(\);/);
+  const stage = /\{#if enlarged && item !== undefined\}([\s\S]*)\{\/if\}\s*<\/dialog>/.exec(mediaGallery)?.[1] ?? '';
+  assert.ok(stage.length > 0, 'the stage branch is not where this pin expects it');
+  assert.match(stage, /src=\{item\.fullSrc\}/, 'the full derivative loads inside the stage branch');
+  assert.doesNotMatch(mediaGallery.replace(stage, ''), /fullSrc/, 'and nowhere else');
+  assert.match(stage, /<source media=\{`\(max-width: \$\{item\.previewWidth\}px\)`\} srcset=\{item\.previewSrc\} \/>/, 'a phone gets the preview rung the manifest measured (issue 241)');
+  assert.match(mediaGallery, /aria-label="Close enlarged photograph"/);
+  assert.match(mediaGallery, /async function onDialogClose\(\): Promise<void> \{\s*enlarged = false;\s*await tick\(\);\s*openerEl\?\.focus\(\);/, 'closing hands focus back to the tile that opened the stage');
+  assert.match(mediaGallery, /if \(event\.key === 'ArrowRight'\) next\(\);\s*else if \(event\.key === 'ArrowLeft'\) previous\(\);/);
+  assert.match(mediaGallery, /if \(event\.target === dialogEl\) dialogEl\?\.close\(\);/, 'the backdrop closes it');
+});
+
+test('the stage pages the stills with prev/next, the arrow keys and a swipe — all inside 44px targets — and wraps at both ends', () => {
+  assert.match(mediaGallery, /const stills = \$derived\(visible\.filter\(\(candidate\) => candidate\.video === undefined\)\);/, 'a film is played where it sits, never paged onto the stage');
+  assert.match(mediaGallery, /index = \(shown \+ 1\) % total;/);
+  assert.match(mediaGallery, /index = \(shown - 1 \+ total\) % total;/);
+  assert.match(mediaGallery, /data-gallery-nav="previous"/);
+  assert.match(mediaGallery, /data-gallery-nav="next"/);
+  assert.match(galleryStyle, /\.gallery-nav \{[^}]*inline-size: var\(--control-target\);\s*block-size: var\(--control-target\);/);
+  assert.match(mediaGallery, /<div class="gallery-stage" use:swipeHorizontal=\{swipe\}>/);
+  assert.match(galleryStyle, /\.gallery-stage \{[^}]*touch-action: pan-y;/, 'the swipe never contests the page’s vertical scroll');
+  assert.match(mediaGallery, /commit: \(direction: -1 \| 1\) => \(direction === 1 \? next\(\) : previous\(\)\),/);
+  assert.doesNotMatch(mediaGallery, /dragX|armSettle|entryOffset|settleMs/, 'the drag-follow strip and its settle went with the strip');
+  assert.match(mediaGallery, /aria-live="polite"/, 'every move is announced as a sentence');
+});
+
+test('a film plays inline in its own tile behind one play control — one at a time, never in the dialog, and nothing autoplays (issues 233, 243, 207)', () => {
+  const filmTile = /<div class="gallery-tile" data-gallery-kind="video">([\s\S]*?)<\/div>\s*\{:else\}/.exec(mediaGallery)?.[1] ?? '';
+  assert.ok(filmTile.length > 0, 'the film tile is not where this pin expects it');
+  assert.match(filmTile, /<video\s+class="gallery-player"\s+controls=\{playingKey === tile\.key\}\s+playsinline\s+preload="metadata"\s+poster=\{tile\.video\.posterSrc\}/);
+  assert.doesNotMatch(mediaGallery, /\bautoplay\b/, 'no element ever carries the attribute');
+  assert.equal((mediaGallery.match(/\.play\(/g) ?? []).length, 1, 'exactly one call ever starts a film');
+  assert.match(mediaGallery, /function startFilm\(key: string\): void \{\s*playingKey = key;\s*void players\[key\]\?\.play\(\)\.catch\(\(\) => \{\}\);/);
+  assert.match(filmTile, /onclick=\{\(\) => startFilm\(tile\.key\)\}/, 'and it is the press on the control');
+  assert.match(filmTile, /onended=\{\(\) => \(playingKey = undefined\)\}/, 'a finished film hands its tile back');
+  const stage = /\{#if enlarged && item !== undefined\}([\s\S]*)\{\/if\}\s*<\/dialog>/.exec(mediaGallery)?.[1] ?? '';
+  assert.doesNotMatch(stage, /<video/, 'the dialog never holds a player');
+  assert.match(galleryStyle, /\.gallery-tile \{[^}]*background: var\(--gallery-stage-ground\);/, 'a poster in flight sits on a ground, not a hole (issue 239)');
+  assert.match(galleryStyle, /\.gallery-player \{[^}]*object-fit: contain;/, 'the film reduces inside the square rather than the square growing (issue 243)');
+});
+
+test('the media sets are data: kind-derived by default, named by the manifest, chrome only when there is a choice (issue 275)', () => {
+  assert.match(mediaGallery, /return candidate\.set \?\? \(candidate\.video === undefined \? 'Photographs' : 'Videos'\);/);
+  assert.match(mediaGallery, /const sets = \$derived\(\[\.\.\.new Set\(items\.map\(setOf\)\)\]\);/, 'a set exists exactly when something is in it');
+  assert.match(mediaGallery, /\{#if sets\.length > 1\}\s*<div class="gallery-sets" role="group" aria-label="Media set">/, 'one set draws no switch');
+  assert.match(mediaGallery, /aria-pressed=\{name === activeSet\}/);
+  assert.match(mediaGallery, /\{name\} · \{countOf\(name\)\}/, 'each set states its own count');
+  assert.match(mediaGallery, /chosenSet = name;\s*playingKey = undefined;\s*index = 0;/, 'a set change hands every film back and returns the stage to the start');
+  assert.match(galleryStyle, /\.gallery-set \{[^}]*min-inline-size: var\(--control-target\);\s*min-block-size: var\(--control-target\);/);
+});
+
+test('the gallery states no colour or length of its own — every dimension is a token', () => {
+  const rules = galleryStyle.replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.doesNotMatch(rules, /#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i, 'no colour literal');
+  for (const line of rules.split('\n').filter((candidate) => /^\s*color:|^\s*background(-color)?:|border-color:/.test(candidate))) {
+    assert.match(line, /var\(--|inherit|transparent|none/, `a colour must come from a token: ${line.trim()}`);
+  }
+  assert.doesNotMatch(rules, /\d(\.\d+)?(rem|em|vw|vh)\b(?![^{]*svh)/, 'no rem/em/viewport literal');
+  for (const px of rules.match(/-?\d+px/g) ?? []) {
+    assert.ok(['2px', '-2px', '-4px', '999px'].includes(px), `the only px literals are the focus ring and the pill radius, not ${px}`);
+  }
+  const svh = rules.match(/80svh/g) ?? [];
+  assert.equal(svh.length, 1);
+  assert.match(rules, /@supports \(max-block-size: 1svh\) \{\s*\.gallery-lightbox-image \{\s*max-block-size: 80svh;/, 'the dynamic unit is guarded, over a token base');
+});
+
+test('the close mark is small, off the artwork and a 44px target; the scrim and the stage caps are tokens (issue 202)', () => {
+  assert.match(mediaGallery, /class="icon-button gallery-lightbox-close"/, 'the page’s own icon control, 44px by its class');
+  assert.match(galleryStyle, /\.gallery-lightbox-close \{[^}]*inset-block-start: 0;\s*inset-inline-end: 0;/);
+  assert.match(galleryStyle, /\.gallery-close-mark \{[^}]*inline-size: var\(--gallery-close-size\);\s*block-size: var\(--gallery-close-size\);/);
+  assert.match(galleryStyle, /\.gallery-lightbox \{[^}]*padding: var\(--gallery-close-lane\) 0 0;/, 'the mark sits in its own lane above the picture');
+  assert.match(galleryStyle, /\.gallery-lightbox::backdrop \{\s*background: var\(--gallery-scrim\);/);
+  assert.match(galleryStyle, /max-inline-size: var\(--gallery-lightbox-max-inline\);[\s\S]*max-block-size: var\(--gallery-image-max-block\);/);
+});
+
+/* TWO LAYERS, NOT THE SET (owner directive, 2026-09-03, issue 287). The band
+ * is handed EVERY vendored texture so a mode switch can crossfade across sets,
+ * and it mounts only the texture showing and the one it left — eight files on
+ * first paint was the cost of mounting them all. Pinned where it is decided;
+ * the rendering lane "the picture band mounts the texture showing and the one
+ * it left" counts the mounted layers in the browser. */
+test('the texture band is handed the whole set and mounts only the picture showing and the one it left', async () => {
+  const band = await readFile(new URL('../src/lib/components/TextureBand.svelte', import.meta.url), 'utf8');
+  const app = await readFile(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  assert.match(app, /layers=\{bandTextures\}/, 'the band is handed every vendored texture, which is what makes the mount rule matter');
+  assert.match(band, /let recent = \$state<string\[\]>\(\[\]\);/, 'the band remembers which files it has shown');
+  assert.match(
+    band,
+    /recent = \[active, \.\.\.recent\.filter\(\(file\) => file !== active\)\]\.slice\(0, 2\);/,
+    'the memory is the active file and the one before it, never longer'
+  );
+  assert.match(
+    band,
+    /const mounted = \$derived\(layers\.filter\(\(layer\) => recent\.includes\(layer\.file\)\)\);/,
+    'what mounts is the remembered pair, filtered from the set'
+  );
+  assert.match(band, /\{#each mounted as layer \(layer\.file\)\}/, 'the template iterates the mounted pair');
+  assert.doesNotMatch(band, /\{#each layers as layer/, 'iterating the whole set is the first-paint cost this rule removes');
 });

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
 
@@ -15,8 +17,16 @@ import { validatedDevApiPort } from './src/lib/devApiPort.ts';
 // tests/vite-config.test.mjs, which calls this file's exported config
 // function directly with `{ command: 'build' }` and a hostile
 // DEV_API_PORT and asserts it neither throws nor returns a server block.
+// The footer names the version the page was built from (owner directive,
+// 2026-09-03, issue 287). VERSION is the repository's one statement of it, so
+// the build reads that file and bakes the string in as a constant: no runtime
+// read, no second copy to drift, and a release that forgets the bump still
+// cannot print a number the tree does not carry.
+export const siteVersion = readFileSync(new URL('../VERSION', import.meta.url), 'utf8').trim();
+
 const buildConfig = {
   plugins: [svelte()],
+  define: { __SITE_VERSION__: JSON.stringify(siteVersion) },
   build: {
     // The origin serves CSP default-src 'self', which forbids data: URIs,
     // so no asset may ever be inlined: every icon stays a real same-origin

@@ -114,7 +114,6 @@
     stripIndexAt,
     weekdayAxis,
     type GridCell,
-    type SeriesView,
     type StripGeometry,
     type ValueFormat
   } from '../grid';
@@ -125,7 +124,6 @@
   let {
     columns,
     noun = 'contribution',
-    view = 'daily' as SeriesView,
     label,
     emptyNote = 'no activity data',
     fullWidth = false,
@@ -134,7 +132,6 @@
   }: {
     columns: GridCell[][];
     noun?: string;
-    view?: SeriesView;
     label: string;
     emptyNote?: string;
     /* How a cell's figure is written out, in the card AND in the accessible
@@ -429,7 +426,7 @@
               label: '',
               value: selectedCell.absent ? 'no data' : formatValue(selectedCell.value)
             },
-            { label: '', value: cellPeriod(selectedCell, view) }
+            { label: '', value: cellPeriod(selectedCell) }
           ]
         }
   );
@@ -649,9 +646,10 @@
               data-grid-absent={cell.absent ? 'true' : 'false'}
               data-grid-selected={selected === index ? 'true' : undefined}
               data-grid-level={cell.absent ? '' : gridLevel(cell.value, peak)}
+              data-grid-peak={!cell.absent && peak > 0 && cell.value === peak ? 'true' : undefined}
               role="option"
               aria-selected={selected === index}
-              aria-label={cellLabel(cell, noun, view, formatValue)}
+              aria-label={cellLabel(cell, noun, formatValue)}
             ></span>
           {/each}
         </div>
@@ -997,6 +995,18 @@
 
   .grid-cell[data-grid-level='4'] {
     background: var(--grid-cell-4, #86b6ef);
+  }
+
+  /* THE PEAK IS ITS OWN CHANNEL (owner directive, 2026-09-03, issue 287): the
+     busiest day of the window wears the page's one highlight, through an
+     attribute of its own rather than through a sixth ramp bucket. Two facts,
+     two attributes — the level says how busy the day was, the peak says it was
+     the busiest — which is what keeps the ramp monotone in lightness while
+     still marking the extreme the owner wanted marked. It is never colour
+     alone: the peak cell carries the identical count-and-date reading every
+     other cell does, in its accessible label and in the shared detail card. */
+  .grid-cell[data-grid-peak='true'] {
+    background: var(--grid-cell-peak, #ff3b1f);
   }
 
   /* A day the window does not cover is absent, not a zero, and is still

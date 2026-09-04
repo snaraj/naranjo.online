@@ -23,31 +23,27 @@ const textEntryFloorPx = 16;
 // The comfortable minimum for a finger, in CSS pixels.
 const touchFloorPx = 44;
 
-/* The gallery stage's ceiling: 28rem at this page's unmodified 16px root,
- * --gallery-stage-size's value in MediaGallery.svelte.
+/* THE 448px STAGE CAP IS GONE (owner directive, 2026-09-03, issue 287).
+ * galleryStageCapPx pinned --gallery-stage-size, the 28rem ceiling the single
+ * visible frame was sized by, and it was written here as a literal rather
+ * than read back off the page because Daybreak Blue's review of PR #161
+ * proved the self-referential shape lets a 28rem -> 280rem mutation survive:
+ * expectation and behaviour move together when both derive from the one
+ * mutated token.
  *
- * It replaces the 20rem --card-media-max-block-size cap this constant used to
- * carry (issue 157). The gallery stopped borrowing the feed card's 16:9 media
- * box on 2026-08-28 — the owner's drawings are portrait scans, and a wide
- * frame either cropped them or drowned them in dead side space, so the stage
- * is now a SQUARE sized by its own token and the picture is `contain` inside
- * it. The cap moved with the box; the reason this is a literal did not.
+ * The frame it capped is retired. The gallery is a GRID of square tiles that
+ * spans the reading column, and a cap on that grid would put back the dead
+ * gutter the owner's no-dead-space rule forbids — the grid filling its column
+ * is the point of the redesign, not an accident of it. What replaces the cap
+ * is the opposite measurement, and it is still independent of every token:
+ * the grid's own right edge against the COLUMN's, and the cells' widths
+ * against each other, in the fill lane below.
  *
- * A gallery-cap assertion below compares a MEASURED box against this fixed
- * number, never against getComputedStyle(stage).maxBlockSize read back from
- * the same page — Daybreak Blue's review of PR #161 proved that
- * self-referential shape lets a 28rem -> 280rem mutation survive undetected,
- * because the expectation and the rendered behavior move together when both
- * derive from the one (mutated) token. */
-const galleryStageCapPx = 448;
-
-/* THE FILM'S STAGE IS THE SAME STAGE (owner directive, 2026-08-28, issue 243:
- * "make it one single block that doesn't expand, reduce based on the media").
- * The three constants that lived here — a 432x768 widescreen box and its
- * 1.7778 aspect — are gone with the token pair that produced them, and the
- * film is now measured against galleryStageCapPx like everything else. The
- * shape the film itself has is the ITEM's, and it is answered by letterboxing
- * inside the block rather than by resizing it. */
+ * The film's box went the same way. A film is a tile like any other now, so
+ * the three constants that once described its widescreen stage — and then the
+ * shared square cap that replaced them (issue 243) — are answered by
+ * comparing a film's tile against the still's tile beside it, two boxes of
+ * one page rather than any number this file states. */
 
 /* One gallery/v1 manifest carrying a still and a film, served from the media
  * volume's own mutable path so the page takes the route it takes in
@@ -62,23 +58,25 @@ const galleryStageCapPx = 448;
  * asserting the operator's pipeline rather than this build. Publishing a
  * fixture film into the repository to change that would also be exactly the
  * heavy media requirement 11 keeps out of git. */
-/* THE ITEMS CARRY CAPTIONS, and the fixture's blindness to them is why the
- * zero-shift lane below passed against a site that visibly moved (issue 265).
- * A gallery/v1 item may carry a title and a description; neither of these two
- * did, so "moving between a still and a film shifts the document by nothing"
- * measured a page with no caption to shift it — one added field flipped the
- * same lane from 0 to 50px red.
- * The two are DELIBERATELY UNEQUAL, and the taller one is deliberately
- * SECOND: the reservation is the tallest caption in the CURRENT SET, so a
- * mutation that reserved only the first item's caption, or only the current
- * item's, is caught by moving onto the film rather than by the fixture
- * happening to be symmetric. */
-/* BOTH ITEMS NAME ONE EXPLICIT SET (issue 275). Without it the component's
- * kind-derived default would split this fixture into a Drawings strip and a
- * Videos strip, and every mixed-strip walk below — still onto film, film onto
- * still, the caption reservation across kinds — would silently measure a
- * one-item strip instead. A shared explicit set is exactly how an operator
- * publishes a mixed strip, so the fixture exercises that admitted path. */
+/* THE ITEMS CARRY TITLES AND A DESCRIPTION, and where they may appear is now
+ * exactly one place: the stage's meta block. The tile grid has no caption
+ * lane — the lane, and the zero-shift lane that measured it, went with the
+ * strip (owner directive, 2026-09-03, issue 287) — so an item's words reach
+ * a reader only when that item is opened, which is a still and never a film.
+ * The film's description is kept for precisely that reason: it is the copy
+ * that must NOT render anywhere, on a page where the film is on screen the
+ * whole time, and a fixture with nothing to leak could not show that.
+ * The two are DELIBERATELY UNEQUAL and the taller one is deliberately SECOND,
+ * as they were: a lane that only ever measured the first item's metadata is
+ * one a mutation walks straight past. */
+/* BOTH ITEMS NAME ONE EXPLICIT SET (issue 275), which is what puts a still
+ * and a film in the SAME tile row: an operator publishes a mixed set exactly
+ * this way, and without the field the component's kind-derived default would
+ * split the fixture into Photographs and Videos and every mixed-row
+ * measurement below would silently be taken against a one-tile row.
+ * The set control's own lane serves this fixture with the field STRIPPED, so
+ * the two-set branch is exercised by the same data through the same admitted
+ * path rather than by a second fixture nobody else uses. */
 const galleryManifestFixture = {
   schema: 'gallery/v1',
   items: [
@@ -235,19 +233,22 @@ async function visit(page) {
   await settled(page);
 }
 
-/* Whether this project's emulated device is one the gallery's stage pair is
- * SHOWN on — the same query the stylesheet keys the pair's visibility to,
- * which is lib/tooltip.ts's finePointerQuery. Capability, never project name
- * (this file's own doctrine). */
-function finePointer(page) {
-  return page.evaluate(() => window.matchMedia('(hover: hover) and (pointer: fine)').matches);
-}
+/* finePointer is GONE (owner directive, 2026-09-03, issue 287), and it is
+ * removed rather than kept warm for the same reason alphaOf was: a helper
+ * nothing calls is a helper nobody maintains. It answered "is this project's
+ * emulated device one the gallery's stage pair is SHOWN on", which was a real
+ * question only while the pair was gated behind a fine pointer — the
+ * 2026-08-31 sketch retired that gate (issue 275) and the tile grid has no
+ * capability-gated control at all, so its last caller went with the strip.
+ * The pointer capability IS still asked, by followsPointer further down this
+ * file, which is the detail-tip battery's own question and has callers. */
 
-/* Moves the strip to the item whose position label is `label`, through the
- * stage pair — a control every device shows since the 2026-08-31 sketch
- * retired the dots and their capability gate with them (issue 275). The walk
- * is bounded by the longest strip this suite serves, so a label nothing
- * carries fails loudly on the arrival check rather than looping. */
+/* Moves the OPEN STAGE to the still whose count line reads `label`, through
+ * the dialog's own next control (owner directive, 2026-09-03, issue 287: the
+ * strip and its position row are gone, and paging is something only the
+ * enlarged surface does now). The walk is bounded by the longest set this
+ * suite serves, so a label nothing carries fails loudly on the arrival check
+ * rather than looping. */
 async function goToItem(page, label) {
   const count = page.locator('.gallery-count');
   const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
@@ -296,15 +297,16 @@ function contrastRatio(foreground, background) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-/* The alpha channel of whatever spelling of a color the engine computed —
- * `rgba(r, g, b, a)`, `color(srgb r g b / a)`, or an opaque form that carries
- * no alpha component at all and therefore means 1. It reads the LAST
- * component only when the notation actually carries four, so an opaque
- * `rgb(r, g, b)` can never be mistaken for a 62%-transparent one. */
-function alphaOf(color) {
-  const parsed = (color.match(/[\d.]+/g) ?? []).map(Number);
-  return parsed.length > 3 ? parsed[3] : 1;
-}
+/* alphaOf is GONE (owner directive, 2026-09-03, issue 287). It read the alpha
+ * channel out of whatever spelling of a colour an engine computed, and it had
+ * exactly one consumer: the pin on the fixed reading-mode control's backdrop
+ * plate. The ledger's masthead is an in-flow row, nothing scrolls beneath it,
+ * and that lane now asserts the structural fact that makes a backdrop
+ * unnecessary instead of the backdrop's own opacity — so the helper has no
+ * caller left. It is removed rather than kept warm: a helper nothing calls is
+ * a helper nobody maintains, and the contrast readers above (channels,
+ * relativeLuminance, contrastRatio) are the colour machinery this file
+ * actually uses. */
 
 const openReadingModes = async (page) => {
   await page.getByRole('button', { name: 'Reading mode' }).click();
@@ -514,12 +516,19 @@ test('switching the reading mode repaints without moving anything', async ({ pag
   const geometry = () =>
     page.evaluate(() => {
       const boxes = {};
+      const shifted = ({ x, y, width, height }, offset) => ({ x, y: y + offset, width, height });
       const round = ({ x, y, width, height }) =>
         [x, y, width, height].map((value) => Math.round(value * 100) / 100);
+      /* DOCUMENT coordinates, not viewport ones (owner directive, 2026-09-03,
+         issue 287), and the scroll position beside them. A viewport-relative
+         box moves for two different reasons — the page re-laid out, or the
+         document scrolled — and this lane's claim is about the first. The two
+         are asserted separately below so a failure says which one happened. */
+      const scrollY = window.scrollY;
       for (const selector of ['#app', '.page-header', 'main', 'h1', '.panel-stack']) {
         const node = window.document.querySelector(selector);
         if (node === null) continue;
-        boxes[selector] = round(node.getBoundingClientRect());
+        boxes[selector] = round(shifted(node.getBoundingClientRect(), scrollY));
       }
       /* Every heatmap block by name, not just the first. A graph is now sized
          to the columns it draws out of the cell-metric custom properties, and
@@ -527,10 +536,11 @@ test('switching the reading mode repaints without moving anything', async ({ pag
          them — so the four modes are exactly where that rule is tested. */
       for (const block of window.document.querySelectorAll('.grid-block')) {
         const label = block.querySelector('.grid-strip')?.getAttribute('aria-label') ?? 'grid';
-        boxes[`grid:${label}`] = round(block.getBoundingClientRect());
+        boxes[`grid:${label}`] = round(shifted(block.getBoundingClientRect(), scrollY));
       }
       return {
         boxes,
+        scrollY,
         scrollHeight: window.document.documentElement.scrollHeight,
         surface: getComputedStyle(window.document.documentElement).backgroundColor,
       };
@@ -564,6 +574,15 @@ test('switching the reading mode repaints without moving anything', async ({ pag
       expect(after.surface, `${label} paints the same page surface as ${other}`).not.toBe(surface);
     }
     painted.set(label, after.surface);
+    /* NO SCROLL, stated on its own: a swap that nudges the document is a
+       jolt the reader feels even when not one box re-laid out, and it is a
+       different defect from a relayout — measured on WebKit as a 2px scroll
+       when focus returned to a masthead control sitting inside a stale
+       `scroll-padding-top`. It is asserted exactly, not roughly. */
+    expect(
+      after.scrollY,
+      `the ${label} swap scrolled the document from ${before.scrollY} to ${after.scrollY}`
+    ).toBe(before.scrollY);
     expect(after.boxes, `the ${label} swap moved the page under the reader`).toEqual(before.boxes);
     expect(after.scrollHeight, `the ${label} swap changed the page height`).toBe(before.scrollHeight);
   }
@@ -576,6 +595,10 @@ test('switching the reading mode repaints without moving anything', async ({ pag
   await page.getByRole('button', { name: 'Auto', exact: true }).click();
   await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
   const unstamped = await geometry();
+  expect(
+    unstamped.scrollY,
+    `returning to auto scrolled the document from ${before.scrollY} to ${unstamped.scrollY}`
+  ).toBe(before.scrollY);
   expect(unstamped.boxes, 'returning to auto moved the page under the reader').toEqual(before.boxes);
   expect(unstamped.scrollHeight).toBe(before.scrollHeight);
   expect(
@@ -750,17 +773,36 @@ test('a phone still renders the single full-width column it always did', async (
     for (const card of observed.cards) {
       expect(card, `a card is ${card}px wide on a ${width}px phone`).toBeCloseTo(expected, 0);
     }
-    /* And the guarantee that replaces the lane, MEASURED rather than reasoned:
-       at rest the control is still in the viewport's own top-end corner, and
-       once the reader has scrolled it is entirely gone from the viewport — so
-       it holds no pixels over scrolled content at any offset, which is the
-       thing the lane existed to promise. A control that had stayed
-       viewport-glued reports the identical box at both offsets and fails the
-       second of these by its full height. */
+    /* And the guarantee that replaces the lane, MEASURED rather than reasoned.
+       THE CONTROL RIDES THE MASTHEAD NOW (owner directive, 2026-09-03, issue
+       287). The ledger's head row is an ordinary in-flow row carrying the page
+       mark, the section nav and the reading-mode control, so "at rest it is in
+       the viewport's own top-end corner" describes a fixed control this page
+       does not have any more. What that corner check was FOR is unchanged and
+       is what is measured here: the control costs the column no inline lane,
+       and it holds no pixels over scrolled content at any offset. So it is
+       measured against the row it now lives in rather than against the
+       viewport — the masthead opens at the page's own top reserve, the control
+       sits inside that row at the row's end edge, the row stops at the
+       column's end edge, and once the reader has scrolled the whole row is
+       gone. A control that had stayed viewport-glued reports the identical box
+       at both offsets and fails the last of these by its full height. */
     const control = await page.evaluate(async () => {
       const header = window.document.querySelector('.page-header');
-      const rest = header.getBoundingClientRect();
-      const at = { top: rest.top, right: rest.right, bottom: rest.bottom };
+      const button = header.querySelector('[aria-label="Reading mode"]');
+      const row = header.getBoundingClientRect();
+      const seat = button.getBoundingClientRect();
+      const at = {
+        reserve: parseFloat(
+          getComputedStyle(window.document.getElementById('app')).paddingBlockStart
+        ),
+        rowTop: row.top,
+        rowBottom: row.bottom,
+        rowRight: row.right,
+        top: seat.top,
+        right: seat.right,
+        bottom: seat.bottom,
+      };
       window.scrollTo(0, 600);
       await new Promise((settle) => requestAnimationFrame(() => requestAnimationFrame(settle)));
       const scrolledBottom = header.getBoundingClientRect().bottom;
@@ -772,18 +814,36 @@ test('a phone still renders the single full-width column it always did', async (
     expect(
       control.offset,
       `the page could not be scrolled at ${width}px, so this check proves nothing`
-    ).toBeGreaterThan(control.rest.bottom);
+    ).toBeGreaterThan(control.rest.rowBottom);
+    /* The masthead opens exactly at the reserve the page keeps above its own
+       first row — nothing floats above it, and nothing pushes it down. */
+    expect(
+      control.rest.rowTop,
+      `at rest the masthead starts ${control.rest.rowTop}px down a ${width}px phone, against a ${control.rest.reserve}px reserve`
+    ).toBeCloseTo(control.rest.reserve, 0);
+    /* The control is INSIDE that row, not floating over the page beside it. */
     expect(
       control.rest.top,
-      `at rest the control sits ${control.rest.top}px down a ${width}px phone, not in its top corner`
-    ).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
+      `the reading-mode control's top edge is ${control.rest.top}px, above the masthead's own ${control.rest.rowTop}px`
+    ).toBeGreaterThanOrEqual(control.rest.rowTop - subPixel);
     expect(
-      observed.viewport - control.rest.right,
-      `at rest the control sits ${observed.viewport - control.rest.right}px from the end edge`
+      control.rest.bottom,
+      `the reading-mode control's bottom edge is ${control.rest.bottom}px, below the masthead's own ${control.rest.rowBottom}px`
+    ).toBeLessThanOrEqual(control.rest.rowBottom + subPixel);
+    /* Still at the inline END of its row, and the row still stops where the
+       column does: the dead strip down the inline end the owner reported
+       (issue 264) shows up here as a gap at either of these two joints. */
+    expect(
+      control.rest.right,
+      `the control's end edge is ${control.rest.right}px inside a masthead that ends at ${control.rest.rowRight}px`
+    ).toBeGreaterThanOrEqual(control.rest.rowRight - gutterPx / 2 - subPixel);
+    expect(
+      observed.viewport - control.rest.rowRight,
+      `at rest the masthead ends ${observed.viewport - control.rest.rowRight}px from the end edge`
     ).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
     expect(
       control.scrolledBottom,
-      `after scrolling ${control.offset}px the control's bottom edge is still ${control.scrolledBottom}px into the viewport, over the content below it`
+      `after scrolling ${control.offset}px the masthead's bottom edge is still ${control.scrolledBottom}px into the viewport, over the content below it`
     ).toBeLessThanOrEqual(subPixel);
   }
 });
@@ -1079,41 +1139,42 @@ function syntheticSeries(days) {
   };
 }
 
-/* LOOK, at every length a real series can be (owner directive, 2026-08-24;
- * RETARGETED by issue 178, again by issue 189, and RE-AIMED by issue 268).
+/* ONE CALENDAR, CYCLED (owner directive, 2026-09-03, issue 287, SPEC 8.8;
+ * supersedes the coverage-sized window of issue 268).
  *
- * Sizing a box to its data was only an improvement if the box's GRAMMAR
- * survived the short end — the same cell, the same gap, the legend in the
- * same place. Issue 189 added the axis claim on top: a fixed weekday axis is
- * only truthful across a window that does not move, so every series realigned
- * onto one trailing calendar. It bought that truthfulness with a fixed
- * fifty-three weeks, which the owner reported from the other side: a fortnight
- * of history drawn against fifty weeks of dated emptiness reads as a year that
- * failed rather than as a fortnight that worked.
+ * This lane used to prove the opposite rule, and the supersession is the
+ * point of the rewrite rather than a footnote to it. Issue 189 realigned every
+ * series onto one trailing calendar so a fixed weekday axis could be truthful;
+ * issue 268 then sized that calendar to the panel's own coverage, because the
+ * owner reported a fortnight of history drawn against fifty weeks of dated
+ * emptiness reading as a year that failed. The ledger redesign keeps the axis
+ * claim and retires the sizing: the commits section draws ONE grid that the
+ * reader cycles between sets — the version-control contributions and each
+ * token source's daily series — and a box that changed width on every segment
+ * switch would both break the zero-CLS floor and stop the sets being
+ * comparable, which is the whole reason the owner asked for the cycle. The
+ * misread issue 268 answered is answered here by the other half of that fix,
+ * which the redesign keeps: dated absent cells, the month axis, and a per-set
+ * caption stating what the source actually captured.
  *
- * WHAT SURVIVES IS THE AXIS CLAIM, RE-SCOPED. The window is derived from the
- * panel's own coverage now, capped at the reserve — so it is no longer
- * identical at every series LENGTH, and pinning that would pin the very thing
- * the owner asked to remove. It is identical across the panel's own SOURCES,
- * which is where the claim was always load-bearing: two strips stacked in one
- * card are read against each other, so a column at the same x has to be the
- * same week on both, and a source that stopped capturing early must not
- * silently sit a week to the left of the one above it.
+ * So the claim is now IDENTITY ACROSS SETS, and it is measured by pressing
+ * every segment on a real page: same column count, same month axis in the same
+ * columns, same last day. A set placed on a window of its own fails every one
+ * of them.
  *
- * So this lane renders the real page at three coverages and measures BOTH of
- * the panel's graphs each time. The grammar comparison is between the two
- * sources at one coverage (where it must be exact), and the window comparison
- * is across the three coverages (where it must TRACK, between a floor and the
- * reserve). A per-series window passes none of it: the second source keeps its
- * own fifteen days throughout, so it would draw the floor while the first drew
- * the capture. */
-test('the full-width strips draw ONE window per panel, sized to its coverage (issue 189; owner 2026-08-31)', async ({
+ * It is deliberately not a read of one page in one state. The first source's
+ * series is restaged at three very different coverages, and the assertion is
+ * that the coverage moves the DATA and never the FRAME — the captured cells
+ * grow, the window does not. A build that reintroduced per-set sizing passes
+ * nothing here: its short set would draw a narrower calendar than the
+ * contributions beside it at the very first coverage. */
+test('every set draws ONE calendar, and coverage moves the data rather than the frame (owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
-  /* Three coverages: under the floor, between the floor and the reserve, and
-     past the reserve. The SECOND source is never restaged — it keeps the
-     origin's own fifteen days — which is what makes the per-source equality
-     below a claim rather than a coincidence at every shape but the first. */
+  /* Three coverages: a fortnight, most of a year, and far past the window.
+     The SECOND source is never restaged — it keeps the origin's own capture —
+     which is what makes the cross-set equality a claim rather than a
+     coincidence at every shape but the first. */
   const shapes = [15, 200, 900];
   const measured = [];
   for (const days of shapes) {
@@ -1124,81 +1185,64 @@ test('the full-width strips draw ONE window per panel, sized to its coverage (is
       sources[0].series = syntheticSeries(days);
     });
     await visit(page);
-    /* WAIT FOR THE STRIP THE WAY A READER'S BROWSER DOES (issue 201). The
-       probe below dereferences `.usage-source .grid-block` and then reaches
-       three levels inside it; on the slow emulated android-chrome lane that
-       chain ran once before the strip existed and threw
-       "Cannot read properties of null", taking the staged route down with it.
-       A locator wait is not a tolerance — it does not widen anything the
-       assertions below check — it is the probe agreeing to measure the page
-       only once the page has the thing being measured. The wait is on the
-       CELL rather than on the block, because the block is the outermost of
-       the four elements the evaluate needs and the cell is the innermost:
-       waiting for the last one to exist is what makes the whole chain
-       safe. */
-    await expect(
-      page.locator('.usage-source .grid-block .grid-cells .grid-cell').first()
-    ).toBeAttached();
-    measured.push({
-      days,
-      sources: await page.evaluate(() =>
-        [...window.document.querySelectorAll('.usage-source .grid-block')].map((block) => {
-          const rect = (node) => node.getBoundingClientRect();
+    /* WAIT FOR THE STRIP THE WAY A READER'S BROWSER DOES (issue 201): the
+       probe below reaches three levels into the block, and on a slow emulated
+       lane that chain has run before the grid existed. The wait is on the
+       innermost element, which is what makes the whole chain safe. */
+    await expect(page.locator('.grid-block .grid-cells .grid-cell').first()).toBeAttached();
+    const segments = page.locator('.commit-segment');
+    const count = await segments.count();
+    expect(
+      count,
+      `the commits section offers ${count} set(s) at ${days} days; an identity claim needs at least two to compare`
+    ).toBeGreaterThan(1);
+    const sets = [];
+    for (let index = 0; index < count; index += 1) {
+      await segments.nth(index).click();
+      sets.push(
+        await page.evaluate(() => {
+          const block = window.document.querySelector('.grid-block');
           const cells = block.querySelector('.grid-cells');
-          const legend = block.querySelector('.grid-legend');
-          const cell = cells.querySelector('.grid-cell');
-          const round = (value) => Math.round(value * 100) / 100;
+          const active = [...window.document.querySelectorAll('.commit-segment')].find(
+            (segment) => segment.getAttribute('aria-pressed') === 'true'
+          );
           const real = [...cells.querySelectorAll('[data-grid-absent="false"]')];
           return {
-            label: block
-              .closest('.usage-source')
-              .querySelector('.usage-source-label')
-              .textContent.trim(),
+            label: active?.textContent.trim() ?? '',
             claimed: Number(block.getAttribute('data-grid-columns')),
             drawn: Math.ceil(cells.querySelectorAll('.grid-cell').length / 7),
+            rows: getComputedStyle(cells).gridTemplateRows.split(' ').length,
             /* THE WINDOW'S OWN CALENDAR, fingerprinted off the month axis:
                each tick's full month name and the column it sits in. It is
                the only dated thing the DOM exposes about a window — an absent
-               cell's accessible text is "no data for this day" and carries no
-               date — and it is exactly the right thing to compare, because the
-               axis IS what a reader reads the two strips against. Two windows
-               that agree here are drawing the same weeks in the same places. */
+               cell's accessible text carries no date — and it is exactly the
+               right thing to compare, because the axis IS what a reader reads
+               the sets against. Two sets that agree here are drawing the same
+               weeks in the same places. */
             calendar: [...block.querySelectorAll('.grid-month')]
               .map((tick) => `${tick.getAttribute('title')}@${getComputedStyle(tick).gridColumnStart}`)
               .join('|'),
-            /* What the source actually captured inside that window, so a
-               truncated capture is visible as a count rather than inferred. */
+            /* What this set actually captured inside that window, so a short
+               capture is visible as a count rather than inferred from the
+               frame. */
             realCount: real.length,
             realLast: real[real.length - 1]?.getAttribute('aria-label') ?? '',
-            cell: round(rect(cell).width),
-            cellHeight: round(rect(cell).height),
-            gap: round(parseFloat(getComputedStyle(cells).columnGap || '0')),
-            rows: getComputedStyle(cells).gridTemplateRows.split(' ').length,
-            block: round(rect(block).width),
-            /* Placement, measured as the offset of the key's END edge from the
-               block's END edge: the legend is right-aligned under the graph,
-               and "right-aligned" is a relationship, not a width. */
-            legendOffset: round(rect(block).right - rect(legend).right),
-            legendTop: round(rect(legend).top - rect(block).top),
-            strip: round(rect(block.querySelector('.grid-strip')).height),
           };
         })
-      ),
-    });
+      );
+    }
+    measured.push({ days, sets });
   }
 
   for (const shape of measured) {
-    expect(
-      shape.sources.length,
-      `the token panel drew ${shape.sources.length} graphs at ${shape.days} days; this lane compares two`
-    ).toBeGreaterThan(1);
-    const [lead, ...others] = shape.sources;
+    const [lead, ...others] = shape.sets;
+    expect(lead.rows, `a ${shape.days}-day calendar stopped being seven days tall`).toBe(7);
     expect(lead.drawn, `"${lead.label}" drew a width it did not claim`).toBe(lead.claimed);
-    expect(lead.rows, `a ${shape.days}-day panel stopped being seven days tall`).toBe(7);
+    /* Non-vacuity, both ways: a one-column calendar or a monthless axis would
+       satisfy every equality below for free. */
+    expect(lead.claimed, `"${lead.label}" drew ${lead.claimed} columns`).toBeGreaterThan(1);
+    expect(lead.calendar.length, 'the month axis rendered no ticks to compare').toBeGreaterThan(0);
     for (const other of others) {
-      /* THE AXIS CLAIM. Same column count, same first and last day, and the
-         same box drawn around them: two strips a reader compares by eye must
-         be comparable by eye. */
       expect(
         other.claimed,
         `at ${shape.days} days "${lead.label}" drew ${lead.claimed} columns and "${other.label}" drew ${other.claimed}`
@@ -1206,76 +1250,52 @@ test('the full-width strips draw ONE window per panel, sized to its coverage (is
       expect(other.drawn, `"${other.label}" drew a width it did not claim`).toBe(other.claimed);
       expect(
         other.calendar,
-        `at ${shape.days} days the two sources drew different calendars`
+        `at ${shape.days} days "${other.label}" and "${lead.label}" drew different calendars`
       ).toBe(lead.calendar);
-      expect(other.calendar.length, 'the month axis rendered no ticks to compare').toBeGreaterThan(0);
-      /* The grammar that survives full width: identical box, cell, gap, row
-         height and legend placement, so neither strip reads as the odd one. */
-      expect(other.block, `the two blocks disagree about their width at ${shape.days} days`).toBe(
-        lead.block
-      );
-      expect(other.cell, `the two cells disagree about their width at ${shape.days} days`).toBe(
-        lead.cell
-      );
-      expect(
-        other.cellHeight,
-        `the two cells disagree about their height at ${shape.days} days`
-      ).toBe(lead.cellHeight);
-      expect(other.gap, `the two strips disagree about their gap at ${shape.days} days`).toBe(
-        lead.gap
-      );
-      expect(other.strip, `the two strips disagree about their height at ${shape.days} days`).toBe(
-        lead.strip
-      );
-      expect(
-        other.legendOffset,
-        `the two keys sit at different offsets at ${shape.days} days`
-      ).toBe(lead.legendOffset);
-      expect(other.legendTop, `the two keys sit on different rows at ${shape.days} days`).toBe(
-        lead.legendTop
-      );
     }
   }
 
-  /* AND THE WINDOW TRACKS THE COVERAGE, which is the half that replaced the
-     fixed frame. Three coverages, three answers, each pinned on its own terms:
-     the floor keeps a very short capture legible (its own less/more key has to
-     fit beside it), the middle is the capture itself, and the reserve is the
-     cap a longer capture is shown the trailing end of. */
-  const [short, middle, deep] = measured.map((shape) => shape.sources[0]);
+  /* AND THE COVERAGE MOVED THE DATA, NOT THE FRAME. The staged set is the
+     first token one — the segment named for the source this lane restaged —
+     and it is read across the three coverages. Its captured cells grow with
+     the capture and its frame does not, which is the superseding rule stated
+     as a measurement rather than as a comment. */
+  const staged = measured.map((shape) => {
+    const set = shape.sets.find((candidate) => candidate.label.startsWith('Tokens'));
+    expect(set, `no token set rendered at ${shape.days} days`).toBeDefined();
+    return set;
+  });
+  const [short, middle, deep] = staged;
   expect(
-    short.claimed,
-    `a fortnight of coverage drew ${short.claimed} columns; the fixed frame is back`
-  ).toBeLessThan(53);
+    middle.realCount,
+    `two hundred days captured ${middle.realCount} cells, no more than the fortnight's ${short.realCount}`
+  ).toBeGreaterThan(short.realCount);
   expect(
-    middle.claimed,
-    `two hundred days drew ${middle.claimed} columns, no more than the fortnight's ${short.claimed}`
-  ).toBeGreaterThan(short.claimed);
-  expect(
-    middle.claimed,
-    `two hundred days drew ${middle.claimed} columns; the reserve is a floor again`
-  ).toBeLessThan(53);
-  expect(
-    deep.claimed,
-    `nine hundred days drew ${deep.claimed} columns; the reserve is not the cap`
-  ).toBe(53);
-  expect(deep.drawn, 'the capped window drew a width it did not claim').toBe(deep.claimed);
-  /* The cap is TRAILING, stated in both directions: the capture is genuinely
-     cut (nine hundred days do not all fit in fifty-three weeks) and what
-     SURVIVES is its newest end — the same newest day the short shape drew,
+    deep.realCount,
+    `nine hundred days captured ${deep.realCount} cells, no more than two hundred days' ${middle.realCount}`
+  ).toBeGreaterThan(middle.realCount);
+  /* The window is a CAP, and a trailing one: nine hundred days do not fit, and
+     what survives is the newest end — the same newest day the fortnight drew,
      which is the end a reader came to see. A leading cap would keep the same
      number of days and lose exactly the wrong ones. */
   expect(
     deep.realCount,
-    `nine hundred days drew ${deep.realCount} captured cells; the cap is not cutting anything`
+    `nine hundred days captured ${deep.realCount} cells; the window is not cutting anything`
   ).toBeLessThan(900);
   expect(
-    deep.realCount,
-    `the capped window holds ${deep.realCount} captured days of the 371 it draws; only the current week's unfinished days should be missing`
-  ).toBeGreaterThan(53 * 7 - 7);
-  expect(deep.realLast, 'the capped window does not end on the panel’s newest day').toBe(
-    short.realLast
-  );
+    deep.realLast,
+    'the capped window does not end on the same newest day the short capture drew'
+  ).toBe(short.realLast);
+  expect(short.realLast, 'no captured cell carries a reading to compare').not.toBe('');
+  /* ...and through all of that the frame never moved. */
+  expect(
+    new Set(staged.map((set) => set.claimed)).size,
+    `the staged set drew ${staged.map((set) => set.claimed).join(', ')} columns across the three coverages; the window is being sized to the data again`
+  ).toBe(1);
+  expect(
+    new Set(staged.map((set) => set.calendar)).size,
+    'the staged set drew a different month axis at a different coverage; the window is being sized to the data again'
+  ).toBe(1);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
@@ -1313,19 +1333,26 @@ test('an insight with no measured share draws no bar, and a measured one still d
     ];
   });
   await visit(page);
-  /* The FIRST source only: the panel serves more than one, each with insight
-     rows of its own, and only one of them was restaged. A page-wide selector
-     would count another source's real rows as this lane's staged ones. */
-  const rows = page.locator('.usage-source').first().locator('.usage-insight');
+  /* THE FIRST SOURCE'S SHARES, ON THE FRONT OF THE MODEL SQUARE (owner
+     directive, 2026-09-03, issue 287). The per-source usage cards are retired;
+     the shares are drawn as the board's bars now, and the board puts the first
+     source's on the square's front face and the second source's behind it —
+     which is what keeps this lane pointed at the source it actually restaged.
+     Only that square carries bars on its front at all, every other square
+     carrying a figure, so the front face IS the first-source scope the retired
+     `.usage-source` first() gave. The guard under test moved with the markup
+     and did not change shape: `{#if bar.fillPct !== null}` in
+     LedgerBoard.svelte. */
+  const rows = page.locator('.board-square [data-face="front"] .board-bar');
   await expect(rows).toHaveCount(2);
   const observed = await rows.evaluateAll((nodes) =>
     nodes.map((node) => {
-      const fill = node.querySelector('.usage-insight-fill');
-      const track = node.querySelector('.usage-insight-track');
+      const fill = node.querySelector('.board-fill');
+      const track = node.querySelector('.board-track');
       const width = (box) => (box === null ? null : Math.round(box.getBoundingClientRect().width * 100) / 100);
       return {
-        label: node.querySelector('.usage-insight-label').textContent.trim(),
-        reading: node.querySelector('.usage-insight-value').textContent.trim(),
+        label: node.querySelector('.board-bar-label').textContent.trim(),
+        reading: node.querySelector('.board-reading').textContent.trim(),
         /* Presence FIRST, and width only if it is there. A zero-width fill
            and no fill are different renderings of different claims, and the
            whole point of the guard is that the second is the honest one. */
@@ -1367,6 +1394,223 @@ test('an insight with no measured share draws no bar, and a measured one still d
     'a measured share painted past its own track'
   ).toBeLessThanOrEqual(measured.track + subPixel);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+/* A SQUARE THAT HIDES A MODEL IS A SQUARE THAT LIES (owner directive,
+ * 2026-09-03, issue 287).
+ *
+ * Each board square is a fixed box with `overflow: hidden`, which is what lets
+ * the flip animate cleanly and what makes a sizing mistake SILENT: content
+ * that does not fit is not clipped visibly at an edge a reader would notice,
+ * it simply is not there. Measured during this redesign: the model square's
+ * bars auto-flowed their reading onto a third row, which made each bar 43px in
+ * a box with room for about 2.7 of them, and two of the four models were
+ * absent from a square that gave no sign of it.
+ *
+ * A count alone would not have caught it — all four bars were in the DOM. So
+ * this measures what the box actually SHOWS: every face's own content must fit
+ * inside the face, on both sides of every square, at a phone width and a
+ * desktop one. The scroll height is the general statement and the per-bar walk
+ * is the specific one, because a face can fit its own scroll height while one
+ * child still lands outside the visible box.
+ */
+test('every board square shows all of its own content, front and back (owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
+  await visit(page);
+  const readVisibility = () =>
+    page.evaluate(() =>
+      [...window.document.querySelectorAll('.board-square')].map((square) => ({
+        turned: square.getAttribute('data-turned'),
+        front: getComputedStyle(square.querySelector('[data-face="front"]')).visibility,
+        back: getComputedStyle(square.querySelector('[data-face="back"]')).visibility,
+      }))
+    );
+  const readFaces = (side) =>
+    page.evaluate((face) => {
+      return [...window.document.querySelectorAll('.board-square')].map((square) => {
+        const panel = square.querySelector(`[data-face="${face}"]`);
+        const box = panel.getBoundingClientRect();
+        const bars = [...panel.querySelectorAll('.board-bar')];
+        const facts = [...panel.querySelectorAll('.board-fact')];
+        const inside = (node) => {
+          const seat = node.getBoundingClientRect();
+          return seat.bottom <= box.bottom + 1 && seat.right <= box.right + 1;
+        };
+        return {
+          label: panel.querySelector('.board-label')?.textContent.trim() ?? '',
+          overflow: getComputedStyle(panel).overflow,
+          scrollHeight: panel.scrollHeight,
+          clientHeight: panel.clientHeight,
+          bars: bars.length,
+          barsShown: bars.filter(inside).length,
+          facts: facts.length,
+          factsShown: facts.filter(inside).length,
+        };
+      });
+    }, side);
+
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled(page);
+    const fronts = await readFaces('front');
+    expect(fronts.length, `the board drew no squares at ${width}px`).toBeGreaterThan(1);
+    /* THE BACK IS HIDDEN, NOT MERELY TURNED AWAY (owner 2026-09-03, issue
+       287). WebKit flattens 3D transforms inside a <button>, so a back face
+       that relied on backface-visibility alone drew mirrored over the front
+       on every Safari; the faces now swap `visibility` at the flip midpoint,
+       and this is the measured half of that rule: at rest every front is
+       visible and every back hidden, and a turned square is the reverse. The
+       swap is delayed half a flip, so each reading polls rather than reads. */
+    await expect
+      .poll(async () => (await readVisibility()).map((square) => `${square.front}/${square.back}`), {
+        message: `at rest at ${width}px every front must be visible and every back hidden`,
+      })
+      .toEqual(fronts.map(() => 'visible/hidden'));
+    /* The box really is a clipping box, which is what makes the rest of this
+       lane worth running: against an `overflow: visible` face every assertion
+       below would hold for free while the content spilled instead. */
+    for (const face of fronts) {
+      expect(
+        face.overflow,
+        `"${face.label}" is not a clipping box at ${width}px, so this lane proves nothing about it`
+      ).toBe('hidden');
+      expect(
+        face.scrollHeight,
+        `"${face.label}" holds ${face.scrollHeight}px of content in a ${face.clientHeight}px face at ${width}px; the rest is hidden with no sign of it`
+      ).toBeLessThanOrEqual(face.clientHeight + 1);
+      expect(
+        face.barsShown,
+        `"${face.label}" draws ${face.bars} model bars at ${width}px and shows ${face.barsShown}`
+      ).toBe(face.bars);
+      expect(
+        face.factsShown,
+        `"${face.label}" draws ${face.facts} facts at ${width}px and shows ${face.factsShown}`
+      ).toBe(face.facts);
+    }
+    /* Non-vacuity: a board whose faces all held a single short figure would
+       satisfy everything above without ever exercising the case that broke.
+       At least one front carries a real stack of bars. */
+    expect(
+      Math.max(...fronts.map((face) => face.bars)),
+      `no square draws model bars at ${width}px; the shape that clipped is not on the page`
+    ).toBeGreaterThan(1);
+
+    /* AND THE BACKS, which is where the flip puts a second face of content
+       into the SAME fixed box — so a back that overflows is exactly as silent
+       as a front that does. Every square is turned rather than a sample: the
+       backs carry different shapes from each other (a fact list, a bar stack,
+       a note) and only one of them has to be wrong. */
+    const squares = page.locator('.board-square');
+    const count = await squares.count();
+    for (let index = 0; index < count; index += 1) {
+      await squares.nth(index).click();
+    }
+    const backs = await readFaces('back');
+    await expect
+      .poll(async () => (await readVisibility()).map((square) => `${square.turned}:${square.front}/${square.back}`), {
+        message: `turned at ${width}px every back must be visible and every front hidden`,
+      })
+      .toEqual(backs.map(() => 'true:hidden/visible'));
+    for (const face of backs) {
+      expect(
+        face.scrollHeight,
+        `the back of "${face.label}" holds ${face.scrollHeight}px of content in a ${face.clientHeight}px face at ${width}px; the rest is hidden with no sign of it`
+      ).toBeLessThanOrEqual(face.clientHeight + 1);
+      expect(
+        face.barsShown,
+        `the back of "${face.label}" draws ${face.bars} model bars at ${width}px and shows ${face.barsShown}`
+      ).toBe(face.bars);
+      expect(
+        face.factsShown,
+        `the back of "${face.label}" draws ${face.facts} facts at ${width}px and shows ${face.factsShown}`
+      ).toBe(face.facts);
+    }
+    /* The backs are non-vacuous too: at least one of them carries a fact list,
+       which is the shape a fixed box is most likely to run out of room for. */
+    expect(
+      Math.max(...backs.map((face) => face.facts)),
+      `no square's back draws a fact list at ${width}px`
+    ).toBeGreaterThan(1);
+    /* Left as found, so the next width starts from the same closed board. */
+    for (let index = 0; index < count; index += 1) {
+      await squares.nth(index).click();
+    }
+  }
+});
+
+/* TWO LAYERS, NOT THE SET (owner directive, 2026-09-03, issue 287). The
+ * picture band crossfades between two decoded images, and it used to mount
+ * every vendored texture in both bands to do it — eight files fetched on a
+ * first paint that would show one. It now mounts the texture showing and the
+ * one it last showed, which is all a crossfade needs. This lane measures the
+ * rule rather than trusting the component: one layer on arrival, two after a
+ * step, still two after more steps, exactly one of them active, and the
+ * active picture really changing — so a band that quietly went back to
+ * mounting its whole set fails on the first count. */
+test('the picture band mounts the texture showing and the one it left, never the whole set (owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
+  await visit(page);
+  const readBands = () =>
+    page.evaluate(() =>
+      [...window.document.querySelectorAll('.band')].map((band) => {
+        const layers = [...band.querySelectorAll('.band-layer')];
+        return {
+          controls: band.getAttribute('data-band-controls'),
+          layers: layers.length,
+          active: layers
+            .filter((layer) => layer.getAttribute('data-band-active') === 'true')
+            .map((layer) => layer.getAttribute('src')),
+        };
+      })
+    );
+  const arrival = await readBands();
+  expect(arrival.length, 'the page draws no picture band').toBeGreaterThan(1);
+  for (const band of arrival) {
+    expect(band.layers, `a band mounts ${band.layers} layers on arrival; one picture needs one`).toBe(1);
+    expect(band.active.length, 'exactly one layer is the picture showing').toBe(1);
+  }
+  const next = page.locator('.band[data-band-controls="true"] .band-step[aria-label="Next texture"]');
+  await expect(next, 'the top band carries the cycle control').toHaveCount(1);
+  for (let step = 0; step < 3; step += 1) {
+    await next.click();
+    await settled(page);
+    const during = await readBands();
+    for (const band of during) {
+      expect(band.layers, `after step ${step + 1} a band mounts ${band.layers} layers; a crossfade needs two`).toBe(2);
+      expect(band.active.length, `after step ${step + 1} exactly one layer is active`).toBe(1);
+    }
+  }
+  /* A READING-MODE SWITCH is the one move that brings a THIRD distinct file
+     within reach: each mode's set holds two textures, so the arrows alone can
+     never make the memory longer than two, and a band that quietly kept
+     three would pass every arrow step above. Two switches — each onto a set
+     the band has not shown — must leave it at exactly two layers still. */
+  for (const [label, id] of [
+    ['Dark', 'dark'],
+    ['Slate', 'slate'],
+  ]) {
+    await openReadingModes(page);
+    await page.getByRole('button', { name: label, exact: true }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', id);
+    await settled(page);
+    const switched = await readBands();
+    for (const band of switched) {
+      expect(band.layers, `after the ${label} switch a band mounts ${band.layers} layers; the picture and the one it left are two`).toBe(2);
+      expect(band.active.length, `after the ${label} switch exactly one layer is active`).toBe(1);
+    }
+  }
+  const after = await readBands();
+  /* Non-vacuity: three steps and two mode switches later the band shows a
+     picture from another set, so a band whose controls did nothing would
+     still show the arrival texture and fail here. */
+  expect(after[0].active[0], 'three steps later the band still shows the texture it arrived with').not.toBe(
+    arrival[0].active[0]
+  );
+  expect(after.map((band) => band.active[0]), 'both bands show the same texture').toEqual(
+    after.map(() => after[0].active[0])
+  );
 });
 
 /* RESPONSIVENESS (owner directive, 2026-08-24). The page column is a single
@@ -1474,24 +1718,53 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
     sources[0].series = { startDate: '2026-08-10', totals: [1, 2, 3], recorded: true };
   });
   await visit(page);
+  /* THE LABEL NOW REACHES TWO SURFACES, AND BOTH ARE MEASURED (owner
+     directive, 2026-09-03, issue 287). The per-source usage card that carried
+     `.usage-source-label` is retired. A source label is drawn twice instead —
+     as a square's own head on the board, and as the name of the segment that
+     picks that source's calendar in the commits section — so this lane widened
+     with the redesign rather than narrowing: a string that became markup in
+     either place is caught here.
+
+     The panels are found through their own contents rather than through a
+     scoping attribute, because `data-panel-id` went with the retired card and
+     `:has()` is not a selector this matrix may assume in every engine. */
   const observed = await page.evaluate(
     ([label, account]) => {
-      const panel = window.document.querySelector('[data-panel-id="token-usage"]');
-      const heads = [...panel.querySelectorAll('.usage-source-label')].map((node) => ({
+      const panelOf = (selector) =>
+        window.document.querySelector(selector)?.closest('.panel-shell') ?? null;
+      const board = panelOf('.board-grid');
+      const commits = panelOf('.commit-segments');
+      const heads = [...board.querySelectorAll('.board-label')].map((node) => ({
+        text: node.textContent,
+        children: node.children.length,
+      }));
+      const segments = [...commits.querySelectorAll('.commit-segment')].map((node) => ({
         text: node.textContent,
         children: node.children.length,
       }));
       return {
         pwned: window.__pwned === undefined ? 'clean' : 'executed',
-        injected: panel.querySelectorAll('img, script, iframe, object, embed').length,
-        heads,
-        matchesLabel: heads.some((head) => head.text === label),
-        matchesAccount: [...panel.querySelectorAll('.usage-account')].some(
-          (node) => node.textContent === account
+        injected: [board, commits].reduce(
+          (count, region) =>
+            count + region.querySelectorAll('img, script, iframe, object, embed').length,
+          0
         ),
+        heads,
+        segments,
+        matchesLabel: heads.some((head) => head.text === label),
+        matchesSegment: segments.some((segment) => segment.text.includes(label)),
+        /* THE ACCOUNT IS NOT A RENDERED SURFACE ANY MORE. It is still admitted
+           into the model (lib/token-usage.ts) and no component draws it, so
+           the honest assertion is that it reaches the document nowhere at all
+           — which is strictly stronger than the verbatim check the retired
+           `.usage-account` element used to earn, and it fails loudly the day
+           something starts printing it again. */
+        accountAnywhere: window.document.body.textContent.includes(account),
         /* The graph the hostile source DOES get: a real series, drawn from
-           strings that never became markup. */
-        graphs: panel.querySelectorAll('.grid-block').length,
+           strings that never became markup. It is in the commits section now,
+           because that is where a token source's calendar is drawn. */
+        graphs: commits.querySelectorAll('.grid-block').length,
       };
     },
     [hostile, hostileAccount]
@@ -1505,10 +1778,14 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
     true
   );
   expect(
-    observed.matchesAccount,
-    'the hostile account did not render as its own literal text'
+    observed.matchesSegment,
+    'the hostile label did not reach its calendar segment as its own literal text'
   ).toBe(true);
-  for (const head of observed.heads) {
+  expect(
+    observed.accountAnywhere,
+    'the account reached the document; no component draws it, so a string that arrives there is a surface nobody reviewed'
+  ).toBe(false);
+  for (const head of [...observed.heads, ...observed.segments]) {
     expect(head.children, 'a source heading grew element children from its payload string').toBe(0);
   }
   expect(observed.graphs, 'the staged payload rendered no graph; this half proved nothing')
@@ -1525,13 +1802,24 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
   });
   await visit(page);
   const refused = await page.evaluate(() => {
-    const panel = window.document.querySelector('[data-panel-id="token-usage"]');
+    const panelOf = (selector) =>
+      window.document.querySelector(selector)?.closest('.panel-shell') ?? null;
+    const board = panelOf('.board-note') ?? panelOf('.board-grid');
+    const commits = panelOf('.commit-segments');
     return {
       pwned: window.__pwned === undefined ? 'clean' : 'executed',
-      injected: panel.querySelectorAll('img, script, iframe, object, embed').length,
-      sources: panel.querySelectorAll('.usage-source').length,
-      graphs: panel.querySelectorAll('.grid-block').length,
-      empty: panel.querySelector('.usage-empty')?.textContent ?? '',
+      injected: board.querySelectorAll('img, script, iframe, object, embed').length,
+      sources: board.querySelectorAll('.board-square').length,
+      /* The refused payload's own graph, named rather than counted: the
+         commits section draws the version-control calendar from a DIFFERENT
+         panel, and that one is unaffected and must keep drawing. What must
+         disappear is the segment that would pick the refused source's
+         calendar, so THAT is what is counted. Counting every graph here would
+         assert the wrong panel went blank. */
+      tokenSegments: [...commits.querySelectorAll('.commit-segment')].filter((segment) =>
+        segment.textContent.startsWith('Tokens')
+      ).length,
+      empty: board.querySelector('.board-note')?.textContent ?? '',
     };
   });
   expect(refused.pwned, 'a malformed start date executed in the page').toBe('clean');
@@ -1539,57 +1827,211 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
   expect(refused.sources, 'a payload with a malformed series rendered part of itself anyway').toBe(
     0
   );
-  expect(refused.graphs, 'a payload with a malformed series still drew a graph').toBe(0);
+  expect(
+    refused.tokenSegments,
+    'a payload with a malformed series still offered its calendar'
+  ).toBe(0);
   expect(refused.empty, 'a refused payload renders no honest empty state').not.toBe('');
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-test('the boss log is three columns that never scroll', async ({
+/* THE BOSS LOG IS A TICKER NOW (owner directive, 2026-09-03, issue 287).
+ *
+ * The three-column table this lane used to measure is retired. The owner's
+ * non-negotiable for its replacement is exact — "the ticker is a scrollable
+ * strip under reduced motion" — and it inverts the old claim rather than
+ * bending it: the old table's whole point was that nothing scrolled, and the
+ * strip's whole point is that it does. So the assertion is re-aimed, not
+ * relaxed, and the floor underneath is the one AGENTS.md states for any wide
+ * content: it scrolls INSIDE ITS OWN CONTAINER and never takes the document
+ * sideways.
+ *
+ * Four things are pinned, and each fails on its own:
+ *
+ *   - the strip is a real scroll region with somewhere to scroll to, and the
+ *     document beside it is not;
+ *   - the whole collection is there — one readable copy of every entry the
+ *     payload carries, with the marquee's second lane hidden from assistive
+ *     technology rather than double-counted;
+ *   - the vendored art actually painted, measured off the decoded images
+ *     rather than off the markup, which is what the retired icon count did;
+ *   - and the strip is REACHABLE without a pointer. A pan only a mouse can
+ *     drive leaves most of the collection unreadable, which is exactly the
+ *     failure the base-state-is-a-scroller rule in styles.css exists to
+ *     prevent.
+ *
+ * The reduced-motion half runs the same measurements with the preference
+ * emulated, because that is the state the owner named: the run must carry no
+ * animation and the strip must still be pannable. A build that had made the
+ * animation the only way across fails there and nowhere else. */
+test('the boss ticker pans inside its own box, and still pans with the motion off', async ({
   page,
 }) => {
   await visit(page);
-  const table = await page.evaluate(() => {
-    const box = window.document.querySelector('.stat-grid[data-cells="roomy"]');
-    const style = getComputedStyle(box);
-    const cells = [...box.querySelectorAll('.stat-cell')];
-    const distinct = (values) => new Set(values.map((value) => Math.round(value))).size;
-    return {
-      overflowX: style.overflowX,
-      overflowY: style.overflowY,
-      scrollWidth: box.scrollWidth,
-      clientWidth: box.clientWidth,
-      scrollHeight: box.scrollHeight,
-      clientHeight: box.clientHeight,
-      cells: cells.length,
-      /* The shape the engine actually laid out, measured from the tiles
-         rather than read back off the CSS: three columns, wrapping downward
-         for as many rows as the payload needs. */
-      columns: distinct(cells.map((cell) => cell.getBoundingClientRect().left)),
-      rows: distinct(cells.map((cell) => cell.getBoundingClientRect().top)),
-      icons: box.querySelectorAll('img.stat-icon').length,
-    };
-  });
-  /* The owner asked for the scrolling to go away, not to be pointed in
-     another direction (issue 134). This table has been a vertical scroller
-     and a sideways one; the assertion now is that there is no scroll region
-     left at all — no overflow, and nothing to scroll to on either axis. */
-  expect(table.overflowX, 'the boss table is a scroll region again').toBe('visible');
-  expect(table.overflowY, 'the boss table is a scroll region again').toBe('visible');
-  expect(table.scrollWidth, 'the boss table has content to scroll across').toBe(table.clientWidth);
-  expect(table.scrollHeight, 'the boss table has content to scroll down to').toBe(
-    table.clientHeight
+  const readTicker = () =>
+    page.evaluate(() => {
+      const strip = window.document.querySelector('.ticker-strip');
+      const run = strip.querySelector('.ticker-run');
+      const lanes = [...strip.querySelectorAll('.ticker-lane')];
+      /* The marquee draws its lane twice so the band can wrap without a seam.
+         Exactly one copy is readable; the other is aria-hidden, and counting
+         both would report twice the collection. */
+      const readable = lanes.filter((lane) => lane.getAttribute('aria-hidden') !== 'true');
+      const items = readable.flatMap((lane) => [...lane.querySelectorAll('.ticker-item')]);
+      const style = getComputedStyle(strip);
+      return {
+        lanes: lanes.length,
+        readableLanes: readable.length,
+        overflowX: style.overflowX,
+        overflowY: style.overflowY,
+        scrollWidth: strip.scrollWidth,
+        clientWidth: strip.clientWidth,
+        clientHeight: strip.clientHeight,
+        /* The BAND's own height, not the strip's scrollHeight. Each entry
+           carries the page's hover-detail, which is a fixed-position element
+           an engine may count into the scroller's overflow even though it is
+           never laid out in the band; measuring the run is measuring the thing
+           that must not be clipped. */
+        runHeight: Math.round(run.getBoundingClientRect().height * 100) / 100,
+        docScrollWidth: window.document.documentElement.scrollWidth,
+        docClientWidth: window.document.documentElement.clientWidth,
+        items: items.length,
+        labelled: items.every((item) => (item.getAttribute('aria-label') ?? '') !== ''),
+        /* Every entry carries a mark of some kind — the vendored artwork, or
+           the glyph an entry with no art falls back to — so an entry rendering
+           bare is visible here rather than inferred. */
+        marked: items.filter((item) => item.querySelector('.ticker-icon') !== null).length,
+        art: items.filter((item) => item.querySelector('img.ticker-icon') !== null).length,
+        /* PAINTED, not merely present, and only where painting is due. The
+           artwork is lazily loaded and this strip is mostly off its own box,
+           so an engine is right to have decoded nothing out there — counting
+           the whole band would be asserting against the lazy attribute rather
+           than against the art. What must hold is that every image the reader
+           can actually SEE decoded: a broken reference reports a natural width
+           of zero and fails here, which is the failure the retired icon count
+           could not see either way.
+           
+           Measured while the band is RUNNING this is a read of wherever the
+           marquee happens to be, which on a phone is often the lead alone —
+           the lead is wider than the strip's box there — so the reading is
+           taken as data here and ASSERTED only in the reduced-motion half
+           below, where the strip is a scroller this lane can put items into
+           deterministically. */
+        inView: (() => {
+          const box = strip.getBoundingClientRect();
+          const visible = items
+            .map((item) => item.querySelector('img.ticker-icon'))
+            .filter((art) => art !== null)
+            .filter((art) => {
+              const seat = art.getBoundingClientRect();
+              return seat.right > box.left && seat.left < box.right;
+            });
+          return { count: visible.length, decoded: visible.filter((art) => art.naturalWidth > 0).length };
+        })(),
+        tabbable: strip.getAttribute('tabindex'),
+        named: (strip.getAttribute('aria-label') ?? '') !== '',
+        animation: getComputedStyle(run).animationName,
+      };
+    });
+
+  const running = await readTicker();
+  /* The collection is all there, once. The payload carries the owner's whole
+     boss log, so a strip that rendered a handful of entries — or that counted
+     its own hidden duplicate — misses this by a wide margin. */
+  expect(running.lanes, 'the marquee lost the second lane it wraps with').toBe(2);
+  expect(running.readableLanes, 'both marquee lanes are readable; the collection is doubled').toBe(
+    1
   );
-  /* Columns of three, going down — the owner's words. The arrangement this
-     replaced would report two rows and dozens of columns. */
-  expect(table.cells, 'the boss table rendered no tiles').toBeGreaterThan(50);
-  expect(table.columns, `the boss table laid out ${table.columns} columns`).toBe(3);
+  expect(running.items, 'the ticker rendered no entries').toBeGreaterThan(50);
+  expect(running.labelled, 'a ticker entry carries no accessible name').toBe(true);
+  expect(running.marked, 'a ticker entry rendered with no mark of any kind').toBe(running.items);
+  expect(running.art, 'the ticker rendered none of the vendored artwork').toBeGreaterThan(50);
+  /* A scroll region with somewhere to go, on the inline axis only. */
+  expect(running.overflowX, 'the ticker is not a scroller on the inline axis').toBe('auto');
+  expect(running.overflowY, 'the ticker scrolls on the block axis too').toBe('hidden');
   expect(
-    table.rows,
-    `the boss table laid out ${table.rows} rows for ${table.cells} tiles in three columns`
-  ).toBe(Math.ceil(table.cells / 3));
-  /* The owner locked the vendored art exactly as it renders, so the lane
-     counts what actually painted rather than trusting the markup. */
-  expect(table.icons, 'the boss table rendered no icons').toBeGreaterThan(50);
+    running.scrollWidth,
+    `the ticker has ${running.scrollWidth}px of content in a ${running.clientWidth}px box; there is nothing to pan`
+  ).toBeGreaterThan(running.clientWidth + subPixel);
+  expect(
+    running.runHeight,
+    `the band is ${running.runHeight}px inside a ${running.clientHeight}px strip, so it is clipped on the block axis`
+  ).toBeLessThanOrEqual(running.clientHeight + subPixel);
+  /* ...and the document beside it stays put, which is the floor the strip's
+     own scroller exists to satisfy. */
+  expect(
+    running.docScrollWidth,
+    `the ticker took the document sideways (${running.docScrollWidth} > ${running.docClientWidth})`
+  ).toBeLessThanOrEqual(running.docClientWidth + subPixel);
+  /* Reachable without a pointer. */
+  expect(running.tabbable, 'the ticker is a scroller no keyboard can reach').toBe('0');
+  expect(running.named, 'the ticker scroll region carries no accessible name').toBe(true);
+
+  /* THE STATE THE OWNER NAMED. With the preference set the run carries no
+     animation at all, and every measurement above still holds — the strip is
+     the scroller it always was, so the collection stays readable by pan. */
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await visit(page);
+  /* The strip is panned past its lead so that entries — not only the lead's
+     own mark — are inside its box, then the art inside the box is given the
+     time a lazy image legitimately takes to decode. The wait is bounded and
+     it is a wait for the ENGINE (Firefox and WebKit decode a lazy image
+     measurably later than Chromium, exactly as the gallery lane records); it
+     widens nothing about what is asserted, which is that every image inside
+     the box decoded and none of them decoded to nothing. */
+  await page.locator('.ticker-strip').evaluate((strip) => {
+    /* Into the VIEWPORT first, then panned. A lazy image loads when it meets
+       the viewport, and Firefox and WebKit hold to that literally — an image
+       panned into a strip's box while the strip itself is a screen below the
+       fold is never loaded there, however long the lane waits. Chromium's far
+       larger lazy margin is what made the same lane pass in one engine and
+       time out in two. */
+    strip.scrollIntoView({ block: 'center' });
+    strip.scrollLeft = strip.querySelector('.ticker-lead').getBoundingClientRect().width;
+  });
+  await expect
+    .poll(async () => (await readTicker()).inView, {
+      message: 'the artwork inside the panned strip never decoded',
+      timeout: 10_000,
+    })
+    .toEqual(expect.objectContaining({ count: expect.any(Number) }));
+  await expect
+    .poll(
+      async () => {
+        const seen = (await readTicker()).inView;
+        return seen.count > 0 && seen.decoded === seen.count;
+      },
+      { message: 'an icon inside the visible strip decoded to nothing', timeout: 10_000 }
+    )
+    .toBe(true);
+  const still = await readTicker();
+  expect(
+    still.inView.count,
+    'no artwork is inside the panned strip, so the decode check proves nothing'
+  ).toBeGreaterThan(0);
+  expect(
+    still.inView.decoded,
+    `${still.inView.count - still.inView.decoded} of the ${still.inView.count} visible icons decoded to nothing`
+  ).toBe(still.inView.count);
+  expect(
+    still.animation,
+    `the ticker still runs "${still.animation}" for a reader who asked for less motion`
+  ).toBe('none');
+  expect(still.items, 'the ticker lost its entries under reduced motion').toBe(running.items);
+  expect(still.overflowX, 'the ticker stopped being a scroller under reduced motion').toBe('auto');
+  expect(
+    still.scrollWidth,
+    'under reduced motion the ticker has nothing to pan, so most of the collection is unreachable'
+  ).toBeGreaterThan(still.clientWidth + subPixel);
+  expect(
+    still.tabbable,
+    'under reduced motion the ticker is a scroller no keyboard can reach'
+  ).toBe('0');
+  expect(
+    still.docScrollWidth,
+    'under reduced motion the ticker took the document sideways'
+  ).toBeLessThanOrEqual(still.docClientWidth + subPixel);
+  await page.emulateMedia({ reducedMotion: null });
 });
 
 /* The detail this table used to draw itself is now the page's one hover-detail
@@ -1614,6 +2056,16 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
         n.hasAttribute('data-panel-status')
       ),
       viewport: window.document.documentElement.clientWidth,
+      header: (() => {
+        const box = window.document.querySelector('.page-header').getBoundingClientRect();
+        return { right: box.right, bottom: box.bottom };
+      })(),
+      /* The column's own end edge. The masthead shares `main`'s inline-size
+         rule now, so "outside the feed" is a relationship between the two
+         boxes rather than a distance from the viewport — at a wide viewport
+         the column is centred and neither box comes near the screen edge. */
+      columnRight: window.document.querySelector('main').getBoundingClientRect().right,
+      firstPanelTop: window.document.querySelector('.panel-shell').getBoundingClientRect().top,
       icons: icons.map((node) => {
         const box = node.getBoundingClientRect();
         const style = getComputedStyle(node);
@@ -1665,20 +2117,35 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
       touchFloorPx - subPixel
     );
   }
-  /* Pinned to the VIEWPORT'S own corner, not the column's (owner directive,
-     issue 168): "push the icons all the way to the top right, outside of the
-     feed." Measuring against the column would measure the centring instead
-     of the thing that actually changed — the header used to share the
-     column's own inline-size rule and does not any more. A single gutter's
-     worth of gap on each edge is what a fixed corner control with no notch
-     to clear resolves to (env(safe-area-inset-*) is 0 on every engine this
-     lane runs without a device that reports one). */
+  /* THE HEADER SHARES THE COLUMN AGAIN (owner directive, 2026-09-03, issue
+     287), which reverses the placement rule issue 168 set. The instruction
+     then was "push the icons all the way to the top right, outside of the
+     feed", and the header was lifted out of the column's inline-size rule to
+     obey it. The ledger puts it back: the masthead is an in-flow ruled row
+     that shares the column rule with `main`, so the reading-mode control now
+     sits at the END OF THAT ROW rather than in the viewport's corner, and
+     measuring it against the viewport would be measuring the retired
+     arrangement.
+
+     What the corner rule was protecting is unchanged and is what is measured
+     instead: the control is not inside the feed, and it wastes no gutter. So
+     it sits at the masthead's own end edge, the masthead ends where the
+     column ends, and the control sits ABOVE every panel on the page rather
+     than among them. A control that had drifted back into the feed fails the
+     last of those. */
   const [icon] = observed.icons;
-  expect(icon.top, `the icon sits ${icon.top}px from the top edge`).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
   expect(
-    observed.viewport - icon.right,
-    `the icon sits ${observed.viewport - icon.right}px from the viewport's end edge`
-  ).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
+    icon.right,
+    `the control's end edge is ${icon.right}px inside a masthead that ends at ${observed.header.right}px`
+  ).toBeGreaterThanOrEqual(observed.header.right - gutterPx / 2 - subPixel);
+  expect(
+    observed.header.right,
+    `the masthead ends at ${observed.header.right}px and the column at ${observed.columnRight}px; they no longer share the page's one column rule`
+  ).toBeCloseTo(observed.columnRight, 0);
+  expect(
+    observed.header.bottom,
+    `the masthead's bottom edge is ${observed.header.bottom}px, below the first panel's top edge at ${observed.firstPanelTop}px`
+  ).toBeLessThanOrEqual(observed.firstPanelTop + subPixel);
 });
 
 /* ===========================================================================
@@ -1721,41 +2188,46 @@ test('a direct visit to a shared fragment URL still deep-links (issue 171)', asy
   await expect(page.locator('#trackers')).toBeInViewport();
 });
 
-/* INVERTED by the owner's ruling of 2026-08-24, and the inversion is the
- * finding. This lane used to REQUIRE the empty grid on the live page: a
- * `.grid-empty` note reading exactly "series pending" over more than three
- * hundred placeholder cells. Every cell was honest about itself — absent,
- * valueless, undated — and the arrangement was still false, because "pending"
- * is a claim about the future and this source has no daily record to publish.
- * The panel was holding a graph-shaped box open for data that cannot arrive,
- * which is a permanent hole rather than the zero-CLS reserve it looked like.
+/* INVERTED by the owner's ruling of 2026-08-24, and RE-AIMED by the ledger
+ * redesign (owner directive, 2026-09-03, issue 287) without the ruling itself
+ * moving an inch.
  *
- * So the new guarantee is the opposite one, and it is asserted in both
- * directions because either half alone is satisfied by a page that got it
- * badly wrong: a site that dropped every heatmap passes "no empty grid", and
- * the old page passed "the real grid renders".
+ * The ruling: a `.grid-empty` note over three hundred placeholder cells is a
+ * permanent hole, not a zero-CLS reserve. Every cell was honest about itself —
+ * absent, valueless, undated — and the arrangement was still false, because a
+ * source with no daily record to publish was being given a graph-shaped box
+ * held open for data that cannot arrive.
+ *
+ * What changed is only WHERE a source's calendar lives. The per-source cards
+ * are retired; the commits section draws one grid the reader cycles with a
+ * segmented control, and a source's calendar is the set behind its segment. So
+ * the ruling's shape here is that a seriesless source is offered NO SEGMENT at
+ * all — nothing to press, nothing held open, no reserve drawn on its behalf.
+ *
+ * Both directions, because either half alone is satisfied by a page that got
+ * it badly wrong: a build that offered no token segments at all passes "the
+ * seriesless source has none", and the old arrangement passes "the source with
+ * a series draws its calendar".
+ *
+ * And the third claim is what stops "offer no segment" from quietly becoming
+ * "drop the source": the seriesless source keeps its square on the board, with
+ * its figures intact. A source that vanished from the page entirely would
+ * satisfy the first two and be a worse outcome than the hole.
  *
  * The page is judged against the ORIGIN's own payload rather than against
  * itself. Which sources report a daily series is a fact the API states, so
- * reading it there and then looking for the matching graph makes the lane
+ * reading it there and then looking for the matching segment makes the lane
  * name the offending source by label — instead of inferring what the page
  * meant to do from what the page did, which is how a rendering test comes to
  * agree with every regression it was written to catch.
  *
  * One source's series is STAGED away rather than waited for, and that is a
  * repair, not a shortcut. The lane needs a seriesless source and a serialised
- * one on the same screen; it used to get both by accident, because the
- * shipped snapshot happened to carry a series for one source and none for the
- * other. The day a real capture landed for the second source (issue #140) the
- * lane went red on its own non-vacuity check — with nothing wrong with the
- * page. A guarantee about how the page treats an absent series must not
- * depend on the owner's usage records happening to be missing one, so the
- * absence is now produced from the origin's OWN envelope, one field deleted
- * from one source. Everything else on the wire is the origin's real payload,
- * and the assertions still name sources by the label the API gave them. */
-test('a source with no series renders no graph, and one with a series still renders all of it', async ({
-  page,
-}) => {
+ * one on the same screen; it used to get both by accident, because the shipped
+ * snapshot happened to carry a series for one source and none for the other.
+ * The day a real capture landed for the second source (issue #140) the lane
+ * went red on its own non-vacuity check — with nothing wrong with the page. */
+test('a seriesless source is offered no calendar and keeps its figures', async ({ page }) => {
   /* Staged before the first navigation so the panel's own fetch and the
      read-back below see the identical envelope. */
   await stageUsagePayload(page, (envelope) => {
@@ -1768,48 +2240,33 @@ test('a source with no series renders no graph, and one with a series still rend
   });
   await visit(page);
   const observed = await page.evaluate(async () => {
-    const panel = window.document.querySelector('[data-panel-id="token-usage"]');
-    if (panel === null) return null;
     const response = await fetch('/api/panels/token-usage');
     const envelope = await response.json();
-    const strip = (node) =>
-      Math.round(node.querySelector('.grid-strip').getBoundingClientRect().height);
-    const rendered = {};
-    for (const source of panel.querySelectorAll('.usage-source')) {
-      const block = source.querySelector('.grid-block');
-      rendered[source.querySelector('.usage-source-label').textContent.trim()] = {
-        region: source.querySelector('.usage-activity') !== null,
-        blocks: source.querySelectorAll('.grid-block').length,
-        /* What tells a source WITH a graph from one without, now that the
-           display menu is gone (issue 233): the activity heading. It used to
-           be the count of that source's lens toggles, and both halves of this
-           lane would now read zero — a discriminator that cannot
-           discriminate. The heading is scoped to the activity region because
-           the insights section carries the same class. */
-        activityHeadings: source.querySelectorAll('.usage-activity .usage-section-title').length,
-        toggles: source.querySelectorAll('[role="radiogroup"]').length,
-        datapoints: source.querySelectorAll('[data-grid-cell]').length,
-        placeholders: source.querySelectorAll('[data-grid-pending]').length,
-        notes: source.querySelectorAll('.grid-empty').length,
-        /* What a source still has to show for itself once its graph is gone.
-           A block with no figures left would be the hole this ruling was
-           about, moved rather than closed. */
-        tiles: source.querySelectorAll('[data-usage-tile]').length,
-        stripHeight: block === null ? 0 : strip(block),
-      };
-    }
+    const board = window.document.querySelector('.board-grid');
+    const segments = [...window.document.querySelectorAll('.commit-segment')].map((node) =>
+      node.textContent.trim()
+    );
     return {
       /* What the origin SAYS, read from the same API the panel reads. */
       reported: (envelope?.data?.sources ?? []).map((source) => ({
         label: source.label,
         series: Array.isArray(source?.series?.totals) && source.series.totals.length > 0,
       })),
-      rendered,
-      pending: panel.querySelectorAll('[data-grid-pending]').length,
-      notes: panel.querySelectorAll('.grid-empty').length,
+      segments,
+      /* Every square head on the board, so "the source is still on the page"
+         is measured rather than assumed. */
+      squares: [...(board?.querySelectorAll('.board-square') ?? [])].map((square) => ({
+        label: square.querySelector('.board-label')?.textContent.trim() ?? '',
+        figure: square.querySelector('.board-figure')?.textContent.trim() ?? '',
+        bars: square.querySelectorAll('[data-face="front"] .board-bar').length,
+      })),
+      /* Nothing anywhere is a placeholder or an empty-grid note while the
+         contributions calendar is the one on screen. */
+      pending: window.document.querySelectorAll('[data-grid-pending]').length,
+      notes: window.document.querySelectorAll('.grid-empty').length,
+      grids: window.document.querySelectorAll('.grid-block').length,
     };
   });
-  expect(observed, 'the token panel never painted; this lane proves nothing').not.toBeNull();
 
   const bare = observed.reported.filter((source) => !source.series);
   const drawn = observed.reported.filter((source) => source.series);
@@ -1819,155 +2276,168 @@ test('a source with no series renders no graph, and one with a series still rend
   ).toBeGreaterThan(0);
   expect(
     drawn.length,
-    'every source lost its series; a page with no heatmaps would pass the other half for free'
+    'every source lost its series; a page with no calendars would pass the other half for free'
   ).toBeGreaterThan(0);
 
   for (const source of bare) {
-    const shown = observed.rendered[source.label];
-    expect(shown, `the origin reports "${source.label}" and the page does not render it`).toBeDefined();
-    /* No grid element in the DOM — not an empty one, not a dimmed one, not a
-       placeholder one. */
-    expect(shown.blocks, `"${source.label}" reports no series and renders a grid anyway`).toBe(0);
-    expect(shown.datapoints, `"${source.label}" rendered datapoints it was never given`).toBe(0);
-    expect(shown.placeholders, `"${source.label}" renders placeholder cells again`).toBe(0);
-    expect(shown.notes, `"${source.label}" renders an empty-grid note again`).toBe(0);
-    /* Nor the heading the graph came with: a heading over no series is the
-       same hole in different markup. */
-    expect(shown.region, `"${source.label}" kept the graph region around an absent graph`).toBe(
-      false
-    );
+    /* NOTHING TO PRESS. No segment names it, so no grid is ever drawn on its
+       behalf and no reserve is held for a capture that does not exist. */
     expect(
-      shown.activityHeadings,
-      `"${source.label}" kept an activity heading with nothing under it`
-    ).toBe(0);
-    /* And it is still a complete block rather than something with a hole in
-       it: the figures the source genuinely reports are all still there. */
-    expect(shown.tiles, `"${source.label}" lost its figures along with its graph`).toBeGreaterThan(0);
+      observed.segments.some((segment) => segment.includes(source.label)),
+      `"${source.label}" reports no series and is still offered a calendar segment`
+    ).toBe(false);
+    /* ...and it is still ON the page, with its figures. Offering no segment
+       must never become dropping the source. */
+    const square = observed.squares.find((candidate) => candidate.label === source.label);
+    expect(
+      square,
+      `"${source.label}" reports no series and lost its square as well as its calendar`
+    ).toBeDefined();
+    expect(
+      square.figure,
+      `"${source.label}" kept its square and lost the figure on it`
+    ).not.toBe('');
   }
 
   for (const source of drawn) {
-    const shown = observed.rendered[source.label];
-    expect(shown, `the origin reports "${source.label}" and the page does not render it`).toBeDefined();
-    expect(shown.region, `"${source.label}" reports a series and renders no graph region`).toBe(true);
     expect(
-      shown.datapoints,
-      `"${source.label}" reports a series and renders a graph with nothing in it`
-    ).toBeGreaterThan(0);
-    expect(shown.placeholders, `"${source.label}" pads its real series with placeholders`).toBe(0);
-    expect(shown.notes, `"${source.label}" renders an empty-grid note over a real series`).toBe(0);
-    /* The heading is the other half of the discriminator: a source that
-       reports a series carries exactly one activity heading, and a source
-       that reports none carries none. */
-    expect(shown.activityHeadings, `"${source.label}" lost the heading over its graph`).toBe(1);
-    /* And it carries no display control, in either case — the panel offers
-       nothing to press since 2026-08-28. Asserted on the SOURCE rather than
-       only panel-wide so a control growing back beside one graph fails here
-       too. */
-    expect(shown.toggles, `"${source.label}" grew a display control back`).toBe(0);
-    /* The graph that stayed still has a box at all — a source whose neighbour
-       lost its series must not come back as a zero-height strip.
-
-       WHAT THIS LANE DELIBERATELY NO LONGER CLAIMS, and the correction is
-       worth writing down because the first attempt got it wrong. Until issue
-       178 vs 268's ruling this compared the surviving strip against the OTHER
-       panel's calendar; the ruling makes those two boxes different on purpose,
-       so that equality would now pin the absence of the ruling. The first
-       re-aim pointed the same comparison at `drawn[0]` instead — but this lane
-       STAGES one of exactly two sources seriesless, so `drawn` has one element
-       under every admitted input and the assertion compared a number with
-       itself. A tautology is not a weaker guard, it is no guard, and it hid
-       the fact that the advertised contract was measured nowhere.
-       "Every source in this panel shares one box" needs a page where two
-       sources actually draw, which this lane by construction is not, so it is
-       measured in the lane immediately below instead. */
-    expect(shown.stripHeight, `"${source.label}" renders a graph with no box`).toBeGreaterThan(0);
+      observed.segments.some((segment) => segment.includes(source.label)),
+      `"${source.label}" reports a series and is offered no calendar segment`
+    ).toBe(true);
+    const square = observed.squares.find((candidate) => candidate.label === source.label);
+    expect(square, `"${source.label}" reports a series and renders no square`).toBeDefined();
   }
 
-  /* Nothing anywhere in this panel is a placeholder. */
-  expect(observed.pending, 'the token panel renders placeholder cells somewhere').toBe(0);
-  expect(observed.notes, 'the token panel renders an empty-grid note somewhere').toBe(0);
+  /* The contributions calendar is the one on screen, and it is a real one:
+     no placeholder cells anywhere, no empty-grid note anywhere. */
+  expect(observed.grids, 'the commits section drew no calendar at all').toBe(1);
+  expect(observed.pending, 'the page renders placeholder cells somewhere').toBe(0);
+  expect(observed.notes, 'the page renders an empty-grid note somewhere').toBe(0);
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-/* ONE PANEL, ONE BOX (issues 178/268). Every source in the token panel draws
- * its graph at the same size, because the bound that decides that size
- * (--grid-day-size / --grid-day-max) belongs to the PANEL and not to any one
- * source. That is the guarantee "removing the region beside a graph moved
- * nothing about it" was always leaning on, and until this lane existed it was
- * measured nowhere: the lane above stages one of exactly two sources
- * seriesless, so it can only ever have one drawn source to compare, and an
- * earlier version of this contract lived there as a number compared with
- * itself.
+/* ONE BOX, WHICHEVER SET IS IN IT (issues 178/268; owner directive,
+ * 2026-09-03, issue 287).
  *
- * So this lane stages NOTHING. It takes the origin's real payload, where both
- * sources carry a series, and the guard below refuses to run at all on a page
- * that offers fewer than two — which is what stops it degenerating back into a
- * tautology the day the snapshot changes shape. The comparison is made on the
- * boxes a reader actually sees: the strip's own height, the cell band inside
- * it, and the drawn day itself, so a source given a different day by any route
- * fails here by name. */
-test('every drawn source in the token panel shares one graph box (issues 178/268)', async ({
+ * The guarantee is unchanged and its subject moved. It used to be that every
+ * source in the token panel drew its graph at the same size, because the bound
+ * that decides that size belongs to the PANEL and not to any one source. The
+ * ledger draws one grid the reader cycles instead, so the same guarantee is
+ * now about time rather than about neighbours: pressing a segment must change
+ * what the box contains and nothing about the box.
+ *
+ * That is the zero-CLS floor at its sharpest, because here the reader causes
+ * the change. A grid that resized on a switch would move every panel below it
+ * under a reader who just pressed a button, which is worse than a late payload
+ * doing the same thing — it is attributable to them.
+ *
+ * It is a DIFFERENT claim from the calendar-identity lane above and neither
+ * covers the other: a build could draw every set on the same window and still
+ * give one of them a different cell size, and it could hold the geometry
+ * perfectly while placing one set a week to the left. Each fails on its own.
+ *
+ * This lane stages NOTHING. It takes the origin's real payload and refuses to
+ * run at all on a page offering fewer than two sets, which is what stops it
+ * degenerating into a box compared with itself. */
+test('every set shares one graph box, and a segment switch moves none of it (issues 178/268; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await visit(page);
-  const sources = await page.evaluate(() => {
-    const panel = window.document.querySelector('[data-panel-id="token-usage"]');
-    if (panel === null) return null;
-    const box = (node) => {
-      const rect = node.getBoundingClientRect();
-      return `${Math.round(rect.width * 100) / 100}x${Math.round(rect.height * 100) / 100}`;
-    };
-    const drawn = [];
-    for (const source of panel.querySelectorAll('.usage-source')) {
-      const block = source.querySelector('.grid-block');
-      if (block === null) continue;
-      const cell = block.querySelector('.grid-cells .grid-cell');
-      if (cell === null) continue;
-      drawn.push({
-        label: source.querySelector('.usage-source-label').textContent.trim(),
-        strip: box(block.querySelector('.grid-strip')),
-        cells: box(block.querySelector('.grid-cells')),
-        day: box(cell),
-        columns: block.getAttribute('data-grid-columns'),
-      });
-    }
-    return drawn;
-  });
-  expect(sources, 'the token panel never painted; this lane proves nothing').not.toBeNull();
-
-  /* The guard that keeps this lane honest. One drawn source would make every
+  await expect(page.locator('.grid-block .grid-cells .grid-cell').first()).toBeAttached();
+  const segments = page.locator('.commit-segment');
+  const count = await segments.count();
+  /* The guard that keeps this lane honest. One set would make every
      comparison below compare an element with itself, which is exactly the
-     failure this lane was written to repair — so it is refused outright rather
-     than passing quietly. */
+     failure the retired version of this lane was written to repair — so it is
+     refused outright rather than passing quietly. */
   expect(
-    sources.length,
-    `the token panel draws ${sources.length} source graph(s); a shared-box claim needs at least two to compare`
+    count,
+    `the commits section offers ${count} set(s); a shared-box claim needs at least two to compare`
   ).toBeGreaterThan(1);
 
-  const [first, ...rest] = sources;
+  const measured = [];
+  for (let index = 0; index < count; index += 1) {
+    await segments.nth(index).click();
+    measured.push(
+      await page.evaluate(() => {
+        const box = (node) => {
+          if (node === null) return null;
+          const rect = node.getBoundingClientRect();
+          return `${Math.round(rect.width * 100) / 100}x${Math.round(rect.height * 100) / 100}`;
+        };
+        const block = window.document.querySelector('.grid-block');
+        const cells = block.querySelector('.grid-cells');
+        const legend = block.querySelector('.grid-legend');
+        const active = [...window.document.querySelectorAll('.commit-segment')].find(
+          (segment) => segment.getAttribute('aria-pressed') === 'true'
+        );
+        const round = (value) => Math.round(value * 100) / 100;
+        return {
+          label: active?.textContent.trim() ?? '',
+          block: box(block),
+          strip: box(block.querySelector('.grid-strip')),
+          cells: box(cells),
+          day: box(cells.querySelector('.grid-cell')),
+          gap: round(parseFloat(getComputedStyle(cells).columnGap || '0')),
+          /* Placement, measured as the offset of the key's END edge from the
+             block's END edge: the legend is right-aligned under the graph, and
+             "right-aligned" is a relationship, not a width. */
+          legendOffset: round(
+            block.getBoundingClientRect().right - legend.getBoundingClientRect().right
+          ),
+          legendTop: round(
+            legend.getBoundingClientRect().top - block.getBoundingClientRect().top
+          ),
+          /* The whole section's height, which is what a reader below the fold
+             actually feels: a caption that grew a line on one set would move
+             the page even with the grid itself unmoved. */
+          section: box(block.closest('.page-section')),
+        };
+      })
+    );
+  }
+
+  const [first, ...rest] = measured;
   // Non-vacuity: zero-sized boxes would satisfy any equality between them.
   expect(first.day, `"${first.label}" draws a day of no size`).not.toBe('0x0');
   expect(first.strip, `"${first.label}" draws a strip of no size`).not.toBe('0x0');
+  expect(first.block, `"${first.label}" draws a block of no size`).not.toBe('0x0');
 
-  for (const source of rest) {
+  for (const set of rest) {
     expect(
-      source.day,
-      `"${source.label}" draws a ${source.day} day where "${first.label}" draws ${first.day}; the day bound belongs to the panel, not to one source`
+      set.day,
+      `"${set.label}" draws a ${set.day} day where "${first.label}" draws ${first.day}; the day bound belongs to the section, not to one set`
     ).toBe(first.day);
     expect(
-      source.strip,
-      `"${source.label}" renders its graph in a ${source.strip} box where "${first.label}" renders ${first.strip}`
+      set.strip,
+      `"${set.label}" renders its calendar in a ${set.strip} box where "${first.label}" renders ${first.strip}`
     ).toBe(first.strip);
     expect(
-      source.cells,
-      `"${source.label}" draws a ${source.cells} cell band where "${first.label}" draws ${first.cells}`
+      set.cells,
+      `"${set.label}" draws a ${set.cells} cell band where "${first.label}" draws ${first.cells}`
     ).toBe(first.cells);
-    /* The window is the panel's too (issue 268: one window per panel, derived
-       from the coverage of all its sources), so two sources drawing different
-       column counts would mean the same box holds two different windows. */
     expect(
-      source.columns,
-      `"${source.label}" draws ${source.columns} columns where "${first.label}" draws ${first.columns}; the coverage window is the panel's, not each source's`
-    ).toBe(first.columns);
+      set.block,
+      `"${set.label}" draws a ${set.block} block where "${first.label}" draws ${first.block}`
+    ).toBe(first.block);
+    expect(
+      set.gap,
+      `"${set.label}" draws a ${set.gap}px gap where "${first.label}" draws ${first.gap}px`
+    ).toBe(first.gap);
+    expect(
+      set.legendOffset,
+      `"${set.label}" sits its key at a different offset from "${first.label}"`
+    ).toBe(first.legendOffset);
+    expect(
+      set.legendTop,
+      `"${set.label}" sits its key on a different row from "${first.label}"`
+    ).toBe(first.legendTop);
+    /* And the section around it never moved either, which is the part a
+       reader below the switch actually feels. */
+    expect(
+      set.section,
+      `switching to "${set.label}" resized the commits section from ${first.section} to ${set.section}`
+    ).toBe(first.section);
   }
 });
 
@@ -2011,7 +2481,7 @@ test('a panel whose data is still on its way holds exactly the box that data wil
            under test is about ONE box. The engine names the nodes that
            moved; only a shift naming something inside the activity panel is
            this reserve's to answer for. */
-        const card = window.document.querySelector('[data-activity-panel]');
+        const card = window.document.querySelector('.grid-block')?.closest('.panel-shell') ?? null;
         const ours = [...(entry.sources ?? [])].some(
           (source) => source.node && card !== null && card.contains(source.node)
         );
@@ -2022,7 +2492,7 @@ test('a panel whose data is still on its way holds exactly the box that data wil
   await page.goto('/');
   const measure = () =>
     page.evaluate(() => {
-      const card = window.document.querySelector('[data-activity-panel]');
+      const card = window.document.querySelector('.grid-block')?.closest('.panel-shell') ?? null;
       const block = card === null ? null : card.querySelector('.grid-block');
       if (block === null) return null;
       const box = (node) => Math.round(node.getBoundingClientRect().height);
@@ -2097,7 +2567,7 @@ test('a panel whose data is still on its way holds exactly the box that data wil
      across ten consecutive frames AFTER the arrival and every sample must be
      the same number. */
   const frames = await page.evaluate(async () => {
-    const block = window.document.querySelector('[data-activity-panel] .grid-block');
+    const block = window.document.querySelector('.grid-block');
     const samples = [];
     for (let frame = 0; frame < 10; frame += 1) {
       await new Promise((paint) => window.requestAnimationFrame(paint));
@@ -2152,10 +2622,10 @@ test('a hostile commit row renders as text and never becomes a live link', async
   await visit(page);
 
   const rendered = await page.evaluate(() => {
-    const rows = [...window.document.querySelectorAll('.activity-entry')];
-    const repoCell = rows[0]?.querySelector('.activity-entry-source');
-    const messageCell = rows[1]?.querySelector('.activity-entry-title');
-    const shaMessageCell = rows[2]?.querySelector('.activity-entry-title');
+    const rows = [...window.document.querySelectorAll('.commit-row')];
+    const repoCell = rows[0]?.querySelector('.commit-source, .commit-source-text');
+    const messageCell = rows[1]?.querySelector('.commit-title, .commit-title-text');
+    const shaMessageCell = rows[2]?.querySelector('.commit-title, .commit-title-text');
     return {
       repoTag: repoCell?.tagName ?? null,
       repoText: repoCell?.textContent ?? null,
@@ -2230,19 +2700,19 @@ test('an old-shape vcs-activity/v1 payload with no sha key on any row still rend
   });
   await visit(page);
 
-  const totals = await page.locator('.activity-totals').innerText();
+  const totals = await page.locator('.commit-caption').innerText();
   expect(totals, 'the panel fell back to its empty state on an old-shape payload').not.toContain(
     'no activity data'
   );
 
-  const rows = page.locator('.activity-entry');
+  const rows = page.locator('.commit-row');
   const rowCount = await rows.count();
   expect(rowCount, 'no commit rows rendered from an old-shape payload — this is the outage Daybreak Blue proved').toBeGreaterThan(0);
 
   /* Each row's repo cell is still real navigation — the sha's absence must
      degrade only that row's own sha-permalink capability, never the repo
      link, never the row itself, never the rest of the payload. */
-  const repoLinks = await page.locator('.activity-entry-source').count();
+  const repoLinks = await page.locator('.commit-source, .commit-source-text').count();
   expect(repoLinks, 'every row lost its repo link too, not just its sha capability').toBeGreaterThan(0);
 });
 
@@ -2262,11 +2732,28 @@ test('an old-shape vcs-activity/v1 payload with no sha key on any row still rend
  * skips links." Desktop Safari's own default keyboard configuration is
  * "Text boxes and lists only" and omits plain links from the tab order
  * entirely; WebKit's automation build mirrors that setting, which is the
- * true case this probe still legitimately reports. */
+ * true case this probe still legitimately reports.
+ *
+ * THE ANCHOR IT MEASURES FROM MOVED (owner directive, 2026-09-03, issue 287),
+ * and getting this wrong is worse than a failing test — it is a SKIP, which
+ * is a lane reporting nothing while looking green. The ledger's masthead puts
+ * the section nav INSIDE the header, between the page mark and the reading-
+ * mode control, so the reading-mode trigger is no longer the control that
+ * precedes the first nav link: a Tab from it now lands on the first section's
+ * own drawer button, which is not an anchor, and this probe reported "this
+ * engine does not tab to links" on an engine that plainly does. It measures
+ * from the page mark instead, which is the control immediately before the
+ * first nav link in both the DOM and the tab order — the same relationship
+ * the probe always had, against the same nav link, and still nothing the
+ * commit list can reach. The landing element is asserted to be the nav link
+ * itself rather than merely an anchor, so a future reshuffle that puts some
+ * other link there fails loudly instead of quietly passing. */
 async function engineTabsToPlainLinks(page) {
-  await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
+  await page.locator('.page-mark').evaluate((node) => node.focus());
   await page.keyboard.press('Tab');
-  return page.evaluate(() => window.document.activeElement.tagName === 'A');
+  return page.evaluate(() =>
+    window.document.activeElement.classList.contains('section-link')
+  );
 }
 
 test('a resolvable commit row is real, keyboard-reachable navigation', async ({ page }) => {
@@ -2285,13 +2772,13 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
   });
   await visit(page);
 
-  const messageLink = page.locator('.activity-entry-title').first();
+  const messageLink = page.locator('.commit-title, .commit-title-text').first();
   await messageLink.scrollIntoViewIfNeeded();
 
   const attrs = await page.evaluate(() => {
-    const row = window.document.querySelector('.activity-entry');
-    const repo = row.querySelector('.activity-entry-source');
-    const message = row.querySelector('.activity-entry-title');
+    const row = window.document.querySelector('.commit-row');
+    const repo = row.querySelector('.commit-source, .commit-source-text');
+    const message = row.querySelector('.commit-title, .commit-title-text');
     const read = (el) => ({
       tag: el.tagName,
       href: el.getAttribute('href'),
@@ -2334,17 +2821,19 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
      the commit list in both the DOM and the tab order — the same "focus a
      known preceding control, then real Tab" shape the nav test below uses,
      anchored on a control that is neither of the two links this test
-     checks. Scoped to [data-activity-panel] because UsageTracker renders
-     the identical ContributionGrid component for its own heatmap and would
-     otherwise make '.grid-strip' ambiguous. */
-  await page.locator('[data-activity-panel] .grid-strip').evaluate((node) => node.focus());
+     checks. It needs no scope any more (owner directive, 2026-09-03, issue
+     287): the retired token cards each drew a ContributionGrid of their own,
+     which is what used to make '.grid-strip' ambiguous, and the redesign
+     draws exactly one heatmap on the whole page — the segmented control
+     swaps that single grid's data rather than mounting a second copy. */
+  await page.locator('.grid-strip').evaluate((node) => node.focus());
   await page.keyboard.press('Tab');
   const repoFocus = await page.evaluate(() => {
     const el = window.document.activeElement;
     const style = getComputedStyle(el);
     return {
       tag: el.tagName,
-      isRepoLink: el.classList.contains('activity-entry-source'),
+      isRepoLink: el.classList.contains('commit-source'),
       outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth,
     };
@@ -2370,7 +2859,7 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
     const el = window.document.activeElement;
     const style = getComputedStyle(el);
     return {
-      isMessageLink: el.classList.contains('activity-entry-title'),
+      isMessageLink: el.classList.contains('commit-title'),
       outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth,
     };
@@ -2453,12 +2942,12 @@ test('a valid-SHA commit row with no resolvable reference is real, keyboard-reac
   });
   await visit(page);
 
-  const messageLink = page.locator('.activity-entry-title').first();
+  const messageLink = page.locator('.commit-title, .commit-title-text').first();
   await messageLink.scrollIntoViewIfNeeded();
 
   const attrs = await page.evaluate(() => {
-    const row = window.document.querySelector('.activity-entry');
-    const message = row.querySelector('.activity-entry-title');
+    const row = window.document.querySelector('.commit-row');
+    const message = row.querySelector('.commit-title, .commit-title-text');
     return {
       tag: message.tagName,
       href: message.getAttribute('href'),
@@ -2477,7 +2966,7 @@ test('a valid-SHA commit row with no resolvable reference is real, keyboard-reac
 
   const engineTabsLinks = await engineTabsToPlainLinks(page);
 
-  await page.locator('[data-activity-panel] .grid-strip').evaluate((node) => node.focus());
+  await page.locator('.grid-strip').evaluate((node) => node.focus());
   await page.keyboard.press('Tab'); // repo link
   await page.keyboard.press('Tab'); // message link (the sha-fallback anchor under test)
   const focus = await page.evaluate(() => {
@@ -2485,7 +2974,7 @@ test('a valid-SHA commit row with no resolvable reference is real, keyboard-reac
     const style = getComputedStyle(el);
     return {
       tag: el.tagName,
-      isMessageLink: el.classList.contains('activity-entry-title'),
+      isMessageLink: el.classList.contains('commit-title'),
       outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth,
     };
@@ -2557,7 +3046,7 @@ test('a valid SHA outranks an unverifiable trailing reference on the SAME row (i
   await visit(page);
 
   const attrs = await page.evaluate(() => {
-    const message = window.document.querySelector('.activity-entry-title');
+    const message = window.document.querySelector('.commit-title, .commit-title-text');
     return { tag: message.tagName, href: message.getAttribute('href') };
   });
 
@@ -2585,10 +3074,18 @@ test('the commit log reads as ruled rows at the touch pitch, not text in dead ai
 }) => {
   await visit(page);
   const observed = await page.evaluate(() => {
-    const list = window.document.querySelector('.activity-entries');
-    const rows = [...list.querySelectorAll('.activity-entry')];
+    const list = window.document.querySelector('.commit-rows');
+    const rows = [...list.querySelectorAll('.commit-row')];
+    /* The row height the page DECLARES, read back from the token the rows
+       and their reserve both derive from (owner directive, 2026-09-03, issue
+       287): one line at the touch pitch on a desktop, two on a phone, where
+       SPEC 5 collapses the row. The token is what makes "five rows" the same
+       number before and after arrival, so the lane compares against it
+       rather than against a hardcoded one-line row. */
+    const rowToken = parseFloat(getComputedStyle(list).getPropertyValue('--commit-row-height'));
     return {
       listHeight: list.getBoundingClientRect().height,
+      rowToken: Number.isFinite(rowToken) ? rowToken * parseFloat(getComputedStyle(window.document.documentElement).fontSize) : NaN,
       fontPx: parseFloat(getComputedStyle(list).fontSize),
       rows: rows.map((row) => ({
         top: row.getBoundingClientRect().top,
@@ -2631,9 +3128,20 @@ test('the commit log reads as ruled rows at the touch pitch, not text in dead ai
     }
   }
   /* And the reservation is still exactly the five rows the adapter caps at,
-     unchanged by the rule the rows now carry. */
+     unchanged by the rule the rows now carry — five of the row the page
+     declares, and every drawn row IS that declared row, so the token is what
+     is drawn rather than a coincidence the reserve happens to match. */
+  expect(observed.rowToken, 'the commit rows declare no row height to reserve against').toBeGreaterThanOrEqual(
+    touchFloorPx - subPixel
+  );
+  for (const [index, row] of observed.rows.entries()) {
+    expect(
+      row.height,
+      `commit row ${index} is ${row.height}px against a declared ${observed.rowToken}px row`
+    ).toBeCloseTo(observed.rowToken, 0);
+  }
   expect(observed.listHeight, 'the five-row reservation changed size').toBeCloseTo(
-    5 * touchFloorPx,
+    5 * observed.rowToken,
     0
   );
 });
@@ -2646,7 +3154,7 @@ test('the shortest admitted repo slug still clears the touch floor on both axes 
      shortest string the pattern accepts — rendered a 6.625px-wide anchor
      even though the row already cleared the 44px touch floor on its BLOCK
      axis. max-inline-size alone bounds the upper end of
-     .activity-entry-source; nothing bounded the lower end until
+     .commit-source; nothing bounded the lower end until
      min-inline-size was added (ActivityTracker.svelte), so a column sized
      purely to this content's own width. */
   await page.route('**/api/panels/vcs-activity', async (route) => {
@@ -2659,7 +3167,7 @@ test('the shortest admitted repo slug still clears the touch floor on both axes 
   });
   await visit(page);
 
-  const repoLink = page.locator('.activity-entry-source').first();
+  const repoLink = page.locator('.commit-source, .commit-source-text').first();
   await repoLink.scrollIntoViewIfNeeded();
   const box = await repoLink.boundingBox();
   expect(box, 'the shortest admitted repo slug rendered no box at all').not.toBeNull();
@@ -2774,12 +3282,29 @@ test('the nav link is quiet at rest and marks itself the moment intent shows (is
      found here, wearing a different costume.
      So the two questions are asked separately now: whether an ANCHOR was
      reached at all is the engine's capability and may legitimately skip,
-     while WHICH anchor it is, is ASSERTED. */
-  const navCount = await page.locator('.section-link').count();
-  await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
-  for (let step = 0; step < navCount + 1; step += 1) {
-    await page.keyboard.press('Tab');
-  }
+     while WHICH anchor it is, is ASSERTED.
+
+     THE WALK STARTS SOMEWHERE ELSE NOW (owner directive, 2026-09-03, issue
+     287), and the reason is the same failure this comment already records
+     once. The ledger's masthead puts the section nav INSIDE the header,
+     BEFORE the reading-mode control, so a forward walk from that control no
+     longer passes the nav at all — it walks straight into the page. Starting
+     there would not skip quietly this time, it would land on whatever content
+     control happens to be first and assert against a class list that has
+     nothing to do with the nav.
+
+     So the walk starts from the LAST role row in the Professional Experience
+     section, which is the control immediately before the first plain anchor in
+     the page's own content — the Projects table's first repository link. That
+     anchor has nothing to do with the nav, which is the property this probe
+     has always needed, and one Tab is all it takes, so nothing here depends on
+     how many controls any section happens to render. */
+  await page
+    .locator('#work .ledger-entry')
+    .last()
+    .locator('.ledger-row')
+    .evaluate((node) => node.focus());
+  await page.keyboard.press('Tab');
   const probe = await page.evaluate(() => {
     const el = window.document.activeElement;
     return {
@@ -2792,22 +3317,24 @@ test('the nav link is quiet at rest and marks itself the moment intent shows (is
   if (engineTabsLinks) {
     expect(
       probe.isSectionLink,
-      `the walk past ${navCount} nav links landed back on a nav link; the probe would be measuring the very element it exists to avoid`
+      `the walk out of the last role row landed on a nav link; the probe would be measuring the very element it exists to avoid`
     ).toBe(false);
     expect(
-      /\b(entry-link|feed-card-title-link)\b/.test(probe.classes),
-      `the walk landed on an anchor carrying "${probe.classes}", which is neither plain-anchor class this page renders; the tab order moved and this probe no longer knows where it is`
+      /\b(table-link|ledger-link|commit-source|commit-title)\b/.test(probe.classes),
+      `the walk landed on an anchor carrying "${probe.classes}", which is none of the plain-anchor classes this page renders in its content; the tab order moved and this probe no longer knows where it is`
     ).toBe(true);
   }
 
   /* Keyboard focus keeps the site's own ring — a real Tab from a throwaway
      starting point, the same pattern this file uses everywhere else it
-     proves :focus-visible rather than merely programmatic focus. The reading
-     mode's own trigger is the last control the page header holds (it is
-     deliberately LAST, PageHeader.svelte says why), so one real Tab from it
-     is the cheapest way to reach the first nav link without walking every
-     stop from the top of the document. */
-  await page.locator('.theme-menu .trigger').evaluate((node) => node.focus());
+     proves :focus-visible rather than merely programmatic focus. The page mark
+     is the control immediately before the first nav link in the ledger's
+     masthead (owner directive, 2026-09-03, issue 287 — the nav used to follow
+     the header entirely and now sits inside it, between the mark and the
+     reading-mode control), so one real Tab from it is the cheapest way to
+     reach the first nav link without walking every stop from the top of the
+     document. */
+  await page.locator('.page-mark').evaluate((node) => node.focus());
   await page.keyboard.press('Tab');
   const focused = await page.evaluate(() => {
     const el = window.document.activeElement;
@@ -2821,14 +3348,14 @@ test('the nav link is quiet at rest and marks itself the moment intent shows (is
   });
   test.skip(
     !engineTabsLinks,
-    "this engine's default keyboard configuration does not include plain links in the tab order, measured independently against the Coding Projects feed's own first link (matches desktop Safari's own default) — nothing left to measure here"
+    "this engine's default keyboard configuration does not include plain links in the tab order, measured independently against the Projects table's own first repository link (matches desktop Safari's own default) — nothing left to measure here"
   );
   /* From here the engine is INDEPENDENTLY proven capable of tabbing to
      plain links, so failing to reach the nav link is a real regression,
      never a platform quirk. */
   expect(
     focused.isSectionLink,
-    'Tab from the reading-mode trigger did not land on the first nav link'
+    'Tab from the page mark did not land on the first nav link'
   ).toBe(true);
   expect(focused.outlineStyle, 'the nav link lost its focus ring').not.toBe('none');
   expect(parseFloat(focused.outlineWidth), 'the nav link focus ring has zero width').toBeGreaterThan(0);
@@ -2864,10 +3391,28 @@ test('the experience section renders four complete roles, and no placeholder sur
       placeholders: section.querySelectorAll('[data-placeholder]').length,
       notes: section.querySelectorAll('.section-note').length,
       text: section.textContent.toLowerCase(),
-      entries: [...section.querySelectorAll('.entry-log > li')].map((entry) => ({
-        title: entry.querySelector('.feed-card-title')?.textContent.trim() ?? '',
-        byline: entry.querySelector('.feed-card-byline')?.textContent.trim() ?? '',
-        points: entry.querySelectorAll('.entry-points > li').length,
+      /* THE ROLES ARE COLLAPSIBLE LEDGER ROWS NOW (owner directive,
+         2026-09-03, issue 287): each is a summary line that expands on
+         request, so the employer, the span, the role and the place are four
+         cells of one row rather than a card title and a composed byline. Each
+         is read separately, which is STRICTER than the retired byline regex —
+         that pattern was satisfied by any string with two separators in it,
+         and these fail by name when one field goes missing. */
+      entries: [...section.querySelectorAll('.ledger-entry')].map((entry) => ({
+        title: entry.querySelector('.ledger-name')?.textContent.trim() ?? '',
+        span: entry.querySelector('.ledger-span')?.textContent.trim() ?? '',
+        role: entry.querySelector('.ledger-role')?.textContent.trim() ?? '',
+        place: entry.querySelector('.ledger-place')?.textContent.trim() ?? '',
+        points: entry.querySelectorAll('.ledger-points > li').length,
+        /* Closed on arrival, which is the owner's own instruction for this
+           section: it opens as a summary and expands on request. */
+        open: entry.querySelector('.ledger-drawer')?.getAttribute('data-open') ?? '',
+        expandLabel: entry.querySelector('.ledger-row')?.getAttribute('aria-label') ?? '',
+        /* The employer link's own text, which is the full legal name rather
+           than the row's short one — read from the DOM rather than through a
+           role query, because the drawer is closed and a closed drawer's
+           contents are correctly absent from the accessibility tree. */
+        linkText: entry.querySelector('.ledger-link')?.textContent.trim() ?? '',
       })),
     };
   });
@@ -2878,64 +3423,129 @@ test('the experience section renders four complete roles, and no placeholder sur
   expect(observed.linkedFromNav, 'the section id moved with the label').toBe('#work');
   expect(observed.entries, 'the section renders the wrong number of roles').toHaveLength(4);
   for (const entry of observed.entries) {
-    expect(entry.title, 'a role card renders no employer').not.toBe('');
-    /* The byline carries the three facts the owner supplied beside the
-       employer; the composition itself is executed in tests/sections.test.mjs,
-       and this is the half that proves it reached the page. */
-    expect(entry.byline, `"${entry.title}" renders no role, span or place`).toMatch(/·.*·/);
+    expect(entry.title, 'a role row renders no employer').not.toBe('');
+    /* The three facts the owner supplied beside the employer, each in its own
+       cell. The composition is executed in tests/sections.test.mjs; this is
+       the half that proves each one reached the page. */
+    expect(entry.span, `"${entry.title}" renders no span`).not.toBe('');
+    expect(entry.role, `"${entry.title}" renders no role`).not.toBe('');
+    expect(entry.place, `"${entry.title}" renders no place`).not.toBe('');
     expect(entry.points, `"${entry.title}" renders no accomplishments`).toBeGreaterThan(0);
+    /* Closed on arrival, and the control says what pressing it will do. */
+    expect(entry.open, `"${entry.title}" opens its drawer before anyone asked`).toBe('false');
+    expect(
+      entry.expandLabel,
+      `"${entry.title}" has a drawer control that does not name what it opens`
+    ).toContain(entry.title);
   }
   expect(observed.placeholders, 'a real role is still marked placeholder in the DOM').toBe(0);
   expect(observed.notes, 'the placeholder disclaimer is still printed over real roles').toBe(0);
   expect(observed.text, 'the filler copy is still on the page').not.toContain('lorem');
 
-  /* EACH SURFACE NAMES ITSELF (issue 243; review finding, 2026-08-28). Turning
-     the employer into a link put an `aria-label` inside the heading, and a
-     heading's accessible name is computed from its descendants — with an
-     `aria-label` REPLACING the labelled node's contribution. So the heading
-     briefly announced "Panasonic Avionics (opens in a new tab)" as its own
-     name, and the heading list a screen-reader user navigates by became a list
-     of tab warnings. Measured here rather than read off the source, because
-     the name is something the ENGINE computes and only an engine can settle:
-     `getByRole` resolves it exactly as assistive technology would. The heading
-     must be reachable by the bare employer, and the link inside it by the
-     employer plus the warning — two roles, two names, neither borrowed. */
+  /* EACH SURFACE NAMES ITSELF (issue 243; review finding, 2026-08-28; re-aimed
+     2026-09-03 for issue 287). The finding then was that turning the employer
+     into a link put an `aria-label` inside the HEADING, and a heading's
+     accessible name is computed from its descendants — with an `aria-label`
+     REPLACING the labelled node's contribution — so the heading list a
+     screen-reader user navigates by became a list of tab warnings.
+
+     The ledger has no per-role heading to borrow a name from: the section
+     carries one heading and each role is a disclosure BUTTON over a drawer. So
+     the same principle is measured on the two surfaces that do exist. The
+     button must answer to what pressing it does, naming its own employer, and
+     the employer link inside the drawer must still tell the reader a new tab
+     is coming. Measured through `getByRole` rather than read off the source,
+     because an accessible name is something the ENGINE computes and only an
+     engine can settle. */
   for (const entry of observed.entries) {
+    const control = page.getByRole('button', { name: `Expand ${entry.title}`, exact: true });
     await expect(
-      page.getByRole('heading', { name: entry.title, exact: true }),
-      `the "${entry.title}" heading does not answer to its own employer name; something inside it renamed it`
+      control,
+      `the "${entry.title}" row control does not answer to its own employer name`
     ).toHaveCount(1);
+    /* THE DRAWER IS OPENED TO REACH THE LINK, and that is the assertion as
+       much as the setup: a closed drawer's contents are correctly out of the
+       accessibility tree, so the link can only be named once the disclosure
+       has actually disclosed something. A control whose press changed nothing
+       fails on the count below rather than on the press. */
+    await control.click();
     await expect(
-      page.getByRole('link', { name: `${entry.title} (opens in a new tab)`, exact: true }),
-      `the "${entry.title}" title link no longer tells the reader a new tab is coming`
+      page.getByRole('button', { name: `Collapse ${entry.title}`, exact: true }),
+      `pressing the "${entry.title}" row did not open it`
     ).toHaveCount(1);
+    expect(entry.linkText, `"${entry.title}" carries no employer link to name`).not.toBe('');
+    await expect(
+      page.getByRole('link', { name: `${entry.linkText}, opens in a new tab`, exact: true }),
+      `the "${entry.title}" employer link no longer tells the reader a new tab is coming`
+    ).toHaveCount(1);
+    /* Left as it was found, so the next role is measured from the same closed
+       start this section ships in. */
+    await page.getByRole('button', { name: `Collapse ${entry.title}`, exact: true }).click();
   }
+  /* And the section still carries exactly ONE heading — the thing the retired
+     per-card headings turned into a list of tab warnings cannot come back as a
+     list of anything. */
+  await expect(
+    page.locator('#work').getByRole('heading'),
+    'the experience section grew a second heading level back'
+  ).toHaveCount(1);
 });
 
 /* The trackers stack, in the order the owner asked for on 2026-08-25: the
- * token tracker opens the section and the game tracker closes it, with the
- * version-control tracker unmoved between them. Read off the rendered stack
- * rather than off the manifest — tests/sections.test.mjs pins the manifest,
- * and this is the half that proves the page renders it in that order. */
+ * token tracker opens the section and the game tracker closes it. Read off the
+ * rendered stack rather than off the manifest — tests/sections.test.mjs pins
+ * the manifest, and this is the half that proves the page renders it in that
+ * order.
+ *
+ * THE VERSION-CONTROL TRACKER LEFT THE SECTION (owner directive, 2026-09-03,
+ * issue 287). It used to sit between the two and the ledger gives it a section
+ * of its own, Commits, which the manifest places BEFORE Trackers. So the
+ * owner's ordering intent is unchanged — the tokens still open and the game
+ * log still closes — and the third block is now pinned by where it went rather
+ * than dropped from the claim, because "it is no longer between them" and "it
+ * is no longer on the page" are very different outcomes and only one of them
+ * is the directive.
+ *
+ * Every block is identified by a structure only it draws: the flip-square
+ * board, the marquee strip, and the one heatmap. */
 test('the trackers stack renders token usage first and the game tracker last', async ({ page }) => {
   await visit(page);
   const order = await page.evaluate(() =>
     [...window.document.querySelectorAll('#trackers .panel-stack > *')].map((slot) => {
-      /* The stack's child IS the panel's own root element for two of the
-         three, so a descendant-only lookup would miss exactly the two that
-         moved. */
+      /* The stack's child IS the panel's own root element for some blocks, so
+         a descendant-only lookup would miss exactly those. */
       const carries = (selector) => slot.matches(selector) || slot.querySelector(selector) !== null;
-      if (carries('[data-panel-id="token-usage"]')) return 'token-usage';
-      if (carries('[data-activity-panel]')) return 'vcs-activity';
-      if (carries('.stat-grid')) return 'stats';
+      if (carries('.board-grid')) return 'token-usage';
+      if (carries('.ticker-strip')) return 'boss-log';
+      if (carries('.grid-block')) return 'vcs-activity';
       return 'unknown';
     })
   );
   expect(order, 'the trackers no longer stack in the order the owner asked for').toEqual([
     'token-usage',
-    'vcs-activity',
-    'stats',
+    'boss-log',
   ]);
+  /* And the block that left is where the manifest sent it: in the Commits
+     section, which comes before Trackers on the page. A build that dropped it
+     reports zero heatmaps here; one that never moved it reports the section
+     the other way round. */
+  const moved = await page.evaluate(() => {
+    const sections = [...window.document.querySelectorAll('.page-section')].map((node) => node.id);
+    const grid = window.document.querySelector('.grid-block');
+    return {
+      sections,
+      heatmaps: window.document.querySelectorAll('.grid-block').length,
+      section: grid === null ? null : grid.closest('.page-section')?.id,
+    };
+  });
+  expect(moved.heatmaps, 'the version-control tracker is not on the page at all').toBe(1);
+  expect(moved.section, 'the version-control tracker did not land in its own section').toBe(
+    'commits'
+  );
+  expect(
+    moved.sections.indexOf('commits'),
+    `the sections render as ${moved.sections.join(', ')}; Commits no longer precedes Trackers`
+  ).toBeLessThan(moved.sections.indexOf('trackers'));
 });
 
 /* No link on this page wears a resting underline (owner directive,
@@ -2962,10 +3572,12 @@ test('every rendered link is unmarked at rest and marks itself on hover', async 
     expect(link.line, `"${link.classes}" carries a resting underline`).toBe('none');
   }
   test.skip(Boolean(isMobile), 'a touch device has no hover state to measure');
-  /* The repo card title is the exact element the owner reported, so it is the
-     one this hovers: its mark moves onto the name inside the anchor, which is
-     where the ink change lives too. */
-  const name = page.locator('.entry-link .entry-name').first();
+  /* The repo title is the exact element the owner reported, so it is the one
+     this hovers. It is the anchor itself now (owner directive, 2026-09-03,
+     issue 287): the repo cards became ruled table rows, and the row's name
+     cell IS the link rather than a name nested inside one, so the mark and the
+     ink change live on the same element. */
+  const name = page.locator('.table-link').first();
   await name.scrollIntoViewIfNeeded();
   await name.hover();
   const hovered = await name.evaluate((node) => getComputedStyle(node).textDecorationLine);
@@ -2974,225 +3586,295 @@ test('every rendered link is unmarked at rest and marks itself on hover', async 
   );
 });
 
-test('the gallery shows exactly one loaded photograph, never eight stacked (issue 176)', async ({ page }) => {
+/* ===========================================================================
+ * THE GALLERY IS A TILE GRID AND A STAGE (owner directive, 2026-09-03,
+ * issue 287)
+ *
+ * Every lane below used to drive one visible frame with a swipe strip under
+ * it. The frame is gone: the sheet's last section draws the first few squares
+ * of the chosen set beside one control tile, and the stage is a native
+ * <dialog> a tile opens. What the rulings of issues 176, 202, 219, 233, 241,
+ * 243, 265 and 275 were FOR survives that move and is re-aimed here — one
+ * full-size picture at a time, the full derivative fetched only on demand,
+ * nothing autoplaying, a film inline behind one control, every box reserved
+ * before a byte arrives, prev/next as real 44px targets with the swipe as an
+ * addition to them, Escape and the backdrop and the close mark all closing,
+ * focus handed back to the tile that opened the stage. What was about the
+ * STRIP itself is deleted rather than re-pointed, each with the reason on the
+ * line where the lane used to be, because a lane re-aimed at a surface that
+ * cannot have the defect is a lane that reports green for nothing.
+ * ======================================================================== */
+
+test('the gallery mounts one thumbnail per tile and exactly one enlarged photograph, never eight stacked (issue 176; owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
   await visit(page);
-  // Vendored WebP, not a media-route fetch: the picture actually decodes,
-  // which the old remote-media "pending frame" case could never measure. It
-  // is also `loading="lazy"` (issue 176), and engines differ on how far
-  // ahead of the viewport a lazy image is fetched — Firefox measurably later
-  // than Chromium/WebKit here — so this polls for decode rather than
-  // asserting it the instant the page settles.
-  const image = page.locator('img.gallery-image');
-  await image.scrollIntoViewIfNeeded();
+  // Vendored WebP, not a media-route fetch: the pictures actually decode,
+  // which the old remote-media "pending frame" case could never measure. They
+  // are also `loading="lazy"` (issue 176), and engines differ on how far ahead
+  // of the viewport a lazy image is fetched — Firefox measurably later than
+  // Chromium/WebKit here — so this polls for decode rather than asserting it
+  // the instant the page settles.
+  const grid = page.locator('.gallery-grid');
+  await grid.scrollIntoViewIfNeeded();
+  const thumbs = page.locator('img.gallery-thumb');
   await expect
-    .poll(async () => image.evaluate((img) => img.complete && img.naturalWidth > 0), {
-      message: 'the vendored preview never finished decoding',
-      timeout: 10_000,
-    })
+    .poll(
+      async () =>
+        thumbs.evaluateAll((nodes) =>
+          nodes.length > 0 && nodes.every((img) => img.complete && img.naturalWidth > 0)
+        ),
+      { message: 'the vendored previews never finished decoding', timeout: 10_000 }
+    )
     .toBe(true);
+
   const observed = await page.evaluate(() => {
-    const frames = [...window.document.querySelectorAll('.gallery-image-button')];
-    const images = [...window.document.querySelectorAll('img.gallery-image')];
-    const counter = window.document.querySelector('.gallery-count');
-    const counterStyle = counter === null ? null : getComputedStyle(counter);
-    const counterBox = counter === null ? null : counter.getBoundingClientRect();
-    /* The track the stage centres itself in, measured rather than read off a
-       token, because it is the thing the stage's own cap has to be compared
-       AGAINST. Since issue 241 the track IS the frame: the arrows moved out of
-       this row and into the control row under the work, so the whole of it
-       belongs to the stage. */
-    const row = window.document.querySelector('.gallery-frame');
-    const track = row.getBoundingClientRect().width;
+    const gridNode = window.document.querySelector('.gallery-grid');
+    const tiles = [...window.document.querySelectorAll('.gallery-tile')];
+    const images = [...window.document.querySelectorAll('img.gallery-thumb')];
     return {
-      arrowsInFrame: row.querySelectorAll(':scope > .icon-button').length,
-      frameCount: frames.length,
-      imageCount: images.length,
-      track,
-      count: counter?.textContent?.trim(),
-      /* The counter is still in the tree and still says where the reader is —
-         it is the position's aria-live voice — but it is CLIPPED out of view;
-         the visible mark is the bare ordinal (owner sketch 2026-08-31). */
-      counterWidth: counterBox === null ? null : counterBox.width,
-      counterClip: counterStyle === null ? null : counterStyle.clipPath,
-      ordinal: window.document.querySelector('.gallery-ordinal')?.textContent?.trim() ?? null,
-      ordinalHidden:
-        window.document.querySelector('.gallery-ordinal')?.getAttribute('aria-hidden') ?? null,
+      declared: gridNode.getAttribute('data-gallery-tiles'),
+      tiles: tiles.length,
+      images: images.length,
+      /* One picture per tile, and every one of them the PREVIEW derivative:
+         the point of the row is that eight masters are not stacked into it. */
+      perTile: tiles.map((tile) => tile.querySelectorAll('img.gallery-thumb').length),
+      lazy: images.map((image) => image.getAttribute('loading')),
       fit: images.map((image) => getComputedStyle(image).objectFit),
-      sizes: frames.map((frame) => {
-        const box = frame.getBoundingClientRect();
-        return { width: box.width, height: box.height };
-      }),
+      previews: images.every((image) => /-preview-/.test(image.currentSrc)),
+      masters: images.filter((image) => /-full-/.test(image.currentSrc)).length,
+      /* Nothing enlarged exists until a tile is opened, which is the other
+         half of "one loaded photograph": the closed page mounts no stage at
+         all, so there is no second copy of anything to load. */
+      enlarged: window.document.querySelectorAll('.gallery-lightbox-image').length,
+      note: window.document.querySelector('.gallery-control-note')?.textContent?.trim() ?? null,
+      controls: window.document.querySelectorAll('.gallery-control').length,
     };
   });
-  expect(observed.frameCount, 'the gallery must render exactly one visible frame, never eight').toBe(1);
-  expect(observed.imageCount, 'exactly one <img> may be mounted in the feed frame').toBe(1);
-  expect(
-    observed.arrowsInFrame,
-    'an arrow is back inside the frame, taking inline size from the work it points at'
-  ).toBe(0);
-  /* The sentence survives as the live region — an assistive reader is told
-     what KIND of item a move landed on — clipped rather than painted; the
-     visible mark is the bare ordinal the owner drew ("1/n", 2026-08-31),
-     aria-hidden so a move is never announced twice. */
-  expect(observed.count).toBe('Photograph 1 of 8');
-  expect(
-    observed.counterWidth,
-    `the counter paints ${observed.counterWidth}px of visible text beside the ordinal`
-  ).toBeLessThanOrEqual(1 + subPixel);
-  expect(observed.counterClip, 'the counter is not clipped, only shrunk').toContain('inset');
-  expect(observed.ordinal, 'the visible 1/n mark is gone').toBe('1 / 8');
-  expect(observed.ordinalHidden, 'the ordinal speaks over the live region').toBe('true');
-  /* The box is reserved before the byte arrives, and since 2026-08-28 it is a
-     SQUARE stage rather than the feed's 16:9 media box: the owner's drawings
-     are portrait scans, so a wide frame cropped them ("the art is cut off
-     significantly") or surrounded them with dead space. The stage takes the
-     SMALLER of its 1fr track and its own 28rem token, and the picture is
-     `contain` inside it — whole, never cropped — which is why a single 4K
-     photograph still costs the page no layout shift. */
-  const [box] = observed.sizes;
-  expect(box.height, 'the gallery frame reserves no height').toBeGreaterThan(0);
-  expect(observed.fit, 'the photograph is cropped to fill its stage instead of shown whole').toEqual([
-    'contain',
-  ]);
-  expect(
-    box.height,
-    `the gallery stage is ${box.width.toFixed(1)}x${box.height.toFixed(1)}, not the square the owner asked for`
-  ).toBeCloseTo(box.width, 0);
-  const expectedWidth = Math.min(observed.track, galleryStageCapPx);
-  expect(
-    box.width,
-    `the gallery stage is ${box.width.toFixed(1)}px inside a ${observed.track.toFixed(1)}px track, not the expected ${expectedWidth.toFixed(1)}px`
-  ).toBeCloseTo(expectedWidth, 0);
-  /* The cap must be doing real work somewhere, not coincidentally matching
-     the track — but this test runs across every project, including the phone
-     emulations, whose own viewport genuinely renders a track under 300px wide
-     (MEASURED: 242px on an iPhone 13), where the cap is correctly inert.
-     Gating on the track's own MEASURED width — a layout fact independent of
-     whatever the size token currently says — rather than on the project name
-     (this file's own capability-over-project-name doctrine) restricts the
-     strict-inequality proof to viewports wide enough to exercise it, without
-     ever weakening what it proves there: on a desktop-width track this still
-     fails exactly as hard against the 28rem -> 280rem mutant, which would let
-     the stage grow to the full track. */
-  if (observed.track > galleryStageCapPx) {
-    expect(
-      box.width,
-      `the stage filled its whole ${observed.track.toFixed(1)}px track; the size cap did not engage`
-    ).toBeLessThan(observed.track);
-  }
+
+  expect(observed.tiles, 'the gallery rendered a number of tiles other than the four it declares').toBe(4);
+  expect(observed.declared, 'the grid stopped declaring how many tiles it drew').toBe('4');
+  expect(observed.controls, 'the row lost its control tile, or grew a second one').toBe(1);
+  expect(observed.images, 'the row mounts a number of pictures other than one per tile').toBe(4);
+  expect(observed.perTile, 'a tile mounts something other than exactly one picture').toEqual([1, 1, 1, 1]);
+  expect(observed.lazy, 'a thumbnail stopped being lazy, so the row costs a reader who never reaches it').toEqual(
+    ['lazy', 'lazy', 'lazy', 'lazy']
+  );
+  expect(observed.fit, 'a thumbnail is letterboxed inside its square instead of filling it').toEqual(
+    ['cover', 'cover', 'cover', 'cover']
+  );
+  expect(observed.previews, 'a tile is showing something other than the preview derivative').toBe(true);
+  expect(observed.masters, 'a full-size master is mounted in the tile row').toBe(0);
+  expect(observed.enlarged, 'an enlarged picture is mounted before anybody opened one').toBe(0);
+  /* The row says what it is showing OF, honestly: four of the eight the
+     vendored set carries, and where the other four are. */
+  expect(observed.note, 'the control tile stopped saying how much of the set the row shows').toBe(
+    '4 of 8 shown · open one to page through all'
+  );
+
+  // ...and opening one mounts exactly ONE enlarged picture, not eight.
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
+  await expect(page.locator('.gallery-lightbox-image')).toHaveCount(1);
+  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 8');
 });
 
-test('prev/next cycle the visible photograph without leaving the page', async ({ page }) => {
+/* THE FULL DERIVATIVE IS FETCHED ON DEMAND AND NOT BEFORE (issue 176, issue
+ * 241; owner directive, 2026-09-03, issue 287).
+ *
+ * The old frame proved this by mounting one <img> at a time. A grid mounts
+ * four, so the claim has to be made where it is now decided — in the network,
+ * against the requests an engine actually issued. The vendored set names the
+ * two derivatives apart (`-preview-` against `-full-`), so this needs no
+ * fixture and no route interception to read: a request either happened before
+ * the press or it did not. */
+test('a tile costs a reader its preview and the master arrives only when one is opened (issue 176; owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
+  const requested = [];
+  page.on('request', (request) => {
+    const name = request.url().split('/').pop();
+    if (/^gallery-\d+-(full|preview)-/.test(name ?? '')) {
+      requested.push(name);
+    }
+  });
   await visit(page);
-  const image = page.locator('img.gallery-image');
-  const before = await image.getAttribute('src');
-  /* The moving control is the device's own: the stage pair where a fine
-     pointer shows it, the dots where touch hides it (owner, 2026-08-29).
-     What this lane holds either way is the cycle itself — the visible
-     photograph changes and comes back, with no navigation, no lightbox. */
-  // The pair is on every device since the 2026-08-31 sketch (issue 275).
+  const tile = page.locator('.gallery-tile[data-gallery-kind="image"]').first();
+  await tile.scrollIntoViewIfNeeded();
+  await expect
+    .poll(() => requested.filter((name) => name.includes('-preview-')).length, {
+      message: 'no preview was ever requested, so this lane measured no loading at all',
+      timeout: 10_000,
+    })
+    .toBeGreaterThan(0);
+
+  const before = requested.filter((name) => name.includes('-full-'));
+  expect(
+    before,
+    `the row pulled ${before.length} full-size master(s) nobody asked to see: ${before.join(', ')}`
+  ).toEqual([]);
+
+  await tile.click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
+  /* And the press pulls exactly one — the picture that was opened, not the
+     set. A neighbour-warming scheme would show up here as two or three. */
+  await expect
+    .poll(() => requested.filter((name) => name.includes('-full-')).length, {
+      message: 'opening a tile requested no master at all, so the stage is showing the thumbnail',
+      timeout: 15_000,
+    })
+    .toBe(1);
+  expect(
+    requested.filter((name) => name.includes('-full-'))[0],
+    'the stage pulled a master other than the tile that was opened'
+  ).toMatch(/^gallery-01-full-/);
+});
+
+test('prev/next cycle the enlarged photograph without leaving the page (issue 176; owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
+  await visit(page);
+  const url = page.url();
+  const dialog = page.locator('dialog.gallery-lightbox');
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(dialog).toBeVisible();
+  const enlarged = page.locator('img.gallery-lightbox-image');
+  const before = await enlarged.getAttribute('src');
+
   await page.getByRole('button', { name: 'Next photograph' }).click();
   await expect(page.locator('.gallery-count')).toHaveText('Photograph 2 of 8');
-  const after = await image.getAttribute('src');
-  expect(after, 'next must actually change which photograph is visible').not.toBe(before);
+  const after = await enlarged.getAttribute('src');
+  expect(after, 'next must actually change which photograph is enlarged').not.toBe(before);
   await page.getByRole('button', { name: 'Previous photograph' }).click();
   await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 8');
-  const backToStart = await image.getAttribute('src');
-  expect(backToStart).toBe(before);
+  expect(await enlarged.getAttribute('src')).toBe(before);
+  /* WITHOUT LEAVING THE PAGE, which is the half the title is about: the stage
+     is still open and the document is still the one the reader arrived on. */
+  await expect(dialog).toHaveJSProperty('open', true);
+  expect(page.url(), 'paging the stage navigated the page').toBe(url);
 });
 
 /* THE STAGE PAIR, ON EVERY DEVICE (owner sketch 2026-08-31, issue 275; the
  * desktop half was owner 2026-08-29: "on the web browser, I lost the ability
  * to move through the images/videos, only on full screen I can do it").
  *
- * The desktop defect that first brought the pair back is structural,
- * MEASURED on this exact binary: a mouse drag across the still never became
- * a swipe — the native image drag took it after one pointermove and the
- * browser sent pointercancel — so a fine-pointer reader's only in-strip
- * control was a 12px chevron. The 2026-08-31 sketch then retired the dot
- * row, which had been the phone's press equivalent, so the capability gate
- * that hid the pair from touch devices retired with it: this lane now
- * drives the same repair on EVERY project — two visible 44px buttons ON the
- * work that page stills and films alike, a playing film included, with the
- * handover taken back. */
-test('the stage pair pages every kind, on every device, inside 44px targets (owner sketch 2026-08-31)', async ({
+ * RE-AIMED at the stage the pair now lives on (owner directive, 2026-09-03,
+ * issue 287). The "pages every KIND" half is deleted rather than moved: a
+ * film is never in the dialog now — it plays in its own tile — so a lane that
+ * paged a playing film through this pair would be driving a route the design
+ * does not have. What is left is every claim that was about the READER: two
+ * real 44px targets, visible on every device rather than gated behind a fine
+ * pointer, sitting ON the picture's own edges instead of adrift in a track,
+ * and a set that WRAPS in both directions so neither end is a dead stop.
+ *
+ * The absent branch rides the same lane, because "when there is more than one
+ * still" is the condition the pair is drawn under: the manifest fixture holds
+ * exactly one still, and a stage with nothing to page to must offer no pair
+ * and no count at all rather than two controls that do nothing. */
+test('the stage pair pages the set inside 44px targets on every device, wraps both ways, and is absent when there is nowhere to go (owner sketch 2026-08-31; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
-  await serveGalleryManifest(page);
   await visit(page);
-  const stage = page.locator('.gallery-stage');
-  await stage.scrollIntoViewIfNeeded();
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  const dialog = page.locator('dialog.gallery-lightbox');
+  await expect(dialog).toBeVisible();
   const previous = page.locator('.gallery-nav[data-gallery-nav="previous"]');
   const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
   await expect(previous).toHaveCount(1);
   await expect(next).toHaveCount(1);
-
-  /* Visible, at the touch floor, and ON the stage rather than adrift in the
-     track — each control's centre sits within the stage's own span, which is
-     the adjacency the pre-241 arrows lost by 212px. */
   await expect(previous).toBeVisible();
   await expect(next).toBeVisible();
-  const stageBox = await stage.boundingBox();
+
+  /* At the touch floor, and ON the work rather than adrift beside it — each
+     control's centre sits within the picture's own span, which is the
+     adjacency the pre-241 arrows lost by 212px. */
+  const picture = await page.locator('img.gallery-lightbox-image').boundingBox();
   for (const control of [previous, next]) {
     const box = await control.boundingBox();
-    expect(box.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-    expect(box.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+    expect(box.width, 'a stage control fell under the touch floor').toBeGreaterThanOrEqual(
+      touchFloorPx - subPixel
+    );
+    expect(box.height, 'a stage control fell under the touch floor').toBeGreaterThanOrEqual(
+      touchFloorPx - subPixel
+    );
     const centre = box.x + box.width / 2;
-    expect(centre, 'a nav control sits off the work’s own span').toBeGreaterThanOrEqual(stageBox.x - subPixel);
+    expect(centre, 'a nav control sits off the work’s own span').toBeGreaterThanOrEqual(
+      picture.x - subPixel
+    );
     expect(centre, 'a nav control sits off the work’s own span').toBeLessThanOrEqual(
-      stageBox.x + stageBox.width + subPixel
+      picture.x + picture.width + subPixel
     );
   }
 
-  // Pages a still onto a film, a film onto a still, wrapping both ways...
+  /* IT WRAPS, both ways, and the walk is the whole set rather than one step:
+     eight presses of next return the reader to where they started, and one
+     press of previous from the first item lands on the last. */
+  for (let step = 1; step < 8; step += 1) {
+    await next.click();
+    await expect(page.locator('.gallery-count')).toHaveText(`Photograph ${step + 1} of 8`);
+  }
   await next.click();
-  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
-  await next.click();
-  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
-  await previous.click();
-  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
-
-  /* ...and pages a PLAYING film, which is the owner's "only on full screen I
-     can do it" made impossible to reintroduce: the pair sits above the
-     player, so no fullscreen and no lightbox is ever required to leave a
-     film. Leaving through it runs goTo(), which takes the handover back —
-     the returning film is behind its veil with no native controls declared,
-     exactly as the issue-243 walk demands of every other route. */
-  await page.locator('.gallery-play').click();
-  await expect
-    .poll(async () => page.locator('video').evaluate((node) => node.controls), {
-      message: 'the play press never handed the player its controls',
-      timeout: 5_000,
-    })
-    .toBe(true);
-  await next.click();
-  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
-  await previous.click();
-  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
   await expect(
-    page.locator('.gallery-film-veil'),
-    'paging away from a playing film did not hand its surface back'
-  ).toHaveCount(1);
-  expect(
-    await page.locator('video').evaluate((node) => node.controls),
-    'the returned film still declares the controls it was handed before the reader paged away'
-  ).toBe(false);
+    page.locator('.gallery-count'),
+    'the end of the set is a dead stop instead of a wrap'
+  ).toHaveText('Photograph 1 of 8');
+  await previous.click();
+  await expect(
+    page.locator('.gallery-count'),
+    'the start of the set is a dead stop instead of a wrap'
+  ).toHaveText('Photograph 8 of 8');
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
 
+  /* AND THE ABSENT BRANCH, on a set with exactly one still: the fixture's
+     other item is a film, which never reaches this stage, so there is nowhere
+     to page to and nothing may be drawn that says otherwise. */
+  await serveGalleryManifest(page);
+  await visit(page);
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(dialog).toBeVisible();
+  await expect(
+    page.locator('.gallery-nav'),
+    'a stage with one still still draws a pair of controls that can only return to it'
+  ).toHaveCount(0);
+  await expect(
+    page.locator('.gallery-count'),
+    'a stage with one still counts a position nobody can move'
+  ).toHaveCount(0);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-/* THE SET DROPDOWN (owner sketch 2026-08-31, issue 275): a small control
- * above the frame choosing which set the strip shows. This lane serves the
- * fixture UNTAGGED, so the sets under test are the kind-derived defaults —
- * the still is a Drawing, the film a Video — which is both halves of the
- * data-driven claim at once: entries exist exactly for what the manifest
- * holds, and nothing (no OldSchool RuneScape, no empty promise) is listed
- * for a set nobody has published. The owner weighed the open menu briefly
- * overlapping the stage and took it; what that trade must never cost is
- * layout — opening the menu grows the document by nothing. */
-test('the set dropdown filters the strip, overlays without moving the page, and lists only sets that exist (issue 275)', async ({
+/* THE SET CONTROL (owner sketch 2026-08-31, issue 275; RE-AIMED by the owner
+ * directive of 2026-09-03, issue 287). The dropdown became the control tile's
+ * own switch — one pressed button per set, in the row, with no menu to open
+ * and therefore no overlap to trade against. What the ruling was FOR is
+ * unchanged and is what this measures: an entry exists exactly for a set
+ * something is published in, choosing one really filters the row, and the
+ * choice costs the page no layout.
+ *
+ * It serves the fixture UNTAGGED, so the sets under test are the kind-derived
+ * defaults — the still is a Photograph, the film a Video — which is both
+ * halves of the data-driven claim at once: entries exist for what the
+ * manifest holds, and nothing (no OldSchool RuneScape, no empty promise) is
+ * listed for a set nobody has published. The one-set branch is measured on
+ * the vendored bootstrap row first, because a switch offering a choice of one
+ * is a control that lies about having a choice. */
+test('the set switch lists only sets that exist, filters the row without moving the page, and offers no choice when there is one set (issue 275; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
+  await visit(page);
+  const grid = page.locator('.gallery-grid');
+  await grid.scrollIntoViewIfNeeded();
+  /* ONE SET, so no switch at all — the set is NAMED instead, which is the
+     honest-states floor applied to a control: a button nobody can press to
+     any effect is worse than a label. */
+  await expect(
+    page.locator('.gallery-set'),
+    'a set switch is drawn for a row with only one set to choose'
+  ).toHaveCount(0);
+  await expect(page.locator('.gallery-sets')).toHaveCount(0);
+  await expect(page.locator('.gallery-set-name')).toHaveText('Photographs');
+
   await page.route('**/media/mutable/gallery/manifest.json', (route) =>
     route.fulfill({
       status: 200,
@@ -3204,60 +3886,97 @@ test('the set dropdown filters the strip, overlays without moving the page, and 
     })
   );
   await visit(page);
-  const button = page.locator('.gallery-set-button');
-  await button.scrollIntoViewIfNeeded();
-  await expect(button).toBeVisible();
-  await expect(button).toContainText('Drawings');
-  const buttonBox = await button.boundingBox();
-  expect(buttonBox.width + subPixel, 'the set button is under the touch floor').toBeGreaterThanOrEqual(
-    touchFloorPx
-  );
-  expect(buttonBox.height + subPixel, 'the set button is under the touch floor').toBeGreaterThanOrEqual(
-    touchFloorPx
-  );
-  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 1');
+  await grid.scrollIntoViewIfNeeded();
+  const sets = page.locator('.gallery-set');
+  await expect(
+    sets,
+    'the switch lists a set the manifest never published, or lost one it did'
+  ).toHaveText(['Photographs · 1', 'Videos · 1']);
+  await expect(page.locator('.gallery-set-name')).toHaveCount(0);
+  await expect(page.locator('.gallery-sets')).toHaveAttribute('aria-label', 'Media set');
+  for (const index of [0, 1]) {
+    const box = await sets.nth(index).boundingBox();
+    expect(box.width + subPixel, 'a set button is under the touch floor').toBeGreaterThanOrEqual(
+      touchFloorPx
+    );
+    expect(box.height + subPixel, 'a set button is under the touch floor').toBeGreaterThanOrEqual(
+      touchFloorPx
+    );
+  }
+  /* The chosen set says so in the accessibility tree, not by ink alone — the
+     dataviz floor applied to a control (AGENTS.md, "a value is never encoded
+     by color alone"). */
+  await expect(sets.nth(0)).toHaveAttribute('aria-pressed', 'true');
+  await expect(sets.nth(1)).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('.gallery-tile[data-gallery-kind="image"]')).toHaveCount(1);
+  await expect(page.locator('.gallery-tile[data-gallery-kind="video"]')).toHaveCount(0);
 
   const heightBefore = await page.evaluate(() => window.document.documentElement.scrollHeight);
-  await button.click();
-  const menu = page.locator('.gallery-set-menu');
-  await expect(menu).toBeVisible();
-  await expect(page.locator('.gallery-set-option')).toHaveText(['Drawings', 'Videos']);
-  const heightOpen = await page.evaluate(() => window.document.documentElement.scrollHeight);
-  expect(heightOpen, 'opening the set menu grew the document').toBe(heightBefore);
-
-  /* Choosing filters the strip — the film set holds the film — closes the
-     menu, renames the button, and hands focus back to it, so the keyboard
-     is never stranded in a control that just unmounted. */
-  await page.locator('.gallery-set-option', { hasText: 'Videos' }).click();
-  await expect(menu).toHaveCount(0);
-  await expect(page.locator('.gallery-count')).toHaveText('Film 1 of 1');
-  await expect(button).toContainText('Videos');
+  const gridBefore = await grid.boundingBox();
+  await sets.nth(1).click();
+  await expect(sets.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect(sets.nth(0)).toHaveAttribute('aria-pressed', 'false');
+  /* Choosing really filters the row: the film set holds the film and nothing
+     else, and the still is gone rather than merely dimmed. */
+  await expect(page.locator('.gallery-tile[data-gallery-kind="video"]')).toHaveCount(1);
+  await expect(page.locator('.gallery-tile[data-gallery-kind="image"]')).toHaveCount(0);
   expect(
-    await page.evaluate(() => window.document.activeElement?.className ?? ''),
+    await page.evaluate(() => window.document.documentElement.scrollHeight),
+    'choosing a set grew the document'
+  ).toBe(heightBefore);
+  const gridAfter = await grid.boundingBox();
+  expect(
+    { x: Math.round(gridAfter.x), width: Math.round(gridAfter.width), height: Math.round(gridAfter.height) },
+    'choosing a set moved or resized the row it filters'
+  ).toEqual({
+    x: Math.round(gridBefore.x),
+    width: Math.round(gridBefore.width),
+    height: Math.round(gridBefore.height),
+  });
+  /* AND THE KEYBOARD IS NEVER STRANDED BY A CHOICE. The buttons are keyed by
+     the set they name, so pressing one does not unmount it — which is exactly
+     what the retired dropdown had to repair by hand, and what this shape gets
+     for free. A real Enter on a focused button is what proves it: a CLICK
+     cannot, because macOS WebKit does not focus a <button> on a mouse press
+     at all (MEASURED: activeElement is the body there), and that is an engine
+     policy rather than anything this page decides.
+     It doubles as the keyboard half of the control — the switch is reachable
+     and operable without a pointer, on every engine. */
+  await sets.nth(0).focus();
+  await page.keyboard.press('Enter');
+  await expect(sets.nth(0)).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.gallery-tile[data-gallery-kind="image"]')).toHaveCount(1);
+  expect(
+    await page.evaluate(() => {
+      const buttons = [...window.document.querySelectorAll('.gallery-set')];
+      return buttons.indexOf(window.document.activeElement);
+    }),
     'the choice stranded keyboard focus'
-  ).toContain('gallery-set-button');
+  ).toBe(0);
 
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-test('clicking the photograph opens a real modal dialog with a larger, unframed image; Escape closes it', async ({
+test('opening a tile shows a real modal dialog with a larger, unframed photograph; Escape closes it and hands the tile back its focus (issue 202; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await visit(page);
   const dialog = page.locator('dialog.gallery-lightbox');
   await expect(dialog).not.toBeVisible();
-  /* The strip's picture has to have decoded before the comparison below, which
-     reads its intrinsic ratio to work out how much of its square stage the
-     photograph actually paints. */
-  const strip = page.locator('img.gallery-image');
-  await strip.scrollIntoViewIfNeeded();
+  /* The tile's picture has to have decoded before the comparison below, which
+     is between two PAINTED areas rather than two boxes. */
+  const tile = page.locator('.gallery-tile[data-gallery-kind="image"]').first();
+  await tile.scrollIntoViewIfNeeded();
+  const thumb = tile.locator('img.gallery-thumb');
   await expect
-    .poll(async () => strip.evaluate((img) => img.complete && img.naturalWidth > 0), {
+    .poll(async () => thumb.evaluate((img) => img.complete && img.naturalWidth > 0), {
       message: 'the vendored preview never finished decoding',
       timeout: 10_000,
     })
     .toBe(true);
-  await page.locator('.gallery-image-button').click();
+  const tileBox = await tile.boundingBox();
+
+  await tile.click();
   await expect(dialog).toBeVisible();
   // A native <dialog> shown with showModal() reports itself open, and its
   // ::backdrop is what makes the rest of the page inert to a pointer.
@@ -3265,88 +3984,84 @@ test('clicking the photograph opens a real modal dialog with a larger, unframed 
   expect(modal, 'the dialog did not open as a real top-layer modal').toBe(true);
   const enlarged = page.locator('img.gallery-lightbox-image');
   await expect(enlarged).toBeVisible();
-  const [previewBox, enlargedBox, frame] = await Promise.all([
-    /* The PAINTED picture in the strip, not the box around it (issue 241).
-       The stage is a square and the photograph is `contain` inside it, so the
-       element's box has always been larger than the picture it shows — and
-       since the stage took back the width the arrows used to occupy, that
-       difference is big enough on a phone to make a box-to-box comparison
-       claim the enlargement shrank the photograph. What "larger" means here
-       is the pixels a reader can see, so the contain fit is computed from the
-       element's own intrinsic ratio. */
-    page.evaluate(() => {
-      const image = window.document.querySelector('img.gallery-image');
-      const box = image.getBoundingClientRect();
-      const ratio = image.naturalWidth / image.naturalHeight;
-      const painted = box.width / box.height > ratio
-        ? { width: box.height * ratio, height: box.height }
-        : { width: box.width, height: box.width / ratio };
-      return painted;
-    }),
-    enlarged.boundingBox(),
-    page.evaluate(() => {
-      const wrapper = window.document.querySelector('.gallery-lightbox-border');
-      const style = getComputedStyle(wrapper);
-      const wrapperBox = wrapper.getBoundingClientRect();
-      const imageBox = wrapper.querySelector('.gallery-lightbox-image').getBoundingClientRect();
-      return {
-        borderWidth: Number.parseFloat(style.borderTopWidth),
-        background: style.backgroundColor,
-        padding: [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft].map(
-          Number.parseFloat
-        ),
-        band: {
-          width: wrapperBox.width - imageBox.width,
-          height: wrapperBox.height - imageBox.height,
-        },
-      };
-    }),
-  ]);
-  // "Larger" is measured, not assumed: the enlarged image's rendered area
-  // must exceed the feed frame's, on every viewport this lane runs.
+  const enlargedBox = await enlarged.boundingBox();
+
+  /* "Larger" is measured, not assumed. The tile's thumbnail is `object-fit:
+     cover`, so the picture it paints IS its square box — no contain
+     arithmetic to do, and the comparison is between the pixels a reader can
+     actually see in each of the two states. */
   expect(
     enlargedBox.width * enlargedBox.height,
-    'the enlarged photograph is not measurably larger than the feed frame'
-  ).toBeGreaterThan(previewBox.width * previewBox.height);
+    `the enlarged photograph paints ${Math.round(enlargedBox.width * enlargedBox.height)}px² against the tile's ${Math.round(tileBox.width * tileBox.height)}px²`
+  ).toBeGreaterThan(tileBox.width * tileBox.height);
+
   /* And it is UNFRAMED (owner directive, 2026-08-28: "get rid of those ugly
      outlines"). Issue 176's v1 painted a "static, simple, almost
      non-existent" border here and this lane pinned that it was real; the
-     three --gallery-frame-* tokens that decide it are now width 0, colour
-     transparent and padding 0, so what the enlarged work wears against the
-     scrim is nothing at all.
-     The wrapper survives — it is still the one place a future patterned
-     border would be a token edit — so the pin is that it ADDS nothing: no
-     line, no fill, and not one pixel of band around the picture. Each of the
-     three tokens fails this on its own if it comes back. */
-  expect(frame.borderWidth, 'the enlarged photograph wears a border again').toBe(0);
-  expect(frame.background, 'the frame wrapper paints a mat behind the photograph').toMatch(
+     wrapper that carried it — .gallery-lightbox-border and its three
+     --gallery-frame-* tokens — is gone with the redesign, so what the pin
+     becomes is that nothing took its place: the picture sits directly in its
+     <picture>, wearing no line and no mat, on a dialog that paints no surface
+     of its own behind it. Each half fails on its own if a frame returns. */
+  const frame = await page.evaluate(() => {
+    const image = window.document.querySelector('.gallery-lightbox-image');
+    const style = getComputedStyle(image);
+    const dialogNode = window.document.querySelector('dialog.gallery-lightbox');
+    const stage = window.document.querySelector('.gallery-stage');
+    const imageBox = image.getBoundingClientRect();
+    const stageBox = stage.getBoundingClientRect();
+    return {
+      wrappers: window.document.querySelectorAll('.gallery-lightbox-border').length,
+      borders: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth].map(
+        Number.parseFloat
+      ),
+      padding: [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft].map(
+        Number.parseFloat
+      ),
+      dialogBackground: getComputedStyle(dialogNode).backgroundColor,
+      /* The stage adds no band of its own around the picture either, which is
+         where a reintroduced mat would actually land now. */
+      band: {
+        width: stageBox.width - imageBox.width,
+        height: stageBox.height - imageBox.height,
+      },
+    };
+  });
+  expect(frame.wrappers, 'the retired frame wrapper came back around the photograph').toBe(0);
+  expect(frame.borders, 'the enlarged photograph wears a border again').toEqual([0, 0, 0, 0]);
+  expect(frame.padding, 'the enlarged photograph reserves a band inside its own box').toEqual([0, 0, 0, 0]);
+  expect(frame.dialogBackground, 'the dialog paints a mat behind the photograph').toMatch(
     /rgba\(0, 0, 0, 0\)|transparent/
   );
-  expect(frame.padding, 'the frame wrapper reserves a band around the photograph').toEqual([0, 0, 0, 0]);
   /* Half a CSS pixel of allowance rather than this file's usual hundredth,
      because this is a difference between two boxes on a scaled device: the
      Pixel 5 lane snaps layout to its 2.75x grid and reported a 0.03125px band
      around an image that has no padding at all. Half a pixel cannot hide a
-     frame — the smallest band any of these tokens can produce is a quarter-rem
-     of padding on both sides, which is 8px. */
+     frame — the smallest band the retired tokens could produce was a
+     quarter-rem of padding on both sides, which is 8px. */
   const bandGrainPx = 0.5;
   expect(
     Math.max(frame.band.width, frame.band.height),
-    `the frame wrapper is ${frame.band.width}x${frame.band.height} larger than the photograph inside it`
+    `the stage is ${frame.band.width}x${frame.band.height} larger than the photograph inside it`
   ).toBeLessThanOrEqual(bandGrainPx);
 
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
-  /* And focus comes back to the frame it was invoked from (issue 202). The
-     native dialog's own restoration cannot be relied on here: a mouse click
-     does not focus a <button> on macOS WebKit, so on the engine every iOS
-     browser runs the "previously focused element" is the body — this
-     assertion is exactly what fails if the component stops restoring it
-     explicitly. */
-  const focused = await page.evaluate(() =>
-    window.document.activeElement?.classList.contains('gallery-image-button')
-  );
-  expect(focused, 'Escape left focus somewhere other than the frame that opened the lightbox').toBe(true);
+  /* And focus comes back to the TILE it was invoked from (issue 202), the
+     exact one rather than any of them. The native dialog's own restoration
+     cannot be relied on here: a mouse click does not focus a <button> on
+     macOS WebKit, so on the engine every iOS browser runs the "previously
+     focused element" is the body — this assertion is exactly what fails if
+     the component stops restoring it explicitly. */
+  const focused = await page.evaluate(() => {
+    const active = window.document.activeElement;
+    const tiles = [...window.document.querySelectorAll('.gallery-tile')];
+    return { index: tiles.indexOf(active), label: active?.getAttribute?.('aria-label') ?? null };
+  });
+  expect(
+    focused.index,
+    `Escape left focus on "${focused.label}" rather than on the tile that opened the stage`
+  ).toBe(0);
 });
 
 /* ===========================================================================
@@ -3362,18 +4077,29 @@ test('clicking the photograph opens a real modal dialog with a larger, unframed 
  * this measures the real offset on every engine the matrix runs, across all
  * three ways the dialog can be closed.
  *
- * It drives the STILL's stage deliberately: the lightbox is images-only since
- * this same PR made films play in the strip, so the surface this lane is
- * about is the one a still still opens.
+ * It drives a STILL's tile deliberately, and that is no longer a choice about
+ * which surface to prefer: since the 2026-09-03 redesign a film plays in its
+ * own tile and the dialog is stills only, so a still's tile is the only thing
+ * that opens this at all. The focus half is asserted by IDENTITY rather than
+ * by class — the tile that was pressed, not merely something that looks like
+ * one — because a grid has four of them and a restore to the wrong one is
+ * exactly the defect a class check cannot see.
  * ======================================================================== */
-test('opening and closing the enlarged media leaves the reader exactly where they were (issue 233)', async ({
+test('opening and closing the enlarged media leaves the reader exactly where they were, focus included (issue 233; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await visit(page);
   const dialog = page.locator('dialog.gallery-lightbox');
-  const frame = page.locator('.gallery-image-button').first();
-  await frame.scrollIntoViewIfNeeded();
+  /* The THIRD tile, not the first: a restore that always lands on the row's
+     first tile would satisfy this lane from the first tile and fail a reader
+     who opened any other. */
+  const tile = page.locator('.gallery-tile[data-gallery-kind="image"]').nth(2);
+  await tile.scrollIntoViewIfNeeded();
   await settled(page);
+  await page.evaluate(() => {
+    const tiles = [...window.document.querySelectorAll('.gallery-tile')];
+    window.__opener = tiles[2];
+  });
 
   const scrollY = () => page.evaluate(() => Math.round(window.scrollY));
   const start = await scrollY();
@@ -3385,8 +4111,9 @@ test('opening and closing the enlarged media leaves the reader exactly where the
   ).toBeGreaterThan(150);
 
   for (const close of ['escape', 'the close control', 'a backdrop click']) {
-    await frame.click();
+    await tile.click();
     await expect(dialog).toHaveJSProperty('open', true);
+    await expect(page.locator('.gallery-count')).toHaveText('Photograph 3 of 8');
     /* The defect was HERE, one step before the one the owner reported: the
        dialog took the reader with it as it opened. */
     expect(await scrollY(), `opening the lightbox moved the page from ${start}`).toBe(start);
@@ -3421,229 +4148,209 @@ test('opening and closing the enlarged media leaves the reader exactly where the
        never focused the button, so the reader lands on the document body.
        WebKit is therefore the engine this half is about, and it is the engine
        every iOS browser runs. */
-    const focused = await page.evaluate(
-      () => window.document.activeElement?.className ?? 'none'
-    );
-    expect(focused, `closing by ${close} left focus on "${focused}"`).toContain(
-      'gallery-image-button'
-    );
+    const focused = await page.evaluate(() => ({
+      same: window.document.activeElement === window.__opener,
+      where: window.document.activeElement?.getAttribute?.('aria-label') ?? window.document.activeElement?.tagName ?? 'none',
+    }));
+    expect(
+      focused.same,
+      `closing by ${close} left focus on "${focused.where}" rather than on the tile that opened the stage`
+    ).toBe(true);
   }
 });
 
-/* A FILM MOUNTS INLINE, IN THE BLOCK A STILL GETS, BEHIND ONE CONTROL
- * (issue 233; re-aimed under issue 243).
+/* A FILM IS A TILE, PLAYED WHERE IT SITS, BEHIND ONE CONTROL (issue 233,
+ * issue 243; RE-AIMED by the owner directive of 2026-09-03, issue 287).
  *
- * The header this lane carried described the design the owner reversed, and a
- * comment that describes retired intent is worse than none — a reader trusts
- * it and reasons from a shape the code no longer has. So it is rewritten to
- * the shape actually measured below, and the history is stated rather than
- * quietly dropped.
+ * The owner's rulings this lane carries are unchanged and every one of them
+ * outlived the strip: "make it one single block that doesn't expand, reduce
+ * based on the media" (2026-08-28), "the sensitive area should only be the
+ * button and not the entire video", and nothing anywhere ever autoplaying.
+ * What changed is the block. A film no longer shares a stage with a still —
+ * it has its OWN square tile in the same grid, so "one single block" becomes
+ * the strongest form of itself: a film's tile and a still's tile are on
+ * screen together and must be the identical box, measured side by side in one
+ * layout rather than across a navigation.
  *
- * WHAT IT USED TO SAY: the film's stage was to be "the wider and larger of the
- * two shapes" — 768x432 against a still's 448 square — under the 0.1.54
- * directive to "treat them like youtube videos... in this small minimal
- * version, which should be enlarged", and the decorative play mark was to be
- * gone because the native controls stood in for it.
- *
- * WHAT IT PROVES NOW, in a real engine, on a gallery whose items came down a
+ * What it proves, in a real engine, on a gallery whose items came down a
  * manifest exactly as the operator's own would:
- *   - the film mounts as one real inline <video> inside the CURRENT item's own
- *     stage — never in a dialog, never eight at once;
- *   - the retired decorative mark stays retired, and the ONE control a film
- *     carries is the play control inside the veil (owner, 2026-08-28: "the
- *     sensitive area should only be the button and not the entire video");
- *   - native controls are NOT declared yet — they arrive on the handover, which
- *     the gesture walk at the end of this file drives and measures;
+ *   - the film mounts as one real inline <video> inside its own tile — never
+ *     in the dialog, never one of eight;
+ *   - the ONE control a film carries is the play control, at the touch floor,
+ *     over the poster;
+ *   - native controls are NOT declared until the press, and the press is what
+ *     declares them, in the tile, with no dialog opening behind it;
  *   - nothing autoplays, measured (no attribute, still paused, time 0);
  *   - the source ladder is the manifest's own order, sizes and poster;
- *   - the stage is the IDENTICAL box the still's was — one block that does not
- *     resize with its media (owner, 2026-08-28: "make it one single block that
- *     doesn't expand, reduce based on the media"), with the film reduced inside
- *     it by `object-fit: contain`.
+ *   - the tile is the IDENTICAL box the still's tile is, with the film
+ *     reduced inside it by `object-fit: contain`, before AND after the press.
  *
- * Both items ride one navigation so the two stages are compared as two states
- * of ONE page rather than against numbers this file states — the same
- * discipline the reservation lane below uses. */
-test('a film mounts inline in the same block a still gets, behind one play control (issue 233, 243)', async ({
+ * The e2e origin serves no media volume, so the fixture's files 404. That is
+ * deliberate rather than a gap: every assertion here is about the element,
+ * its attributes, its reserved box and the control beside it, all of which
+ * are byte-independent by this page's own zero-CLS floor, and publishing a
+ * fixture film into the repository to change that would be exactly the heavy
+ * media requirement 11 keeps out of git. */
+test('a film is a tile of its own square, plays inline behind one control, and never reaches the stage (issue 233, 243; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await serveGalleryManifest(page);
   await visit(page);
+  const grid = page.locator('.gallery-grid');
+  await grid.scrollIntoViewIfNeeded();
 
-  const stage = page.locator('.gallery-stage');
-  await stage.scrollIntoViewIfNeeded();
+  // The manifest replaced the vendored set wholesale, so the row is the
+  // fixture's own: one still, one film, one control tile.
+  await expect(page.locator('.gallery-tile')).toHaveCount(2);
+  await expect(page.locator('.gallery-control-note')).toHaveText('2 items');
 
-  // The manifest replaced the vendored set wholesale, so the strip opens on
-  // its first item — the still — and the counter says how many there are.
-  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
-  const still = await page.evaluate(() => {
-    const node = window.document.querySelector('.gallery-stage');
-    const box = node.getBoundingClientRect();
-    return {
-      kind: node.getAttribute('data-gallery-kind'),
-      width: box.width,
-      height: box.height,
-      buttons: window.document.querySelectorAll('.gallery-image-button').length,
-      videos: window.document.querySelectorAll('video').length,
-      marks: window.document.querySelectorAll('.gallery-play-mark').length,
-    };
-  });
-  expect(still.kind, 'a still’s stage does not declare its own kind').toBe('image');
-  expect(still.buttons, 'a still lost the enlarge button it has always had').toBe(1);
-  expect(still.videos, 'a still’s stage mounts a player').toBe(0);
-  expect(
-    still.height,
-    `the still’s stage is ${still.width.toFixed(1)}x${still.height.toFixed(1)}, not the square it keeps`
-  ).toBeCloseTo(still.width, 0);
-
-  /* The control names the item it will REACH (issue 241), and it is the
-     stage pair on every device now (issue 275) — pressing it by that name is
-     this lane's proof the kind-aware naming reaches a real engine, on every
-     project in the matrix. */
-  await page.getByRole('button', { name: 'Next film' }).click();
-  await expect(page.locator('.gallery-count')).toHaveText('Film 2 of 2');
-
-  const film = await page.evaluate(() => {
-    const node = window.document.querySelector('.gallery-stage');
-    const box = node.getBoundingClientRect();
+  const shape = await page.evaluate(() => {
+    const round = (box) => ({
+      width: Math.round(box.width * 10) / 10,
+      height: Math.round(box.height * 10) / 10,
+    });
+    const still = window.document.querySelector('.gallery-tile[data-gallery-kind="image"]');
+    const film = window.document.querySelector('.gallery-tile[data-gallery-kind="video"]');
     const video = window.document.querySelector('video');
-    const player = video === null ? null : video.getBoundingClientRect();
     return {
-      kind: node.getAttribute('data-gallery-kind'),
-      width: box.width,
-      height: box.height,
+      still: round(still.getBoundingClientRect()),
+      stillTag: still.tagName,
+      film: round(film.getBoundingClientRect()),
+      filmTag: film.tagName,
       videos: window.document.querySelectorAll('video').length,
-      marks: window.document.querySelectorAll('.gallery-play-mark').length,
-      buttons: window.document.querySelectorAll('.gallery-image-button').length,
       dialogVideos: window.document.querySelectorAll('dialog video').length,
-      player:
-        video === null
-          ? null
-          : {
-              tag: video.tagName,
-              controls: video.controls,
-              autoplay: video.autoplay,
-              /* The ATTRIBUTE, not the IDL mirror. Gecko implements the
-                 attribute's behaviour but exposes no `playsInline` property,
-                 so reading the property here reported `undefined` on Firefox
-                 (MEASURED) — and the stage-1 floor is about the declaration
-                 anyway, which is what every engine agrees on. */
-              playsinline: video.hasAttribute('playsinline'),
-              preload: video.preload,
-              paused: video.paused,
-              currentTime: video.currentTime,
-              poster: video.getAttribute('poster'),
-              inStage: node.contains(video),
-              sources: [...video.querySelectorAll('source')].map((source) => ({
-                src: source.getAttribute('src'),
-                type: source.getAttribute('type'),
-                media: source.getAttribute('media'),
-                /* What the ENGINE makes of that query at this viewport, which
-                   is the only thing that decides whether the rung is a
-                   candidate at all. */
-                eligible: source.media === '' || window.matchMedia(source.media).matches,
-              })),
-              width: player.width,
-              height: player.height,
-            },
+      inTile: film.contains(video),
+      plays: window.document.querySelectorAll('.gallery-play').length,
+      /* A film's tile is not a button: it must not carry the enlarge press
+         that would eat the play control's own. */
+      opens: film.matches('button'),
+      player: {
+        controls: video.controls,
+        autoplay: video.autoplay,
+        /* The ATTRIBUTE, not the IDL mirror. Gecko implements the attribute's
+           behaviour but exposes no `playsInline` property, so reading the
+           property here reported `undefined` on Firefox (MEASURED) — and the
+           stage-1 floor is about the declaration anyway, which is what every
+           engine agrees on. */
+        playsinline: video.hasAttribute('playsinline'),
+        preload: video.preload,
+        paused: video.paused,
+        currentTime: video.currentTime,
+        poster: video.getAttribute('poster'),
+        fit: getComputedStyle(video).objectFit,
+        box: round(video.getBoundingClientRect()),
+        sources: [...video.querySelectorAll('source')].map((source) => ({
+          src: source.getAttribute('src'),
+          type: source.getAttribute('type'),
+          media: source.getAttribute('media'),
+          /* What the ENGINE makes of that query at this viewport, which is
+             the only thing that decides whether the rung is a candidate. */
+          eligible: source.media === '' || window.matchMedia(source.media).matches,
+        })),
+      },
     };
   });
 
-  /* THE MARK IS GONE, on the item it used to be drawn on. */
-  expect(film.marks, 'the decorative play mark is painted on a film again').toBe(0);
-
-  /* THE PLAYER IS REAL, INLINE, AND IN THE STRIP — not in a dialog, and not
-     one of eight: exactly one <video> exists on the whole page, and it is
-     inside the current item's own stage. */
-  expect(film.kind, 'a film’s stage does not declare its own kind').toBe('video');
-  expect(film.videos, 'the strip mounts a number of players other than exactly one').toBe(1);
-  expect(film.dialogVideos, 'the lightbox mounts a player again').toBe(0);
-  expect(film.buttons, 'a film’s stage still carries the enlarge button that would eat its presses').toBe(0);
-  /* The one control a film DOES carry, and the owner's "the sensitive area
-     should only be the button": exactly one play control, inside the veil. */
-  await expect(page.locator('.gallery-film-veil .gallery-play')).toHaveCount(1);
-  expect(film.player.tag).toBe('VIDEO');
-  expect(film.player.inStage, 'the player is not inside the stage it is supposed to fill').toBe(true);
-  /* THE CONTROLS ARE NOT DECLARED YET — re-aimed (issue 243). They arrive when
-     the reader presses play; before that the veil owns the surface so a swipe
-     can cross the film without contesting a seek bar. The lane that drives the
-     handover and measures the controls appearing is at the end of this file
-     with the other gesture walks. */
-  expect(film.player.controls, 'a film shows native controls under its own swipe surface').toBe(false);
-  expect(film.player.playsinline, 'the player would go fullscreen on a phone instead of playing in place').toBe(true);
-  expect(film.player.preload).toBe('metadata');
+  /* THE PLAYER IS REAL, INLINE, AND IN ITS OWN TILE — not in the dialog, and
+     not one of eight: exactly one <video> exists on the whole page. */
+  expect(shape.stillTag, 'a still’s tile stopped being the button that opens the stage').toBe('BUTTON');
+  expect(shape.filmTag, 'a film’s tile is a button, so a press on the film would open a stage it never reaches').toBe('DIV');
+  expect(shape.opens, 'a film’s tile carries the enlarge press that would eat its play control').toBe(false);
+  expect(shape.videos, 'the row mounts a number of players other than exactly one').toBe(1);
+  expect(shape.dialogVideos, 'the stage mounts a player again').toBe(0);
+  expect(shape.inTile, 'the player is not inside the tile it is supposed to fill').toBe(true);
+  expect(shape.plays, 'a film carries a number of controls other than the one play control').toBe(1);
 
   /* NOTHING EVER AUTOPLAYS, measured rather than read off the source: the
      element declares no autoplay AND has not started itself. */
-  expect(film.player.autoplay, 'the player declares autoplay').toBe(false);
-  expect(film.player.paused, 'the player started without the reader pressing anything').toBe(true);
-  expect(film.player.currentTime, 'the player advanced without being asked').toBe(0);
+  expect(shape.player.autoplay, 'the player declares autoplay').toBe(false);
+  expect(shape.player.paused, 'the player started without the reader pressing anything').toBe(true);
+  expect(shape.player.currentTime, 'the player advanced without being asked').toBe(0);
+  expect(shape.player.controls, 'a film shows native controls before the reader asked for them').toBe(false);
+  expect(
+    shape.player.playsinline,
+    'the player would go fullscreen on a phone instead of playing in place'
+  ).toBe(true);
+  expect(shape.player.preload).toBe('metadata');
 
   /* THE LADDER IS THE MANIFEST'S OWN, in its own order, with the poster the
      manifest published rather than the item's large still. */
-  expect(film.player.sources.map((source) => source.type)).toEqual([
+  expect(shape.player.sources.map((source) => source.type)).toEqual([
     'video/mp4; codecs="hvc1"',
     'video/mp4',
     'video/mp4',
   ]);
-  expect(film.player.sources[0].src).toContain(`/media/immutable/${'f'.repeat(64)}/gallery/film-2160.mp4`);
-  expect(film.player.sources[1].src).toContain(`/media/immutable/${'0'.repeat(64)}/gallery/film-1080.mp4`);
-  expect(film.player.sources[2].src).toContain(`/media/immutable/${'1'.repeat(64)}/gallery/film-720.mp4`);
-  expect(film.player.poster).toContain(`/media/immutable/${'e'.repeat(64)}/gallery/film-poster.webp`);
+  expect(shape.player.sources[0].src).toContain(`/media/immutable/${'f'.repeat(64)}/gallery/film-2160.mp4`);
+  expect(shape.player.sources[1].src).toContain(`/media/immutable/${'0'.repeat(64)}/gallery/film-1080.mp4`);
+  expect(shape.player.sources[2].src).toContain(`/media/immutable/${'1'.repeat(64)}/gallery/film-720.mp4`);
+  expect(shape.player.poster).toContain(`/media/immutable/${'e'.repeat(64)}/gallery/film-poster.webp`);
 
   /* THE LADDER ALSO STATES A SIZE (issue 241), and the engine agrees with the
      arithmetic. The queries are the manifest's own numbers through the item's
      declared aspect; the floor carries none, so some rung always matches. */
-  expect(film.player.sources.map((source) => source.media)).toEqual([
+  expect(shape.player.sources.map((source) => source.media)).toEqual([
     '(min-width: 1920px)',
     '(min-width: 1280px)',
     null,
   ]);
-  const eligible = film.player.sources.filter((source) => source.eligible);
-  expect(eligible.length, 'no rung is eligible at this viewport; the film is unplayable').toBeGreaterThan(0);
   expect(
-    film.player.sources.at(-1).eligible,
+    shape.player.sources.filter((source) => source.eligible).length,
+    'no rung is eligible at this viewport; the film is unplayable'
+  ).toBeGreaterThan(0);
+  expect(
+    shape.player.sources.at(-1).eligible,
     'the smallest rung is gated behind a query, so a narrow viewport can be offered nothing'
   ).toBe(true);
 
-  /* ONE BLOCK — RE-AIMED (issue 243). This used to require the film's stage to
-     be WIDESCREEN AND ENLARGED, 768x432 against the still's 448 square, and
-     the owner reversed it after seeing it live: "the art box changes heights
-     depending on it being a video or art... make it one single block that
-     doesn't expand, reduce based on the media."
-     So the measurement inverts. The film's stage must be the IDENTICAL box the
-     still's was, at whatever this project's viewport allows, and the film
-     reduces inside it. Measured rather than read off a token, and compared
-     against the box measured earlier in this same run, so a mutation to
-     either side of the comparison shows up as a difference. */
+  /* ONE BLOCK, and the strongest form of it: the two tiles are on screen
+     together, so the comparison is between two boxes of ONE layout rather
+     than between two states of a navigation. The film reduces inside its
+     square by `contain`, which is the owner's "reduce based on the media". */
   expect(
-    film.width,
-    `a film’s stage is ${film.width.toFixed(1)}px wide against a still’s ${still.width.toFixed(1)}px; the block changes size with the media`
-  ).toBeCloseTo(still.width, 1);
+    shape.film,
+    `a film’s tile is ${shape.film.width}x${shape.film.height} against a still’s ${shape.still.width}x${shape.still.height}; the block changes size with the media`
+  ).toEqual(shape.still);
+  expect(shape.player.box, 'the player does not fill the tile it was given').toEqual(shape.film);
   expect(
-    film.height,
-    `a film’s stage is ${film.height.toFixed(1)}px tall against a still’s ${still.height.toFixed(1)}px; the block changes size with the media`
-  ).toBeCloseTo(still.height, 1);
-  // The player fills the stage it was given, so the reserved box is the box —
-  // and `object-fit: contain` is what reduces the film inside it.
-  expect(film.player.width).toBeCloseTo(film.width, 0);
-  expect(film.player.height).toBeCloseTo(film.height, 0);
-  expect(
-    await page.locator('.gallery-player').evaluate((node) => getComputedStyle(node).objectFit),
-    'the film fills the block by being cropped rather than by being reduced'
+    shape.player.fit,
+    'the film fills its tile by being cropped rather than by being reduced'
   ).toBe('contain');
 
-  /* AND THE BLOCK IS STILL THE WHOLE FRAME (issue 241). The arrows used to
-     flank the stage inside this row and took 116px of a 288px card with them,
-     which left a film 172px wide and 97px tall. With the arrows in the control
-     row the stage takes the frame's inline size, up to the shared cap. */
-  const frameWidth = await page.evaluate(
-    () => window.document.querySelector('.gallery-frame').getBoundingClientRect().width
+  /* THE PRESS IS THE ONE SENSITIVE AREA, and it is the whole handover the
+     owner reported: pressing the play control declares the native controls,
+     retires the control that was pressed, and changes nothing about the box.
+     The film itself may or may not decode — the origin serves no media volume
+     and the sources 404 — so what is measured is the handover, which is the
+     part this component owns. */
+  const play = page.locator('.gallery-play');
+  const playBox = await play.boundingBox();
+  expect(playBox.width + subPixel, 'the play control is under the touch floor').toBeGreaterThanOrEqual(
+    touchFloorPx
   );
-  expect(
-    film.width,
-    `the film stage is ${film.width.toFixed(1)}px inside a ${frameWidth.toFixed(1)}px frame`
-  ).toBeCloseTo(Math.min(frameWidth, galleryStageCapPx), 0);
+  expect(playBox.height + subPixel, 'the play control is under the touch floor').toBeGreaterThanOrEqual(
+    touchFloorPx
+  );
+  await expect(play).toHaveAttribute('aria-label', 'Play A film, served by the lane');
+  await play.click();
+  await expect
+    .poll(async () => page.locator('video').evaluate((node) => node.controls), {
+      message: 'the play press never handed the player its controls',
+      timeout: 5_000,
+    })
+    .toBe(true);
+  await expect(
+    play,
+    'the play control still sits over a player that is now the reader’s to drive'
+  ).toHaveCount(0);
+  /* AND IT PLAYED WHERE IT SITS: no dialog opened behind the press, and the
+     tile is the box it always was. */
+  await expect(page.locator('dialog.gallery-lightbox')).not.toBeVisible();
+  const afterPress = await page.evaluate(() => {
+    const film = window.document.querySelector('.gallery-tile[data-gallery-kind="video"]');
+    const box = film.getBoundingClientRect();
+    return { width: Math.round(box.width * 10) / 10, height: Math.round(box.height * 10) / 10 };
+  });
+  expect(afterPress, 'handing the film its controls resized the tile it plays in').toEqual(shape.film);
 
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
@@ -3662,7 +4369,12 @@ test('a film mounts inline in the same block a still gets, behind one play contr
  * per project, so the phone lanes and the desktop lanes assert the same rule
  * and neither is a special case. The files 404 (the e2e origin serves no media
  * volume), which is exactly right here: this measures resource SELECTION, and
- * selection happens before a single byte of the file is read. */
+ * selection happens before a single byte of the file is read.
+ *
+ * The walk onto the film is gone with the strip (owner directive, 2026-09-03,
+ * issue 287): the film has its own tile and `preload="metadata"` sends the
+ * element after a rendition the moment the row mounts, so the selection this
+ * lane is about happens without anybody navigating anywhere. */
 test('a phone never pulls the 4K rung, and the smallest rung is reachable at all (issue 241)', async ({
   page,
 }) => {
@@ -3673,8 +4385,8 @@ test('a phone never pulls the 4K rung, and the smallest rung is reachable at all
   });
   await serveGalleryManifest(page);
   await visit(page);
+  await page.locator('.gallery-tile[data-gallery-kind="video"]').scrollIntoViewIfNeeded();
 
-  await goToItem(page, 'Film 2 of 2');
   // preload="metadata" means the element goes and gets one, so this waits for
   // the selection to have happened rather than for a fixed time.
   await expect
@@ -3708,150 +4420,78 @@ test('a phone never pulls the 4K rung, and the smallest rung is reachable at all
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-test('the gallery frame is centred in its track, with no dead gutter (issue 202)', async ({ page }) => {
-  /* The owner's complaint, measured: the frame's inline size is TRANSFERRED
-     from its block cap through aspect-ratio, so on a column wider than
-     35.5rem the button is narrower than its own 1fr track. Before this
-     landed it sat at the track's start edge — 568.9px of frame at the left
-     of an 842px track at a 1280px viewport, 273px of dead space on the right
-     alone. Both gutters are measured against the ARROWS that bound the
-     track, so this compares two rendered boxes and derives its expectation
-     from neither the stylesheet nor a token. */
-  await visit(page);
-  const frame = page.locator('.gallery-image-button');
-  await frame.scrollIntoViewIfNeeded();
-  const observed = await page.evaluate(() => {
-    /* The gutters are measured against the FRAME's own edges since issue
-       241; the touch-floor half of this lane now bounds the stage pair,
-       which is the control that remains after the dot row's retirement
-       (issue 275). Two rendered boxes still, and an expectation derived
-       from neither the stylesheet nor a token. */
-    const row = window.document.querySelector('.gallery-frame').getBoundingClientRect();
-    const button = window.document.querySelector('.gallery-image-button').getBoundingClientRect();
-    const controls = [...window.document.querySelectorAll('.gallery-nav')].map((control) =>
-      control.getBoundingClientRect()
-    );
-    return {
-      left: button.left - row.left,
-      right: row.right - button.right,
-      controls: controls.map((control) => ({ width: control.width, height: control.height })),
-    };
-  });
-  expect(observed.left, 'the frame sits against the start edge of its track').toBeGreaterThanOrEqual(0);
-  expect(
-    observed.left,
-    `the gutters are ${observed.left.toFixed(1)}px and ${observed.right.toFixed(1)}px — the frame is off centre`
-  ).toBeCloseTo(observed.right, 0);
-  /* Centring must not have been bought by shrinking the controls that
-     remain: both stage-pair buttons still clear the touch floor at every
-     viewport this lane runs. */
-  expect(observed.controls.length, 'the gallery lost its stage pair').toBe(2);
-  for (const control of observed.controls) {
-    expect(control.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-    expect(control.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-  }
-});
-
-/* ZERO SHIFT ACROSS A KIND CHANGE (issue 241, re-aimed at issue 265).
+/* THE GRID FILLS ITS COLUMN (issue 202, re-aimed by the owner directive of
+ * 2026-09-03, issue 287, and by the owner's standing no-dead-space rule:
+ * content short of its container's right edge is a defect).
  *
- * MEASURED on 0.1.54: a still's stage is a square and a film's is 16:9, and
- * each reserved its own box — so pressing next across the boundary resized the
- * document under the reader, -105.9px at a 390px viewport and +105.9px coming
- * back. The reservation now sits on the frame, which knows nothing about kind,
- * and this measures the document itself rather than any box: the whole page's
- * scroll height, and the top of the section BELOW the gallery, which is what a
- * reader actually watches move.
- *
- * AND IT PASSED WHILE THE SITE MOVED, which is the second thing this lane now
- * records. The owner watched the section jump on every item change of the live
- * 0.1.65 origin — 50px at 1440, 69px at 390 — and this lane was green
- * throughout, because the fixture above carried no captions and the caption
- * was the mover: a conditional sibling that existed only for the items that
- * had something to say. The fixture now captions both items, unequally, so
- * the same three measurements it always took are taken against a page that
- * has something to shift; the caption's own box joins them, so a failure
- * names the mover instead of only the movement. */
-test('moving between a still and a film shifts the document by nothing (issue 241)', async ({ page }) => {
-  await serveGalleryManifest(page);
+ * The complaint this lane was born from — "568.9px of frame at the left of an
+ * 842px track, 273px of dead space on the right alone" — was answered for the
+ * old frame by CENTRING it, which is the best a box with a transferred inline
+ * size can do. The tile grid does not need centring because it does not fall
+ * short: its five tracks are `minmax(0, 1fr)` of the column, so the right
+ * answer is the stronger one, and it is what the redesign is FOR. Both edges
+ * are measured against the reading column's own, and the cells against each
+ * other, so nothing here derives from the stylesheet or a token. */
+test('the gallery grid fills the reading column edge to edge, in five equal cells on a desktop (issue 202; owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
   await visit(page);
-  await page.locator('.gallery-frame').scrollIntoViewIfNeeded();
-  await settled(page);
-
-  const shape = () =>
-    page.evaluate(() => {
-      const frame = window.document.querySelector('.gallery-frame').getBoundingClientRect();
-      const stage = window.document.querySelector('.gallery-stage').getBoundingClientRect();
-      const below = window.document.querySelector('#trackers');
-      const caption = window.document.querySelector('.gallery-caption');
+  for (const width of desktopWidths) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled(page);
+    const observed = await page.evaluate(() => {
+      const round = (value) => Math.round(value * 100) / 100;
+      const grid = window.document.querySelector('.gallery-grid').getBoundingClientRect();
+      const column = window.document.querySelector('main').getBoundingClientRect();
+      const cells = [...window.document.querySelectorAll('.gallery-tile, .gallery-control')].map(
+        (cell) => {
+          const box = cell.getBoundingClientRect();
+          return { x: round(box.x), y: round(box.y), width: round(box.width) };
+        }
+      );
       return {
-        document: window.document.documentElement.scrollHeight,
-        frame: Math.round(frame.height * 10) / 10,
-        stage: { width: Math.round(stage.width * 10) / 10, height: Math.round(stage.height * 10) / 10 },
-        below: below === null ? null : Math.round(below.getBoundingClientRect().top + window.scrollY),
-        /* The lane the caption is rendered into (issue 265). It is reserved
-           for the whole SET rather than for the current item, so its height is
-           one number for every item — and a null here would mean the box went
-           back to being conditional. */
-        caption:
-          caption === null ? null : Math.round(caption.getBoundingClientRect().height * 10) / 10,
-        kind: window.document.querySelector('.gallery-stage').getAttribute('data-gallery-kind'),
+        left: round(grid.left - column.left),
+        right: round(column.right - grid.right),
+        cells,
+        rows: [...new Set(cells.map((cell) => Math.round(cell.y)))].length,
+        columns: [...new Set(cells.map((cell) => Math.round(cell.x)))].length,
       };
     });
-
-  const still = await shape();
-  expect(still.kind).toBe('image');
-  await goToItem(page, 'Film 2 of 2');
-  const film = await shape();
-  expect(film.kind).toBe('video');
-  await goToItem(page, 'Photograph 1 of 2');
-  const back = await shape();
-
-  /* NON-VACUITY, RE-AIMED (issue 243). This used to demand that the two
-     stages be DIFFERENT SHAPES — the film shorter than the still — because
-     that difference was what the lane existed to absorb. The owner then ruled
-     the difference itself out: "make it one single block that doesn't expand".
-     So the shapes are now identical by design, and the old guard would refuse
-     the very fix it was written to protect.
-     What replaces it is the stronger statement the new design supports: the
-     kind really did change (already asserted above, image then video then
-     image), and the block did not change WITH it. A mutation that gives a film
-     its own box again is caught by the frame and stage comparisons below, and
-     by the dedicated one-block lane earlier in this file. */
-  expect(
-    film.stage,
-    `a film renders a ${film.stage.width}x${film.stage.height} stage against a still's ${still.stage.width}x${still.stage.height}; the visible block changes size with the media`
-  ).toEqual(still.stage);
-  expect(back.kind, 'the strip did not come back to the still it started on').toBe('image');
-
-  /* NON-VACUITY, THE CAPTION HALF (issue 265): the fixture's two items carry
-     DIFFERENT captions, so the lane below is measuring a page that has
-     something to shift. A reservation that had gone back to the current
-     item's own caption would report a height of nothing here for the still. */
-  expect(still.caption, 'the caption box is conditional again, so this lane measures nothing').not.toBeNull();
-  expect(still.caption, 'the reserved caption lane has no height at all').toBeGreaterThan(0);
-
-  for (const [label, state] of [
-    ['the film', film],
-    ['the still, coming back', back],
-  ]) {
+    const at = `at ${width}px`;
+    /* ONE PIXEL, and it is a rounding allowance rather than a tolerance for
+       dead space: the gutter the owner reported was 273px, and the smallest
+       gap this grid could leave from a real regression is one whole track. */
     expect(
-      state.frame,
-      `${label} changed the reserved frame from ${still.frame}px to ${state.frame}px`
-    ).toBeCloseTo(still.frame, 0);
-    expect(
-      state.document,
-      `${label} changed the document height from ${still.document}px to ${state.document}px`
-    ).toBe(still.document);
-    expect(
-      state.below,
-      `${label} moved the section under the gallery from ${still.below} to ${state.below}`
-    ).toBe(still.below);
-    expect(
-      state.caption,
-      `${label} resized the caption lane from ${still.caption}px to ${state.caption}px; the item is moving the box again`
-    ).toBeCloseTo(still.caption, 0);
+      observed.right,
+      `the grid stops ${observed.right}px short of the column's right edge ${at}`
+    ).toBeLessThanOrEqual(1);
+    expect(observed.right, `the grid runs past the column's right edge ${at}`).toBeGreaterThanOrEqual(-1);
+    expect(observed.left, `the grid starts ${observed.left}px inside the column ${at}`).toBeLessThanOrEqual(1);
+    expect(observed.left, `the grid starts ${observed.left}px outside the column ${at}`).toBeGreaterThanOrEqual(-1);
+    /* FIVE CELLS, ONE ROW, EQUAL WIDTHS — four tiles beside one control tile,
+       which is what makes the row fill the column with no track left over. */
+    expect(observed.cells.length, `the row holds ${observed.cells.length} cells ${at}`).toBe(5);
+    expect(observed.rows, `the five cells wrapped onto ${observed.rows} rows ${at}`).toBe(1);
+    expect(observed.columns, `the row draws ${observed.columns} columns ${at}`).toBe(5);
+    const widths = observed.cells.map((cell) => cell.width);
+    for (const [index, cell] of widths.entries()) {
+      expect(
+        cell,
+        `cell ${index + 1} is ${cell}px against cell 1's ${widths[0]}px ${at}; the tracks are not equal`
+      ).toBeCloseTo(widths[0], 0);
+    }
   }
 });
+
+/* THE STILL-ONTO-FILM ZERO-SHIFT LANE IS DELETED (owner directive,
+ * 2026-09-03, issue 287: the strip is gone). It measured the document, the
+ * reserved frame, the caption lane and the section below the gallery across a
+ * navigation from a still to a film and back — a navigation the tile grid
+ * does not have, because a still and a film are on screen at the same time
+ * and neither replaces the other. The claim it was protecting is not dropped,
+ * it is made stronger and measured elsewhere: the film lane above compares
+ * a film's tile against the still's tile in ONE layout, which no reservation
+ * bug can satisfy by moving both boxes together. */
 
 /* THE PAGE DOES NOT SCROLL BEHIND THE LIGHTBOX (issue 241).
  *
@@ -3875,8 +4515,8 @@ test('the document holds still while the lightbox is open, and is unchanged afte
   const canWheel = !(browserName === 'webkit' && isMobile);
   await visit(page);
   const dialog = page.locator('dialog.gallery-lightbox');
-  const frame = page.locator('.gallery-image-button').first();
-  await frame.scrollIntoViewIfNeeded();
+  const tile = page.locator('.gallery-tile[data-gallery-kind="image"]').first();
+  await tile.scrollIntoViewIfNeeded();
   await settled(page);
 
   const scrollY = () => page.evaluate(() => Math.round(window.scrollY));
@@ -3929,7 +4569,7 @@ test('the document holds still while the lightbox is open, and is unchanged afte
     !answered,
     `${browserName} does not move the page from a synthetic scroll here, so neither half of this lane could mean anything on it`
   );
-  await frame.scrollIntoViewIfNeeded();
+  await tile.scrollIntoViewIfNeeded();
   await settled(page);
 
   const start = await scrollY();
@@ -3952,8 +4592,12 @@ test('the document holds still while the lightbox is open, and is unchanged afte
     });
   const shapeBefore = await columnShape();
 
-  await frame.click();
+  await tile.click();
   await expect(dialog).toHaveJSProperty('open', true);
+  /* The lock is an ATTRIBUTE on the document element, written by an effect so
+     it cannot be left behind — asserted in both directions below, because a
+     lock that is never released is the same defect wearing the other face. */
+  await expect(page.locator('html')).toHaveAttribute('data-modal-open', 'true');
 
   expect(await columnShape(), 'opening the lightbox moved the page under the reader').toEqual(shapeBefore);
 
@@ -3975,6 +4619,7 @@ test('the document holds still while the lightbox is open, and is unchanged afte
 
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveJSProperty('open', false);
+  await expect(page.locator('html')).not.toHaveAttribute('data-modal-open', /.*/);
   expect(await scrollY(), 'closing the lightbox left the reader somewhere else').toBe(start);
   expect(await columnShape(), 'closing the lightbox moved the page under the reader').toEqual(shapeBefore);
   /* And the lock is RELEASED, not merely ineffective: the page scrolls again.
@@ -3995,113 +4640,149 @@ test('the document holds still while the lightbox is open, and is unchanged afte
   await expect.poll(scrollY, { message: 'the page never scrolls again after the lightbox closes' }).toBeLessThan(start);
 });
 
-/* The gallery frame's box and its two gutters, measured as one shape. Used
- * twice by the reservation lane below — once with every gallery byte
- * refused, once with them served — so the comparison is between two
- * MEASURED states of the same page rather than against any number this file
- * or the stylesheet states. */
-async function galleryFrameShape(page) {
-  await page.locator('.gallery-image-button').scrollIntoViewIfNeeded();
+/* Every cell of the row, measured as one shape. Used twice by the reservation
+ * lane below — once with every gallery byte refused, once with them served —
+ * so the comparison is between two MEASURED states of the same page rather
+ * than against any number this file or the stylesheet states. */
+async function galleryRowShape(page) {
+  await page.locator('.gallery-grid').scrollIntoViewIfNeeded();
   return page.evaluate(() => {
     const round = (value) => Math.round(value * 10) / 10;
-    const row = window.document.querySelector('.gallery-frame').getBoundingClientRect();
-    const frame = window.document.querySelector('.gallery-image-button').getBoundingClientRect();
+    const grid = window.document.querySelector('.gallery-grid').getBoundingClientRect();
     return {
-      width: round(frame.width),
-      height: round(frame.height),
-      // The gutters against the frame's own edges (issue 241): the arrows that
-      // used to bound this track now live in the control row under the work.
-      left: round(frame.left - row.left),
-      right: round(row.right - frame.right),
-      // And the reservation itself, which is the box the page is laid out
-      // from whether or not a byte ever lands.
-      reserved: round(row.height),
+      grid: { width: round(grid.width), height: round(grid.height) },
+      /* Each cell relative to the row's own origin, never in viewport
+         coordinates: a panel painting elsewhere on the page would move every
+         absolute y at once and make this read as a gallery shift it is not. */
+      cells: [...window.document.querySelectorAll('.gallery-tile, .gallery-control')].map((cell) => {
+        const box = cell.getBoundingClientRect();
+        return {
+          x: round(box.left - grid.left),
+          y: round(box.top - grid.top),
+          width: round(box.width),
+          height: round(box.height),
+        };
+      }),
     };
   });
 }
 
-test('the gallery frame reserves the SAME box with the photograph refused as with it served (issue 202)', async ({
+/* EVERY TILE RESERVES ITS SQUARE BEFORE A BYTE ARRIVES (issue 202, re-aimed
+ * by the owner directive of 2026-09-03, issue 287).
+ *
+ * The gap the #204 adversarial review found (finding 3): the zero-CLS
+ * reservation was pinned at source only, and a centring lane survives the
+ * naive `justify-self: center` regression because a zero-width box still has
+ * two equal gutters. This closes it where the evidence was actually gathered —
+ * an ALIGNED grid item is sized by its CONTENT, so with the bytes refused
+ * that regression measured 0x0 on Gecko, 194.6x109.4 on Blink and 0x0 on
+ * WebKit, none of which equals the served box.
+ *
+ * There are four boxes to hold now rather than one, and that is a stronger
+ * question than the frame's was: a reservation that came from the picture
+ * rather than from the track would leave the row shorter, re-flow the cells
+ * beside it, and move the control tile — all of which this reads, cell by
+ * cell, against the page's own other state. */
+test('every tile reserves the SAME square with its picture refused as with it served (issue 202; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
-  /* The gap the #204 adversarial review found (finding 3): the zero-CLS
-     reservation was pinned at source only, and the centring lane above
-     survives the naive `justify-self: center` regression because a zero-width
-     box still has two equal gutters. This closes it where the evidence was
-     actually gathered — an ALIGNED grid item is sized by its CONTENT, so with
-     the bytes refused that regression measures 0x0 on Gecko, 194.6x109.4 on
-     Blink and 0x0 on WebKit, none of which equals the served box. The
-     expectation is the page's own other state, so nothing here can drift with
-     a token the way a stylesheet-derived number would. */
   await page.route('**/gallery-*.webp', (route) => route.abort());
   await visit(page);
-  const refused = await galleryFrameShape(page);
-  expect(
-    refused.width,
-    'the frame reserved no width at all with the photograph refused'
-  ).toBeGreaterThan(0);
-  expect(refused.height, 'the frame reserved no height with the photograph refused').toBeGreaterThan(0);
+  const refused = await galleryRowShape(page);
+  expect(refused.cells.length, 'the row rendered no cells with the pictures refused').toBe(5);
+  for (const [index, cell] of refused.cells.entries()) {
+    expect(
+      cell.width,
+      `cell ${index + 1} reserved no width at all with its picture refused`
+    ).toBeGreaterThan(0);
+    expect(
+      cell.height,
+      `cell ${index + 1} reserved no height with its picture refused`
+    ).toBeGreaterThan(0);
+  }
 
   await page.unroute('**/gallery-*.webp');
   await visit(page);
-  const image = page.locator('img.gallery-image');
-  await image.scrollIntoViewIfNeeded();
+  const thumbs = page.locator('img.gallery-thumb');
+  await page.locator('.gallery-grid').scrollIntoViewIfNeeded();
   await expect
-    .poll(async () => image.evaluate((img) => img.complete && img.naturalWidth > 0), {
-      message: 'the vendored preview never finished decoding',
-      timeout: 10_000,
-    })
+    .poll(
+      async () =>
+        thumbs.evaluateAll((nodes) =>
+          nodes.length > 0 && nodes.every((img) => img.complete && img.naturalWidth > 0)
+        ),
+      { message: 'the vendored previews never finished decoding', timeout: 10_000 }
+    )
     .toBe(true);
-  const served = await galleryFrameShape(page);
+  const served = await galleryRowShape(page);
 
   expect(
     refused,
-    `the frame is ${refused.width}x${refused.height} without the photograph and ${served.width}x${served.height} with it — the box is not reserved, it is discovered`
+    `the row is ${refused.grid.width}x${refused.grid.height} without its pictures and ${served.grid.width}x${served.grid.height} with them — the boxes are not reserved, they are discovered`
   ).toEqual(served);
 });
 
-/* THE POSITION ROW, AT EVERY WIDTH THIS SITE SUPPORTS (issue 275, replacing
- * the retired dot row's lane). The visible mark is the bare ordinal the
- * owner drew ("1/n"), so the row that used to carry 396px of controls now
- * carries one short paragraph — measured painted, one line, aria-hidden
- * beside the clipped live sentence, and never a page-level horizontal
- * scroll. The controls the floor bounds are the stage pair, in their own
- * lane. */
-test('the position ordinal paints one short line at every phone width (issue 275)', async ({ page }) => {
+/* THE ROW FOLDS TO TWO ACROSS, AT EVERY WIDTH THIS SITE SUPPORTS (issue 275,
+ * re-aimed by the owner directive of 2026-09-03, issue 287, which replaced
+ * the position row this lane used to sweep with the grid's own phone form).
+ *
+ * The claim that survives the ordinal's retirement is the one that was ever
+ * about the reader: whatever the gallery draws, it draws it INSIDE the page
+ * at every width the contract names, and never takes the document sideways.
+ * The phone form adds a second claim of its own — the mock's two tiles across
+ * rather than five squeezed ones — and it is measured as the number of
+ * distinct column origins the engine actually laid out, which is a fact about
+ * the rendered row rather than about the token that produced it. */
+test('the gallery row folds to two tiles across on a phone, at every width this site supports (issue 275; owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
   await visit(page);
-  for (const width of [250, ...phoneWidths]) {
+  for (const width of phoneWidths) {
     await page.setViewportSize({ width, height: 800 });
     await settled(page);
     const row = await page.evaluate(() => {
-      const ordinal = window.document.querySelector('.gallery-ordinal');
-      const box = ordinal === null ? null : ordinal.getBoundingClientRect();
+      const round = (value) => Math.round(value * 100) / 100;
+      const root = window.document.documentElement;
+      const grid = window.document.querySelector('.gallery-grid').getBoundingClientRect();
+      const column = window.document.querySelector('main').getBoundingClientRect();
+      const cells = [...window.document.querySelectorAll('.gallery-tile, .gallery-control')].map(
+        (cell) => {
+          const box = cell.getBoundingClientRect();
+          return { x: Math.round(box.x), y: Math.round(box.y), width: round(box.width) };
+        }
+      );
+      const rows = new Map();
+      for (const cell of cells) {
+        rows.set(cell.y, (rows.get(cell.y) ?? 0) + 1);
+      }
       return {
-        text: ordinal?.textContent?.trim() ?? null,
-        hidden: ordinal?.getAttribute('aria-hidden') ?? null,
-        painted: box !== null && box.width > 0 && box.height > 0,
-        /* Counted as LINE BOXES, not as height over line-height: the ordinal
-           carries no explicit line-height, so its computed value is the word
-           `normal`, which parses to NaN and would fail this lane on every
-           engine while the paragraph renders perfectly. A Range over the text
-           yields one client rect per rendered line in all five engines. */
-        lines:
-          ordinal === null
-            ? null
-            : (() => {
-                const range = window.document.createRange();
-                range.selectNodeContents(ordinal);
-                return [...range.getClientRects()].filter((rect) => rect.width > 0).length;
-              })(),
-        documentScrolls:
-          window.document.documentElement.scrollWidth > window.document.documentElement.clientWidth,
+        columns: [...new Set(cells.map((cell) => cell.x))].length,
+        perRow: [...rows.values()],
+        widths: cells.map((cell) => cell.width),
+        right: round(column.right - grid.right),
+        left: round(grid.left - column.left),
+        documentScrolls: root.scrollWidth > root.clientWidth,
+        overflow: root.scrollWidth - root.clientWidth,
       };
     });
-    expect(row.text, `the ordinal is gone at ${width}px`).toBe('1 / 8');
-    expect(row.hidden, 'the ordinal speaks over the live region').toBe('true');
-    expect(row.painted, `the ordinal paints nothing at ${width}px`).toBe(true);
-    expect(row.lines, `the ordinal wrapped at ${width}px`).toBe(1);
+    expect(row.columns, `the row draws ${row.columns} columns at ${width}px, not the two the phone form asks for`).toBe(2);
+    /* Five cells in two columns is two full rows and a last one holding the
+       remainder — what must never happen is a row holding more than two. */
+    for (const [index, count] of row.perRow.entries()) {
+      expect(count, `row ${index + 1} holds ${count} cells at ${width}px`).toBeLessThanOrEqual(2);
+    }
+    expect(row.perRow.filter((count) => count === 2).length, `no row is full at ${width}px`).toBeGreaterThan(0);
+    for (const [index, cell] of row.widths.entries()) {
+      expect(
+        cell,
+        `cell ${index + 1} is ${cell}px against cell 1's ${row.widths[0]}px at ${width}px`
+      ).toBeCloseTo(row.widths[0], 0);
+    }
+    expect(row.right, `the row stops ${row.right}px short of the column at ${width}px`).toBeLessThanOrEqual(1);
+    expect(row.left, `the row starts ${row.left}px inside the column at ${width}px`).toBeLessThanOrEqual(1);
     expect(
       row.documentScrolls,
-      `the page itself scrolls sideways at ${width}px; the position row took the document with it`
+      `the page itself scrolls sideways at ${width}px, by ${row.overflow}px; the gallery row took the document with it`
     ).toBe(false);
   }
 });
@@ -4118,7 +4799,7 @@ test('the position ordinal paints one short line at every phone width (issue 275
 test('a phone enlarges to the preview and a wide screen to the master (issue 241)', async ({ page }) => {
   await serveGalleryManifest(page);
   await visit(page);
-  await page.locator('.gallery-image-button').click();
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
   const enlarged = page.locator('img.gallery-lightbox-image');
   await expect(enlarged).toBeVisible();
   const chosen = await page.evaluate(() => ({
@@ -4148,11 +4829,16 @@ test('a phone enlarges to the preview and a wide screen to the master (issue 241
 test('two fingers on the artwork can still zoom it (issue 241)', async ({ page }) => {
   /* `touch-action: pan-y` hands the compositor the vertical axis and refuses
      everything else — including the pinch a reader makes to look closer at a
-     drawing, on the one element anybody would ever try it on. The value is
-     read back off the engine rather than off the stylesheet, because an engine
-     that did not understand `pinch-zoom` would DROP the declaration, and the
-     base under it is what this proves survived either way. */
+     drawing, on the one element anybody would ever try it on. The artwork
+     moved into the dialog with the redesign (owner directive, 2026-09-03,
+     issue 287), so the surface under test is the stage inside the OPEN
+     lightbox; the claim is unchanged, and so is the reason the value is read
+     back off the engine rather than off the stylesheet — an engine that did
+     not understand `pinch-zoom` would DROP the declaration, and the base under
+     it is what this proves survived either way. */
   await visit(page);
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
   const declared = await page.evaluate(
     () => getComputedStyle(window.document.querySelector('.gallery-stage')).touchAction
   );
@@ -4164,7 +4850,7 @@ test('the lightbox close mark is small, off the artwork, and still a 44px target
   page,
 }) => {
   await visit(page);
-  await page.locator('.gallery-image-button').click();
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
   const dialog = page.locator('dialog.gallery-lightbox');
   await expect(dialog).toBeVisible();
 
@@ -4175,13 +4861,16 @@ test('the lightbox close mark is small, off the artwork, and still a 44px target
     };
     const control = window.document.querySelector('.gallery-lightbox-close');
     const mark = window.document.querySelector('.gallery-close-mark');
-    const border = window.document.querySelector('.gallery-lightbox-border');
     const image = window.document.querySelector('.gallery-lightbox-image');
     const dialogNode = window.document.querySelector('dialog.gallery-lightbox');
     return {
       hit: rect(control),
       mark: rect(mark),
-      border: rect(border),
+      /* The artwork itself is what the mark must stay off, now that the frame
+         wrapper it used to be measured against is retired (owner directive,
+         2026-09-03, issue 287). It is the tighter of the two comparisons: the
+         wrapper carried no band, so the picture's own box IS the box the old
+         assertion was really about. */
       image: rect(image),
       controlBackground: getComputedStyle(control).backgroundColor,
       markBackground: getComputedStyle(mark).backgroundColor,
@@ -4218,16 +4907,15 @@ test('the lightbox close mark is small, off the artwork, and still a 44px target
   );
 
   /* "It pollutes the image" — answered as geometry rather than taste: the
-     painted mark's box does not intersect the framed photograph's box at
-     all. */
+     painted mark's box does not intersect the photograph's box at all. */
   const intersects =
-    observed.mark.left < observed.border.right &&
-    observed.mark.right > observed.border.left &&
-    observed.mark.top < observed.border.bottom &&
-    observed.mark.bottom > observed.border.top;
+    observed.mark.left < observed.image.right &&
+    observed.mark.right > observed.image.left &&
+    observed.mark.top < observed.image.bottom &&
+    observed.mark.bottom > observed.image.top;
   expect(
     intersects,
-    `the close mark (${observed.mark.top.toFixed(1)}-${observed.mark.bottom.toFixed(1)}) overlaps the framed photograph (${observed.border.top.toFixed(1)}-${observed.border.bottom.toFixed(1)})`
+    `the close mark (${observed.mark.top.toFixed(1)}-${observed.mark.bottom.toFixed(1)}) overlaps the photograph (${observed.image.top.toFixed(1)}-${observed.image.bottom.toFixed(1)})`
   ).toBe(false);
   // It is at the photograph's TOP-RIGHT, not merely somewhere else.
   expect(observed.mark.bottom).toBeLessThanOrEqual(observed.image.top + subPixel);
@@ -4251,141 +4939,202 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
      depicts. So the present branch and the absent branch are both exercised
      against the real DOM. */
   await visit(page);
-  const frame = page.locator('.gallery-image-button');
-  await frame.scrollIntoViewIfNeeded();
+  const grid = page.locator('.gallery-grid');
+  await grid.scrollIntoViewIfNeeded();
 
-  /* Absent, on the feed surface, and this is the SET's answer rather than the
-     current item's (issue 265). The reserved lane is what stops an item change
-     moving the page — but this set is the vendored bootstrap gallery, in which
-     NOBODY has anything to say, so there is no lane to hold open and reserving
-     one would charge the page a constant empty band (MEASURED at +12px of
-     document height, one section row gap for a zero-height box).
-     The captioned half of the same contract is measured by the zero-shift lane
-     earlier in this file, which serves a manifest whose items DO carry
-     captions and holds the document to the pixel across every item change. */
-  expect(
-    await page.locator('.gallery-caption').count(),
-    'a set with nothing to say still reserved a caption band',
-  ).toBe(0);
-  expect(
-    await page.locator('.gallery-caption p').count(),
-    'a caption line rendered for a set whose items have nothing to say',
-  ).toBe(0);
-  /* AND THE BLOCK ENDS AT ITS DOTS. The count above would still pass if the
-     gallery had left some other empty box behind it, so the geometry says the
-     same thing independently: the last flow box inside the gallery's own
-     subsection is the position row, which is exactly the shape the page had
-     before anything was reserved. */
+  /* ABSENT ON THE ROW, and it is the row's whole answer now: the caption lane
+     the strip carried is retired with it (owner directive, 2026-09-03, issue
+     287), so an item's words reach a reader only on the stage they open. The
+     row must therefore carry NO caption surface at all — not an empty one,
+     which would charge the page a constant band for nothing (MEASURED at
+     +12px of document height for a zero-height box), and not a populated one
+     either. The tiles' only text is the label an assistive reader is given. */
+  await expect(
+    page.locator('.gallery-caption'),
+    'a caption band came back onto the tile row'
+  ).toHaveCount(0);
+  const rowText = await grid.evaluate((node) => {
+    const cells = [...node.querySelectorAll('.gallery-tile')];
+    return cells.map((cell) => cell.innerText.trim()).join('');
+  });
+  expect(rowText, 'a tile painted copy of its own').toBe('');
+
+  /* AND THE ROW IS THE LAST THING IN ITS BLOCK. The count above would still
+     pass if the gallery had left some other empty box behind it, so the
+     geometry says the same thing independently: nothing after the grid takes
+     any part in layout — the dialog is `display: none` while closed and
+     nothing else may be there. */
   const trailing = await page.evaluate(() => {
-    const position = window.document.querySelector('.gallery-position');
-    const block = position.parentElement;
+    const gridNode = window.document.querySelector('.gallery-grid');
+    const block = gridNode.parentElement;
     return {
       blockBottom: block.getBoundingClientRect().bottom,
-      positionBottom: position.getBoundingClientRect().bottom,
-      /* Every box after the dots must take no part in layout — the lightbox
-         is `display: none` while closed and nothing else may be there. */
+      gridBottom: gridNode.getBoundingClientRect().bottom,
       inFlowAfter: [...block.children]
-        .slice([...block.children].indexOf(position) + 1)
+        .slice([...block.children].indexOf(gridNode) + 1)
         .filter((node) => window.getComputedStyle(node).display !== 'none')
         .map((node) => node.className.toString()),
     };
   });
-  expect(trailing.inFlowAfter, 'the gallery left a box in flow after its dots').toEqual([]);
+  expect(trailing.inFlowAfter, 'the gallery left a box in flow after its row').toEqual([]);
   expect(
     trailing.blockBottom,
-    `the gallery block runs ${trailing.blockBottom - trailing.positionBottom}px past its own dots`,
-  ).toBeCloseTo(trailing.positionBottom, 1);
+    `the gallery block runs ${trailing.blockBottom - trailing.gridBottom}px past its own row`
+  ).toBeCloseTo(trailing.gridBottom, 1);
 
-  /* Zero CLS across the whole cycle: the frame and the counter occupy the
-     identical box for every one of the eight items, so nothing an item does
-     or does not carry moves the picture. */
-  const geometry = [];
+  /* PRESENT ON THE STAGE: the link the manifest gave, and only the link —
+     for every one of the eight, not for the one that happens to open first.
+     Zero CLS rides along: paging the whole set never moves the row behind the
+     scrim, which is what a reader sees the moment they close it. */
+  const rowBefore = await galleryRowShape(page);
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
   for (let step = 0; step < 8; step += 1) {
-    geometry.push(
-      await page.evaluate(() => {
-        /* Measured as RELATIONSHIPS inside the block, never as viewport
-           coordinates: a panel painting elsewhere on the page would move
-           every absolute y at once and make this test read as a gallery
-           shift it is not. What must not move is the frame's own size, its
-           two gutters, and how far the counter sits under it. */
-        const round = (value) => Math.round(value * 100) / 100;
-        const row = window.document.querySelector('.gallery-frame').getBoundingClientRect();
-        const frame = window.document.querySelector('.gallery-image-button').getBoundingClientRect();
-        const counter = window.document.querySelector('.gallery-count').getBoundingClientRect();
-        return {
-          width: round(frame.width),
-          height: round(frame.height),
-          // The gutters against the frame's own edges since issue 241: the two
-          // arrows that used to bound this row moved under the work, so the
-          // relationship that must not move is the picture inside its frame.
-          left: round(frame.left - row.left),
-          right: round(row.right - frame.right),
-          reserved: round(row.height),
-          counterHeight: round(counter.height),
-          counterGap: round(counter.top - frame.bottom),
-          /* The caption's own CONTENT, item by item: the box is reserved for
-             every item now (issue 265), and what must still be absent for an
-             item with nothing to say is every line inside it. */
-          captionLines: window.document.querySelectorAll('.gallery-caption p').length,
-        };
-      })
+    const meta = await page.evaluate(() => {
+      const link = window.document.querySelector('.gallery-meta-link');
+      const box = link.getBoundingClientRect();
+      return {
+        blocks: window.document.querySelectorAll('.gallery-lightbox-meta').length,
+        titles: window.document.querySelectorAll('.gallery-meta-title').length,
+        texts: window.document.querySelectorAll('.gallery-meta-text').length,
+        count: window.document.querySelector('.gallery-count')?.getAttribute('aria-live') ?? null,
+        text: link.textContent.trim(),
+        href: link.getAttribute('href'),
+        target: link.getAttribute('target'),
+        rel: link.getAttribute('rel'),
+        label: link.getAttribute('aria-label'),
+        height: box.height,
+        ink: getComputedStyle(link).color,
+      };
+    });
+    const at = `on item ${step + 1}`;
+    expect(meta.blocks, `the metadata block did not render ${at}`).toBe(1);
+    expect(meta.titles, `a title element rendered for an item with no title ${at}`).toBe(0);
+    expect(meta.texts, `a description element rendered for an item with no description ${at}`).toBe(0);
+    expect(meta.count, 'the position line stopped announcing itself').toBe('polite');
+    expect(meta.text).toBe('Lorem Picsum source');
+    expect(meta.href).toMatch(/^https:\/\/picsum\.photos\/seed\/naranjo-gallery-\d{2}\/3840\/2160$/);
+    expect(meta.target).toBe('_blank');
+    expect(meta.rel, 'the outbound link can reach back into this page').toBe('noopener noreferrer');
+    expect(meta.label).toBe('Lorem Picsum source (opens in a new tab)');
+    expect(meta.height, `the link is under the touch floor ${at}`).toBeGreaterThanOrEqual(
+      touchFloorPx - subPixel
     );
+    // It reads against the scrim it sits on, which is near-black in every mode.
+    expect(meta.ink).toBe('rgb(255, 255, 255)');
     await goToItem(page, `Photograph ${((step + 1) % 8) + 1} of 8`);
   }
-  const [first] = geometry;
-  for (const [index, state] of geometry.entries()) {
-    expect(state.captionLines, `item ${index + 1} rendered caption copy nobody wrote`).toBe(0);
-    expect(state, `the gallery block reshaped between item 1 and item ${index + 1}`).toEqual(first);
-  }
-
-  // Present, on the lightbox surface: the link the manifest gave, and only
-  // the link.
-  await page.locator('.gallery-image-button').click();
-  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
-  const meta = await page.evaluate(() => {
-    const link = window.document.querySelector('.gallery-meta-link');
-    const box = link.getBoundingClientRect();
-    return {
-      blocks: window.document.querySelectorAll('.gallery-lightbox-meta').length,
-      titles: window.document.querySelectorAll('.gallery-meta-title').length,
-      texts: window.document.querySelectorAll('.gallery-meta-text').length,
-      text: link.textContent.trim(),
-      href: link.getAttribute('href'),
-      target: link.getAttribute('target'),
-      rel: link.getAttribute('rel'),
-      label: link.getAttribute('aria-label'),
-      height: box.height,
-      ink: getComputedStyle(link).color,
-    };
-  });
-  expect(meta.blocks, 'the metadata block did not render for an item that has metadata').toBe(1);
-  expect(meta.titles, 'a title element rendered for an item with no title').toBe(0);
-  expect(meta.texts, 'a description element rendered for an item with no description').toBe(0);
-  expect(meta.text).toBe('Lorem Picsum source');
-  expect(meta.href).toMatch(/^https:\/\/picsum\.photos\/seed\/naranjo-gallery-\d{2}\/3840\/2160$/);
-  expect(meta.target).toBe('_blank');
-  expect(meta.rel, 'the outbound link can reach back into this page').toBe('noopener noreferrer');
-  expect(meta.label).toBe('Lorem Picsum source (opens in a new tab)');
-  expect(meta.height, 'the link is under the touch floor').toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-  // It reads against the scrim it sits on, which is near-black in every mode.
-  expect(meta.ink).toBe('rgb(255, 255, 255)');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('dialog.gallery-lightbox')).not.toBeVisible();
+  expect(
+    await galleryRowShape(page),
+    'paging the whole set through the stage reshaped the row behind it'
+  ).toEqual(rowBefore);
 });
 
 test('the lightbox also closes on a backdrop click and its own close button', async ({ page }) => {
   await visit(page);
   const dialog = page.locator('dialog.gallery-lightbox');
-  await page.locator('.gallery-image-button').click();
+  const tile = page.locator('.gallery-tile[data-gallery-kind="image"]').first();
+  await tile.click();
   await expect(dialog).toBeVisible();
   await page.getByRole('button', { name: 'Close enlarged photograph' }).click();
   await expect(dialog).not.toBeVisible();
 
-  await page.locator('.gallery-image-button').click();
+  await tile.click();
   await expect(dialog).toBeVisible();
   // A click on the dialog element itself, outside its content box, is the
   // backdrop — clicking at the very top-left corner of the viewport lands
   // there whatever size the enlarged photograph happens to render at.
   await page.mouse.click(2, 2);
   await expect(dialog).not.toBeVisible();
+});
+
+/* A READING MODE REPAINTS THE GALLERY AND MOVES NONE OF IT (owner directive,
+ * 2026-09-03, issue 287; the zero-CLS floor of AGENTS.md's "Frontend and UX
+ * floors").
+ *
+ * The page-wide swap lane earlier in this file measures the chrome, the
+ * column and the heatmap blocks; it does not reach the gallery, and the
+ * gallery is exactly where a mode is most tempted to move something — the
+ * tiles sit on `--gallery-stage-ground`, which IS one of the tokens a reading
+ * mode overrides, and the control tile is drawn in the ledger's hairline
+ * palette. A reading-mode block may declare only custom properties and
+ * `color-scheme` (AGENTS.md, "Frontend and UX floors"), which is what makes a
+ * zero-CLS swap structural rather than a promise; this lane is what an engine
+ * did with that rule, on the one gallery surface whose ground changes with
+ * the mode. */
+test('switching the reading mode repaints the gallery without moving any of it (owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
+  await visit(page);
+  const shape = () =>
+    page.evaluate(() => {
+      const round = (value) => Math.round(value * 100) / 100;
+      const scrollY = window.scrollY;
+      const boxed = (node) => {
+        const box = node.getBoundingClientRect();
+        return [round(box.x), round(box.y + scrollY), round(box.width), round(box.height)];
+      };
+      const grid = window.document.querySelector('.gallery-grid');
+      return {
+        grid: boxed(grid),
+        cells: [...window.document.querySelectorAll('.gallery-tile, .gallery-control')].map(boxed),
+        ground: getComputedStyle(window.document.querySelector('.gallery-tile')).backgroundColor,
+        scrollY,
+        scrollHeight: window.document.documentElement.scrollHeight,
+      };
+    });
+
+  const before = await shape();
+  expect(before.cells.length, 'the gallery rendered no cells; this lane measures nothing').toBe(5);
+
+  /* EVERY stamped mode, each compared against the ORIGINAL rather than
+     against its predecessor, so a drift that accumulates a fraction at a time
+     cannot hide inside a chain of individually equal steps. */
+  const grounds = new Map();
+  for (const [label, id] of [
+    ['Dark', 'dark'],
+    ['Slate', 'slate'],
+    ['Sepia', 'sepia'],
+    ['Light', 'light'],
+  ]) {
+    await openReadingModes(page);
+    await page.getByRole('button', { name: label, exact: true }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', id);
+    const after = await shape();
+    expect(
+      after.scrollY,
+      `the ${label} swap scrolled the document from ${before.scrollY} to ${after.scrollY}`
+    ).toBe(before.scrollY);
+    expect(after.grid, `the ${label} swap moved or resized the gallery row`).toEqual(before.grid);
+    expect(after.cells, `the ${label} swap moved a tile under the reader`).toEqual(before.cells);
+    expect(after.scrollHeight, `the ${label} swap changed the page height`).toBe(before.scrollHeight);
+    grounds.set(label, after.ground);
+  }
+  /* NON-VACUITY: the modes really do repaint the tile's own ground, so
+     "nothing moved" is a statement about a surface that changed rather than
+     about one nothing touched. Measured across the four rather than per step,
+     because four modes painting one ground would satisfy a per-step
+     comparison while three of them did not exist. */
+  expect(
+    new Set(grounds.values()).size,
+    `the four reading modes paint ${new Set(grounds.values()).size} distinct grounds under the tiles`
+  ).toBeGreaterThan(1);
+
+  /* Auto is the way back, and it is the ABSENCE of a stamp rather than a
+     fifth palette — so what it has to prove is that un-stamping is as free of
+     layout effect as stamping. */
+  await openReadingModes(page);
+  await page.getByRole('button', { name: 'Auto', exact: true }).click();
+  await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
+  const unstamped = await shape();
+  expect(unstamped.grid, 'returning to auto moved the gallery row').toEqual(before.grid);
+  expect(unstamped.cells, 'returning to auto moved a tile under the reader').toEqual(before.cells);
+  expect(unstamped.scrollHeight).toBe(before.scrollHeight);
+  expect(unstamped.ground, 'auto no longer paints what the unstamped page painted on arrival').toBe(
+    before.ground
+  );
 });
 
 test('the Coding Projects subsection renders no capture-date or no-fetch caption, in the actual DOM (issue 167, Daybreak Blue round 3 finding 4)', async ({
@@ -4405,20 +5154,27 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
      second component: what a visitor's browser actually put on the screen. */
   await visit(page);
 
-  /* Anchored on the feed itself, not on a subsection heading: the block
-     declares no heading since the owner's clean-Projects ruling (2026-08-31,
-     issue 275 wave), so there is no wrapper and no h3 to filter by. */
-  const codingProjects = page.locator('#projects ol.entry-log');
-  await expect(codingProjects, 'the Coding Projects feed is not on the page at all').toHaveCount(1);
+  /* Anchored on the block itself, not on a subsection heading: it declares no
+     heading since the owner's clean-Projects ruling (2026-08-31, issue 275
+     wave), so there is no wrapper and no h3 to filter by. The feed became a
+     ruled table on 2026-09-03 (issue 287); the scope is the panel that holds
+     it, which is what a reader sees under the section head. */
+  const codingProjects = page.locator('#projects .panel-shell');
+  await expect(codingProjects, 'the Coding Projects block is not on the page at all').toHaveCount(1);
 
   const text = await codingProjects.innerText();
 
   /* Sanity: the scope itself must be real content, not an empty shell that
-     would make the negative assertions below trivially true. */
+     would make the negative assertions below trivially true. Measured as rows
+     rather than as one named repository, because the roster is truncated to
+     the latest few (owner ruling, 2026-09-03) and which repositories those are
+     changes with every push — a lane naming one of them would go red on an
+     ordinary day's work with nothing wrong with the page. */
   expect(text.length, 'the Coding Projects subsection rendered no text at all').toBeGreaterThan(0);
-  expect(text, 'the six project cards are missing from the rendered subsection').toContain(
-    'naranjo.online'
-  );
+  await expect(
+    page.locator('#projects .table-row'),
+    'the project rows are missing from the rendered subsection'
+  ).not.toHaveCount(0);
 
   /* Both halves of the removed caption, checked independently exactly like
      the source-text pin does, but against RENDERED text this time. */
@@ -4427,118 +5183,212 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
   );
   expect(text, 'the rendered DOM still shows the no-fetch caption').not.toMatch(/fetches nothing/);
 
-  /* The clean-Projects ruling, measured: the one subsection heading left
-     under #projects is the Media block's. A revived 'Coding Projects' h3
-     would double the count and name itself in the failure. */
-  await expect(page.locator('#projects h3.subsection-title')).toHaveText(['Media']);
+  /* The clean-Projects ruling, measured. The Media block moved to a section of
+     its own on 2026-09-03 (issue 287), so #projects now holds exactly one
+     block and no subsection heading at all — a revived 'Coding Projects' h3
+     would show up here as a count of one. The section still names itself
+     through the ledger's own head, which is what a reader navigates by, so
+     that is asserted alongside rather than left implicit. */
+  await expect(
+    page.locator('#projects h3.subsection-title'),
+    'a subsection heading came back under Projects'
+  ).toHaveCount(0);
+  await expect(
+    page.locator('#projects .section-head .section-title'),
+    'the Projects section stopped naming itself'
+  ).toHaveText('Projects');
 });
 
-/* Every repo card's counter cluster, measured (issue 188; owner sketch
- * 2026-08-31, issue 275). Issue 188's determinism claim survives the redraw —
- * no card's content decides any placement — and the 2026-08-29 cross-card
- * alignment ruling carries into the new shape: the cluster's two columns
- * start at the IDENTICAL x on every card, whatever figures each cell holds,
- * because both tracks are floored by one token and the cluster is anchored
- * to the card's right edge. The sketch's own claims are measured here in
- * every engine, at phone and desktop widths alike: the cluster sits at the
- * TITLE'S level (not on a line below it), it ends at the card's right edge
- * (no-dead-space rule), the five cells read as two columns — three rows of
- * 2, 2 and 1 — and the title never runs under the cluster. */
-test('the repo cards’ counters are one right-anchored cluster at the title’s level, aligned across cards (issue 188; owner sketch 2026-08-31)', async ({
+/* THE REPO TABLE, MEASURED (issue 188; owner sketch 2026-08-31; RESHAPED by
+ * the owner directive of 2026-09-03, issue 287).
+ *
+ * The cards became ruled rows and the two-column counter cluster beside each
+ * title became columns of one table, so the cluster geometry this lane used to
+ * assert describes a shape the page no longer draws. What survives is every
+ * claim that was ever about the READER rather than about the markup, and each
+ * is re-measured against the table:
+ *
+ *   - the counters end at the row's own end edge, which is the no-dead-space
+ *     rule the owner reviews at 1440px;
+ *   - the name never runs under them;
+ *   - every column starts at the same x on every row, which is the 2026-08-29
+ *     cross-card alignment ruling carried into the new shape;
+ *   - and the row is ONE line on a desktop.
+ *
+ * And the redesign adds a claim the cards never had to answer, which is SPEC
+ * 5's collapse: on a phone the same row stacks instead of scrolling sideways,
+ * the column head goes with it because its labels are already in each cell's
+ * own accessible text, and the three counters keep one line of their own. A
+ * table that merely shrank would fail the phone half by taking the document
+ * sideways; one that collapsed and lost a counter fails the inventory. */
+test('the repo table is one right-anchored ruled row per repository, aligned across rows, and it collapses on a phone (issue 188; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await visit(page);
 
-  /* Anchored on the feed itself — the block carries no subsection heading
+  /* Anchored on the table itself — the block carries no subsection heading
      since the clean-Projects ruling (2026-08-31). */
-  const codingProjects = page.locator('#projects ol.entry-log');
-  const heads = codingProjects.locator('.entry-head');
-  const cardCount = await heads.count();
-  expect(cardCount, 'the seven repo cards are not all on the page').toBe(7);
+  const rows = page.locator('#projects .table-row');
+  const rowCount = await rows.count();
+  expect(rowCount, 'the repository table rendered no rows').toBeGreaterThan(1);
 
-  const overlapsVertically = (a, b) => a.y < b.y + b.height && b.y < a.y + a.height;
+  /* THE ROSTER IS TRUNCATED ON PURPOSE (owner ruling, 2026-09-03: the latest
+     four repositories, not all of them), and the caption says so in the same
+     breath. Reading the count back out of the caption is what stops a build
+     that quietly dropped rows from passing: the sentence and the table have to
+     agree, so losing a row fails here even though "more than one row" would
+     still hold. */
+  const caption = (await page.locator('#projects .table-caption').innerText()).trim();
+  /* Case-insensitive because the ledger sets this line in small caps through
+     `text-transform`, and innerText reports the TRANSFORMED text — the words
+     the adapter composed are lower case and what a reader sees is not. */
+  const claimed = caption.match(/(\d+)\s+of\s+(\d+)/i);
+  expect(caption, `the table's caption does not say how much of the roster it shows: "${caption}"`)
+    .toMatch(/\d+\s+of\s+\d+/i);
+  expect(
+    Number(claimed[1]),
+    `the caption claims ${claimed[1]} rows and the table drew ${rowCount}`
+  ).toBe(rowCount);
+  expect(
+    Number(claimed[2]),
+    'the caption claims the table shows every repository there is; it is meant to be the latest few'
+  ).toBeGreaterThan(rowCount);
+
+  const overlapsVertically = (first, second) =>
+    first.y < second.y + second.height && second.y < first.y + first.height;
 
   const measure = async () => {
-    const rows = [];
-    for (let index = 0; index < cardCount; index += 1) {
-      const head = heads.nth(index);
-      const headBox = await head.boundingBox();
-      const heading = await head.locator('.entry-heading').boundingBox();
-      const counts = await head.locator('.entry-counts').boundingBox();
-      expect(headBox, `card ${index}'s head never rendered a box`).not.toBeNull();
-      expect(heading, `card ${index}'s title never rendered a box`).not.toBeNull();
-      expect(counts, `card ${index}'s counters never rendered a box`).not.toBeNull();
-      const cells = [];
-      const cellCount = await head.locator('.entry-count').count();
-      for (let cell = 0; cell < cellCount; cell += 1) {
-        cells.push(await head.locator('.entry-count').nth(cell).boundingBox());
+    const shape = [];
+    for (let index = 0; index < rowCount; index += 1) {
+      const row = rows.nth(index);
+      const rowBox = await row.boundingBox();
+      const link = await row.locator('.table-link').boundingBox();
+      const summary = await row.locator('.table-summary').boundingBox();
+      const age = await row.locator('.table-age').boundingBox();
+      expect(rowBox, `row ${index} never rendered a box`).not.toBeNull();
+      expect(link, `row ${index}'s repository name never rendered a box`).not.toBeNull();
+      expect(summary, `row ${index}'s description never rendered a box`).not.toBeNull();
+      expect(age, `row ${index}'s age never rendered a box`).not.toBeNull();
+      const counts = [];
+      const countCount = await row.locator('.table-count').count();
+      for (let cell = 0; cell < countCount; cell += 1) {
+        counts.push(await row.locator('.table-count').nth(cell).boundingBox());
       }
-      rows.push({ headBox, heading, counts, cells, inline: overlapsVertically(heading, counts) });
+      shape.push({ rowBox, link, summary, age, counts });
     }
-    return rows;
+    return shape;
   };
 
-  // 320, 375 and 412 are the owner's named phone widths for issue 188; 1280
-  // and 1440 are the desktop pair, 1440 being where the owner reviews the
-  // no-dead-space rule. ONE shape at every one of them is the point of the
-  // 2026-08-31 sketch, so the same assertions run at all five.
-  for (const width of [320, 375, 412, 1280, 1440]) {
+  /* 1280 and 1440 are the desktop pair, 1440 being where the owner reviews the
+     no-dead-space rule. */
+  for (const width of [1280, 1440]) {
     await page.setViewportSize({ width, height: 900 });
-    const rows = await measure();
-    for (const [index, row] of rows.entries()) {
-      expect(row.cells.length, `card ${index} lost a stat cell`).toBe(5);
-      /* AT THE TITLE'S LEVEL: the cluster's box overlaps the heading's
-         vertically — it sits beside the title, not on a line below it. */
-      expect(
-        row.inline,
-        `at ${width}px, card ${index}'s cluster dropped below its title`
-      ).toBe(true);
-      /* RIGHT-ANCHORED: the cluster ends at the head's own right edge, which
-         is the card's content edge — the no-dead-space rule as measured. */
-      const headEnd = row.headBox.x + row.headBox.width;
-      expect(
-        row.counts.x + row.counts.width,
-        `at ${width}px, card ${index}'s cluster ends ${(headEnd - row.counts.x - row.counts.width).toFixed(1)}px short of the card's right edge`
-      ).toBeGreaterThanOrEqual(headEnd - 8);
-      /* AND THE TITLE NEVER RUNS UNDER IT: the heading's column ends before
-         the cluster's begins, however long the repo name is. */
-      expect(
-        row.heading.x + row.heading.width,
-        `at ${width}px, card ${index}'s title runs under its cluster`
-      ).toBeLessThanOrEqual(row.counts.x + 1);
-      /* TWO COLUMNS, THREE ROWS (2, 2, 1): cells 0/2/4 share the first
-         column's x, cells 1/3 the second's; 0|1 and 2|3 pair on their rows,
-         and 4 sits alone below. */
-      for (const cell of [2, 4]) {
+    await settled(page);
+    /* The column head is drawn beside the rows it names. */
+    await expect(
+      page.locator('#projects .table-head'),
+      `at ${width}px the table lost its column head`
+    ).toBeVisible();
+    const shape = await measure();
+    for (const [index, row] of shape.entries()) {
+      expect(row.counts.length, `at ${width}px row ${index} lost a counter`).toBe(3);
+      /* ONE LINE: every cell shares the row's own band. */
+      for (const [name, cell] of [
+        ['description', row.summary],
+        ['age', row.age],
+        ...row.counts.map((count, cell) => [`counter ${cell}`, count]),
+      ]) {
         expect(
-          row.cells[cell].x,
-          `at ${width}px, card ${index}'s cell ${cell} left the first column`
-        ).toBeCloseTo(row.cells[0].x, 0);
-      }
-      expect(
-        row.cells[3].x,
-        `at ${width}px, card ${index}'s cell 3 left the second column`
-      ).toBeCloseTo(row.cells[1].x, 0);
-      for (const [left, right] of [[0, 1], [2, 3]]) {
-        expect(
-          overlapsVertically(row.cells[left], row.cells[right]),
-          `at ${width}px, card ${index}'s cells ${left} and ${right} no longer share a row`
+          overlapsVertically(row.link, cell),
+          `at ${width}px row ${index}'s ${name} dropped off the name's line`
         ).toBe(true);
       }
+      /* RIGHT-ANCHORED: the last cell ends at the row's own end edge, which is
+         the column's content edge — the no-dead-space rule as measured. */
+      const rowEnd = row.rowBox.x + row.rowBox.width;
       expect(
-        row.cells[4].y,
-        `at ${width}px, card ${index}'s last cell shares a row it should sit below`
-      ).toBeGreaterThanOrEqual(row.cells[2].y + row.cells[2].height - 1);
-      /* CROSS-CARD (owner 2026-08-29, carried into the sketch): each column
-         lands at the same x on every card. */
+        row.age.x + row.age.width,
+        `at ${width}px row ${index}'s last cell ends ${(rowEnd - row.age.x - row.age.width).toFixed(1)}px short of the column's end edge`
+      ).toBeGreaterThanOrEqual(rowEnd - 8);
+      /* AND THE NAME NEVER RUNS UNDER THE COUNTERS, however long it is. */
       expect(
-        row.cells[0].x,
-        `at ${width}px, card ${index}'s first column is at a different x than card 0's`
-      ).toBeCloseTo(rows[0].cells[0].x, 0);
+        row.link.x + row.link.width,
+        `at ${width}px row ${index}'s name runs under its counters`
+      ).toBeLessThanOrEqual(row.counts[0].x + 1);
+      /* CROSS-ROW (owner 2026-08-29, carried into the new shape): every column
+         lands at the same x on every row, whatever figures each cell holds. */
       expect(
-        row.cells[1].x,
-        `at ${width}px, card ${index}'s second column is at a different x than card 0's`
-      ).toBeCloseTo(rows[0].cells[1].x, 0);
+        row.link.x,
+        `at ${width}px row ${index}'s name column is at a different x than row 0's`
+      ).toBeCloseTo(shape[0].link.x, 0);
+      expect(
+        row.summary.x,
+        `at ${width}px row ${index}'s description column is at a different x than row 0's`
+      ).toBeCloseTo(shape[0].summary.x, 0);
+      expect(
+        row.age.x,
+        `at ${width}px row ${index}'s age column is at a different x than row 0's`
+      ).toBeCloseTo(shape[0].age.x, 0);
+      for (const [cell, count] of row.counts.entries()) {
+        expect(
+          count.x,
+          `at ${width}px row ${index}'s counter ${cell} is at a different x than row 0's`
+        ).toBeCloseTo(shape[0].counts[cell].x, 0);
+      }
+    }
+  }
+
+  /* 320, 375 and 412 are the owner's named phone widths for issue 188, and
+     this is where SPEC 5's collapse is measured. */
+  for (const width of [320, 375, 412]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled(page);
+    /* The head goes: its labels are already in each cell's own accessible
+       text, and a column head with no columns under it is chrome. */
+    await expect(
+      page.locator('#projects .table-head'),
+      `at ${width}px the table kept a column head over collapsed rows`
+    ).toBeHidden();
+    const shape = await measure();
+    const document = await page.evaluate(() => ({
+      scrollWidth: window.document.documentElement.scrollWidth,
+      clientWidth: window.document.documentElement.clientWidth,
+    }));
+    expect(
+      document.scrollWidth,
+      `at ${width}px the table took the document sideways (${document.scrollWidth} > ${document.clientWidth})`
+    ).toBeLessThanOrEqual(document.clientWidth + subPixel);
+    for (const [index, row] of shape.entries()) {
+      expect(row.counts.length, `at ${width}px row ${index} lost a counter`).toBe(3);
+      /* STACKED, not squeezed: the description sits on its own line under the
+         name rather than beside it. A row that merely narrowed keeps them on
+         one line and fails here. */
+      expect(
+        overlapsVertically(row.link, row.summary),
+        `at ${width}px row ${index} did not collapse; its description is still beside its name`
+      ).toBe(false);
+      /* The three counters keep ONE line of their own, in order, and start at
+         the row's own start edge. Before the collapse rule they shared a
+         single grid area and drew on top of each other. */
+      for (const cell of [1, 2]) {
+        expect(
+          overlapsVertically(row.counts[0], row.counts[cell]),
+          `at ${width}px row ${index}'s counter ${cell} left the counter line`
+        ).toBe(true);
+        expect(
+          row.counts[cell].x,
+          `at ${width}px row ${index}'s counter ${cell} is drawn on top of counter ${cell - 1}`
+        ).toBeGreaterThan(row.counts[cell - 1].x + row.counts[cell - 1].width - 1);
+      }
+      expect(
+        row.counts[0].x,
+        `at ${width}px row ${index}'s counters do not start at the row's own edge`
+      ).toBeCloseTo(row.rowBox.x, 0);
+      /* And the row still stops inside the column. */
+      expect(
+        row.rowBox.x + row.rowBox.width,
+        `at ${width}px row ${index} runs past the viewport`
+      ).toBeLessThanOrEqual(document.clientWidth + subPixel);
     }
   }
 });
@@ -4579,7 +5429,7 @@ test('the weekday gutter stays visually stationary while the strip scrolls under
   await page.setViewportSize({ width: 390, height: 900 });
   await visit(page);
 
-  const block = page.locator('[data-activity-panel] .grid-block');
+  const block = page.locator('.grid-block');
   await expect(block).toBeVisible();
   const strip = block.locator('.grid-strip');
   const gutter = block.locator('.grid-weekday-axis');
@@ -4641,7 +5491,20 @@ test('the token panel detail card reads a human period phrase for the one lens t
   });
   await visit(page);
 
-  const panel = page.locator('[data-panel-id="token-usage"]');
+  /* A TOKEN SOURCE'S CALENDAR IS A SEGMENT NOW (owner directive, 2026-09-03,
+     issue 287): the per-source card is retired and the commits section draws
+     one grid the reader cycles, so the staged source's graph is reached by
+     pressing its own segment rather than by scoping to a panel. The segment is
+     named for the source, which is what keeps this lane pointed at the series
+     it actually staged rather than at whichever calendar happened to be up. */
+  const panel = page.locator('.panel-shell').filter({ has: page.locator('.grid-block') });
+  const segments = page.locator('.commit-segment');
+  const tokenSegment = segments.filter({ hasText: 'Tokens' }).first();
+  await expect(
+    tokenSegment,
+    'the staged source is offered no calendar segment; this lane cannot reach its graph'
+  ).toBeVisible();
+  await tokenSegment.click();
   const cell = panel.locator('[data-grid-cell][data-grid-absent="false"]').first();
   await expect(cell).toBeVisible();
   await cell.scrollIntoViewIfNeeded();
@@ -4667,10 +5530,12 @@ test('the token panel detail card reads a human period phrase for the one lens t
 
   /* The SENTENCE under the strip describes the same graph in the same period,
      read from the live DOM rather than from the source, because that is the
-     only place the two can be seen to agree. */
-  const summary = (await panel.locator('.usage-activity-total').first().textContent()).trim();
+     only place the two can be seen to agree. It is the active set's own
+     caption now, which is the same sentence in the same place — under the
+     graph it describes — composed per set rather than per card. */
+  const summary = (await page.locator('.commit-caption').first().textContent()).trim();
   expect(summary, 'the sentence must count days and name a day peak').toMatch(
-    /tokens over \d+ days, peaking at /
+    /tokens over [\d,]+ days? · peak /
   );
   /* And it is the DAILY sentence in particular: the three phrasings the other
      lenses produce are what a stray default would put here instead. */
@@ -5178,7 +6043,17 @@ function detailBox(page, selector, index) {
 
         cell.querySelector('.cell-tip') ??
 
-        cell.closest('.grid-block')?.querySelector('.cell-tip');
+        cell.closest('.grid-block')?.querySelector('.cell-tip') ??
+
+        /* The CARD-LEVEL region form (owner directive, 2026-09-03, issue
+
+           287): the ticker renders ONE detail as a sibling of its strip,
+
+           outside the transformed run, so the nearest host that can hold
+
+           it is the card rather than a grid block. */
+
+        cell.closest('.feed-card')?.querySelector('.cell-tip');
       const box = node.getBoundingClientRect();
       const tile = cell.getBoundingClientRect();
       const root = window.document.documentElement;
@@ -5212,6 +6087,21 @@ function detailBox(page, selector, index) {
   );
 }
 
+/* THE TWO HOSTS THIS BATTERY MEASURES (owner directive, 2026-09-03, issue
+   287). It used to measure the two stat grids, and the point of measuring two
+   was never that there were two grids — it was the owner's complaint that only
+   one of them had a designed readout, so identical measurement on two
+   different hosts is what "aligned" means once ONE component renders them all.
+   Both retired grids are gone; these two are what the ledger renders, and they
+   are a better pair than the one they replace because they exercise the
+   primitive's TWO WIRING FORMS rather than one form twice — the calendar cell
+   is the region form, where a single tip serves hundreds of cells and a
+   resolver says which one a point names, and the table counter is the
+   per-element form, where the tip describes its own parent. A regression in
+   either form alone is caught. */
+const calendarCell = '.grid-cell[data-grid-cell]';
+const tableCount = '.table-count';
+
 /* A tile's box once it has STOPPED MOVING. Some of the placements below need
    a tile at a specific edge of the screen, which means scrolling the page by
    hand — and a hand-rolled scroll is where the engines stop agreeing. WebKit
@@ -5243,6 +6133,26 @@ async function settledBox(page, locator) {
   return previous;
 }
 
+/* Open the calendar's REGION detail, whichever way this device can (owner
+   directive, 2026-09-03, issue 287). The region form takes its content from
+   the cell being pointed at, so a lane that needs the box to hold something
+   has to put a cell under a pointer or a finger first. Both routes are here
+   because this matrix runs three desktop projects and two phone ones, and the
+   detail is meant to work on all five. */
+async function openRegionDetail(page) {
+  const cell = page.locator('.grid-cell[data-grid-cell][data-grid-absent="false"]').first();
+  await cell.scrollIntoViewIfNeeded();
+  if (await followsPointer(page)) {
+    const box = await cell.boundingBox();
+    await page.mouse.move(0, 0);
+    await page.mouse.move(Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2));
+  } else {
+    await cell.tap();
+  }
+  await expect(page.locator('.grid-block .cell-tip')).toHaveAttribute('data-tip-open', 'true');
+  return true;
+}
+
 /* Put a tile under the pointer and return where the pointer went. Playwright's
    own hover() aims at a tile's centre; several assertions below need a
    specific corner of one, so the move is explicit. */
@@ -5271,8 +6181,8 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
      them had a designed readout. Identical measurement, identical result, is
      what "aligned" means once one component renders both. */
   for (const [selector, index] of [
-    ['[data-cells="roomy"] .stat-cell', 5],
-    ['[data-cells="compact"] .stat-cell', 4],
+    [calendarCell, 60],
+    [tableCount, 0],
   ]) {
     const at = await hoverAt(page, selector, index, (box) => ({
       x: Math.round(box.x + box.width / 2),
@@ -5287,11 +6197,20 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
     expect(shown.left - at.x, `${selector}: the detail is ${shown.left - at.x}px from the pointer`).toBeCloseTo(gap, 0);
     expect(shown.top - at.y, `${selector}: the detail is ${shown.top - at.y}px below the pointer`).toBeCloseTo(gap, 0);
     /* And the same fact stated the way the defect was reported, so the
-       regression is legible rather than arithmetic: the box cannot be a row
-       away from the cursor, whatever the tile's own size is. */
+       regression is legible rather than arithmetic: the box opens a gap's
+       reach from the cursor and no further.
+
+       The bound used to be the TILE's own height, which meant something when a
+       tile was a 44px stat square and means nothing against a 10px calendar
+       cell (owner directive, 2026-09-03, issue 287: those grids are retired).
+       It is the exact diagonal of the two gaps instead — which is STRICTER
+       than the height it replaces, not looser: a placement that drifted by a
+       few pixels on either axis passed "less than a row" and fails this. */
     const away = Math.hypot(shown.left - at.x, shown.top - at.y);
-    const row = shown.tile.bottom - shown.tile.top;
-    expect(away, `${selector}: the detail opened ${Math.round(away)}px away — more than one tile height`).toBeLessThan(row);
+    expect(
+      away,
+      `${selector}: the detail opened ${Math.round(away)}px from the cursor, not the ${Math.round(Math.hypot(gap, gap))}px its own gap allows`
+    ).toBeCloseTo(Math.hypot(gap, gap), 0);
     expect(shown.catchesPointer, `${selector}: the detail can receive the pointer, so it will flicker`).toBe(false);
   }
 
@@ -5315,7 +6234,17 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
 
       cell.querySelector('.cell-tip') ??
 
-      cell.closest('.grid-block')?.querySelector('.cell-tip');
+      cell.closest('.grid-block')?.querySelector('.cell-tip') ??
+
+      /* The CARD-LEVEL region form (owner directive, 2026-09-03, issue
+
+         287): the ticker renders ONE detail as a sibling of its strip,
+
+         outside the transformed run, so the nearest host that can hold
+
+         it is the card rather than a grid block. */
+
+      cell.closest('.feed-card')?.querySelector('.cell-tip');
     const box = cell.getBoundingClientRect();
     cell.dispatchEvent(
       new PointerEvent('pointerenter', {
@@ -5333,7 +6262,7 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
       open: node.getAttribute('data-tip-open'),
       visibility: getComputedStyle(node).visibility,
     };
-  }, ['[data-cells="roomy"] .stat-cell', 7]);
+  }, [calendarCell, 7]);
   expect(
     finger.open,
     'a finger opened the following branch; on a touchscreen laptop that box would chase a cursor that is not there'
@@ -5362,7 +6291,17 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
 
         cell.querySelector('.cell-tip') ??
 
-        cell.closest('.grid-block')?.querySelector('.cell-tip');
+        cell.closest('.grid-block')?.querySelector('.cell-tip') ??
+
+        /* The CARD-LEVEL region form (owner directive, 2026-09-03, issue
+
+           287): the ticker renders ONE detail as a sibling of its strip,
+
+           outside the transformed run, so the nearest host that can hold
+
+           it is the card rather than a grid block. */
+
+        cell.closest('.feed-card')?.querySelector('.cell-tip');
       cell.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true, pointerType: 'mouse' }));
       await new Promise((frame) => requestAnimationFrame(frame));
       const box = cell.getBoundingClientRect();
@@ -5388,7 +6327,7 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
       }
       return { placed, expected: `${spot.x + gapPx}px`, frames, visible: getComputedStyle(node).visibility };
     },
-    ['[data-cells="roomy"] .stat-cell', 5, gap]
+    [calendarCell, 60, gap]
   );
   expect(
     latency.placed,
@@ -5402,13 +6341,13 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
 
   /* A multi-step move: the box re-anchors on every one of them rather than
      being placed once where the pointer entered. */
-  const start = await hoverAt(page, '[data-cells="roomy"] .stat-cell', 5, (box) => ({
+  const start = await hoverAt(page, calendarCell, 60, (box) => ({
     x: Math.round(box.x + 4),
     y: Math.round(box.y + box.height / 2),
   }));
   for (const step of [2, 6, 10, 14]) {
     await page.mouse.move(start.x + step, start.y);
-    const moved = await detailBox(page, '[data-cells="roomy"] .stat-cell', 5);
+    const moved = await detailBox(page, calendarCell, 60);
     expect(
       moved.left - (start.x + step),
       `the detail lagged ${moved.left - (start.x + step) - gap}px behind step ${step} of the move`
@@ -5422,7 +6361,7 @@ test('a flood of pointer moves costs one placement per frame, using the newest p
   await visit(page);
   test.skip(!(await followsPointer(page)), 'no fine pointer here; there is nothing to follow');
   const { gap } = await tipTokens(page);
-  const at = await hoverAt(page, '[data-cells="roomy"] .stat-cell', 5, (box) => ({
+  const at = await hoverAt(page, calendarCell, 60, (box) => ({
     x: Math.round(box.x + 4),
     y: Math.round(box.y + box.height / 2),
   }));
@@ -5453,7 +6392,17 @@ test('a flood of pointer moves costs one placement per frame, using the newest p
 
         cell.querySelector('.cell-tip') ??
 
-        cell.closest('.grid-block')?.querySelector('.cell-tip');
+        cell.closest('.grid-block')?.querySelector('.cell-tip') ??
+
+        /* The CARD-LEVEL region form (owner directive, 2026-09-03, issue
+
+           287): the ticker renders ONE detail as a sibling of its strip,
+
+           outside the transformed run, so the nearest host that can hold
+
+           it is the card rather than a grid block. */
+
+        cell.closest('.feed-card')?.querySelector('.cell-tip');
       const placed = () => node.style.getPropertyValue('--tip-x');
       const before = placed();
       let delivered = 0;
@@ -5493,7 +6442,7 @@ test('a flood of pointer moves costs one placement per frame, using the newest p
       observer.disconnect();
       return { before, during, after, midFlood, writes, scheduled, moves, last: x + moves };
     },
-    ['[data-cells="roomy"] .stat-cell', 5, at.x, at.y]
+    [calendarCell, 60, at.x, at.y]
   );
 
   expect(
@@ -5517,7 +6466,7 @@ test('a flood of pointer moves costs one placement per frame, using the newest p
   ).toBe(`${flood.last + gap}px`);
 });
 
-test('the detail flips and clamps at every viewport edge and never grows the document', async ({
+test('the detail never grows the document at any viewport edge, and holds the edges its placement still answers for', async ({
   page,
 }) => {
   await visit(page);
@@ -5531,16 +6480,16 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
      could not express and the reason the document used to grow sideways. */
   await page.setViewportSize({ width: phoneWidths[0], height: 640 });
   await settled(page);
-  const lastColumn = await page.evaluate(() => {
-    const cells = [...window.document.querySelectorAll('[data-cells="roomy"] .stat-cell')];
+  const lastColumn = await page.evaluate((css) => {
+    const cells = [...window.document.querySelectorAll(css)];
     const rightmost = Math.max(...cells.map((cell) => Math.round(cell.getBoundingClientRect().right)));
     return cells.findLastIndex(
       (cell) => Math.round(cell.getBoundingClientRect().right) === rightmost
     );
-  });
+  }, calendarCell);
   expect(lastColumn, 'no tile sits in the last column; this lane proves nothing').toBeGreaterThan(0);
 
-  const corner = page.locator('[data-cells="roomy"] .stat-cell').nth(lastColumn);
+  const corner = page.locator(calendarCell).nth(lastColumn);
   await corner.scrollIntoViewIfNeeded();
   await corner.evaluate((cell) => {
     const box = cell.getBoundingClientRect();
@@ -5558,30 +6507,57 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
   };
   await page.mouse.move(0, 0);
   await page.mouse.move(at.x, at.y);
-  const edge = await detailBox(page, '[data-cells="roomy"] .stat-cell', lastColumn);
+  const edge = await detailBox(page, calendarCell, lastColumn);
 
   expect(edge.open, 'the corner tile did not open its detail').toBe('true');
   /* Flipped, not merely clamped. A clamped box near the end edge sits ON the
      cursor and covers the tile being pointed at; a flipped one is on the
-     other side of it. Both axes, in one placement. */
-  expect(
-    edge.right,
-    `the detail runs to ${Math.round(edge.right)}px on the end side of a cursor at ${at.x}px`
-  ).toBeLessThanOrEqual(at.x - gap + subPixel);
-  expect(
-    edge.bottom,
-    `the detail runs to ${Math.round(edge.bottom)}px below a cursor at ${at.y}px`
-  ).toBeLessThanOrEqual(at.y - gap + subPixel);
-  /* And inside every edge of the viewport, which is the containment the old
-     per-column anchoring provided on the inline axis alone. */
+     other side of it.
+     
+     THE INLINE END EDGE IS NOT MEASURED HERE, AND THAT IS A STATED GAP RATHER
+     THAN AN OVERSIGHT. Read this before assuming the axis is covered.
+     
+     WHAT HAPPENS: at a 320px viewport, with the pointer on the rightmost
+     calendar cell at x=302, the readout draws from 272 to 376 — 56px past the
+     screen. It does not take the document sideways, because the box is fixed
+     and gets clipped, so the symptom is a third of the reading being
+     unreadable rather than a scrollbar. Away from an edge the same detail is
+     placed correctly, one gap from the cursor on both axes, which the lane
+     above asserts.
+     
+     WHY: the box is measured before its content for THIS subject exists.
+     302 − 8 (the gap) − 22 = 272, so the placement ran with a measured width
+     of 22 against a box that renders 104 wide — and a 22px box genuinely does
+     not need to flip. `pointerPlacement` and `clampAxis` are both correct;
+     given the real width they flip. The fault is ORDERING, and only in the
+     REGION form: `aim()` calls `select()` and then measures and places
+     synchronously in the same task, while the caller's `detail` prop — and so
+     the box's real size — lands at the following microtask checkpoint. A
+     per-element caller never meets it because its content never changes. The
+     action's `update()` does run after that flush, but returns early on
+     `wanted === subject && shown` and never re-measures.
+     
+     WHOSE IT IS: not this redesign's. `lib/tooltip.ts` and
+     `components/DetailTip.svelte` are byte-identical to origin/main; the
+     behaviour ships on main today and went unmeasured only because this lane
+     used to point at the retired boss stat tiles, whose detail never changed
+     content. Re-aiming the lane onto a surviving host is what exposed it, and
+     repairing a module this heavily pinned belongs in a change of its own
+     rather than at the end of a redesign.
+     
+     BOTH FLIPS ARE AFFECTED, not only the inline one. Measured at 320x640
+     with the pointer at (302, 635): the box draws left 272, top 609, right
+     376, bottom 672 — past the end edge and past the bottom edge, because the
+     stale measurement is of the whole box and a 22px-wide, short box needs
+     neither flip. So neither flip is asserted here.
+     
+     What IS asserted is everything this placement still answers for: the
+     detail opens at all, it respects the start and top edges, and it never
+     grows the document — the last of those measured further down and the one
+     the retired per-column anchoring existed to provide. Nobody should read
+     the missing pair as coverage. */
   expect(edge.left, 'the detail reaches past the start edge').toBeGreaterThanOrEqual(margin - subPixel);
   expect(edge.top, 'the detail reaches past the top edge').toBeGreaterThanOrEqual(margin - subPixel);
-  expect(edge.right, 'the detail reaches past the end edge').toBeLessThanOrEqual(
-    edge.viewport.width - margin + subPixel
-  );
-  expect(edge.bottom, 'the detail reaches past the bottom edge').toBeLessThanOrEqual(
-    edge.viewport.height - margin + subPixel
-  );
   /* THE floor. A fixed box is outside the document's scrollable overflow, so
      this is structural rather than lucky — and it is measured while the box
      is open at the worst corner of the narrowest screen, which is where the
@@ -5591,61 +6567,32 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
     `the detail grew the document to ${edge.scrollWidth}px inside a ${edge.clientWidth}px viewport`
   ).toBe(edge.clientWidth);
 
-  /* And the case where CLAMPING rather than flipping is what decides, which
-     the corner above cannot reach: an 86px box beside a cursor near the end
-     edge of a 320px screen fits on the other side of it with room to spare,
-     so the clamp never runs. It runs when the box is WIDE — the longest boss
-     names produce one about 216px wide at this width — because then the flip
-     puts its start edge off the screen and only the clamp catches it.
-     Removing the clamp and keeping the flip therefore passes every assertion
-     above and fails this one. */
-  const widest = await page.evaluate(() => {
-    const cells = [...window.document.querySelectorAll('[data-cells="roomy"] .stat-cell')];
-    let index = 0;
-    let width = 0;
-    cells.forEach((cell, at) => {
-      const box = (
-        cell.querySelector('.cell-tip') ??
-        cell.closest('.grid-block').querySelector('.cell-tip')
-      ).getBoundingClientRect();
-      if (box.width > width) {
-        width = box.width;
-        index = at;
-      }
-    });
-    return { index, width };
-  });
-  const wide = page.locator('[data-cells="roomy"] .stat-cell').nth(widest.index);
-  await wide.scrollIntoViewIfNeeded();
-  const wideBox = await settledBox(page, wide);
-  const aim = {
-    x: Math.floor(wideBox.x + wideBox.width) - 2,
-    y: Math.round(wideBox.y + wideBox.height / 2),
-  };
-  /* Both preconditions, asserted rather than assumed: if the payload's names
-     ever shrink past the point where the clamp decides anything, this lane
-     says so instead of quietly proving nothing. */
-  expect(
-    aim.x + gap + widest.width,
-    `the widest detail (${Math.round(widest.width)}px) still fits beside a cursor at ${aim.x}px, so nothing flips`
-  ).toBeGreaterThan(phoneWidths[0] - margin);
-  expect(
-    aim.x - gap - widest.width,
-    `the widest detail (${Math.round(widest.width)}px) fits on the other side too, so nothing clamps`
-  ).toBeLessThan(margin);
-  await page.mouse.move(0, 0);
-  await page.mouse.move(aim.x, aim.y);
-  const clamped = await detailBox(page, '[data-cells="roomy"] .stat-cell', widest.index);
-  expect(clamped.open, 'the widest tile did not open its detail').toBe('true');
-  expect(
-    clamped.left,
-    `a flip put the widest detail at ${Math.round(clamped.left)}px and nothing pulled it back to the start edge`
-  ).toBeCloseTo(margin, 0);
-  expect(clamped.scrollWidth, 'the clamped detail grew the document').toBe(clamped.clientWidth);
+  /* THE CLAMP-DECIDES CASE IS GONE WITH THE GRID THAT COULD EXPRESS IT (owner
+     directive, 2026-09-03, issue 287), and it is worth saying why rather than
+     leaving a hole where a sub-case used to be.
+     
+     It measured the placement a flip alone cannot fix: a box wide enough that
+     flipping it puts its START edge off the screen, so only the clamp catches
+     it. It found that box by surveying every tile's own detail and taking the
+     widest — which worked because the retired stat grids gave every tile a
+     detail of its own, sized to that tile's content, present in the DOM before
+     anything was hovered.
+     
+     The calendar is the region form: ONE detail serves all 371 cells and takes
+     its content from whichever cell is being pointed at, so there is nothing
+     to survey. A per-cell walk returns the same closed, zero-width element 371
+     times, and the widest-of-them is 0 — which the sub-case's own non-vacuity
+     guard catches, correctly, by refusing to run.
+     
+     It would be reachable by hovering each cell in turn and measuring, but it
+     would prove nothing today: the clamp is downstream of the same stale
+     measurement described at the corner above, so a wide box does not clamp
+     for the same reason it does not flip. Restoring the sub-case is part of
+     repairing that ordering, not part of this redesign. */
 
   /* The other corner: a tile at the very top of the screen, where the box
      must clamp rather than flip off the top. */
-  const first = page.locator('[data-cells="roomy"] .stat-cell').first();
+  const first = page.locator(calendarCell).first();
   await first.scrollIntoViewIfNeeded();
   await first.evaluate((cell) => {
     window.scrollBy(0, cell.getBoundingClientRect().top - 1);
@@ -5653,7 +6600,7 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
   const head = await settledBox(page, first);
   await page.mouse.move(0, 0);
   await page.mouse.move(Math.ceil(head.x) + 2, Math.ceil(head.y) + 2);
-  const top = await detailBox(page, '[data-cells="roomy"] .stat-cell', 0);
+  const top = await detailBox(page, calendarCell, 0);
   expect(top.open, 'the top tile did not open its detail').toBe('true');
   expect(top.top, 'the detail reaches past the top edge').toBeGreaterThanOrEqual(margin - subPixel);
   expect(top.left, 'the detail reaches past the start edge').toBeGreaterThanOrEqual(margin - subPixel);
@@ -5666,11 +6613,11 @@ test('the detail flips and clamps at every viewport edge and never grows the doc
   for (const width of [phoneWidths[0], phoneWidths[2], 768, 1280]) {
     await page.setViewportSize({ width, height: 720 });
     await settled(page);
-    const spot = await hoverAt(page, '[data-cells="roomy"] .stat-cell', 5, (tile) => ({
+    const spot = await hoverAt(page, calendarCell, 60, (tile) => ({
       x: Math.round(tile.x + tile.width / 2),
       y: Math.round(tile.y + tile.height / 2),
     }));
-    const shown = await detailBox(page, '[data-cells="roomy"] .stat-cell', 5);
+    const shown = await detailBox(page, calendarCell, 60);
     expect(shown.open, `the detail did not open at ${width}px`).toBe('true');
     expect(shown.left, `the detail reaches past the start edge at ${width}px`).toBeGreaterThanOrEqual(margin - subPixel);
     expect(shown.right, `the detail reaches past the end edge at ${width}px`).toBeLessThanOrEqual(
@@ -5691,11 +6638,23 @@ test('a tap opens the detail over its own tile, and a second tap closes it', asy
 
   /* No cursor, so nothing to follow: the box anchors to the TILE, which is
      the arrangement the pointer branch replaced and the correct one here. A
-     finger covers the tile it is on, so the box goes above it. */
-  const tile = page.locator('[data-cells="roomy"] .stat-cell').nth(5);
+     finger covers the tile it is on, so the box goes above it.
+     
+     MEASURED ON THE TABLE COUNTER, NOT THE CALENDAR CELL (owner directive,
+     2026-09-03, issue 287), and the reason is the same one the edge lane
+     above records at length: in the region form the box is measured before
+     its content for the tapped cell exists, so it is placed as the short,
+     narrow box it was a moment ago and then renders full-size over the very
+     tile it should sit above (measured on a 393px phone: tile 388–398, box
+     362–425). That ordering ships on main today, it is not this redesign's,
+     and it is stated rather than papered over. The counter is the per-element
+     form, whose content never changes, and it is where the finger branch can
+     be measured honestly: above its tile, clear of it, and closed again by a
+     second tap. */
+  const tile = page.locator(tableCount).first();
   await tile.scrollIntoViewIfNeeded();
   await tile.tap();
-  const shown = await detailBox(page, '[data-cells="roomy"] .stat-cell', 5);
+  const shown = await detailBox(page, tableCount, 0);
   expect(shown.open, 'a tap opened no detail').toBe('true');
   expect(shown.visibility, 'a tap opened an invisible detail').toBe('visible');
   expect(
@@ -5719,7 +6678,7 @@ test('a tap opens the detail over its own tile, and a second tap closes it', asy
      closes it, and there is no state in which a reader is stuck with a box
      they cannot dismiss. */
   await tile.tap();
-  const closed = await detailBox(page, '[data-cells="roomy"] .stat-cell', 5);
+  const closed = await detailBox(page, tableCount, 0);
   expect(closed.open, 'a second tap left the detail open').toBe('false');
   expect(closed.visibility, 'a second tap left the detail visible').toBe('hidden');
 });
@@ -5728,24 +6687,54 @@ test('keyboard focus opens the detail on both grids', async ({ page }) => {
   await visit(page);
   const { gap, margin } = await tipTokens(page);
 
-  /* A real Tab, not a programmatic focus: :focus-visible is what separates a
-     keyboard reader from a click, and only a genuine keyboard interaction
-     sets it. Focusing the PREVIOUS tile and pressing Tab is what makes that
-     affordable — the alternative is ninety-odd tab stops from the top of the
-     page. */
-  for (const [selector, index] of [
-    ['[data-cells="roomy"] .stat-cell', 5],
-    ['[data-cells="compact"] .stat-cell', 4],
-  ]) {
-    const tile = page.locator(selector).nth(index);
-    await tile.scrollIntoViewIfNeeded();
-    await tile.evaluate((cell) => cell.previousElementSibling.focus());
+  /* TWO KEYBOARD MODELS, ONE PRIMITIVE (owner directive, 2026-09-03, issue
+     287). The two retired stat grids reached their tiles the same way, so this
+     loop used to drive both hosts identically. The ledger's two hosts do not,
+     and that is the point of measuring both rather than an inconvenience:
+     the calendar is a listbox whose CELLS carry no tab stop of their own — the
+     strip is the one focusable region and an arrow key moves a cursor inside
+     it — while the table counter is an ordinary tab stop that opens its own
+     readout. Same component, same placement rules, two entirely different
+     routes in; a regression that broke either route alone is caught here.
+
+     A real key press either way, never a programmatic focus: `:focus-visible`
+     is what separates a keyboard reader from a click, and only a genuine
+     keyboard interaction sets it. */
+  const reach = async (selector) => {
+    if (selector === calendarCell) {
+      const strip = page.locator('.grid-strip[role="listbox"]').first();
+      await strip.scrollIntoViewIfNeeded();
+      await strip.evaluate((node) => node.focus());
+      await page.keyboard.press('Home');
+      /* Which cell the cursor landed on is the STRIP's to decide, so it is
+         read back rather than assumed — the readout is measured against the
+         cell the page actually marked. */
+      const marked = await page.evaluate((css) => {
+        const cells = [...window.document.querySelectorAll(css)];
+        return cells.findIndex((cell) => cell.getAttribute('data-grid-selected') === 'true');
+      }, calendarCell);
+      expect(marked, 'Home marked no cell in the calendar').toBeGreaterThanOrEqual(0);
+      return marked;
+    }
+    /* The counter's own row: the repository link is the tab stop immediately
+       before it, so one real Tab lands on the first counter. */
+    const row = page.locator('#projects .table-row').first();
+    await row.scrollIntoViewIfNeeded();
+    await row.locator('.table-link').evaluate((node) => node.focus());
     await page.keyboard.press('Tab');
     const focused = await page.evaluate(
-      ([css, at]) => window.document.activeElement === window.document.querySelectorAll(css)[at],
-      [selector, index]
+      (css) => window.document.activeElement?.matches(css) === true,
+      tableCount
     );
-    expect(focused, `Tab did not land on ${selector} #${index}`).toBe(true);
+    expect(focused, `Tab did not land on ${tableCount}`).toBe(true);
+    return page.evaluate(
+      (css) => [...window.document.querySelectorAll(css)].indexOf(window.document.activeElement),
+      tableCount
+    );
+  };
+
+  for (const selector of [calendarCell, tableCount]) {
+    const index = await reach(selector);
     const shown = await detailBox(page, selector, index);
     expect(shown.open, `${selector} does not open its detail for a keyboard`).toBe('true');
     expect(shown.visibility, `${selector} opened an invisible detail for a keyboard`).toBe('visible');
@@ -5787,105 +6776,142 @@ test('keyboard focus opens the detail on both grids', async ({ page }) => {
  * calendar's own coverage above is untouched by either change.
  * ======================================================================== */
 
-test('the token-activity grid fills its card, not a tiny left-aligned block', async ({ page }) => {
+test('the calendar fills its card, and its day bound still stops and squares a day', async ({
+  page,
+}) => {
   await visit(page);
-  const measured = await page.evaluate(() => {
-    const block = window.document.querySelector('[data-panel-id="token-usage"] .grid-block');
-    const body = window.document.querySelector('[data-panel-id="token-usage"] .panel-body');
-    if (!block || !body) return null;
-    const blockBox = block.getBoundingClientRect();
-    const bodyBox = body.getBoundingClientRect();
-    const cells = block.querySelector('.grid-cells');
-    const strip = block.querySelector('.grid-strip');
-    const cell = block.querySelector('.grid-cells .grid-cell');
-    const cellsBox = cells === null ? null : cells.getBoundingClientRect();
-    const stripBox = strip === null ? null : strip.getBoundingClientRect();
-    const cellBox = cell === null ? null : cell.getBoundingClientRect();
-    return {
-      fullwidth: block.getAttribute('data-grid-fullwidth'),
-      blockWidth: blockBox.width,
-      bodyWidth: bodyBox.width,
-      columns: Number(block.getAttribute('data-grid-columns')),
-      cellsWidth: cellsBox === null ? 0 : cellsBox.width,
-      cellsLeft: cellsBox === null ? 0 : cellsBox.left,
-      stripLeft: stripBox === null ? 0 : stripBox.left,
-      stripWidth: stripBox === null ? 0 : stripBox.width,
-      cellWidth: cellBox === null ? 0 : cellBox.width,
-      cellHeight: cellBox === null ? 0 : cellBox.height,
-      viewport: window.innerWidth,
-    };
-  });
-  expect(measured, 'the token panel rendered no activity grid to measure').not.toBeNull();
-  expect(measured.fullwidth, 'the token panel did not opt its grid into full width').toBe('true');
+  const read = () =>
+    page.evaluate(() => {
+      const block = window.document.querySelector('.grid-block');
+      const body = block?.closest('.panel-shell')?.querySelector('.panel-body');
+      if (!block || !body) return null;
+      const box = (node) => (node === null ? null : node.getBoundingClientRect());
+      const cells = block.querySelector('.grid-cells');
+      const strip = block.querySelector('.grid-strip');
+      const cell = block.querySelector('.grid-cells .grid-cell');
+      const cellsBox = box(cells);
+      const stripBox = box(strip);
+      const cellBox = box(cell);
+      return {
+        fullwidth: block.getAttribute('data-grid-fullwidth'),
+        blockWidth: block.getBoundingClientRect().width,
+        bodyWidth: body.getBoundingClientRect().width,
+        columns: Number(block.getAttribute('data-grid-columns')),
+        cellsWidth: cellsBox === null ? 0 : cellsBox.width,
+        cellsLeft: cellsBox === null ? 0 : cellsBox.left,
+        stripLeft: stripBox === null ? 0 : stripBox.left,
+        stripWidth: stripBox === null ? 0 : stripBox.width,
+        cellWidth: cellBox === null ? 0 : cellBox.width,
+        cellHeight: cellBox === null ? 0 : cellBox.height,
+        viewport: window.innerWidth,
+      };
+    });
+
+  const measured = await read();
+  expect(measured, 'the page rendered no calendar to measure').not.toBeNull();
+  expect(measured.fullwidth, 'the calendar was not opted into full width').toBe('true');
   /* Not a pixel match — the block sits inside the card's own flex column —
      but genuinely filling it rather than the few columns' worth of pixels a
-     15-day series would otherwise claim (roughly a third of the card). */
+     15-day series would otherwise claim (roughly a third of the card). This is
+     issue 178's own report, unchanged. */
   expect(
     measured.blockWidth,
-    `the grid is ${Math.round(measured.blockWidth)}px inside a ${Math.round(measured.bodyWidth)}px card`
+    `the calendar is ${Math.round(measured.blockWidth)}px inside a ${Math.round(measured.bodyWidth)}px card`
   ).toBeGreaterThan(measured.bodyWidth * 0.9);
-
-  /* THE RULING, no longer a recorded gap (issue 178 vs issue 268). The owner
-     delegated this call to the coordinator on 2026-08-31 and the ruling is
-     that COVERAGE-WINDOW TRUTH OUTRANKS FILL at short coverage: the panel
-     draws only the days it captured, a day stays square and may scale up only
-     to the caller's bound, and the width the strip does not reach is accepted
-     because it closes itself — one real column per week. This lane used to pin
-     CURRENT BEHAVIOUR with the conflict written into its message; it now
-     asserts the ruled contract, and only for THIS surface. The version-control
-     calendar sets no bound, keeps the plain stretch, and is not measured here.
-
-     Three statements, because the ruling has three halves and any one of them
-     alone would let a defect through: the BLOCK still spans the card (issue
-     178's own report, unchanged and asserted above), the CELLS stop at the
-     bound instead of stretching into bar-chart days, and what stops is LEFT-
-     ALIGNED with the strip rather than centred in the space it declined. */
   expect(
     measured.columns > 0 && measured.cellWidth > 0,
-    'the token strip drew no cells to measure the ruling against'
+    'the calendar drew no cells to measure the ruling against'
   ).toBe(true);
-
   /* Left-aligned: the cells begin exactly where the strip's content begins.
      A centred remainder would split the accepted gap in two and read as a
-     mistake rather than as a window that has not filled out yet. */
-  expect(
-    measured.cellsLeft,
-    `the token strip's cells begin at ${measured.cellsLeft.toFixed(1)} inside a strip that begins at ${measured.stripLeft.toFixed(1)}: the remainder was distributed instead of left-aligned`
-  ).toBeCloseTo(measured.stripLeft, 0);
-
-  /* The token panel's own bound is 1.25rem, released below 30rem where the
-     columns share the strip instead (UsageTracker.svelte states both halves).
-     So the contract is range-dependent, and both ranges are asserted rather
-     than one being skipped — the desktop projects reach the first branch and
-     the two phone projects reach the second. */
-  const dayBoundPx = 20;
+     mistake rather than as a window that has not filled out yet. Asserted
+     only where the strip is not scrolled: on a phone it opens on its newest
+     column and the cells' start edge is legitimately off to the left of it. */
   if (measured.viewport > 480) {
     expect(
-      measured.cellWidth,
-      `a day is drawn ${measured.cellWidth.toFixed(2)}px wide against a ${dayBoundPx}px bound; the cap is not holding and the strip is stretching into bar-chart days again`
-    ).toBeLessThanOrEqual(dayBoundPx + subPixel);
-    /* SQUARE, which is the half a width cap alone does not give: capping the
-       width and leaving the row height at the base token drew a 20x10 day —
-       the same shape issue 158 refused, only smaller. */
-    expect(
-      measured.cellWidth,
-      `a day is ${measured.cellWidth.toFixed(2)}x${measured.cellHeight.toFixed(2)}: the bound stopped its width without squaring it`
-    ).toBeCloseTo(measured.cellHeight, 0);
-    // Non-vacuity: a day that never grew would satisfy both of the above.
-    expect(
-      measured.cellHeight,
-      `a day is ${measured.cellHeight.toFixed(2)}px tall; it did not scale up from the base cell at all`
-    ).toBeGreaterThan(10);
-  } else {
-    /* Below the bound's range the phone contract issue 268 measured still
-       holds: the columns share the strip and the cells reach its edge, which
-       is the owner's no-dead-space rule on a box too narrow for a bound and a
-       fill to coexist. */
+      measured.cellsLeft,
+      `the calendar's cells begin at ${measured.cellsLeft.toFixed(1)} inside a strip that begins at ${measured.stripLeft.toFixed(1)}: the remainder was distributed instead of left-aligned`
+    ).toBeCloseTo(measured.stripLeft, 0);
+  }
+
+  /* BELOW THE BOUND'S RANGE the phone contract issue 268 measured is what
+     holds instead, and it is measured here rather than skipped: the strip is a
+     scroller opened on its newest column, the columns share it, and the cells
+     run to its edge — the owner's no-dead-space rule on a box too narrow for a
+     bound and a fill to coexist. The retired token card released its bound
+     below 30rem for exactly this reason, so a phone never had a bounded day
+     to measure and does not have one now. */
+  if (measured.viewport <= 480) {
     expect(
       measured.cellsWidth,
-      `the token strip's cells reach ${measured.cellsWidth.toFixed(1)} of a ${measured.stripWidth.toFixed(1)}px strip at ${measured.viewport}px`
-    ).toBeCloseTo(measured.stripWidth, 0);
+      `the calendar's cells reach ${measured.cellsWidth.toFixed(1)} of a ${measured.stripWidth.toFixed(1)}px strip at ${measured.viewport}px`
+    ).toBeGreaterThanOrEqual(measured.stripWidth - subPixel);
+    return;
   }
+
+  /* THE DAY BOUND, DRIVEN FROM OUTSIDE (owner directive, 2026-09-03, issue
+     287, re-aiming the ruling of 2026-08-31).
+     
+     The ruling stands: coverage-window truth outranks fill, so a day stays
+     square and may scale up only to the caller's bound, and the width the
+     strip does not reach is accepted because it closes itself. What changed is
+     WHO SETS THE BOUND. It was the retired token card's 1.25rem, and the one
+     calendar the ledger draws sets none — the version-control calendar always
+     kept the plain stretch, which is why the default measured above fills.
+     
+     So the bound is driven the way the page-column lane drives its own token,
+     from the outside, and the component's bounded branch is measured on
+     demand rather than left unpinned because today's only caller declines it.
+     A lane that simply dropped these assertions would report nothing about a
+     branch that is still in the component and still reachable by any future
+     caller. */
+  const dayBoundPx = 20;
+  /* BOTH TOKENS, because the contract is both: `--grid-day-max` caps how far
+     a few columns may stretch and `--grid-day-size` moves the row height that
+     makes the capped day square. Capping the width alone leaves a 20x10 day —
+     the exact shape issue 158 refused, only smaller — so a caller that bounds
+     a day and does not size it is the defect, not the component. The retired
+     token card set the pair to the same value and that is what is reproduced
+     here. */
+  await page.evaluate((bound) => {
+    const block = window.document.querySelector('.grid-block');
+    block.style.setProperty('--grid-day-max', `${bound / 16}rem`);
+    block.style.setProperty('--grid-day-size', `${bound / 16}rem`);
+  }, dayBoundPx);
+  await settled(page);
+  const bounded = await read();
+  /* EXACTLY the bound, not merely under it, and that precision is the whole
+     assertion. The strip's own max-inline-size subtracts the trailing gap,
+     and without that term a 20px bound over ten columns drew 20.30px days
+     inside a 230px box — square to the eye, and not the number the caller
+     asked for. A `toBeLessThanOrEqual` here would pass on that bug. */
+  expect(
+    bounded.cellWidth,
+    `a day is drawn ${bounded.cellWidth.toFixed(2)}px wide against a ${dayBoundPx}px bound; the cap is not holding and the strip is stretching into bar-chart days again`
+  ).toBeCloseTo(dayBoundPx, 1);
+  /* SQUARE, which is the half a width cap alone does not give. */
+  expect(
+    bounded.cellWidth,
+    `a day is ${bounded.cellWidth.toFixed(2)}x${bounded.cellHeight.toFixed(2)}: the bound stopped its width without squaring it`
+  ).toBeCloseTo(bounded.cellHeight, 0);
+  /* Still left-aligned once the bound has left a remainder, which is the
+     arrangement the ruling accepts. */
+  expect(
+    bounded.cellsLeft,
+    `under its bound the calendar's cells begin at ${bounded.cellsLeft.toFixed(1)} inside a strip that begins at ${bounded.stripLeft.toFixed(1)}`
+  ).toBeCloseTo(bounded.stripLeft, 0);
+  /* Non-vacuity, and the reason the bound is worth measuring at all: it has to
+     actually CHANGE something. A build that ignored the token entirely would
+     satisfy both assertions above by drawing exactly what it drew before. */
+  expect(
+    bounded.cellWidth,
+    `the bound changed nothing: a day is ${bounded.cellWidth.toFixed(2)}px wide with it and ${measured.cellWidth.toFixed(2)}px without it, so this branch is unmeasured`
+  ).not.toBeCloseTo(measured.cellWidth, 1);
+  await page.evaluate(() => {
+    const block = window.document.querySelector('.grid-block');
+    block.style.removeProperty('--grid-day-max');
+    block.style.removeProperty('--grid-day-size');
+  });
 });
 
 /* NO DISPLAY CONTROLS, AND ONE GRAPH PER SOURCE (owner directive, 2026-08-28,
@@ -5901,29 +6927,35 @@ test('the token-activity grid fills its card, not a tiny left-aligned block', as
  *
  * A page that had simply lost its graphs would satisfy the first half
  * perfectly, which is why the second half is here. */
-test('the token panel offers no display control, and every source still draws its fixed graph', async ({
+test('the token board offers no display control, and every reported source still draws its fixed calendar', async ({
   page,
 }) => {
   await visit(page);
-  const panel = page.locator('[data-panel-id="token-usage"]');
-  await expect(panel).toBeVisible();
+  const board = page.locator('.panel-shell').filter({ has: page.locator('.board-grid') });
+  await expect(board).toBeVisible();
 
-  /* Half one: nothing to press. Measured as the DOM the reader gets, not as
-     the source — a control rendered hidden would still be a control, and this
-     is the assertion that would fail if one grew back inside the panel. */
-  const controls = await panel.evaluate((node) => ({
+  /* Half one: nothing to press that CHOOSES A DISPLAY. Measured as the DOM the
+     reader gets, not as the source — a control rendered hidden would still be
+     a control.
+     
+     The board does hold buttons now (owner directive, 2026-09-03, issue 287):
+     every square turns over to show its own back. So the blanket "no buttons
+     at all" this lane used to assert would now fail on a feature rather than
+     on a regression, and the honest replacement is that every button the panel
+     holds IS a square's own turn control — which is checked by name, so a
+     display control wearing a new class cannot hide among them. */
+  const controls = await board.evaluate((node) => ({
     triggers: node.querySelectorAll('.filter-trigger').length,
     popovers: node.querySelectorAll('.filter-popover').length,
     groups: node.querySelectorAll('.filter-group').length,
     radiogroups: node.querySelectorAll('[role="radiogroup"]').length,
     radios: node.querySelectorAll('[role="radio"]').length,
     pills: node.querySelectorAll('.usage-view').length,
-    /* Every remaining button in the panel, so a control wearing a new class
-       cannot slip past the four above. The panel legitimately holds none:
-       its cells are listbox options, not buttons. */
-    buttons: [...node.querySelectorAll('button')].map((button) =>
-      (button.getAttribute('aria-label') ?? button.textContent ?? '').trim()
-    ),
+    squares: node.querySelectorAll('.board-square').length,
+    buttons: [...node.querySelectorAll('button')].map((button) => ({
+      square: button.classList.contains('board-square'),
+      name: (button.getAttribute('aria-label') ?? button.textContent ?? '').trim(),
+    })),
   }));
   expect(controls.triggers, 'the display trigger is back').toBe(0);
   expect(controls.popovers, 'the display popover is back').toBe(0);
@@ -5931,32 +6963,66 @@ test('the token panel offers no display control, and every source still draws it
   expect(controls.radiogroups, 'a radio group is back in the token panel').toBe(0);
   expect(controls.radios, 'a radio is back in the token panel').toBe(0);
   expect(controls.pills, 'a display pill is back').toBe(0);
-  expect(controls.buttons, `the token panel grew a control: ${controls.buttons.join(', ')}`).toEqual([]);
+  expect(controls.squares, 'the board drew no squares').toBeGreaterThan(1);
+  const strangers = controls.buttons.filter((button) => !button.square);
+  expect(
+    strangers.map((button) => button.name),
+    `the token board grew a control that is not a square: ${strangers.map((button) => button.name).join(', ')}`
+  ).toEqual([]);
+  /* And every square's own control says what it does, so "they are all
+     squares" is a statement about controls a reader can understand rather
+     than about a class name. */
+  for (const button of controls.buttons) {
+    expect(button.name, 'a board square offers a control with no accessible name').not.toBe('');
+  }
 
-  /* Half two: every source still draws the fixed graph, and every one draws
-     the SAME window, which is what "fixed" means once the choice is gone.
-     Both sources are read so a panel that dropped one source's graph fails
-     here rather than passing on the survivor. */
-  const graphs = await panel.evaluate((node) =>
-    [...node.querySelectorAll('.usage-source')]
-      .map((source) => {
-        const region = source.querySelector('.usage-activity');
-        if (region === null) return null;
-        const block = region.querySelector('.grid-block');
-        const cells = [...region.querySelectorAll('[data-grid-cell]')];
+  /* Half two: every source the payload reports with a daily series still draws
+     the fixed calendar, and every one draws the SAME window — which is what
+     "fixed" means once the choice is gone. The sources are read from the API
+     the panel itself reads, so a page that quietly dropped one fails here
+     rather than passing on the survivors. */
+  const sets = await page.evaluate(async () => {
+    const response = await fetch('/api/panels/token-usage');
+    const envelope = await response.json();
+    return {
+      reported: (envelope?.data?.sources ?? [])
+        .filter((source) => Array.isArray(source?.series?.totals) && source.series.totals.length > 0)
+        .map((source) => source.label),
+      segments: [...window.document.querySelectorAll('.commit-segment')].map((node) =>
+        node.textContent.trim()
+      ),
+    };
+  });
+  expect(
+    sets.reported.length,
+    'no source reports a daily series; this lane cannot compare two calendars'
+  ).toBeGreaterThan(1);
+
+  const segments = page.locator('.commit-segment');
+  const drawn = [];
+  for (const label of sets.reported) {
+    const segment = segments.filter({ hasText: label }).first();
+    await expect(
+      segment,
+      `"${label}" reports a daily series and is offered no calendar segment`
+    ).toHaveCount(1);
+    await segment.click();
+    drawn.push(
+      await page.evaluate((source) => {
+        const block = window.document.querySelector('.grid-block');
+        const strip = block.querySelector('.grid-strip');
         return {
-          label: source.querySelector('.usage-source-label').textContent.trim(),
+          label: source,
           claimed: Number(block.getAttribute('data-grid-columns')),
-          columns: cells.length / 7,
-          strip: region.querySelector('.grid-strip').getAttribute('aria-label'),
-          summary: region.querySelector('.usage-activity-total').textContent.trim(),
-          coverage: region.querySelector('.usage-activity-coverage').textContent.trim(),
+          columns: block.querySelectorAll('[data-grid-cell]').length / 7,
+          strip: strip.getAttribute('aria-label'),
+          caption: window.document.querySelector('.commit-caption').textContent.trim(),
         };
-      })
-      .filter((graph) => graph !== null)
-  );
-  expect(graphs.length, 'the token panel renders fewer than two graphs; this lane cannot compare them').toBeGreaterThan(1);
-  for (const graph of graphs) {
+      }, label)
+    );
+  }
+
+  for (const graph of drawn) {
     expect(graph.columns, `"${graph.label}" drew a width it did not claim`).toBe(graph.claimed);
     /* The graph's accessible name is the region's own label and NOTHING else
        (issue 233): it used to carry the pressed lens and window, which were
@@ -5965,34 +7031,30 @@ test('the token panel offers no display control, and every source still draws it
     expect(graph.strip, `"${graph.label}" still announces a lens or a window`).not.toMatch(
       /view|range|only/
     );
-    // The daily sentence, and the coverage line that states its denominator.
-    expect(graph.summary, `"${graph.label}" renders no daily summary sentence`).toMatch(
-      /tokens over \d+ days, peaking at /
-    );
-    expect(graph.coverage, `"${graph.label}" renders no coverage line`).toMatch(
-      /· \d+(,\d{3})* of \d+(,\d{3})* days captured$|· every day in range captured$/
+    // The daily sentence, which states what the source actually captured.
+    expect(graph.caption, `"${graph.label}" renders no daily summary sentence`).toMatch(
+      /tokens over [\d,]+ days? · peak /
     );
   }
-  const [first, ...rest] = graphs;
+  const [first, ...rest] = drawn;
   for (const graph of rest) {
     expect(
       graph.claimed,
       `"${first.label}" draws ${first.claimed} columns and "${graph.label}" draws ${graph.claimed}; the window is not fixed`
     ).toBe(first.claimed);
   }
-  /* The window is the panel's own coverage, between the floor that keeps a
-     very short capture legible and the reserve that caps a long one (issue
-     268; the fixed fifty-three-week frame this used to require is what the
-     owner reported as a graph mostly made of nothing). Both bounds are pinned
-     here so a window that escaped either end fails on the real page as well as
-     in lib/periods.ts's own arithmetic. */
+  /* The window's two bounds. The floor is the width the strip's own less/more
+     key needs to sit under it; the reserve is the cap a longer capture is
+     shown the trailing end of. Both are pinned here so a window that escaped
+     either end fails on the real page as well as in the grid's own
+     arithmetic. */
   expect(
     first.claimed,
-    `the panel's window drew ${first.claimed} columns, under the width its own less/more key needs`
+    `the window drew ${first.claimed} columns, under the width its own less/more key needs`
   ).toBeGreaterThanOrEqual(10);
   expect(
     first.claimed,
-    `the panel's window drew ${first.claimed} columns, past the reserve it is capped at`
+    `the window drew ${first.claimed} columns, past the reserve it is capped at`
   ).toBeLessThanOrEqual(53);
 });
 
@@ -6082,19 +7144,32 @@ test('a tap opens the token-activity card, and a second tap closes it', async ({
   expect(closed.open, 'a second tap left the card open').toBe('false');
 });
 
-test('the skill detail and the boss detail are the same object, measured', async ({ page }) => {
+test('the calendar detail and the table detail are the same object, measured', async ({ page }) => {
   await visit(page);
 
-  /* The owner's second complaint, measured rather than eyeballed: the skill
-     readout must not merely resemble the boss one, it must BE it. Every value
-     below is read from the engine's computed style, and every one of them
-     also has to resolve from a token — a raw length would pass a parity
-     check and still be the drift issue #136 rule 5 forbids. */
-  const measure = ([css, at]) => {
-    const target = window.document.querySelectorAll(css)[at];
-    const node =
-      target.querySelector('.cell-tip') ??
-      target.closest('.grid-block').querySelector('.cell-tip');
+  /* The owner's second complaint, measured rather than eyeballed: one readout
+     must not merely resemble the other, it must BE it. Every value below is
+     read from the engine's computed style, and every one of them also has to
+     resolve from a token — a raw length would pass a parity check and still be
+     the drift issue #136 rule 5 forbids.
+     
+     THE TWO SURFACES MOVED (owner directive, 2026-09-03, issue 287). It was
+     the boss grid against the skill grid, and both are retired. It is now the
+     calendar against the repository table, which is a better pair for the same
+     claim: those two use the primitive's two different WIRING FORMS — one tip
+     serving a whole region, and a tip describing its own parent — so parity
+     here proves the object is the same across the deeper of the two possible
+     divergences rather than across two copies of one arrangement.
+     
+     The calendar's tip has to be OPENED before it can be compared: in the
+     region form the box takes its content from whichever cell is pointed at,
+     so an unopened one is genuinely empty and comparing it would be comparing
+     nothing. The table's tip describes its own parent and always carries it. */
+  const opened = await openRegionDetail(page);
+  expect(opened, 'the calendar never opened a detail to compare').toBe(true);
+
+  const measure = (css) => {
+    const node = window.document.querySelector(css);
     const box = getComputedStyle(node);
     const title = getComputedStyle(node.querySelector('.cell-tip-name'));
     const row = getComputedStyle(node.querySelectorAll('span')[1]);
@@ -6115,8 +7190,8 @@ test('the skill detail and the boss detail are the same object, measured', async
       rows: node.querySelectorAll('span').length,
     };
   };
-  const boss = await page.evaluate(measure, ['[data-cells="roomy"] .stat-cell', 5]);
-  const skill = await page.evaluate(measure, ['[data-cells="compact"] .stat-cell', 4]);
+  const boss = await page.evaluate(measure, '.grid-block .cell-tip');
+  const skill = await page.evaluate(measure, '.table-count .cell-tip');
 
   for (const property of [
     'padding',
@@ -6135,13 +7210,17 @@ test('the skill detail and the boss detail are the same object, measured', async
   ]) {
     expect(
       skill[property],
-      `the skill detail's ${property} is "${skill[property]}" where the boss detail's is "${boss[property]}"`
+      `the table detail's ${property} is "${skill[property]}" where the calendar detail's is "${boss[property]}"`
     ).toBe(boss[property]);
   }
   /* Non-vacuity: a parity check between two empty boxes proves nothing, so
-     both must actually carry a heading and labelled rows. */
-  expect(boss.rows, 'the boss detail rendered no rows').toBeGreaterThan(2);
-  expect(skill.rows, 'the skill detail rendered no rows').toBeGreaterThan(2);
+     both must actually carry a heading and at least one labelled row. Two
+     spans rather than the three the retired stat tiles carried, because a
+     repository counter states one fact and its provenance while a stat tile
+     stated two — the floor is "a heading and a row", which is what makes the
+     comparison above about real content. */
+  expect(boss.rows, 'the calendar detail rendered no rows').toBeGreaterThanOrEqual(2);
+  expect(skill.rows, 'the table detail rendered no rows').toBeGreaterThanOrEqual(2);
   /* The heading is the panel layer's one chromatic token and the rows are
      not, which is the visual grammar the owner called the reference. */
   expect(boss.titleInk, 'the detail heading is painted in the body ink').not.toBe(boss.ink);
@@ -6152,7 +7231,7 @@ test('the skill detail and the boss detail are the same object, measured', async
      is what makes the parity above a property instead of a coincidence. */
   const fromTokens = await page.evaluate(() => {
     const style = getComputedStyle(window.document.documentElement);
-    const node = window.document.querySelector('.cell-tip');
+    const node = window.document.querySelector('.grid-block .cell-tip');
     const box = getComputedStyle(node);
     const read = (name) => style.getPropertyValue(name).trim();
     return {
@@ -6181,54 +7260,86 @@ test('the skill detail and the boss detail are the same object, measured', async
 });
 
 test('a hostile row name reaches the detail as text and nothing else', async ({ page }) => {
-  /* Detail content is PAYLOAD — boss and skill names arrive over the network
-     from the origin's hiscore snapshot — so "it renders as text" is a
-     security property, not a formatting one. The origin's own data is well
-     behaved, which is exactly why it cannot demonstrate this: the response is
-     intercepted and one name replaced with markup that would be loud if it
-     ever executed. */
+  /* Detail content is PAYLOAD — the row names arrive over the network from the
+     origin's own snapshot — so "it renders as text" is a security property,
+     not a formatting one. The origin's data is well behaved, which is exactly
+     why it cannot demonstrate this: the response is intercepted and one name
+     replaced with markup that would be loud if it ever executed.
+     
+     ONE SURFACE RATHER THAN TWO (owner directive, 2026-09-03, issue 287). The
+     lane used to stage a boss name and a skill name and expect two details to
+     carry the string; the skill grid is retired, so the skills half is gone
+     and only the boss row is staged. The row is drawn in a marquee that
+     renders its lane TWICE so the band can wrap without a seam, and only one
+     copy is readable — the other is `aria-hidden` — so the accessible-name
+     count below is taken over the readable copy alone rather than being
+     doubled by the duplicate. */
   const hostile = '<img src=x onerror="window.__tipEscaped = true">';
   await page.route('**/api/panels/boss-log', async (route) => {
     const response = await route.fetch();
     const envelope = await response.json();
     envelope.data.bosses[0].name = hostile;
-    envelope.data.skills[0].name = hostile;
     await route.fulfill({ response, json: envelope });
   });
+  /* The band is stopped first. Its items are geometrically in motion while it
+     runs, so nothing can be put under a pointer — and stopping it is not a
+     workaround but a state the owner named: under reduced motion the strip is
+     a scroller a reader pans, and every item is a target. */
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await visit(page);
 
-  const rendered = await page.evaluate(
-    (text) => {
-      const tips = [...window.document.querySelectorAll('.cell-tip')];
-      const carrying = tips.filter((node) => node.textContent.includes(text));
-      return {
-        carrying: carrying.length,
-        elements: carrying.flatMap((node) => [...node.querySelectorAll('*')].map((n) => n.tagName)),
-        images: window.document.querySelectorAll('img[src="x"]').length,
-        executed: window.__tipEscaped === true,
-        labels: [...window.document.querySelectorAll('[aria-label]')].filter((n) =>
-          n.getAttribute('aria-label').includes(text)
-        ).length,
-      };
-    },
-    hostile
+  /* The staged row is found by its own name rather than by position: the band
+     is ordered by the payload's own ranking, so "the row I replaced" and "the
+     first row drawn" are different rows, and assuming otherwise would measure
+     an innocent neighbour. Exactly one readable copy must match. */
+  const staged = page.locator(
+    '.ticker-lane:not([aria-hidden="true"]) .ticker-item[aria-label^="<img src=x"]'
   );
+  await expect(
+    staged,
+    'the staged row is not in the band; this lane has nothing to measure'
+  ).toHaveCount(1);
+  await staged.scrollIntoViewIfNeeded();
+  const box = await staged.boundingBox();
+  await page.mouse.move(0, 0);
+  await page.mouse.move(Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2));
+  await expect(
+    page.locator('.ticker-strip').locator('xpath=..').locator('.cell-tip'),
+    'the staged row opened no detail; this lane proves nothing'
+  ).toHaveAttribute('data-tip-open', 'true');
 
-  /* One boss tile and one skill tile carry it, as literal text. */
-  expect(rendered.carrying, 'the hostile name never reached a detail; this lane proves nothing').toBe(2);
+  const rendered = await page.evaluate((text) => {
+    const tips = [...window.document.querySelectorAll('.cell-tip')];
+    const carrying = tips.filter((node) => node.textContent.includes(text));
+    const readable = [
+      ...window.document.querySelectorAll('.ticker-lane:not([aria-hidden="true"]) [aria-label]'),
+    ].filter((node) => node.getAttribute('aria-label').includes(text));
+    return {
+      carrying: carrying.length,
+      elements: carrying.flatMap((node) => [...node.querySelectorAll('*')].map((n) => n.tagName)),
+      images: window.document.querySelectorAll('img[src="x"]').length,
+      executed: window.__tipEscaped === true,
+      labels: readable.length,
+    };
+  }, hostile);
+
+  /* Exactly one detail carries it, as literal text. */
+  expect(rendered.carrying, 'the hostile name never reached a detail; this lane proves nothing').toBe(1);
   /* Nothing it contained became an element, anywhere. */
   expect(rendered.images, 'the payload name became a real <img> in the document').toBe(0);
   expect(rendered.executed, 'markup from the payload executed').toBe(false);
-  /* And the only elements inside those details are the primitive's own spans:
+  /* And the only elements inside that detail are the primitive's own spans:
      the payload contributed text nodes and no structure at all. */
   expect(
     [...new Set(rendered.elements)],
     'a detail carrying payload text contains an element the primitive did not render'
   ).toEqual(['SPAN']);
-  /* The same text also lands in the tile's accessible name, and is inert
-     there too — the aria-label path is a second place a payload reaches the
-     DOM and it must be no different. */
-  expect(rendered.labels, 'the hostile name never reached an accessible name').toBe(2);
+  /* The same text also lands in the row's accessible name, and is inert there
+     too — the aria-label path is a second place a payload reaches the DOM and
+     it must be no different. */
+  expect(rendered.labels, 'the hostile name never reached an accessible name').toBe(1);
+  await page.emulateMedia({ reducedMotion: null });
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
 /* ===========================================================================
@@ -6388,6 +7499,12 @@ async function loadAndObserve(context, stored) {
   const column = await columnBox(page);
   const observed = await page.evaluate(() => ({
     firstFrame: window.__columnFirstFrame,
+    /* The same heading once the page has settled, in the same shape as the
+       first frame, so the two can be compared within ONE load. */
+    settledHeading: (() => {
+      const box = window.document.querySelector('h1').getBoundingClientRect();
+      return [box.x, box.y, box.width, box.height].map(Math.round);
+    })(),
     shift: window.__columnShift,
     scored: window.__columnShiftScored
   }));
@@ -6542,14 +7659,29 @@ test('a real pointer drag moves the edge exactly as far as the pointer', async (
   expect(after.width - before.width, 'a centred column must grow from both sides').toBeCloseTo(320, 0);
   expect(after.left - before.left).toBeCloseTo(-160, 0);
   expect(after.scrollWidth).toBe(after.clientWidth);
-  /* The header pinned to the viewport corner, decoupled from the column
-     entirely (issue 168): the exact drag above that just moved the column's
-     own edge by 160px must move the icon by nothing at all. */
+  /* THE HEADER RIDES THE COLUMN AGAIN (owner directive, 2026-09-03, issue
+     287), which reverses issue 168's decoupling. The masthead is an in-flow
+     ruled row sharing `main`'s inline-size rule, so the drag that just moved
+     the column's end edge by 160px moves the control on that row by the same
+     160px — the control is part of the sheet now rather than chrome floating
+     over it.
+     
+     The owner's complaint that issue 168 answered ("I don't like how they move
+     when I drag the feed in and out") was about chrome pinned to a corner
+     drifting independently of the thing being dragged. The ledger answers it
+     the other way: the control is IN the sheet, so it moves exactly with the
+     sheet and never disagrees with it. That is what is asserted — the icon
+     tracks the column's own edge one for one, and its block position does not
+     change, because the drag is an inline gesture. */
   const iconAfter = await page.evaluate(() => window.document.querySelector('.icon-button').getBoundingClientRect());
   expect(
-    { top: iconAfter.top, right: iconAfter.right },
-    'dragging the feed moved the header icon; it must be independent of the column'
-  ).toEqual({ top: iconBefore.top, right: iconBefore.right });
+    iconAfter.right - iconBefore.right,
+    `the drag moved the column's edge by 160px and the header control by ${(iconAfter.right - iconBefore.right).toFixed(1)}px; the masthead shares the column rule and must track it`
+  ).toBeCloseTo(after.right - before.right, 0);
+  expect(
+    iconAfter.top,
+    'an inline drag moved the header control down the page'
+  ).toBeCloseTo(iconBefore.top, 0);
 
   /* The start handle mirrors it, and undoes it. */
   await dragHandle(page, 'start', 160);
@@ -6699,16 +7831,51 @@ test('a stored width is on the page before it paints, and moves nothing', async 
     0
   );
 
-  /* The pre-paint guarantee, measured in every engine: the only thing the
-     static document paints is in exactly the same place either way, so there
-     is nothing a later width could move. A shell that grew a left-aligned
-     element would fail here, which is precisely the regression this measures
-     rather than assumes. */
-  expect(chosen.firstFrame?.heading, 'no heading was painted to measure').toBeTruthy();
+  /* The pre-paint guarantee, measured in every engine and RE-EXPRESSED for
+     the ledger (owner directive, 2026-09-03, issue 287). This used to compare
+     the first-frame heading of the stored-width load against the SHIPPED
+     load's, because the heading sat in a fixed-width intro and a stored
+     column could not move it. The masthead fills the column now — the heading
+     is 960px wide at the shipped width and 640px at the stored one — so that
+     equality would assert a stored width has no effect, which is the opposite
+     of the feature.
+     
+     What the title claims is what is asserted instead: the stored width is on
+     the page BEFORE it paints, so within the stored-width load the heading's
+     first frame is the heading's settled frame — nothing arrived later and
+     moved it. The shipped load is held to the same standard, so a shell that
+     drifted from the hydrated page is caught on either. */
+  expect(shipped.firstFrame?.heading, 'no heading was painted to measure').toBeTruthy();
+  /* EVERY READER WHO HAS NEVER DRAGGED THE COLUMN — which is most of them —
+     gets a page whose first frame is its settled frame. Exact, in every
+     engine, and it is the assertion that caught the shell drifting from the
+     hydrated masthead during this redesign. */
   expect(
-    chosen.firstFrame.heading,
-    'the page painted something the column width moves; the stored width now costs a layout shift'
-  ).toEqual(shipped.firstFrame.heading);
+    shipped.firstFrame.heading,
+    `the shipped page painted its heading at ${shipped.firstFrame.heading} and settled it at ${shipped.settledHeading}; the shell reserves a different page from the one that mounts`
+  ).toEqual(shipped.settledHeading);
+
+  /* WHAT IS NOT ASSERTED, AND WHY, so nobody reads the silence as coverage or
+     "fixes" it the wrong way (owner directive, 2026-09-03, issue 287).
+     
+     With a stored NON-DEFAULT width the first frame is NOT the settled frame:
+     the shell paints the masthead at the default column and the module resizes
+     it at mount. MEASURED under this lane's own request interception, which is
+     the ordering a real network produces: first frame [240, 280, 960, 297],
+     settled [400, 280, 640, 297] — one resize of one element, on the inline
+     axis only, once per load, visible only to a reader who has dragged the
+     column. The restore lives in the bundle because this origin's CSP admits
+     no inline script to run it earlier, and index.html's own comment records
+     that the repository declines to widen `default-src` even for its boot
+     status line; a column-width restore is not a better reason. CSS cannot
+     read storage, the shell must reserve the masthead's exact box to satisfy
+     the hydration pin below, and a box equal to the masthead is by definition
+     column-dependent — so there is no shape of the shell that is right at
+     every stored width. The gap is real, bounded, and named here and in the
+     PR body rather than closed by a security posture changed inside a
+     redesign. What is asserted for the stored width is the feature itself:
+     the restore HAPPENS, which the column and token checks above prove, so a
+     page that ignored storage still fails this lane. */
 
   /* And the engine's own score for the whole load, where an engine keeps one.
      The comparison is against the SHIPPED page rather than against zero: this
@@ -6725,6 +7892,67 @@ test('a stored width is on the page before it paints, and moves nothing', async 
        an absolute one as well as a relative one. */
     expect(chosen.shift).toBeLessThan(0.1);
   }
+});
+
+/* THE STATIC SHELL RESERVES THE HYDRATED CHROME, MEASURED (owner directive,
+ * 2026-09-03, issue 287). `settled()` above records why this is a floor and
+ * not a nicety: the shell in index.html is deliberately the same height as
+ * the hydrated chrome, "so that a zero-CLS hydration is possible at all". It
+ * was measured nowhere directly — the stored-width lane used to catch a
+ * mismatch only when an engine's first animation frame happened to land before
+ * hydration, which WebKit does and Chromium never does, so the same defect was
+ * red on one engine and invisible on another.
+ *
+ * This measures it on purpose and in every engine: one load with the entry
+ * module refused, which is exactly the shell a visitor sees while the bundle
+ * is still on its way, and one ordinary load. The heading and the masthead
+ * must be in the same place and the same size in both, or mounting moves the
+ * page under a reader who has already started reading it. */
+test('the static shell holds the heading where hydration will put it', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const read = () =>
+    page.evaluate(() => {
+      const box = (selector) => {
+        const node = window.document.querySelector(selector);
+        if (node === null) return null;
+        const rect = node.getBoundingClientRect();
+        return [rect.x, rect.y, rect.width, rect.height].map(Math.round);
+      };
+      return {
+        shell: window.document.querySelector('[data-static-fallback]') !== null,
+        heading: box('h1'),
+        header: box('.page-header'),
+        main: box('main'),
+      };
+    });
+
+  /* The shell alone. Scripts are refused at the network, which is the honest
+     boot state issue 239 describes, not a synthetic one. */
+  await page.route('**/*.js', (route) => route.abort());
+  await page.goto('/');
+  await page.waitForLoadState('load');
+  const before = await read();
+  expect(before.shell, 'the page did not render its static shell with scripts refused').toBe(true);
+  expect(before.heading, 'the shell painted no heading').not.toBeNull();
+  await page.unroute('**/*.js');
+
+  /* The hydrated page, on the same viewport. */
+  await visit(page);
+  const after = await read();
+  expect(after.shell, 'the page never hydrated').toBe(false);
+
+  expect(
+    after.heading,
+    `hydration moved the heading from ${before.heading} to ${after.heading}; the shell reserves a different page from the one that mounts`
+  ).toEqual(before.heading);
+  expect(
+    after.header,
+    `hydration changed the masthead from ${before.header} to ${after.header}`
+  ).toEqual(before.header);
+  expect(
+    after.main[1],
+    `hydration moved the column's top edge from ${before.main[1]} to ${after.main[1]}`
+  ).toBe(before.main[1]);
 });
 
 test('a poisoned preference lands the page on the width it ships at', async ({ page }) => {
@@ -6837,22 +8065,40 @@ test('every width the handle can reach keeps every section intact', async ({ pag
     }, target);
     await settled(page);
     const state = await page.evaluate(() => {
-      const grid = window.document.querySelector('.stat-grid[data-cells="roomy"]');
-      const cells = [...grid.querySelectorAll('.stat-cell')];
-      const distinct = (values) => new Set(values.map((value) => Math.round(value))).size;
-      const frames = [...window.document.querySelectorAll('.gallery-stage')].map((stage) => {
-        const box = stage.getBoundingClientRect();
+      /* THE LEDGER'S OWN BLOCKS (owner directive, 2026-09-03, issue 287).
+         The three-column boss table is retired; what has to survive every
+         column width now is the marquee strip and the flip-square board, so
+         those are what is counted. */
+      const strip = window.document.querySelector('.ticker-strip');
+      const readable = [...strip.querySelectorAll('.ticker-lane')].filter(
+        (lane) => lane.getAttribute('aria-hidden') !== 'true'
+      );
+      /* The gallery's TILES, since the frame they used to be one of retired
+         (owner directive, 2026-09-03, issue 287). The row is measured against
+         its own column here rather than against a ceiling: every cell keeps
+         its square and the row keeps filling the column, at every width a
+         reader can drag the page down to. */
+      const gridBox = window.document.querySelector('.gallery-grid').getBoundingClientRect();
+      const tiles = [...window.document.querySelectorAll('.gallery-tile')].map((tile) => {
+        const box = tile.getBoundingClientRect();
         return { width: box.width, height: box.height };
       });
+      const galleryFill = {
+        left: Math.round((gridBox.left - window.document.querySelector('main').getBoundingClientRect().left) * 10) / 10,
+        right: Math.round((window.document.querySelector('main').getBoundingClientRect().right - gridBox.right) * 10) / 10,
+      };
       const root = window.document.documentElement;
       return {
         column: window.document.querySelector('main').getBoundingClientRect().width,
         scrollWidth: root.scrollWidth,
         clientWidth: root.clientWidth,
-        bossColumns: distinct(cells.map((cell) => cell.getBoundingClientRect().left)),
-        bossRows: distinct(cells.map((cell) => cell.getBoundingClientRect().top)),
-        bossCells: cells.length,
-        tiles: window.document.querySelectorAll('[data-usage-tile]').length,
+        tickerItems: readable.reduce(
+          (count, lane) => count + lane.querySelectorAll('.ticker-item').length,
+          0
+        ),
+        tickerPans: strip.scrollWidth > strip.clientWidth,
+        tickerOverflow: getComputedStyle(strip).overflowX,
+        squares: window.document.querySelectorAll('.board-square').length,
         strips: window.document.querySelectorAll('.grid-strip').length,
         navLinks: window.document.querySelectorAll('.section-link').length,
         sections: window.document.querySelectorAll('.page-section').length,
@@ -6860,7 +8106,8 @@ test('every width the handle can reach keeps every section intact', async ({ pag
           const rail = handle.getBoundingClientRect();
           return { left: rail.left, right: rail.right };
         }),
-        frames,
+        tiles,
+        galleryFill,
         /* Nothing anywhere escapes its own box: the same containment rule the
            phone lane proves, asked at every width a reader can produce. */
         escaping: [...window.document.querySelectorAll('body *')]
@@ -6894,45 +8141,47 @@ test('every width the handle can reach keeps every section intact', async ({ pag
       );
     }
     expect(state.escaping, `content escapes its box ${at}`).toEqual([]);
-    /* Three columns going down, whatever the column measures — the owner's
-       arrangement, not a shape that survives only at one width. */
-    expect(state.bossColumns, `the boss table lays out ${state.bossColumns} columns ${at}`).toBe(3);
-    expect(state.bossRows, `the boss table lost rows ${at}`).toBe(Math.ceil(state.bossCells / 3));
-    expect(state.tiles, `the usage tiles disappeared ${at}`).toBeGreaterThan(0);
+    /* The whole collection is still in the strip, and the strip is still the
+       thing that scrolls rather than the page — at every width, not only at
+       the one the ticker was designed against. A narrow column is exactly
+       where a band would be tempted to push the document sideways, and the
+       page-level check above would catch that; this is the other half, that
+       it did not silently drop entries to avoid it. */
+    expect(state.tickerItems, `the ticker lost entries ${at}`).toBeGreaterThan(50);
+    expect(state.tickerOverflow, `the ticker stopped being a scroller ${at}`).toBe('auto');
+    expect(state.tickerPans, `the ticker has nothing left to pan ${at}`).toBe(true);
+    expect(state.squares, `the board squares disappeared ${at}`).toBeGreaterThan(0);
     expect(state.strips, `the heatmap strips disappeared ${at}`).toBeGreaterThan(0);
     expect(state.navLinks, `the nav lost links ${at}`).toBeGreaterThan(2);
     expect(state.sections, `the page lost a section ${at}`).toBeGreaterThan(2);
-    /* The pictures still reserve the box they will fill, and since
-       2026-08-28 that box is a SQUARE stage rather than the feed card's 16:9
-       media frame (owner: the drawings are portrait scans, and a wide frame
-       cropped them). Squareness is the property under test at every column
-       width: whatever the track does, the stage keeps its ratio and stops
-       at its own ceiling, so a narrow column shrinks the work rather than
-       distorting it and a wide one stops growing instead of reproducing the
-       complaint the cap exists to fix. galleryStageCapPx is the literal cap
-       value, never the page's own computed style (see its declaration for
-       why) — this is what makes the assertion below independent, rather
-       than the self-referential shape Daybreak Blue's review of PR #161
-       found: a mutation that widened the token could no longer widen its own
-       expectation along with it.
-       (This viewport is the narrow "rails" one the handle needs to exist at
-       all — MEASURED: even the widest column this sweep can reach keeps the
-       stage's track under ~570px, so the cap engages here only at the wider
-       end. The unambiguous "the cap is doing real work, not coincidentally
-       equal to the track" proof lives in the dedicated single-frame test
-       above instead, at a viewport wide enough to make that margin real.) */
-    expect(state.frames.length, `the gallery rendered no frame ${at}`).toBe(1);
-    for (const frame of state.frames) {
+    /* The pictures still reserve the boxes they will fill, and since
+       2026-09-03 those boxes are a ROW of squares rather than one capped
+       stage (owner directive, issue 287). Two properties are under test at
+       every column width, and neither is a number this file or the
+       stylesheet states: every tile stays SQUARE, so a narrow column shrinks
+       the work rather than distorting it, and the row still reaches both of
+       the column's edges, so no width a reader can drag to reopens the dead
+       gutter the redesign closed. The 448px ceiling this block used to
+       compare against is gone with the frame it capped — a cap on a row that
+       is supposed to span its column would BE the defect — and what replaced
+       it as the independent expectation is the column itself, measured on
+       the same page in the same pass. */
+    expect(state.tiles.length, `the gallery rendered no tiles ${at}`).toBeGreaterThan(0);
+    for (const [index, tile] of state.tiles.entries()) {
+      expect(tile.width, `gallery tile ${index + 1} reserves nothing ${at}`).toBeGreaterThan(0);
       expect(
-        frame.height,
-        `the gallery stage is ${frame.width.toFixed(1)}x${frame.height.toFixed(1)} ${at}, not square`
-      ).toBeCloseTo(frame.width, 0);
-      expect(
-        frame.width,
-        `the gallery stage grew to ${frame.width.toFixed(1)}px ${at}, past its ${galleryStageCapPx}px ceiling`
-      ).toBeLessThanOrEqual(galleryStageCapPx + subPixel);
-      expect(frame.width, `the gallery stage reserves nothing ${at}`).toBeGreaterThan(0);
+        tile.height,
+        `gallery tile ${index + 1} is ${tile.width.toFixed(1)}x${tile.height.toFixed(1)} ${at}, not square`
+      ).toBeCloseTo(tile.width, 0);
     }
+    expect(
+      state.galleryFill.right,
+      `the gallery row stops ${state.galleryFill.right}px short of the column ${at}`
+    ).toBeLessThanOrEqual(1);
+    expect(
+      state.galleryFill.left,
+      `the gallery row starts ${state.galleryFill.left}px inside the column ${at}`
+    ).toBeLessThanOrEqual(1);
   }
 });
 
@@ -6995,14 +8244,20 @@ test('the drag writes once a frame and never stalls on layout', async ({ page })
   expect(swept.moves, `120 pointer moves took ${swept.moves.toFixed(1)}ms`).toBeLessThan(250);
 });
 
-// SUPERSEDED (owner directive, issue 168). This lane used to REQUIRE the
-// popover to fit inside whatever the reader had dragged the column down to,
-// because the header used to take the column's own width and the popover
-// hangs off the header. That coupling is exactly what issue 168 removed: the
-// header pins to the viewport corner now, independent of the column
-// entirely, so the correct claim inverts — narrowing the column to its
-// minimum must move the popover NOT AT ALL, never merely "fit" inside it.
-test('the reading-mode popover is unaffected by the column, even at its narrowest (issue 168)', async ({
+// SUPERSEDED TWICE, and the second reversal is the current rule (owner
+// directive, 2026-09-03, issue 287). Originally this lane REQUIRED the popover
+// to fit inside whatever the reader had dragged the column down to, because
+// the header took the column's own width and the popover hangs off the header.
+// Issue 168 removed that coupling — the header pinned to the viewport corner —
+// so the claim inverted to "narrowing the column moves the popover not at all".
+// The ledger's masthead puts the header back INSIDE the column, sharing its
+// inline-size rule with `main`, so the coupling is deliberate again and the
+// original claim is the right one: the popover travels with the column and
+// must still FIT, entirely on screen, with every swatch, and without taking
+// the document sideways. Both halves are asserted — that it moved, so the
+// coupling is real rather than assumed, and that it fits, which is the floor
+// the coupling has to respect.
+test('the reading-mode popover travels with the column and still fits at its narrowest (issue 168; owner 2026-09-03, issue 287)', async ({
   page
 }) => {
   await page.setViewportSize({ width: railsBreakpointPx, height: 900 });
@@ -7068,18 +8323,30 @@ test('the reading-mode popover is unaffected by the column, even at its narrowes
 
   expect(observed.animating, 'the narrowed popover was measured mid-reveal').toBe(0);
   expect(observed.swatches, 'the reading modes lost a swatch at the narrowest column').toBe(5);
-  for (const edge of ['left', 'right', 'top']) {
-    // The allowance stays at one CSS pixel: it is now a genuine sub-pixel
-    // rounding margin over two settled readings rather than cover for a
-    // moving box, and it is not widened by a hair. A popover actually
-    // coupled to the column moves by hundreds.
-    expect(
-      Math.abs(observed.popover[edge] - shipped[edge]),
-      `narrowing the column moved the popover ${edge} from ${shipped[edge]} to ` +
-        `${observed.popover[edge]}; it is meant to be independent of the column ` +
-        'now (issue 168; one CSS pixel of settled rounding allowed, issue #194)'
-    ).toBeLessThanOrEqual(1);
-  }
+  /* IT MOVED, which is the coupling stated as a measurement rather than
+     assumed. A popover still pinned to the viewport corner would report the
+     identical box and the fit assertions below would then prove nothing about
+     the column at all. */
+  expect(
+    Math.abs(observed.popover.left - shipped.left),
+    `narrowing the column left the popover at ${observed.popover.left}; it rides the masthead now and the masthead rides the column`
+  ).toBeGreaterThan(1);
+  /* AND IT FITS, which is the floor that coupling has to respect: entirely on
+     screen on both inline edges, and below the top of the viewport. The
+     arrangement this replaced failed exactly here — a popover hanging off a
+     narrowed header used to run off the end of the screen. */
+  expect(
+    observed.popover.left,
+    `the narrowed popover starts at ${observed.popover.left}px, off the start edge`
+  ).toBeGreaterThanOrEqual(-subPixel);
+  expect(
+    observed.popover.right,
+    `the narrowed popover ends at ${observed.popover.right}px in a ${observed.clientWidth}px viewport`
+  ).toBeLessThanOrEqual(observed.clientWidth + subPixel);
+  expect(
+    observed.popover.top,
+    `the narrowed popover starts at ${observed.popover.top}px, above the viewport`
+  ).toBeGreaterThanOrEqual(-subPixel);
   expect(observed.scrollWidth).toBe(observed.clientWidth);
 });
 
@@ -7100,10 +8367,18 @@ test('the reading-mode popover is unaffected by the column, even at its narrowes
  * where the card's padding says it should.
  * ======================================================================== */
 
-/* The card-body surfaces the ruling covers, by the class the page gives them.
- * A summary paragraph and a bullet list — the blocks that used to read the
- * 42rem measure. */
-const filledCardBodies = ['.entry-summary', '.entry-points'];
+/* The card-body surfaces the ruling covers, by the class the page gives them
+ * (owner directive, 2026-09-03, issue 287). It was a summary paragraph and a
+ * bullet list on the retired feed cards; the ledger's one card-body prose
+ * surface is the accomplishments list inside a role's drawer, so that is what
+ * the ruling covers now.
+ *
+ * The repository table's description cell is DELIBERATELY not here. It is one
+ * column of a ruled row, sized against its neighbours, and it is supposed to
+ * stop where its column stops — measuring it against the card's own edge would
+ * assert that a table has no columns. Its own geometry is pinned by the repo
+ * table lane instead. */
+const filledCardBodies = ['.ledger-points'];
 
 /* The widths this rule is measured at, and why they are COLUMN values rather
  * than only viewport ones. The page column is a fixed 60rem token, so a 1440px
@@ -7148,7 +8423,19 @@ const measureCardFill = (page) =>
           const range = window.document.createRange();
           range.selectNodeContents(node);
           const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
-          if (rects.length > 0) runs.push(rects);
+          /* Each run carries the END EDGE OF THE BOX IT WAS LAID OUT IN, not
+             the card's (owner directive, 2026-09-03, issue 287). A broken line
+             stands within one word of the width ACTUALLY AVAILABLE TO IT, and
+             what is available is its own containing block — which is the card
+             for a full-width paragraph and one track for a list the ledger
+             lays out in two columns. Measuring every line against the card
+             would call a correctly filled second column a two-thirds failure.
+             For the single-column blocks this rule was written against the two
+             edges are the same edge, so nothing is relaxed where the old shape
+             held. */
+          if (rects.length > 0) {
+            runs.push({ rects, end: node.parentElement.getBoundingClientRect().right });
+          }
           return;
         }
         if (node.nodeType !== 1) return;
@@ -7169,16 +8456,18 @@ const measureCardFill = (page) =>
              a layout tells you nothing there — but a line the engine chose to
              BREAK was broken because the next word did not fit, so it stands
              within one word of the width actually available. */
-          const broken = runs.flatMap((rects) => rects.slice(0, -1));
+          const broken = runs.flatMap((run) =>
+            run.rects.slice(0, -1).map((rect) => run.end - rect.right)
+          );
           rows.push({
             selector,
             card: Math.round(card.getBoundingClientRect().width),
             short: edge - block.getBoundingClientRect().right,
             runs: runs.length,
             broken: broken.length,
-            /* The WORST of them: the broken line that stops furthest from the
-               card's edge. */
-            ink: broken.length === 0 ? 0 : Math.max(...broken.map((rect) => edge - rect.right)),
+            /* The WORST of them: the broken line that stops furthest from its
+               own containing block's edge. */
+            ink: broken.length === 0 ? 0 : Math.max(...broken),
           });
         }
       }
@@ -7241,7 +8530,7 @@ function expectCardsFilled(observed, where) {
     if (row.broken > 0) {
       expect(
         row.ink,
-        `a line inside ${row.selector} was broken ${row.ink.toFixed(1)}px short of a ${row.card}px card at ${where}; the box fills but the text does not`
+        `a line inside ${row.selector} was broken ${row.ink.toFixed(1)}px short of its own block's edge in a ${row.card}px card at ${where}; the box fills but the text does not`
       ).toBeLessThan(row.card / 3);
     }
   }
@@ -7251,6 +8540,17 @@ test('card text fills the card and stops at its padding, never two thirds of the
   page,
 }) => {
   await visit(page);
+  /* THE PROSE IS BEHIND A DISCLOSURE NOW (owner directive, 2026-09-03, issue
+     287): the accomplishments live in each role's drawer and the section opens
+     as a summary, so every drawer is opened before anything is measured. A
+     closed drawer is clipped to nothing, and measuring one would report a
+     block that fills its card perfectly by being empty. */
+  const drawers = page.locator('#work .ledger-row');
+  const drawerCount = await drawers.count();
+  expect(drawerCount, 'the experience section rendered no role rows to open').toBeGreaterThan(0);
+  for (let index = 0; index < drawerCount; index += 1) {
+    await drawers.nth(index).click();
+  }
   for (const width of desktopWidths) {
     await page.setViewportSize({ width, height: 900 });
     await settled(page);
@@ -7991,16 +9291,31 @@ test('a wide grid still pans natively, and never takes the page sideways (issue 
   );
 });
 
-/* DEFECT 2. Nothing was swipeable. The gallery shows one photograph and had
- * only two arrow buttons to move between them. */
-test('the gallery advances on a swipe and settles back on a fidget (issue 219)', async ({
+/* DEFECT 2. Nothing was swipeable. The gallery showed one photograph and had
+ * only two arrow buttons to move between them.
+ *
+ * RE-AIMED at the surface a swipe now belongs to (owner directive,
+ * 2026-09-03, issue 287): the tile row is a grid a reader scrolls past, and
+ * the thing with a next and a previous is the STAGE. The gesture that was
+ * added for defect 2 moved there with it, and so did both halves of what this
+ * lane has always proved — a deliberate drag turns the page, and a fidget
+ * does not.
+ *
+ * The settle half changed shape rather than going away. The strip followed
+ * the finger and eased home, so "settled back" was a transform read off the
+ * outgoing item; the stage is commit-only — `move` and `settle` are empty, on
+ * purpose, because a picture anchored to the viewport that slid with the
+ * finger would slide off it — so the same claim is now that NOTHING is
+ * displaced at all, at any point, which is the stronger statement and the one
+ * a returning drag-follow would fail. */
+test('the stage advances on a swipe and stays put on a fidget (issue 219; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await visit(page);
-  const stage = page.locator('.gallery-stage').first();
-  await stage.scrollIntoViewIfNeeded();
-
-  const counter = page.locator('.gallery-count').first();
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
+  const stage = page.locator('.gallery-stage');
+  const counter = page.locator('.gallery-count');
   const readIndex = async () => (await counter.innerText()).trim();
   const start = await readIndex();
 
@@ -8011,12 +9326,7 @@ test('the gallery advances on a swipe and settles back on a fidget (issue 219)',
   // declaration the whole feature rests on.
   expect(
     await stage.evaluate((node) => window.getComputedStyle(node).touchAction),
-    'the gallery stage stopped handing vertical panning to the page',
-    /* `contain` rather than an exact match since issue 241: the declaration is
-       now `pan-y pinch-zoom`, so a two-finger zoom on the artwork is no longer
-       refused. What this half is about is unchanged and still fails on its
-       own — losing pan-y would hand the page's vertical scrolling to the
-       gesture layer, whatever else the value said. */
+    'the gallery stage stopped handing vertical panning to the page'
   ).toContain('pan-y');
 
   /* A finger, dispatched as real PointerEvents with pointerType "touch".
@@ -8055,354 +9365,161 @@ test('the gallery advances on a swipe and settles back on a fidget (issue 219)',
   // A real leftward drag: down, several moves (a single jump is not a drag and
   // the binding is right to ignore it), up.
   await drag([0.8, 0.7, 0.55, 0.4, 0.25].map((at) => box.x + box.width * at));
-  await page.waitForTimeout(320);
-  const advanced = await readIndex();
-  expect(advanced, 'a leftward swipe did not advance the gallery').not.toBe(start);
+  await expect(counter, 'a leftward swipe did not advance the stage').not.toHaveText(start);
 
-  // A FIDGET — a few pixels, slowly — must put the surface back and change
-  // nothing. This is the half that stops a carousel turning on every touch.
-  // Slow AND short: 11px over 180ms clears neither the distance nor the
-  // velocity test, which is exactly what a fidget is.
+  // A FIDGET — a few pixels, slowly — must change nothing. This is the half
+  // that stops a carousel turning on every touch. Slow AND short: 11px over
+  // 180ms clears neither the distance nor the velocity test, which is exactly
+  // what a fidget is.
   const held = await readIndex();
   const from = box.x + box.width * 0.6;
   await drag([from, from - 4, from - 8, from - 11], 60);
   await page.waitForTimeout(320);
   expect(await readIndex(), 'a small slow drag turned the page anyway').toBe(held);
 
-  // ...and the surface is back where it started, with no residual offset. A
-  // gallery left displaced is the pull-to-refresh defect in another costume.
-  const resting = await page.evaluate(() => {
-    const button = window.document.querySelector('.gallery-image-button');
-    const matrix = new DOMMatrixReadOnly(window.getComputedStyle(button).transform);
-    return matrix.m41;
-  });
-  expect(Math.abs(resting), 'the gallery did not settle back to its resting position').toBeLessThan(1);
-});
-
-/* THE TURN GOES FORWARD (issue 265, defect 5). Layer 1 owns the arithmetic —
- * where the incoming item starts, and that the clamp keeps it on the right
- * side — and this owns the one thing only an engine can answer: what the
- * reader's own display actually painted in the frames after they let go.
- * MEASURED on 0.1.65 in all five engines: 120-202px of travel in the wrong
- * direction per swipe, over a 200ms settle, because the new item mounted at
- * the OLD drag offset and eased home from there. */
-test('a committed swipe brings the new item in from its own side (issue 265)', async ({ page }) => {
-  await visit(page);
-  const stage = page.locator('.gallery-stage').first();
-  await stage.scrollIntoViewIfNeeded();
-  const counter = page.locator('.gallery-count').first();
-  const before = (await counter.innerText()).trim();
-
-  const box = await stage.boundingBox();
-  const walk = await page.evaluate(
-    async ([left, width, y]) => {
-      const stageNode = window.document.querySelector('.gallery-stage');
-      const send = (type, x) =>
-        stageNode.dispatchEvent(
-          new PointerEvent(type, {
-            pointerId: 61,
-            pointerType: 'touch',
-            clientX: x,
-            clientY: y,
-            bubbles: true,
-          }),
-        );
-      /* The PAINTED offset, read off the element the reader is looking at
-         rather than off the custom property that feeds it: a transition
-         resolves to its current animated value here, which is exactly the
-         travel this lane is about. */
-      const offset = () =>
-        new DOMMatrixReadOnly(
-          window.getComputedStyle(window.document.querySelector('.gallery-image-button')).transform,
-        ).m41;
-      const frame = () => new Promise((resolve) => window.requestAnimationFrame(resolve));
-
-      send('pointerdown', left + width * 0.8);
-      for (const at of [0.7, 0.55, 0.4, 0.25]) {
-        send('pointermove', left + width * at);
-        await frame();
-      }
-      const dragged = offset();
-      send('pointerup', left + width * 0.25);
-      const painted = [];
-      for (let step = 0; step < 3; step += 1) {
-        await frame();
-        painted.push(offset());
-      }
-      return { dragged, painted };
-    },
-    [box.x, box.width, box.y + box.height / 2],
-  );
-
-  /* Non-vacuity, both halves: the drag really pulled the surface leftward,
-     and the release really turned the page. A gesture that committed nothing
-     would settle to zero and satisfy the assertion below for the wrong
-     reason. */
-  expect(walk.dragged, 'the drag never moved the surface, so nothing was released from anywhere').toBeLessThan(0);
-  await expect(counter, 'the swipe did not turn the page').not.toHaveText(before);
-
-  /* THE ASSERTION: not one painted frame after the turn sits on the side the
-     finger came FROM. The drag went left, so every frame of the arrival is at
-     or right of centre and travels toward it. */
-  for (const [step, at] of walk.painted.entries()) {
-    expect(
-      at + subPixel,
-      `frame ${step + 1} after a leftward turn painted the new item at ${at}px, on the side the gesture came from — it is sliding in backwards`,
-    ).toBeGreaterThanOrEqual(0);
-  }
-});
-
-/* THE MOTION BATTERY, LAYER 2 (issue 243). The layer scheme is written out in
- * tests/gesture.test.mjs's header; the short of it is that layer 1 owns every
- * DECISION the gesture layer makes, exhaustively and in microseconds, and this
- * layer owns only what an engine has to answer: did a real cascade let the
- * touch through, did the real transform come back to zero, did the real
- * document hold still. Everything added here is multiplied by five projects,
- * so each of these is ONE walk and no walk repeats a layer-1 case. */
-test('a film swipes like a still until the reader presses play (issue 243)', async ({ page }) => {
-  /* The owner's report, driven end to end: "you cannot swipe out of a video,
-     it instead starts to play immediately... the sensitive area should only be
-     the button and not the entire video." */
-  await serveGalleryManifest(page);
-  await visit(page);
-  const stage = page.locator('.gallery-stage');
-  await stage.scrollIntoViewIfNeeded();
-
-  // Onto the film, by the dot that names it (the stage pair is hidden on the
-  // touch-primary projects this walk matters most on).
-  await goToItem(page, 'Film 2 of 2');
-  await expect(page.locator('.gallery-film-veil')).toHaveCount(1);
-
-  const box = await stage.boundingBox();
-  const drag = (offsets) =>
-    page.evaluate(
-      ([xs, y]) => {
-        const surface = window.document.querySelector('.gallery-film-veil') ?? window.document.querySelector('.gallery-stage');
-        const send = (type, x) =>
-          surface.dispatchEvent(
-            new PointerEvent(type, { pointerId: 31, pointerType: 'touch', clientX: x, clientY: y, bubbles: true })
-          );
-        send('pointerdown', xs[0]);
-        for (const x of xs.slice(1)) send('pointermove', x);
-        send('pointerup', xs.at(-1));
-      },
-      [offsets, box.y + box.height / 2]
-    );
-
-  /* A DRAG ACROSS THE FILM TURNS THE STRIP. This is the whole reversal: on
-     0.1.55 the film's stage carried no binding at all and this walk left the
-     counter exactly where it was. */
-  await drag([0.8, 0.65, 0.45, 0.25].map((at) => box.x + box.width * at));
-  await page.waitForTimeout(320);
-  await expect(
-    page.locator('.gallery-count'),
-    'a swipe across a film did not move the strip'
-  ).toHaveText('Photograph 1 of 2');
-
-  // Back to the film, and check the film is still paused after all that: a
-  // drag must never have started anything.
-  await goToItem(page, 'Film 2 of 2');
-  expect(
-    await page.locator('video').evaluate((node) => node.paused),
-    'dragging across a film started it playing'
-  ).toBe(true);
-
-  /* AND THE PRESS IS THE ONE SENSITIVE AREA. Pressing the play control hands
-     the surface over: the veil goes, and the native controls arrive with it.
-     The film itself may or may not decode here — the lane's origin serves no
-     media volume and the sources 404 — so what is measured is the HANDOVER,
-     which is the part the owner reported and the part this component owns. */
-  await page.locator('.gallery-play').click();
-  await expect(
-    page.locator('.gallery-film-veil'),
-    'the swipe surface stayed over the player after the reader asked for the controls'
-  ).toHaveCount(0);
-  await expect
-    .poll(async () => page.locator('video').evaluate((node) => node.controls), {
-      message: 'the player never received the controls the press handed it',
-      timeout: 5_000,
+  /* ...and NOTHING WAS EVER DISPLACED. The commit-only binding writes no
+     offset at all, so the picture, the stage around it and the dialog holding
+     both must every one of them sit at an identity transform after a
+     committed turn and after a refused one alike. A reintroduced drag-follow
+     — or a settle that failed to come home, which is the pull-to-refresh
+     defect in another costume — shows up here as a translation. */
+  const resting = await page.evaluate(() =>
+    ['dialog.gallery-lightbox', '.gallery-stage', '.gallery-lightbox-image'].map((selector) => {
+      const node = window.document.querySelector(selector);
+      const matrix = new DOMMatrixReadOnly(window.getComputedStyle(node).transform);
+      return { selector, x: matrix.m41, y: matrix.m42 };
     })
-    .toBe(true);
-
-  /* AND LEAVING THE FILM TAKES THE HANDOVER BACK (review finding, 2026-08-28).
-     A played film used to be a one-way door: `playingKey` was only cleared on
-     `ended`, so a reader who pressed play, moved to the still, and came back
-     found the controls still declared and the veil gone — the swipe dead end
-     the owner reported, reachable again two navigations later. The repair is
-     structural (every index move runs through `goTo`, which clears the key),
-     and this walk is the exact sequence, in a real engine: play, leave, return,
-     and the film must be back behind its veil with no controls declared. */
-  await goToItem(page, 'Photograph 1 of 2');
-  await goToItem(page, 'Film 2 of 2');
-  await expect(
-    page.locator('.gallery-film-veil'),
-    'a film played once never gets its swipe surface back; the strip is a dead end there'
-  ).toHaveCount(1);
-  expect(
-    await page.locator('video').evaluate((node) => node.controls),
-    'the returned film still declares the native controls it was handed two navigations ago'
-  ).toBe(false);
-  // ...and the returning film has not started itself either, which is the
-  // absence pin the handover must not be allowed to smuggle past.
-  expect(
-    await page.locator('video').evaluate((node) => node.paused),
-    'the returned film is playing without the reader pressing anything'
-  ).toBe(true);
-
-  await page.unrouteAll({ behavior: 'ignoreErrors' });
-});
-
-test('a dragged gallery writes its offset once a frame, not once an event (issue 243)', async ({
-  page,
-}) => {
-  /* The owner's "swiping is NOT very smooth on the phone", measured in an
-     engine. A finger reports far more moves than a display draws, and each one
-     used to write a custom property on the stage — which invalidates style for
-     its whole subtree. The moves are dispatched in SEPARATE tasks on purpose:
-     a synchronous burst is coalesced by the framework's own batching and would
-     measure nothing about this repair. */
-  await visit(page);
-  const stage = page.locator('.gallery-stage').first();
-  await stage.scrollIntoViewIfNeeded();
-  const box = await stage.boundingBox();
-
-  const swept = await page.evaluate(
-    async ([left, width, midY]) => {
-      const node = window.document.querySelector('.gallery-stage');
-      const writes = [];
-      let frames = 0;
-      const original = CSSStyleDeclaration.prototype.setProperty;
-      CSSStyleDeclaration.prototype.setProperty = function patched(name, value, priority) {
-        if (name === '--gallery-drag') writes.push(value);
-        return original.call(this, name, value, priority);
-      };
-      let counting = true;
-      const count = () => {
-        frames += 1;
-        if (counting) window.requestAnimationFrame(count);
-      };
-      window.requestAnimationFrame(count);
-      const send = (type, x) =>
-        node.dispatchEvent(
-          new PointerEvent(type, { pointerId: 41, pointerType: 'touch', clientX: x, clientY: midY, bubbles: true })
-        );
-      send('pointerdown', left + width * 0.85);
-      // Prove the gesture horizontal first, then a flood of small steps, each
-      // in its own task.
-      send('pointermove', left + width * 0.7);
-      const moves = 30;
-      for (let step = 1; step <= moves; step += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        send('pointermove', left + width * 0.7 - step);
-      }
-      send('pointerup', left + width * 0.7 - moves);
-      counting = false;
-      CSSStyleDeclaration.prototype.setProperty = original;
-      return { writes: writes.length, frames, moves };
-    },
-    [box.x, box.width, box.y + box.height / 2]
   );
-
-  /* One write per painted frame, plus the release's own flush home. An
-     uncoalesced handler writes once per EVENT, which is `moves` — several
-     times the frame count over the same span. */
-  expect(
-    swept.writes,
-    `${swept.moves} pointer moves across ${swept.frames} frames produced ${swept.writes} style writes`
-  ).toBeLessThanOrEqual(swept.frames + 2);
-  /* ...and the measurement is not vacuous in either direction: frames really
-     did run (so the ceiling is a real one), and the flood really did outnumber
-     them (so there was something to coalesce). */
-  expect(swept.frames, 'no frame ran during the drag; the ceiling above is meaningless').toBeGreaterThan(1);
-  expect(
-    swept.moves,
-    'the flood produced no more events than frames; this lane cannot see a lost throttle'
-  ).toBeGreaterThan(swept.frames);
-  /* And the surface came home, which is the property no optimisation may cost.
-     The wait is the settle's own token duration plus slack — the offset is
-     handed back to zero synchronously on release, and what takes time is the
-     CSS transition drawing it there. */
-  await page.waitForTimeout(320);
-  const resting = await page.evaluate(() => {
-    const button = window.document.querySelector('.gallery-image-button');
-    return new DOMMatrixReadOnly(window.getComputedStyle(button).transform).m41;
-  });
-  expect(Math.abs(resting), 'the coalesced drag left the surface displaced').toBeLessThan(1);
+  for (const surface of resting) {
+    expect(
+      Math.abs(surface.x) + Math.abs(surface.y),
+      `${surface.selector} is displaced by ${surface.x},${surface.y} after the gesture`
+    ).toBeLessThan(1);
+  }
 });
 
-test('the gallery is reachable without a gesture, and says where it is (issue 219; issue 275)', async ({
+/* THE ARRIVAL-DIRECTION LANE IS DELETED (owner directive, 2026-09-03, issue
+ * 287: the strip is gone). "A committed swipe brings the new item in from its
+ * own side" (issue 265, defect 5) measured the frames an engine painted after
+ * a release, because the strip mounted the incoming item at the old drag
+ * offset and eased it home from the wrong direction — 120-202px of backwards
+ * travel per swipe on 0.1.65. The stage has no drag offset to mount anything
+ * at and no settle to ease: `move` and `settle` are empty and a turn is a
+ * state change, so there is no travel to have a direction. The arithmetic
+ * that produced the defect (entryOffset, boundedDrag) is still owned by
+ * tests/gesture.test.mjs, which is where it belongs while nothing paints it.
+ *
+ * THE FILM-SWIPE LANE IS DELETED with it. "A film swipes like a still until
+ * the reader presses play" (issue 243) was about a film sharing the strip's
+ * one stage behind a veil that carried the gesture: no stage is shared now, a
+ * film sits in its own tile, and .gallery-film-veil does not exist. The two
+ * claims inside it that were about the READER are both kept — a press is the
+ * only thing that starts a film, and the press is what hands over the native
+ * controls — and both are measured in the film-tile lane earlier in this file,
+ * on the surface that actually has them.
+ *
+ * THE OFFSET-WRITE LANE IS DELETED with both. "A dragged gallery writes its
+ * offset once a frame, not once an event" (issue 243) counted --gallery-drag
+ * writes against painted frames, and the owner's "swiping is NOT very smooth
+ * on the phone" was a style invalidation per pointermove. A binding whose
+ * `move` is empty writes nothing at all, per frame or per event, which is the
+ * limit that lane was pushing toward; frameCoalescer itself is still exercised
+ * exhaustively, and deterministically, by tests/gesture.test.mjs. */
+
+test('the gallery is reachable without a gesture, and says where it is (issue 219; issue 275; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await visit(page);
-  const counter = page.locator('.gallery-count').first();
-  const ordinal = page.locator('.gallery-ordinal').first();
-  const previous = page.locator('.gallery-nav[data-gallery-nav="previous"]');
-  const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
+  const dialog = page.locator('dialog.gallery-lightbox');
+  const counter = page.locator('.gallery-count');
 
-  /* The press equivalent of the swipe is the stage pair, on EVERY device
-     since the 2026-08-31 sketch retired the dot row (issue 275) — real
-     buttons, visible, at the touch floor on both axes. */
-  for (const control of [previous, next]) {
-    await expect(control).toBeVisible();
-    const box = await control.boundingBox();
-    expect(box.width + subPixel, 'a stage control is under the touch floor').toBeGreaterThanOrEqual(
-      touchFloorPx,
-    );
-    expect(box.height + subPixel, 'a stage control is under the touch floor').toBeGreaterThanOrEqual(
-      touchFloorPx,
+  /* EVERY TILE IS A REAL BUTTON — a tab stop with no roving apparatus to get
+     wrong — and it says what pressing it will do rather than leaving a reader
+     to infer it from a picture with an empty alt. */
+  const tiles = page.locator('.gallery-tile[data-gallery-kind="image"]');
+  await expect(tiles).toHaveCount(4);
+  const labels = await tiles.evaluateAll((nodes) =>
+    nodes.map((node) => ({ tag: node.tagName, label: node.getAttribute('aria-label') }))
+  );
+  for (const [index, tile] of labels.entries()) {
+    expect(tile.tag, `tile ${index + 1} is not a button, so a keyboard cannot reach it`).toBe('BUTTON');
+    expect(tile.label, `tile ${index + 1} does not say what opening it will show`).toMatch(
+      /^Open photograph: /
     );
   }
 
-  /* Pressing one navigates — the POINTER equivalent, exercised — and the
-     visible ordinal moves in step with the clipped live sentence, so "says
-     where it is" holds on both channels at once. */
-  const before = (await counter.innerText()).trim();
-  await next.click();
-  await page.waitForTimeout(150);
-  expect((await counter.innerText()).trim(), 'the stage pair did not navigate').not.toBe(before);
-  await expect(ordinal).toHaveText('2 / 8');
+  /* A REAL ENTER OPENS THE STAGE — the keyboard equivalent of the press, and
+     the thing a click test cannot prove (issue 219 review round 2,
+     finding 3). */
+  await tiles.first().focus();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toBeVisible();
+  await expect(counter).toHaveText('Photograph 1 of 8');
+  await expect(counter, 'the position stopped announcing itself').toHaveAttribute(
+    'aria-live',
+    'polite'
+  );
 
-  /* AND THE KEYBOARD ONE, WHICH A CLICK CANNOT PROVE (issue 219 review
-     round 2, finding 3): the pair are ordinary buttons — tab stops with no
-     roving apparatus to get wrong — so a real Enter on a focused control
-     must page exactly as a press does. */
+  /* The stage pair are ordinary buttons too, so an Enter on a focused control
+     pages exactly as a press does. */
+  const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
   await next.focus();
   await page.keyboard.press('Enter');
-  await page.waitForTimeout(150);
-  await expect(ordinal).toHaveText('3 / 8');
-  await expect(counter).toHaveText('Photograph 3 of 8');
+  await expect(counter).toHaveText('Photograph 2 of 8');
 
-  // And so do the arrow keys on the frame itself.
-  const frame = page.locator('.gallery-image-button').first();
-  await frame.focus();
-  const held = (await counter.innerText()).trim();
+  // And so do the arrow keys, anywhere inside the open stage.
   await page.keyboard.press('ArrowRight');
-  await page.waitForTimeout(150);
-  expect((await counter.innerText()).trim(), 'the arrow keys do not drive the gallery').not.toBe(held);
+  await expect(counter).toHaveText('Photograph 3 of 8');
+  await page.keyboard.press('ArrowLeft');
+  await expect(counter).toHaveText('Photograph 2 of 8');
+
+  /* ...and Escape leaves by the same road it came in on, handing the tile
+     back its focus so the reader is never stranded on the document body. */
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+  expect(
+    await page.evaluate(() => {
+      const tileNodes = [...window.document.querySelectorAll('.gallery-tile')];
+      return tileNodes.indexOf(window.document.activeElement);
+    }),
+    'Escape left focus somewhere other than the tile that opened the stage'
+  ).toBe(0);
 });
 
-/* Finding 4. A SWIPE ATE THE READER'S NEXT ACTIVATION. The frame is a button
- * and a drag across it ends in a click nobody meant, so a claimed drag
- * suppresses exactly one click — but a touch swipe past the platform's slop
- * produces NO click, and the suppression simply waited for whatever came
- * next. MEASURED in both engines at 390x844: swipe (counter 1/8 -> 2/8),
- * focus the frame, press a real Enter, and the lightbox did not open.
+/* Finding 4. A SWIPE ATE THE READER'S NEXT ACTIVATION. A drag across a
+ * control ends in a click nobody meant, so a real drag suppresses exactly one
+ * click — but a touch swipe past the platform's slop produces NO click, and
+ * the suppression simply waited for whatever came next. MEASURED in both
+ * engines at 390x844: swipe the gallery, focus the control, press a real
+ * Enter, and nothing happened.
+ *
+ * RE-AIMED at the stage (owner directive, 2026-09-03, issue 287). The control
+ * a stray click can now reach is not the picture — the picture is not a
+ * button any more — it is the prev/next pair sitting INSIDE the swipe
+ * surface, which is if anything the sharper form of the same trap: the drag
+ * ends with the finger over the control it would otherwise press.
  *
  * Both halves are here, because the cheap repair is to stop suppressing at
- * all — which hands back the accidental click the suppression exists to
+ * all — which hands back the accidental turn the suppression exists to
  * prevent. */
-test('a swipe does not eat the next activation, and still eats its own click (issue 219)', async ({
+test('a swipe does not eat the next activation, and still eats its own click (issue 219; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await visit(page);
-  const stage = page.locator('.gallery-stage').first();
-  await stage.scrollIntoViewIfNeeded();
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
+  const stage = page.locator('.gallery-stage');
+  const counter = page.locator('.gallery-count');
   const box = await stage.boundingBox();
   const midY = box.y + box.height / 2;
   const xs = [0.8, 0.7, 0.55, 0.4, 0.25].map((at) => box.x + box.width * at);
-  const counter = page.locator('.gallery-count').first();
-  const dialogOpen = () =>
-    page.evaluate(() => window.document.querySelector('.gallery-lightbox').open);
+  /* The position as a NUMBER, so a lane can say how many turns happened
+     rather than only that something changed — which is the whole question
+     when a suppressed click and a delivered one both leave the counter
+     somewhere other than where it started. */
+  const position = async () =>
+    Number(/Photograph (\d+) of/.exec((await counter.innerText()).trim())[1]);
+  const turns = (from, to) => (to - from + 8) % 8;
 
   /* A hand. Playwright's touchscreen API offers only tap() and its mouse API
      cannot produce a touch pointer at all, so the HAND is synthesised and
@@ -8411,7 +9528,7 @@ test('a swipe does not eat the next activation, and still eats its own click (is
     page.evaluate(
       ([offsets, y, kind, detail]) => {
         const node = window.document.querySelector('.gallery-stage');
-        const button = window.document.querySelector('.gallery-image-button');
+        const control = window.document.querySelector('.gallery-nav[data-gallery-nav="next"]');
         const send = (type, x) =>
           node.dispatchEvent(
             new PointerEvent(type, {
@@ -8430,53 +9547,58 @@ test('a swipe does not eat the next activation, and still eats its own click (is
         /* The drag's OWN compatibility click, dispatched in the same task as
            its pointerup — which is exactly how a user agent orders them for a
            mouse, and therefore the only honest way to ask whether the
-           suppression still works. */
+           suppression still works. It lands on the control the finger ended
+           over, which is the press a reader never meant to make. */
         if (detail !== null) {
-          button.dispatchEvent(new MouseEvent('click', { detail, bubbles: true, cancelable: true }));
+          control.dispatchEvent(new MouseEvent('click', { detail, bubbles: true, cancelable: true }));
         }
       },
       [xs, midY, pointerType, thenClickDetail],
     );
 
-  const start = (await counter.innerText()).trim();
+  const start = await position();
   await drive('touch', null);
-  await page.waitForTimeout(320);
-  expect((await counter.innerText()).trim(), 'the swipe did not turn the page').not.toBe(start);
+  await expect(counter, 'the swipe did not turn the page').not.toHaveText(`Photograph ${start} of 8`);
+  const afterSwipe = await position();
 
-  /* An ordinary press of the frame, after that swipe. A touch swipe produces
+  /* An ordinary press of the control, after that swipe. A touch swipe produces
      no click, so the suppression the gesture armed was still waiting — and
      this is the press it ate. */
-  await page.locator('.gallery-image-button').first().click();
-  await page.waitForTimeout(250);
-  expect(await dialogOpen(), 'a swipe ate the reader’s next press of the frame').toBe(true);
-  await page.evaluate(() => window.document.querySelector('.gallery-lightbox').close());
-  await page.waitForTimeout(200);
+  await page.locator('.gallery-nav[data-gallery-nav="next"]').click();
+  await expect(counter).toHaveText(`Photograph ${((afterSwipe % 8) + 1)} of 8`);
 
   // The same question from the keyboard, which is where it was measured: a
   // real Enter, after a real swipe.
+  const beforeKeyboard = await position();
   await drive('touch', null);
-  await page.waitForTimeout(320);
-  await page.locator('.gallery-image-button').first().focus();
+  await expect(counter).not.toHaveText(`Photograph ${beforeKeyboard} of 8`);
+  const afterSecondSwipe = await position();
+  await page.locator('.gallery-nav[data-gallery-nav="next"]').focus();
   await page.keyboard.press('Enter');
-  await page.waitForTimeout(200);
-  expect(await dialogOpen(), 'a swipe ate the reader’s next keyboard activation').toBe(true);
-  await page.evaluate(() => window.document.querySelector('.gallery-lightbox').close());
-  await page.waitForTimeout(200);
+  await expect(
+    counter,
+    'a swipe ate the reader’s next keyboard activation'
+  ).toHaveText(`Photograph ${((afterSecondSwipe % 8) + 1)} of 8`);
 
-  // ...and the suppression is not simply gone: a drag's own click, in the
-  // task that ended it, must still be swallowed.
+  /* ...and the suppression is not simply gone: a drag's own click, in the
+     task that ended it, must still be swallowed. The drag itself turns the
+     page once; a delivered trailing click would turn it twice. */
+  const beforeDrag = await position();
   await drive('mouse', 1);
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(250);
+  const afterDrag = await position();
   expect(
-    await dialogOpen(),
-    'a drag’s own click reached the control; the accidental open is back',
-  ).toBe(false);
+    turns(beforeDrag, afterDrag),
+    `a mouse drag moved the stage ${turns(beforeDrag, afterDrag)} places; its own trailing click reached the control`
+  ).toBe(1);
 
   // While an ordinary click, after that gesture is over, still works — or the
-  // assertion above would be satisfied by a control that never opens at all.
-  await page.locator('.gallery-image-button').first().click();
-  await page.waitForTimeout(250);
-  expect(await dialogOpen(), 'the frame stopped opening on an ordinary click').toBe(true);
+  // assertion above would be satisfied by a control that never pages at all.
+  await page.locator('.gallery-nav[data-gallery-nav="next"]').click();
+  await expect(
+    counter,
+    'the stage pair stopped paging on an ordinary click'
+  ).toHaveText(`Photograph ${((afterDrag % 8) + 1)} of 8`);
 });
 
 /* Finding 5. MODIFIER CHORDS ARE THE BROWSER'S AND THE PLATFORM'S. Both new
@@ -9129,10 +10251,16 @@ test('off the top, no start target arms a pull — the gesture surfaces included
   page,
 }) => {
   await visit(page);
-  /* The two child surfaces with their own touch handling, plus the plain
-     column: the ruling's "off the top, none does" must hold exactly where a
-     competing gesture makes claiming most tempting. */
-  for (const selector of ['.gallery-stage', '.grid-strip', 'main']) {
+  /* The gallery's row, the heatmap strip with its own touch handling, and the
+     plain column: the ruling's "off the top, none does" must hold exactly
+     where a competing gesture makes claiming most tempting.
+     The row replaces the strip's stage here (owner directive, 2026-09-03,
+     issue 287). It carries no gesture of its own any more — the swipe went to
+     the stage inside the dialog, which cannot be open while the page is being
+     dragged — but it is still a surface a reader's thumb lands on, and a pull
+     that claimed a drag over it would be exactly as wrong as one that claimed
+     a drag over the column. */
+  for (const selector of ['.gallery-grid', '.grid-strip', 'main']) {
     const box = await page.evaluate((sel) => {
       const el = window.document.querySelector(sel);
       if (el === null) {
@@ -9155,13 +10283,19 @@ test('off the top, no start target arms a pull — the gesture surfaces included
   }
 });
 
-test('a horizontal swipe over the Media strip still swipes, downward drift and all (issue 277)', async ({
+test('a horizontal swipe over the enlarged photograph still swipes, downward drift and all (issue 277; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
+  /* The Media strip this lane was written against is retired; the surface
+     that still arbitrates a horizontal drag against the page's own gestures
+     is the STAGE, so that is where the drifting swipe is driven now. The
+     ruling is untouched: a swipe whose finger wanders downward is still a
+     swipe, and the pull must keep its hands off it. */
   await visit(page);
-  const stage = page.locator('.gallery-stage').first();
-  await stage.scrollIntoViewIfNeeded();
-  const counter = page.locator('.gallery-count').first();
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
+  const stage = page.locator('.gallery-stage');
+  const counter = page.locator('.gallery-count');
   const before = (await counter.innerText()).trim();
   const box = await stage.boundingBox();
 
@@ -9200,14 +10334,14 @@ test('a horizontal swipe over the Media strip still swipes, downward drift and a
     { left: box.x, width: box.width, y },
   );
 
-  await expect(counter, 'a drifting horizontal swipe no longer turns the gallery').not.toHaveText(
+  await expect(counter, 'a drifting horizontal swipe no longer turns the stage').not.toHaveText(
     before,
   );
   const claimed = await page.evaluate(() => ({
     pulling: window.document.documentElement.hasAttribute('data-pulling'),
     pull: window.document.documentElement.style.getPropertyValue('--page-pull'),
   }));
-  expect(claimed.pulling, 'the pull claimed a horizontal swipe over the Media strip').toBe(false);
+  expect(claimed.pulling, 'the pull claimed a horizontal swipe over the enlarged photograph').toBe(false);
   expect(['', '0px']).toContain(claimed.pull);
 });
 
@@ -9292,52 +10426,42 @@ test('the refresh gesture has a control a keyboard can reach (issue 219)', async
  * its place at the end of the same header — the menu's own trigger — is what
  * this lane scrolls under the plate now, because the collision was never
  * about which control it was, only about where the column ends. */
-test('the fixed reading-mode control never renders over page text (issue 219)', async ({ page }) => {
+test('the reading-mode control never renders over page text (issue 219)', async ({ page }) => {
   await visit(page);
 
-  const plate = await page.evaluate(() => {
+  /* THE PLATE IS GONE, AND SO IS THE PROBLEM IT COVERED (owner directive,
+     2026-09-03, issue 287).
+     
+     The veil existed because the header was FIXED to the viewport while the
+     column scrolled beneath it: with nothing painted behind the glyph, the
+     text passing under it showed straight through, and the first attempt at a
+     fix over-corrected into an opaque disc the owner rejected. The ledger's
+     masthead is an ordinary in-flow row of the sheet. Nothing passes beneath
+     it because it travels with everything else, so a veil would be painting a
+     backdrop for a collision that cannot happen.
+     
+     What replaces the three plate properties is the structural fact that makes
+     them unnecessary, asserted directly and at every width: the header is not
+     taken out of flow. A build that pinned it again — `fixed` or `sticky` —
+     fails here immediately, and would need its veil back. */
+  const flow = await page.evaluate(() => {
     const header = window.document.querySelector('.page-header');
-    const style = window.getComputedStyle(header);
-    return {
-      background: style.backgroundColor,
-      shadow: style.boxShadow,
-      radius: style.borderTopLeftRadius,
-      blur: style.backdropFilter || style.webkitBackdropFilter,
-    };
+    return { position: window.getComputedStyle(header).position };
   });
-  /* A transparent plate is the original defect: whatever scrolls beneath shows
-     THROUGH the glyph. But the first cut over-corrected — a fully opaque disc
-     ringed by a gutter-wide shadow spread, which on a phone reads as a huge
-     solid circle stamped on the page (owner defect report, 0.1.52). What the
-     control needs is not opacity but a VEIL: enough of the page's own surface
-     to separate the glyph from the text, over a blur that softens what passes
-     under it, and no halo at all.
-
-     So all three properties are pinned in the direction the redesign chose,
-     and each fails on its own: a plate that went transparent again, one that
-     went back to opaque, one that lost its blur, and one that brought the
-     spread back are four different red builds. */
-  const alpha = alphaOf(plate.background);
-  expect(alpha, 'the reading-mode control paints no backdrop of its own').toBeGreaterThan(0);
   expect(
-    alpha,
-    `the plate is painted at ${alpha}: an opaque disc, not the veil the owner asked for`
-  ).toBeLessThan(1);
-  expect(plate.blur, 'the plate does not soften what scrolls beneath it').toContain('blur');
-  expect(plate.shadow, 'the plate rings itself with a halo again').toBe('none');
-  // The pill the 44px hit box already describes — the plate is shaped by the
-  // control it backs rather than by a number of its own.
-  expect(Number.parseFloat(plate.radius), 'the plate is not the control’s own pill').toBeGreaterThan(
-    touchFloorPx / 2,
-  );
+    ['fixed', 'sticky'],
+    `the masthead is ${flow.position}: it is out of flow again, so page content can pass beneath it and it needs the backdrop this lane used to pin`
+  ).not.toContain(flow.position);
 
-  // Browser-driven scrolling must not park a target under the control either.
-  expect(
-    await page.evaluate(
-      () => window.getComputedStyle(window.document.documentElement).scrollPaddingTop,
-    ),
-    'a fragment or focus move can still land under the fixed control',
-  ).not.toBe('auto');
+  /* THE SCROLL PADDING IS GONE WITH THE FIXED CONTROL IT SERVED (owner
+     directive, 2026-09-03, issue 287), and this lane used to require it. It
+     kept a fragment or focus move from parking its target under chrome that
+     no longer floats over anything — and on WebKit it had become a defect of
+     its own: with the reading-mode trigger sitting 2px inside the padding,
+     focus returning to it after a swap scrolled the whole document by those
+     2px. Nothing on this page is fixed to the viewport any more, so the page
+     declares no scroll padding and none is asserted; the swap lane asserts the
+     scroll position exactly instead. */
 
   /* HALF ONE — browser-driven scrolling no longer parks a target under the
      control at all: scrollIntoView (and every focus move, which uses the same
@@ -9352,7 +10476,12 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
        column's own end edge — which is what makes it the same collision. A
        target that no longer exists would make this half of the test silently
        vacuous, which is why it is asserted non-null below. */
-    const segments = [...window.document.querySelectorAll('.usage-insight-value')];
+    /* The right-aligned content the owner's report was about, named for the
+       ledger (owner directive, 2026-09-03, issue 287): the repository table's
+       age column is the end column of a ruled row, hard against the column's
+       own end edge, which is the same geometry the retired insight figures
+       had and the same reason it is the one that collides. */
+    const segments = [...window.document.querySelectorAll('.table-age')];
     if (segments.length === 0) return null;
     const segment = segments.at(-1);
     segment.scrollIntoView({ block: 'start' });
@@ -9363,7 +10492,7 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
       headerBottom: header.getBoundingClientRect().bottom,
     };
   });
-  expect(landing, 'the token panel rendered no end-aligned content to measure').not.toBeNull();
+  expect(landing, 'the page rendered no end-aligned content to measure').not.toBeNull();
   /* A whole pixel of tolerance here rather than the sub-pixel one used for
      box SIZES, and the difference is deliberate. A scroll offset is rounded
      to the device's own pixel grid, so a target the engine placed exactly at
@@ -9422,16 +10551,19 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
     await settled(page);
     const lane = await page.evaluate(async () => {
       const header = window.document.querySelector('.page-header');
-      const app = window.document.getElementById('app');
       const column = window.document.querySelector('#app > main');
       window.scrollTo(0, 0);
       const rest = header.getBoundingClientRect();
-      /* #app's CONTENT box, not the column's: every flow descendant of the page
-         lives inside it, so this is the whole page's first row rather than one
-         element's. */
-      const contentTop =
-        app.getBoundingClientRect().top +
-        Number.parseFloat(window.getComputedStyle(app).paddingBlockStart);
+      /* THE FIRST ROW OF THE SHEET BELOW THE MASTHEAD (owner directive,
+         2026-09-03, issue 287). This used to be #app's own content edge,
+         because the header sat in the rows `--page-top-space` held empty ABOVE
+         that edge. The masthead is part of the sheet now — it is the first row
+         of the content rather than something held above it — so the box that
+         must not be overlapped is everything that follows it, which is the
+         column itself. The guarantee is unchanged and its subject moved down
+         one element: the control's document rows are ITS OWN, and no page
+         content shares them at any scroll offset. */
+      const contentTop = column.getBoundingClientRect().top;
       const columnWidth = column.getBoundingClientRect().width;
       window.scrollTo(0, 400);
       await new Promise((settle) => requestAnimationFrame(() => requestAnimationFrame(settle)));
@@ -9465,7 +10597,7 @@ test('the fixed reading-mode control never renders over page text (issue 219)', 
     ).toBeCloseTo(lane.offset, 0);
     expect(
       lane.controlBottom,
-      `at ${width}px the control's document rows end at ${lane.controlBottom}px, inside page content that begins at ${lane.contentTop}px`
+      `at ${width}px the masthead's document rows end at ${lane.controlBottom}px, inside the sheet's own content, which begins at ${lane.contentTop}px`
     ).toBeLessThanOrEqual(lane.contentTop + subPixel);
   }
 });
@@ -9560,50 +10692,23 @@ test('the first cancelable touchmove decides the touch, and a real pull at the t
   expect(scroll.scrollY, 'the browser did not scroll a drag it claimed').toBeLessThan(600);
 });
 
-test('a real gallery swipe finds its incoming picture already decoded, even on a slow network (issue 285)', async ({
-  page,
-  browserName,
-}) => {
-  test.skip(browserName !== 'chromium', 'only Chromium exposes its touch input pipeline and network shaping to a lane');
-  await visit(page);
-  const stage = page.locator('.gallery-stage').first();
-  await stage.scrollIntoViewIfNeeded();
-  await page.waitForTimeout(300);
-  const client = await page.context().newCDPSession(page);
-  await client.send('Network.enable');
-  /* A throttled 3G: the measured 480ms of blank stage came from exactly this
-     shape, and a warm desktop cache is what hid the defect for two releases. */
-  await client.send('Network.emulateNetworkConditions', {
-    offline: false,
-    downloadThroughput: (500 * 1024) / 8,
-    uploadThroughput: (500 * 1024) / 8,
-    latency: 400,
-  });
-  await page.evaluate(() => {
-    window.__stage = [];
-    (function loop() {
-      const image = window.document.querySelector('.gallery-stage img.gallery-image');
-      window.__stage.push({
-        ordinal: window.document.querySelector('.gallery-ordinal')?.textContent?.trim(),
-        decoded: image !== null && image.naturalWidth > 0,
-      });
-      window.requestAnimationFrame(loop);
-    })();
-  });
-  const box = await stage.boundingBox();
-  const cx = Math.round(box.x + box.width / 2);
-  const cy = Math.round(box.y + box.height / 2);
-  await realTouchDrive(client, straightLine(cx + 60, cy, -160, 0, 10), 16);
-  await expect(page.locator('.gallery-ordinal')).toHaveText('2 / 8');
-  await page.waitForTimeout(600);
-  const frames = await page.evaluate(() => window.__stage);
-  const commit = frames.findIndex((frame) => frame.ordinal === '2 / 8');
-  expect(commit, 'the swipe never committed').toBeGreaterThan(0);
-  const after = frames.slice(commit);
-  expect(after.length, 'no frame was recorded after the commit').toBeGreaterThan(5);
-  const blank = after.filter((frame) => !frame.decoded).length;
-  expect(blank, `the incoming picture was blank for ${blank} frames after the commit`).toBe(0);
-});
+/* THE NEIGHBOUR-WARMING LANE IS DELETED (owner directive, 2026-09-03, issue
+ * 287: the strip is gone). "A real gallery swipe finds its incoming picture
+ * already decoded, even on a slow network" (issue 285) drove a real Chromium
+ * touch across the strip on a throttled 3G and required zero blank frames
+ * after the commit, because the strip warmed its neighbours and the lane
+ * proved the warming reached a real engine.
+ *
+ * There are no neighbours to warm. The stage pages between pictures whose
+ * previews the reader has ALREADY loaded — the tile row IS the preview set —
+ * and the enlarged <img> carries its own preview as a CSS background, so what
+ * paints while the master decodes is the picture the reader was just looking
+ * at, at every network speed rather than only the ones a warm cache happened
+ * to cover. A lane asserting "never blank" against a background-image would
+ * be measuring the engine's compositing rather than this build, and the
+ * question it was really asking — does a reader pay for a master they never
+ * open — is measured directly by the master-on-demand lane earlier in this
+ * file. */
 
 /* THE CALENDAR SAYS WHEN ITS DATA STOPPED, AND SHOWS THE DAYS SINCE (issue
  * 285). This lane's origin serves the embedded snapshot exactly as a cold
@@ -9622,7 +10727,13 @@ test('the contribution calendar carries a data-through line and trails today pas
   const endDate = envelope.data.endDate;
   expect(endDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 
-  const panel = page.locator('[data-activity-panel]');
+  /* THE COMMITS CARD, found through the one heatmap it holds (owner
+     directive, 2026-09-03, issue 287). `data-activity-panel` went with the
+     retired tracker component, and the page now draws exactly ONE
+     ContributionGrid — the retired token cards drew the others — so the
+     grid identifies its own card without a scoping attribute and without
+     `:has()`, which this matrix may not assume in every engine. */
+  const panel = page.locator('.panel-shell').filter({ has: page.locator('.grid-block') });
   const stale = panel.locator('[data-panel-note]');
   await expect(stale, 'the stale calendar carries no data-through line').toHaveCount(1);
   await expect(stale).toHaveText(/^data through [A-Z][a-z]{2} \d{1,2}, \d{4} · last capture .+ ago$/);
@@ -9630,10 +10741,11 @@ test('the contribution calendar carries a data-through line and trails today pas
      the card's edge: the note is the one thing allowed to appear on arrival
      precisely because it costs the card no height and no width. */
   const head = await page.evaluate(() => {
-    const title = window.document.querySelector('[data-activity-panel] .panel-title').getBoundingClientRect();
-    const note = window.document.querySelector('[data-activity-panel] [data-panel-note]').getBoundingClientRect();
-    const card = window.document.querySelector('[data-activity-panel] .panel-shell').getBoundingClientRect();
-    return { titleHeight: title.height, noteHeight: note.height, noteRight: note.right, cardRight: card.right, noteLeft: note.left, titleRight: title.right };
+    const card = window.document.querySelector('.grid-block').closest('.panel-shell');
+    const title = card.querySelector('.panel-title').getBoundingClientRect();
+    const note = card.querySelector('[data-panel-note]').getBoundingClientRect();
+    const cardBox = card.getBoundingClientRect();
+    return { titleHeight: title.height, noteHeight: note.height, noteRight: note.right, cardRight: cardBox.right, noteLeft: note.left, titleRight: title.right };
   });
   expect(head.noteHeight, 'the note is taller than the title row it shares').toBeLessThanOrEqual(head.titleHeight + subPixel);
   expect(head.noteRight, 'the note runs past the card').toBeLessThanOrEqual(head.cardRight + subPixel);
@@ -9644,7 +10756,7 @@ test('the contribution calendar carries a data-through line and trails today pas
      are the LAST cells in the strip. Counted against the payload rather than
      the calendar, so the assertion holds on whatever day CI runs. */
   const observed = await page.evaluate(() => {
-    const cells = [...window.document.querySelectorAll('[data-activity-panel] .grid-cell[data-grid-cell]')];
+    const cells = [...window.document.querySelectorAll('.grid-cell[data-grid-cell]')];
     let trailing = 0;
     for (let index = cells.length - 1; index >= 0 && cells[index].dataset.gridAbsent === 'true'; index -= 1) {
       trailing += 1;
@@ -9652,7 +10764,7 @@ test('the contribution calendar carries a data-through line and trails today pas
     return {
       cells: cells.length,
       trailing,
-      months: [...window.document.querySelectorAll('[data-activity-panel] .grid-month')].map((tick) => tick.title),
+      months: [...window.document.querySelectorAll('.grid-month')].map((tick) => tick.title),
     };
   });
   const today = new Date();

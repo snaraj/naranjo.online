@@ -16,11 +16,13 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { describe, it, test } from 'node:test';
 
-import { contributionsLabel, parseVCSActivity, vcsActivityProps } from '../src/lib/activity.ts';
+import { contributionsLabel, parseVCSActivity } from '../src/lib/activity.ts';
+import { commitLogProps } from '../src/lib/commits.ts';
 import { recordedOutOfBand } from '../src/lib/blocks.ts';
 import {
   codingProjectsPanelId,
-  codingProjectsProps,
+  projectHost,
+  projectTableProps,
   parseCodingProjects,
   projectCounts,
   projects
@@ -81,11 +83,17 @@ describe('the contribution figure names its coverage', () => {
         ...(coverage === undefined ? {} : { coverage })
       }
     });
-    const restOf = (coverage) =>
-      vcsActivityProps(envelope(coverage)).figures.find((figure) => figure.key === 'total').rest;
-    assert.equal(restOf('public'), ' public contributions');
-    assert.equal(restOf('complete'), ' contributions');
-    assert.equal(restOf(undefined), ' contributions');
+    /* The wording rides the calendar's own caption now (owner directive,
+       2026-09-03, issue 287): the commits section cycles three calendars and
+       each states its own reading, so the coverage word is measured where the
+       reader meets it rather than on a figures row one of the three owned. */
+    const captionOf = (coverage) => commitLogProps([envelope(coverage), null]).sets[0].caption;
+    assert.equal(captionOf('public'), '5 public contributions · 0-day streak');
+    assert.equal(captionOf('complete'), '5 contributions · 0-day streak');
+    assert.equal(captionOf(undefined), '5 contributions · 0-day streak');
+    // ...and the builder itself is still the one place the two words differ.
+    assert.equal(contributionsLabel('public'), ' public contributions');
+    assert.equal(contributionsLabel('complete'), ' contributions');
   });
 
   it('refuses a coverage outside the closed vocabulary', () => {
@@ -110,38 +118,47 @@ describe('the Coding Projects feed follows the host', () => {
   it('renders the description the host carries right now', () => {
     // The commission, exactly: the owner edits a description on the host and
     // the site follows without a release.
-    const props = codingProjectsProps(
+    const props = projectTableProps(
       projectsEnvelope(projects.map((project) => liveRow(project.name))),
       noon
     );
-    assert.equal(props.entries.length, projects.length);
+    assert.equal(props.rows.length, Math.min(projects.length, 4));
     assert.equal(
-      props.entries[0].summary,
+      props.rows[0].summary,
       `${projects[0].name} as the host describes it now`,
       'the feed served the captured description while the panel carried a newer one'
     );
     // Identity stays the captured module's: a payload can never introduce a
     // repository the owner did not list, rename one, or move a link.
-    assert.deepEqual(
-      props.entries.map((entry) => entry.title),
-      projects.map((project) => project.name)
-    );
+    /* Identity stays the roster's: a payload can never introduce a repository
+       the owner did not list, rename one, or move a link. Every live row here
+       carries the SAME pushedAt, so the order this table renders is the stable
+       order the adapter produced from an unbroken tie — which is exactly what
+       makes this a pin on identity rather than on ordering (ordering has its
+       own pin, against distinct instants). */
+    assert.equal(props.rows.length, 4);
+    for (const row of props.rows) {
+      assert.ok(
+        projects.some((project) => project.name === row.link.text),
+        `${row.link.text} is not a repository the roster lists`
+      );
+      assert.equal(row.link.href, `${projectHost}/${row.link.text}`);
+    }
   });
 
   it('marks the commit count as recorded however fresh the row is', () => {
     // No repository API reports a commit total, so the count is captured no
     // matter what — and the page says so rather than letting it pass as live.
-    const props = codingProjectsProps(
+    const props = projectTableProps(
       projectsEnvelope(projects.map((project) => liveRow(project.name))),
       noon
     );
-    const counts = props.entries[0].counts;
+    const counts = [props.rows[0].counts[0], props.rows[0].updated, ...props.rows[0].counts.slice(1)];
     assert.deepEqual(
       counts.map((count) => [count.key, count.marked]),
       [
         ['stars', false],
         ['updated', false],
-        ['commits', true],
         // These fixture rows carry no tallies, which is the ADDITIVE path: the
         // exact shape a payload written before the two counters existed still
         // has. A figure that is not there renders as a dash, and a dash has no
@@ -164,25 +181,26 @@ describe('the Coding Projects feed follows the host', () => {
         ? { ...liveRow(project.name), recorded: true, openIssues: 3, openPulls: 1 }
         : liveRow(project.name)
     );
-    const props = codingProjectsProps(projectsEnvelope(rows), noon);
+    const props = projectTableProps(projectsEnvelope(rows), noon);
     // Entries are looked up BY NAME rather than by position, because the feed
     // is ordered by push instant now (issue 252) and a recorded row is ordered
     // by its captured one — so position is a property of the data here, not an
     // index into the module list.
-    const entryFor = (name) => props.entries.find((entry) => entry.key === name);
+    const rowFor = (name) => props.rows.find((row) => row.key === name);
+    const marksOf = (row) => [row.counts[0], row.updated, ...row.counts.slice(1)].map((count) => count.marked);
     assert.deepEqual(
-      entryFor(projects[1].name).counts.map((count) => count.marked),
-      [true, true, true, true, true],
+      marksOf(rowFor(projects[1].name)),
+      [true, true, true, true],
       'a recorded row left a figure unmarked'
     );
     assert.equal(
-      entryFor(projects[1].name).summary,
+      rowFor(projects[1].name).summary,
       projects[1].description,
       'a recorded row served the payload description instead of the captured one'
     );
     assert.deepEqual(
-      entryFor(projects[0].name).counts.map((count) => count.marked),
-      [false, false, true, undefined, undefined],
+      marksOf(rowFor(projects[0].name)),
+      [false, false, undefined, undefined],
       'a live row inherited the recorded row’s marks'
     );
   });
@@ -212,6 +230,7 @@ describe('the Coding Projects feed follows the host', () => {
     // loading face and reserves nothing.
     const capturedSummaries = projects
       .toSorted((left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt))
+      .slice(0, 4)
       .map((project) => project.description);
     for (const envelope of [
       null,
@@ -219,13 +238,13 @@ describe('the Coding Projects feed follows the host', () => {
       projectsEnvelope([], { data: { repos: [{ name: 'x', description: 5, stars: 1 }] } }),
       projectsEnvelope([], { data: null })
     ]) {
-      const props = codingProjectsProps(envelope, noon);
+      const props = projectTableProps(envelope, noon);
       assert.deepEqual(
-        props.entries.map((entry) => entry.summary),
+        props.rows.map((row) => row.summary),
         capturedSummaries
       );
-      for (const entry of props.entries) {
-        for (const count of entry.counts) {
+      for (const entry of props.rows) {
+        for (const count of [...entry.counts, entry.updated]) {
           // A captured figure is marked; the two open-work counters have no
           // captured figure at all and render as an unmarked dash, which is
           // the same honesty by a different route.
@@ -313,23 +332,35 @@ test('one wording says a figure was recorded out of band, wherever it appears', 
      usage tiles' visible suffix, verbatim and unchanged — proved to be that
      same string, and the entry log's half proved to reach the reader through
      the constant rather than through a copy of it. */
-  const entryLog = await read('../src/lib/components/EntryLog.svelte');
-  const usage = await read('../src/lib/components/UsageTracker.svelte');
-  // The usage panel's half: unchanged, still the visible suffix beside a tile.
-  // Whitespace-tolerant between the attribute and the text — where the closing
-  // angle bracket lands is the formatter's business. The WORDING is the pin.
-  assert.match(usage, /title="recorded out of band, not fetched live"\s*>·\s*recorded/);
-  // And it is the one constant, spelled once, that the literal above matches.
+  /* BOTH HALVES ARE DATA NOW (owner directive, 2026-09-03, issue 287). The
+     usage panel carried the last VISIBLE copy of this sentence — a "· recorded"
+     suffix beside a tile, with the full wording in a title attribute — and the
+     tile grid it lived in is gone: the token panel is a board of squares whose
+     provenance rides the same detail every other figure on this page uses. So
+     the wording no longer appears as a literal in any component at all, which
+     is strictly stronger than it appearing in one: there is nothing left to
+     drift from the constant, because there is only the constant.
+
+     A title attribute is also what issue 219 removed everywhere else — it has
+     no touch trigger in any engine — so a component reintroducing one for this
+     sentence would be reintroducing a reading no phone can reach. */
+  const table = await read('../src/lib/components/LedgerTable.svelte');
+  const board = await read('../src/lib/components/LedgerBoard.svelte');
   assert.equal(recordedOutOfBand, 'recorded out of band, not fetched live');
-  assert.ok(
-    usage.includes(recordedOutOfBand),
-    'the usage panel spells a provenance wording the shared constant does not carry'
-  );
-  // The entry log's half is DATA now: the mark, its class and its browser
-  // tooltip are gone from the component, and the wording reaches the reader
-  // through the counter's detail instead.
-  assert.doesNotMatch(entryLog, /entry-recorded/);
-  assert.doesNotMatch(entryLog, /title="recorded out of band/);
+  for (const [name, source] of Object.entries({ table, board })) {
+    assert.ok(
+      !source.includes(recordedOutOfBand),
+      `${name} spells the provenance wording itself; it is one constant, carried as data`
+    );
+    assert.doesNotMatch(
+      source,
+      /title="recorded out of band/,
+      `${name} reintroduced a title-attribute reading no touch device can open`
+    );
+  }
+  // And the reader still reaches it: the table renders the counter's detail
+  // through the one hover-detail primitive.
+  assert.match(table, /<DetailTip detail=\{count\.detail\} \/>/);
   const commits = projectCounts({ ...projects[0], commits: 1, stars: 1 }, undefined, noon).find(
     (count) => count.key === 'commits'
   );

@@ -33,7 +33,7 @@ func buildBuiltinPanels() []panelDefinition {
 		// the account's skills beside its boss tallies rather than a boss log
 		// alone. Renaming identity to follow copy would break every stored
 		// URL and mint a kind version for a heading change.
-		{id: "boss-log", kind: KindBossLog, title: "Old School RuneScape Stats", source: bossLogSnapshot},
+		{id: "boss-log", kind: KindBossLog, title: "Old School RuneScape", source: bossLogSnapshot},
 		{id: "coding-projects", kind: KindCodingProjects, title: "Coding projects", source: codingProjectsSnapshot},
 	}
 	document, bounds, err := loadFetchConfig(fetchConfigBytes)

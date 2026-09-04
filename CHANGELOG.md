@@ -7,6 +7,137 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.73] - 2026-09-03
+
+### Changed
+
+- The page is a ledger (owner directive, 2026-09-03, issue #287). The feed of
+  cards is replaced by one ruled sheet: a chrome row of section links between
+  two rules, a picture band, the name set as a masthead in Archivo at 900, five
+  numbered sections down the column, a closing band and a footer. Everything
+  that made a card a card — the raised plate, the seam, the radius, the padding
+  — is gone; what separates a row from the next is a hairline drawn in the same
+  ink the words are, and what separates a section is a two-pixel rule under its
+  number. Every part of it is a token in `styles.css`, so the four reading modes
+  carry the design with no mode-specific rule anywhere.
+- Professional Experience opens and closes. The four roles are ruled rows —
+  years, employer, role, place — and the accomplishments live in a drawer that
+  grows open when the row is pressed, collapsed by default. The employer link
+  moved inside the drawer: the row itself is the disclosure control now, and an
+  anchor inside a button is invalid content no keyboard can reach.
+- Projects is a ruled table of the four most recently pushed repositories, with
+  the roster it was chosen from counted in its head ("latest 4 of 7 · by last
+  push"). The roster is still the payload's, the order is still derived from
+  each row's own instant, and the captured rows are still the honest fallback.
+- Commits is its own section and it CYCLES. The contribution calendar leads it,
+  and a segmented control swaps the same heatmap between the contributions and
+  each token source's daily series — several pictures of one year, laid on one
+  53-week window so they can be read against each other. How many there are is
+  data: a source that publishes no daily record is offered no segment, because a
+  reserve is a promise that something is coming and for that source nothing is.
+  Each set states its own reading under the grid, and the recent commits follow
+  as ruled rows.
+- Trackers is a board of five turnable squares plus a scrolling strip. The
+  squares carry the lifetime totals, the per-source figures, the model split and
+  the session record, and each turns over to its own breakdown — the token
+  categories with their exact counts and shares. The strip runs every boss the
+  hiscores list, most killed first, led by the collection's own served name.
+- The heatmap is monochrome in every reading mode, and the busiest day of a
+  window wears the page's one highlight through an attribute of its own rather
+  than a sixth ramp level — so the ramp stays monotone in lightness while the
+  extreme is still marked. Every cell still prints its own count.
+- The chrome row is in the document's flow. It used to be a control pinned to
+  the viewport's corner, which cost a translucent plate (issue #219), a
+  reserved lane on every row of the page (issue #241) and then a second
+  positioning scheme below the handle breakpoint (issue #264). A row that
+  scrolls with the page needs none of the three, and they are removed rather
+  than restyled.
+
+- Gallery is a row of tiles (owner directive, 2026-09-03, issue #287, on the
+  approved mock). The single visible frame — with its swipe strip, drag-follow
+  settle, caption lane and position counter — is superseded by a grid of
+  reserved square tiles beside one control tile: the first four of the chosen
+  set at the reading width, two across on a phone, the control tile stating
+  the set and how much of it the row shows. The native dialog is the stage:
+  opening a tile shows that photograph, loads the full derivative only then,
+  pages with prev/next, the arrow keys or a swipe, closes on Escape, the
+  backdrop or the close mark, and hands focus back to the tile. A film plays
+  inline in its own tile behind one play control, never in the dialog, and
+  nothing autoplays. The gallery row now fills the column; the 448px stage
+  that left dead space either side at 1440 is gone with the strip.
+- Two band textures are the owner's picks (2026-09-03): the light set's
+  `spikes` (purple-and-gold wavy forms) and the dark set's `refraction`
+  (transparent blue curved shapes on black), replacing `iridescent` and
+  `glass`. The light surface is the pearl the owner asked for
+  (`#faf9f5`, a warm off-white rather than a hard white), with the raised,
+  overlay and border tokens moved onto the same warm family at the same
+  luminance steps.
+- The band mounts two layers, not eight: the texture showing and the one it
+  fades from. Mounting every vendored texture in both bands made the first
+  paint fetch all eight files; now a texture is fetched the first time it is
+  chosen and the crossfade still has both pictures decoded.
+- Two blocks reading one panel share one loop: the commits cycler and the
+  token board both read token-usage, and the origin now hears one request per
+  tick for it rather than one per block (`watchPanel` shares by host and id;
+  a caller with its own host keeps its own loop).
+- The footer names the version the page was built from, baked in from the
+  repository's `VERSION` file at build time — no runtime read, no second copy.
+- The retired display lenses are cut with the menu that offered them: the
+  weekly, monthly and cumulative re-reads of a series, their period phrasing
+  and the two calendar helpers only they used (192 lines of `grid.ts`, 205 of
+  its suite, the parked year-boundary test in `periods.test.mjs`), and three
+  tokens nothing consumed.
+- The image build runs its checks once, natively: both build stages pin
+  `--platform=$BUILDPLATFORM` and the Go stage cross-compiles the static
+  binary for the target, so the PR gate's `container` job no longer re-runs
+  the frontend suite and the Go tests under arm64 emulation: on this
+  change's own pull-request runs the job measured 710 s before and 107 s
+  after. The browser lanes run one runner per engine, each
+  taking its device project, so the matrix finishes in the time of its
+  slowest engine rather than the sum of five.
+- The rendering lanes measure the tile grid rather than the strip they were
+  written for: 115 lanes become 112 — five retired with their reasons left at
+  the deletion site, twenty-six rewritten (fourteen under new titles), two
+  added (the full derivative is requested only when a tile is opened, measured
+  in the network; a reading-mode switch moves no gallery geometry). The
+  enlarged photograph accepts a two-finger zoom again: the stage declares
+  `pan-y pinch-zoom` over its plain `pan-y` base. The board's face swap and
+  the band's two-layer mount are each pinned where they are decided and
+  measured in the browser, so neither can quietly revert.
+
+### Added
+
+- Archivo, self-hosted, as the page's second face: a variable grotesque with
+  both a weight and a width axis, split into the same two character ranges the
+  mono face is split into and vendored beside its OFL licence. Figures, labels,
+  hashes and dates stay in JetBrains Mono; everything a person reads is Archivo.
+- Eight vendored band textures (454,936 bytes) from the owner's own Unsplash
+  wallpaper library, two per reading mode, cycled by the arrows on the band and
+  crossfaded between mounted layers so a mode switch moves no geometry.
+- A block may now read SEVERAL live panels at once (`panelsBlock`). The commits
+  section is the first: one picture built from two envelopes, through the same
+  visibility-aware `watchPanel` every single-panel block already uses.
+
+### Removed
+
+- `EntryLog`, `ActivityTracker`, `UsageTracker` and `StatTracker`, and the
+  adapters that fed only them. Their replacements are the five ledger surfaces;
+  every floor they carried — validated hrefs, formatting kept out of components,
+  locked icon sourcing, honest empty states, provenance by exception, the
+  reserved boxes — is pinned on the surface that replaced them.
+- The twenty-five skill icons, with the levels grid the owner cut. Third-party
+  art must never outlive the data that justifies it, and `ATTRIBUTION.md`
+  records how to re-vendor them the day a skills surface returns.
+- The windowing layer the retired trackers were the only readers of — the range
+  selector's ranges and columns, the coverage window and its column mapping,
+  and the readings and period folds written for the strips beneath them (1,022
+  lines net, `periods.ts` and its suite). `dayNumber` and `formatDateRange` are
+  what the module still is. The coverage window's own rule is superseded rather
+  than mislaid: the commits block lays all three of its sets on ONE 53-week
+  calendar so a reader cycling between them compares like with like, and
+  `docs/design-iteration.md` records why, beside the half of that rule the
+  redesign keeps.
+
 ## [0.1.72] - 2026-09-03
 
 ### Fixed

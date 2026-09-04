@@ -41,11 +41,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # One runner per engine (owner directive, 2026-09-03, issue 287): the five
+  # projects took nine minutes in a row, and the two device projects are the
+  # same engines at phone metrics, so each engine's runner takes its device
+  # project too and the matrix finishes in the time of its slowest engine.
   lanes:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        engine:
+          - { install: chromium, projects: chromium android-chrome }
+          - { install: firefox, projects: firefox }
+          - { install: webkit, projects: webkit ios-safari }
+    name: lanes (${{ matrix.engine.install }})
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,14 +108,16 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.runner.outputs.version }}
-      - name: Install the three engines
+          key: playwright-${{ runner.os }}-${{ steps.runner.outputs.version }}-${{ matrix.engine.install }}
+      - name: Install this runner's engine
         working-directory: frontend
-        # Chromium (Chrome and Edge), Firefox and WebKit (Safari and every
-        # iOS browser) — named explicitly so an engine is a deliberate
-        # addition. The download is skipped entirely when the cache above
-        # restored them; --with-deps installs the system libraries the
-        # engines link against, from the runner's own Ubuntu archives.
+        # ONE engine per runner, the one the matrix names — Chromium (Chrome
+        # and Edge), Firefox or WebKit (Safari and every iOS browser) — so an
+        # engine is a deliberate addition to the matrix above and a runner
+        # never downloads the two it will not drive. The download is skipped
+        # entirely when the cache above restored it; --with-deps installs the
+        # system libraries the engine links against, from the runner's own
+        # Ubuntu archives.
         #
         # Honest limit, stated where it will be read: these engine builds
         # arrive from Playwright's CDN over TLS and are NOT checksum-verified
@@ -113,10 +127,19 @@ jobs:
         # tarball integrity IS in the committed lockfile and which selects the
         # browser revisions. This job holds no secret, no write permission and
         # no package scope, and nothing it produces is published.
-        run: npx playwright install --with-deps chromium firefox webkit
-      - name: Run the rendering-lane smoke matrix
+        run: npx playwright install --with-deps ${{ matrix.engine.install }}
+      - name: Run this runner's projects
         working-directory: frontend
         # The suite boots the real Go binary over localhost (see
-        # playwright.config.mjs) and drives five projects: three desktop
-        # engines plus an Android and an iPhone viewport.
-        run: npm run test:browsers
+        # playwright.config.mjs). Across the matrix it drives five projects —
+        # three desktop engines plus an Android and an iPhone viewport — and
+        # THIS runner drives only the ones the matrix hands it: its engine and
+        # that engine's device project. Each becomes one --project flag, so a
+        # runner that ran every project would show up as three equal
+        # durations in the matrix rather than pass unnoticed.
+        run: |
+          set --
+          for project in ${{ matrix.engine.projects }}; do
+            set -- "$@" --project "$project"
+          done
+          npm run test:browsers -- "$@"

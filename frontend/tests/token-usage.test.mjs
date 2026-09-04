@@ -18,23 +18,52 @@ import {
   modelLabel,
   modelShares,
   modelSlot,
+  boardEmptyNote,
+  boardReturnLabel,
+  boardTurnLabel,
   provenanceIsMixed,
   resetsIn,
+  tokenSquares,
+  tokenSquaresProps,
+  tokenUsageEmptyNote,
+  tokenUsageFallbackTitle,
   tokenUsagePanelId,
-  tokenUsageProps,
+  tokenUsageSourceEmptyNote,
   tokenUsageSources,
+  unknownFigure,
   usageDataThrough,
   usageStaleAfterMs,
   usageStaleNote
 } from '../src/lib/token-usage.ts';
-import { formatMagnitude } from '../src/lib/grid.ts';
+import { recordedOutOfBand } from '../src/lib/blocks.ts';
+import { commitLogProps } from '../src/lib/commits.ts';
+import { formatMagnitude, pendingWeeks } from '../src/lib/grid.ts';
 
-const [component, helper, manifest, binding] = await Promise.all([
-  readFile(new URL('../src/lib/components/UsageTracker.svelte', import.meta.url), 'utf8'),
+/* THE PANEL BECAME A BOARD (owner directive of 2026-09-03, issue 287): the
+ * tile grid is five turnable squares in LedgerBoard.svelte, and the daily
+ * graph the tracker used to draw moved into the commits section's cycling
+ * calendar (CommitLog.svelte). Both are read here, because the pins this file
+ * carries now live in two components rather than one — and the ABSENCE list
+ * that keeps the retired display menu from coming back has to sweep both, or
+ * it would only be guarding the door the menu did not use.
+ *
+ * styles.css joins them for the same reason: the board's grid and its category
+ * swatches are page-level decisions the ledger's other sections share, so the
+ * stylesheet is where they are stated and where they must be pinned. */
+const [component, commits, helper, manifest, binding, sheet] = await Promise.all([
+  readFile(new URL('../src/lib/components/LedgerBoard.svelte', import.meta.url), 'utf8'),
+  readFile(new URL('../src/lib/components/CommitLog.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/token-usage.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/page.ts', import.meta.url), 'utf8'),
-  readFile(new URL('../src/lib/blocks/tokenUsage.ts', import.meta.url), 'utf8')
+  readFile(new URL('../src/lib/blocks/tokenSquares.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
 ]);
+
+/* One envelope carrying the shipped payload plus a token series, for driving
+ * the commits block's own adapter the way its multi-panel host does: the
+ * calendar reads the version-control panel first and the token panel second,
+ * so a token-only fixture passes null for the first slot. */
+const tokenOnly = (data, overrides = {}) => [null, envelopeFor(data, overrides)];
 
 /* One well-formed envelope around the shipped payload, for driving the
  * adapter the way the block host does. */
@@ -197,10 +226,14 @@ describe('tokenUsageSources admission', () => {
   });
 });
 
-describe('UsageTracker source contract', () => {
+describe('the board of squares: source contract', () => {
   it('renders inside the shared PanelShell with the envelope status, age, and no per-card control', () => {
     assert.match(component, /import PanelShell from '\.\/PanelShell\.svelte'/);
-    assert.match(component, /<PanelShell \{title\} \{status\} \{generatedAt\}>/);
+    /* The shell now receives the data-through line as well (owner directive of
+       2026-09-03, issue 287): the board's body is a grid of fixed squares, so
+       the head is the one row a late line can appear in without moving
+       anything — the same arrangement the calendar already used. */
+    assert.match(component, /<PanelShell \{title\} \{status\} \{generatedAt\} note=\{staleNote\}>/);
     assert.match(component, /<\/PanelShell>/);
     // No panel offers a manual refresh any more (owner directive, issue 179):
     // this panel hands its shell no refresher and holds no watcher handle of
@@ -210,29 +243,46 @@ describe('UsageTracker source contract', () => {
     assert.doesNotMatch(component, /\{refresh\}|const refresh =|watcher/);
     // The envelope facts ride the adapter into the shell unchanged, and the
     // empty-title fallback the unavailablePanel case needs is preserved.
-    const rendered = tokenUsageProps(envelopeFor(shippedPayload));
+    const rendered = tokenSquaresProps(envelopeFor(shippedPayload));
     assert.equal(rendered.title, 'Fixture Usage');
     assert.equal(rendered.status, 'ok');
     assert.equal(rendered.generatedAt, '2026-08-11T03:00:00Z');
-    assert.equal(tokenUsageProps(envelopeFor(null, { title: '' })).title, 'Token usage');
+    assert.equal(tokenSquaresProps(envelopeFor(null, { title: '' })).title, tokenUsageFallbackTitle);
+    assert.equal(tokenUsageFallbackTitle, 'Token usage');
     // Before the first envelope the block renders NOTHING — the same face the
     // retired component's {#if envelope} guard gave the page.
-    assert.equal(tokenUsageProps(null), null);
+    assert.equal(tokenSquaresProps(null), null);
   });
 
-  it('iterates payload sources and takes every label from the data', () => {
-    assert.match(component, /\{#each sections as source \(source\.key\)\}/);
-    assert.match(component, /\{source\.label\}/);
-    const rendered = tokenUsageProps(envelopeFor(shippedPayload));
+  it('derives one square per payload source and takes every label from the data', () => {
+    /* The tile grid iterated `sections`; the board iterates `squares` (owner
+       directive of 2026-09-03, issue 287). The property that mattered is
+       unchanged and is asserted the same way: the SET of surfaces is derived
+       from the payload's own sources, in the payload's own order, so a third
+       source appearing tomorrow needs no edit in the adapter and none in the
+       component. */
+    assert.match(component, /\{#each squares as square \(square\.key\)\}/);
+    assert.match(component, /\{square\.label\}/);
+    const rendered = tokenSquaresProps(envelopeFor(shippedPayload));
+    const perSource = rendered.squares.filter((square) => square.key.startsWith('source-'));
     assert.deepEqual(
-      rendered.sections.map((section) => section.label),
+      perSource.map((square) => square.label),
       shippedPayload.sources.map((source) => source.label),
-      'every section label is the payload’s, in the payload’s order'
+      'every source square is labelled by the payload, in the payload\u2019s order'
     );
+    // ...and the whole board is derived, never enumerated: a one-source
+    // payload produces one source square, a three-source payload three.
+    const three = tokenSquares([
+      { label: 'a', windows: [] },
+      { label: 'b', windows: [] },
+      { label: 'c', windows: [] }
+    ]);
+    assert.equal(three.filter((square) => square.key.startsWith('source-')).length, 3);
+    assert.deepEqual(tokenSquares([]), [], 'a payload with no sources draws no board at all');
     // Vendor and tool names are payload data, never component or helper
     // logic. The needles are assembled from fragments so this test file's
     // own scan subject stays clean, mirroring the Go doctrine pin.
-    for (const [name, source] of Object.entries({ component, helper })) {
+    for (const [name, source] of Object.entries({ component, commits, helper })) {
       const lowered = source.toLowerCase();
       for (const mark of ['anthro' + 'pic', 'co' + 'dex', 'open' + 'ai']) {
         assert.ok(!lowered.includes(mark), `${name} hardcodes the vendor name ${mark}`);
@@ -241,49 +291,89 @@ describe('UsageTracker source contract', () => {
   });
 
   it('never lets color carry the meter alone: the graphic is hidden, the value visible', () => {
-    assert.match(component, /class="usage-meter-track" aria-hidden="true"/);
-    assert.match(component, /class="usage-meter-value"/);
-    assert.match(component, /\{usageWindow\.meter\.reading\}/);
+    /* THE METER SURVIVED THE REDESIGN (owner directive of 2026-09-03, issue
+       287). It sits under a source square\u2019s lifetime figure rather than in a
+       window row, and every property this pin protects is unchanged: the fill
+       is decorative, the true reading is printed beside it, the period it
+       measures is printed under it, and the fill saturates while the reading
+       does not. Dropping the meter with the tiles would have been the redesign
+       quietly losing a capability rather than restyling one. */
+    assert.match(component, /class="board-meter" data-severity=\{square\.meter\.severity\}/);
+    assert.match(component, /class="board-meter-reading">\{square\.meter\.reading\}/);
+    assert.match(component, /class="board-meter-label">\{square\.meter\.label\}/);
     // The reading beside the fill is the true figure through the tested
     // renderer, and the fill saturates while the reading does not.
-    const [first] = tokenUsageProps(envelopeFor(shippedPayload)).sections;
-    assert.equal(first.windows[0].meter.reading, formatUtilization(36.4));
-    assert.equal(first.windows[0].meter.severity, meterSeverity(36.4));
-    assert.equal(first.windows[0].meter.fillPct, meterFillPct(36.4));
-    // A window without a reported utilization draws no meter at all.
-    const [, second] = tokenUsageProps(envelopeFor(shippedPayload)).sections;
-    assert.equal(second.windows[0].meter, undefined);
-    // The pair row: compact figures beside named glyphs, the replaced word
-    // clipped into the tree (owner directive, 2026-08-31), exact figures on
-    // the title.
+    const squares = tokenSquaresProps(envelopeFor(shippedPayload)).squares;
+    const first = squares.find((square) => square.key === 'source-anthro' + 'pic');
+    assert.equal(first.meter.reading, formatUtilization(36.4));
+    assert.equal(first.meter.severity, meterSeverity(36.4));
+    assert.equal(first.meter.fillPct, meterFillPct(36.4));
+    const reset = resetsIn('2026-08-11T07:00:00Z');
+    assert.equal(first.meter.label, reset === '' ? 'session' : `session · ${reset}`);
+    // A source whose only window reports no utilization draws no meter at
+    // all: a bar at zero and a bar for a figure nobody reported are the same
+    // picture, and only one of them is true.
+    const second = squares.find((square) => square.key === 'source-co' + 'dex');
+    assert.equal(second.meter, undefined);
+    /* THE INPUT/OUTPUT SPLIT MOVED TO THE SQUARE\u2019S BACK (same directive): the
+       pair row became the per-day category composition, which says the same
+       thing with more of it — a written label, an exact count and a share for
+       each of input, output and the two cache classes. The words are never
+       replaced by a glyph here, so there is nothing to clip into the
+       accessibility tree and nothing to recover from a title attribute. */
+    const composed = tokenSquaresProps(
+      envelopeFor({
+        sources: [
+          {
+            label: 'fixture',
+            windows: [],
+            series: {
+              startDate: '2026-08-10',
+              totals: [10],
+              categories: [
+                { key: 'input', totals: [4] },
+                { key: 'output', totals: [6] }
+              ]
+            }
+          }
+        ]
+      })
+    ).squares.find((square) => square.key === 'source-fixture');
     assert.deepEqual(
-      first.windows[0].pairs.map((pair) => `${pair.glyph} ${pair.label} ${pair.figure}`),
-      [`flow-in input ${formatTokenCount(182340)}`, `flow-out output ${formatTokenCount(45120)}`]
+      composed.back.facts.map((fact) => [fact.term, fact.value]),
+      [
+        ['input', `${formatTokenCount(4)} · ${formatShare(40)}`],
+        ['output', `${formatTokenCount(6)} · ${formatShare(60)}`]
+      ]
     );
-    // The component draws both arrows in the page's one glyph language and
-    // marks them decorative; the clipped word is what carries the meaning.
-    for (const glyph of ["pair.glyph === 'flow-in'"]) {
-      assert.ok(component.includes(glyph), `the tracker draws no ${glyph} branch`);
-    }
-    assert.match(component, /class="usage-pair-glyph"[^>]*aria-hidden="true"/s);
-    assert.match(component, /\.usage-pair-label \{[^}]*clip-path: inset\(50%\)/s);
-    assert.doesNotMatch(component, /\.usage-pair-label \{[^}]*display: none/s);
-    // The exact figures stay exact (owner directive, 2026-08-25: the compact
-    // reading is what surfaces, the exact one survives here) — but GROUPED,
-    // because nine undelimited digits on a tooltip is a log line, not a
-    // figure a reader can size at a glance.
-    assert.equal(first.windows[0].pairsLabel, '182,340 input tokens, 45,120 output tokens');
-    assert.equal(first.windows[0].reset, resetsIn('2026-08-11T07:00:00Z'));
   });
 
-  it('renders honest empty states for a refused payload and for a windowless source', () => {
-    const emptyStates = component.match(/class="usage-empty"/g) ?? [];
-    assert.equal(emptyStates.length, 2);
+  it('renders honest empty states for a refused payload and for a sourceless square', () => {
+    /* Two empty faces, exactly as the tracker had two: the board\u2019s own note
+       for a payload that produced no squares, and a square\u2019s back note for a
+       source with nothing to turn over to. Both are ADAPTER words, so the
+       component states neither. */
+    assert.match(component, /<p class="board-note">\{emptyNote\}<\/p>/);
+    assert.match(component, /\{#if square\.back\.note\}<span class="board-sub">\{square\.back\.note\}<\/span>\{\/if\}/);
+    assert.equal(boardEmptyNote, tokenUsageEmptyNote);
+    assert.equal(tokenUsageEmptyNote, 'No usage data available.');
+    assert.equal(tokenSquaresProps(envelopeFor(null)).squares.length, 0);
+    const bare = tokenSquares([{ label: 'bare', windows: [] }]);
+    const bareSource = bare.find((square) => square.key === 'source-bare');
+    assert.equal(bareSource.back.facts, undefined, 'a source with nothing to show must list no facts');
+    assert.equal(bareSource.back.note, tokenUsageSourceEmptyNote);
+    assert.equal(tokenUsageSourceEmptyNote, 'No usage recorded for this source yet.');
   });
 
   it('reads every color from a custom property, and the severity ramp with no fallback at all', () => {
     assert.doesNotMatch(component, /#[0-9a-fA-F]{3,8}\b/, 'raw hex colors defeat theme overrides');
-    for (const token of ['--panel-', '--usage-meter-ok', '--usage-meter-warning', '--usage-meter-critical']) {
+    /* RE-AIMED at the roles this component actually paints (owner directive of
+       2026-09-03, issue 287): the board sits on the ledger\u2019s own sheet, so its
+       neutrals are --ledger-* rather than --panel-*, and the panel tokens are
+       read by the shell it renders inside. The claim is unchanged — every
+       colour here is a token read, so a reading mode restyles the board
+       without this file knowing a mode exists. */
+    for (const token of ['--ledger-', '--usage-meter-ok', '--usage-meter-warning', '--usage-meter-critical']) {
       assert.match(
         component,
         new RegExp(`var\\(\\s*${token}`),
@@ -315,8 +405,72 @@ describe('UsageTracker source contract', () => {
     );
   });
 
+  it('sets every dynamic value through a custom property, never an inline style string', () => {
+    /* The CSP floor (default-src 'self' admits no style attribute), carried
+       into the board (owner directive of 2026-09-03, issue 287): a bar's fill
+       is the one genuinely dynamic length on this surface, and it reaches the
+       DOM as a custom property Svelte writes with setProperty rather than as a
+       style string. Everything else — which face is up, which severity paints,
+       which palette slot a category owns — is a closed-set data attribute. */
+    assert.match(component, /style:--board-fill=\{`\$\{bar\.fillPct\}%`\}/);
+    assert.match(component, /style:--board-fill=\{`\$\{square\.meter\.fillPct\}%`\}/);
+    assert.doesNotMatch(component, /\sstyle="/, 'a static style attribute is exactly what the CSP forbids');
+    assert.doesNotMatch(component, /style=\{/, 'a whole-attribute style expression is blocked by the CSP');
+    assert.doesNotMatch(component, /cssText/, 'cssText writes the same blocked attribute by another name');
+  });
+
+  it('hides the face that is turned away, swapping at the flip midpoint, because WebKit flattens the 3D turn', () => {
+    /* The back face used to rely on backface-visibility alone, and on every
+       Safari it drew mirrored over the front: WebKit flattens 3D transforms
+       inside a <button>, so the property never applied (found by the browser
+       matrix, 2026-09-03, issue 287). The rule that fixed it is a
+       `visibility` swap — the back hidden at rest, the front hidden once the
+       square is turned — delayed half a flip so the swap lands while the
+       square is edge-on. Pinned here where it is declared; the rendering lane
+       "every board square shows all of its own content" measures the
+       computed visibility of both faces at rest and turned. */
+    assert.match(
+      sheet,
+      /\.board-face\[data-face='back'\],\s*\.board-square\[data-turned='true'\] \.board-face\[data-face='front'\] \{[^}]*visibility: hidden/,
+      'the back at rest and the front once turned must be hidden, not merely turned away'
+    );
+    assert.match(
+      sheet,
+      /\.board-square\[data-turned='true'\] \.board-face\[data-face='back'\] \{[^}]*visibility: visible/,
+      'the turned back must be the visible face'
+    );
+    assert.match(
+      sheet,
+      /\.board-face \{[^}]*transition: visibility 0s linear calc\(var\(--flip-duration\) \/ 2\)/,
+      'the swap must wait half a flip, or the new face pops in before the square is edge-on'
+    );
+  });
+
+  it('is a control a finger and a keyboard can both reach', () => {
+    /* The 44px touch floor and the announced state, on the one control this
+       surface has (owner directive of 2026-09-03, issue 287: "tap a square").
+       A real <button> is what brings keyboard operation and the pressed state
+       with it; the floor is declared on the class even though a square is far
+       larger, because a control sized only by its content is a control whose
+       size depends on its content. */
+    assert.match(component, /<button\s+class="board-square"/);
+    assert.match(component, /aria-pressed=\{open\}/);
+    assert.match(sheet, /\.board-square \{[^}]*min-inline-size: var\(--control-target\)/);
+    assert.match(sheet, /\.board-square \{[^}]*min-block-size: var\(--control-target\)/);
+    assert.match(sheet, /--control-target: 2\.75rem;/);
+    // The turn is announced in words the ADAPTER supplies, so the component
+    // composes no sentence of its own.
+    assert.match(component, /aria-label=\{`\$\{open \? returnLabel : turnLabel\} \$\{square\.ariaLabel\}`\}/);
+    assert.equal(boardTurnLabel, 'Turn');
+    assert.equal(boardReturnLabel, 'Turn back');
+    // The face turned away is hidden from assistive technology, so a square's
+    // front and back are never read as one run-on sentence.
+    assert.match(component, /data-face="front" aria-hidden=\{open\}/);
+    assert.match(component, /data-face="back" aria-hidden=\{!open\}/);
+  });
+
   it('stays local-origin like every shipped source file', () => {
-    for (const [name, source] of Object.entries({ component, helper })) {
+    for (const [name, source] of Object.entries({ component, commits, helper })) {
       // Protocol-relative origins still fail this; a line comment no longer
       // does. The lookahead and the reasoning behind it are documented once,
       // on the same sweep in tests/experience.test.mjs.
@@ -327,18 +481,25 @@ describe('UsageTracker source contract', () => {
 
 describe('manifest mount', () => {
   it('lists this block exactly once, bound to its panel id', () => {
-    // The fences retired with the table-of-contents App (issue 165): the
-    // manifest IS the mount list, so the per-panel pin moves to it. The
-    // canonical whole-section listing lives in panels-ui.test.mjs.
-    const importLines = manifest.match(/^import \{ tokenUsage \} from '\.\/lib\/blocks\/tokenUsage\.ts';$/gm);
-    assert.equal(importLines?.length, 1, 'exactly one import line for the usage block');
-    const body = manifest.replace(/^import[^\n]*\n/gm, '');
+    /* The fences retired with the table-of-contents App (issue 165): the
+       manifest IS the mount list, so the per-panel pin moves to it. The block
+       module was renamed with the component it binds (owner directive of
+       2026-09-03, issue 287): tokenUsage → tokenSquares, UsageTracker →
+       LedgerBoard. The PANEL ID is untouched, which is the half that matters —
+       the wire contract did not move, only the rendering did. The canonical
+       whole-section listing lives in panels-ui.test.mjs. */
+    const importLines = manifest.match(/^import \{ tokenSquares \} from '\.\/lib\/blocks\/tokenSquares\.ts';$/gm);
+    assert.equal(importLines?.length, 1, 'exactly one import line for the token block');
+    const body = manifest.replace(/^import[^\n]*\n/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
     assert.equal(
-      (body.match(/\btokenUsage\b/g) ?? []).length,
+      (body.match(/\btokenSquares\b/g) ?? []).length,
       1,
-      'the manifest lists the usage block exactly once'
+      'the manifest lists the token block exactly once'
     );
-    assert.match(binding, /panelBlock\(\s*'token-usage',\s*UsageTracker,\s*tokenUsagePanelId,\s*tokenUsageProps\s*\)/);
+    assert.match(
+      binding,
+      /panelBlock\(\s*'token-squares',\s*LedgerBoard,\s*tokenUsagePanelId,\s*\(envelope\) => tokenSquaresProps\(envelope\)\s*\)/
+    );
     assert.equal(tokenUsagePanelId, 'token-usage');
   });
 });
@@ -513,21 +674,35 @@ describe('provenanceIsMixed', () => {
   });
 });
 
-describe('UsageTracker live surface', () => {
+describe('the board of squares: live surface', () => {
   it('keeps itself current through the block host instead of painting once at mount', () => {
     // The subscription moved to the ONE host every panel block shares
     // (issue 165): Block.svelte runs watchPanel and re-runs this adapter on
     // every envelope, so a panel cannot drift into a one-shot read of its
     // own. The component itself fetches nothing.
-    assert.doesNotMatch(component, /onMount/, 'a one-shot mount read is the bug this panel had');
-    assert.doesNotMatch(component, /watchPanel|loadPanel|fetch\(/, 'the component reads no wire; the block host does');
+    for (const [name, source] of Object.entries({ component, commits })) {
+      assert.doesNotMatch(source, /onMount/, `${name}: a one-shot mount read is the bug this panel had`);
+      assert.doesNotMatch(
+        source,
+        /watchPanel|loadPanel|fetch\(/,
+        `${name} reads the wire itself; the block host does that`
+      );
+    }
   });
 
-  it('renders the owner\'s tile grid: two columns, a final odd tile spanning the row', () => {
-    assert.match(component, /grid-template-columns:\s*repeat\(2,/);
-    assert.match(component, /\.usage-tile:last-child:nth-child\(odd\)\s*\{\s*grid-column:\s*1 \/ -1/);
-    assert.match(component, /class="usage-tile-value">\{tile\.figure\}/);
-    // The figure the tile shows is the tested renderer's, via the adapter.
+  it("renders the owner's board: five squares, two to a phone row, an odd last one spanning", () => {
+    /* THE TILE GRID BECAME THE BOARD (owner directive of 2026-09-03, issue
+       287). The arrangement pin survives intact and moves to the stylesheet,
+       which is where the ledger's page-level geometry is stated: the desktop
+       row is one track per square and a phone gets two columns with an odd
+       final square taking the width rather than leaving a hole — the same
+       "final odd tile spans the row" rule the grid had, on the same reasoning.
+       The figure is still the tested renderer's, through the adapter. */
+    assert.match(sheet, /\.board-grid \{[^}]*grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\)/);
+    assert.match(sheet, /\.board-grid \{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
+    assert.match(sheet, /\.board-square:last-child:nth-child\(odd\) \{[^}]*grid-column:\s*1 \/ -1/);
+    assert.match(component, /class="board-figure">\{square\.figure\}/);
+    // The figure the square shows is the tested renderer's, via the adapter.
     const payload = {
       sources: [
         {
@@ -537,31 +712,47 @@ describe('UsageTracker live surface', () => {
         }
       ]
     };
-    const [section] = tokenUsageProps(envelopeFor(payload)).sections;
-    assert.equal(section.tiles[0].figure, formatStatValue(22_700_000_000, 'tokens'));
-    assert.equal(section.tiles[0].label, 'Lifetime tokens');
+    const squares = tokenSquaresProps(envelopeFor(payload)).squares;
+    const source = squares.find((square) => square.key === 'source-fixture');
+    assert.equal(source.figure, formatStatValue(22_700_000_000, 'tokens'));
+    assert.equal(source.label, 'fixture');
+    // The whole-board total is the same figure summed across sources, through
+    // the same renderer — never a second formatter.
+    assert.equal(squares[0].figure, formatTokenCount(22_700_000_000));
+    assert.equal(squares[0].label, 'Tokens tracked');
   });
 
   it('marks provenance by exception, never once per figure', () => {
-    // The marker is still here and still says the same thing — what changed
-    // with issue 134 is that it is gated on the source's provenance being
-    // MIXED, and with issue 165 the gate is decided in the adapter, beside
-    // provenanceIsMixed itself, so the component renders a plain flag.
-    assert.match(component, /\{#if tile\.marked\}/);
-    assert.match(component, /\{#if insight\.marked\}/);
-    assert.match(component, /class="usage-recorded"/);
-    // The ungated forms are what this replaces; either one returning is the
-    // regression, and both are cheap to name exactly.
-    assert.doesNotMatch(component, /\{#if stat\.recorded\}|\{#if tile\.recorded\}/);
-    assert.doesNotMatch(component, /\{#if insight\.recorded\}/);
+    /* The marker is still decided in the adapter, beside provenanceIsMixed
+       itself, and it is still gated on the source's provenance being MIXED.
+       What changed with the owner's directive of 2026-09-03 (issue 287) is
+       WHERE it is decided FROM: the tiles and the insight rows became the
+       board's squares and bars, so the mark travels on LedgerBar.marked. The
+       ungated forms this replaces are still named exactly, in both components,
+       because either one returning is the regression. */
+    for (const [name, source] of Object.entries({ component, commits })) {
+      assert.doesNotMatch(source, /\{#if stat\.recorded\}|\{#if tile\.recorded\}/, name);
+      assert.doesNotMatch(source, /\{#if insight\.recorded\}/, name);
+    }
     // EXECUTED both ways: a uniform source marks nothing, a mixed source
     // marks exactly the recorded figures.
     const figure = (key, recorded) => ({ key, label: key, value: 1, unit: 'tokens', recorded });
-    const uniform = tokenUsageProps(
-      envelopeFor({ sources: [{ label: 's', windows: [], stats: [figure('a', true), figure('b', true)] }] })
+    const barsOf = (props) =>
+      props.squares.find((square) => square.key === 'models')?.bars ?? [];
+    const uniform = tokenSquaresProps(
+      envelopeFor({
+        sources: [
+          {
+            label: 's',
+            windows: [],
+            stats: [figure('a', true), figure('b', true)],
+            insights: [{ label: 'i', pct: 4, recorded: true }]
+          }
+        ]
+      })
     );
-    assert.deepEqual(uniform.sections[0].tiles.map((tile) => tile.marked), [false, false]);
-    const mixed = tokenUsageProps(
+    assert.deepEqual(barsOf(uniform).map((bar) => bar.marked), [false]);
+    const mixed = tokenSquaresProps(
       envelopeFor({
         sources: [
           {
@@ -573,114 +764,174 @@ describe('UsageTracker live surface', () => {
         ]
       })
     );
-    assert.deepEqual(mixed.sections[0].tiles.map((tile) => tile.marked), [true, false]);
-    assert.equal(mixed.sections[0].insights.rows[0].marked, true);
+    assert.deepEqual(barsOf(mixed).map((bar) => bar.marked), [true]);
     // An unreported insight draws NO fill and reads as the explicit dash.
     // Null rather than 0 is the whole point (owner directive, 2026-08-28): a
     // zero-width bar is pixel-identical to a measured 0%, so a row whose
     // denominator never existed used to draw the same picture as one that
-    // genuinely contributed nothing.
-    const dashed = tokenUsageProps(
+    // genuinely contributed nothing. The component honours it structurally:
+    // a null fill renders no fill element at all.
+    assert.match(component, /\{#if bar\.fillPct !== null\}/);
+    const dashed = tokenSquaresProps(
       envelopeFor({ sources: [{ label: 's', windows: [], insights: [{ label: 'i', pct: null }] }] })
     );
-    assert.equal(dashed.sections[0].insights.rows[0].fillPct, null);
-    assert.equal(dashed.sections[0].insights.rows[0].reading, '--');
+    assert.equal(barsOf(dashed)[0].fillPct, null);
+    assert.equal(barsOf(dashed)[0].reading, unknownFigure);
+    assert.equal(unknownFigure, '--');
     // ...and a MEASURED zero still draws its (empty) bar, because 0% of a real
     // window is a measurement and must not be erased along with the unknowns.
-    const measured = tokenUsageProps(
+    const measured = tokenSquaresProps(
       envelopeFor({ sources: [{ label: 's', windows: [], insights: [{ label: 'i', pct: 0 }] }] })
     );
-    assert.equal(measured.sections[0].insights.rows[0].fillPct, 0);
-    assert.equal(measured.sections[0].insights.rows[0].reading, '0%');
+    assert.equal(barsOf(measured)[0].fillPct, 0);
+    assert.equal(barsOf(measured)[0].reading, '0%');
+    // A figure the payload does not carry is the dash on the square's face
+    // too, never a zero.
+    const nothing = tokenSquares([{ label: 's', windows: [] }]);
+    assert.equal(nothing.find((square) => square.key === 'source-s').figure, unknownFigure);
+    assert.equal(nothing.find((square) => square.key === 'sessions').figure, unknownFigure);
   });
 
   it('draws ONE graph client-side over the whole delivered series', () => {
-    /* RE-AIMED for the owner's 2026-08-28 reversal ("remove this entire menu.
-       it doesnt look good and it doesn't provide any value"). What this used
-       to pin was three toggles composing into one pipeline; what it pins now
-       is that the pipeline has no toggles left and answers at full depth.
-       The claim is the same shape — one delivered payload, read client-side,
-       no extra bytes — and it is the QUESTION that stopped being a choice. */
-    assert.match(
-      component,
-      /seriesCells\(activity\.series\.startDate, activity\.series\.totals\)/
-    );
-    // ONE window, derived from the panel's whole coverage and handed to every
-    // source (issue 268), rather than each source measuring its own.
-    assert.match(component, /coverageColumns\(seriesOf\(activity\), panelWindow\)/);
-    assert.doesNotMatch(component, /rangeColumns/);
-    // The source's own totals, never a category slice: the category lens went
-    // with the menu, so there is no branch left that could read anything else.
-    assert.doesNotMatch(component, /category \? category\.totals/);
-    assert.doesNotMatch(component, /viewColumns/);
-    // No vocabulary is offered to the reader any more, in either question.
-    assert.doesNotMatch(component, /seriesViews|seriesRanges|defaultSeriesRange/);
-    assert.doesNotMatch(component, /role="radiogroup"/);
-    // The deleted component is genuinely gone from the tree rather than
+    /* RE-AIMED TWICE, and never relaxed. The owner's 2026-08-28 reversal took
+       the display menu away ("remove this entire menu. it doesnt look good and
+       it doesn't provide any value"); the directive of 2026-09-03 (issue 287)
+       moved the graph itself out of this panel and into the commits section,
+       where ONE ContributionGrid cycles between the contribution calendar and
+       each token source's daily series. The claim is the same shape it has
+       always been — one delivered payload, read client-side, no extra bytes,
+       and no vocabulary offered to the reader — so every absence below now
+       sweeps BOTH components, because a menu could otherwise come back through
+       whichever of the two this pin had stopped watching. */
+    assert.match(helper, /seriesCells|totals/);
+    // ONE grid instance, swapped by props rather than three stacked copies:
+    // three would be three scroll positions, three keyboard cursors and three
+    // detail cards for one picture.
+    assert.equal((commits.match(/<ContributionGrid/g) ?? []).length, 1);
+    for (const [name, source] of Object.entries({ component, commits })) {
+      // The source's own totals, never a category slice: the category lens
+      // went with the menu, so there is no branch left that could read
+      // anything else.
+      assert.doesNotMatch(source, /category \? category\.totals/, name);
+      assert.doesNotMatch(source, /viewColumns/, name);
+      assert.doesNotMatch(source, /rangeColumns/, name);
+      // No vocabulary is offered to the reader any more, in either question.
+      assert.doesNotMatch(source, /seriesViews|seriesRanges|defaultSeriesRange/, name);
+      assert.doesNotMatch(source, /role="radiogroup"/, name);
+      assert.doesNotMatch(source, /\$state\([^)]*\)[^;]*(?:view|range|lens)/i, name);
+      assert.doesNotMatch(source, /usage-controls|usage-activity-head|UsageFilterMenu/, name);
+    }
+    // The deleted components are genuinely gone from the tree rather than
     // merely unreferenced here.
-    assert.equal(
-      existsSync(new URL('../src/lib/components/UsageFilterMenu.svelte', import.meta.url)),
-      false,
-      'the display menu file outlived every reference to it'
-    );
+    for (const gone of ['UsageFilterMenu', 'UsageTracker']) {
+      assert.equal(
+        existsSync(new URL(`../src/lib/components/${gone}.svelte`, import.meta.url)),
+        false,
+        `${gone}.svelte outlived every reference to it`
+      );
+    }
   });
 
-  it('renders the activity heatmap only where there is a series to draw', () => {
-    assert.match(component, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
-    assert.match(component, /<ContributionGrid/);
-    // INVERTED by the owner's ruling of 2026-08-24. This used to require
-    // `emptyNote="series pending"` — a source with no series got the graph's
-    // chrome and that note. The note was true about the data and false about
-    // the future: this source publishes no daily record, so no series is
-    // pending, and the panel was reserving a graph-shaped box for something
-    // that can never arrive. It now renders no graph region at all, and keeps
-    // every figure the source genuinely reports.
-    assert.doesNotMatch(component, /emptyNote=/, 'the panel asks for an empty grid again');
-    assert.doesNotMatch(component, /series pending/, 'the retired "pending" claim is back');
-    // Both halves of the guarantee, now decided twice on the same data: the
-    // adapter carries an activity region only when the series has days in it,
-    // and the render still gates on there being columns to draw. The gated
-    // region is the whole graph — heading and grid together (the lens toggle
-    // that used to be gated with them went with the owner's 2026-08-28
-    // reversal).
-    const region =
-      /\{#if columns\.length > 0\}\s*<section class="usage-activity">([\s\S]*?)<\/section>\s*\{\/if\}/.exec(
-        component
-      );
-    assert.ok(region, 'the graph region is no longer gated on there being columns to draw');
-    assert.match(region[1], /<ContributionGrid/, 'the gate does not contain the graph');
-    assert.match(region[1], /\{source\.activity\.heading\}/, 'the heading is outside the gate it belongs to');
-    assert.doesNotMatch(component, /live refresh is off/);
-    // The adapter half, executed: no series (or an empty one) means no
-    // activity region at all; a real series carries the region and its
-    // whole-series summary sentence.
-    const seriesless = tokenUsageProps(envelopeFor({ sources: [{ label: 's', windows: [] }] }));
-    assert.equal(seriesless.sections[0].activity, undefined);
-    const empty = tokenUsageProps(
-      envelopeFor({ sources: [{ label: 's', windows: [], series: { startDate: '2026-08-01', totals: [] } }] })
+  it('renders a token calendar only where there is a series to draw', () => {
+    /* INVERTED by the owner's ruling of 2026-08-24 and MOVED by the directive
+       of 2026-09-03 (issue 287). The rule is unchanged: a source that
+       publishes no daily record gets no graph-shaped box held open for
+       something that can never arrive, and it keeps every figure it genuinely
+       reports. What changed is that the graph is now one of the commits
+       section's cycling sets, so the same decision is made per SET.
+
+       And it is made by OFFERING NO SET AT ALL, which an earlier draft of
+       this pin got wrong: it accepted a set with no columns and an honest
+       caption, which is still a pressable segment over a grid drawing 371
+       placeholder cells — measured on chromium against the real origin with
+       the source's series removed. The note's wording was better than "series
+       pending"; the arrangement was the same one the ruling threw out. A
+       reserve is a promise that something is coming, and for a source that
+       has already answered and keeps no daily record, nothing is. */
+    assert.match(commits, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
+    assert.match(commits, /<ContributionGrid/);
+    assert.doesNotMatch(commits, /series pending/, 'the retired "pending" claim is back');
+    assert.doesNotMatch(commits, /live refresh is off/);
+    // The gate is the set's own emptiness, and the grid is inside it.
+    assert.match(commits, /\{#if sets\.length > 0 && active\}/);
+    // The adapter half, executed, and BOTH directions, because half of this
+    // is not a guard: an adapter that offered no set to anybody would satisfy
+    // the first half perfectly and draw nothing at all.
+    const seriesless = commitLogProps(tokenOnly({ sources: [{ label: 's', windows: [] }] }));
+    assert.equal(
+      seriesless.sets.find((set) => set.key === 's'),
+      undefined,
+      'a source with no daily record was offered a segment over an empty grid'
     );
-    assert.equal(empty.sections[0].activity, undefined);
-    const drawn = tokenUsageProps(
-      envelopeFor({ sources: [{ label: 's', windows: [], series: { startDate: '2026-08-01', totals: [1, 2, 3] } }] })
+    const empty = commitLogProps(
+      tokenOnly({ sources: [{ label: 's', windows: [], series: { startDate: '2026-08-01', totals: [] } }] })
     );
-    assert.equal(drawn.sections[0].activity.heading, 'Token activity');
-    assert.equal(drawn.sections[0].activity.label, 's token activity');
-    assert.equal(drawn.sections[0].activity.noun, 'token');
-    /* The adapter carries the SERIES and no sentence about it (issue 158).
-       The sentence moved to lib/periods.ts, where the chosen window is known;
-       an adapter-built one would keep describing the whole capture while the
-       graph above it drew ninety days. What that sentence says for exactly
-       this payload, through exactly the default window this panel opens on,
-       is pinned in tests/periods.test.mjs — including that it is the same
-       string this assertion used to hold. */
-    assert.equal(drawn.sections[0].activity.summary, undefined);
-    assert.deepEqual(drawn.sections[0].activity.series, { startDate: '2026-08-01', totals: [1, 2, 3] });
-    // A windowless, statless source states its honest empty line; a source
-    // with figures does not.
-    assert.equal(seriesless.sections[0].note, 'No usage recorded for this source yet.');
-    const withWindows = tokenUsageProps(envelopeFor(shippedPayload));
-    assert.equal(withWindows.sections[0].note, undefined);
+    assert.equal(
+      empty.sets.find((set) => set.key === 's'),
+      undefined,
+      'a series carrying no days is the same permanent hole as no series at all'
+    );
+    /* The source is not ERASED, only its calendar: every figure it reports
+       still reaches the page through the board's own square, which is the
+       half of the ruling that keeps this from being a way to hide a source. */
+    assert.ok(
+      tokenSquaresProps(
+        {
+          schema: 'panel/v1',
+          id: 'token-usage',
+          kind: 'token-usage/v2',
+          title: 'Token usage',
+          status: 'ok',
+          data: { sources: [{ label: 's', windows: [] }] }
+        },
+        new Date('2026-08-27T12:00:00Z')
+      ).squares.some((square) => square.label.toLowerCase().includes('s')),
+      'a source with no series lost its square as well as its calendar'
+    );
+    const drawn = commitLogProps(
+      tokenOnly({ sources: [{ label: 's', windows: [], series: { startDate: '2026-08-01', totals: [1, 2, 3] } }] })
+    );
+    const set = drawn.sets.find((set) => set.key === 's');
+    assert.equal(set.noun, 'token');
+    assert.equal(set.stripLabel, 's token calendar: daily totals, newest last');
+    assert.ok(set.columns.length > 0, 'a real series draws its window');
+    /* THE READING IS BUILT FROM THE DAYS THE PAYLOAD ACTUALLY CARRIES, never
+       from a sentence an adapter guessed at (issue 158's finding, carried
+       through the move): the sum, the day count, the peak and the last day
+       covered are all measured from the same totals the grid draws. */
+    assert.equal(set.caption, `${formatMagnitude(6)} tokens over 3 days · peak ${formatMagnitude(3)} · data through 2026-08-03`);
+    // A windowless, statless source still states its honest empty face on its
+    // own square; a source with figures does not.
+    const board = tokenSquaresProps(envelopeFor({ sources: [{ label: 's', windows: [] }] }));
+    assert.equal(board.squares.find((square) => square.key === 'source-s').back.note, tokenUsageSourceEmptyNote);
+    const withWindows = tokenSquaresProps(envelopeFor(shippedPayload));
     assert.equal(withWindows.emptyNote, 'No usage data available.');
+  });
+
+  it('lays every source onto the ONE window the section derives, never one each', () => {
+    /* Issue 268's rule, carried into the cycler (owner directive of
+       2026-09-03, issue 287): several series in one section have to be read
+       against each other, so every set is laid onto the SAME calendar — the
+       week that ends the contribution window ends every window. A source that
+       stopped capturing early would otherwise draw a window silently offset
+       from the one above it. */
+    const props = commitLogProps(
+      tokenOnly({
+        sources: [
+          { label: 'a', windows: [], series: { startDate: '2026-08-01', totals: [1, 2, 3] } },
+          { label: 'b', windows: [], series: { startDate: '2026-06-01', totals: [4] } }
+        ]
+      }),
+      new Date('2026-09-03T10:00:00Z')
+    );
+    const lastDayOf = (set) => set.columns.at(-1).at(-1).date;
+    const [, first, second] = props.sets;
+    // Both sources end on the SAME calendar week — the one holding the
+    // section's anchor day — however far apart their own captures started.
+    assert.equal(lastDayOf(first), '2026-09-05');
+    assert.equal(lastDayOf(second), lastDayOf(first));
+    assert.equal(first.columns.length, second.columns.length);
+    assert.equal(first.columns.length, pendingWeeks);
   });
 });
 
@@ -844,82 +1095,62 @@ describe('category lens helpers', () => {
 
   /* Lens RESOLUTION used to be a helper here (`lensValues`), and its unit test
      sat in this spot. Both are gone: main's block architecture moved lens
-     resolution into the component, which resolves an `UsageCategory` from the
-     adapter-built list and falls back to the plain series when the active lens
-     names nothing — so the helper had no production caller left, and a test
-     whose only subject is unshipped code measures nothing. The behaviour it
-     described is still pinned, in the two places that now decide it: the
-     component's own fallback expression, asserted ABOVE by `switches the
-     activity view client-side over one series`, and the real-engine lens
-     behaviour in `e2e/rendering-lanes.spec.mjs` :: `a source lens moves its
-     own graph and leaves its neighbour on daily`. */
-
-  /* The lens VOCABULARY is what the adapter delivers, and the lens LOOKUP is
-     the component's `activeLensCategory` over exactly this list. A resolver
-     helper in this module was deleted as dead code (coordinator ruling,
-     2026-08-26): nothing on main ever called it, and the component already
-     resolves its own lens, so keeping it would have been a second
-     lens-resolution path pinned by tests that only it satisfied.
-
-     The four behaviours those tests pinned still SHIP, so they are asserted
-     here against the surviving path instead: a named lens reads its own
-     dailies, an unreported lens has no entry to find, a series with no
-     breakdown offers no lens at all, and the total sentinel travels as data.
-     The component-side half of each — the guard and the fallback expression
-     that consume them — is pinned in panels-ui.test.mjs. */
-  it('delivers the lens vocabulary the component looks up, and nothing to resolve it with', () => {
-    const props = tokenUsageProps(
-      envelopeFor({ sources: [{ label: 'alpha', windows: [], series }] })
-    );
-    const categories = props.sections[0].activity.categories;
+     resolution into the component, and the owner's 2026-08-28 reversal then
+     removed the lens itself along with the whole display menu. What the
+     categories are FOR did not go with it — the owner's directive of
+     2026-09-03 (issue 287) put the per-day breakdown on the back of each
+     source's square, where it is delivered data a reader reads rather than a
+     question they answer. So the vocabulary the adapter delivers is pinned
+     here against that surface, and the four behaviours the retired resolver's
+     tests described are asserted against the path that ships. */
+  it('delivers the category breakdown the square turns over to, and nothing to resolve it with', () => {
+    const backOf = (payload) =>
+      tokenSquaresProps(envelopeFor(payload)).squares.find((square) => square.key === 'source-alpha')
+        .back;
+    const back = backOf({ sources: [{ label: 'alpha', windows: [], series }] });
     assert.deepEqual(
-      categories.map((category) => category.key),
-      ['input', 'cache-read']
+      back.facts.map((fact) => fact.key),
+      ['input', 'cache-read'],
+      'the served order is the rendered order'
     );
-    /* A named lens reads its OWN dailies, delivered unchanged from the
-       served category — the value the retired helper's second assertion
-       measured. */
+    /* A named category reads its OWN dailies, summed from the served row —
+       the value the retired helper's second assertion measured. cache-read is
+       9+18+27 of a 60-token series, input is 1+2+3. */
+    const factFor = (key) => back.facts.find((fact) => fact.key === key);
+    assert.equal(factFor('cache-read').value, `${formatTokenCount(54)} · ${formatShare(90)}`);
+    assert.equal(factFor('input').value, `${formatTokenCount(6)} · ${formatShare(10)}`);
+    /* A category this source does not report has no entry at all, which is
+       what keeps the face a statement about real data rather than a table of
+       zeroes for classes nobody used. */
+    assert.equal(factFor('reasoning'), undefined);
+    /* And a series with no breakdown at all turns over to the source's own
+       remaining stats instead — the second half of the same fallback, and the
+       reason a payload that reports only tiles still has something true
+       behind its square. */
+    const plain = backOf({
+      sources: [
+        {
+          label: 'alpha',
+          windows: [],
+          series: { startDate: '2026-08-10', totals: [5] },
+          stats: [{ key: 'chats', label: 'Chats', value: 4, unit: 'count' }]
+        }
+      ]
+    });
     assert.deepEqual(
-      categories.find((category) => category.key === 'cache-read').totals,
-      [9, 18, 27]
+      plain.facts.map((fact) => [fact.key, fact.value, fact.slot]),
+      [['chats', '4', undefined]],
+      'a source with no breakdown lists its own stats, and a stat owns no palette slot'
     );
-    assert.deepEqual(
-      categories.find((category) => category.key === 'input').totals,
-      [1, 2, 3]
-    );
-    /* A lens this source does not report has no entry to find, which is what
-       sends the component's lookup to the plain series — real data, never a
-       guess. */
-    assert.equal(
-      categories.find((category) => category.key === 'reasoning'),
-      undefined
-    );
-    /* And a series with no breakdown at all offers no lens row: the second
-       half of the same fallback. */
-    const plain = tokenUsageProps(
-      envelopeFor({
-        sources: [
-          { label: 'alpha', windows: [], series: { startDate: '2026-08-10', totals: [5] } }
-        ]
-      })
-    );
-    assert.equal(plain.sections[0].activity.categories, undefined);
-    assert.deepEqual(plain.sections[0].activity.series.totals, [5]);
-    /* Neither the resolver nor its sentinel came back here, and the adapter
-       reads the served category directly rather than through one. The
-       sentinel is stated once, in the component that decides with it. */
+    /* Neither the resolver nor its sentinel came back, and the adapter reads
+       the served category directly rather than through one. */
     assert.doesNotMatch(helper, /lensValues/, 'the dead lens resolver is back');
     assert.doesNotMatch(helper, /totalLens/, 'the adapter grew back a second copy of the sentinel');
-    assert.match(helper, /totals: category\.totals,/);
-    /* A category carries a NOUN, never a finished sentence: the reading is
-       built by lib/periods.ts from the cells actually drawn, so a lens and a
-       window cannot describe two different graphs. */
-    for (const category of categories) {
-      assert.equal(category.noun, `${category.label} token`);
-      assert.equal(category.summary, undefined);
-    }
-    assert.match(helper, /noun: `\$\{categoryLabel\(category\.key\)\} \$\{tokenActivityNoun\}`/);
     assert.doesNotMatch(helper, /function usageActivitySummary/, 'the adapter grew back a window-blind sentence');
+    /* A category still carries no finished SENTENCE: the caption under the
+       graph is built by lib/commits.ts from the days actually drawn, so a
+       breakdown and a window cannot describe two different pictures. */
+    assert.doesNotMatch(helper, /summary:/, 'the adapter grew back a sentence about a window it cannot see');
   });
 
   it('summarizes shares from the same integers the grid draws', () => {
@@ -1286,19 +1517,25 @@ describe('activity insights provenance', () => {
     ...extra
   });
 
-  it('reads the rows from the live series when the payload carries models', () => {
-    const props = tokenUsageProps(
-      envelopeFor({
-        sources: [
-          sourceWith({
-            insights: [{ label: 'Frozen', pct: 99, recorded: true }]
-          })
-        ]
-      })
+  /* The insight rows are the model split, and since the owner's directive of
+     2026-09-03 (issue 287) they are the bars on the board's "Models · <source>"
+     square: the first source's shares on the front, the second's behind it.
+     Every property these pins protected is a property of the ROWS, so they
+     read the bars the adapter builds rather than a region that no longer
+     exists. */
+  const modelBars = (payload, face = 'front') => {
+    const square = tokenSquaresProps(envelopeFor(payload)).squares.find(
+      (candidate) => candidate.key === 'models'
     );
-    const insights = props.sections[0].insights;
+    return (face === 'front' ? square?.bars : square?.back.bars) ?? [];
+  };
+
+  it('reads the rows from the live series when the payload carries models', () => {
+    const bars = modelBars({
+      sources: [sourceWith({ insights: [{ label: 'Frozen', pct: 99, recorded: true }] })]
+    });
     assert.deepEqual(
-      insights.rows.map((row) => [row.label, row.reading]),
+      bars.map((bar) => [bar.label, bar.reading]),
       [
         ['Opus 5', '80%'],
         ['Fable 5', '20%']
@@ -1306,140 +1543,174 @@ describe('activity insights provenance', () => {
     );
     // The frozen release-time set is not merged in beside the measured one:
     // two answers to one question is worse than the older answer alone.
-    assert.equal(
-      insights.rows.find((row) => row.label === 'Frozen'),
-      undefined
+    assert.equal(bars.find((bar) => bar.label === 'Frozen'), undefined);
+    /* THE RANGE IS STILL MEASURED OVER THE WINDOW THE MODELS COVER, never the
+       whole series — the property the retired range note ANNOUNCED, and the
+       one that makes the percentages true. It is asserted here on the figures
+       themselves (80/20 over the two declared days, not over the three-day
+       series), and independently against modelShares in "takes shares over the
+       window the models cover, never the whole series". */
+    assert.deepEqual(
+      modelShares(sourceWith({}).series).map((share) => [share.key, share.pct]),
+      [
+        ['opus-5', 80],
+        ['fable-5', 20]
+      ]
     );
-    // And the range is stated, because a percentage with no stated range
-    // invites the reader to assume the widest one.
-    assert.equal(insights.note, 'share of tokens · Aug 11–12, 2026');
   });
 
   it('falls back to the shipped insights when no model partition exists', () => {
-    const props = tokenUsageProps(
-      envelopeFor({
-        sources: [
-          {
-            label: 'alpha',
-            windows: [],
-            series: { startDate: '2026-08-10', totals: [10] },
-            insights: [{ label: 'Frozen', pct: 99, recorded: true }]
-          }
-        ]
-      })
-    );
-    const insights = props.sections[0].insights;
-    assert.deepEqual(
-      insights.rows.map((row) => row.label),
-      ['Frozen']
-    );
-    // No note: the frozen set is not measured over any window this panel can
-    // name, and inventing one would be exactly the borrowed freshness the
-    // panel doctrine forbids.
-    assert.equal(insights.note, undefined);
+    const bars = modelBars({
+      sources: [
+        {
+          label: 'alpha',
+          windows: [],
+          series: { startDate: '2026-08-10', totals: [10] },
+          insights: [{ label: 'Frozen', pct: 99, recorded: true }]
+        }
+      ]
+    });
+    assert.deepEqual(bars.map((bar) => bar.label), ['Frozen']);
+    assert.equal(bars[0].reading, formatShare(99));
   });
 
   it('weighs the DERIVED rows when it decides whether provenance is mixed', () => {
-    // The rows are resolved before the marks are, so a live-derived set is
-    // weighed exactly as a served one. Here the tiles are live and the
-    // derived rows inherit the series' recorded provenance, so the section is
-    // mixed and only the recorded figures carry the mark.
-    const props = tokenUsageProps(
-      envelopeFor({
-        sources: [
-          sourceWith({
-            stats: [{ key: 'lifetime', label: 'Lifetime', value: 7, unit: 'tokens' }]
-          })
-        ]
-      })
-    );
-    const section = props.sections[0];
-    assert.deepEqual(
-      section.insights.rows.map((row) => row.marked),
-      [true, true]
-    );
-    assert.equal(section.tiles[0].marked, false);
+    /* The rows must be resolved BEFORE the marks are, so a live-derived set is
+       weighed exactly as a served one. Here the one stat is live and the
+       derived rows inherit the series' recorded provenance, so the source is
+       mixed and the recorded figures carry the mark.
+
+       This is a property of the ADAPTER, unchanged by the owner's directive of
+       2026-09-03 (issue 287): a figure captured out of band says so, and
+       whether it needs to say so is decided against the whole population of
+       figures a surface shows — derived rows included. */
+    const bars = modelBars({
+      sources: [sourceWith({ stats: [{ key: 'lifetime', label: 'Lifetime', value: 7, unit: 'tokens' }] })]
+    });
+    assert.deepEqual(bars.map((bar) => bar.marked), [true, true]);
   });
 
   it('marks nothing when the derived rows and the tiles share one provenance', () => {
-    const props = tokenUsageProps(
-      envelopeFor({
-        sources: [
-          sourceWith({
-            stats: [
-              { key: 'lifetime', label: 'Lifetime', value: 7, unit: 'tokens', recorded: true }
-            ]
-          })
-        ]
-      })
-    );
-    const section = props.sections[0];
-    assert.deepEqual(
-      section.insights.rows.map((row) => row.marked),
-      [false, false]
-    );
-    assert.equal(section.tiles[0].marked, false);
+    const bars = modelBars({
+      sources: [
+        sourceWith({
+          stats: [{ key: 'lifetime', label: 'Lifetime', value: 7, unit: 'tokens', recorded: true }]
+        })
+      ]
+    });
+    assert.deepEqual(bars.map((bar) => bar.marked), [false, false]);
   });
 
-  it('renders the range note under the heading, gated on it existing', () => {
-    assert.match(component, /\{#if source\.insights\.note\}/);
-    assert.match(component, /<p class="usage-insights-note">\{source\.insights\.note\}<\/p>/);
+  it("carries the second source's split on the back of the same square", () => {
+    /* The owner's drawing (2026-09-03, issue 287) puts one source's model
+       split on the front and the next source's behind it, so the two are read
+       by turning one square rather than by hunting two. A payload with a
+       single source turns over to its own honest note instead of an empty
+       chart. */
+    const both = {
+      sources: [
+        sourceWith({}),
+        {
+          label: 'beta',
+          windows: [],
+          series: { startDate: '2026-08-10', totals: [4], models: [{ key: 'sonnet-5', totals: [4] }] }
+        }
+      ]
+    };
+    assert.deepEqual(modelBars(both, 'back').map((bar) => bar.label), ['Sonnet 5']);
+    const alone = { sources: [sourceWith({})] };
+    assert.deepEqual(modelBars(alone, 'back'), []);
+    const square = tokenSquaresProps(envelopeFor(alone)).squares.find(
+      (candidate) => candidate.key === 'models'
+    );
+    assert.equal(square.back.note, tokenUsageSourceEmptyNote);
+  });
+
+  it('never encodes a share by colour alone', () => {
+    /* The dataviz floor, carried onto the bars: every one of them prints its
+       own label and its own reading beside the fill, and the fill is the
+       redundant channel. */
+    assert.match(component, /class="board-bar-label">\{bar\.label\}/);
+    assert.match(component, /class="board-reading">\{bar\.reading\}/);
   });
 });
 
 describe('category breakdown surface', () => {
-  it('gates the composition strip on the composition existing', () => {
-    /* RE-AIMED for the owner's 2026-08-28 reversal. This used to gate TWO
-       things on a source reporting categories: the category lens in the
-       display menu, and the composition strip. The lens went with the menu;
-       the strip did not, and must not — it is delivered data a reader reads,
-       never a question they answer, which is exactly the distinction the
-       owner drew ("the filters don't provide any value"). So the gate that
-       remains is pinned here, and the retired one is pinned as an absence so
-       the lens cannot come back through this door. */
-    assert.match(component, /\{#if source\.activity\.composition && source\.activity\.composition\.length > 0\}/);
-    assert.match(component, /class="usage-composition-bar"/);
-    assert.match(component, /class="usage-composition-rows"/);
-    assert.doesNotMatch(
-      component,
-      /source\.activity\.categories/,
-      'the component reads the category vocabulary again, which only the retired lens ever needed'
-    );
+  it("gates the breakdown on the source having one", () => {
+    /* RE-AIMED TWICE. The owner's 2026-08-28 reversal gated TWO things on a
+       source reporting categories — the lens in the display menu, and the
+       composition strip — and took the lens away. The directive of 2026-09-03
+       (issue 287) moved what remained onto the back of the source's own
+       square, which is the same distinction the owner drew then: delivered
+       data a reader reads, never a question they answer. So the gate that
+       remains is pinned here, and the retired one is pinned as an absence in
+       BOTH components so the lens cannot come back through either door. */
+    assert.match(component, /\{:else if square\.back\.facts\}/);
+    assert.match(component, /class="board-facts"/);
+    assert.match(component, /\{#each square\.back\.facts as fact \(fact\.key\)\}/);
+    for (const [name, source] of Object.entries({ component, commits })) {
+      assert.doesNotMatch(
+        source,
+        /activity\.categories|activeLensCategory/,
+        `${name} reads the category vocabulary again, which only the retired lens ever needed`
+      );
+    }
   });
 
   it('never encodes a category by color alone', () => {
-    /* Every segment carries its category's name and figures in the tooltip —
-       built as data by the adapter, rendered verbatim by the component — and
-       every legend chip sits BESIDE the written label and value. */
-    assert.match(helper, /tooltip: `\$\{categoryLabel\(share\.key\)\}: \$\{formatTokenCount\(share\.total\)\} tokens/);
-    assert.match(component, /title=\{share\.tooltip\}/);
-    assert.match(component, /class="usage-composition-label">\{share\.label\}</);
-    assert.match(component, /class="usage-composition-value"/);
-    /* Figures wear the text token, never a series color. */
-    assert.match(component, /\.usage-composition-value \{[^}]*var\(--panel-text/);
+    /* Every fact carries its category's name and its figures BESIDE the
+       swatch — built as data by the adapter, rendered verbatim by the
+       component — so the colour is the redundant channel and the swatch is
+       decorative to assistive technology. This is stronger than the retired
+       strip's arrangement, which put the exact figures in a title attribute
+       that no touch device could open (issue 219). */
+    assert.match(helper, /value: `\$\{formatTokenCount\(share\.total\)\} · \$\{formatShare\(share\.pct\)\}`/);
+    assert.match(component, /class="board-term">\{fact\.term\}/);
+    assert.match(component, /class="board-value">\{fact\.value\}/);
+    assert.match(component, /class="board-swatch" data-slot=\{fact\.slot\} aria-hidden="true"/);
+    assert.doesNotMatch(component, /\stitle=/, 'a title attribute has no touch trigger in any engine');
+    /* Figures wear the face's own ink, never a series colour. */
+    assert.match(sheet, /\.board-value \{[^}]*font-variant-numeric: tabular-nums/);
   });
 
-  it('keeps 2px surface gaps between stacked segments (dataviz mark spec)', () => {
-    assert.match(component, /\.usage-composition-bar \{[^}]*gap: 2px/);
+  it('separates the swatches from the values with the sheet gap (dataviz mark spec)', () => {
+    /* The retired strip stacked segments in one bar and needed a 2px surface
+       gap to keep adjacent categories apart. The board lists them as rows
+       instead (owner directive of 2026-09-03, issue 287), so the separation is
+       the row gap and the swatch's own box — a stronger separation than 2px,
+       and one that cannot collapse when two adjacent categories are close in
+       hue. */
+    assert.match(sheet, /\.board-facts \{[^}]*gap: 0\.25rem/);
+    assert.match(sheet, /\.board-swatch \{[^}]*inline-size: 0\.5rem/);
+    assert.match(sheet, /\.board-swatch \{[^}]*block-size: 0\.5rem/);
   });
 
   it('resolves every category color from a global token slot', () => {
+    /* The slot rules moved to styles.css with the rest of the board's
+       geometry (owner directive of 2026-09-03, issue 287), which is also what
+       keeps them CSP-safe: a closed set of attribute rules rather than a
+       per-element inline style, exactly as the heatmap's levels are. */
     for (let slot = 0; slot <= 5; slot += 1) {
-      assert.match(component, new RegExp(`var\\(--usage-cat-${slot},`));
+      assert.match(sheet, new RegExp(`background: var\\(--usage-cat-${slot}\\)`));
+      assert.match(sheet, new RegExp(`--usage-cat-${slot}: var\\(--color-cat-${slot}\\)`));
     }
     /* The component draws whatever slot the adapter assigned; the adapter is
        where the entity-owns-its-slot rule lives (categorySlot above). */
-    assert.match(component, /data-category-slot=\{share\.slot\}/);
+    assert.match(component, /data-slot=\{fact\.slot\}/);
     assert.match(helper, /slot: categorySlot\(share\.key\)/);
+    // No component declares a palette token of its own; it may only read one.
+    assert.doesNotMatch(component, /--usage-cat-\d\s*:/, 'a component declares a palette slot');
   });
 
   it('renders every payload string as text, never markup', () => {
     /* Svelte escapes text interpolation; what would break that promise is a
-       raw-HTML injection, so the component may never contain one. A hostile
+       raw-HTML injection, so neither component may ever contain one. A hostile
        label in a payload therefore renders as inert text, and a hostile
        category KEY cannot even reach the renderer (admission refuses it —
        proven above). */
-    assert.doesNotMatch(component, /\{@html/);
+    for (const [name, source] of Object.entries({ component, commits })) {
+      assert.doesNotMatch(source, /\{@html/, name);
+    }
   });
 });
 
@@ -1600,18 +1871,86 @@ describe('the stale data-through note', () => {
     assert.equal(usageStaleNote('stale', undefined, [{ label: 's', windows: [] }], now), undefined);
   });
 
-  it('rides tokenUsageProps into the component, which renders it above the sections', () => {
-    const props = tokenUsageProps(
+  it('rides the adapter into the shell head, where a late line moves nothing', () => {
+    /* The line still arrives as adapter-built words the component never
+       composes. Where it RENDERS moved with the owner's directive of
+       2026-09-03 (issue 287): the board's body is a grid of fixed squares, so
+       the shell's head — the one row a card already reserves beside its title
+       — is the only place a late line can appear without moving anything.
+       That is the identical arrangement the calendar has used since issue 285,
+       so the page now has one home for this line rather than two. */
+    const props = tokenSquaresProps(
       envelopeFor({ sources: seriesSources }, { generatedAt: '2026-08-25T12:00:00Z' }),
       now
     );
     assert.equal(props.staleNote, 'data through Aug 25, 2026 · last capture 7d ago');
-    const fresh = tokenUsageProps(
+    const fresh = tokenSquaresProps(
       envelopeFor({ sources: seriesSources }, { generatedAt: '2026-09-01T11:30:00Z' }),
       now
     );
     assert.equal(fresh.staleNote, undefined);
-    assert.match(component, /data-usage-stale/);
-    assert.match(component, /\{#if staleNote\}/);
+    assert.match(component, /note=\{staleNote\}/);
+    assert.doesNotMatch(
+      component,
+      /class="board-note">\{staleNote\}/,
+      'the stale line grew the board body it must not move'
+    );
+  });
+});
+
+/* PROVENANCE BY EXCEPTION, ON THE FACE A READER OPENS (issue 268's wording,
+ * carried into the board by the owner directive of 2026-09-03, issue 287).
+ *
+ * The retired tile panel put a visible "· recorded" suffix beside a figure.
+ * The owner removed that mark from the repository rows in the same breath
+ * ("just remove it") and moved provenance to the surface a reader opens, so
+ * the board's answer is the same one the card's counters give: the sentence
+ * lives where the figures it qualifies are, which for a square is its back.
+ *
+ * The rule is unchanged in both directions — a source whose every figure
+ * shares one provenance marks none of them, and a source that mixes them says
+ * so — and the sentence is the page's ONE constant rather than a copy. */
+describe('a figure captured out of band says so on the face that shows the breakdown', () => {
+  it('marks a recorded source, and says it in the shared wording', () => {
+    const [total, anthropic] = tokenSquares([
+      {
+        label: 'anthropic',
+        windows: [],
+        stats: [
+          { key: 'lifetime', label: 'Lifetime tokens', value: 10, unit: 'tokens', recorded: true },
+          { key: 'input', label: 'Input', value: 4, unit: 'tokens', recorded: true }
+        ]
+      }
+    ]);
+    assert.equal(anthropic.back.note, recordedOutOfBand);
+    assert.equal(total.back.note, recordedOutOfBand);
+    assert.equal(recordedOutOfBand, 'recorded out of band, not fetched live');
+  });
+
+  it('marks nothing when every figure was fetched live', () => {
+    const [total, anthropic] = tokenSquares([
+      {
+        label: 'anthropic',
+        windows: [],
+        stats: [
+          { key: 'lifetime', label: 'Lifetime tokens', value: 10, unit: 'tokens' },
+          { key: 'input', label: 'Input', value: 4, unit: 'tokens' }
+        ]
+      }
+    ]);
+    assert.equal(anthropic.back.note, undefined, 'a live source claimed an out-of-band capture');
+    assert.equal(total.back.note, undefined);
+  });
+
+  it('renders the note on the back face, never on the front', () => {
+    assert.match(
+      component,
+      /data-face="back"[\s\S]*?\{#if square\.back\.note\}<span class="board-sub">\{square\.back\.note\}<\/span>\{\/if\}/,
+      'the provenance sentence has no rendered home on the board'
+    );
+    assert.ok(
+      !component.includes('recorded out of band'),
+      'the component spells the provenance wording itself; it is one constant, carried as data'
+    );
   });
 });

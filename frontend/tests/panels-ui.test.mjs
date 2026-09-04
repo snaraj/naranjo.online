@@ -3,27 +3,23 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { vcsActivityProps } from '../src/lib/activity.ts';
-import { bossInitials, bossSlug, skillSlug } from '../src/lib/bossIcons.ts';
+import { bossInitials, bossSlug } from '../src/lib/bossIcons.ts';
 import {
   bossDetail,
-  bossLogEmptySkillsNote,
   bossLogFallbackTitle,
+  bossLogFanContentNotice,
   bossLogLoadingNote,
   bossLogPanelId,
+  bossLogStripLabel,
   bossLogUnavailableNote,
+  bossTickerProps,
   cellLabel,
   noTally,
-  osrsStatsProps,
   rankLabel,
-  skillDetail,
-  skillLabel,
-  skillSummary,
-  summaryDetail,
-  summaryLabel,
   tally,
   unrankedLabel,
 } from '../src/lib/bossLog.ts';
+import { commitLogProps } from '../src/lib/commits.ts';
 import { unavailablePanel } from '../src/lib/panels.ts';
 import { projects } from '../src/lib/projects.ts';
 
@@ -62,71 +58,86 @@ const [
   shell,
   pageHeaderSource,
   fallbackShell,
-  statTracker,
+  ticker,
   panelsSource,
   iconsSource,
   viteConfig,
   grid,
   gridSource,
-  activityTracker,
-  usageTracker,
+  commitLog,
+  ledgerBoard,
   styles,
   themeMenu,
   detailTip,
   manifest,
   pageSection,
   blockHost,
-  osrsBinding,
+  bossBinding,
 ] = await Promise.all([
   read('../src/App.svelte'),
   read('../src/lib/components/PanelShell.svelte'),
   read('../src/lib/components/PageHeader.svelte'),
   read('../index.html'),
-  read('../src/lib/components/StatTracker.svelte'),
+  read('../src/lib/components/Ticker.svelte'),
   read('../src/lib/panels.ts'),
   read('../src/lib/bossIcons.ts'),
   read('../vite.config.ts'),
   read('../src/lib/components/ContributionGrid.svelte'),
   read('../src/lib/grid.ts'),
-  read('../src/lib/components/ActivityTracker.svelte'),
-  read('../src/lib/components/UsageTracker.svelte'),
+  read('../src/lib/components/CommitLog.svelte'),
+  read('../src/lib/components/LedgerBoard.svelte'),
   read('../src/styles.css'),
   read('../src/lib/ThemeMenu.svelte'),
   read('../src/lib/components/DetailTip.svelte'),
   read('../src/page.ts'),
   read('../src/lib/components/PageSection.svelte'),
   read('../src/lib/components/Block.svelte'),
-  read('../src/lib/blocks/osrsStats.ts'),
+  read('../src/lib/blocks/bossTicker.ts'),
 ]);
 
 /* The two sibling binding modules, read beside the one above so the
  * stays-current pin can sweep all three panel bindings. */
 const bindingSourceCache = {
-  vcs: await read('../src/lib/blocks/vcsActivity.ts'),
-  usage: await read('../src/lib/blocks/tokenUsage.ts'),
+  commits: await read('../src/lib/blocks/commitLog.ts'),
+  squares: await read('../src/lib/blocks/tokenSquares.ts'),
+  projects: await read('../src/lib/blocks/codingProjects.ts'),
 };
 
 /* The adapter module beside the boss-log data, for the account-privacy pin. */
 const bossLogHelperSource = await read('../src/lib/bossLog.ts');
 
+/* The composite adapter behind the commits section, for the shared-window pin
+ * below: it is the one place the three calendars are laid onto one anchor. */
+const commitsAdapter = await read('../src/lib/commits.ts');
+
 // Like the experience suite, these are structural regex pins over source:
 // they hold the shapes the owner specified — chrome values, grid density,
 // fail-soft rendering — while leaving copy and styling free to evolve.
-test('the manifest mounts exactly the three tracker blocks, in the stacked order', () => {
-  // The fences retired with the table-of-contents App (issue 165): the
-  // manifest IS the mount list, one ordered entry per block, and the page
-  // renders it verbatim. Adding a tracker is adding one block to this line.
-  // The owner reversed the section's two ends on 2026-08-25 — the token
-  // tracker opens it and the game tracker closes it, with the
-  // version-control tracker unmoved between them.
+test('the manifest mounts exactly the two tracker blocks, in the stacked order', () => {
+  /* The fences retired with the table-of-contents App (issue 165): the
+     manifest IS the mount list, one ordered entry per block, and the page
+     renders it verbatim.
+
+     The section holds TWO blocks now (owner directive, 2026-09-03, issue 287):
+     the version-control calendar left to lead its own COMMITS section, where a
+     segmented control cycles it against each token source's daily series, and
+     what stays here is what is still a tracker once the calendar has moved —
+     the board of token squares and the boss ticker, in that order. */
   assert.match(
     manifest,
-    /section\('trackers', 'Trackers', \[tokenUsage, vcsActivity, osrsStats\], \{ layout: 'stack' \}\)/,
+    /section\('trackers', 'Trackers', \[tokenSquares, bossTicker\], \{ layout: 'stack' \}\)/,
     'the trackers section must list exactly one entry per panel, in the order the page stacks them'
   );
-  // The page renders the manifest rather than spelling its own copy of it.
+  // ...and the calendar is mounted exactly once, in its own section.
+  assert.match(manifest, /section\('commits', 'Commits', \[commitLog\], \{ layout: 'stack' \}\)/);
+  // The page renders the manifest rather than spelling its own copy of it. The
+  // ordinal it passes is the manifest's own position, so a section moved there
+  // renumbers itself (owner directive, 2026-09-03, issue 287).
   assert.match(app, /import \{ page \} from '\.\/page\.ts'/);
-  assert.match(app, /\{#each page as section \(section\.id\)\}\s*<PageSection \{section\} \/>\s*\{\/each\}/);
+  assert.match(
+    app,
+    /\{#each page as section, position \(section\.id\)\}\s*<PageSection \{section\} ordinal=\{String\(position \+ 1\)\.padStart\(2, '0'\)\} \/>\s*\{\/each\}/
+  );
 });
 
 // The side rail is GONE (owner directive): the OSRS panel was a collapsible
@@ -142,7 +153,7 @@ test('the panels are one centered column, not a rail', () => {
   );
   // Nothing anywhere still reaches for the rail's geometry or its published
   // open-state attribute; a leftover reference is a gutter nobody reserves.
-  for (const [name, source] of Object.entries({ app, styles, themeMenu, activityTracker, statTracker, pageSection })) {
+  for (const [name, source] of Object.entries({ app, styles, themeMenu, commitLog, ticker, pageSection })) {
     assert.doesNotMatch(source, /data-rail-open|--page-rail-gutter|--panel-rail-|SideRail/, `${name} still references the retired rail`);
   }
   // The stack owns the column width and the gap; panels own neither, so a
@@ -155,13 +166,18 @@ test('the panels are one centered column, not a rail', () => {
   assert.match(pageSection, /\{#if section\.layout === 'stack'\}(?:\s*<!--[\s\S]*?-->)?\s*<div class="panel-stack" data-block-count=\{section\.blocks\.length\}>/);
   assert.match(styles, /\.panel-stack\s*\{[^}]*display:\s*grid/);
   assert.match(styles, /\.panel-stack\s*\{[^}]*gap:\s*var\(--page-stack-gap\)/);
-  // The header no longer shares this rule (owner directive, issue 168): it
-  // pinned to the viewport corner and decoupled from the column entirely.
-  assert.match(styles, /#app > main\s*\{[^}]*inline-size:\s*min\(var\(--page-column-width\), 100%\)/);
-  assert.doesNotMatch(
+  /* THE HEADER SHARES THIS RULE AGAIN, and the reversal is deliberate (owner
+     directive, 2026-09-03, issue 287). Issue 168 decoupled the two because the
+     header was a corner-pinned CONTROL that must not move when the reader
+     drags the feed. The ledger's header is a ROW of the sheet — its top rule —
+     so it has to begin and end exactly where every section head below it does,
+     and sharing the declaration is what makes that true by construction rather
+     than by two sets of numbers kept in step. The old coupling's actual defect
+     is fixed at its cause instead: the row is in the flow, so nothing about it
+     floats over the column. */
+  assert.match(
     styles,
-    /#app > \.page-header/,
-    'the header still shares a rule with the column it was told to decouple from'
+    /#app > main,\s*\.page-header \{[^}]*inline-size:\s*min\(var\(--page-column-width\), 100%\)/
   );
 });
 
@@ -269,18 +285,18 @@ test('no card announces its own age, and none keeps a control', () => {
   // empty fields; this is what makes the badge removal safe to make: a panel
   // with nothing true to show still says so in words. EXECUTED where the
   // words live, structural where they render.
-  assert.equal(osrsStatsProps(null, { levels: new Map(), tallies: new Map() }).note, bossLogLoadingNote);
+  assert.equal(bossTickerProps(null, new Map()).emptyNote, bossLogLoadingNote);
   assert.equal(bossLogUnavailableNote, 'Boss data is unavailable right now.');
   // A failed read's fail-soft envelope carries no title (issue 285): the
   // face it produces keeps this panel's heading rather than rendering a
   // headless line — the only face of the boss log that read as "not rendered".
-  const failed = osrsStatsProps(unavailablePanel(bossLogPanelId), { levels: new Map(), tallies: new Map() });
+  const failed = bossTickerProps(unavailablePanel(bossLogPanelId), new Map());
   assert.equal(failed.title, bossLogFallbackTitle);
-  assert.equal(failed.note, bossLogUnavailableNote);
+  assert.equal(failed.emptyNote, bossLogUnavailableNote);
   assert.equal(failed.status, 'unavailable');
-  assert.match(statTracker, /\{#if grids\.length === 0 && note\}\s*<p class="stat-note">\{note\}<\/p>/);
-  assert.match(activityTracker, /<span class="activity-empty">\{figuresNote\}<\/span>/);
-  assert.match(usageTracker, /<p class="usage-empty">\{emptyNote\}<\/p>/);
+  assert.match(ticker, /\{#if items\.length === 0\}\s*<p class="ticker-note">\{emptyNote\}<\/p>/);
+  assert.match(commitLog, /<p class="commit-note">\{rowsNote\}<\/p>/);
+  assert.match(ledgerBoard, /<p class="board-note">\{emptyNote\}<\/p>/);
   // No per-card control, and no panel hands one up any more.
   assert.doesNotMatch(shell, /panel-refresh|<button/, 'a card grew its own refresh control back');
   // Two spellings, because a bespoke refresher does not have to be CALLED
@@ -308,9 +324,9 @@ test('no card announces its own age, and none keeps a control', () => {
   // is the ONE host every panel block renders through, so a control added
   // there appears on every card at once.
   for (const [name, source] of Object.entries({
-    statTracker,
-    activityTracker,
-    usageTracker,
+    ticker,
+    commitLog,
+    ledgerBoard,
     panelShell: shell,
     blockHost,
   })) {
@@ -342,10 +358,17 @@ test('the refresh control is gone, and nothing it owned survives as dead code', 
     'the refresh component must not come back'
   );
   assert.doesNotMatch(pageHeaderSource, /RefreshAll/, 'the header still names the retired control');
-  assert.match(
-    pageHeaderSource,
-    /<header class="page-header">\s*<ThemeMenu \/>\s*<\/header>/,
-    'the reading mode is the header’s only control now'
+  /* The chrome row gained the section nav and the wordmark with the ledger
+     (owner directive, 2026-09-03, issue 287), so "one control" is no longer
+     the shape to pin — what is, and what issue 179 actually decided, is that
+     the reading mode is the only ACTION in the row: everything else there is
+     navigation or a label. */
+  assert.match(pageHeaderSource, /<header class="page-header">/);
+  assert.match(pageHeaderSource, /<ThemeMenu \/>/);
+  assert.equal(
+    (pageHeaderSource.match(/<button/g) ?? []).length,
+    0,
+    'the header declares a button of its own again; its one action is the reading mode, which ThemeMenu owns'
   );
   assert.doesNotMatch(app, /RefreshAll/, 'the refresh must not head the panel stack again either');
   // THE FAN-OUT IS BACK, WITH A CALLER — and that condition is now the pin
@@ -404,12 +427,14 @@ test('the refresh control is gone, and nothing it owned survives as dead code', 
 // name that one exception rather than lifted; every OTHER float is still
 // exactly as forbidden as it was.
 test('no page chrome floats over the document', () => {
-  // The header's own rule is carved out of styles.css before the blanket
-  // sweep below, and checked separately underneath — it is the one deliberate
-  // exception now, not an absence to prove.
-  const headerRule = /\.page-header\s*\{([^}]*)\}/.exec(styles);
-  assert.ok(headerRule, 'the page header rule is not where this pin expects it');
-  const stylesWithoutHeader = styles.slice(0, headerRule.index) + styles.slice(headerRule.index + headerRule[0].length);
+  /* THE EXCEPTION IS GONE (owner directive, 2026-09-03, issue 287). Issue 168
+     put one piece of chrome back over the document — the reading-mode control,
+     pinned to the viewport corner — and this pin was narrowed to carve its
+     rule out before sweeping. The ledger's chrome is a row IN the flow, so
+     there is nothing left to carve out and the sweep is over the whole
+     stylesheet again: strictly stronger than it was, and the shape the
+     original pin had before the exception existed. */
+  const stylesWithoutHeader = styles;
   // styles.css is in this sweep deliberately and is the load-bearing entry:
   // most page chrome's rule lives THERE, not in a component, so a scan of
   // components alone would let the exact drift this test is named for return
@@ -417,9 +442,9 @@ test('no page chrome floats over the document', () => {
   for (const [name, source] of Object.entries({
     pageHeaderSource,
     themeMenu,
-    activityTracker,
-    statTracker,
-    usageTracker,
+    commitLog,
+    ticker,
+    ledgerBoard,
     pageSection,
     blockHost,
     shell,
@@ -435,212 +460,44 @@ test('no page chrome floats over the document', () => {
       `${name} floats over the page again; fixed chrome is what made the controls drift`
     );
   }
-  /* TWO narrow, named exceptions, stated here where the owner will read them.
+  /* ONE narrow, named exception, stated here where the owner will read it.
 
-     The page header (owner directive, issue 168): "push the icons all the
-     way to the top right, outside of the feed... I don't like how they move
-     when I drag the feed in and out." Fixed positioning is the fix rather
-     than the defect this time, because it is what decouples the header from
-     the column it used to share a rule with — the exact coupling that made
-     it drift. It stays safe for a different reason than the detail below:
-     it is real interactive chrome, so it keeps the pointer and stays visible,
-     but it reserves no layout space (nothing above it needs to hold a gap
-     open any more) and clears the same safe-area insets #app does, through
-     its own inset tokens. */
-  assert.match(headerRule[1], /position:\s*fixed/, 'the header is no longer pinned to the viewport corner; this exception is stale and should go');
-  assert.match(headerRule[1], /inset-block-start:\s*var\(--header-inset-block,\s*var\(--page-gutter\)\)/);
-  assert.match(headerRule[1], /inset-inline-end:\s*var\(--header-inset-inline,\s*var\(--page-gutter\)\)/);
-  // Coordinator quality pass on issue 186: --header-inset-inline/--header-inset-block
-  // used to carry a plain-base declaration ahead of the env()-guarded one, on
-  // the mistaken claim that a later custom-property declaration degrades the
-  // way a later REGULAR-property one can. It cannot: any value parses as a
-  // custom property, so the second declaration always wins and the first was
-  // dead code. Exactly one declaration of each survives.
-  for (const token of ['--header-inset-inline', '--header-inset-block']) {
-    const declarations = styles.match(new RegExp(`${token}:\\s*[^;]+;`, 'g')) ?? [];
-    assert.equal(declarations.length, 1, `${token} must be declared exactly once, not shadowed by a dead fallback`);
-    assert.match(declarations[0], /env\(safe-area-inset-/, `${token}'s one declaration must still clear the safe area`);
-  }
+     The page header used to be the other one (issue 168) and is not any more:
+     the ledger's chrome is a row in the document's own flow (owner directive,
+     2026-09-03, issue 287), so it is swept by the loop above like everything
+     else and needs no carve-out. That is the stricter direction — the
+     exception list shrank rather than grew.
 
-  /* The hover-detail primitive (owner directive, 2026-08-24). It is fixed so
-     it can follow the cursor, and fixed positioning is what makes its
-     containment structural — a fixed box sits outside the document's
-     scrollable overflow, so no position it takes can drag the page sideways,
-     which is the 320px floor the retired per-column anchoring existed to
-     protect.
+     What survives from the pair: the detail card (DetailTip) is fixed on
+     purpose and always has been — it is a readout, not chrome, it takes no
+     pointer, and being outside every scrollable ancestor is exactly what
+     stops it being clipped. Its own geometry is pinned in
+     tests/tooltip.test.mjs beside the arithmetic that places it. */
+  assert.match(stripComments(detailTip), /position:\s*fixed/, 'the detail card is no longer viewport-fixed; a clipping ancestor is the defect issue 136 removed');
 
-     It is not chrome and cannot become chrome, and these are the conditions
-     that say so rather than a promise that it will not: it reserves no
-     gutter, it cannot receive the pointer, and it is invisible until a
-     reader asks for it. Its position is measured against every viewport edge
-     by the browser lanes, including the no-sideways-scroll floor at 320px. */
-  const tipStyles = /<style[^>]*>([\s\S]*?)<\/style>/.exec(detailTip)[1];
-  assert.match(tipStyles, /position:\s*fixed/, 'the detail is no longer fixed; this exception is stale and should go');
-  assert.match(tipStyles, /pointer-events:\s*none/, 'fixed chrome that can take the pointer is chrome');
-  assert.match(tipStyles, /visibility:\s*hidden/, 'a fixed box that is always visible is chrome');
-  assert.doesNotMatch(
-    stripComments(detailTip),
-    /--page-[a-z-]*gutter|reserve/,
-    'the detail reserves page space; a transient overlay must cost the layout nothing'
-  );
-  // With nothing floating but real chrome there is nothing left to reserve
-  // space for, so the gutter tokens that existed only to hold space open for
-  // the OLD, defective floats must stay gone.
-  assert.doesNotMatch(styles, /--page-activity-gutter|--panel-activity-reserve/);
-  // The page pads itself by the safe-area insets ONCE, for everything inside
-  // it — each fixed element used to have to do this for itself.
-  for (const side of ['top', 'bottom', 'left', 'right']) {
-    assert.match(
-      styles,
-      new RegExp(`env\\(safe-area-inset-${side}\\)`),
-      `the page does not clear the ${side} inset`
-    );
-  }
-  // The layer scale survives for the one real overlap left — the popover over
-  // the stack — and is still an ORDERED list of names, never a bare number.
-  const layers = ['base', 'menu'].map((name) => {
-    const found = styles.match(new RegExp(`--layer-${name}:\\s*(\\d+);`));
-    assert.ok(found, `the stacking scale lost --layer-${name}`);
-    return Number(found[1]);
-  });
-  assert.ok(layers[1] > layers[0], `the stacking scale is not ordered: ${layers.join(' < ')}`);
-  assert.match(themeMenu, /z-index:\s*var\(--layer-menu,/);
-  for (const [name, source] of Object.entries({ pageHeaderSource, themeMenu, activityTracker })) {
-    assert.doesNotMatch(
-      source,
-      /z-index:\s*\d/,
-      `${name} sets a raw z-index; the stacking order is the token scale, not a race`
-    );
-  }
-});
-
-// The header's one remaining control is pinned to the viewport's top-end
-// corner (owner directive, issue 168), OUTSIDE the feed column, and is an
-// ICON rather than a button (owner directive, issue 127): no disc, no
-// border, no fill. What is NOT negotiable is the box — 44px on both axes
-// stays, because a bare glyph is no easier to hit than a framed one. A
-// second icon — the manual refresh — used to sit beside it and is gone now
-// (issue 179), which is what turns "two plain icons" into one.
-test('the page header is one plain icon pinned to the viewport corner', () => {
-  assert.match(app, /<PageHeader \/>/);
-  assert.match(pageHeaderSource, /<ThemeMenu \/>/);
-  assert.doesNotMatch(pageHeaderSource, /<button/, 'the header composes controls, it does not spell them');
-  assert.match(themeMenu, /class="icon-button trigger"/);
-  // The static shell renders the identical empty header tag, so the exact
-  // same fixed-position rule applies to it before a single icon hydrates —
-  // there is no in-flow row left to reserve or to have arrive late.
-  assert.match(fallbackShell, /<header class="page-header"><\/header>/);
-  // The chrome is gone, and its absence is the pin: a circle, a border or a
-  // fill on this rule is what the owner rejected, and each would come back
-  // as one innocent-looking declaration.
-  const iconRule = /\.icon-button\s*\{([^}]*)\}/.exec(styles);
-  assert.ok(iconRule, 'the shared icon-control rule is not where this pin expects it');
-  assert.match(iconRule[1], /border:\s*0/, 'a page icon must carry no border');
-  assert.match(iconRule[1], /background:\s*none/, 'a page icon must carry no fill');
-  assert.doesNotMatch(iconRule[1], /border-radius/, 'a page icon must not wear a disc');
-  // ...and neither does any state of it: a hover that paints a surface is a
-  // button that appears when touched.
-  for (const [, body] of styles.matchAll(/\.icon-button[^{]*\{([^}]*)\}/g)) {
-    assert.doesNotMatch(
-      body,
-      /background:\s*var\(|border-radius:\s*50%/,
-      'an icon-button state paints button chrome'
-    );
-  }
   // 44px on both axes, still, from the one shared rule.
   assert.match(styles, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
   assert.match(styles, /\.icon-button\s*\{[^}]*block-size:\s*2\.75rem/);
 });
 
-test('the stats tracker renders the dense fixed-cell table with tooltips and -- tallies', () => {
-  assert.match(statTracker, /block-size:\s*var\(--stat-cell-height/, 'cells must keep a fixed height (no CLS)');
-  // Figures and details are built by the adapter through the tested
-  // renderers — tally, cellLabel, bossDetail — executed below and in
-  // tests/tooltip.test.mjs, including the unranked and no-figure cases. The
-  // component may format nothing.
-  assert.doesNotMatch(
-    statTracker,
-    /toLocaleString|Intl\.NumberFormat/,
-    'a figure is being formatted in the component instead of by the tested renderers'
-  );
-  const tallies = osrsStatsTallies();
-  assert.equal(tallies.cells[0].figure, tally(1192), 'tallies must go through the tested renderer');
-  assert.equal(tallies.cells[0].label, cellLabel({ name: 'Zulrah', kc: 1192, rank: 111737 }));
-  assert.deepEqual(tallies.cells[0].detail, bossDetail({ name: 'Zulrah', kc: 1192, rank: 111737 }));
-  assert.equal(tallies.cells[1].muted, true, 'a null rank arrives muted, never hidden');
-  assert.equal(tallies.cells[1].figure, tally(null), 'a null tally arrives as the no-figure marker');
-  // Three columns wrapping downward, and NO scroll region (owner directive,
-  // issue 134: "it doesn't need scrolling if it just goes down in columns of
-  // 3"). The table has now been all three arrangements — a tall vertical
-  // scroller, a two-row sideways one, and this — so every declaration that
-  // made it a scroller is pinned absent rather than merely replaced.
-  //
-  // minmax(0, 1fr) is what makes "never scrolls" a property instead of a
-  // hope: the tracks are exactly a third of the card at every width, so three
-  // columns always fit and the box never has an overflow to reveal. A fixed
-  // track width would lay out 252px of columns in the 266px a 320px card
-  // leaves, and would scroll on the first narrower device.
-  assert.match(
-    statTracker,
-    /\.stat-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
-    'both stat tables must be three shrinkable columns'
-  );
-  assert.doesNotMatch(
-    statTracker,
-    /grid-auto-flow/,
-    'a column flow is the sideways strip the owner replaced'
-  );
-  // The absence of overflow is the load-bearing pin, and it protects two
-  // things at once: the table the owner asked not to scroll, and the tooltip
-  // below, which an overflow ancestor would clip the moment one came back.
-  assert.doesNotMatch(
-    statTracker,
-    /\.stat-grid\s*\{[^}]*overflow/,
-    'an overflow on the stat table is a scroll region the owner removed and a clipping ancestor for the detail'
-  );
-  // The fill variant existed only to claim the retired rail's height; a card
-  // in the stack grows to its content, so it must not come back.
-  assert.doesNotMatch(shell, /panel-shell-fill/, 'the rail-filling variant must stay retired');
-  // The detail moved OUT of this component (owner directive, 2026-08-24):
-  // there is one hover-detail primitive, DetailTip, and both grids render
-  // it. Its own pins — the fixed anchor, the viewport clamping that replaced
-  // the per-column anchoring, the absent minimum width, the token layer —
-  // live in tests/tooltip.test.mjs beside the arithmetic they guard, and the
-  // browser lanes measure all of it at 320px. What stays pinned HERE is that
-  // this component still delegates rather than growing its own again.
-  assert.doesNotMatch(
-    statTracker,
-    /role="tooltip"|boss-tip|nth-child\(3n/,
-    'the stat tracker grew a second tooltip implementation; there is one primitive and it is DetailTip'
-  );
-  // That the shared detail, the focusability it needs, and the accessible
-  // name are on EVERY tile is pinned in tests/tooltip.test.mjs, which walks
-  // the component's tile templates and asserts there are exactly two before
-  // checking each one. Three whole-file `assert.match(statTracker, …)` copies
-  // stood here and were strictly weaker: a single tile template carrying all
-  // three satisfied them while the other carried none.
-  // Data flows only through the shared layer and shell; the component knows
-  // no panel, no slug and no name — the binding layer holds all three.
-  assert.match(statTracker, /import PanelShell from '\.\/PanelShell\.svelte'/);
-  assert.doesNotMatch(
-    statTracker,
-    /watchPanel|boss|skill|osrs|runelite|hiscore/i,
-    'the component names its domain; names live in the adapter and the binding layer (issue 165)'
-  );
-  assert.match(osrsBinding, /bossLogPanelId/);
-  assert.equal(bossLogPanelId, 'boss-log');
-});
+/* THE GRID BECAME A STRIP (owner directive, 2026-09-03, issue 287): the boss
+ * tallies scroll past in one ruled band instead of tiling a three-column
+ * table. Every pin the grid carried is ported item for item rather than
+ * dropped, because none of them was about the grid — they were about the
+ * data: figures go through the tested renderers, the component formats
+ * nothing, the vendored art is locked exactly as reviewed, an unmapped row
+ * falls back to a designed glyph, and no account name reaches a rendering.
+ * ------------------------------------------------------------------------ */
 
-/* One fixture drive of the adapter, shared by the structural tests above and
- * below: the exact grids the retired component rendered, decided by the same
- * data. */
-function osrsStatsFixture() {
-  return osrsStatsProps(
+/* One fixture drive of the adapter, shared by the structural tests below: the
+ * exact strip the component renders, decided by the same data. */
+function bossTickerFixture() {
+  return bossTickerProps(
     {
       schema: 'panel/v1',
       id: bossLogPanelId,
       kind: 'boss-log/v1',
-      title: 'Fixture Stats',
+      title: 'Old School RuneScape',
       status: 'ok',
       data: {
         account: 'fixture',
@@ -651,116 +508,138 @@ function osrsStatsFixture() {
         bosses: [
           { name: 'Zulrah', kc: 1192, rank: 111737 },
           { name: 'Artio', kc: null, rank: null },
+          { name: 'Hespori', kc: 0, rank: null },
         ],
       },
     },
-    {
-      levels: new Map([['attack', '/assets/attack.png']]),
-      tallies: new Map([['zulrah', '/assets/zulrah.png']]),
-    }
+    new Map([['zulrah', '/assets/zulrah.png']])
   );
 }
 
-function osrsStatsTallies() {
-  return osrsStatsFixture().grids[1];
-}
+test('the ticker renders the tallies through the tested renderers, formatting nothing', () => {
+  // Figures and details are built by the adapter through the tested
+  // renderers — tally, cellLabel, bossDetail — executed below and in
+  // tests/tooltip.test.mjs, including the unranked and no-figure cases. The
+  // component may format nothing.
+  assert.doesNotMatch(
+    ticker,
+    /toLocaleString|Intl\.NumberFormat/,
+    'a figure is being formatted in the component instead of by the tested renderers'
+  );
+  const { items } = bossTickerFixture();
+  assert.equal(items[0].figure, tally(1192), 'tallies must go through the tested renderer');
+  assert.equal(items[0].label, cellLabel({ name: 'Zulrah', kc: 1192, rank: 111737 }));
+  assert.deepEqual(items[0].detail, bossDetail({ name: 'Zulrah', kc: 1192, rank: 111737 }));
+  // MOST KILLED FIRST, then by name — a stable order, so a redraw of the same
+  // payload is byte-identical and two rows on one count never swap places.
+  assert.deepEqual(items.map((item) => item.key), ['Zulrah', 'Hespori', 'Artio']);
+  // A row the hiscores list with nothing against it is DIMMED, never dropped,
+  // and the two absences stay different claims: a reported zero renders "0"
+  // and an unreported figure renders the no-figure marker.
+  assert.equal(items[1].figure, tally(0));
+  assert.equal(items[1].quiet, true, 'a zero row is dimmed, never hidden');
+  assert.equal(items[2].figure, tally(null), 'a null tally arrives as the no-figure marker');
+  assert.equal(items[2].quiet, true);
+  // The peak is the page's one highlight, and it is a peak only when
+  // something was actually killed.
+  assert.equal(items[0].peak, true);
+  assert.equal(items[1].peak, false);
+  assert.equal(bossTickerProps({
+    schema: 'panel/v1',
+    id: bossLogPanelId,
+    kind: 'boss-log/v1',
+    title: 'x',
+    status: 'ok',
+    data: { account: 'f', bosses: [{ name: 'A', kc: null, rank: null }] }
+  }, new Map()).items[0].peak, false, 'a strip of unreported rows has no maximum to mark');
+  // The dim and the highlight are ATTRIBUTES, not inline styles: this origin's
+  // Content-Security-Policy admits no style attribute at all.
+  assert.match(ticker, /data-quiet=\{item\.quiet \? 'true' : 'false'\}/);
+  assert.match(ticker, /data-peak=\{item\.peak \? 'true' : 'false'\}/);
+  assert.doesNotMatch(ticker, /style="/, 'an inline style attribute is unservable under default-src \'self\'');
+  assert.match(styles, /\.ticker-item\[data-quiet='true'\] \.ticker-icon \{[^}]*opacity: var\(--ticker-dim\)/);
+  assert.match(styles, /\.ticker-item\[data-peak='true'\] \.ticker-figure \{[^}]*color: var\(--ledger-highlight\)/);
+  // The fill variant existed only to claim the retired rail's height; a card
+  // in the stack grows to its content, so it must not come back.
+  assert.doesNotMatch(shell, /panel-shell-fill/, 'the rail-filling variant must stay retired');
+  // The detail is the ONE primitive (owner directive, 2026-08-24); this
+  // component delegates rather than growing its own again.
+  assert.doesNotMatch(
+    ticker,
+    /role="tooltip"|boss-tip|nth-child\(3n/,
+    'the ticker grew a second tooltip implementation; there is one primitive and it is DetailTip'
+  );
+  // Data flows only through the shared layer and shell; the component knows
+  // no panel, no slug and no name — the binding layer holds all three.
+  assert.match(ticker, /import PanelShell from '\.\/PanelShell\.svelte'/);
+  assert.doesNotMatch(
+    ticker,
+    /watchPanel|boss|skill|osrs|runelite|hiscore/i,
+    'the component names its domain; names live in the adapter and the binding layer (issue 165)'
+  );
+  assert.match(bossBinding, /bossLogPanelId/);
+  assert.equal(bossLogPanelId, 'boss-log');
+});
+
+/* THE ATTRIBUTION TRAVELS WITH THE ARTWORK (AGENTS.md, "Attribution for
+ * third-party assets"): the icons are Jagex intellectual property used as fan
+ * content, so the exact notice renders wherever they render. It is DATA on the
+ * props — the component quotes nothing — and it is compared byte for byte with
+ * the document it is quoted from. */
+test('the strip renders the fan-content notice word for word, under the art it covers', {
+  skip: reducedContextNote,
+}, async () => {
+  const attribution = await read('../../ATTRIBUTION.md');
+  const quoted = attribution
+    .slice(attribution.indexOf('> Created using intellectual property'))
+    .split('\n\n')[0]
+    .split('\n')
+    .map((line) => line.replace(/^>\s*/, '').trim())
+    .join(' ')
+    .trim();
+  assert.equal(
+    bossLogFanContentNotice,
+    quoted,
+    'the rendered notice and ATTRIBUTION.md have drifted apart; this text is quoted, never paraphrased'
+  );
+  assert.equal(bossTickerFixture().notice, bossLogFanContentNotice);
+  assert.match(ticker, /<p class="ticker-notice">\{notice\}<\/p>/);
+  assert.ok(
+    !ticker.includes('Jagex'),
+    'the component spells the notice itself; it is data, so there is one copy and it is the constant'
+  );
+});
 
 // The owner reviewed the vendored boss art and locked it exactly as rendered
 // (issue 127: "gorgeous… LOCK THOSE IN"). The layout around it changed in the
 // same pass, which is precisely when a rendering detail gets adjusted by
-// accident, so every part of how a tile is SOURCED and DRAWN is pinned here
+// accident, so every part of how an item is SOURCED and DRAWN is pinned here
 // in one place: the file the slug selects, the declared box, the loading
 // behavior, and the painted size.
 test('the boss icons are locked exactly as they render', () => {
-  // The tile declares its box, its lazy loading and its async decode; the
-  // box is the grid scale's, stated once beside the scale decision.
+  // The item declares its box, its lazy loading and its async decode; the box
+  // is a token, stated once beside the strip's own metrics.
   assert.match(
-    statTracker,
-    /<img\s+class="stat-icon"\s+src=\{cell\.icon\}\s+alt=""\s+width=\{iconSize\}\s+height=\{iconSize\}\s+loading="lazy"\s+decoding="async"/,
-    'a tile icon declares its box, its lazy loading and its async decode'
+    ticker,
+    /<img\s+class="ticker-icon"\s+src=\{item\.icon\}\s+alt=""\s+width=\{22\}\s+height=\{22\}\s+loading="lazy"\s+decoding="async"/,
+    'an item icon declares its box, its lazy loading and its async decode'
   );
-  assert.match(statTracker, /\{@const iconSize = grid\.size === 'compact' \? 18 : 26\}/);
   assert.match(
-    statTracker,
-    /\.stat-grid\[data-cells='roomy'\] \.stat-icon\s*\{[^}]*inline-size:\s*26px[^}]*block-size:\s*26px[^}]*object-fit:\s*contain/,
-    'the painted tally-icon box is 26px square and never distorts the art inside it'
+    styles,
+    /\.ticker-icon \{[^}]*inline-size: var\(--ticker-icon\)[^}]*block-size: var\(--ticker-icon\)[^}]*object-fit: contain/,
+    'the painted icon box is square and never distorts the art inside it'
   );
+  assert.match(styles, /--ticker-icon: 22px;/);
   // The designed hole for a row that ships upstream before its art does.
-  assert.match(statTracker, /<span class="stat-icon stat-glyph" aria-hidden="true">\{cell\.glyph\}<\/span>/);
+  assert.match(ticker, /<span class="ticker-icon ticker-glyph" aria-hidden="true">\{item\.glyph\}<\/span>/);
   // WHICH art a row shows is the adapter's slug lookup, executed: a mapped
   // slug arrives as the icon URL, an unmapped row arrives as its initials.
-  const tallies = osrsStatsTallies();
-  assert.equal(tallies.cells[0].icon, '/assets/zulrah.png', 'a vendored icon is selected by slug');
-  assert.equal(tallies.cells[1].icon, undefined, 'a row without art carries none');
-  assert.equal(tallies.cells[1].glyph, bossInitials('Artio'), 'the initials fallback rides every cell');
+  const { items } = bossTickerFixture();
+  assert.equal(items[0].icon, '/assets/zulrah.png', 'a vendored icon is selected by slug');
+  assert.equal(items[2].icon, undefined, 'a row without art carries none');
+  assert.equal(items[2].glyph, bossInitials('Artio'));
 });
 
-// The skills grid is the half of the panel the payload always carried and
-// nothing ever rendered: internal/panels parsed the hiscores skill table and
-// then dropped it on the floor (issue #78).
-test('the skills grid mirrors the reference panel and renders levels honestly', () => {
-  assert.match(
-    statTracker,
-    /\.stat-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
-    'the compact table must stay three columns that can shrink'
-  );
-  assert.match(
-    statTracker,
-    /\.stat-grid\[data-cells='compact'\] \.stat-cell\s*\{[^}]*block-size:\s*1\.625rem/,
-    'compact cells need a fixed height (no CLS)'
-  );
-  // The levels grid is the adapter's, through the tested renderers, executed.
-  const [levels] = osrsStatsFixture().grids;
-  assert.equal(levels.size, 'compact');
-  assert.equal(levels.label, 'Skill levels');
-  assert.equal(levels.cells[1].figure, tally(99), 'levels must go through the tested renderer');
-  assert.equal(
-    levels.cells[1].label,
-    skillLabel({ name: 'Attack', level: 99, rank: 124252, xp: 19794965 })
-  );
-  assert.deepEqual(
-    levels.cells[1].detail,
-    skillDetail({ name: 'Attack', level: 99, rank: 124252, xp: 19794965 })
-  );
-  assert.equal(levels.cells[1].icon, '/assets/attack.png', 'a level icon is selected by the same slug rule');
-  // The totals are cells of the same grid, keyed and labelled like the rest,
-  // so the last row ends flush instead of trailing two blank tiles.
-  assert.match(statTracker, /\{#each grid\.closing \?\? \[\] as cell \(cell\.key\)\}/);
-  assert.match(statTracker, /<li class="stat-cell stat-closing" tabindex="0" aria-label=\{cell\.label\}>/);
-  const summary = skillSummary([{ name: 'Overall', level: 2274, rank: 138220, xp: 453846899 }]);
-  assert.deepEqual(
-    levels.closing.map((cell) => [cell.caption, cell.figure, cell.label]),
-    summary.map((cell) => [cell.label, cell.value, summaryLabel(cell)]),
-    'the closing cells are the payload totals through the tested builders'
-  );
-  assert.deepEqual(levels.closing.map((cell) => cell.detail), summary.map((cell) => summaryDetail(cell)));
-  // One line, whatever the width: a wrapped nine-digit figure in a 1.625rem
-  // cell spills over the row below it.
-  assert.match(statTracker, /\.stat-closing\s*\{[^}]*white-space:\s*nowrap/);
-  // A payload with no skill table says so; it never renders an empty grid
-  // that reads as "this account has no levels". The words are the adapter's,
-  // the empty-note branch the component's.
-  assert.equal(bossLogEmptySkillsNote, 'No skill levels reported.');
-  assert.equal(levels.emptyNote, bossLogEmptySkillsNote);
-  assert.match(statTracker, /\{:else\}\s*<p class="stat-note">\{grid\.emptyNote\}<\/p>/);
-  // The levels are right-aligned digits in tabular figures, like the counts.
-  assert.match(statTracker, /\.stat-figure\s*\{[^}]*text-align:\s*right/);
-  assert.match(statTracker, /\.stat-figure\s*\{[^}]*font-variant-numeric:\s*tabular-nums/);
-});
-
-// The icon set is now COMPLETE (issue #78: the owner reviewed and approved
-// one batch covering every served row), so the pin runs in BOTH directions
-// again and is strictly stronger than either half alone:
-//
-//   forward  — every row the origin serves has a vendored icon, so the grid
-//              never falls back to a letter chip in practice. This direction
-//              was deliberately removed when only six of seventy-one bosses
-//              had art; restoring it is what makes the batch a contract
-//              rather than a one-off.
-//   backward — every icon that ships belongs to a row the origin really
-//              serves, so third-party art can never outlive the data that
-//              justified vendoring it.
-//
 // The initials fallback stays in the component regardless: a boss shipped
 // upstream tomorrow must render as a designed state, not a hole.
 // The stat unit set is hand-duplicated across the tree: a Go const block that
@@ -800,9 +679,14 @@ test('the stat unit set is identical on both sides', { skip: reducedContextNote 
 
 test('the icon set covers exactly the rows the origin serves', { skip: reducedContextNote }, async () => {
   const snapshot = await read('../../internal/panels/snapshots/boss-log.json').then(JSON.parse);
+  /* ONE directory now (owner directive, 2026-09-03, issue 287: the owner cut
+     the skills grid). The twenty-five skill icons went with the surface that
+     rendered them, because this pin's own rule is what decides that — "third-
+     party art must never outlive the data that justifies it" cuts both ways,
+     and art nothing renders is art nothing justifies. The boss half is
+     untouched and still exact in both directions. */
   const directories = {
     bosses: { rows: snapshot.data.bosses, slug: bossSlug },
-    skills: { rows: snapshot.data.skills, slug: skillSlug },
   };
   for (const [directory, { rows, slug }] of Object.entries(directories)) {
     assert.ok(
@@ -826,9 +710,8 @@ test('the icon set covers exactly the rows the origin serves', { skip: reducedCo
   // The fallback is still reachable code, and still tested, because upstream
   // ships new content without asking: the adapter hands every row its
   // initials, and the fixture's unmapped rows arrive glyph-first.
-  const { grids } = osrsStatsFixture();
-  assert.equal(grids[0].cells[0].glyph, bossInitials('Overall'));
-  assert.equal(grids[1].cells[1].glyph, bossInitials('Artio'));
+  const { items } = bossTickerFixture();
+  assert.equal(items.find((item) => item.key === 'Artio').glyph, bossInitials('Artio'));
 });
 
 test('the boss list is derived from the upstream, never enumerated in config', {
@@ -954,17 +837,28 @@ test('the panel heading is data the origin serves, not a string in either tree',
   // EXECUTED both ways: the origin's title wins, and only its absence (or
   // the unavailable fallback's empty title) reads the neutral name.
   assert.equal(
-    vcsActivityProps({
-      schema: 'panel/v1',
-      id: 'vcs-activity',
-      kind: 'vcs-activity/v1',
-      title: 'GitHub',
-      status: 'ok',
-      data: null
-    }).title,
+    commitLogProps([
+      {
+        schema: 'panel/v1',
+        id: 'vcs-activity',
+        kind: 'vcs-activity/v1',
+        title: 'GitHub',
+        status: 'ok',
+        data: null
+      },
+      null
+    ]).title,
     'GitHub'
   );
-  assert.equal(vcsActivityProps(null).title, 'Version-control activity');
+  assert.equal(commitLogProps([null, null]).title, 'Version-control activity');
+  /* The boss panel's heading is the same arrangement and it MOVED into view
+     with the ledger (owner directive, 2026-09-03, issue 287): the strip's lead
+     item renders the envelope's own title, so the served string is now the
+     visible name of the collection rather than a card heading nobody reads.
+     That makes the rule stricter to break, not looser — the component is swept
+     for the word and the config is what carries it. */
+  assert.equal(fetchConfig.titles?.['boss-log'], 'Old School RuneScape');
+  assert.match(ticker, /<span class="ticker-name">\{title\}<\/span>/);
   // And the Go source keeps the neutral name as its fallback, so a config
   // that fails to load degrades to a truthful heading rather than a blank.
   const panelConfig = await read('../../internal/panels/config.go');
@@ -1019,7 +913,7 @@ test('every mounted panel stays current instead of painting once', () => {
     /\bloadPanel\b/,
     'the block host reads an envelope directly; the one-shot read is the bug'
   );
-  for (const [name, source] of Object.entries({ statTracker, activityTracker, usageTracker })) {
+  for (const [name, source] of Object.entries({ ticker, commitLog, ledgerBoard })) {
     assert.doesNotMatch(
       source,
       /\bloadPanel\b|\bwatchPanel\b|\bfetch\(/,
@@ -1028,16 +922,29 @@ test('every mounted panel stays current instead of painting once', () => {
   }
   // And every tracker block is a panel binding, so all three ride that host.
   for (const [name, source] of Object.entries({
-    osrsBinding,
-    vcsBinding: bindingSourceCache.vcs,
-    usageBinding: bindingSourceCache.usage,
+    bossBinding,
+    squaresBinding: bindingSourceCache.squares,
+    projectsBinding: bindingSourceCache.projects,
   })) {
     assert.match(source, /panelBlock\(/, `${name} no longer binds through the panel host`);
   }
+  /* The commits block reads TWO panels (owner directive, 2026-09-03, issue
+     287) and rides the same host to do it: panelsBlock is one subscription per
+     id through the identical watchPanel, never a second retrieval path. */
+  assert.match(bindingSourceCache.commits, /panelsBlock\(/, 'the commits block no longer binds through the panel host');
+  assert.match(blockHost, /watchPanel\(id, \(loaded\) => \{/, 'the multi-panel branch no longer watches through the shared host');
 });
 
-test('the contribution grid is one component both panels render', () => {
-  assert.match(usageTracker, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
+test('the contribution grid is one component every calendar renders', () => {
+  /* ONE component and now ONE INSTANCE (owner directive, 2026-09-03, issue
+     287): the calendars moved into the commits section, where a segmented
+     control swaps which series the same grid draws. That is stricter than two
+     panels sharing an implementation — there is one mounted grid on the page,
+     so a scroll position, a keyboard cursor and a detail card cannot be three
+     of each. The board renders none. */
+  assert.match(commitLog, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
+  assert.equal((commitLog.match(/<ContributionGrid/g) ?? []).length, 1);
+  assert.doesNotMatch(ledgerBoard, /ContributionGrid/, 'the board grew a calendar of its own');
   // A wide window scrolls inside the strip, so it never takes the page's own
   // scrollbar sideways. The strip's BOX — the term-by-term calc() that keeps
   // an arriving series from moving the page — is pinned in
@@ -1052,7 +959,7 @@ test('the contribution grid is one component both panels render', () => {
   // `var(--grid-cell-N, #hex)` — strictly stronger than the bare
   // `--grid-cell-N` sweep that stood here, and mutation-tested there.
   // Never color alone, and a day outside the window is a hole, not a zero.
-  assert.match(grid, /aria-label=\{cellLabel\(cell, noun, view, formatValue\)\}/);
+  assert.match(grid, /aria-label=\{cellLabel\(cell, noun, formatValue\)\}/);
   // THE BROWSER TOOLTIP IS GONE, AND ITS ABSENCE IS THE PIN (issue 219).
   // `title=` used to carry every calendar cell's reading and 96% of the token
   // strip's. It has NO touch trigger in any engine, so on a phone those cells
@@ -1071,43 +978,41 @@ test('the contribution grid is one component both panels render', () => {
   assert.match(grid, /data-grid-absent=\{cell\.absent \? 'true' : 'false'\}/);
 });
 
-// Full width (issue #178, extended to both grids by the owner on 2026-08-25)
-// and the OSRS-style card (issue #178). The daily heatmap used to render as a
-// tiny left-aligned block, and its value popover was a bare title= tooltip
-// reading "1,025,755,735 tokens on 2026-08-22" — a log line, not a designed
-// readout. The calendar was left content-sized then, on the argument that it
-// genuinely has a year of columns to show; the owner reports the same dead gap
-// on it and wants the same stretch, so BOTH callers opt in now. The hover card
-// stays the token panel's alone: a commit count needs no designed readout.
-test('both panels opt the shared grid into full width; only the token panel takes the card', () => {
+/* Full width (issue #178, extended to both grids by the owner on 2026-08-25)
+ * and the OSRS-style card (issue #178). The daily heatmap used to render as a
+ * tiny left-aligned block, and its value popover was a bare title= tooltip
+ * reading "1,025,755,735 tokens on 2026-08-22" — a log line, not a designed
+ * readout. Both callers opted in, and since the ledger redesign (owner
+ * directive, 2026-09-03, issue 287) there is one caller carrying both opt-ins
+ * for every series it draws: the commits block. The card's TITLE is now the
+ * active set's own label, so a reader who cycles to a token series reads a
+ * card headed with that series rather than with the calendar's noun. */
+test('the one calendar takes the full width and names its card from the active set', () => {
   assert.match(
-    usageTracker,
+    commitLog,
     /<ContributionGrid[\s\S]*?fullWidth[\s\S]*?\/>/,
-    'the token panel does not opt the grid into full width'
+    'the calendar stopped filling its card'
   );
   assert.match(
-    usageTracker,
-    /<ContributionGrid[\s\S]*?cardTitle="Tokens used"[\s\S]*?\/>/,
-    'the token panel does not name the hover card'
+    commitLog,
+    /<ContributionGrid[\s\S]*?cardTitle=\{active\.label\}[\s\S]*?\/>/,
+    'the hover card no longer names the series a reader is actually looking at'
   );
+  /* THE FORMATTER IS THE SET'S (owner directive, 2026-09-03, issue 287). It
+     used to be a per-panel choice — exact digits for commits, compacted for
+     nine-digit token days — and the two now live in one section, so the
+     choice travels with the series rather than with the component. The shared
+     grid still defaults to exact digits, which is what a caller that says
+     nothing gets. */
   assert.match(
-    activityTracker,
-    /<ContributionGrid[\s\S]*?fullWidth[\s\S]*?\/>/,
-    'the version-control calendar stopped filling its card'
+    commitLog,
+    /<ContributionGrid[\s\S]*?formatValue=\{active\.format\}[\s\S]*?\/>/,
+    'the card and the accessible text can drift apart from the series they describe'
   );
-  // THE CALENDAR TAKES THE CARD NOW, and the reversal is the fix of issue
-  // 219. It was left on the browser's native `title=` on the argument that
-  // the card was the token panel's own flourish. MEASURED on an iPhone at the
-  // build before this one: 0 of the calendar's 371 cells carried a readout a
-  // finger could open, because `title=` has no touch trigger — the calendar
-  // was not "less decorated", it was mute. What stays optional is the card's
-  // TITLE, not the card: a caller that names none falls back to its own noun
-  // (nounTitle), so the calendar reads "Contribution" without either panel
-  // spelling a word the adapter already owns.
-  // The calendar names no card title and does not need to: the fallback reads
-  // its own noun. What it must NOT do is go back to being the caller that
-  // opts out, so the pin is on the shared component's fallback rather than on
-  // this caller's silence — silence is now the default that WORKS.
+  assert.match(grid, /formatValue = formatWhole/, 'the shared grid defaults to anything but exact digits');
+
+  // The calendar names its card from data and does not need a literal: the
+  // shared component's fallback reads its own noun, so silence still works.
   assert.match(grid, /name: cardTitle \?\? nounTitle\(noun\)/);
 
   // The shared component: both remain props rather than becoming its only
@@ -1118,10 +1023,8 @@ test('both panels opt the shared grid into full width; only the token panel take
   assert.match(grid, /data-grid-fullwidth=\{fullWidth\}/);
   // THE GATE IS GONE — the one line this test used to pin as correct.
   // `{#if cardTitle && !cell.absent}` was two independent holes, and both
-  // consumers of the shared grid fell through at least one: the calendar
-  // passed no cardTitle (0 of 371 cells readable), and the token strip's
-  // absent cells failed the second condition (15 of 371 readable). Pinning
-  // its ABSENCE is what stops the opt-in coming back as a convenience.
+  // consumers of the shared grid fell through at least one. Pinning its
+  // ABSENCE is what stops the opt-in coming back as a convenience.
   assert.doesNotMatch(
     grid,
     /\{#if cardTitle/,
@@ -1131,110 +1034,69 @@ test('both panels opt the shared grid into full width; only the token panel take
   // One card per STRIP, not per cell, and the strip resolves which cell a
   // point names. 371 cells at 10x10px cannot each own a tip — that is ~4400
   // extra elements per grid for a readout one cell shows at a time, and a
-  // 10px target is far under the 44px touch floor either way, so per-cell
-  // tips would not even fix the defect.
+  // 10px target is far under the 44px touch floor either way.
   assert.match(grid, /host=\{strip\}/);
   assert.match(grid, /resolve=\{resolveCell\}/);
   assert.match(grid, /select=\{noteSelection\}/);
   assert.match(grid, /anchor=\{anchorElement\}/);
   // Every cell is a selectable option with an honest accessible name, absent
-  // ones included: "no data for this day" is information a reader can reach,
-  // and a grid silent for 96% of its cells was the defect.
+  // ones included: "no data for this day" is information a reader can reach.
   assert.match(grid, /role="option"/);
   assert.match(grid, /aria-selected=\{selected === index\}/);
   assert.match(
     grid,
     /aria-activedescendant=\{selected >= 0 \? `\$\{gridId\}-cell-\$\{selected\}` : undefined\}/
   );
-  // The card shows the value AND the view-scoped period phrase (issue 189,
-  // amending the earlier value-only decision from #178 to match the owner's
-  // reference designs — "2.8B tokens on Aug 13" is a value plus a period,
-  // not a value alone). Both rows stay label-less, mirroring BossLog's own
-  // DetailTip usage; cellPeriod is the ONE function that phrase comes from,
-  // so this card and cellLabel's own accessible text can never drift apart.
-  //
-  // The value is written by the CALLER's formatter (owner directive,
-  // 2026-08-25), which is the whole of the magnitude fix: the same function
-  // formats the card and the accessible text below, so a cell can never show
-  // "627.7M" while its aria-label reads nine raw digits, and the calendar —
-  // which passes none — keeps the exact counts a reader of commits wants.
-  // The value row now branches on absence rather than being unreachable for
-  // it: an absent cell reads "no data" beside the day it had none, which is
-  // the same sentence cellLabel has always produced for the accessible name.
-  // A fabricated zero there would be the doctrine violation the panels
-  // contract names; refusing to render the cell at all was the defect.
+  // The card shows the value AND the day phrase, both rows label-less, from
+  // the ONE function that phrase comes from.
   assert.match(
     grid,
     /value: selectedCell\.absent \? 'no data' : formatValue\(selectedCell\.value\)/
   );
-  assert.match(grid, /\{ label: '', value: cellPeriod\(selectedCell, view\) \}/);
-  assert.match(grid, /formatValue = formatWhole/, 'the shared grid defaults to anything but exact digits');
-  assert.match(
-    usageTracker,
-    /<ContributionGrid[\s\S]*?formatValue=\{formatMagnitude\}[\s\S]*?\/>/,
-    'the token panel renders nine-digit cells with exact digits again'
-  );
-  assert.doesNotMatch(
-    activityTracker,
-    /formatValue/,
-    'the contribution calendar compacted counts a reader wants exactly'
-  );
+  assert.match(grid, /\{ label: '', value: cellPeriod\(selectedCell\) \}/);
 });
 
-/* ONE GRAPH PER SOURCE, AND NO WAY TO RE-ASK IT (owner directive,
- * 2026-08-28, reversing the 0.1.52 decision after seeing it live: "remove
- * this entire menu. it doesnt look good and it doesn't provide any value").
+/* ONE WINDOW FOR EVERY SERIES, AND NO WAY TO RE-ASK IT (owner directive,
+ * 2026-08-28, reversing the 0.1.52 decision after seeing it live: "remove this
+ * entire menu. it doesnt look good and it doesn't provide any value" — carried
+ * into the ledger unchanged on 2026-09-03).
  *
- * The two tests this replaces pinned a per-source view lens and a per-source
- * trailing range — first as exposed pill rows, then collapsed behind a
- * compact popover. Both are gone, and this is deliberately not a smaller
- * pin than they were: what they guaranteed was that the graph read the
- * control beside it, and what this guarantees is that there is no control
- * and the graph reads the ONE fixed answer instead. Every state, map,
- * resolver and sentinel behind the old controls is named here as an absence,
- * so none of them can drift back in one at a time.
+ * The tests this replaces pinned a per-source view lens and a per-source
+ * trailing range, then their absence inside the token panel. The panel is a
+ * board of squares now and the calendars are the commits section's, so the
+ * same guarantee is pinned at its new home and is if anything wider: the
+ * three calendars share ONE anchor, so the week that ends the contributions
+ * window ends every other one, and the reader is offered a choice of SERIES
+ * rather than a choice of how to re-read one.
+ *
+ * The segmented control is buttons with a pressed state, deliberately not a
+ * radiogroup — the same grammar the gallery's set switch uses, so the page has
+ * one way of saying "pick which of these to show".
  *
  * The lens ENGINE is untouched and still proven, executed rather than
- * pattern-matched, in tests/grid.test.mjs and tests/periods.test.mjs — this
- * component simply stopped offering a reader four ways to ask one question. */
-test('each usage source renders one fixed graph, and no display control survives', () => {
-  /* The fixed reading: the source's own totals, laid on calendar weeks over
-     the window lib/periods.ts derives from the PANEL's coverage (issue 268).
-     The component decides nothing about the window's arithmetic, which is the
-     point — that has its own executed tests — but it does decide the SCOPE,
-     and the scope is the half a per-source helper structurally could not
-     express: one window derived from every source's series, then handed to
-     each of them, so two strips in one card are read against one calendar. */
+ * pattern-matched, in tests/grid.test.mjs and tests/periods.test.mjs. */
+test('every calendar shares one window, and no display control survives', () => {
+  // The one anchor, handed to every set: the contributions window's own last
+  // day, which is where the segmented control's three pictures line up.
   assert.match(
-    usageTracker,
-    /return coverageColumns\(seriesOf\(activity\), panelWindow\);/,
-    'the graph is no longer laid onto the panel’s own window'
+    commitsAdapter,
+    /const anchor = windowAnchor\(activity, now\);/,
+    'the sets no longer share one window'
   );
-  assert.match(
-    usageTracker,
-    /coverageWindow\(\s*sections\.flatMap\(\(source\) => \(source\.activity \? \[seriesOf\(source\.activity\)\] : \[\]\)\)\s*\)/,
-    'the window is derived from one source instead of from the whole panel'
+  const calendarCalls = commitsAdapter.match(/calendarColumns\(/g) ?? [];
+  const anchoredCalls = commitsAdapter.match(/pendingWeeks, anchor\)/g) ?? [];
+  assert.ok(calendarCalls.length >= 2, 'the adapter builds fewer calendars than the section cycles');
+  assert.equal(
+    anchoredCalls.length,
+    calendarCalls.length,
+    'a set builds its columns without the shared anchor'
   );
-  assert.doesNotMatch(usageTracker, /rangeColumns/, 'the component parameterises its window again');
-  assert.match(usageTracker, /\{@const columns = windowedColumns\(source\.activity\)\}/);
-  // The graph the gate reads IS the graph it draws, exactly as before.
-  assert.match(usageTracker, /<ContributionGrid\s+\{columns\}/);
+  // The control is pressed buttons, not a radio group.
+  assert.match(commitLog, /<button\s+class="commit-segment"[\s\S]*?aria-pressed=\{set\.key === active\.key\}/);
 
-  /* The DAILY reading is taken by omission, not by restating it: both
-     lib/periods.ts's activityReading and ContributionGrid already default to
-     daily, and passing it here would be a third statement of one default
-     that could then disagree with the other two. */
-  assert.match(
-    usageTracker,
-    /activityReading\(columns, source\.activity\.noun, formatMagnitude\)/,
-    'the sentence no longer reads the same cells the graph draws'
-  );
-  assert.match(usageTracker, /coverageReading\(columns\)/);
-  assert.doesNotMatch(usageTracker, /\{view\}/, 'a view is threaded through the render again');
-
-  /* THE ABSENCES, one per retired mechanism. Each of these was a live line in
-     0.1.52; any one of them coming back alone is a display control growing
-     back through a component the owner asked to have none. */
+  /* THE ABSENCES, one per retired mechanism, swept over every component that
+     could grow one back. Any one of them returning alone is a display control
+     growing back through a component the owner asked to have none. */
   for (const [pattern, complaint] of [
     [/UsageFilterMenu/, 'the display menu is back'],
     [/usage-controls/, 'the controls row is back'],
@@ -1249,19 +1111,18 @@ test('each usage source renders one fixed graph, and no display control survives
     [/totalLens/, 'the "no category" sentinel outlived the lens it belonged to'],
     [/seriesViews|seriesRanges|defaultSeriesRange/, 'a display vocabulary is offered to the reader again'],
     [/viewColumns/, 'the view aggregation is applied to a graph nobody can re-read'],
-    [/role="radiogroup"/, 'a radio group is back inside the token panel'],
+    [/role="radiogroup"/, 'a radio group is back inside a panel'],
   ]) {
-    assert.doesNotMatch(usageTracker, pattern, complaint);
+    for (const [name, source] of Object.entries({ commitLog, ledgerBoard, ticker })) {
+      assert.doesNotMatch(source, pattern, `${name}: ${complaint}`);
+    }
   }
   // And nothing else in the tree imports the deleted component either.
   assert.doesNotMatch(styles, /filter-trigger|filter-popover|filter-group/, 'the menu left styles behind');
-
-  /* The retired adapter-built sentences, which described the whole series and
-     could not know which window a reader had chosen. They stay retired: the
-     window is fixed now, but it is still the CELLS that must answer, because
-     an adapter sentence would go stale the moment the capture grows. */
-  assert.doesNotMatch(usageTracker, /source\.activity\.summary/, 'the window-blind summary is back');
-  assert.doesNotMatch(usageTracker, /lensCategory\.summary/, 'the window-blind category summary is back');
+  assert.ok(
+    !existsSync(new URL('../src/lib/components/UsageFilterMenu.svelte', import.meta.url)),
+    'the display menu component is back'
+  );
 });
 
 // The calendar opens on TODAY at its end edge (owner directive, issue 127).
@@ -1328,33 +1189,69 @@ test('the grid opens on its newest column and lets history scroll back', () => {
 // that would have no series to re-read. A source WITH something to draw
 // renders the whole region, unchanged. Half of this alone is not a guard: a
 // panel that dropped every graph would satisfy the first half perfectly.
-test('a token source with no series renders no graph, and one with a series still renders it', () => {
-  const region =
-    /\{#if columns\.length > 0\}\s*<section class="usage-activity">([\s\S]*?)<\/section>\s*\{\/if\}/.exec(
-      usageTracker
-    );
-  assert.ok(region, 'the graph region is no longer gated on there being columns to draw');
-  // The gate reads the SAME columns the grid is handed, so the two can never
-  // disagree about whether this source has a graph.
-  assert.match(
-    region[1],
-    /<ContributionGrid\s+\{columns\}/,
-    'the gate and the graph read different things'
+/* A SOURCE WITH NO SERIES IS OFFERED NO SEGMENT (owner ruling 2026-08-24,
+ * carried into the ledger on 2026-09-03, issue 287).
+ *
+ * The ruling drew a line the redesign does not move: a reserve is for a
+ * payload IN FLIGHT and holds exactly the box the data will fill, while a
+ * source that has already answered and said it keeps no daily record gets no
+ * held-open box at all — nothing is on its way there, so the box would be a
+ * permanent hole. What changed is only where each side lives: the calendar's
+ * own reserve is the one grid the commits block always renders, waiting for
+ * the contributions payload, and a token source with no series contributes no
+ * SET, so there is no segment to press and no grid drawn on its behalf.
+ *
+ * An earlier draft of this pin accepted a set with no columns and an honest
+ * caption. That is the same arrangement wearing better words: a pressable
+ * segment over 371 placeholder cells and a note underneath. The stronger
+ * claim is the one the ruling actually made.
+ */
+test('a source with no series is offered no segment, while the calendar keeps its reserve', () => {
+  // The grid renders whenever there are sets to choose between, because the
+  // contributions calendar is one of them and its payload is genuinely in
+  // flight — that reserve is measured in the rendering lanes.
+  assert.match(commitLog, /\{#if sets\.length > 0 && active\}/);
+  const { sets } = commitLogProps([
+    null,
+    {
+      schema: 'panel/v1',
+      id: 'token-usage',
+      kind: 'token-usage/v2',
+      title: 'Token usage',
+      status: 'ok',
+      data: { sources: [{ label: 'anthropic', windows: [] }] }
+    }
+  ]);
+  assert.equal(
+    sets.find((set) => set.key === 'anthropic'),
+    undefined,
+    'a source with no daily record was offered a segment over an empty grid'
   );
-  // The heading is inside the gate with it: an activity heading over nothing
-  // is the same hole wearing different markup. (It used to name the display
-  // menu here too; the menu went with the owner's 2026-08-28 reversal, and
-  // the heading is what is left to gate.)
-  assert.match(region[1], /\{source\.activity\.heading\}/, 'the heading survived its graph');
-  // And the panel never asks the shared component for its empty treatment.
-  assert.doesNotMatch(usageTracker, /emptyNote=/, 'the panel asks for an empty grid again');
-  assert.doesNotMatch(usageTracker, /series pending/, 'the retired "pending" claim is back');
-  assert.doesNotMatch(usageTracker, /pendingColumns/, 'the panel reaches for placeholder columns');
-  // The component KEEPS that treatment, and this is the line between the two
-  // cases rather than an exception to the ruling: the version-control
-  // calendar's payload is genuinely in flight, and its reserve holds exactly
-  // the box the data will fill (measured in the rendering lanes). Deleting it
-  // would trade a permanent hole for a shift on every visit.
+  /* The other direction, so this is a guard rather than a way to draw
+     nothing: a source that DOES publish days contributes its set. */
+  const { sets: drawn } = commitLogProps([
+    null,
+    {
+      schema: 'panel/v1',
+      id: 'token-usage',
+      kind: 'token-usage/v2',
+      title: 'Token usage',
+      status: 'ok',
+      data: {
+        sources: [
+          { label: 'anthropic', windows: [], series: { startDate: '2026-08-01', totals: [3, 1, 4] } }
+        ]
+      }
+    }
+  ]);
+  const plotted = drawn.find((set) => set.key === 'anthropic');
+  assert.ok(plotted, 'a source with days to plot lost its segment');
+  assert.ok(plotted.columns.length > 0, 'a real series draws no window');
+  // The board never asks the shared component for its empty treatment,
+  // because the board draws no graph at all.
+  assert.doesNotMatch(ledgerBoard, /emptyNote=/, 'the board asks for an empty grid again');
+  assert.doesNotMatch(ledgerBoard, /pendingColumns/, 'the board reaches for placeholder columns');
+  // The component KEEPS that treatment for the caller whose data is coming.
   assert.match(grid, /pendingColumns/, 'the reserve for a payload in flight lost its chrome');
   assert.match(
     grid,
@@ -1364,9 +1261,9 @@ test('a token source with no series renders no graph, and one with a series stil
   assert.match(grid, /<div class="grid-cells" aria-hidden="true">/);
   assert.match(grid, /\.grid-empty\s*\{[^}]*position:\s*absolute/);
   // Exactly one caller may ask for it, and it is the one whose data is coming.
-  assert.match(activityTracker, /emptyNote=/, 'the calendar stopped labelling its waiting state');
+  assert.match(commitLog, /emptyNote=/, 'the calendar stopped labelling its waiting state');
   // The retired sentence must not come back anywhere.
-  for (const [name, source] of Object.entries({ grid, usageTracker, activityTracker })) {
+  for (const [name, source] of Object.entries({ grid, ledgerBoard, commitLog })) {
     assert.doesNotMatch(
       source,
       /live refresh is off/,
@@ -1378,13 +1275,13 @@ test('a token source with no series renders no graph, and one with a series stil
 test('panel sources stay local-origin', () => {
   for (const [name, source] of Object.entries({
     shell,
-    statTracker,
+    ticker,
     panelsSource,
     iconsSource,
     grid,
     gridSource,
-    activityTracker,
-    usageTracker,
+    commitLog,
+    ledgerBoard,
     blockHost,
     pageSection,
     manifest,
@@ -1402,13 +1299,13 @@ test('boss identity helpers bridge data names to asset slugs', () => {
   assert.equal(bossInitials('The Whisperer'), 'TW');
   assert.equal(bossInitials('Chambers of Xeric'), 'CX');
   assert.equal(bossInitials(''), '?');
-  // Skills canonicalize by the identical rule, so one icon directory can
-  // never drift into a second naming convention.
-  assert.equal(skillSlug('Attack'), 'attack');
-  assert.equal(skillSlug('Runecraft'), 'runecraft');
-  for (const name of ['Overall', "Kree'arra", 'Chambers of Xeric: Challenge Mode']) {
-    assert.equal(skillSlug(name), bossSlug(name), `the two slug rules disagree on ${name}`);
-  }
+  /* There is ONE slug rule and ONE icon directory now (owner directive,
+     2026-09-03, issue 287: the skills grid is cut, so the skill icons and the
+     second slug helper went with the surface that justified them). The rule
+     the pair existed to protect — an icon file is named by exactly the data
+     name it serves — is unchanged and is what the directory pin above
+     enforces in both directions. */
+  assert.equal(bossSlug('Chambers of Xeric: Challenge Mode'), 'chambers-of-xeric-challenge-mode');
 });
 
 // The two renderings that carry real meaning in this panel, EXECUTED rather
@@ -1445,20 +1342,13 @@ test('a tile label carries the whole row, including its nulls', () => {
   assert.equal(cellLabel({ name: 'Sol Heredit', kc: 2, rank: null, score: null }), 'Sol Heredit: 2 KC, rank Unranked');
 });
 
-// A skill cell shows one number in a grid of twenty-five, so its accessible
-// label has to carry the whole row — nulls included, since the hiscores
-// legitimately report none for a skill below the listing threshold.
-test('a skill label carries the whole row, including its nulls', () => {
-  assert.equal(
-    skillLabel({ name: 'Attack', level: 99, rank: 124252, xp: 19794965 }),
-    'Attack: level 99, rank 124,252, 19,794,965 xp'
-  );
-  assert.equal(skillLabel({ name: 'Sailing', level: 72, rank: null }), 'Sailing: level 72, rank Unranked');
-  assert.equal(
-    skillLabel({ name: 'Hunter', level: null, rank: null, xp: null }),
-    'Hunter: level --, rank Unranked'
-  );
-});
+/* The skill-label pin retired with the grid it described (owner directive,
+ * 2026-09-03, issue 287). What it proved — an accessible label carries the
+ * WHOLE row, nulls included, so a figure never depends on reading one number
+ * out of a dense table — is unchanged and still proven, on the collection that
+ * survives: `cellLabel` is executed against a full row, an unranked row and a
+ * no-figure row in the tests directly above and below this line, and the
+ * ticker renders it as every item's accessible name. */
 
 // The panel used to open with a subtitle naming the account. The RSN is
 // personal information and the owner does not want it displayed (issue 127),
@@ -1475,73 +1365,43 @@ test('the boss panel displays no account name anywhere', () => {
     /\.account\b/,
     'the account name reaches a rendering again; a label read aloud is still displayed'
   );
-  assert.doesNotMatch(statTracker, /account|panelSummary/, 'the account subtitle came back');
+  assert.doesNotMatch(ticker, /account|panelSummary/, 'the account subtitle came back');
   // The grids keep accessible names — losing the account must not cost a
   // screen reader the ability to tell the two tables apart. The names are
   // adapter data on the one grid template.
-  assert.match(statTracker, /<ul class="stat-grid" data-cells=\{grid\.size\} aria-label=\{grid\.label\}>/);
-  const { grids } = osrsStatsFixture();
-  assert.deepEqual(grids.map((grid) => grid.label), ['Skill levels', 'Boss tallies']);
-  // And the tally table is no longer a focus stop. The tabindex it used to
-  // carry existed because a scrollable box is keyboard-reachable only when
-  // focusable; with the scroll region gone (issue 134) it is a tab stop that
-  // does nothing, which costs every keyboard reader a press for no action.
-  assert.doesNotMatch(
-    statTracker,
-    /<ul class="stat-grid"[^>]*tabindex/,
-    'the stat tables are not scroll regions, so they must not be focus stops either'
-  );
+  /* The collection keeps its accessible name — losing the account must not
+     cost a screen reader the ability to say what the strip is. The name is
+     adapter data, and the strip IS a focus stop now, deliberately: under
+     reduced motion it is a scroller, and a scrollable box is keyboard-
+     reachable only when it is focusable (owner directive, 2026-09-03, issue
+     287 — the inverse of the ruling that removed the grid's tabindex, for the
+     inverse reason: the grid had stopped scrolling, this scrolls). */
+  /* The strip's accessible name is the COMPOSED label the adapter built, and
+     nothing else is allowed to name it: the attribute is pinned rather than
+     its whole opening tag, so a binding added to the element (the strip is
+     the detail's host now) cannot break a claim that was never about the
+     tag's shape. */
+  assert.match(ticker, /<div class="ticker-strip" aria-label=\{label\} tabindex="0" role="group"/);
+  assert.equal(bossTickerFixture().label, bossLogStripLabel);
+  assert.ok(!bossLogStripLabel.includes('Roll'), 'the strip name must not carry the account');
+  // The lead item renders the ENVELOPE's title, so even the collection's own
+  // name is origin-served data rather than a string in this tree.
+  assert.equal(bossTickerFixture().title, 'Old School RuneScape');
 });
 
-// The grid's trailing gap, filled with the account's own totals rather than
-// left blank (owner directive, issue 127). These are EXECUTED rather than
-// pattern-matched, because the interesting cases are the honest ones: a total
-// the hiscores do not report, and a payload with no Overall row at all.
-test('the skills grid closes with the account totals, honestly', () => {
-  const overall = { name: 'Overall', level: 2274, rank: 138220, xp: 453846899 };
-  const cells = skillSummary([overall, { name: 'Attack', level: 99, rank: 1, xp: 2 }]);
-  assert.deepEqual(
-    cells.map((cell) => [cell.label, cell.value]),
-    [
-      ['XP', '453,846,899'],
-      ['Rank', '138,220'],
-    ],
-    'the two totals are the Overall row’s xp and rank, grouped like every other figure'
-  );
-  // The full name rides the accessible text, because "Total XP" does not fit
-  // a third of a 320px card and a truncated label is worse than a short one.
-  assert.equal(summaryLabel(cells[0]), 'Total XP: 453,846,899');
-  assert.equal(summaryLabel(cells[1]), 'Overall rank: 138,220');
-  // Nulls render as the same markers every other cell uses — a total the
-  // upstream does not report is not a zero and not an empty tile.
-  const unreported = skillSummary([{ name: 'Overall', level: null, rank: null, xp: null }]);
-  assert.deepEqual(
-    unreported.map((cell) => cell.value),
-    [noTally, unrankedLabel]
-  );
-  // No Overall row, no invented cells. The gap coming back is the honest
-  // outcome, and the tiling pin below is what makes it loud.
-  assert.deepEqual(skillSummary([{ name: 'Attack', level: 99, rank: 1, xp: 2 }]), []);
-  assert.deepEqual(skillSummary([]), []);
-});
-
-// The blank tiles the owner asked us to remove are a COUNTING property, not a
-// styling one: three columns, twenty-five skills and two totals tile exactly,
-// and an upstream that ships a twenty-sixth skill breaks that. This fails the
-// day it does, naming the arithmetic, instead of shipping a blank tile.
-test('the skills grid tiles its columns exactly, with no cell left over', {
-  skip: reducedContextNote,
-}, async () => {
-  const snapshot = await read('../../internal/panels/snapshots/boss-log.json').then(JSON.parse);
-  const columns = 3;
-  const cells = snapshot.data.skills.length + skillSummary(snapshot.data.skills).length;
-  assert.equal(
-    cells % columns,
-    0,
-    `${snapshot.data.skills.length} skills plus ${cells - snapshot.data.skills.length} totals leave ` +
-      `${cells % columns} blank tile(s) in a ${columns}-column grid; the grid must end flush`
-  );
-});
+/* The two skills-grid pins retired with the grid (owner directive,
+ * 2026-09-03, issue 287: the owner cut the skills grid).
+ *
+ * They proved two things and both survive elsewhere rather than being lost.
+ * The FIRST — a total the upstream does not report renders as the same marker
+ * every other cell uses, never as a zero and never as an empty tile — is the
+ * honest-states floor, and it is executed on the surviving collection by the
+ * null-tally and unranked pins above (`tally(null)` is `--`, `rankLabel(null)`
+ * is "Unranked", and the strip renders both). The SECOND — that blank tiles
+ * are a COUNTING property, so an upstream shipping a twenty-sixth skill fails
+ * loudly rather than shipping a hole — has no counting property left to guard:
+ * the strip is a single row of exactly the rows the payload carries, so there
+ * is no grid for a remainder to fall out of. */
 
 // One numeric contract, three languages (2026-08-24 round-3 review finding
 // 9). A token count is produced by a Python capture tool, summed and served

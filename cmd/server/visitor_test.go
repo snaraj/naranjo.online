@@ -344,10 +344,17 @@ func TestVisitorChecksTheBossLog(t *testing.T) {
 		if envelope.Kind != "boss-log/v1" {
 			t.Fatalf("boss-log kind = %q, want boss-log/v1", envelope.Kind)
 		}
-		// The heading the rail puts on the card. The panel's id and kind are
-		// its stable public identity and deliberately did NOT follow the
-		// owner's rename, so this is the one place the new title is visible.
-		if envelope.Title != "Old School RuneScape Stats" {
+		// The heading the page puts on the collection. The panel's id and kind
+		// are its stable public identity and deliberately did NOT follow the
+		// owner's renames, so this is the one place a title is visible.
+		//
+		// It is the collection's own name now (owner directive, 2026-09-03,
+		// issue 287): the ledger's ticker leads with the envelope's title, so
+		// the served string is what a reader actually reads rather than a card
+		// heading, and "Stats" described the retired two-grid panel rather than
+		// the thing being counted. Data edit only — the frontend spells no
+		// title, which its own pins enforce.
+		if envelope.Title != "Old School RuneScape" {
 			t.Errorf("boss-log title = %q, want the panel's current heading", envelope.Title)
 		}
 		var payload visitorBossLog
@@ -684,9 +691,10 @@ func TestVisitorReadsTheProjectFeed(t *testing.T) {
 			bundled = append(bundled, response.Body...)
 		}
 		// Structure and markers, never copy: the panel id the block subscribes
-		// to, the entry-count class the feed's figures render in, and the
-		// provenance mark a captured figure carries.
-		for _, marker := range []string{"coding-projects", "entry-count", "recorded"} {
+		// to, the table-count class the ledger table's figures render in (the
+		// entry-count class went with the card feed, owner directive 2026-09-03,
+		// issue 287), and the provenance mark a captured figure carries.
+		for _, marker := range []string{"coding-projects", "table-count", "recorded"} {
 			if !bytes.Contains(bundled, []byte(marker)) {
 				t.Errorf("built assets lack the project-feed marker %q", marker)
 			}

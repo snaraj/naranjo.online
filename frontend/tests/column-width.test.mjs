@@ -636,9 +636,14 @@ describe('the page cannot be broken by a width, whichever half is looking', () =
     // Belt AND braces, and the point of pinning both is that losing ONE is
     // silent: a page with only the script clamp still renders correctly today
     // and fails open the moment a value reaches the token by any other route.
-    // main alone carries the column now — the header decoupled from it
-    // (owner directive, issue 168) and no longer shares this rule.
-    const rule = /#app > main\s*\{([^}]*)\}/.exec(styles);
+    /* The chrome row shares this rule again (owner directive, 2026-09-03,
+       issue 287). Issue 168 decoupled the two because the header was a
+       corner-pinned control that must not move when the reader drags the feed;
+       the ledger's header is a ROW of the sheet — its top rule — so it has to
+       begin and end exactly where the column does, and one declaration is what
+       makes that true rather than two sets of numbers kept in step. The clamp
+       this test measures is unchanged and now governs both. */
+    const rule = /#app > main,\s*\.page-header\s*\{([^}]*)\}/.exec(styles);
     assert.ok(rule, 'the page column rule has moved; the clamp pins below no longer measure it');
     assert.match(rule[1], /inline-size:\s*min\(var\(--page-column-width\), 100%\);/);
     assert.match(

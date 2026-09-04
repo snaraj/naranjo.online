@@ -1,14 +1,14 @@
-/* The work-history block (issue 165): the generic EntryLog bound to the
+/* The work-history block (issue 165): the generic LedgerLog bound to the
  * captured rows in lib/work.ts. Static — the build already carries the data.
  *
- * It used to declare a section note as well, the "placeholder entries" line
- * the page printed over two lorem-ipsum records. The owner supplied the real
- * history (2026-08-25), so both the copy and its disclaimer are gone: an
- * honest-state note over four real roles would itself be the false statement
- * the note existed to prevent. */
+ * It used to bind EntryLog, which drew four cards with every accomplishment
+ * on the page at once. The owner's ledger redesign (2026-09-03, issue 287)
+ * made the section a summary that opens: the same four roles, the same order,
+ * the same accomplishments, as ruled rows with a drawer each. One line here,
+ * because that is what the manifest architecture is for. */
 
 import { staticBlock, type PageBlock } from '../blocks.ts';
-import EntryLog from '../components/EntryLog.svelte';
-import { workHistoryProps } from '../work.ts';
+import LedgerLog from '../components/LedgerLog.svelte';
+import { roleLedgerProps } from '../work.ts';
 
-export const workHistory: PageBlock = staticBlock('work-history', EntryLog, workHistoryProps);
+export const workHistory: PageBlock = staticBlock('work-history', LedgerLog, roleLedgerProps);

@@ -57,6 +57,38 @@
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
+/* THE LEDGER'S WORDS (owner directive, 2026-09-03, issue 287). The redesign
+ * sets figures, labels, hashes and dates in the mono face above and everything
+ * a person READS — the name, a company, a role, a commit subject — in Archivo,
+ * a grotesque with a variable weight axis (100-900) and a variable WIDTH axis
+ * (62-125%). Both axes matter to this design: the masthead is 900 at 100%
+ * width, and a narrower cut is one token edit away rather than a second file.
+ *
+ * Split into the same two character ranges the mono face is split into, for
+ * the same reason — a visitor downloads the ~90KB range this page's text
+ * actually reaches instead of one everything-file — and vendored beside its
+ * OFL license per the attribution convention. `font-display: swap` keeps first
+ * paint honest: system text beats invisible text, and the fallback stack below
+ * (--font-sans) is chosen so the swap moves as little as it can. */
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+  src: url('./assets/fonts/Archivo-Variable-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+  src: url('./assets/fonts/Archivo-Variable-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 /* Reading-mode token layer (issue #22, the OSRS-wiki mechanism adapted):
  * every color lives in a custom property, and each reading mode is one
  * override block scoped by the data-theme attribute the origin stamps on
@@ -91,10 +123,10 @@
  * twice below because light's text is slate's surface and vice versa — one
  * occurrence per palette slot, never per consumer. */
 :root {
-  --palette-light-surface: #f7f7f2;
-  --palette-light-surface-raised: #efefe8;
-  --palette-light-surface-overlay: #e6e6dd;
-  --palette-light-border: #d8d8cd;
+  --palette-light-surface: #faf9f5;
+  --palette-light-surface-raised: #f1efe7;
+  --palette-light-surface-overlay: #e7e4da;
+  --palette-light-border: #d9d5c9;
   /* Repainted at issue 138. border-strong is a non-text UI boundary, so WCAG
      2.2 SC 1.4.11 sets its floor at 3:1 against the surface it sits on, and
      three of the four palettes were below it — measured against each mode's
@@ -140,7 +172,7 @@
   --palette-slate-border: #2a3040;
   --palette-slate-border-strong: #5f6a84;
   --palette-slate-accent: #b9c2d4;
-  --palette-slate-text: #f7f7f2;
+  --palette-slate-text: #faf9f5;
 
   /* Sepia: placeholder palette seeded from the wiki's browntown values. */
   --palette-sepia-surface: #1b1612;
@@ -159,6 +191,20 @@
      rather than a brand that quietly becomes unreadable in one mode. */
   --palette-brand-orange: #dc8a00;
   --palette-brand-orange-on-light: #8a5600;
+
+  /* THE LEDGER'S ONE CHROMATIC MARK (owner directive, 2026-09-03, issue 287).
+     The redesign is monochrome — rules, ink and paper — and spends colour on
+     exactly one thing: the extreme. The peak day of a heatmap, a hovered
+     control, the boss the owner has killed most. One value across every
+     reading mode, deliberately, because it is not a palette member: it is the
+     same red on paper as it is on near-black, the way a printer's spot colour
+     is. Measured against every surface it can land on — 3.31:1 on the light
+     page, 3.08:1 on the light card, 4.68:1 dark, 4.89:1 slate, 4.41:1 sepia —
+     which clears 1.4.11's 3:1 for the non-text indicator it always is. It is
+     never the only channel: a peak cell still prints its own count, a hovered
+     control still moves, and the ramp below still steps monotonically without
+     it. */
+  --palette-highlight: #ff3b1f;
 
   /* Panel status: the WHOLE traffic-light family, not one third of it
      (issues 222 and 229). Shape and text already distinguish these states —
@@ -234,12 +280,25 @@
      no hue at all: it is derived from the same white-over-base composite as
      its surfaces, so the one chromatic thing in the whole mode stays the
      brand mark. Restraint is the difference between a dark theme and a dim
-     one, and a heatmap is the easiest place to lose it. */
-  --palette-light-grid-0: #dcdcd2;
-  --palette-light-grid-1: #a8c4e8;
-  --palette-light-grid-2: #6f9fd8;
-  --palette-light-grid-3: #3f79c4;
-  --palette-light-grid-4: #1c5cab;
+     one, and a heatmap is the easiest place to lose it.
+
+     THE RAMP IS MONOCHROME IN EVERY MODE NOW (owner directive, 2026-09-03,
+     issue 287). It used to carry a hue per palette — a blue on light and
+     slate, a warm gold on sepia, with only the true dark running hueless. The
+     ledger design spends colour on the peak alone (--palette-highlight above),
+     so every ramp is now what the dark one always was: its own palette's
+     neutrals walking from the empty tile to the ink. That makes the four modes
+     one picture rather than four, keeps the redundant channel (the count is
+     printed in every cell) doing the identifying, and leaves the highlight the
+     only chromatic thing on the page. The direction is still per palette and
+     still derived rather than assumed — a ramp that stepped brighter against
+     the light card would walk toward its own background and draw the busiest
+     days as the emptiest. The dark ramp is untouched. */
+  --palette-light-grid-0: #e4e4dc;
+  --palette-light-grid-1: #b7b7ae;
+  --palette-light-grid-2: #85857d;
+  --palette-light-grid-3: #55554f;
+  --palette-light-grid-4: #262624;
 
   --palette-dark-grid-0: #2a2a2a;
   --palette-dark-grid-1: #545454;
@@ -248,16 +307,16 @@
   --palette-dark-grid-4: #d9d9d9;
 
   --palette-slate-grid-0: #262b36;
-  --palette-slate-grid-1: #1c5cab;
-  --palette-slate-grid-2: #2a78d6;
-  --palette-slate-grid-3: #5598e7;
-  --palette-slate-grid-4: #86b6ef;
+  --palette-slate-grid-1: #454d61;
+  --palette-slate-grid-2: #6b7488;
+  --palette-slate-grid-3: #98a0b2;
+  --palette-slate-grid-4: #cdd3de;
 
   --palette-sepia-grid-0: #3a322b;
-  --palette-sepia-grid-1: #6b4f2a;
-  --palette-sepia-grid-2: #946d33;
-  --palette-sepia-grid-3: #b98f4a;
-  --palette-sepia-grid-4: #d9b676;
+  --palette-sepia-grid-1: #5b4f43;
+  --palette-sepia-grid-2: #85735f;
+  --palette-sepia-grid-3: #ae9880;
+  --palette-sepia-grid-4: #d8c4a8;
 
   /* The token-usage CATEGORY set: identity colors for the per-day breakdown
      (input, output, cache read, cache write, reasoning — slots 1..5, fixed
@@ -314,7 +373,6 @@
      covered by a rail nobody asked for. Three named layers say that, and a
      component reading a raw number instead is still the defect this scale
      exists to prevent. */
-  --layer-base: 0;
   --layer-rail: 10;
   --layer-menu: 30;
 
@@ -403,7 +461,22 @@
      owner's a11y instruction on issue 168. */
   --page-rail-size: 2.75rem;
 
-  /* The header's own corner position (owner directive, issue 168): pinned to
+  /* RETIRED WITH THE CORNER (owner directive, 2026-09-03, issue 287). The
+     chrome row was pinned to the viewport's top-end corner and needed insets
+     of its own to clear a notch or a home indicator; it is a row across the
+     sheet now, inside #app, so #app's own safe-area padding clears both for it
+     exactly as it does for everything else in the column. Two tokens fewer,
+     and one fewer place a notch is answered.
+
+     The original note is kept below because the FINDING outlives the tokens:
+     a custom property cannot use the plain-base-then-progressive pair a
+     regular property can, because a custom property's value is opaque text the
+     parser always accepts, so a second declaration wins outright rather than
+     falling back. The recovery for one is a var() fallback argument at every
+     READ site. Anything reintroducing an env() custom property here needs to
+     know that.
+
+     The header's own corner position (owner directive, issue 168): pinned to
      the top-end corner, independent of the column's width, so dragging the
      feed never moves it. Insets rather than a bare page-gutter literal so a
      notch or a home indicator is cleared the same way the rest of the page
@@ -427,9 +500,6 @@
      this site's entire browser-support window since before issue 168
      shipped, so there is no fallback to write; the honest form is the one
      declaration below. */
-  --header-inset-inline: max(var(--page-gutter), env(safe-area-inset-right));
-  --header-inset-block: max(var(--page-gutter), env(safe-area-inset-top));
-
   /* The feed-card token layer (owner directive, issue 134). The page is
      becoming a feed of many content types, so the card is a primitive with
      regions rather than a layout for one kind of thing — and every visual
@@ -455,7 +525,14 @@
      restate values: the compact variant points --card-padding at
      --card-padding-compact, so the tight rhythm is still one number defined
      in one place. */
-  --card-surface: var(--color-surface-raised);
+  /* THE CARD SITS ON THE PAGE'S OWN PAPER NOW (owner directive, 2026-09-03,
+     issue 287). It used to sit on the raised surface, which is what made a
+     card read AS a card — a slightly lifted plate with a seam around it. The
+     ledger has no plates: rows are separated by rules drawn in the ink and
+     everything shares one sheet. The raised value did not leave the palette,
+     it changed job: it is --ledger-raised below, the tint a row takes under a
+     pointer, which is the one place this design still wants a lift. */
+  --card-surface: var(--color-surface);
   --card-ink: var(--color-text);
   --card-border-color: var(--color-border);
   --card-border-width: 1px;
@@ -486,7 +563,6 @@
      breakpoint token with it (both are pinned ABSENT, by name, in
      tests/sections.test.mjs — which is why this comment does not spell
      them). */
-  --entry-count-min: 3.25rem;
   --card-title-family: var(--font-mono);
   --card-title-size: 1.0625rem;
   --card-title-weight: 650;
@@ -556,6 +632,98 @@
      channel with a fork the day one surface needs it. */
   --card-measure: none;
 
+  /* THE LEDGER LAYER (owner directive, 2026-09-03, issue 287). The page is a
+     ruled sheet now: two-pixel rules over each section head, hairlines between
+     rows, ink on paper, and one red for the extreme. Nothing below is a colour
+     of its own — each is a ROLE mapped onto the reading-mode tokens above, so
+     the four modes carry the ledger without a single mode-specific rule
+     anywhere in the design.
+
+     The role names are the ones the drawing uses, which is why they exist at
+     all: a component that read --color-text where the drawing says "ink" would
+     be correct today and unmovable tomorrow. `rule` is deliberately the INK
+     rather than the border token — a ledger's rules are drawn in the same
+     black the words are, and the faint --color-border seam is the card
+     grammar this design replaced. */
+  --ledger-bg: var(--color-surface);
+  --ledger-raised: var(--color-surface-raised);
+  --ledger-ink: var(--color-text);
+  --ledger-muted: var(--color-accent);
+  --ledger-rule: var(--color-text);
+  --ledger-highlight: var(--color-highlight);
+
+  /* The two rule weights the whole sheet is drawn with, and the gaps between
+     its parts. A section head is heavy over, hairline under; a row is hairline
+     under; a band is heavy both sides. Two numbers, stated once. */
+  --ledger-hairline: 1px;
+  --ledger-heavy: 2px;
+  --ledger-section-gap: 2.5rem;
+  /* The commit log's row pitch, and the number its reserve is built from. It
+     is a token because the row is TALLER on a phone — the repository and the
+     subject stack there — and a reserve computed from one width while the rows
+     are drawn at another is a box that clips its own last row. */
+  --commit-row-height: 2.75rem;
+  --ledger-row-pad: 0.875rem;
+  --ledger-column-gap: 1.5rem;
+
+  /* The mono LABEL, which is the ledger's connective tissue: section numbers,
+     column heads, sub-lines, the footer. One size, one tracking, everywhere. */
+  --ledger-label-size: 0.6875rem;
+  --ledger-label-tracking: 0.2em;
+  --ledger-figure-size: 0.75rem;
+  --ledger-body-size: 0.875rem;
+  --ledger-body-leading: 1.5;
+  --ledger-name-size: 1.0625rem;
+
+  /* The masthead. It clamps rather than sitting at the 180px the desktop
+     drawing shows, because the owner's first requirement is the phone: at
+     320px a fixed 180px "samuel naranjo" overflows the viewport, and the
+     clamp's own vw term wraps it to the two lines the owner saw and accepted
+     instead. The ceiling IS the drawing's 180px. */
+  --masthead-size: clamp(4rem, 12vw, 11.25rem);
+  --masthead-weight: 900;
+  --masthead-stretch: 100%;
+  --masthead-tracking: -0.055em;
+  --masthead-leading: 0.86;
+  --masthead-rule: 3px;
+
+  /* The picture band, top and bottom. Its height is fixed at both widths
+     rather than fluid: the band is the one box on the page whose contents
+     arrive as an image, and a height that depended on the picture would move
+     everything under it the moment a texture decoded. */
+  --band-height: 8.25rem;
+  --band-height-phone: 5.5rem;
+  --band-ground: rgb(0, 0, 0);
+
+  /* Controls. The VISIBLE mark is 32px — a chevron's circle, a segment's box,
+     a texture arrow — and the control around it is the site's 44px floor,
+     which is why these are two tokens rather than one: the drawing's size and
+     the finger's size are different questions and were answered separately. */
+  --control-target: 2.75rem;
+  --control-mark: 2rem;
+
+  /* The board of flip squares, and the strip under it. */
+  --square-figure-size: 2.75rem;
+  --square-pad: 0.875rem;
+  --square-gap: 0.5rem;
+  --ticker-icon: 22px;
+  --ticker-item-pad: 0.5625rem 0.875rem;
+  --ticker-dim: 0.35;
+
+  /* Motion, as tokens, because how this page moves is as much a dial as how it
+     is coloured — and because every one of these is read from inside a
+     (prefers-reduced-motion: no-preference) block, so a reader who asked for
+     less motion gets the same page with none of it. */
+  --ledger-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ledger-repaint: 360ms;
+  --ledger-hover: 200ms;
+  --drawer-duration: 520ms;
+  --flip-duration: 680ms;
+  --heat-fade: 420ms;
+  --band-fade: 320ms;
+  --masthead-draw: 1400ms;
+  --ticker-duration: 90s;
+
   /* The panel theme layer. Every panel component was built "shaped, not
      styled" — each color reads a --panel-* custom property with a
      dark-native fallback, so the theme layer restyles panels by overriding
@@ -582,6 +750,35 @@
      dissolving into each palette's neutral. In the true dark that is the
      ONLY chromatic token the mode carries, which is the point of it. */
   --panel-surface: var(--card-surface);
+  /* THE SHELL IS FRAMELESS UNDER THE LEDGER (owner directive, 2026-09-03,
+     issue 287). PanelShell still reads every one of its dimensions from this
+     layer — it states none of its own, which is the whole reason these three
+     can move the panels without a component edit — and the ledger's answer to
+     all three is nothing: a block's separation is the section rule above it,
+     not a box around it, and a padding here would inset the ledger's rows from
+     the column edge the rest of the page is aligned to. --panel-border keeps
+     its value rather than going transparent, because the detail card still
+     reads it for its own hairline; what changed is that the shell draws zero
+     pixels of it. */
+  --panel-border-width: 0rem;
+  --panel-radius: 0rem;
+  --panel-padding: 0rem;
+  --panel-gap: 0rem;
+  /* Each block's own caption row: the ORIGIN's title for the panel and its
+     data-through line, both set as the sheet's mono label under the section
+     head. The title is origin-served data — it is what the envelope carries —
+     so it renders rather than being hidden: a heading a page receives and then
+     drops is a page deciding what its own backend meant. */
+  --panel-title-size: var(--ledger-label-size);
+  --panel-title-family: var(--font-mono);
+  --panel-title-weight: 500;
+  --panel-title-tracking: var(--ledger-label-tracking);
+  --panel-title-transform: uppercase;
+  --panel-heading: var(--ledger-muted);
+  --panel-note-size: var(--ledger-label-size);
+  --panel-note-family: var(--font-mono);
+  --panel-note-tracking: var(--ledger-label-tracking);
+  --panel-note-transform: uppercase;
   --panel-tip-surface: var(--color-surface-overlay);
   --usage-tile-surface: var(--color-surface);
   --panel-border: var(--card-border-color);
@@ -617,6 +814,16 @@
   --grid-cell-2: var(--color-grid-2);
   --grid-cell-3: var(--color-grid-3);
   --grid-cell-4: var(--color-grid-4);
+  /* THE PEAK IS NOT A RAMP LEVEL (owner directive, 2026-09-03, issue 287).
+     The busiest day of a window wears the highlight, and it wears it through
+     its own attribute rather than through a sixth bucket — a chromatic step
+     inside the ramp would break the monotone-lightness property the ramp is
+     measured for, and would mean the level a cell is bucketed into depended on
+     whether it happened to be the maximum. Two orthogonal facts, two channels:
+     the LEVEL says how busy the day was, the PEAK says it was the busiest. The
+     count is printed in the cell either way, so neither is carried by colour
+     alone. */
+  --grid-cell-peak: var(--color-highlight);
   --usage-cat-0: var(--color-cat-0);
   --usage-cat-1: var(--color-cat-1);
   --usage-cat-2: var(--color-cat-2);
@@ -629,7 +836,6 @@
      belongs to, and it was rendering at the same 0.8125rem as the prose it
      titles. Declared here rather than left to a component fallback, because
      this is a dimension the owner tunes. */
-  --usage-source-label-size: 1rem;
 
   /* The hover-detail token layer. The detail that hangs off a tile is one
      primitive (lib/components/DetailTip.svelte), so like the card above it
@@ -673,6 +879,7 @@
   --color-accent: var(--palette-light-accent);
   --color-text: var(--palette-light-text);
   --color-brand: var(--palette-brand-orange-on-light);
+  --color-highlight: var(--palette-highlight);
   --color-status-ok: var(--palette-status-ok-on-light);
   --color-status-stale: var(--palette-status-stale-on-light);
   --color-status-critical: var(--palette-status-critical-on-light);
@@ -696,6 +903,16 @@
      token called sans holding a mono face is the kind of small lie the
      dead-code audit exists to catch. */
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* And the page's OTHER stack (owner directive, 2026-09-03, issue 287). The
+     ledger sets two kinds of thing in two faces, which is the whole of its
+     typographic idea: anything MEASURED — a figure, a date, a hash, a label —
+     stays in the mono face above, and anything a person READS is set in
+     Archivo. The fallbacks behind it are grotesques a platform is very likely
+     to have, so the swap window shows the right SHAPE of type rather than a
+     serif that will jump when the real face lands. Named for what it holds,
+     like its sibling. */
+  --font-sans: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
 
   /* The chrome-icon grammar (owner directive, 2026-08-24). The page's two
      header controls are LINE ICONS — a small glyph inside a 44px hit area,
@@ -760,6 +977,7 @@
     --color-accent: var(--palette-dark-accent);
     --color-text: var(--palette-dark-text);
     --color-brand: var(--palette-brand-orange);
+    --color-highlight: var(--palette-highlight);
     --color-status-ok: var(--palette-status-ok);
     --color-status-stale: var(--palette-status-stale);
     --color-status-critical: var(--palette-status-critical);
@@ -788,6 +1006,7 @@
   --color-accent: var(--palette-dark-accent);
   --color-text: var(--palette-dark-text);
   --color-brand: var(--palette-brand-orange);
+  --color-highlight: var(--palette-highlight);
   --color-status-ok: var(--palette-status-ok);
   --color-status-stale: var(--palette-status-stale);
   --color-status-critical: var(--palette-status-critical);
@@ -821,6 +1040,7 @@
   --color-accent: var(--palette-slate-accent);
   --color-text: var(--palette-slate-text);
   --color-brand: var(--palette-brand-orange);
+  --color-highlight: var(--palette-highlight);
   --color-status-ok: var(--palette-status-ok);
   --color-status-stale: var(--palette-status-stale);
   --color-status-critical: var(--palette-status-critical);
@@ -848,6 +1068,7 @@
   --color-accent: var(--palette-sepia-accent);
   --color-text: var(--palette-sepia-text);
   --color-brand: var(--palette-brand-orange);
+  --color-highlight: var(--palette-highlight);
   --color-status-ok: var(--palette-status-ok);
   --color-status-stale: var(--palette-status-stale);
   --color-status-critical: var(--palette-status-critical);
@@ -1047,7 +1268,17 @@ textarea {
    less its gutters and its safe-area insets. The script that writes the knob
    clamps too; neither clamp is the other's excuse, and each alone still holds
    the page. */
-#app > main {
+/* THE CHROME ROW TAKES THE SAME COLUMN (owner directive, 2026-09-03, issue
+   287), and it is the same three declarations rather than a second set of
+   numbers: the row is the sheet's own top rule, so it has to begin and end
+   exactly where every section head below it does. Issue 168 decoupled the
+   header from the column on purpose — a corner-pinned control must not move
+   when the reader drags the feed — and this is the opposite arrangement for
+   the opposite object: a row in the flow that IS part of the sheet. What the
+   old coupling actually broke is fixed at its cause instead, by the header
+   being a row rather than a floating box. */
+#app > main,
+.page-header {
   inline-size: min(var(--page-column-width), 100%);
   min-inline-size: min(var(--page-column-min), 100%);
   max-inline-size: min(var(--page-column-max), 100%);
@@ -1121,7 +1352,8 @@ html[data-column-resizing] {
    have. A frontend test recomputes 67.5 from the four tokens it is made of,
    so the breakpoint cannot drift away from what it means. */
 @media (min-width: 67.5rem) {
-  #app > main {
+  #app > main,
+  .page-header {
     max-inline-size: min(var(--page-column-max), calc(100% - 2 * var(--page-rail-size)));
   }
 
@@ -1130,182 +1362,230 @@ html[data-column-resizing] {
   }
 }
 
-/* The chrome row is styled HERE rather than inside PageHeader.svelte because
-   the static shell renders the same empty row, before any icon has hydrated
-   into it — a component-scoped rule would style only the hydrated one.
+/* THE CHROME ROW IS A REAL ROW NOW (owner directive, 2026-09-03, issue 287).
+   It is styled HERE rather than inside PageHeader.svelte because the static
+   shell renders the same row before any control has hydrated into it, and a
+   component-scoped rule would style only the hydrated one.
 
-   Pinned to the viewport's top-end corner (owner directive, issue 168):
-   "push the icons all the way to the top right, outside of the feed... I
-   don't like how they move when I drag the feed in and out." Fixed
-   positioning is what makes that true — the header no longer takes the
-   column's width or sits in its flow at all, so nothing the reader drags
-   can move it, and it needs no reserved row height either, because
-   out-of-flow chrome never occupies one. Below the handle breakpoint there
-   is nothing to drag and the corner is re-aimed at the document instead
-   (issue 264, under this rule). The insets clear the same safe areas #app
-   pads by, and they are declared once here for both ranges. z-index reuses
-   the popover's own layer: the header CONTAINS the reading-mode trigger, so
-   anything that must out-rank the resize rails (--layer-rail) already has to
-   out-rank it by exactly that much. */
+   It used to be FIXED to the viewport's top-end corner (issue 168): the header
+   held one icon, out of the document flow so dragging the column could not
+   move it, backed by a translucent plate (issue 219) because a viewport-glued
+   box owns its corner at every scroll offset and page content passed under it.
+   Below the handle breakpoint it was re-aimed at the document (issue 264)
+   because that corner cost the whole column a 60px lane it could not use.
+
+   The ledger answers all three at their cause rather than one at a time: the
+   row spans the sheet instead of sitting beside the column, so the column's
+   width cannot reach it and there is nothing to reserve a lane for; it is in
+   the flow, so it occupies its own height honestly and no scrolled row can
+   pass beneath it; and with nothing passing beneath it there is nothing left
+   for a plate to soften, so the plate, its blur and its pill are gone rather
+   than restyled. What survives is the part that was never decoration: the row
+   is the site's 44px hit lane tall, and the controls in it clear the touch
+   floor on both axes. */
 .page-header {
-  position: fixed;
-  /* The fallback argument is real protection here, not decoration
-     (coordinator quality pass on issue 186): --header-inset-block/-inline's
-     own declarations read env(safe-area-inset-*), so in a hypothetical
-     engine without it those custom properties would be invalid at
-     computed-value time and resolve to their initial value — this second
-     argument is what recovers a real base (--page-gutter) instead. */
-  inset-block-start: var(--header-inset-block, var(--page-gutter));
-  inset-inline-end: var(--header-inset-inline, var(--page-gutter));
-  z-index: var(--layer-menu);
   display: flex;
   align-items: center;
-  /* THE PLATE (issue 219). A viewport-glued control keeps its corner while the
-     column scrolls underneath it, and at a phone width the column IS the
-     viewport — so page content passed through the corner this control owns.
-     MEASURED at 390x844 in WebKit: the reading-mode glyph occupies x 330-374,
-     y 16-60, and the token panel's "cumulative" segment scrolls to x 283-360,
-     y 27-71, a 30x33px overlap that renders the label underneath the icon.
-     At 1440px there is none — the glyph sits at x 1380-1424 and the column
-     ends at 1200 — which is exactly why this only ever showed on a phone.
-
-     The phone half of that is structural now (issue 264, under this rule):
-     below the handle breakpoint the control is glued to the DOCUMENT, so it
-     leaves with the page and no scrolled row reaches it. The plate still backs
-     the control across the range where it stays viewport-glued, and it is the
-     control's own appearance at every width — which is what the owner's 0.1.52
-     report was about.
-
-     The reserve at the top of the document was never the problem and is not
-     the fix: --page-top-space already clears this row at scroll zero. What was
-     missing is that the control painted nothing of its own, so whatever
-     scrolled beneath it showed THROUGH it. The plate is the page's own surface
-     token, so the glyph reads against a real background in every reading mode
-     rather than against whatever text happens to be passing.
-
-     The radius is the pill the 44px hit box already describes, and the plate
-     is sized by that box rather than by a number of its own, so it cannot
-     drift from the control it backs.
-
-     The plate is a VEIL, not a disc: the first cut painted the surface colour
-     at full opacity and rang a gutter-wide shadow around it, which on a phone
-     read as a huge solid circle stamped on the page (owner defect report,
-     0.1.52). Legibility never needed opacity — it needs the text underneath
-     softened. So the pill keeps only a translucent wash of the page surface
-     and blurs what scrolls beneath it; the spread halo is gone entirely. An
-     engine without backdrop-filter or color-mix falls back to the plain
-     surface colour, which is the safe (legible) direction. */
-  background: var(--color-surface);
-  background: color-mix(in srgb, var(--color-surface) 62%, transparent);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
-  border-radius: 999px;
-  box-shadow: none;
+  justify-content: space-between;
+  gap: var(--ledger-column-gap);
+  /* The row's reserve is the touch row PLUS its own two rules, because the
+     box is border-box and the static shell's copy of this header is EMPTY.
+     Stated as the control alone, the empty shell measured 44px while the
+     hydrated row measured 48 — content plus borders — and mounting moved the
+     whole page down by four pixels. The shell exists precisely so that does
+     not happen (index.html says so), and it can only work if the reserve is
+     the height the arrived row actually takes. */
+  min-block-size: calc(var(--page-rail-size) + 2 * var(--ledger-heavy));
+  padding-block: 0;
+  border-block-start: var(--ledger-heavy) solid var(--ledger-rule);
+  border-block-end: var(--ledger-heavy) solid var(--ledger-rule);
 }
 
-/* BELOW THE HANDLE BREAKPOINT THE CORNER IS THE DOCUMENT'S (owner defect
-   report, issue 264, 2026-08-31: on a phone the page showed a dead strip
-   roughly 60px wide down its inline end). That strip was a lane the page
-   reserved for this control on every row it has (retired with the rule that
-   declared it): a viewport-glued box owns its corner at every scroll offset,
-   so the only way to keep text out from under it was to hold the whole column
-   away from it — the entire page paying for one corner.
+/* The wordmark. An anchor to the page's own name, so the row's first stop is
+   "back to the top" rather than a decorative glyph. */
+.page-mark {
+  display: inline-flex;
+  align-items: center;
+  min-inline-size: var(--control-target);
+  min-block-size: var(--control-target);
+  font-family: var(--font-sans);
+  font-size: 1.25rem;
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  color: var(--ledger-ink);
+  text-decoration: none;
+}
 
-   Re-aiming the control answers the same collision without charging anything
-   for it. There is no positioned ancestor to resolve against — #app is not
-   positioned, and <main> is, but this header is its SIBLING rather than its
-   child — so these insets resolve against the initial containing block, the
-   viewport-sized rectangle anchored at the document's origin. That is the
-   identical box fixed positioning produced at scroll zero, and
-   --page-top-space already clears it: the column begins exactly where this
-   chrome row ends, so nothing sits beside it at rest. The moment the reader
-   scrolls, the control leaves with the page, so no scrolled row can pass
-   under it at any offset. The lane had nothing left to defend, and the column
-   is the viewport less its two gutters again.
+.page-mark:hover,
+.page-mark:focus-visible {
+  color: var(--ledger-highlight);
+  text-decoration: underline;
+}
 
-   Above the breakpoint nothing changes, and both reasons still hold there:
-   fixed is the owner's issue-168 directive (the drag handles exist only in
-   that range, and the control must not move when the feed is dragged), and
-   the column's ceiling gives its two rail lanes back up there, which keeps
-   the two boxes apart arithmetically rather than by reserve. */
-@media not all and (min-width: 67.5rem) {
-  .page-header {
-    position: absolute;
+.page-mark:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* The row's end cluster: where the page is written from, and the reading
+   mode. */
+.page-chrome {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: none;
+}
+
+.page-place {
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  letter-spacing: var(--ledger-label-tracking);
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--ledger-muted);
+}
+
+/* The place label is the first thing to go when the row runs out of room: it
+   is context, not navigation, and the nav and the mode control are both. */
+@media (max-width: 45rem) {
+  .page-place {
+    display: none;
   }
 }
 
-/* The other half of the same collision, for a reader who never scrolls by
-   hand: browser-driven scrolling — a fragment link, and every focus move a
-   keyboard makes — must not park its target under the fixed control either.
-   The inset is the SAME sum the document's top reserve is built from, so the
-   two can never disagree about how much of the viewport that control owns. */
-html {
-  scroll-padding-block-start: var(--page-top-space);
-}
+/* THE SCROLL PADDING IS GONE WITH THE FIXED CONTROL (owner directive,
+   2026-09-03, issue 287). It reserved the top of the viewport so a fragment
+   link or a focus move could not park its target under the reading-mode
+   control that used to be pinned there. The ledger's chrome row is in the
+   document and scrolls away with everything else, so there is no longer any
+   chrome for a scroll to clear — and the padding had stopped being inert: it
+   sits 2px above the trigger's own top edge, and WebKit honours scroll
+   padding on a focus reveal, so returning focus to that trigger after a
+   reading-mode swap nudged the whole document down by exactly those 2px. A
+   reading-mode swap that scrolls the page is the zero-CLS floor breaking in
+   the one place the floor was written for. */
 
 /* The column, and — since the resize handles are drawn against its edges —
    their containing block. position: relative adds no stacking context of its
    own (no z-index sits on this rule), so the reading-mode popover still hangs
-   over everything from the one layer scale above. */
+   over everything from the one layer scale above.
+
+   The gap is the ledger's own section rhythm (owner directive, 2026-09-03,
+   issue 287): the sheet's parts sit forty pixels apart, which is what makes a
+   two-pixel rule read as the start of a section rather than as a line in the
+   middle of one. */
 main {
   display: grid;
-  justify-items: center;
-  gap: 2rem;
+  /* ONE COLUMN, DECLARED, and the `minmax(0, ...)` is the load-bearing half.
+     An implicit `auto` track sizes to its widest item's MAX-CONTENT and is
+     free to overflow a container narrower than that — so the picture band,
+     whose cycler label is one unbreakable line, sized this whole column to
+     237px and took the document sideways with it below that width (measured
+     at 250px, and at 240px). Naming the track as `minmax(0, 1fr)` makes every
+     section exactly the column, and anything wider than the column clips or
+     pans inside its own box, which is what each of them already does. */
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: stretch;
+  gap: var(--ledger-section-gap);
   position: relative;
 }
 
-/* The name and the section nav are one block, so the links sit UNDER the name
-   (owner directive, issue 134) rather than one page-gap away from it. */
+/* THE MASTHEAD (owner directive, 2026-09-03, issue 287). The name is set as
+   large as the column allows, lowercase, tight, with a rule drawn under it. */
 .page-intro {
   display: grid;
-  justify-items: center;
+  justify-items: stretch;
   gap: 0.75rem;
   inline-size: 100%;
 }
 
-/* The nav is one row of in-page links. It wraps rather than scrolling: four
-   labels are a comfortable line on any desktop and a tight one on a 320px
-   phone, and a link that has moved off the edge of a row is a link nobody
-   finds. */
+/* The nav is the chrome row's middle now (owner directive, 2026-09-03, issue
+   287): one line of five links between the wordmark and the reading mode.
+
+   It SCROLLS rather than wraps, which is the opposite of what it used to do
+   and the right answer in its new home: a wrapping nav changes the height of
+   the row it sits in, and this row is the sheet's own top rule — a rule that
+   moved down a line on a narrow phone would take the whole page with it. The
+   scrollbar is hidden because the row is 44px of touch target with no room to
+   spare, and the affordance is the content itself running past the edge. */
 .section-nav {
   display: flex;
-  flex-wrap: wrap;
+  flex: 1 1 auto;
   align-items: center;
-  justify-content: center;
-  gap: 0.25rem 0.5rem;
+  /* START, not centre: a scroll container that centres content wider than
+     itself clips the BEGINNING of that content and cannot be scrolled back to
+     it, so the first link reads as a word cut in half — measured at 390px.
+     Centring is a decision about spare room, and a scrolling row has none. */
+  justify-content: flex-start;
+  gap: 0.25rem 1.25rem;
+  min-inline-size: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+/* Above the phone range there IS spare room, and the row is centred in it
+   between the wordmark and the reading mode. */
+@media (min-width: 45.0625rem) {
+  .section-nav {
+    /* Centred, and SAFELY so, because centring is only correct while the row
+       fits. A centred scroll container whose content overflows hides the
+       BEGINNING of that content, and no scroll gesture brings it back — the
+       first link renders as a word cut in half. `safe` says exactly that:
+       centre while there is room, fall back to the start when there is not.
+       The plain `center` under it is the base an engine without the keyword
+       keeps, and the tighter column gap narrows the row enough that the
+       fallback is rarely even reached — the overflow at 721px, the first
+       width this block covers, went from twenty pixels to four. */
+    justify-content: center;
+    justify-content: safe center;
+    column-gap: 1rem;
+  }
+}
+
+.section-nav::-webkit-scrollbar {
+  display: none;
 }
 
 /* A link, and a touch target. The 44px floor is a MINIMUM on both axes rather
    than a fixed box: a reader who enlarges their base font gets a bigger
    target, never a clipped label.
 
-   The idle underline is gone (owner directive, issue 157: it "looked
-   terrible" as a permanent row of four ruled-off words under the page's
-   name). These are hyperlinks and identifying them by color alone would
-   identify them for fewer readers — but color is not the only other channel
-   here, which is the a11y position this change rests on: a NAV link is
-   distinguished by POSITION (one row, directly under the page name, nowhere
-   else prose ever puts a link) and by ROLE (the enclosing <nav
-   aria-label="Page sections">, which names the row's purpose to assistive
-   tech independent of any visual mark) before color enters into it at all.
-   Hover and keyboard focus still mark a link as a link the moment intent is
-   shown: hover adds the underline back plus the brand ink, and focus-visible
-   keeps the exact site-wide ring untouched below. */
+   The idle underline is gone (owner directive, issue 157). These are
+   hyperlinks and identifying them by color alone would identify them for
+   fewer readers — but color is not the only other channel here, which is the
+   a11y position this change rests on: a NAV link is distinguished by POSITION
+   (one row in the page's own chrome, nowhere else prose ever puts a link) and
+   by ROLE (the enclosing <nav aria-label="Page sections">, which names the
+   row's purpose to assistive tech independent of any visual mark) before color
+   enters into it at all. Hover and keyboard focus still mark a link as a link
+   the moment intent is shown. */
 .section-link {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-inline-size: 2.75rem;
-  min-block-size: 2.75rem;
-  padding-inline: 0.5rem;
-  color: var(--color-text);
-  font-size: 0.9375rem;
+  /* NEVER SHRUNK, and this is what makes the sentence above true. The nav is
+     a flex row, so its links are flex items, and a flex item shrinks to its
+     min-inline-size — which the touch floor sets to 44px. Five labels squeezed
+     to 44px each is five labels overflowing their own boxes and drawing over
+     one another, measured at 390px, where the row read as one run-on word.
+     The row scrolls instead: each link keeps the width its label needs, and
+     the floor goes back to being a floor for the SHORT labels. */
+  flex: none;
+  min-inline-size: var(--control-target);
+  min-block-size: var(--control-target);
+  padding-inline: 0.25rem;
+  color: var(--ledger-ink);
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  letter-spacing: var(--ledger-label-tracking);
+  text-transform: uppercase;
+  white-space: nowrap;
   text-decoration: none;
   text-underline-offset: 0.2em;
 }
 
 .section-link:hover {
-  color: var(--color-brand);
+  color: var(--ledger-highlight);
   text-decoration: underline;
 }
 
@@ -1314,29 +1594,58 @@ main {
   outline-offset: 2px;
 }
 
-/* Every section of the stack takes the column and stacks its own contents.
+/* Every section of the sheet takes the column and stacks its own contents.
    The scroll margin is what the nav links land against: an anchor jump puts
    the target at the very top edge of the viewport otherwise, with the heading
    touching the browser chrome. */
+.page-section,
+.page-section > * {
+  min-inline-size: 0;
+}
+
 .page-section {
   display: grid;
-  gap: 0.75rem;
+  gap: 0;
   inline-size: 100%;
   scroll-margin-block-start: 1rem;
 }
 
-.section-title {
-  margin: 0;
-  padding-block-end: 0.375rem;
-  border-block-end: 1px solid var(--color-border);
-  font-size: 1.375rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+/* THE SECTION HEAD (owner directive, 2026-09-03, issue 287): a two-pixel rule
+   over a hairline, with the number and the name set as one mono label between
+   them. The number is decoration in the visual channel and absent from the
+   semantic one — see PageSection.svelte for why. */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding-block: 0.625rem;
+  border-block-start: var(--ledger-heavy) solid var(--ledger-rule);
+  border-block-end: var(--ledger-hairline) solid var(--ledger-rule);
 }
 
-/* A section that holds more than one thing — Projects holds Media and Coding
-   Projects (owner directive, issue 134) — stacks them the same way the page
-   stacks sections, one level in. */
+.section-number,
+.section-title {
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  font-weight: 500;
+  letter-spacing: var(--ledger-label-tracking);
+  text-transform: uppercase;
+  color: var(--ledger-ink);
+}
+
+.section-number::after {
+  content: ' /';
+}
+
+.section-title {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* A subsection's own head, for a section that holds more than one named
+   thing. Nothing declares one today; the rules stay because the manifest can
+   at any time, and a heading with no style is worse than one nobody uses. */
 .page-subsection {
   display: grid;
   gap: 0.5rem;
@@ -1344,32 +1653,30 @@ main {
 
 .subsection-title {
   margin: 0;
-  font-size: 1.0625rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  font-weight: 500;
+  letter-spacing: var(--ledger-label-tracking);
+  text-transform: uppercase;
 }
 
-/* A subsection's opening line. It carried a hand-written `max-inline-size:
-   42rem` — a second, UNTOKENISED copy of the reading measure the card layer
-   had already decided — so it leaned left exactly the way the cards did, and
-   it leaned from a literal no token could ever move. Both halves go under the
-   2026-08-26 ruling (issue 212): the line fills its section, and the number it
-   duplicated no longer exists anywhere to be duplicated from. */
 .subsection-intro {
   margin: 0;
-  font-size: 0.9375rem;
-  line-height: 1.55;
+  font-family: var(--font-sans);
+  font-size: var(--ledger-body-size);
+  line-height: var(--ledger-body-leading);
 }
 
 /* The line a section uses to tell the truth about itself — placeholder copy,
-   or a figure captured out of band. It reads the accent token rather than a
+   or a figure captured out of band. It reads the muted token rather than a
    transparency, so its contrast is measured in every reading mode like every
    other ink on the page. */
 .section-note {
   margin: 0;
-  font-size: 0.8125rem;
+  font-family: var(--font-mono);
+  font-size: var(--ledger-figure-size);
   line-height: 1.45;
-  color: var(--color-accent);
+  color: var(--ledger-muted);
 }
 
 /* The stack: one card per tracker, top to bottom, each filling the column.
@@ -1412,15 +1719,41 @@ main {
   inline-size: 100%;
 }
 
-/* The hero used to be the only thing on the page and was sized like it — a
-   viewport-filling splash that pushed every panel below the fold now that the
-   panels are in the document. It reads as the page's title instead. */
+/* THE NAME, SET AS A MASTHEAD (owner directive, 2026-09-03, issue 287):
+   lowercase, Archivo at its heaviest, tracked in hard and set on a leading of
+   less than one so the two lines a phone wraps it to read as one block.
+
+   THE CLAMP IS THE PHONE REQUIREMENT, not a taste. The owner's drawing sets
+   this at 180px, which is 180px of unbreakable word on a 320px screen — so the
+   ceiling IS the drawing's figure and the middle term is a viewport width, and
+   the name wraps to the two lines the owner saw and accepted rather than
+   pushing the document sideways. The floor is what keeps it a masthead at the
+   narrowest width the page supports.
+
+   The DOM text is unchanged: the lowercase is a text-transform, so the
+   document, its title and every accessible name still say the name the way it
+   is written. */
 h1 {
   margin: 0;
-  font-size: clamp(2rem, 8vw, 3.5rem);
-  font-weight: 650;
-  letter-spacing: -0.05em;
-  line-height: 1;
+  font-family: var(--font-sans);
+  font-size: var(--masthead-size);
+  font-weight: var(--masthead-weight);
+  font-stretch: var(--masthead-stretch);
+  letter-spacing: var(--masthead-tracking);
+  line-height: var(--masthead-leading);
+  text-transform: lowercase;
+  text-wrap: balance;
+}
+
+/* The rule under the name. It is an SVG line rather than a border because the
+   owner asked for it to be DRAWN — see the motion block at the end of this
+   file, which is the only place the drawing exists, so a reader who asked for
+   less motion gets the finished rule on the first frame and no animation at
+   all. */
+.masthead-rule {
+  display: block;
+  inline-size: 100%;
+  color: var(--ledger-rule);
 }
 
 /* The shared shape of every page-level icon control — the reading-mode
@@ -1499,71 +1832,21 @@ h1 {
    branch by reading mode for the same reason that sibling does not -- it is
    read against the scrim, which is the same near-black in every mode. */
 :root {
-  /* Frameless since 2026-08-28 (owner: "get rid of those ugly outlines"):
-     width and padding at zero keep the enlarged work edge-to-edge against
-     the scrim. The tokens stay — a future patterned border is still a token
-     edit here alone. */
-  --gallery-frame-width: 0px;
-  --gallery-frame-color: transparent;
-  /* Zero with the width, not left at the card radius: a frameless work has
-     no frame to round, and the strip's stage already shows square corners —
-     an enlarged copy keeping a 3px curve the strip lost was the one place
-     the outline survived its own removal. */
-  --gallery-frame-radius: 0px;
-  --gallery-frame-padding: 0rem;
-  --gallery-frame-image: none;
-  /* The stage's own shape (owner directive, 0.1.52: "more like a square
-     than a rectangle"). Declared HERE, not left to the component's var()
-     fallbacks, because every other dimension of this gallery is a global
-     token and the two that now decide its whole silhouette must not be the
-     exception. Size is the square's edge; aspect multiplies the inline axis,
-     so 1 IS the square and a later widescreen stage is one token edit. */
-  --gallery-stage-size: 28rem;
-  --gallery-stage-aspect: 1;
-  /* THERE IS NO SECOND STAGE SHAPE, and its absence is the load-bearing part
-     (owner directive, 2026-08-28, issue 243: "make it one single block that
-     doesn't expand, reduce based on the media").
-     A --gallery-stage-size-video / --gallery-stage-aspect-video pair lived
-     here for two releases and gave a film a 768x432 stage against a still's
-     448x448. It answered a real complaint -- a 16:9 film inside a square sits
-     between two bands of ground -- but it answered it by changing the size of
-     the one object on the page the owner watches, 320px wider and 16px
-     shorter on every press of the next arrow. The owner weighed the two and
-     ruled for the constant block.
-     Nothing replaces the pair. That is the point: with no film-specific
-     expression anywhere, the block CANNOT expand for a film, and restoring a
-     per-kind size means reintroducing tokens here rather than editing a
-     number somewhere. The film reduces inside the block instead, by the
-     `object-fit: contain` its player already carried, against the ground
-     below. */
-  /* The GROUND a film sits on (issue 239). The film stage carried no
-     background at all, so it was transparent: a poster still in flight left
-     the page's own surface showing through a 768x432 hole, which reads as a
-     broken image rather than as a frame that has not arrived yet. The same
-     transparency showed through the bands `object-fit: contain` leaves
-     whenever a film's ratio is not exactly the stage's — so the stage paints
-     a ground of its own in every mode.
-
-     WHICH ground branches by reading mode (owner ruling 2026-08-31,
-     superseding the earlier every-player-is-dark rationale that lived
-     here): the light page projects onto the white anthropic.com opens on,
-     an ivory a few points off this site's own light surface, so an
-     in-flight poster reads as a quiet pale box rather than a black
-     monolith — a trade the owner weighed and ruled for; the three dark
-     reading modes keep the shared near-black, a film's letterbox having no
-     reason to lighten there. The token is deliberately NOT declared in this
-     block: this :root block sits after the reading-mode blocks and would
-     beat their remaps on source order at equal specificity, so the light
-     value lives with the palettes, before them, where the pin measures its
-     position. */
-  /* The desktop prev/next pair (owner, 2026-08-29: "bring back the buttons
-     but chose to hide them by default in mobile"). The retired
-     --gallery-arrow-size sized the 12px chevron ink that stopped reading as
-     a button at all; these size its replacement, the disc pair on the stage
-     itself, shown only to hover-and-fine-pointer devices. Same grammar and
-     same non-branching rationale as --gallery-play-button-*: the discs sit
-     on the artwork's own ground in every reading mode. The inset is how far
-     each disc tucks in from the stage's edge. */
+  /* THE GALLERY IS A ROW OF TILES (owner directive, 2026-09-03, issue 287):
+     the first few of the chosen set as squares, beside one control tile, in
+     one grid whose column count is the only number that changes between the
+     reading width and a phone. Every tile reserves its square before a byte
+     arrives, so arrival moves nothing. */
+  --gallery-columns: 5;
+  --gallery-tile-gap: 0.5rem;
+  --gallery-tile-aspect: 1;
+  --gallery-control-gap: 0.5rem;
+  --gallery-control-pad: 0.75rem;
+  /* The GROUND a tile and a film sit on (issue 239) is --gallery-stage-ground,
+     declared with the palettes because it branches by reading mode. */
+  /* The stage's prev/next pair: the disc inside the 44px target, its ink, its
+     rest opacity, and how far each disc tucks in from the picture's edge. Not
+     branched by reading mode: it sits on the artwork's own ground. */
   --gallery-nav-size: 2.25rem;
   --gallery-nav-surface: rgba(0, 0, 0, 0.55);
   --gallery-nav-ink: white;
@@ -1571,12 +1854,7 @@ h1 {
   --gallery-nav-inset: 0.375rem;
   /* The film's play control (issue 243): the painted disc inside the 44px
      target, the ink on it, and how far the triangle is nudged off centre so a
-     right-pointing glyph reads centred in a circle. The disc is LARGER than
-     the gallery's other ink because it is the one control a reader has to
-     find on the artwork itself rather than in a control row, and it is
-     translucent at rest so it never becomes the picture. Not branched by
-     reading mode, exactly as --gallery-scrim and --gallery-stage-ground are
-     not: it sits on the film's own dark ground in every mode. */
+     right-pointing glyph reads centred in a circle. */
   --gallery-play-button-size: 3rem;
   --gallery-play-button-surface: rgba(0, 0, 0, 0.55);
   --gallery-play-button-ink: white;
@@ -1588,29 +1866,1254 @@ h1 {
   --gallery-close-size: 1.125rem;
   --gallery-close-lane: 1.5rem;
   --gallery-close-rest-opacity: 0.55;
-  --gallery-caption-gap: 0.125rem;
-  --gallery-caption-space: 0.25rem;
   --gallery-meta-gap: 0.125rem;
   --gallery-meta-space: 0.5rem;
   --gallery-meta-ink: white;
   --gallery-meta-link-padding: 0.5rem;
   --gallery-lightbox-max-inline: min(94vw, 90rem);
-  /* How long a released swipe takes to settle (issue 219). A token like every
-     other dimension of this card, so the FEEL of the gesture is tunable from
-     the token layer rather than from the component — the same rule
-     --tip-pointer-gap follows for the detail card. Short enough to read as a
-     snap rather than a slide; a reduced-motion reader gets no transition at
-     all, which MediaGallery.svelte decides with a media query. */
-  --gallery-settle-duration: 200ms;
   /* --gallery-image-max-block is the fixed cap only; the dynamic-unit upgrade
      stays a literal inside its own @supports guard in MediaGallery.svelte,
-     unlike every token above. A custom property accepts any value syntax
-     unconditionally (the coordinator's own finding just above, about
-     --header-inset-*), so declaring an 80svh DEFAULT here would sit outside
-     any @supports guard while still being textually indistinguishable from
-     an unguarded progressive value to this repository's own guard-pin
-     (tests/experience.test.mjs) — which is right to be strict about it: nothing
-     else in this stylesheet tokenizes a dynamic-unit fallback, and inventing
-     the first one is a bigger change than this quality pass asked for. */
+     because a custom property accepts any value syntax unconditionally and
+     would sit outside any guard this repository's guard-pin can see. */
   --gallery-image-max-block: 40rem;
+}
+
+/* ===========================================================================
+ * THE LEDGER (owner directive, 2026-09-03, issue 287)
+ *
+ * Every rule below draws one part of the ruled sheet, and not one of them
+ * states a colour, a family or a motion of its own: each reads a --ledger-*,
+ * --control-*, --band-* or --square-* role declared once in the token layer at
+ * the top of this file. That is what lets the four reading modes carry this
+ * design with no mode-specific rule anywhere, and what lets the owner retune
+ * the whole sheet from one block.
+ *
+ * The rules live here rather than in the components for the reason the page
+ * column and the chrome row already do: these are PAGE-level decisions — a
+ * rule weight, a row height, a touch floor — that several components have to
+ * agree on, and a second copy inside one of them is how two rules that must
+ * agree drift apart. Motion is the one thing gathered somewhere else: it is
+ * all at the very end of this file, inside a single reduced-motion guard.
+ * ======================================================================== */
+
+/* THE SAME MINIMUM, ONE LEVEL DOWN. The card's own regions are constrained by
+   FeedCard.svelte, but each region is itself a grid, so its children inherit
+   the same automatic min-content minimum — and the ledger's children are rows
+   and control strips whose min-content is a whole unbreakable line. This rule
+   lives here rather than in the card because a scoped component style cannot
+   reach content the CALLER passed in: `{@render children()}` belongs to the
+   caller's stylesheet, not the card's. Anything genuinely too wide to fit
+   scrolls inside its own box (the calendar strip and the ticker both do). */
+.feed-card-body > * {
+  min-inline-size: 0;
+}
+
+/* --- The picture bands --------------------------------------------------- */
+
+.band {
+  position: relative;
+  /* A grid item's automatic minimum is its MIN-CONTENT, and the cycler's
+     label inside this band is one unbreakable line — so the band refused to
+     shrink under about 237px and pushed the document sideways below that,
+     measured at 250px. The band is a picture, not a column of text: it has no
+     minimum it needs to keep, and its own `overflow: hidden` already clips the
+     cycler the same way it does at every other narrow width. */
+  min-inline-size: 0;
+  block-size: var(--band-height);
+  overflow: hidden;
+  background: var(--band-ground);
+  border-block-start: var(--ledger-heavy) solid var(--ledger-rule);
+  border-block-end: var(--ledger-heavy) solid var(--ledger-rule);
+}
+
+.band-layers {
+  position: absolute;
+  inset: 0;
+}
+
+/* Every texture is mounted and only one is opaque; the swap is a crossfade
+   under the motion guard and an instant change without it. */
+.band-layer {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+  opacity: 0;
+}
+
+.band-layer[data-band-active='true'] {
+  opacity: 1;
+}
+
+/* The cycle box, flush into the band's own end corner: two arrows around a
+   label, the arrows in ink and the label on paper, so the pair reads as one
+   object stamped on the picture rather than as controls floating over it. */
+.band-cycle {
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline-end: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.band-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--control-target);
+  block-size: var(--control-target);
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  background: var(--ledger-ink);
+  color: var(--ledger-bg);
+}
+
+.band-step:hover {
+  background: var(--ledger-highlight);
+}
+
+.band-step:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.band-label {
+  display: inline-flex;
+  align-items: center;
+  padding-inline: 0.75rem;
+  background: var(--ledger-bg);
+  color: var(--ledger-ink);
+  border-block-start: var(--ledger-heavy) solid var(--ledger-ink);
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  letter-spacing: var(--ledger-label-tracking);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* --- The footer ---------------------------------------------------------- */
+
+.page-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding-block-start: 0.625rem;
+  border-block-start: var(--ledger-heavy) solid var(--ledger-rule);
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  letter-spacing: var(--ledger-label-tracking);
+  text-transform: uppercase;
+}
+
+.footer-mark {
+  color: var(--ledger-ink);
+}
+
+.footer-meta {
+  color: var(--ledger-muted);
+}
+
+/* --- The panel shell, under the ledger ----------------------------------- */
+
+/* --- 01 / the openable ledger rows --------------------------------------- */
+
+.ledger-entry {
+  /* A grid rather than a block, so the row button inside it stretches to the
+     column without declaring a width of its own — a control that declares
+     `inline-size: 100%` is a control the touch-floor sweep can read no size
+     from, and a percentage is not a floor. */
+  display: grid;
+  border-block-end: var(--ledger-hairline) solid var(--ledger-rule);
+}
+
+.ledger-row {
+  display: grid;
+  grid-template-columns: 8.75rem 1.1fr 1.3fr 9.375rem var(--control-target);
+  align-items: center;
+  gap: var(--ledger-column-gap);
+  min-block-size: var(--control-target);
+  padding: var(--ledger-row-pad) 0;
+  border: 0;
+  background: none;
+  color: var(--ledger-ink);
+  text-align: start;
+  cursor: pointer;
+  font: inherit;
+}
+
+.ledger-row:hover {
+  background: var(--ledger-raised);
+}
+
+.ledger-row:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.ledger-span,
+.ledger-place {
+  font-family: var(--font-mono);
+  font-size: var(--ledger-figure-size);
+  color: var(--ledger-muted);
+}
+
+.ledger-place {
+  text-align: end;
+}
+
+.ledger-name {
+  font-family: var(--font-sans);
+  font-size: var(--ledger-name-size);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.ledger-role {
+  font-family: var(--font-sans);
+  font-size: var(--ledger-body-size);
+  min-inline-size: 0;
+}
+
+/* The chevron's VISIBLE mark is 32px; the control around it is the row, which
+   is why this is a span rather than a button and why its size is the drawing's
+   rather than the finger's. */
+.ledger-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--control-mark);
+  block-size: var(--control-mark);
+  justify-self: end;
+  border: var(--ledger-hairline) solid var(--ledger-rule);
+  border-radius: 50%;
+}
+
+.ledger-row[data-open='true'] .ledger-chevron {
+  background: var(--ledger-ink);
+  color: var(--ledger-bg);
+}
+
+/* THE DRAWER. `0fr → 1fr` over an overflow-hidden wrapper is the one
+   arrangement that opens to a content height nobody measured. */
+.ledger-drawer {
+  display: grid;
+  grid-template-rows: 0fr;
+}
+
+.ledger-drawer[data-open='true'] {
+  grid-template-rows: 1fr;
+}
+
+.ledger-drawer-clip {
+  overflow: hidden;
+  min-block-size: 0;
+}
+
+.ledger-points {
+  margin: 0;
+  padding: 0.25rem 0 0.75rem 10.25rem;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.625rem 2rem;
+  font-family: var(--font-sans);
+  font-size: var(--ledger-body-size);
+  line-height: var(--ledger-body-leading);
+  text-wrap: pretty;
+}
+
+.ledger-point {
+  padding-inline-start: 1.2em;
+  text-indent: -1.2em;
+}
+
+.ledger-point::before {
+  content: '';
+  display: inline-block;
+  inline-size: 6px;
+  block-size: 6px;
+  margin-inline-end: 0.8em;
+  vertical-align: 2px;
+  background: var(--ledger-ink);
+}
+
+.ledger-link {
+  display: inline-flex;
+  align-items: center;
+  min-inline-size: var(--control-target);
+  min-block-size: var(--control-target);
+  margin-inline-start: 10.25rem;
+  margin-block-end: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: var(--ledger-figure-size);
+  color: var(--ledger-muted);
+  text-decoration: none;
+  text-underline-offset: 0.2em;
+}
+
+.ledger-link:hover,
+.ledger-link:focus-visible {
+  color: var(--ledger-highlight);
+  text-decoration: underline;
+}
+
+.ledger-note,
+.table-note,
+.commit-note,
+.board-note,
+.ticker-note {
+  margin: 0;
+  padding-block: var(--ledger-row-pad);
+  font-family: var(--font-mono);
+  font-size: var(--ledger-figure-size);
+  color: var(--ledger-muted);
+}
+
+/* --- 02 / the ruled table ------------------------------------------------ */
+
+.table-caption {
+  margin: 0;
+  padding-block: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  letter-spacing: var(--ledger-label-tracking);
+  text-transform: uppercase;
+  color: var(--ledger-muted);
+}
+
+.table-head,
+.table-row {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr) 4.375rem 5.625rem 4.375rem 5.625rem;
+  align-items: center;
+  gap: var(--ledger-column-gap);
+  border-block-end: var(--ledger-hairline) solid var(--ledger-rule);
+}
+
+.table-head {
+  padding-block: 0.5rem;
+}
+
+.table-row {
+  min-block-size: var(--control-target);
+}
+
+.table-row:hover {
+  background: var(--ledger-raised);
+}
+
+.table-label {
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  letter-spacing: var(--ledger-label-tracking);
+  text-transform: uppercase;
+  color: var(--ledger-muted);
+}
+
+.table-label[data-table-align='end'] {
+  text-align: end;
+}
+
+.table-link,
+.table-name {
+  display: inline-flex;
+  align-items: center;
+  min-inline-size: var(--control-target);
+  min-block-size: var(--control-target);
+  font-family: var(--font-mono);
+  font-size: var(--ledger-body-size);
+  font-weight: 500;
+  color: var(--ledger-ink);
+  text-decoration: none;
+  text-underline-offset: 0.2em;
+}
+
+.table-link:hover,
+.table-link:focus-visible {
+  color: var(--ledger-highlight);
+  text-decoration: underline;
+}
+
+.table-summary {
+  min-inline-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-sans);
+  font-size: var(--ledger-body-size);
+}
+
+.table-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.3125rem;
+  font-family: var(--font-mono);
+  font-size: var(--ledger-figure-size);
+  font-variant-numeric: tabular-nums;
+}
+
+.table-glyph {
+  display: inline-flex;
+  color: var(--ledger-muted);
+}
+
+/* Every counter and the age are focus stops, because each carries a detail a
+   keyboard has to be able to open; they wear the site's one focus ring. */
+.table-count:focus-visible,
+.table-age:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* The words a glyph replaced. They are clipped rather than removed, so a
+   screen reader still hears "1 star" where the eye reads a mark and a number
+   (issue 268's terse-counter rule, unchanged by the redesign). */
+.table-clipped {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.table-age {
+  font-family: var(--font-mono);
+  font-size: var(--ledger-figure-size);
+  text-align: end;
+  color: var(--ledger-muted);
+}
+
+/* --- 03 / the cycling calendar and the commit log ------------------------ */
+
+.commit-segments {
+  display: flex;
+  flex-wrap: wrap;
+  padding-block: 0.5rem;
+}
+
+/* A grid or flex item's automatic minimum is its MIN-CONTENT, and a segment's
+   label is one unbreakable line, so three of them refuse to shrink and push
+   the row past the column — which the page would then scroll sideways to
+   reveal. Zero as the minimum lets each segment be the track it was given and
+   clip its own label instead. Declared on the CHILDREN rather than on the
+   control's own class, because the touch-floor sweep reads a class's own size
+   declarations and a `min-inline-size: 0` there is a control declaring itself
+   smaller than the floor — true of the layout box, false of the control. */
+.commit-segments > * {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.commit-segment {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: var(--control-target);
+  min-inline-size: var(--control-target);
+  padding-inline: 0.75rem;
+  margin-inline-start: -1px;
+  border: var(--ledger-hairline) solid var(--ledger-rule);
+  background: var(--ledger-bg);
+  color: var(--ledger-ink);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.commit-segment:first-child {
+  margin-inline-start: 0;
+}
+
+.commit-segment:hover {
+  background: var(--ledger-raised);
+}
+
+.commit-segment[aria-pressed='true'] {
+  background: var(--ledger-ink);
+  color: var(--ledger-bg);
+}
+
+.commit-segment:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.commit-grid {
+  padding-block: 0.5rem;
+}
+
+.commit-caption {
+  margin: 0;
+  /* ONE LINE OF RESERVE, and see the phone override: a caption that grows when
+     the reader presses a segment is the reader's own action moving the page
+     under them, which is the shift the zero-CLS floor is actually about. */
+  min-block-size: 1.25rem;
+  padding-block-end: 0.375rem;
+  border-block-end: var(--ledger-hairline) solid var(--ledger-rule);
+  font-family: var(--font-mono);
+  font-size: var(--ledger-figure-size);
+  color: var(--ledger-muted);
+}
+
+/* THE LOG'S BOX IS RESERVED (issue 285's reserve, kept through the redesign):
+   exactly as tall as the rows the adapter is allowed to hand it, so a payload
+   that lands a moment after first paint lands without moving the page. The
+   number is a multiplication of the row cap by the row's own touch floor
+   rather than a height somebody measured, and a frontend test recomputes it
+   from the adapter's own cap — so the box and the number of rows it holds
+   cannot drift apart. */
+.commit-rows {
+  block-size: calc(5 * var(--commit-row-height));
+}
+
+.commit-row {
+  display: grid;
+  grid-template-columns: 5.625rem 14.375rem minmax(0, 1fr) 5rem;
+  align-items: center;
+  gap: var(--ledger-column-gap);
+  block-size: var(--commit-row-height);
+  min-block-size: var(--control-target);
+  /* THE RULE UNDER A ROW IS AN INSET SHADOW, never a border (owner directive,
+     2026-08-25, kept through the redesign): a border adds its pixel to every
+     row's box, and five of them push the last row out of a reservation that is
+     exactly five rows tall — the zero-CLS reserve turned into a clipped row.
+     It draws the identical hairline. */
+  box-shadow: inset 0 -1px 0 var(--ledger-rule);
+}
+
+.commit-row:last-child {
+  box-shadow: none;
+}
+
+.commit-row:hover {
+  background: var(--ledger-raised);
+}
+
+.commit-age,
+.commit-mark {
+  font-family: var(--font-mono);
+  font-size: var(--ledger-figure-size);
+  color: var(--ledger-muted);
+}
+
+.commit-mark {
+  text-align: end;
+}
+
+.commit-source,
+.commit-source-text,
+.commit-title,
+.commit-title-text {
+  display: inline-flex;
+  align-items: center;
+  min-inline-size: var(--control-target);
+  min-block-size: var(--control-target);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ledger-ink);
+  text-decoration: none;
+  text-underline-offset: 0.2em;
+}
+
+.commit-source,
+.commit-source-text {
+  font-family: var(--font-mono);
+  font-size: var(--ledger-figure-size);
+  font-weight: 500;
+}
+
+.commit-title,
+.commit-title-text {
+  display: block;
+  line-height: var(--control-target);
+  font-family: var(--font-sans);
+  font-size: var(--ledger-body-size);
+}
+
+.commit-source:hover,
+.commit-source:focus-visible,
+.commit-title:hover,
+.commit-title:focus-visible {
+  color: var(--ledger-highlight);
+  text-decoration: underline;
+}
+
+/* A grid item's automatic minimum size is its MIN-CONTENT, so a row holding a
+   long commit subject refuses to shrink and drags the column past the page,
+   which the body then scrolls sideways to reveal. Zero as the minimum is what
+   lets each cell be exactly the track it was given and ellipsize inside it.
+   Declared on the row's CHILDREN rather than on each cell's own class, because
+   the touch-floor sweep reads a class's own size declarations and a
+   `min-inline-size: 0` on a link class is a control declaring itself smaller
+   than the floor — true of the layout box, false of the control, and
+   indistinguishable to a walk that can only read the declaration. */
+.commit-row > *,
+.table-row > * {
+  min-inline-size: 0;
+}
+
+/* --- 04 / the board of squares ------------------------------------------- */
+
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--square-gap);
+  padding-block-start: var(--square-gap);
+}
+
+.board-square {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  min-inline-size: var(--control-target);
+  min-block-size: var(--control-target);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ledger-ink);
+  cursor: pointer;
+  font: inherit;
+  perspective: 1400px;
+}
+
+.board-square:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.board-pivot {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.board-square[data-turned='true'] .board-pivot {
+  transform: rotateY(180deg);
+}
+
+.board-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.375rem;
+  padding: var(--square-pad);
+  overflow: hidden;
+  border: var(--ledger-hairline) solid var(--ledger-rule);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  background: var(--ledger-bg);
+  color: var(--ledger-ink);
+  text-align: start;
+}
+
+.board-square:hover .board-face[data-face='front'] {
+  background: var(--ledger-raised);
+}
+
+.board-face[data-face='back'] {
+  transform: rotateY(180deg);
+  background: var(--ledger-ink);
+  color: var(--ledger-bg);
+}
+
+/* THE FAR FACE IS HIDDEN BY VISIBILITY, NOT ONLY BY BACKFACE CULLING. WebKit
+   flattens the 3D context inside a <button>, so backface-visibility never
+   applies there and the back face painted mirrored over the front at rest —
+   the whole board unreadable on every iOS browser (found by screenshot,
+   2026-09-03). So the face the reader is not looking at is simply invisible:
+   swapped at the flip's midpoint under motion (the delay below), instantly
+   otherwise. The cull stays for the engines that honour it; nothing depends
+   on it any more. */
+.board-face[data-face='back'],
+.board-square[data-turned='true'] .board-face[data-face='front'] {
+  visibility: hidden;
+}
+
+.board-square[data-turned='true'] .board-face[data-face='back'] {
+  visibility: visible;
+}
+
+.board-label {
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  letter-spacing: var(--ledger-label-tracking);
+  text-transform: uppercase;
+}
+
+.board-figure {
+  font-family: var(--font-sans);
+  font-size: var(--square-figure-size);
+  font-weight: 900;
+  letter-spacing: -0.05em;
+  line-height: 0.9;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.board-sub {
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  color: var(--ledger-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.board-face[data-face='back'] .board-sub {
+  color: var(--ledger-bg);
+}
+
+.board-bars,
+.board-facts {
+  display: grid;
+  gap: 0.25rem;
+  min-block-size: 0;
+  overflow: hidden;
+}
+
+.board-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2.5rem;
+  align-items: center;
+  gap: 0.25rem 0.375rem;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+}
+
+.board-bar-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* PLACED, not auto-flowed, and the difference is two whole lines per bar. The
+   track spans both columns, so auto-placement pushes it to a row of its own
+   and then pushes the READING — which comes after it in the DOM, because it
+   belongs to the label — onto a third row below the track. Four bars at three
+   rows each is 172px of content in a 118px box, and the square's own
+   `overflow: hidden` silently ate two of the four models. Naming the rows
+   puts the reading back beside its label where it was always drawn, and four
+   bars fit. */
+.board-reading {
+  grid-row: 1;
+  grid-column: 2;
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The track spans both columns under its own label, so a share is read as a
+   length AND as a printed percentage — never as a colour. */
+.board-track {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  block-size: 4px;
+  background: var(--ledger-raised);
+}
+
+.board-face[data-face='back'] .board-track {
+  background: var(--ledger-muted);
+}
+
+.board-fill {
+  display: block;
+  block-size: 100%;
+  inline-size: var(--board-fill, 0%);
+  background: var(--ledger-ink);
+}
+
+.board-face[data-face='back'] .board-fill {
+  background: var(--ledger-bg);
+}
+
+.board-fact {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+}
+
+.board-term {
+  min-inline-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.board-value {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* --- 04 / the ticker ----------------------------------------------------- */
+
+/* THE BASE STATE IS A SCROLLER, and the animation is the upgrade (see
+   Ticker.svelte): removing the motion from a band wider than its box would
+   leave most of the collection unreachable, so the honest base is the one that
+   can be panned. */
+.ticker-strip {
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-block-start: var(--ledger-hairline) solid var(--ledger-rule);
+  border-block-end: var(--ledger-hairline) solid var(--ledger-rule);
+}
+
+.ticker-strip:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.ticker-run {
+  display: flex;
+  inline-size: max-content;
+}
+
+.ticker-lane {
+  display: flex;
+}
+
+.ticker-lead,
+.ticker-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: var(--ticker-item-pad);
+  border-inline-end: var(--ledger-hairline) solid var(--ledger-rule);
+  white-space: nowrap;
+}
+
+.ticker-lead {
+  background: var(--ledger-ink);
+  color: var(--ledger-bg);
+}
+
+.ticker-mark {
+  flex: none;
+}
+
+.ticker-name {
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  letter-spacing: var(--ledger-label-tracking);
+  text-transform: uppercase;
+}
+
+.ticker-lead-line {
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+}
+
+.ticker-icon {
+  flex: none;
+  inline-size: var(--ticker-icon);
+  block-size: var(--ticker-icon);
+  object-fit: contain;
+}
+
+.ticker-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 650;
+  border: var(--ledger-hairline) solid var(--ledger-rule);
+  color: var(--ledger-muted);
+}
+
+.ticker-figure {
+  font-family: var(--font-mono);
+  font-size: var(--ledger-figure-size);
+  font-variant-numeric: tabular-nums;
+  color: var(--ledger-ink);
+}
+
+/* A row the source lists with nothing against it is dimmed, never dropped —
+   through an attribute, because a per-item inline style is exactly what this
+   origin's Content-Security-Policy forbids. */
+.ticker-item[data-quiet='true'] .ticker-figure {
+  color: var(--ledger-muted);
+}
+
+.ticker-item[data-quiet='true'] .ticker-icon {
+  opacity: var(--ticker-dim);
+}
+
+.ticker-item[data-peak='true'] .ticker-figure {
+  color: var(--ledger-highlight);
+}
+
+.ticker-item:hover {
+  background: var(--ledger-raised);
+}
+
+/* The attribution the artwork travels with, under the strip that carries it. */
+.ticker-notice {
+  margin: 0;
+  padding-block: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  line-height: 1.45;
+  color: var(--ledger-muted);
+}
+
+/* --- The phone (owner's first requirement) ------------------------------- */
+
+@media (max-width: 45rem) {
+  /* Two tiles across on a phone. Declared AFTER the gallery token block above,
+     because an earlier declaration at equal specificity loses to it. */
+  :root {
+    --gallery-columns: 2;
+  }
+  .band {
+    block-size: var(--band-height-phone);
+  }
+
+  /* Every wide row collapses to stacked lines rather than scrolling sideways:
+     the page does not scroll sideways at any width, and a table that did would
+     take the whole document with it. */
+  .ledger-row {
+    grid-template-columns: minmax(0, 1fr) var(--control-target);
+    grid-template-areas:
+      'span chevron'
+      'name chevron'
+      'role chevron'
+      'place chevron';
+    align-items: start;
+    row-gap: 0.125rem;
+  }
+
+  .ledger-span {
+    grid-area: span;
+  }
+
+  .ledger-name {
+    grid-area: name;
+  }
+
+  .ledger-role {
+    grid-area: role;
+  }
+
+  .ledger-place {
+    grid-area: place;
+    text-align: start;
+  }
+
+  .ledger-chevron {
+    grid-area: chevron;
+    align-self: center;
+  }
+
+  .ledger-points {
+    grid-template-columns: minmax(0, 1fr);
+    padding-inline-start: 0;
+  }
+
+  .ledger-link {
+    margin-inline-start: 0;
+  }
+
+  .table-head {
+    display: none;
+  }
+
+  /* THE RESTACK, WITH EVERY CELL STILL IN A DECLARED TRACK. Three counters
+     placed in ONE grid area are three counters drawn on top of one another —
+     measured at 390px, where only the last of them was legible. So the phone
+     declares its OWN four columns and hands each counter one of them, which
+     keeps issue 188's claim true at this width as well: a figure sits where
+     the table put it, never where its own length pushed it. */
+  .table-row {
+    grid-template-columns: repeat(3, auto) minmax(0, 1fr);
+    grid-template-areas:
+      'name name name age'
+      'summary summary summary summary'
+      'first second third .';
+    align-items: center;
+    padding-block: 0.5rem;
+    row-gap: 0.125rem;
+  }
+
+  .table-link,
+  .table-name {
+    grid-area: name;
+  }
+
+  .table-age {
+    grid-area: age;
+  }
+
+  .table-summary {
+    grid-area: summary;
+  }
+
+  /* The counters are the row's third, fourth and fifth children — the name,
+     the summary, then the cluster — so each is placed by that position. The
+     desktop track list already depends on there being exactly three of them;
+     the pin in tests/sections.test.mjs holds both ends to that number. */
+  .table-count:nth-child(3) {
+    grid-area: first;
+  }
+
+  .table-count:nth-child(4) {
+    grid-area: second;
+  }
+
+  .table-count:nth-child(5) {
+    grid-area: third;
+  }
+
+  .table-count {
+    justify-content: flex-start;
+  }
+
+  /* A narrow row stacks its source over its subject, so the pitch — and the
+     reserve derived from it — is taller here. Both move together, from the one
+     token, and the number is ARITHMETIC rather than taste: two stacked lines
+     that are each a touch target (2 × 2.75rem) plus the row's own padding
+     (2 × 0.375rem). A reserve shorter than that is a box that clips its own
+     last row, which is what 3.75rem did at 390px. */
+  :root {
+    --commit-row-height: 6.25rem;
+  }
+
+  .commit-segments {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .commit-segment {
+    padding-inline: 0.25rem;
+    font-size: 0.625rem;
+    letter-spacing: 0.06em;
+  }
+
+  /* TWO LINES OF RESERVE, because at this width a token set's caption needs
+     two and the contributions caption needs one — and the reader chooses
+     between them by pressing a segment. A caption that grew on that press
+     moved the whole page under the hand that pressed it, which is the zero-CLS
+     floor breaking in the one place a reader can actually feel it: measured on
+     a Pixel 5, the commits section went from 809.6px to 828.2px on a segment
+     switch. The number is the TALLER state measured — two lines of the
+     caption's own type plus the rule's padding, 44.2px — rounded up to the
+     next half step, so the one-line state is padded out to meet it rather
+     than the two-line state being allowed to push. */
+  .commit-caption {
+    min-block-size: 2.875rem;
+  }
+
+  .commit-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'source age'
+      'title title';
+    align-items: center;
+    padding-block: 0.375rem;
+    row-gap: 0;
+  }
+
+  .commit-source,
+  .commit-source-text {
+    grid-area: source;
+  }
+
+  .commit-age {
+    grid-area: age;
+    text-align: end;
+  }
+
+  .commit-title,
+  .commit-title-text {
+    grid-area: title;
+  }
+
+  /* The seven-character mark is the one thing a phone row has no room for; it
+     is display-only, and the row's link still carries the full identity. */
+  .commit-mark {
+    display: none;
+  }
+
+  /* Two squares to a row, with an odd last one taking the width rather than
+     leaving a hole. */
+  .board-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .board-square:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+    aspect-ratio: 2 / 1;
+  }
+}
+
+/* ===========================================================================
+ * MOTION — every animated declaration on this page, in one guard.
+ *
+ * The page states motion inside `no-preference` rather than cancelling it
+ * inside `reduce`, and the difference is not stylistic: a cancelling block is
+ * reachable only by a browser that HAS the media feature, so it leaves the
+ * animation running everywhere the feature is unknown. A no-preference block
+ * never starts it there.
+ *
+ * Every state this file animates therefore EXISTS without the animation. A
+ * drawer is open or closed; a square is turned or not; the masthead rule is
+ * drawn; the ticker is a strip a finger can pan. What the guard adds is the
+ * travel between the two.
+ * ======================================================================== */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* The reading-mode crossfade: the sheet's paper, ink and rules move between
+     palettes rather than snapping. Only paint properties, so the zero-CLS
+     floor is untouched by construction. */
+  .page-header,
+  .section-head,
+  .page-footer,
+  .band,
+  .ledger-entry,
+  .ledger-chevron,
+  .table-head,
+  .table-row,
+  .commit-caption,
+  .commit-row,
+  .commit-segment,
+  .board-face,
+  .ticker-strip,
+  .ticker-lead,
+  .ticker-item {
+    transition:
+      background-color var(--ledger-repaint) var(--ledger-ease),
+      color var(--ledger-repaint) var(--ledger-ease),
+      border-color var(--ledger-repaint) var(--ledger-ease);
+  }
+
+  .band-layer {
+    transition: opacity var(--band-fade) var(--ledger-ease);
+  }
+
+  .ledger-row,
+  .commit-source,
+  .commit-title,
+  .table-link,
+  .ledger-link,
+  .page-mark,
+  .section-link,
+  .band-step {
+    transition:
+      background-color var(--ledger-hover),
+      color var(--ledger-hover);
+  }
+
+  .ledger-drawer {
+    transition: grid-template-rows var(--drawer-duration) var(--ledger-ease);
+  }
+
+  .ledger-chevron {
+    transition: transform var(--drawer-duration) var(--ledger-ease);
+  }
+
+  .ledger-row[data-open='true'] .ledger-chevron {
+    transform: rotate(180deg);
+  }
+
+  .board-pivot {
+    transition: transform var(--flip-duration) var(--ledger-ease);
+  }
+
+  .board-face {
+    transition: visibility 0s linear calc(var(--flip-duration) / 2);
+  }
+
+  .commit-grid {
+    transition: opacity var(--heat-fade) var(--ledger-ease);
+  }
+
+  /* The masthead's rule is DRAWN on load: the dash pattern is as long as the
+     line, so the offset starts it invisible and the animation walks it in from
+     the start edge. Without this block the line is simply there on the first
+     frame, which is the same rule and no arrival. */
+  .masthead-rule line {
+    stroke-dasharray: 1440;
+    stroke-dashoffset: 1440;
+    animation: masthead-draw var(--masthead-draw) var(--ledger-ease) forwards;
+  }
+
+  /* The strip travels exactly half its own width, which is one full copy of
+     its contents, so the loop restarts on an identical frame. Hovering pauses
+     it — the one control a reader needs over something that moves on its own
+     and the reason the strip is also focusable. */
+  .ticker-run {
+    animation: ticker-run var(--ticker-duration) linear infinite;
+  }
+
+  .ticker-strip:hover .ticker-run,
+  .ticker-strip:focus-within .ticker-run {
+    animation-play-state: paused;
+  }
+}
+
+@keyframes masthead-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes ticker-run {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* A category's own swatch on a square's back (issue 287). The colour is the
+   entity's fixed palette slot, chosen by a closed set of attribute rules
+   rather than by an inline style — the same mechanism the heatmap's levels
+   use, and for the same reason: this origin's Content-Security-Policy admits
+   no style attribute. It is never the only channel; the category's name is
+   printed beside it. */
+.board-swatch {
+  flex: none;
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  background: var(--usage-cat-0);
+}
+
+.board-swatch[data-slot='1'] {
+  background: var(--usage-cat-1);
+}
+
+.board-swatch[data-slot='2'] {
+  background: var(--usage-cat-2);
+}
+
+.board-swatch[data-slot='3'] {
+  background: var(--usage-cat-3);
+}
+
+.board-swatch[data-slot='4'] {
+  background: var(--usage-cat-4);
+}
+
+.board-swatch[data-slot='5'] {
+  background: var(--usage-cat-5);
+}
+
+.board-fact {
+  align-items: center;
 }
