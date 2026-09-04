@@ -530,11 +530,6 @@ export function projectsStaleNote(
  * SHAPE the same facts are handed to a component in.
  * ------------------------------------------------------------------------ */
 
-/* The shell heading before any envelope arrives, or when one arrives with an
- * empty title; otherwise the ORIGIN's own title rides the envelope, exactly as
- * every other panel's does. */
-export const projectsFallbackTitle = 'Coding projects';
-
 /* The table's column heads, in column order. They are the page's words for
  * what each column holds, and they are here rather than in the component for
  * the reason every label on this page is: a component that named a column
@@ -642,8 +637,11 @@ export function projectTableProps(envelope: PanelEnvelope | null, now?: number):
       counts: tableCounts(counts)
     };
   });
+  /* No title: the section head "02 / Projects" already names this table, and
+     the origin's own "Coding Projects" beneath it was one label too many
+     (owner directive, 2026-09-04, issue 292). The shell keeps the head row at
+     the title's height for the stale line. */
   return {
-    title: envelope?.title || projectsFallbackTitle,
     status: envelope?.status ?? 'unavailable',
     generatedAt: envelope?.generatedAt,
     heads: projectTableHeads,

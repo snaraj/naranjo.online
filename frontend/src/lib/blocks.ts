@@ -297,7 +297,9 @@ export type LedgerTableRow = {
 };
 
 export type LedgerTableProps = {
-  readonly title: string;
+  /* Absent for a table whose section head already names it (owner directive,
+   * 2026-09-04, issue 292): the shell renders no label and keeps the row. */
+  readonly title?: string;
   readonly status: PanelStatus;
   readonly generatedAt?: string;
   /* The column heads, in column order, exactly as they render. */

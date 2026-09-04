@@ -39,7 +39,9 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   that box could reach; each reading mode keeps one picture.
 - The Jagex Fan Content Policy sentence under the boss ticker (owner
   directive); `ATTRIBUTION.md` remains the attribution record.
-- The "latest 4 of N · by last push" line under Coding Projects.
+- The "latest 4 of N · by last push" line under Coding Projects, and the
+  "Coding Projects" panel label itself: the section head names the table, and
+  the panel head keeps its reserved row for the stale line.
 
 ## [0.1.74] - 2026-09-04
 

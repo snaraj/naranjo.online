@@ -35,7 +35,12 @@
     note,
     children
   }: {
-    title: string;
+    /* The panel's own name, or nothing. A block whose section head already
+       names it renders no second label (owner directive, 2026-09-04, issue
+       292: three stacked headers over Projects read as noise), and the head
+       row stays at the title's own height either way — see .panel-head — so
+       the note keeps its reserved lane. */
+    title?: string;
     status?: PanelStatus;
     generatedAt?: string;
     /* The honest data-through line (issue 285), for a panel whose body is a
@@ -52,7 +57,7 @@
 
 <section class="panel-shell" data-panel-status={status} data-panel-generated-at={generatedAt}>
   <header class="panel-head">
-    <h2 class="panel-title">{title}</h2>
+    {#if title}<h2 class="panel-title">{title}</h2>{/if}
     {#if note}<span class="panel-note" data-panel-note>{note}</span>{/if}
   </header>
   <div class="panel-body">
@@ -90,6 +95,18 @@
     grid-template-columns: minmax(0, auto) minmax(0, 1fr);
     align-items: center;
     gap: 0.5rem;
+    /* THE ROW IS THE RESERVE WHETHER OR NOT IT HAS A TITLE (owner directive,
+       2026-09-04, issue 292: the Projects table renders no label of its own).
+       Its minimum is one line of the title's own type: the row wears the
+       title's face and size, and `1lh` is the line box that face draws at
+       that size — exactly the box the h2 occupies when it is here — so a head
+       with no title is as tall as one with, and a note arriving later lands
+       in a row that was already there. The em fallback under it is the same
+       line at the face's normal leading, for an engine without the unit. */
+    font-family: var(--panel-title-family, inherit);
+    font-size: var(--panel-title-size, 0.8125rem);
+    min-block-size: 1.3em;
+    min-block-size: 1lh;
   }
 
   /* Every dimension of the heading is a token, for the reason the rest of this
@@ -126,6 +143,9 @@
      truncates instead. Its own size token, defaulting to the same step the
      usage tracker's body line reads, and the same muted ink. */
   .panel-note {
+    /* Always the end column, so a head with no title still keeps its note at
+       the far edge rather than letting it slide into the title's cell. */
+    grid-column: 2;
     min-inline-size: 0;
     font-family: var(--panel-note-family, inherit);
     letter-spacing: var(--panel-note-tracking, normal);
