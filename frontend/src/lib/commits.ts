@@ -18,12 +18,22 @@
  * outside the captured range is not a zero, and the caption says how many days
  * were actually captured rather than letting the empty cells imply an answer.
  *
- * HOW MANY SETS THERE ARE IS DATA. The contributions calendar, then one per
- * token source that actually reports days — a source with no daily record is
+ * HOW MANY SETS THERE ARE IS DATA. One per token source that actually reports
+ * days, then the contributions calendar — a source with no daily record is
  * offered no segment at all, because a segment over a grid drawing its
  * placeholder reserve is a box held open for something that cannot arrive
  * (owner ruling, 2026-08-24). A third reporting source would add a fourth
  * segment with no edit anywhere.
+ *
+ * THE CALENDAR OPENS ON THE BUSIEST SERIES (owner directive, 2026-09-04,
+ * issue 294: "Codex has the most activity"). The lead source is named once
+ * below; its set goes first, the other token sets follow in payload order,
+ * and the contributions calendar closes the row. The component draws sets[0]
+ * until a reader presses a segment, so the order IS the default.
+ *
+ * NO PANEL LABEL (same directive). The activity envelope's title names the
+ * version-control host, and a calendar that opens on a token series cannot
+ * wear that name; the segments name every source, so the shell gets none.
  *
  * Nothing here invents a figure. Every caption is composed from counts the
  * payloads carry, and a payload that carries none produces the set's own empty
@@ -33,7 +43,6 @@
 import {
   activityCells,
   activityEntriesNote,
-  activityFallbackTitle,
   activityPanelId,
   activityStripEmptyNote,
   commitRepoLinkLabel,
@@ -78,6 +87,11 @@ const noMark = '—';
  * payload data, so adding a third source adds a fourth segment with no edit
  * anywhere. */
 export const contributionsSetLabel = 'Contributions';
+
+/* The source whose calendar the section opens on — a payload label, matched
+ * exactly, so a payload that stops reporting it simply opens on whatever set
+ * comes first instead. */
+export const leadTokenSource = 'codex';
 
 export function tokenSetLabel(source: string): string {
   return `Tokens · ${source}`;
@@ -143,8 +157,7 @@ export function commitLogProps(
       : [];
   const anchor = windowAnchor(activity, now);
 
-  const sets: CommitLogSet[] = [];
-  sets.push({
+  const contributions: CommitLogSet = {
     key: 'contributions',
     label: contributionsSetLabel,
     columns: activity === null ? [] : calendarColumns(activityCells(activity), pendingWeeks, anchor),
@@ -156,7 +169,8 @@ export function commitLogProps(
         : `contribution calendar: ${activity.weeks.length} weeks of daily counts, newest last`,
     emptyNote: contributionsEmptyNote,
     format: formatWhole
-  });
+  };
+  const tokenSets: CommitLogSet[] = [];
   /* A SOURCE WITH NO DAILY SERIES IS OFFERED NO SEGMENT (owner ruling,
      2026-08-24). Pushing a set for it would put a pressable segment over a
      grid that draws its 371-cell reserve and an empty note underneath — a
@@ -173,7 +187,7 @@ export function commitLogProps(
     if (series === undefined || series.totals.length === 0) {
       continue;
     }
-    sets.push({
+    tokenSets.push({
       key: source.label,
       label: tokenSetLabel(source.label),
       columns: calendarColumns(seriesCells(series.startDate, series.totals), pendingWeeks, anchor),
@@ -188,6 +202,14 @@ export function commitLogProps(
       format: formatMagnitude
     });
   }
+  /* Lead source first, the rest in payload order, contributions last. A
+     stable partition rather than a sort comparator, so two payload orders
+     that agree about the lead agree about everything. */
+  const sets: CommitLogSet[] = [
+    ...tokenSets.filter((set) => set.key === leadTokenSource),
+    ...tokenSets.filter((set) => set.key !== leadTokenSource),
+    contributions
+  ];
 
   const rows: CommitLogRow[] =
     activity === null
@@ -205,7 +227,6 @@ export function commitLogProps(
         }));
 
   return {
-    title: activityEnvelope?.title || activityFallbackTitle,
     status: activityEnvelope?.status ?? 'unavailable',
     generatedAt: activityEnvelope?.generatedAt,
     sets,

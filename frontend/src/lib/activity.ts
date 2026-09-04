@@ -304,13 +304,6 @@ export function commitShaLinkLabel(message: string, sha: string): string {
  * rest simply do not render. */
 export const shownEntryRows = 5;
 
-/* The shell heading before any envelope arrives, or when one arrives with an
- * empty title; otherwise the ORIGIN's own title rides the envelope. The
- * owner's rename (issue 127) lives in the origin's config data, because the
- * name the owner chose names a service and no frontend source file may spell
- * one — swapping where the data comes from stays a data edit. */
-export const activityFallbackTitle = 'Version-control activity';
-
 /* contributionsLabel words the headline figure against the coverage the
  * payload declared, and it exists because the two producers count different
  * things.

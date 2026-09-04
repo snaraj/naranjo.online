@@ -814,10 +814,12 @@ test('the panel heading is data the origin serves, not a string in either tree',
     'GitHub',
     'the owner-chosen heading must live in config data, where a vendor name is allowed to be'
   );
-  // The adapter renders whatever the envelope carries. A hardcoded heading
-  // would render the same page today and make the config data a lie —
-  // EXECUTED both ways: the origin's title wins, and only its absence (or
-  // the unavailable fallback's empty title) reads the neutral name.
+  // The commits block renders NO panel label (owner directive, 2026-09-04,
+  // issue 294): the calendar opens on a token series, so the host's name over
+  // it would be false, and the segments name every source. The envelope still
+  // carries the owner-chosen title — the API serves it and the rendering lane
+  // reads it there — but the adapter hands the shell none, whatever arrives,
+  // so no hardcoded heading can creep back in through the fallback path.
   assert.equal(
     commitLogProps([
       {
@@ -830,9 +832,10 @@ test('the panel heading is data the origin serves, not a string in either tree',
       },
       null
     ]).title,
-    'GitHub'
+    undefined,
+    'the commit block wears the envelope title again'
   );
-  assert.equal(commitLogProps([null, null]).title, 'Version-control activity');
+  assert.equal(commitLogProps([null, null]).title, undefined);
   /* The boss panel's heading is the same arrangement: the envelope's own
      title is the panel head over the strip, and the strip's lead prints no
      copy of it (owner directive, 2026-09-04, issue 292 — the lead's name and

@@ -28,18 +28,22 @@
   import FeedCard from './FeedCard.svelte';
   import PanelShell from './PanelShell.svelte';
 
-  let { title, status, generatedAt, sets, rows, rowsNote, staleNote }: CommitLogProps = $props();
+  let { status, generatedAt, sets, rows, rowsNote, staleNote }: CommitLogProps = $props();
 
   /* Which set is drawn, by KEY rather than by index: the payload decides how
      many sets there are (a source that reports no daily series contributes
      none), so an index remembered across a delivery could name a set that no
-     longer exists. A key that vanishes falls back to the first set, which is
-     the contributions calendar. */
+     longer exists. A key that vanishes falls back to the first set — the
+     adapter puts the busiest token series there (owner directive, 2026-09-04,
+     issue 294), and the contributions calendar last. */
   let chosen = $state('');
   const active = $derived(sets.find((set) => set.key === chosen) ?? sets[0]);
 </script>
 
-<PanelShell {title} {status} {generatedAt} note={staleNote}>
+<!-- No panel label (owner directive, 2026-09-04, issue 294): the envelope's
+  title names the version-control host, and a calendar that opens on a token
+  series cannot wear it. The segments name every source, one line below. -->
+<PanelShell {status} {generatedAt} note={staleNote}>
   <FeedCard variant="ledger">
     {#if sets.length > 0 && active}
       <div class="commit-segments">

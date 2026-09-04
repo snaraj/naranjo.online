@@ -543,7 +543,10 @@ test('the adapter renders the figures, the strip, and the noun the panel always 
     data: goodActivity
   };
   const rendered = commitLogProps([envelope, null]);
-  assert.equal(rendered.title, 'Fixture Activity');
+  /* No panel label (owner directive, 2026-09-04, issue 294): the envelope's
+     title names one host and the calendar opens on a token series, so the
+     adapter hands the shell no title at all rather than a false one. */
+  assert.equal(rendered.title, undefined, 'the commit block grew a panel label back');
   assert.equal(rendered.status, 'ok');
   assert.equal(rendered.generatedAt, '2026-08-11T00:12:00Z');
   /* The two headline figures are the calendar's own CAPTION now (owner
@@ -626,7 +629,8 @@ test('a stalled payload draws its missing days as dated absences up to today, un
   // The component hands the line to the shell's HEAD — the one row the card
   // already reserves — never to its body, whose every region is a fixed box
   // so the calendar's arrival costs no layout shift (the reserve lane).
-  assert.match(component, /<PanelShell \{title\} \{status\} \{generatedAt\} note=\{staleNote\}>/);
+  assert.match(component, /<PanelShell \{status\} \{generatedAt\} note=\{staleNote\}>/);
+  assert.doesNotMatch(component, /\{title\}/, 'the commit block renders a panel label again (issue 294)');
   assert.doesNotMatch(component, /staleNote\}<\/p>/, 'the stale line grew the reserved body');
   const shell = await readFile(new URL('../src/lib/components/PanelShell.svelte', import.meta.url), 'utf8');
   assert.match(shell, /\{#if note\}<span class="panel-note" data-panel-note>\{note\}<\/span>\{\/if\}/);
@@ -641,7 +645,7 @@ test('an empty commit list says so instead of showing invented history', () => {
   const empty = commitLogProps([null, null]);
   assert.equal(empty.rowsNote, 'no recent commits reported');
   assert.equal(empty.sets[0].emptyNote, 'activity data unavailable');
-  assert.equal(empty.title, 'Version-control activity');
+  assert.equal(empty.title, undefined, 'an empty commit block grew a panel label');
   assert.equal(empty.status, 'unavailable');
 });
 

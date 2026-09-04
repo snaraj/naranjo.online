@@ -925,7 +925,11 @@ describe('the board of squares: live surface', () => {
       new Date('2026-09-03T10:00:00Z')
     );
     const lastDayOf = (set) => set.columns.at(-1).at(-1).date;
-    const [, first, second] = props.sets;
+    // Token sets lead and contributions closes the row (owner directive,
+    // 2026-09-04, issue 294); neither fixture label is the lead source, so
+    // the two keep their payload order.
+    const [first, second, contributions] = props.sets;
+    assert.equal(contributions.key, 'contributions');
     // Both sources end on the SAME calendar week — the one holding the
     // section's anchor day — however far apart their own captures started.
     assert.equal(lastDayOf(first), '2026-09-05');

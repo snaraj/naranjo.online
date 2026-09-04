@@ -7,6 +7,42 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.76] - 2026-09-04
+
+### Changed
+
+- The name is set on two lines at every width, `samuel` over `naranjo` (owner
+  directive, 2026-09-04, issue #294): the heading's box takes the width of its
+  longest word, so the break lands at the space everywhere and the DOM text is
+  unchanged.
+- The commits calendar opens on the Codex token series, with the segments
+  ordered Codex, then the other token sources, then Contributions (owner
+  directive, issue #294: "Codex has the most activity"). The lead source is one
+  named payload label; a payload that stops reporting it opens on whatever set
+  comes first.
+- The chrome row draws one rule, under it. Its top rule sat directly beneath a
+  phone browser's toolbar edge and the two read as one band twice as thick;
+  the row's reserve shrinks by that rule so the static shell and the hydrated
+  row still measure the same.
+- The browser's own toolbars wear the sheet's colour: a `theme-color` meta is
+  written from the computed sheet token at boot, on every mode change, and
+  when the OS scheme flips under auto — read from the live document, so no
+  palette value is stated twice.
+
+### Removed
+
+- The page's own pull-to-refresh gesture, its indicator and its keyboard
+  control, and the `overscroll-behavior-y: none` that let it own the drag
+  past the top (owner ruling, 2026-09-04, issue #294: on a phone the gesture
+  read as rigid and its indicator bled in at the top). The platform's native
+  overscroll and bounce are the behaviour now, the root already paints the
+  sheet's colour into the overscroll region, and the panels keep refreshing
+  themselves every thirty seconds (issue #179). The page-wide `refreshPanels`
+  fan-out goes with its only caller.
+- The "GitHub" panel label over the commits calendar. The envelope's title
+  names one source and the calendar now opens on another; the segments name
+  every source one line below.
+
 ## [0.1.75] - 2026-09-04
 
 ### Changed

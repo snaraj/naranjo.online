@@ -544,13 +544,14 @@
 
      Dropping it was the same class of defect the tip's own scroll handler was
      repaired for — "a listbox cursor is not the tip's to discard" — one layer
-     up, and this PR handed it a new trigger: the pull gesture and its
-     keyboard control both call refreshPanels(), which rebuilds every section
-     and therefore every `columns` array. MEASURED at 390x844 before this
-     repair: cursor on cell 370 with the readout open, press the refresh
-     control, and `aria-activedescendant`, the ring and the card were all
-     gone — a screen-reader reader lost their place because the page did its
-     minute's work.
+     up, and every delivery is a trigger: the thirty-second poll and the
+     visibility catch-up (lib/panels.ts) rebuild every section and therefore
+     every `columns` array — as did the pull-to-refresh gesture that first
+     exposed it, retired at issue 294. MEASURED at 390x844 before this
+     repair: cursor on cell 370 with the readout open, a refresh lands, and
+     `aria-activedescendant`, the ring and the card were all gone — a
+     screen-reader reader lost their place because the page did its minute's
+     work.
 
      So the cursor is re-pointed at the same DATE, and dropped only when that
      day is genuinely no longer in the window (a range change, a lens that
