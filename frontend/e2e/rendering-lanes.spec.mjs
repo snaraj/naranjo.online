@@ -1418,6 +1418,14 @@ test('every board square shows all of its own content, front and back (owner 202
   page,
 }) => {
   await visit(page);
+  const readVisibility = () =>
+    page.evaluate(() =>
+      [...window.document.querySelectorAll('.board-square')].map((square) => ({
+        turned: square.getAttribute('data-turned'),
+        front: getComputedStyle(square.querySelector('[data-face="front"]')).visibility,
+        back: getComputedStyle(square.querySelector('[data-face="back"]')).visibility,
+      }))
+    );
   const readFaces = (side) =>
     page.evaluate((face) => {
       return [...window.document.querySelectorAll('.board-square')].map((square) => {
@@ -1447,6 +1455,18 @@ test('every board square shows all of its own content, front and back (owner 202
     await settled(page);
     const fronts = await readFaces('front');
     expect(fronts.length, `the board drew no squares at ${width}px`).toBeGreaterThan(1);
+    /* THE BACK IS HIDDEN, NOT MERELY TURNED AWAY (owner 2026-09-03, issue
+       287). WebKit flattens 3D transforms inside a <button>, so a back face
+       that relied on backface-visibility alone drew mirrored over the front
+       on every Safari; the faces now swap `visibility` at the flip midpoint,
+       and this is the measured half of that rule: at rest every front is
+       visible and every back hidden, and a turned square is the reverse. The
+       swap is delayed half a flip, so each reading polls rather than reads. */
+    await expect
+      .poll(async () => (await readVisibility()).map((square) => `${square.front}/${square.back}`), {
+        message: `at rest at ${width}px every front must be visible and every back hidden`,
+      })
+      .toEqual(fronts.map(() => 'visible/hidden'));
     /* The box really is a clipping box, which is what makes the rest of this
        lane worth running: against an `overflow: visible` face every assertion
        below would hold for free while the content spilled instead. */
@@ -1487,6 +1507,11 @@ test('every board square shows all of its own content, front and back (owner 202
       await squares.nth(index).click();
     }
     const backs = await readFaces('back');
+    await expect
+      .poll(async () => (await readVisibility()).map((square) => `${square.turned}:${square.front}/${square.back}`), {
+        message: `turned at ${width}px every back must be visible and every front hidden`,
+      })
+      .toEqual(backs.map(() => 'true:hidden/visible'));
     for (const face of backs) {
       expect(
         face.scrollHeight,
@@ -1512,6 +1537,61 @@ test('every board square shows all of its own content, front and back (owner 202
       await squares.nth(index).click();
     }
   }
+});
+
+/* TWO LAYERS, NOT THE SET (owner directive, 2026-09-03, issue 287). The
+ * picture band crossfades between two decoded images, and it used to mount
+ * every vendored texture in both bands to do it — eight files fetched on a
+ * first paint that would show one. It now mounts the texture showing and the
+ * one it last showed, which is all a crossfade needs. This lane measures the
+ * rule rather than trusting the component: one layer on arrival, two after a
+ * step, still two after more steps, exactly one of them active, and the
+ * active picture really changing — so a band that quietly went back to
+ * mounting its whole set fails on the first count. */
+test('the picture band mounts the texture showing and the one it left, never the whole set (owner 2026-09-03, issue 287)', async ({
+  page,
+}) => {
+  await visit(page);
+  const readBands = () =>
+    page.evaluate(() =>
+      [...window.document.querySelectorAll('.band')].map((band) => {
+        const layers = [...band.querySelectorAll('.band-layer')];
+        return {
+          controls: band.getAttribute('data-band-controls'),
+          layers: layers.length,
+          active: layers
+            .filter((layer) => layer.getAttribute('data-band-active') === 'true')
+            .map((layer) => layer.getAttribute('src')),
+        };
+      })
+    );
+  const arrival = await readBands();
+  expect(arrival.length, 'the page draws no picture band').toBeGreaterThan(1);
+  for (const band of arrival) {
+    expect(band.layers, `a band mounts ${band.layers} layers on arrival; one picture needs one`).toBe(1);
+    expect(band.active.length, 'exactly one layer is the picture showing').toBe(1);
+  }
+  const next = page.locator('.band[data-band-controls="true"] .band-step[aria-label="Next texture"]');
+  await expect(next, 'the top band carries the cycle control').toHaveCount(1);
+  for (let step = 0; step < 3; step += 1) {
+    await next.click();
+    await settled(page);
+    const during = await readBands();
+    for (const band of during) {
+      expect(band.layers, `after step ${step + 1} a band mounts ${band.layers} layers; a crossfade needs two`).toBe(2);
+      expect(band.active.length, `after step ${step + 1} exactly one layer is active`).toBe(1);
+    }
+  }
+  const after = await readBands();
+  /* Non-vacuity: three steps through a set of two lands on the other
+     picture, so a band whose control did nothing would still show the
+     arrival texture and fail here. */
+  expect(after[0].active[0], 'three steps later the band still shows the texture it arrived with').not.toBe(
+    arrival[0].active[0]
+  );
+  expect(after.map((band) => band.active[0]), 'both bands show the same texture').toEqual(
+    after.map(() => after[0].active[0])
+  );
 });
 
 /* RESPONSIVENESS (owner directive, 2026-08-24). The page column is a single

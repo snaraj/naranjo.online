@@ -95,11 +95,14 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   taking its device project, so the matrix finishes in the time of its
   slowest engine rather than the sum of five.
 - The rendering lanes measure the tile grid rather than the strip they were
-  written for: 115 lanes become 112 — eighteen re-aimed, seven retired with
-  their reasons left in place, two added (the full derivative is requested only
-  when a tile is opened, measured in the network; a reading-mode switch moves
-  no gallery geometry). The enlarged photograph accepts a two-finger zoom
-  again: the stage declares `pan-y pinch-zoom` over its plain `pan-y` base.
+  written for: 115 lanes become 112 — five retired with their reasons left at
+  the deletion site, twenty-six rewritten (fourteen under new titles), two
+  added (the full derivative is requested only when a tile is opened, measured
+  in the network; a reading-mode switch moves no gallery geometry). The
+  enlarged photograph accepts a two-finger zoom again: the stage declares
+  `pan-y pinch-zoom` over its plain `pan-y` base. The board's face swap and
+  the band's two-layer mount are each pinned where they are decided and
+  measured in the browser, so neither can quietly revert.
 
 ### Added
 

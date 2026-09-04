@@ -1949,3 +1949,28 @@ test('the close mark is small, off the artwork and a 44px target; the scrim and 
   assert.match(galleryStyle, /\.gallery-lightbox::backdrop \{\s*background: var\(--gallery-scrim\);/);
   assert.match(galleryStyle, /max-inline-size: var\(--gallery-lightbox-max-inline\);[\s\S]*max-block-size: var\(--gallery-image-max-block\);/);
 });
+
+/* TWO LAYERS, NOT THE SET (owner directive, 2026-09-03, issue 287). The band
+ * is handed EVERY vendored texture so a mode switch can crossfade across sets,
+ * and it mounts only the texture showing and the one it left — eight files on
+ * first paint was the cost of mounting them all. Pinned where it is decided;
+ * the rendering lane "the picture band mounts the texture showing and the one
+ * it left" counts the mounted layers in the browser. */
+test('the texture band is handed the whole set and mounts only the picture showing and the one it left', async () => {
+  const band = await readFile(new URL('../src/lib/components/TextureBand.svelte', import.meta.url), 'utf8');
+  const app = await readFile(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  assert.match(app, /layers=\{bandTextures\}/, 'the band is handed every vendored texture, which is what makes the mount rule matter');
+  assert.match(band, /let recent = \$state<string\[\]>\(\[\]\);/, 'the band remembers which files it has shown');
+  assert.match(
+    band,
+    /recent = \[active, \.\.\.recent\.filter\(\(file\) => file !== active\)\]\.slice\(0, 2\);/,
+    'the memory is the active file and the one before it, never longer'
+  );
+  assert.match(
+    band,
+    /const mounted = \$derived\(layers\.filter\(\(layer\) => recent\.includes\(layer\.file\)\)\);/,
+    'what mounts is the remembered pair, filtered from the set'
+  );
+  assert.match(band, /\{#each mounted as layer \(layer\.file\)\}/, 'the template iterates the mounted pair');
+  assert.doesNotMatch(band, /\{#each layers as layer/, 'iterating the whole set is the first-paint cost this rule removes');
+});

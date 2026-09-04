@@ -501,10 +501,22 @@ test('two readers of one panel share one loop, and the loop stops with its last 
   assert.deepEqual(host.canceled, [0], 'the last reader leaving cancels the one timer');
   assert.equal(host.unsubscribes, 1);
 
-  // A different panel, or the same panel on a different host, is its own loop.
-  const other = fakeHost();
-  const stopOther = watchPanel('token-usage', () => {}, { host: other });
+  // The same panel on a different host is its own loop — and the share is
+  // keyed on the host WHILE both are live, not merely after one has left:
+  // two hosts reading the same id at once each read once, hold one timer
+  // each, and one leaving cancels nothing of the other's.
+  const left = fakeHost();
+  const right = fakeHost();
+  const stopLeft = watchPanel('token-usage', () => {}, { host: left });
+  const stopRight = watchPanel('token-usage', () => {}, { host: right });
   await flush();
-  assert.deepEqual(other.requests, ['/api/panels/token-usage']);
-  stopOther();
+  assert.deepEqual(left.requests, ['/api/panels/token-usage'], 'the left host reads for itself');
+  assert.deepEqual(right.requests, ['/api/panels/token-usage'], 'the right host reads for itself, not through the left');
+  assert.equal(left.scheduled.length, 1);
+  assert.equal(right.scheduled.length, 1, 'each live host holds its own timer');
+  stopLeft();
+  assert.deepEqual(left.canceled, [0]);
+  assert.deepEqual(right.canceled, [], 'one host leaving cancels nothing of the other');
+  stopRight();
+  assert.deepEqual(right.canceled, [0]);
 });

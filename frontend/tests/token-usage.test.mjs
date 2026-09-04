@@ -419,6 +419,33 @@ describe('the board of squares: source contract', () => {
     assert.doesNotMatch(component, /cssText/, 'cssText writes the same blocked attribute by another name');
   });
 
+  it('hides the face that is turned away, swapping at the flip midpoint, because WebKit flattens the 3D turn', () => {
+    /* The back face used to rely on backface-visibility alone, and on every
+       Safari it drew mirrored over the front: WebKit flattens 3D transforms
+       inside a <button>, so the property never applied (found by the browser
+       matrix, 2026-09-03, issue 287). The rule that fixed it is a
+       `visibility` swap — the back hidden at rest, the front hidden once the
+       square is turned — delayed half a flip so the swap lands while the
+       square is edge-on. Pinned here where it is declared; the rendering lane
+       "every board square shows all of its own content" measures the
+       computed visibility of both faces at rest and turned. */
+    assert.match(
+      sheet,
+      /\.board-face\[data-face='back'\],\s*\.board-square\[data-turned='true'\] \.board-face\[data-face='front'\] \{[^}]*visibility: hidden/,
+      'the back at rest and the front once turned must be hidden, not merely turned away'
+    );
+    assert.match(
+      sheet,
+      /\.board-square\[data-turned='true'\] \.board-face\[data-face='back'\] \{[^}]*visibility: visible/,
+      'the turned back must be the visible face'
+    );
+    assert.match(
+      sheet,
+      /\.board-face \{[^}]*transition: visibility 0s linear calc\(var\(--flip-duration\) \/ 2\)/,
+      'the swap must wait half a flip, or the new face pops in before the square is edge-on'
+    );
+  });
+
   it('is a control a finger and a keyboard can both reach', () => {
     /* The 44px touch floor and the announced state, on the one control this
        surface has (owner directive of 2026-09-03, issue 287: "tap a square").

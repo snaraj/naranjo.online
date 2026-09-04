@@ -109,13 +109,15 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.runner.outputs.version }}-${{ matrix.engine.install }}
-      - name: Install the three engines
+      - name: Install this runner's engine
         working-directory: frontend
-        # Chromium (Chrome and Edge), Firefox and WebKit (Safari and every
-        # iOS browser) — named explicitly so an engine is a deliberate
-        # addition. The download is skipped entirely when the cache above
-        # restored them; --with-deps installs the system libraries the
-        # engines link against, from the runner's own Ubuntu archives.
+        # ONE engine per runner, the one the matrix names — Chromium (Chrome
+        # and Edge), Firefox or WebKit (Safari and every iOS browser) — so an
+        # engine is a deliberate addition to the matrix above and a runner
+        # never downloads the two it will not drive. The download is skipped
+        # entirely when the cache above restored it; --with-deps installs the
+        # system libraries the engine links against, from the runner's own
+        # Ubuntu archives.
         #
         # Honest limit, stated where it will be read: these engine builds
         # arrive from Playwright's CDN over TLS and are NOT checksum-verified
@@ -125,10 +127,19 @@ jobs:
         # tarball integrity IS in the committed lockfile and which selects the
         # browser revisions. This job holds no secret, no write permission and
         # no package scope, and nothing it produces is published.
-        run: npx playwright install --with-deps chromium firefox webkit
-      - name: Run the rendering-lane smoke matrix
+        run: npx playwright install --with-deps ${{ matrix.engine.install }}
+      - name: Run this runner's projects
         working-directory: frontend
         # The suite boots the real Go binary over localhost (see
-        # playwright.config.mjs) and drives five projects: three desktop
-        # engines plus an Android and an iPhone viewport.
-        run: npm run test:browsers
+        # playwright.config.mjs). Across the matrix it drives five projects —
+        # three desktop engines plus an Android and an iPhone viewport — and
+        # THIS runner drives only the ones the matrix hands it: its engine and
+        # that engine's device project. Each becomes one --project flag, so a
+        # runner that ran every project would show up as three equal
+        # durations in the matrix rather than pass unnoticed.
+        run: |
+          set --
+          for project in ${{ matrix.engine.projects }}; do
+            set -- "$@" --project "$project"
+          done
+          npm run test:browsers -- "$@"
