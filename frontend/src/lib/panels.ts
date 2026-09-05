@@ -453,7 +453,7 @@ export interface PanelWatcher {
  * delivered on subscription, and the loop stops when its last reader does.
  * The share is keyed on the host object as well as the id, so a caller that
  * brings its own host — every test does — never hears another host's
- * fetcher, and refreshPanels still refreshes each real loop exactly once. */
+ * fetcher, and each real loop's refresh() reaches that loop exactly once. */
 type SharedLoop = {
   readonly subscribers: Set<(envelope: PanelEnvelope) => void>;
   last: PanelEnvelope | null;

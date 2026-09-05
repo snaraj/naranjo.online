@@ -61,11 +61,11 @@ Numbered for citation, repo-scoped, none negotiable in code:
    committed as the owner's GitHub noreply identity (both fields). No
    co-author trailers. Agent-authored commit messages and PR bodies end
    with the ACTING agent's own signature, exactly matching its agent
-   label in the roster below (`- Fable5.1` ↔ `fable5.1`, `- Fable5` ↔
-   `fable5`, `- Sonnet5` ↔ `sonnet5`, `- Opus5` ↔ `opus5`, `- 5.6 Sol` ↔
-   `5.6-sol`) — never a fixed lane. This supersedes the single-signature owner attribution
-   decision of 2026-08-10; `docs/agent-git-mechanics.md` records why it
-   was superseded and which merged PR is the first under the corrected rule.
+   label in the roster below (`- Fable5.1` ↔ `fable5.1`, `- Fable5` ↔ `fable5`,
+   `- Sonnet5` ↔ `sonnet5`, `- Opus5` ↔ `opus5`, `- 5.6 Sol` ↔ `5.6-sol`) —
+   never a fixed lane. This supersedes the single-signature owner attribution
+   decision of 2026-08-10; `docs/agent-git-mechanics.md` records why it was
+   superseded and which merged PR is the first under the corrected rule.
 4. **Fail-closed doctrine — never weaken.** No security behavior may be
    made toggleable: no boolean, env var, build tag, or config field may
    silently disable signing, verification, probes, TLS, header policy, or
@@ -576,10 +576,10 @@ The complete delivery loop, each step gated by the sections around it:
    (`low | med | high | xhigh | max`; `xhigh` admitted by owner ruling,
    2026-09-03) and the tracking issue number; `<lane>` is
    parsed by longest match against the repository-registered label set
-   (`fable5.1`, `fable5`, `5.6-sol`, `opus5`, `opus4.8`, `sonnet5`), then
-   the `-<effort>` suffix — longest match is what lets `fable5.1-high/…`
-   and `fable5-high/…` coexist. A branch with genuinely no issue states why in its PR
-   body. The legacy form (`<lane>/<topic>`, e.g. `sonnet5/contracts-0.1.13`,
+   (`fable5.1`, `fable5`, `5.6-sol`, `opus5`, `opus4.8`, `sonnet5`), then the
+   `-<effort>` suffix — longest match is what lets `fable5.1-high/…` and
+   `fable5-high/…` coexist. A branch with genuinely no issue states why in its
+   PR body. The legacy form (`<lane>/<topic>`, e.g. `sonnet5/contracts-0.1.13`,
    `opus5/panels-fix`) remains accepted during the transition. One writer
    per branch, always —
    a branch that is not yours is a branch you never push to. Reserve the exact

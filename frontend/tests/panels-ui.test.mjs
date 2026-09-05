@@ -370,16 +370,16 @@ test('the refresh control is gone, and nothing it owned survives as dead code', 
     'the header declares a button of its own again; its one action is the reading mode, which ThemeMenu owns'
   );
   assert.doesNotMatch(app, /RefreshAll/, 'the refresh must not head the panel stack again either');
-  // THE FAN-OUT IS BACK, WITH A CALLER — and that condition is now the pin
-  // (issue 219). It was deleted at issue 179 because the only thing invoking
-  // it was the button that had just been removed, and a fan-out nothing fans
-  // out to is dead code; that reasoning was right and is preserved exactly.
-  // What changed is that a pull-to-refresh gesture now asks for it. So the
-  // rule is no longer "this must not exist" — which would forbid the caller
-  // rather than the dead code — but "this must not exist WITHOUT a caller",
-  // which is the property issue 179 actually wanted and is strictly harder to
-  // satisfy by accident. A future removal of the gesture makes this red
-  // again, exactly as it should.
+  // THE FAN-OUT EXISTS ONLY WITH A CALLER — that condition is the pin, in
+  // both directions. It was deleted at issue 179 because the only thing
+  // invoking it was the button that had just been removed, and a fan-out
+  // nothing fans out to is dead code; issue 219 brought it back with a
+  // caller (the pull-to-refresh gesture), and issue 294 removed that gesture
+  // by owner ruling — and the fan-out with it, which is the branch below
+  // that now holds. The rule is "this must not exist WITHOUT a caller", which
+  // is the property issue 179 actually wanted and is strictly harder to
+  // satisfy by accident: a fan-out re-exported with nothing calling it goes
+  // red, and a component calling one panels.ts no longer exports goes red.
   // Swept across the whole component tree rather than a named file, so the
   // caller may move without anyone remembering to update this.
   const tree = await readdir(new URL('../src', import.meta.url), { recursive: true });
