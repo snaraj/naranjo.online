@@ -506,7 +506,8 @@ merges. No third distinct-context pass is required.
   PR reserves no patch at all), the automatic release consequence is proven, and
   the owner-observed release-control receipt proves immutable releases plus
   strict exact required checks, and the owner's separate bypass check reports
-  no bypass actor — the receipt carries no bypass field. Only the coordinator
+  no core bypass actor and exactly the owner User's PR-only update exception —
+  the receipt carries no bypass field. Only the coordinator
   flips Ready. The author and reviewer never do.
 
 ## Parallel agents in one checkout
@@ -607,7 +608,9 @@ The complete delivery loop, each step gated by the sections around it:
    `docs/release-governance.md` AND, separately, that document's standalone
    bypass command — the preflight reads no bypass field under any credential.
    Immutable releases and strict current-base required checks must be exact,
-   and the bypass-actor list must be empty, before Ready.
+   and the core bypass-actor list must be empty, before Ready. The separate
+   `Owner-PR-Updates` restriction permits only owner-account PR merges; its
+   exception never applies to the core security checks (see release governance).
 8. **Owner comments** are handled per the owner review protocol below.
 9. **The owner merges.** Nothing you can do — approval, green checks,
    ready state — substitutes for that.
@@ -803,11 +806,13 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   `dependency-review` `skipped` on a main push and the other four
   successful, exact in both directions. What each chart pin proves, and why
   the two PR-only jobs carry no main trigger, is in `docs/ci-map.md`.
-- **coverage-badges** — `main` pushes only: recomputes both coverages
-  with the gate's own recipe and force-updates the generated
+- **coverage-badges** — `main` pushes only: waits for `application` to
+  succeed and publishes its numeric coverage outputs from the same run,
+  without rebuilding or repeating tests. It force-updates the generated
   single-commit `badges` branch. Badge numbers are CI-computed, never
   hand-edited; the badge publishes the identical number the gate
-  enforced.
+  enforced for Go and reported for frontend. A badge is a coverage report;
+  the release publisher separately requires every main gate job to pass.
 - **browser-lanes.yml** — pull requests and manual dispatch (no `main` push
   trigger): the rendering-lane smoke matrix (issue #26 stage 2), five
   projects against the real Go binary on localhost. It holds `contents:

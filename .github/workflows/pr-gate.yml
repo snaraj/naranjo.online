@@ -152,6 +152,9 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    outputs:
+      go: ${{ steps.go_coverage.outputs.total }}
+      front: ${{ steps.frontend_coverage.outputs.total }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -196,6 +199,7 @@ jobs:
           CGO_ENABLED=0 go test ./...
           go test -race ./...
       - name: Enforce and report Go test coverage
+        id: go_coverage
         env:
           GOTOOLCHAIN: local
           # Ratchet-only floor (total statement coverage, measured at 96.2%
@@ -206,6 +210,7 @@ jobs:
           # or they become three claims that can disagree.
           GO_COVERAGE_FLOOR: '93.2'
         run: |
+          set -euo pipefail
           CGO_ENABLED=0 go test -covermode=atomic \
             -coverprofile="${RUNNER_TEMP}/site.cover.out" ./...
           # internal/testsupport is shared test scaffolding: it executes only
@@ -231,12 +236,22 @@ jobs:
             }
             printf "Go coverage %.1f%% meets the %.1f%% floor\n", got, floor
           }'
+          [[ "${total}" =~ ^(100(\.0+)?|[0-9]{1,2}(\.[0-9]+)?)$ ]]
+          printf 'total=%s\n' "${total}" >> "${GITHUB_OUTPUT}"
       - name: Report frontend test coverage
+        id: frontend_coverage
         working-directory: frontend
         run: |
+          set -euo pipefail
+          node --test --experimental-test-coverage tests/*.test.mjs \
+            | tee "${RUNNER_TEMP}/frontend-coverage.txt"
+          total="$(awk -F'|' '/all files/{gsub(/ /,"",$2); print $2}' \
+            "${RUNNER_TEMP}/frontend-coverage.txt")"
+          [[ "${total}" =~ ^(100(\.0+)?|[0-9]{1,2}(\.[0-9]+)?)$ ]]
+          printf 'total=%s\n' "${total}" >> "${GITHUB_OUTPUT}"
           {
             printf '### Frontend coverage\n\n```\n'
-            node --test --experimental-test-coverage tests/*.test.mjs | tail -n 14
+            tail -n 14 "${RUNNER_TEMP}/frontend-coverage.txt"
             printf '```\n'
           } >> "${GITHUB_STEP_SUMMARY}"
 
@@ -323,58 +338,27 @@ jobs:
           push: false
 
   coverage-badges:
-    # Runs only on main pushes: recomputes both coverages and publishes
-    # shields-endpoint JSONs to the generated single-commit `badges` branch
+    # Runs only after this main-push application's tests and coverage pass.
+    # Reuse that job's numeric results from this run instead of rebuilding.
+    # Publishes shields-endpoint JSONs to the generated single-commit `badges` branch
     # (no history value; force-updating it is the documented exception to
     # the no-force-push rule). Zero external services or accounts.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: application
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '24.19.0'
-          check-latest: false
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.26.6'
-          check-latest: false
-          cache: false
-      - name: Compute coverage percentages
-        id: cov
-        env:
-          GOTOOLCHAIN: local
-        run: |
-          set -euo pipefail
-          pushd frontend >/dev/null
-          npm ci --ignore-scripts --no-audit --no-fund
-          npm run build
-          front="$(node --test --experimental-test-coverage tests/*.test.mjs 2>&1 \
-            | awk -F'|' '/all files/{gsub(/ /,"",$2); print $2; exit}')"
-          popd >/dev/null
-          CGO_ENABLED=0 go test -covermode=atomic -coverprofile="${RUNNER_TEMP}/cp.out" ./...
-          # Same scaffolding exclusion as the enforcement step, so the badge
-          # publishes the identical production-statement number the gate holds.
-          grep -v '/internal/testsupport/' "${RUNNER_TEMP}/cp.out" > "${RUNNER_TEMP}/cp.production.out"
-          gopct="$(go tool cover -func="${RUNNER_TEMP}/cp.production.out" | awk '/^total:/{gsub(/%/,"",$3); print $3}')"
-          test -n "${gopct}" && test -n "${front}"
-          printf 'go=%s\n' "${gopct}" >> "${GITHUB_OUTPUT}"
-          printf 'front=%s\n' "${front}" >> "${GITHUB_OUTPUT}"
       - name: Publish badge JSONs to the badges branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GO_PCT: ${{ steps.cov.outputs.go }}
-          FRONT_PCT: ${{ steps.cov.outputs.front }}
+          GO_PCT: ${{ needs.application.outputs.go }}
+          FRONT_PCT: ${{ needs.application.outputs.front }}
         run: |
           set -euo pipefail
+          [[ "${GO_PCT}" =~ ^(100(\.0+)?|[0-9]{1,2}(\.[0-9]+)?)$ ]]
+          [[ "${FRONT_PCT}" =~ ^(100(\.0+)?|[0-9]{1,2}(\.[0-9]+)?)$ ]]
           color() {
             awk -v p="$1" 'BEGIN{ if (p>=90) print "brightgreen"; else if (p>=75) print "green"; else if (p>=60) print "yellow"; else print "orange" }'
           }
