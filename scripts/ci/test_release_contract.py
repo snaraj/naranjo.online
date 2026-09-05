@@ -7356,8 +7356,14 @@ class GovernanceParityTests(unittest.TestCase):
                 # apply or interpret `requires-review` on the issue" and the
                 # later Ready/merge steps — are unchanged; only the effort set
                 # in the branch grammar grew by one word.
+                # Re-pinned for issue #294: step 2's registered label set
+                # gained `fable5.1` (owner directive, 2026-09-04, PR #295)
+                # and names the longest-match rule that lets `fable5.1-high/`
+                # and `fable5-high/` coexist. The block's Ready sentences —
+                # step 1's "Never apply or interpret `requires-review` on
+                # the issue" and the later Ready/merge steps — are unchanged.
                 ("1. **Claim the work.** (the delivery-loop numbered list)",
-                 "2bea38ceb4e31531cf764b18fe241a92dca0d0be598b87d874e58ed647d31eff"),
+                 "58cefe80d5331501af88e4a18db87ec6632c54a67dfd223cc3f56c345a18060e"),
                 ("Comments the owner leaves on PRs ARE code reviews",
                  "e8e6f2dd0c82a28a8c280cd1705002f4faf8d2e9aa81195df5466d6db83a871c"),
                 ("The full local gate does not substitute for the server boundary",

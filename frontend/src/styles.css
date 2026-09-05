@@ -1131,25 +1131,16 @@ body,
   margin: 0;
 }
 
-/* The settle guard for a pull past the top (issue 187, iOS Safari): the
-   fragment-drop fix at issue 171 (history.scrollRestoration = 'manual', in
-   SectionNav.svelte) already keeps a RELOAD from landing on a stale scroll
-   position; this is the companion for the LIVE gesture, a pull-to-refresh
-   drag that overshoots and leaves the document translated down after the
-   bounce settles. `none` rather than `contain`: contain only stops the
-   overscroll from chaining to a further ancestor, which this page has none
-   of past the document — it does nothing about the rubber-band/bounce
-   effect itself, which is the actual bug. `none` suppresses that boundary
-   effect directly, on both axes' block dimension, on both elements a
-   browser might treat as the real scroller for the root document. The
-   header's own positioning (`.page-header`, below) takes it out of flow in
-   both of its ranges, so it was swept for a leftover top gap during this fix
-   and needs no rule of its own: an out-of-flow element never occupies flow
-   space to leave behind. */
-html,
-body {
-  overscroll-behavior-y: none;
-}
+/* THE NATIVE OVERSCROLL IS BACK (owner ruling, 2026-09-04, issue 294). The
+   document used to declare `overscroll-behavior-y: none` on html and body
+   (issue 187) so the page's own pull-to-refresh could own the drag past the
+   top; with that gesture gone there is nothing left for the suppression to
+   protect, and the rubber-band it suppressed is exactly the app-like feel
+   the owner asked for on a phone. The root paints the sheet's colour (the
+   :root block above), so the overscroll region a bounce reveals is the
+   sheet, never a bare browser grey. Nothing is declared here on purpose: the
+   platform default is the behaviour, and a rule restating `auto` would be a
+   second place to forget. */
 
 /* THE DOCUMENT DOES NOT SCROLL UNDER AN OPEN MODAL (issue 241).
    showModal() makes the rest of the page inert to POINTER interaction and
@@ -1191,32 +1182,6 @@ body {
 html[data-modal-open] {
   overflow: hidden;
   padding-inline-end: var(--modal-scrollbar-giveback, 0px);
-}
-
-/* THE PULL'S OWN TRAVEL (issue 219). The declaration above is what makes this
-   possible rather than what it fights: with the native boundary effect
-   suppressed there is no browser animation competing for the same drag, so
-   this transform is the only thing moving the surface and the settle is ours
-   to guarantee. A pull layered on top of a LIVE native bounce is the thing
-   that cannot be made to settle — which is exactly what the owner reported at
-   issue 187 and why that gesture had to be taken away.
-
-   A transform, never a margin or a top offset: a composited translate changes
-   no box, reserves no space and triggers no layout, so a pull costs nothing
-   against the zero-CLS floor and the document's own height never moves.
-
-   THE ATTRIBUTE GUARD IS LOAD-BEARING, NOT TIDINESS. A transform of any value
-   other than `none` makes the element a containing block for every
-   `position: fixed` DESCENDANT — and `translateY(0px)` is a transform, not
-   `none`. Left ungated, this rule would silently re-parent the reading-mode
-   header and every detail card from the viewport to this element, for the
-   entire life of the page, whether or not anyone ever pulled. That is the
-   exact guarantee lib/tooltip.ts rests on ("a fixed box is outside the
-   scrollable overflow region by construction"), so the property must not
-   exist at rest. PullToRefresh.svelte writes the attribute only while a pull
-   is actually displaced and removes it the moment the surface settles home. */
-[data-pulling='true'] main {
-  transform: translateY(var(--page-pull, 0px));
 }
 
 /* Dynamic viewport units only (rendering-lane floor, issue #26). The static
@@ -1421,16 +1386,21 @@ html[data-column-resizing] {
   align-items: center;
   justify-content: space-between;
   gap: var(--ledger-column-gap);
-  /* The row's reserve is the touch row PLUS its own two rules, because the
-     box is border-box and the static shell's copy of this header is EMPTY.
-     Stated as the control alone, the empty shell measured 44px while the
-     hydrated row measured 48 — content plus borders — and mounting moved the
-     whole page down by four pixels. The shell exists precisely so that does
-     not happen (index.html says so), and it can only work if the reserve is
-     the height the arrived row actually takes. */
-  min-block-size: calc(var(--page-rail-size) + 2 * var(--ledger-heavy));
+  /* The row's reserve is the touch row PLUS its own rule, because the box is
+     border-box and the static shell's copy of this header is EMPTY. Stated as
+     the control alone, the empty shell measured 44px while the hydrated row
+     measured more — content plus border — and mounting moved the whole page
+     down. The shell exists precisely so that does not happen (index.html says
+     so), and it can only work if the reserve is the height the arrived row
+     actually takes.
+
+     ONE RULE, UNDER THE ROW (owner directive, 2026-09-04, issue 294). The row
+     used to be ruled top and bottom, and on a phone the top rule sat directly
+     under the browser's own toolbar edge, so the two read as one band twice as
+     thick as either. The sheet's top edge is the screen's; the row hangs from
+     it and draws its rule below, where the masthead needs one. */
+  min-block-size: calc(var(--page-rail-size) + var(--ledger-heavy));
   padding-block: 0;
-  border-block-start: var(--ledger-heavy) solid var(--ledger-rule);
   border-block-end: var(--ledger-heavy) solid var(--ledger-rule);
 }
 
@@ -1768,6 +1738,13 @@ main {
    is written. */
 h1 {
   margin: 0;
+  /* TWO LINES AT EVERY WIDTH (owner directive, 2026-09-04, issue 294): the
+     name breaks after its first word on a phone because it must, and the owner
+     liked that better than the one-line desktop setting. The box is as wide as
+     its longest word, so the break lands at the space everywhere and the DOM
+     text stays exactly the name — no <br>, no second heading. The rule under
+     it is a sibling and still spans the column. */
+  inline-size: min-content;
   font-family: var(--font-sans);
   font-size: var(--masthead-size);
   font-weight: var(--masthead-weight);

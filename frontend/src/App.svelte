@@ -2,10 +2,10 @@
   import ColumnHandles from './lib/components/ColumnHandles.svelte';
   import PageHeader from './lib/components/PageHeader.svelte';
   import PageSection from './lib/components/PageSection.svelte';
-  import PullToRefresh from './lib/components/PullToRefresh.svelte';
   import TextureBand from './lib/components/TextureBand.svelte';
   import { bandTextures } from './lib/textureAssets.ts';
   import { bandMode, documentPrefersDark, prefersDarkQuery, textureFor } from './lib/textures.ts';
+  import { syncThemeColor } from './lib/themes.ts';
   import { page } from './page.ts';
 
   /* THE BAND'S STATE LIVES HERE, and that is deliberate: the page opens and
@@ -43,9 +43,22 @@
     const query = window.matchMedia(prefersDarkQuery);
     const onChange = (): void => {
       prefersDark = query.matches;
+      /* The sheet's colour changed under auto, so the browser's toolbars
+         follow it (lib/themes.ts); a chosen mode is synced by the toggle.
+         ONE FRAME LATER, measured: the change event fires before the
+         stylesheet's own media query has been re-evaluated, so a read inside
+         the handler still returns the colour the sheet is leaving. */
+      requestAnimationFrame(syncThemeColor);
     };
     query.addEventListener('change', onChange);
     return () => query.removeEventListener('change', onChange);
+  });
+
+  /* The first sync: the origin stamped the mode before any script ran, so
+     the toolbars are told the sheet's colour once at hydration and then only
+     when it changes (owner directive, 2026-09-04, issue 294). */
+  $effect(() => {
+    syncThemeColor();
   });
 </script>
 
@@ -55,11 +68,13 @@
   description exists for — and two copies, one static and one hydrated,
   would be the same fact written twice. -->
 
-<!-- First in the document on purpose (issue 219): the refresh control inside
-  it is invisible until focused, and being the first focusable thing is what
-  makes one Tab reach it — the skip-link arrangement. -->
-<PullToRefresh />
-
+<!-- No pull-to-refresh surface any more (owner ruling, 2026-09-04, issue
+  294). The page used to run its own pull gesture over a suppressed native
+  overscroll (issue 219), and on a phone that read as rigid, with the
+  indicator bleeding in at the top; the platform's own bounce is the feel the
+  owner asked for, and the panels refresh themselves (issue 179), so the
+  gesture, its indicator and its keyboard control are gone rather than
+  re-tuned. -->
 <PageHeader />
 
 <!-- THE LEDGER (owner directive, 2026-09-03, issue 287). The page is one

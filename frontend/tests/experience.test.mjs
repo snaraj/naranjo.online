@@ -1430,18 +1430,35 @@ test('the chrome row is in the document, so no control owns a corner of the page
     'the plate is back under a control that no longer floats over anything'
   );
 
-  // What the row IS: the site's own hit lane tall, ruled top and bottom like
-  // every other head on the sheet.
-  /* The reserve is the touch row PLUS the row's own two rules (owner
-     directive, 2026-09-03, issue 287): the box is border-box and the static
-     shell renders this header EMPTY, so a reserve stated as the control alone
-     measured four pixels short of the row that arrives and mounting moved the
-     page. The arithmetic is what makes the shell's promise keepable. */
-  assert.match(
-    stylesCode,
-    /\.page-header \{[^}]*min-block-size: calc\(var\(--page-rail-size\) \+ 2 \* var\(--ledger-heavy\)\)/
-  );
-  assert.match(stylesCode, /\.page-header \{[^}]*border-block-end: var\(--ledger-heavy\) solid var\(--ledger-rule\)/);
+  // What the row IS: the site's own hit lane tall, ruled UNDER like every
+  // other head on the sheet — and only under (owner directive, 2026-09-04,
+  // issue 294): a top rule sat directly beneath a phone browser's toolbar edge
+  // and the two read as one band twice as thick.
+  /* The reserve is the touch row PLUS the row's own rule (owner directive,
+     2026-09-03, issue 287): the box is border-box and the static shell renders
+     this header EMPTY, so a reserve stated as the control alone measured short
+     of the row that arrives and mounting moved the page. The arithmetic is
+     what makes the shell's promise keepable, so it names the ONE rule the row
+     draws and nothing else. */
+  /* THE NAME IS TWO LINES AT EVERY WIDTH (owner directive, 2026-09-04, issue
+     294): the heading's box is its longest word, so the break lands at the
+     space on a monitor exactly as it does on a phone, with the DOM text left
+     as the name. Pinned where it is decided; the rendering lane for issue 294
+     counts the two line boxes in every engine. */
+  const masthead = /\nh1 \{([^}]*)\}/.exec(stylesCode);
+  assert.ok(masthead, 'the masthead rule is gone');
+  assert.match(masthead[1], /inline-size: min-content;/, 'the name is no longer boxed to its longest word');
+  assert.match(masthead[1], /text-transform: lowercase;/);
+
+  // The stylesheet states .page-header more than once (its width beside the
+  // column's, its ceiling under the rails); the ROW is the block that
+  // reserves its height, so that is the one read here.
+  const rows = [...stylesCode.matchAll(/\.page-header \{([^}]*)\}/g)].map((found) => found[1]);
+  const row = rows.find((body) => body.includes('min-block-size'));
+  assert.ok(row, 'the chrome row no longer states its reserve');
+  assert.match(row, /min-block-size: calc\(var\(--page-rail-size\) \+ var\(--ledger-heavy\)\)/);
+  assert.match(row, /border-block-end: var\(--ledger-heavy\) solid var\(--ledger-rule\)/);
+  assert.doesNotMatch(row, /border-block-start|border-top|border:/, 'the row grew a top rule back');
 
   // And the control inside it still clears the touch floor on both axes.
   assert.match(stylesCode, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);

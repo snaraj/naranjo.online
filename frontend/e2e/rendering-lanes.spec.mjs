@@ -1177,11 +1177,17 @@ test('every set draws ONE calendar, and coverage moves the data rather than the 
      coincidence at every shape but the first. */
   const shapes = [15, 200, 900];
   const measured = [];
+  /* The restaged source's own label, so the set it drew is found by NAME
+     below: the section opens on the lead token source (issue 294), which
+     need not be the payload's first, so "the first token segment" no longer
+     names the restaged one. */
+  let stagedLabel = '';
   for (const days of shapes) {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
     await stageUsagePayload(page, (envelope) => {
       const sources = envelope?.data?.sources ?? [];
       expect(sources.length, 'the origin serves fewer than two usage sources').toBeGreaterThan(1);
+      stagedLabel = sources[0].label;
       sources[0].series = syntheticSeries(days);
     });
     await visit(page);
@@ -1256,13 +1262,15 @@ test('every set draws ONE calendar, and coverage moves the data rather than the 
   }
 
   /* AND THE COVERAGE MOVED THE DATA, NOT THE FRAME. The staged set is the
-     first token one — the segment named for the source this lane restaged —
-     and it is read across the three coverages. Its captured cells grow with
-     the capture and its frame does not, which is the superseding rule stated
-     as a measurement rather than as a comment. */
+     segment named for the source this lane restaged — by its label, because
+     the lead token source opens the section (issue 294) and the restaged one
+     may sit second — and it is read across the three coverages. Its captured
+     cells grow with the capture and its frame does not, which is the
+     superseding rule stated as a measurement rather than as a comment. */
+  expect(stagedLabel, 'the staged source has no label to find its segment by').not.toBe('');
   const staged = measured.map((shape) => {
-    const set = shape.sets.find((candidate) => candidate.label.startsWith('Tokens'));
-    expect(set, `no token set rendered at ${shape.days} days`).toBeDefined();
+    const set = shape.sets.find((candidate) => candidate.label === `Tokens · ${stagedLabel}`);
+    expect(set, `no "Tokens · ${stagedLabel}" set rendered at ${shape.days} days`).toBeDefined();
     return set;
   });
   const [short, middle, deep] = staged;
@@ -2078,10 +2086,20 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
   });
   expect(observed.heading).toBe('Samuel Naranjo');
   /* The heading the ORIGIN serves for the version-control panel, chosen in
-     config data because neither source tree may spell a vendor name. Reading
-     it off the rendered card is what proves the whole path — config, Go
-     overlay, envelope, component — rather than any one link in it. */
-  expect(observed.titles).toContain('GitHub');
+     config data because neither source tree may spell a vendor name. It used
+     to be read off the rendered card; the commits block renders no panel
+     label now (owner directive, 2026-09-04, issue 294 — the calendar opens on
+     a token series, so the host's name over it would be false), so the path
+     is proved one link shorter: config, Go overlay, envelope. The component
+     link is proved the other way round — the name must NOT reach the page. */
+  const activityTitle = await page.evaluate(async () => {
+    const envelope = await (await fetch('/api/panels/vcs-activity')).json();
+    return envelope?.title ?? '';
+  });
+  expect(activityTitle).toBe('GitHub');
+  expect(observed.titles, 'the commits block wears the host name over a token calendar again').not.toContain(
+    'GitHub'
+  );
   /* No card announces its own age any more, and every card still carries the
      status the badge used to read from. */
   expect(observed.badges, 'a freshness badge is rendering again').toBe(0);
@@ -2450,7 +2468,12 @@ test('every set shares one graph box, and a segment switch moves none of it (iss
 test('a panel whose data is still on its way holds exactly the box that data will fill', async ({
   page,
 }) => {
-  await page.route('**/api/panels/vcs-activity', async (route) => {
+  /* BOTH payloads the calendar can open on are delayed. The section opens
+     on the lead token series (issue 294), so a delay on the activity payload
+     alone would put a series-state calendar on first paint with nothing
+     waiting to measure; with both held back the section draws its reserve —
+     the contributions set with no columns — until the first of them lands. */
+  await page.route(/\/api\/panels\/(vcs-activity|token-usage)$/, async (route) => {
     await new Promise((resume) => setTimeout(resume, 1_200));
     await route.continue();
   });
@@ -5217,16 +5240,162 @@ test('a panel head with no title keeps the reserved row, with and without its no
     return { titled: titled.map(height), before, after };
   });
   expect(measured.titled.length, 'no titled panel head to measure the reserve against').toBeGreaterThan(0);
-  expect(measured.before.length, 'exactly one panel renders without a label: the Projects table').toBe(1);
+  /* Two bare heads now: the Projects table (issue 292) and the commits
+     calendar, which dropped its host label when it began opening on a token
+     series (issue 294). Each is measured; none is exempt. */
+  expect(measured.before.length, 'exactly two panels render without a label: Projects and the commits calendar').toBe(
+    2
+  );
   const reserve = measured.titled[0];
   for (const height of measured.titled) {
     expect(height, 'titled heads disagree about the row height').toBeCloseTo(reserve, 1);
   }
-  expect(measured.before[0], 'a head with no title is not as tall as one with').toBeCloseTo(reserve, 1);
-  expect(measured.after[0], 'taking the note away collapsed the head; the row is not reserved').toBeCloseTo(
-    reserve,
+  for (const height of measured.before) {
+    expect(height, 'a head with no title is not as tall as one with').toBeCloseTo(reserve, 1);
+  }
+  for (const height of measured.after) {
+    expect(height, 'taking the note away collapsed the head; the row is not reserved').toBeCloseTo(reserve, 1);
+  }
+});
+
+/* THE PHONE CHROME AND THE MASTHEAD (owner directives, 2026-09-04, issue 294),
+ * measured in every project so the phone viewports prove the same things the
+ * desktop one does:
+ *  - the name breaks after its first word at every width — two line boxes,
+ *    and the rule under it still spans the column;
+ *  - the chrome row draws one rule, under it, and its height is exactly the
+ *    reserve the stylesheet states for it;
+ *  - the commits calendar opens on the lead token series with no panel label,
+ *    and the contributions calendar closes the segments;
+ *  - the browser's chrome is told the sheet's colour, and told again when the
+ *    mode or the OS scheme changes;
+ *  - the document root no longer refuses the native overscroll (the pull
+ *    gesture that needed that refusal is gone, owner ruling, same issue). */
+test('the name is two lines, the chrome row has one rule, the calendar opens on the lead token set, and the toolbars wear the sheet (issue 294)', async ({
+  page,
+}) => {
+  await visit(page);
+  await expect(page.locator('.commit-segment').first()).toBeAttached();
+  const observed = await page.evaluate(() => {
+    const heading = window.document.querySelector('h1');
+    const text = heading.firstChild;
+    const range = window.document.createRange();
+    range.selectNodeContents(text);
+    const lines = [...range.getClientRects()].filter((rect) => rect.width > 0).length;
+    const main = window.document.querySelector('main').getBoundingClientRect();
+    const rule = window.document.querySelector('.masthead-rule').getBoundingClientRect();
+    const header = window.document.querySelector('.page-header');
+    const style = getComputedStyle(header);
+    const commits = window.document.querySelector('.commit-segments')?.closest('.panel-shell');
+    const segments = [...commits.querySelectorAll('.commit-segment')].map((node) => ({
+      text: node.textContent.trim(),
+      pressed: node.getAttribute('aria-pressed') === 'true',
+    }));
+    const surface = getComputedStyle(window.document.documentElement)
+      .getPropertyValue('--color-surface')
+      .trim();
+    return {
+      heading: heading.textContent.trim(),
+      lines,
+      headingWidth: heading.getBoundingClientRect().width,
+      mainWidth: main.width,
+      ruleWidth: rule.width,
+      borderTop: Number.parseFloat(style.borderTopWidth),
+      borderBottom: Number.parseFloat(style.borderBottomWidth),
+      headerHeight: header.getBoundingClientRect().height,
+      reserve: Number.parseFloat(style.minHeight),
+      segments,
+      commitLabel: commits.querySelector('.panel-title')?.textContent ?? null,
+      surface,
+      themeColor:
+        window.document.head.querySelector('meta[name="theme-color"]')?.getAttribute('content') ?? null,
+      overscroll: {
+        html: getComputedStyle(window.document.documentElement).overscrollBehaviorY,
+        body: getComputedStyle(window.document.body).overscrollBehaviorY,
+      },
+      pullSurface: window.document.querySelector('.pull-indicator, .pull-control') !== null,
+    };
+  });
+  expect(observed.heading).toBe('Samuel Naranjo');
+  expect(observed.lines, 'the name is not set on exactly two lines').toBe(2);
+  expect(observed.headingWidth, 'the heading box is not its longest word').toBeLessThan(observed.mainWidth);
+  /* The two lines are the RULE, not the viewport's accident: at this
+     project's own width the name may wrap on its own, so the count is taken
+     again on a monitor wide enough for the whole name to fit on one line —
+     where only the min-content box keeps the break — and then at a phone. */
+  const before = page.viewportSize();
+  const linesAt = async (width, height) => {
+    await page.setViewportSize({ width, height });
+    return page.evaluate(() => {
+      const range = window.document.createRange();
+      range.selectNodeContents(window.document.querySelector('h1').firstChild);
+      return [...range.getClientRects()].filter((rect) => rect.width > 0).length;
+    });
+  };
+  expect(await linesAt(1920, 1080), 'on a wide monitor the name runs on one line').toBe(2);
+  expect(await linesAt(390, 844), 'on a phone the name is not two lines').toBe(2);
+  await page.setViewportSize(before);
+  expect(observed.ruleWidth, 'the rule under the name no longer spans the column').toBeCloseTo(
+    observed.mainWidth,
+    0
+  );
+  expect(observed.borderTop, 'the chrome row grew its top rule back').toBe(0);
+  expect(observed.borderBottom, 'the chrome row lost its rule').toBeGreaterThan(0);
+  expect(observed.headerHeight, 'the chrome row is not exactly its stated reserve').toBeCloseTo(
+    observed.reserve,
     1
   );
+  expect(observed.segments.length, 'fewer than two calendars to order').toBeGreaterThan(1);
+  expect(observed.segments[0].pressed, 'the calendar does not open on its first segment').toBe(true);
+  expect(observed.segments[0].text.toLowerCase(), 'the first segment is not the lead token set').toMatch(
+    /^tokens · codex$/
+  );
+  expect(observed.segments.at(-1).text, 'contributions is not the last segment').toBe('Contributions');
+  expect(observed.commitLabel, 'the commits calendar wears a panel label').toBeNull();
+  expect(observed.overscroll.html, 'the root still refuses the native overscroll').toBe('auto');
+  expect(observed.overscroll.body, 'the body still refuses the native overscroll').toBe('auto');
+  expect(observed.pullSurface, 'the retired pull surface is back in the document').toBe(false);
+  expect(observed.surface, 'the sheet token is unreadable').not.toBe('');
+  expect(observed.themeColor, 'the toolbars were not told the sheet colour').toBe(observed.surface);
+
+  /* A chosen mode moves it: the real toggle, so the sync rides applyMode. */
+  await page.locator('.theme-menu .trigger').click();
+  await page.locator('.swatch-sepia').click();
+  const sepia = await page.evaluate(() => ({
+    surface: getComputedStyle(window.document.documentElement).getPropertyValue('--color-surface').trim(),
+    themeColor: window.document.head.querySelector('meta[name="theme-color"]')?.getAttribute('content') ?? null,
+  }));
+  expect(sepia.surface, 'sepia did not change the sheet').not.toBe(observed.surface);
+  expect(sepia.themeColor, 'the toolbars did not follow the chosen mode').toBe(sepia.surface);
+
+  /* And the OS scheme moves it under auto: back to auto, then flip the scheme.
+     The sync rides the frame after the change event (App.svelte says why), so
+     the read waits two frames — the one the sync is queued for, and the one
+     that proves it ran. */
+  const settledFrames = () =>
+    page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(resolve));
+        })
+    );
+  await page.locator('.theme-menu .trigger').click();
+  await page.locator('.swatch-auto').click();
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await settledFrames();
+  const dark = await page.evaluate(() => ({
+    surface: getComputedStyle(window.document.documentElement).getPropertyValue('--color-surface').trim(),
+    themeColor: window.document.head.querySelector('meta[name="theme-color"]')?.getAttribute('content') ?? null,
+  }));
+  expect(dark.themeColor, 'the toolbars did not follow the OS scheme under auto').toBe(dark.surface);
+  await page.emulateMedia({ colorScheme: 'light' });
+  await settledFrames();
+  const light = await page.evaluate(() => ({
+    surface: getComputedStyle(window.document.documentElement).getPropertyValue('--color-surface').trim(),
+    themeColor: window.document.head.querySelector('meta[name="theme-color"]')?.getAttribute('content') ?? null,
+  }));
+  expect(light.surface, 'the scheme flip did not move the sheet').not.toBe(dark.surface);
+  expect(light.themeColor, 'the toolbars did not follow the scheme back').toBe(light.surface);
 });
 
 /* THE REPO TABLE, MEASURED (issue 188; owner sketch 2026-08-31; RESHAPED by
@@ -5420,28 +5589,6 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
   }
 });
 
-/* The pull-to-refresh settle guard (issue 187). What this lane CAN prove,
- * in every engine: the declaration reached the page and the engine computed
- * it — not a source-text scan, the same "what a real engine did with it"
- * standard every other lane in this file holds to. What it CANNOT prove:
- * that a live rubber-band drag on a physical iPhone visually settles flush
- * instead of leaving the document translated down. Playwright's synthetic
- * touch/wheel events do not drive WebKit's native overscroll/bounce
- * animation the way a real touchscreen gesture does — there is no
- * documented, reliable way to trigger that specific compositor-level effect
- * from automation in any engine this matrix runs, headless or not. That gap
- * is why this is a computed-style pin rather than a gesture simulation, and
- * why the PR body states it needs the owner's own device to close. */
-test('the document root refuses the overscroll bounce, in every engine (issue 187)', async ({ page }) => {
-  await visit(page);
-  const observed = await page.evaluate(() => ({
-    html: getComputedStyle(window.document.documentElement).overscrollBehaviorY,
-    body: getComputedStyle(window.document.body).overscrollBehaviorY,
-  }));
-  expect(observed.html, 'html does not refuse the overscroll bounce').toBe('none');
-  expect(observed.body, 'body does not refuse the overscroll bounce').toBe('none');
-});
-
 /* The weekday gutter sits BESIDE the strip, in its own flex row (issue 189),
  * so a Mon/Wed/Fri label stays put while the cells beside it carry their own
  * horizontal scroll. This is exactly the kind of claim a source-text pin
@@ -5511,9 +5658,11 @@ test('the token panel detail card reads a human period phrase for the one lens t
      real cell. The four-way lens arithmetic itself is executed — not
      pattern-matched — in tests/grid.test.mjs and tests/periods.test.mjs,
      which is where it belongs now that no reader can reach it. */
+  let stagedLabel = '';
   await stageUsagePayload(page, (envelope) => {
     const sources = envelope?.data?.sources ?? [];
     expect(sources.length, 'the origin serves no usage sources; this lane cannot stage one').toBeGreaterThan(0);
+    stagedLabel = sources[0].label;
     sources[0].series = syntheticSeries(120);
   });
   await visit(page);
@@ -5522,11 +5671,14 @@ test('the token panel detail card reads a human period phrase for the one lens t
      issue 287): the per-source card is retired and the commits section draws
      one grid the reader cycles, so the staged source's graph is reached by
      pressing its own segment rather than by scoping to a panel. The segment is
-     named for the source, which is what keeps this lane pointed at the series
-     it actually staged rather than at whichever calendar happened to be up. */
+     named for the source — and found by that name, because the lead source
+     opens the section (issue 294) and the staged one may be the second token
+     segment — which is what keeps this lane pointed at the series it actually
+     staged rather than at whichever calendar happened to be up. */
   const panel = page.locator('.panel-shell').filter({ has: page.locator('.grid-block') });
   const segments = page.locator('.commit-segment');
-  const tokenSegment = segments.filter({ hasText: 'Tokens' }).first();
+  expect(stagedLabel, 'the staged source has no label to find its segment by').not.toBe('');
+  const tokenSegment = segments.filter({ hasText: `Tokens · ${stagedLabel}` }).first();
   await expect(
     tokenSegment,
     'the staged source is offered no calendar segment; this lane cannot reach its graph'
@@ -7988,6 +8140,12 @@ test('the static shell holds the heading where hydration will put it', async ({ 
   await page.route('**/*.js', (route) => route.abort());
   await page.goto('/');
   await page.waitForLoadState('load');
+  /* Both reads wait for the webfonts. The heading's box is its longest word
+     now (issue 294), so its width is the FONT's to decide: read in a fallback
+     face it is narrower than in the vendored one, and WebKit reached `load`
+     before the swap. The claim here is that the shell reserves the hydrated
+     page's geometry, not that a font arrives before the load event. */
+  await page.evaluate(() => window.document.fonts.ready);
   const before = await read();
   expect(before.shell, 'the page did not render its static shell with scripts refused').toBe(true);
   expect(before.heading, 'the shell painted no heading').not.toBeNull();
@@ -7995,6 +8153,7 @@ test('the static shell holds the heading where hydration will put it', async ({ 
 
   /* The hydrated page, on the same viewport. */
   await visit(page);
+  await page.evaluate(() => window.document.fonts.ready);
   const after = await read();
   expect(after.shell, 'the page never hydrated').toBe(false);
 
@@ -9185,66 +9344,27 @@ test('a refresh keeps the keyboard cursor on the day it named (issue 219)', asyn
   expect(before.marked, 'the keyboard marked no cell to begin with').not.toBeNull();
   expect(before.open, 'the keyboard opened no readout to begin with').toBe(true);
 
-  /* Watched rather than sampled afterwards. The page's travel attribute is
-     written and removed inside the refresh, so reading it once at the end
-     measures a state that has already gone — an assertion that cannot fail is
-     no assertion. A mutation record for that attribute exists ONLY if it was
-     added at some point (removing an absent attribute records nothing), which
-     makes "the press never displaced the page" a fact about the whole
-     interval rather than about one instant in it. */
-  await page.evaluate(() => {
-    window.__displaced = false;
-    window.__watch = new MutationObserver((records) => {
-      for (const record of records) {
-        if (record.attributeName === 'data-pulling') {
-          window.__displaced = true;
-        }
-      }
-    });
-    window.__watch.observe(window.document.documentElement, {
-      attributes: true,
-      attributeFilter: ['data-pulling'],
-    });
-  });
-
   /* The refresh is triggered WITHOUT moving focus, and that is the honest
      shape of the defect rather than a convenience. A payload delivery has
-     nothing to do with where focus is: the per-panel minute loop, the
-     visibility catch-up and this PR's own pull gesture all rebuild `columns`
-     while a reader sits on the grid, and every one of them dropped the
-     cursor. Focusing the control and pressing Enter would measure something
-     else entirely — leaving the strip blurs it, and a blur closing the
-     readout is correct and separately asserted below. `.click()` runs the
-     shipping handler and moves focus nowhere, which isolates the delivery. */
+     nothing to do with where focus is: the per-panel poll and the visibility
+     catch-up both rebuild `columns` while a reader sits on the grid, and both
+     used to drop the cursor (so did the pull-to-refresh gesture that first
+     exposed it, retired at issue 294). The visibility catch-up is driven
+     here — the document reports itself visible again — because it is the one
+     delivery a lane can summon on demand: the poll would take thirty seconds.
+     The delivery is awaited as the origin's own answer, never guessed at. */
+  const delivered = page.waitForResponse((response) => response.url().includes('/api/panels/'));
   await page.evaluate(() => {
-    window.document.querySelector('.pull-control').click();
+    window.document.dispatchEvent(new Event('visibilitychange'));
   });
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(() => window.document.querySelector('.pull-indicator').dataset.pullPhase),
-      { message: 'the refresh never completed', timeout: 10_000 },
-    )
-    .toBe('idle');
+  await delivered;
+  await settled(page);
 
   const after = await cursorInPort(page);
   expect(after.marked, 'the refresh wiped the keyboard cursor').toBe(before.marked);
   expect(after.active, 'the refresh wiped aria-activedescendant').toBe(before.active);
   expect(after.open, 'the refresh closed the readout').toBe(true);
   expect(after.text, 'the refresh left the readout describing something else').toBe(before.text);
-  /* And the page was never displaced by a press: a keyboard reader dragged
-     nothing, so <main> must not become a containing block for its 101 fixed
-     descendants on their behalf — not at the end of the refresh, and not for
-     a single frame in the middle of it. */
-  const displaced = await page.evaluate(() => {
-    window.__watch.disconnect();
-    return window.__displaced;
-  });
-  expect(displaced, 'pressing the refresh control displaced the page column').toBe(false);
-  expect(
-    await page.evaluate(() => window.getComputedStyle(window.document.querySelector('main')).transform),
-    'the page column was left transformed after a refresh',
-  ).toBe('none');
 
   /* And the cursor is still the READOUT'S to close when focus genuinely
      leaves, which is the guarantee this repair must not have traded away: a
@@ -9721,537 +9841,6 @@ test('a widget’s arrows do not swallow the browser’s own chords (issue 219)'
   }
 });
 
-/* DEFECT 3. Pull-to-refresh. The browser's own was suppressed at issue 187
- * because its rubber-band overshoot left the document translated down and
- * never settled flush; that declaration stays, and this replacement owns its
- * own travel and its own settle.
- *
- * The honest limit of this lane, stated rather than hidden: Playwright's
- * synthetic touch events drive the pointer path, which is what the binding
- * listens to — so the ARMING, the resistance, the refresh and the settle are
- * all really measured. What no engine here can produce is the compositor-level
- * native overscroll animation that issue 187 was about, and the pin for that
- * remains the computed `overscroll-behavior-y` below. */
-test('the page is never left displaced by a pull, and the native bounce stays suppressed (issue 219, 187)', async ({
-  page,
-}) => {
-  await visit(page);
-
-  // Issue 187's fix is still in force in this engine — removing it would
-  // reintroduce exactly the defect this feature is a replacement for.
-  const overscroll = await page.evaluate(() => ({
-    html: window.getComputedStyle(window.document.documentElement).overscrollBehaviorY,
-    body: window.getComputedStyle(window.document.body).overscrollBehaviorY,
-  }));
-  expect(overscroll.html).toBe('none');
-  expect(overscroll.body).toBe('none');
-
-  // AT REST there must be no transform on the page column. This is not
-  // cosmetic: a transform of any value other than `none` makes its element a
-  // containing block for every fixed-position descendant, which would silently
-  // re-parent the pinned header and every detail card away from the viewport
-  // for the life of the page.
-  const atRest = await page.evaluate(() => ({
-    main: window.getComputedStyle(window.document.querySelector('main')).transform,
-    pulling: window.document.documentElement.hasAttribute('data-pulling'),
-  }));
-  expect(atRest.main, 'the page column carries a transform at rest').toBe('none');
-  expect(atRest.pulling).toBe(false);
-
-  // A real downward pull from the top.
-  await page.evaluate(() => window.scrollTo(0, 0));
-  const pulled = await page.evaluate(async () => {
-    const target = window.document.body;
-    const send = (type, y) =>
-      target.dispatchEvent(
-        new PointerEvent(type, {
-          pointerId: 1,
-          pointerType: 'touch',
-          clientX: 100,
-          clientY: y,
-          bubbles: true,
-        }),
-      );
-    send('pointerdown', 100);
-    const samples = [];
-    for (const y of [120, 140, 190, 260, 340]) {
-      send('pointermove', y);
-      /* The component writes the travel from a reactive effect, which lands on
-         a microtask rather than inside the dispatch. Reading synchronously
-         here would measure the frame BEFORE the pull — a harness racing the
-         framework, not a product fault. */
-      await new Promise((resolve) => window.requestAnimationFrame(resolve));
-      samples.push({
-        raw: y - 100,
-        moved: Number.parseFloat(
-          window.document.documentElement.style.getPropertyValue('--page-pull'),
-        ),
-        phase: window.document.querySelector('.pull-indicator').dataset.pullPhase,
-      });
-    }
-    return samples;
-  });
-
-  // It RESISTS: the surface always moves less than the finger did.
-  for (const sample of pulled) {
-    expect(sample.moved, `a ${sample.raw}px pull moved ${sample.moved}px, which is no resistance`).toBeLessThan(
-      sample.raw,
-    );
-    expect(sample.moved).toBeGreaterThan(0);
-  }
-  // ...and it ARMS, with a phase change the reader can see at the crossing.
-  expect(pulled.at(0).phase, 'a short pull already reads as armed').toBe('pulling');
-  expect(pulled.at(-1).phase, 'a long pull never armed; the gesture can never fire').toBe('armed');
-
-  // Releasing an armed pull refreshes and then SETTLES BACK TO PLACE — the
-  // exact property the removed gesture lacked.
-  await page.evaluate(() => {
-    window.document.body.dispatchEvent(
-      new PointerEvent('pointerup', {
-        pointerId: 1,
-        pointerType: 'touch',
-        clientX: 100,
-        clientY: 340,
-        bubbles: true,
-      }),
-    );
-  });
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(
-          () => window.document.documentElement.style.getPropertyValue('--page-pull') === '0px',
-        ),
-      { message: 'the page never settled back after a pull', timeout: 10_000 },
-    )
-    .toBe(true);
-
-  const settledState = await page.evaluate(() => ({
-    main: window.getComputedStyle(window.document.querySelector('main')).transform,
-    pulling: window.document.documentElement.hasAttribute('data-pulling'),
-    phase: window.document.querySelector('.pull-indicator').dataset.pullPhase,
-    scrollY: window.scrollY,
-  }));
-  expect(settledState.main, 'the page column was left transformed after a pull').toBe('none');
-  expect(settledState.pulling, 'the pulling attribute outlived the pull').toBe(false);
-  expect(settledState.phase).toBe('idle');
-  expect(settledState.scrollY, 'the page was left scrolled by its own refresh gesture').toBe(0);
-});
-
-test('a completed pull is held long enough to be seen, and says it finished (issue 243)', async ({
-  page,
-}) => {
-  /* The owner's "pull to refresh feels broken" (2026-08-28), measured as the
-     thing that was actually wrong: refreshPanels() resolves against a
-     same-origin endpoint in tens of milliseconds, so the armed hold collapsed
-     before its own 260ms settle had finished drawing. The reader saw the mark
-     flash and vanish, which is indistinguishable from a gesture the site
-     ignored. */
-  await visit(page);
-  await page.evaluate(() => window.scrollTo(0, 0));
-
-  const walk = await page.evaluate(async () => {
-    const indicator = window.document.querySelector('.pull-indicator');
-    const seen = [];
-    const note = () => {
-      const phase = indicator.dataset.pullPhase;
-      if (seen.at(-1)?.phase !== phase) seen.push({ phase, at: performance.now() });
-    };
-    note();
-    const observer = new MutationObserver(note);
-    observer.observe(indicator, { attributes: true, attributeFilter: ['data-pull-phase'] });
-
-    const send = (type, y) =>
-      window.document.body.dispatchEvent(
-        new PointerEvent(type, { pointerId: 61, pointerType: 'touch', clientX: 100, clientY: y, bubbles: true })
-      );
-    send('pointerdown', 100);
-    for (const y of [130, 190, 260, 340]) {
-      send('pointermove', y);
-      await new Promise((resolve) => window.requestAnimationFrame(resolve));
-    }
-    send('pointerup', 340);
-
-    // Wait for the cycle to come all the way home rather than for a duration:
-    // the assertions below are about the timing, so the wait must not be.
-    const deadline = performance.now() + 8000;
-    while (performance.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      note();
-      if (
-        indicator.dataset.pullPhase === 'idle' &&
-        window.document.documentElement.style.getPropertyValue('--page-pull') === '0px' &&
-        seen.some((entry) => entry.phase === 'complete')
-      ) {
-        break;
-      }
-    }
-    observer.disconnect();
-    return {
-      phases: seen.map((entry) => entry.phase),
-      caption: indicator.querySelector('.pull-caption').textContent.trim(),
-      held: seen,
-      pull: window.document.documentElement.style.getPropertyValue('--page-pull'),
-      pulling: window.document.documentElement.hasAttribute('data-pulling'),
-    };
-  });
-
-  /* THE ORDER, and the acknowledgement that did not exist before: refreshing,
-     then a state that says it finished, then home. */
-  expect(walk.phases, `the pull walked ${walk.phases.join(' -> ')}`).toContain('refreshing');
-  expect(
-    walk.phases,
-    'a completed refresh never told the reader it had finished; the gesture is indistinguishable from one that was ignored'
-  ).toContain('complete');
-  expect(walk.phases.at(-1)).toBe('idle');
-  expect(walk.phases.indexOf('complete')).toBeGreaterThan(walk.phases.indexOf('refreshing'));
-
-  /* Timestamps are read from the walk's own transition log. `idle` is looked
-     up AFTER the acknowledgement rather than by first occurrence, because the
-     control starts idle and the first entry is that resting state — measuring
-     from it would report the acknowledgement as having lasted a negative
-     length of time, which is how this lane first failed. */
-  const at = (phase) => walk.held.find((entry) => entry.phase === phase)?.at;
-  const completedAt = walk.held.findIndex((entry) => entry.phase === 'complete');
-  const heldFor = at('complete') - at('refreshing');
-  /* The floor is 700ms. The bound asserted is 500 rather than 700 because a
-     loaded machine's timer can fire late but never early, and because the
-     regression this is written for — no floor at all — lands two orders of
-     magnitude below it at the tens of milliseconds the work itself takes. */
-  expect(
-    heldFor,
-    `the refreshing state was held for ${heldFor.toFixed(0)}ms; the reader cannot see a state that brief`
-  ).toBeGreaterThan(500);
-  const returnedHome = walk.held.slice(completedAt + 1).find((entry) => entry.phase === 'idle');
-  expect(returnedHome, 'the cycle never returned to rest after acknowledging').toBeDefined();
-  const acknowledged = returnedHome.at - at('complete');
-  expect(
-    acknowledged,
-    `the completed state was held for ${acknowledged.toFixed(0)}ms`
-  ).toBeGreaterThan(200);
-
-  // And every settle guarantee the gesture already owed is untouched.
-  expect(walk.pull, 'the page was left displaced after the cycle').toBe('0px');
-  expect(walk.pulling, 'the pulling attribute outlived the cycle').toBe(false);
-  expect(walk.caption).toBe('Pull to refresh');
-});
-
-test('an upward drag from the top is the page’s scroll, never a pull (issue 219)', async ({
-  page,
-}) => {
-  await visit(page);
-  await page.evaluate(() => window.scrollTo(0, 0));
-  const moved = await page.evaluate(() => {
-    const target = window.document.body;
-    const send = (type, y) =>
-      target.dispatchEvent(
-        new PointerEvent(type, {
-          pointerId: 7,
-          pointerType: 'touch',
-          clientX: 100,
-          clientY: y,
-          bubbles: true,
-        }),
-      );
-    send('pointerdown', 300);
-    for (const y of [280, 240, 180]) send('pointermove', y);
-    const pull = window.document.documentElement.style.getPropertyValue('--page-pull');
-    send('pointerup', 180);
-    return pull;
-  });
-  // Either untouched or explicitly zero — never a positive travel.
-  expect(['', '0px']).toContain(moved);
-});
-
-/* Findings 7 and 8, and they belong together because both are about what a
- * pull CLAIMS.
- *
- * 7. The pull asked only for downward travel, so a mostly-HORIZONTAL drag
- *    with any downward drift claimed it: measured at the top of the document,
- *    a drag of dx 160 / dy 20 set `data-pulling="true"` and moved the page
- *    18.8px, while lib/gesture.ts's own swipe stands down explicitly in the
- *    mirror-image case. It now stands down on the SAME predicate.
- * 8. While a pull is live the transform on <main> is genuinely applied, and
- *    <main> then IS the containing block for every `position: fixed`
- *    descendant inside it — 101 of them here, every one a detail card — so
- *    lib/tooltip.ts's stated guarantee ("a fixed box is outside the scrollable
- *    overflow region by construction") is suspended for the gesture. What
- *    saves it is geometry, and geometry is what this pins: a pull engages only
- *    at the top of the document, and NOTHING fixed inside <main> is visible
- *    there. The day that stops being true — a fixed element added inside
- *    <main> near the top, or the header moved into it — is the day the
- *    gesture needs to close what it re-parents, and this lane is what says
- *    so. */
-test('a pull claims only a downward drag, and takes no open readout with it (issue 219)', async ({
-  page,
-}) => {
-  await visit(page);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await settled(page);
-
-  /* The census that makes finding 8 a measurement rather than a worry, taken
-     at the ONLY scroll position a pull can begin from. `visible` is the whole
-     question: a hidden box being re-parented costs nothing, because its
-     position is written when it opens. */
-  const census = await page.evaluate(() => {
-    window.scrollTo(0, 0);
-    const main = window.document.querySelector('main');
-    const fixed = [...main.querySelectorAll('*')].filter(
-      (node) => window.getComputedStyle(node).position === 'fixed',
-    );
-    const onScreen = (node) => {
-      const style = window.getComputedStyle(node);
-      const box = node.getBoundingClientRect();
-      return (
-        style.visibility !== 'hidden' &&
-        style.display !== 'none' &&
-        box.width > 0 &&
-        box.height > 0 &&
-        box.bottom > 0 &&
-        box.top < window.innerHeight
-      );
-    };
-    const hostTops = [...window.document.querySelectorAll('.cell-tip')].map((tip) =>
-      Math.round(tip.parentElement.getBoundingClientRect().top + window.scrollY),
-    );
-    return {
-      fixedInsideMain: fixed.length,
-      visibleInsideMain: fixed.filter(onScreen).map((node) => node.className),
-      nearestDetailHost: hostTops.length === 0 ? null : Math.min(...hostTops),
-      viewportHeight: window.innerHeight,
-      headerInsideMain: main.querySelector('.page-header') !== null,
-    };
-  });
-  expect(census.fixedInsideMain, 'nothing fixed lives inside main; this lane proves nothing').toBeGreaterThan(0);
-  /* NOTHING FIXED INSIDE MAIN IS ON SCREEN AT THE TOP. This is what makes the
-     re-parenting harmless, and it is the assertion that fails the day it stops
-     being true. */
-  expect(
-    census.visibleInsideMain,
-    'a fixed element inside main is visible where a pull begins; the gesture now re-parents something a reader can see',
-  ).toEqual([]);
-  // With margin, rather than by a pixel: the nearest detail host is far below
-  // any viewport a touch device brings here.
-  expect(
-    census.nearestDetailHost,
-    `the nearest detail host is ${census.nearestDetailHost}px down a ${census.viewportHeight}px viewport`,
-  ).toBeGreaterThan(census.viewportHeight);
-  // The pinned header is outside main and therefore never re-parented — the
-  // half of this that is already safe, stated so a later move would be loud.
-  expect(census.headerInsideMain, 'the fixed header moved inside main, where a pull re-parents it').toBe(false);
-
-  const drag = (path) =>
-    page.evaluate(async (points) => {
-      const send = (type, x, y) =>
-        window.document.body.dispatchEvent(
-          new PointerEvent(type, {
-            pointerId: 88,
-            pointerType: 'touch',
-            clientX: x,
-            clientY: y,
-            bubbles: true,
-          }),
-        );
-      send('pointerdown', points[0][0], points[0][1]);
-      for (const [x, y] of points.slice(1)) {
-        send('pointermove', x, y);
-        /* The travel is written from a reactive effect, which lands on a
-           microtask rather than inside the dispatch, so a synchronous read
-           would measure the frame BEFORE the pull. */
-        await new Promise((resolve) => window.requestAnimationFrame(resolve));
-      }
-      const root = window.document.documentElement;
-      const state = {
-        pulling: root.hasAttribute('data-pulling'),
-        pull: root.style.getPropertyValue('--page-pull'),
-        main: window.getComputedStyle(window.document.querySelector('main')).transform,
-        tipOpen: window.document.querySelector('.cell-tip[data-tip-open="true"]') !== null,
-      };
-      send('pointerup', points.at(-1)[0], points.at(-1)[1]);
-      return state;
-    }, path);
-
-  const acrossThenDown = [
-    [40, 100],
-    [60, 102],
-    [90, 105],
-    [120, 108],
-    [150, 112],
-    [180, 116],
-    [200, 120],
-  ];
-  const straightDown = [
-    [100, 100],
-    [100, 120],
-    [100, 150],
-    [100, 200],
-    [100, 260],
-  ];
-
-  await page.evaluate(() => window.scrollTo(0, 0));
-  const sideways = await drag(acrossThenDown);
-  expect(sideways.pulling, 'a mostly-horizontal drag claimed the page pull').toBe(false);
-  expect(['', '0px'], 'a mostly-horizontal drag moved the page').toContain(sideways.pull);
-  expect(sideways.main, 'a mostly-horizontal drag made main a containing block').toBe('none');
-
-  // ...and the gesture it stands down for still works, or the assertion above
-  // is satisfied by a pull that never claims anything at all.
-  await page.waitForTimeout(400);
-  await page.evaluate(() => window.scrollTo(0, 0));
-  const downward = await drag(straightDown);
-  expect(downward.pulling, 'a straight downward drag no longer pulls at all').toBe(true);
-  expect(Number.parseFloat(downward.pull), 'a straight downward drag moved nothing').toBeGreaterThan(0);
-
-  /* And no detail is open while the transform is on — which follows from the
-     census above rather than from a guard, and is measured here as the
-     behaviour rather than assumed from the geometry. */
-  expect(downward.tipOpen, 'a detail card was open while main became its containing block').toBe(false);
-  await expect
-    .poll(async () => page.evaluate(() => window.document.documentElement.hasAttribute('data-pulling')), {
-      message: 'the pull never settled',
-      timeout: 10_000,
-    })
-    .toBe(false);
-});
-
-/* THE STRAND (issue 265, defect 1), in a real engine. The state machine is
- * exercised exhaustively in tests/gesture.test.mjs; what only an engine can
- * say is whether the page itself came back — the custom property, the
- * attribute that makes <main> a containing block, and the transform a reader
- * is left looking at. MEASURED on the live 0.1.65 origin, all five engines:
- * `--page-pull` frozen at 39.98px, `data-pulling="true"` for the rest of the
- * session, and the indicator pinned at the top of the viewport 1500px down
- * the page. */
-test('a second touch during the snap-back leaves the page nowhere but home (issue 265)', async ({
-  page,
-}) => {
-  await visit(page);
-  const walk = await page.evaluate(async () => {
-    const root = window.document.documentElement;
-    const body = window.document.body;
-    const send = (id, type, y) =>
-      body.dispatchEvent(
-        new PointerEvent(type, {
-          pointerId: id,
-          pointerType: 'touch',
-          clientX: 100,
-          clientY: y,
-          bubbles: true,
-        }),
-      );
-    const frame = () => new Promise((resolve) => window.requestAnimationFrame(resolve));
-    const pull = () => Number.parseFloat(root.style.getPropertyValue('--page-pull')) || 0;
-
-    window.scrollTo(0, 0);
-    /* A pull SHORT of the arming threshold, so releasing it starts the 260ms
-       snap-back rather than a refresh — the window the strand lives in. */
-    send(51, 'pointerdown', 100);
-    for (const y of [120, 135, 145]) {
-      send(51, 'pointermove', y);
-      await frame();
-    }
-    const dragged = pull();
-    send(51, 'pointerup', 145);
-    await frame();
-    /* The second touch, which cancels that settle simply by arriving — and
-       then turns out to be an upward flick, which is the page's gesture and
-       not this one's. Before the repair, the pull stopped tracking here and
-       nothing ever restarted the settle it had just cancelled. */
-    send(52, 'pointerdown', 300);
-    const interrupted = pull();
-    send(52, 'pointermove', 262);
-    send(52, 'pointerup', 262);
-    return { dragged, interrupted };
-  });
-
-  // Non-vacuity, both halves: a pull that never moved the page, or a settle
-  // that had already finished, would make the walk above prove nothing.
-  expect(walk.dragged, 'the setup pull never moved the page').toBeGreaterThan(0);
-  expect(
-    walk.interrupted,
-    'the snap-back had already finished when the second touch arrived; there was nothing to interrupt',
-  ).toBeGreaterThan(0);
-
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(() => ({
-          pull: window.document.documentElement.style.getPropertyValue('--page-pull'),
-          pulling: window.document.documentElement.hasAttribute('data-pulling'),
-          main: window.getComputedStyle(window.document.querySelector('main')).transform,
-        })),
-      {
-        message: `the page was stranded at ${walk.interrupted}px by a gesture that stood down mid-settle`,
-        timeout: 10_000,
-      },
-    )
-    .toEqual({ pull: '0px', pulling: false, main: 'none' });
-});
-
-/* THE WIDE PULL (issue 277). The owner's ruling, from a real iPhone: at the
- * top, a deliberate downward drag started ANYWHERE on the screen arms — the
- * start target must not matter, because a reader dragging the page down at
- * the top has no other plausible intent. Off the top, no start target arms.
- *
- * The lanes below dispatch every event at the element actually under the
- * finger's position — the target a real touch's events bubble from — rather
- * than at document.body directly, because "the start target must not matter"
- * is exactly the dimension a body-targeted dispatch cannot measure: it was
- * these drives that reproduced the defect at HEAD (a first sample 1px up, or
- * a thumb-arc's 10px-across/4px-down, killed a 240px straight-down pull in
- * all five engines) while every body-targeted lane stayed green. */
-const pullFrom = (page, points, exit = 'pointercancel') =>
-  page.evaluate(
-    async ({ points, exit }) => {
-      const root = window.document.documentElement;
-      const send = (type, x, y) => {
-        const target = window.document.elementFromPoint(x, y) ?? window.document.body;
-        target.dispatchEvent(
-          new PointerEvent(type, {
-            pointerId: 277,
-            pointerType: 'touch',
-            clientX: x,
-            clientY: y,
-            bubbles: true,
-          }),
-        );
-        return target;
-      };
-      const frame = () => new Promise((resolve) => window.requestAnimationFrame(resolve));
-      const [x0, y0] = points[0];
-      const started = send('pointerdown', x0, y0);
-      const startTarget = `${started.tagName}.${
-        (typeof started.className === 'string' ? started.className : '').split(' ')[0]
-      }`;
-      for (const [x, y] of points.slice(1)) {
-        send('pointermove', x, y);
-        await frame();
-      }
-      const state = {
-        startTarget,
-        phase: window.document.querySelector('.pull-indicator').dataset.pullPhase,
-        pull: root.style.getPropertyValue('--page-pull'),
-        pulling: root.hasAttribute('data-pulling'),
-      };
-      /* A cancel, not a release: the arming is the assertion, and a cancel
-         stands the gesture down through the same settle every exit uses
-         without spending a full refresh cycle per matrix row. */
-      send(exit, ...points.at(-1));
-      const deadline = performance.now() + 8000;
-      while (performance.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 40));
-        if (
-          window.document.querySelector('.pull-indicator').dataset.pullPhase === 'idle' &&
-          ['', '0px'].includes(root.style.getPropertyValue('--page-pull'))
-        ) {
-          break;
-        }
-      }
-      return state;
-    },
-    { points, exit },
-  );
-
 /* A deliberate wide pull: 240px of downward travel, sampled the way a finger
  * reports it. The two wobble variants are the exact first samples measured
  * killing the gesture at HEAD — a 1px upward tremor, and a thumb arc's
@@ -10264,83 +9853,6 @@ const widePull = (x, y0, wobble = []) => [
   [x, y0 + 150],
   [x, y0 + 240],
 ];
-
-test('at the top, a wide pull arms from every start target on the screen (issue 277)', async ({
-  page,
-}) => {
-  await visit(page);
-  const size = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
-  const bands = [];
-  for (let y0 = 30; y0 <= size.h - 260; y0 += 120) {
-    bands.push(y0);
-  }
-
-  const rows = [];
-  for (const y0 of bands) {
-    await page.evaluate(() => window.scrollTo(0, 0));
-    const row = await pullFrom(page, widePull(Math.round(size.w / 2), y0));
-    rows.push({ y0, ...row });
-    expect(
-      row.phase,
-      `a straight 240px pull from y=${y0} (${row.startTarget}) never armed`,
-    ).toBe('armed');
-  }
-  /* Non-vacuity for "every start target": the bands really did begin on
-     different element classes, or this matrix measured one surface many
-     times. Three is the floor a phone viewport always clears here — a gap,
-     a link, a list entry — and more is fine. */
-  const targets = new Set(rows.map((row) => row.startTarget));
-  expect(
-    targets.size,
-    `the matrix only ever started on ${[...targets].join(', ')}`,
-  ).toBeGreaterThanOrEqual(3);
-
-  // The measured killers: a first-sample wobble decides nothing.
-  for (const [name, wobble] of [
-    ['a 1px upward tremor', [[0, -1]]],
-    ['a thumb arc, 10 across and 4 down', [[10, 4]]],
-  ]) {
-    await page.evaluate(() => window.scrollTo(0, 0));
-    const row = await pullFrom(page, widePull(Math.round(size.w / 2), 200, wobble));
-    expect(row.phase, `${name} as a first sample killed a deliberate wide pull`).toBe('armed');
-  }
-});
-
-test('off the top, no start target arms a pull — the gesture surfaces included (issue 277)', async ({
-  page,
-}) => {
-  await visit(page);
-  /* The gallery's row, the heatmap strip with its own touch handling, and the
-     plain column: the ruling's "off the top, none does" must hold exactly
-     where a competing gesture makes claiming most tempting.
-     The row replaces the strip's stage here (owner directive, 2026-09-03,
-     issue 287). It carries no gesture of its own any more — the swipe went to
-     the stage inside the dialog, which cannot be open while the page is being
-     dragged — but it is still a surface a reader's thumb lands on, and a pull
-     that claimed a drag over it would be exactly as wrong as one that claimed
-     a drag over the column. */
-  for (const selector of ['.gallery-grid', '.grid-strip', 'main']) {
-    const box = await page.evaluate((sel) => {
-      const el = window.document.querySelector(sel);
-      if (el === null) {
-        return null;
-      }
-      const top = el.getBoundingClientRect().top + window.scrollY;
-      window.scrollTo(0, Math.max(120, top - 160));
-      const rect = el.getBoundingClientRect();
-      return {
-        x: Math.round(rect.left + rect.width / 2),
-        y: Math.round(Math.max(rect.top + 40, 40)),
-        scrolled: window.scrollY,
-      };
-    }, selector);
-    expect(box, `${selector} is not on this page; the lane measures nothing`).not.toBeNull();
-    expect(box.scrolled, `${selector} could not be scrolled away from the top`).toBeGreaterThan(1);
-    const row = await pullFrom(page, widePull(box.x, box.y), 'pointerup');
-    expect(row.pulling, `a pull claimed a drag over ${selector} with the page scrolled`).toBe(false);
-    expect(['', '0px'], `a drag over ${selector} moved the page off the top`).toContain(row.pull);
-  }
-});
 
 test('a horizontal swipe over the enlarged photograph still swipes, downward drift and all (issue 277; owner 2026-09-03, issue 287)', async ({
   page,
@@ -10396,74 +9908,6 @@ test('a horizontal swipe over the enlarged photograph still swipes, downward dri
   await expect(counter, 'a drifting horizontal swipe no longer turns the stage').not.toHaveText(
     before,
   );
-  const claimed = await page.evaluate(() => ({
-    pulling: window.document.documentElement.hasAttribute('data-pulling'),
-    pull: window.document.documentElement.style.getPropertyValue('--page-pull'),
-  }));
-  expect(claimed.pulling, 'the pull claimed a horizontal swipe over the enlarged photograph').toBe(false);
-  expect(['', '0px']).toContain(claimed.pull);
-});
-
-test('the refresh gesture has a control a keyboard can reach (issue 219)', async ({ page }) => {
-  await visit(page);
-  const control = page.locator('.pull-control');
-  await expect(control, 'the pull gesture has no non-gesture equivalent').toHaveCount(1);
-
-  // Hidden by CLIPPING, not by shrinking: the box stays at the touch floor, so
-  // the control is a real target the instant it is revealed.
-  const box = await control.boundingBox();
-  expect(box.width + subPixel, 'the refresh control is under the touch floor').toBeGreaterThanOrEqual(
-    touchFloorPx,
-  );
-  expect(box.height + subPixel, 'the refresh control is under the touch floor').toBeGreaterThanOrEqual(
-    touchFloorPx,
-  );
-
-  /* It is the FIRST thing a keyboard reaches — where the engine tabs to
-     buttons at all. WebKit does not by default (its "press Tab to highlight
-     each item" setting is off, and Playwright inherits that), which is a
-     browser preference rather than anything this page controls, so the
-     Tab-order half is asserted only on the engines that HAVE a Tab order over
-     buttons. The reachability half below is asserted everywhere, because
-     focus() is what assistive technology uses regardless. */
-  await page.keyboard.press('Tab');
-  const focused = await page.evaluate(() => ({
-    tag: window.document.activeElement?.tagName ?? '',
-    className: window.document.activeElement?.className ?? '',
-  }));
-  /* The engine test is the ENGINE'S OWN ANSWER, not a list of classes that
-     happen to come first. This used to skip WebKit by naming the element it
-     landed on — a gallery dot — which made the lane depend on which element
-     carrying an explicit tabindex sat earliest in the document, and issue 268
-     moved that: the repo cards' counters are focus stops now (they carry the
-     stat tiles' detail affordance) and they precede the gallery. Asking
-     whether the first stop is a BUTTON states the same skip in terms of the
-     claim itself, and it is strictly tighter — a button that is not the
-     refresh control now fails on every engine instead of only on some. */
-  if (focused.tag === 'BUTTON') {
-    expect(
-      focused.className,
-      'the refresh control is not the first button a keyboard reaches'
-    ).toContain('pull-control');
-  }
-  await control.evaluate((node) => node.focus());
-  expect(
-    await page.evaluate(() => window.document.activeElement?.className ?? ''),
-    'the refresh control cannot be focused at all',
-  ).toContain('pull-control');
-
-  // Focusing it reveals it rather than leaving an invisible focused control.
-  expect(await control.evaluate((node) => window.getComputedStyle(node).clipPath)).toBe('none');
-
-  // And pressing it does the work, then returns to idle.
-  await page.keyboard.press('Enter');
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(() => window.document.querySelector('.pull-indicator').dataset.pullPhase),
-      { message: 'the refresh control never returned to idle', timeout: 10_000 },
-    )
-    .toBe('idle');
 });
 
 /* DEFECT 4. At iPhone width the fixed reading-mode control overlapped the
@@ -10689,68 +10133,6 @@ function straightLine(x, y, dx, dy, steps) {
   }));
 }
 
-test('the first cancelable touchmove decides the touch, and a real pull at the top survives it (issue 285)', async ({
-  page,
-  browserName,
-}) => {
-  test.skip(browserName !== 'chromium', 'only Chromium exposes its touch input pipeline to a lane');
-  await visit(page);
-  const client = await page.context().newCDPSession(page);
-  await page.evaluate(() => {
-    window.__touches = [];
-    const record = (type, event) =>
-      window.__touches.push({ type, cancelable: event.cancelable, prevented: event.defaultPrevented });
-    for (const type of ['pointercancel']) window.document.addEventListener(type, (e) => record(type, e), true);
-    // After the body's own handlers, so defaultPrevented is their decision.
-    window.addEventListener('touchmove', (e) => record('touchmove', e), { passive: true });
-    window.__phases = new Set();
-    (function loop() {
-      window.__phases.add(window.document.querySelector('.pull-indicator')?.dataset.pullPhase);
-      window.requestAnimationFrame(loop);
-    })();
-  });
-
-  // A deliberate pull at the top, six pixels a frame.
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await realTouchDrive(client, straightLine(200, 300, 0, 120, 20), 16);
-  await page.waitForTimeout(1500);
-  const pull = await page.evaluate(() => {
-    const touches = window.__touches.splice(0);
-    const phases = [...window.__phases];
-    window.__phases.clear();
-    return { touches, phases, scrollY: window.scrollY };
-  });
-  const pullMoves = pull.touches.filter((t) => t.type === 'touchmove');
-  expect(pullMoves.length, 'the drive produced no touchmove at all').toBeGreaterThan(0);
-  expect(pullMoves[0].cancelable, 'the first touchmove arrived uncancelable').toBe(true);
-  expect(pullMoves[0].prevented, 'the defence conceded the first sample to the scroll claim').toBe(true);
-  expect(pull.touches.some((t) => t.type === 'pointercancel'), 'the browser took a contested pull').toBe(false);
-  expect(pull.phases, 'the pull never armed under real touch').toContain('armed');
-  expect(pull.phases, 'the pull never ran its refresh').toContain('refreshing');
-  expect(pull.scrollY, 'a pull at the top scrolled the page').toBe(0);
-
-  // The model the defence rests on, measured: off the top the first touchmove
-  // is (correctly) not contested — and that one sample decides the rest.
-  await page.evaluate(() => window.scrollTo(0, 600));
-  await page.waitForTimeout(200);
-  await realTouchDrive(client, straightLine(200, 300, 0, 120, 20), 16);
-  await page.waitForTimeout(400);
-  const scroll = await page.evaluate(() => ({
-    touches: window.__touches.splice(0),
-    phases: [...window.__phases],
-    scrollY: window.scrollY,
-  }));
-  const scrollMoves = scroll.touches.filter((t) => t.type === 'touchmove');
-  expect(scrollMoves[0].prevented, 'a drag off the top was contested').toBe(false);
-  expect(scroll.touches.some((t) => t.type === 'pointercancel'), 'an un-prevented first touchmove left the pointer alive').toBe(true);
-  expect(
-    scrollMoves.slice(1).every((t) => t.cancelable === false),
-    'a later touchmove was still cancelable after the browser claimed the scroll — the first-sample model this defence rests on does not hold here'
-  ).toBe(true);
-  expect(scroll.phases.filter((phase) => phase !== 'idle'), 'the pull engaged off the top').toEqual([]);
-  expect(scroll.scrollY, 'the browser did not scroll a drag it claimed').toBeLessThan(600);
-});
-
 /* THE NEIGHBOUR-WARMING LANE IS DELETED (owner directive, 2026-09-03, issue
  * 287: the strip is gone). "A real gallery swipe finds its incoming picture
  * already decoded, even on a slow network" (issue 285) drove a real Chromium
@@ -10796,24 +10178,33 @@ test('the contribution calendar carries a data-through line and trails today pas
   const stale = panel.locator('[data-panel-note]');
   await expect(stale, 'the stale calendar carries no data-through line').toHaveCount(1);
   await expect(stale).toHaveText(/^data through [A-Z][a-z]{2} \d{1,2}, \d{4} · last capture .+ ago$/);
-  /* In the head's reserved row, at the title's own height, and never past
-     the card's edge: the note is the one thing allowed to appear on arrival
-     precisely because it costs the card no height and no width. */
+  /* In the head's reserved row, no taller than that row, and never past the
+     card's edge: the note is the one thing allowed to appear on arrival
+     precisely because it costs the card no height and no width. The commits
+     card wears no title any more (issue 294), so the row itself is the
+     measure, and the note keeps to its end column of it. */
   const head = await page.evaluate(() => {
     const card = window.document.querySelector('.grid-block').closest('.panel-shell');
-    const title = card.querySelector('.panel-title').getBoundingClientRect();
+    const row = card.querySelector('.panel-head').getBoundingClientRect();
     const note = card.querySelector('[data-panel-note]').getBoundingClientRect();
     const cardBox = card.getBoundingClientRect();
-    return { titleHeight: title.height, noteHeight: note.height, noteRight: note.right, cardRight: cardBox.right, noteLeft: note.left, titleRight: title.right };
+    return { rowHeight: row.height, rowLeft: row.left, noteHeight: note.height, noteRight: note.right, cardRight: cardBox.right, noteLeft: note.left };
   });
-  expect(head.noteHeight, 'the note is taller than the title row it shares').toBeLessThanOrEqual(head.titleHeight + subPixel);
+  expect(head.noteHeight, 'the note is taller than the head row it sits in').toBeLessThanOrEqual(head.rowHeight + subPixel);
   expect(head.noteRight, 'the note runs past the card').toBeLessThanOrEqual(head.cardRight + subPixel);
-  expect(head.noteLeft, 'the note overlaps the title').toBeGreaterThanOrEqual(head.titleRight - subPixel);
+  expect(head.noteLeft, 'the note left its end column').toBeGreaterThan(head.rowLeft);
 
   /* The window ends on the Saturday of the reader's (UTC) week; the cells
      between the payload's last day and that Saturday are absences, and they
      are the LAST cells in the strip. Counted against the payload rather than
-     the calendar, so the assertion holds on whatever day CI runs. */
+     the calendar, so the assertion holds on whatever day CI runs. The
+     contributions calendar is pressed first: the section opens on the lead
+     token series (issue 294), and this claim is about the activity payload. */
+  await panel.locator('.commit-segment').filter({ hasText: 'Contributions' }).click();
+  await expect(panel.locator('.commit-segment').filter({ hasText: 'Contributions' })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
   const observed = await page.evaluate(() => {
     const cells = [...window.document.querySelectorAll('.grid-cell[data-grid-cell]')];
     let trailing = 0;

@@ -453,7 +453,7 @@ export interface PanelWatcher {
  * delivered on subscription, and the loop stops when its last reader does.
  * The share is keyed on the host object as well as the id, so a caller that
  * brings its own host — every test does — never hears another host's
- * fetcher, and refreshPanels still refreshes each real loop exactly once. */
+ * fetcher, and each real loop's refresh() reaches that loop exactly once. */
 type SharedLoop = {
   readonly subscribers: Set<(envelope: PanelEnvelope) => void>;
   last: PanelEnvelope | null;
@@ -583,38 +583,21 @@ function startWatch<Data = unknown>(
     () => {
       stopped = true;
       settle();
-      live.delete(watcher);
       host.cancel(handle);
       unsubscribe();
     },
     { refresh: () => read(true) }
   );
-  live.add(watcher);
   return watcher;
 }
 
-/* THE LIVE REGISTRY. Its one caller is the pull-to-refresh gesture (issue
- * 219), which asks for the panels the reader is looking at to be re-read NOW.
- * That does not make the site depend on a control — the minute loop still
- * runs and a reader who never pulls sees what they saw before (the owner's
- * issue-179 ruling); it is a reader declining to wait out the remaining
- * interval, the same intent the visibility catch-up honours.
- *
- * Every live watcher registers here and deregisters on stop, so a panel that
- * has unmounted can never be refreshed into a dead component and the set
- * cannot grow across a long session. */
-const live = new Set<PanelWatcher>();
-
-/* refreshPanels forces one immediate read of every mounted panel and resolves
- * when they have all settled — which is what lets a caller stay busy for
- * exactly as long as the work is, rather than for a guessed animation. Each
- * watcher's own single-flight rule still holds, so a reader pulling twice
- * costs the origin no more requests than pulling once. It never rejects: a
- * panel that fails degrades to its honest unavailable envelope inside
- * loadPanel, and a gesture is not the place to surface a transport fault. */
-export async function refreshPanels(): Promise<void> {
-  await Promise.all([...live].map((watcher) => watcher.refresh()));
-}
+/* No page-wide fan-out any more. refreshPanels() and the live registry that
+ * backed it existed for one caller, the pull-to-refresh gesture (issue 219);
+ * with that gesture gone (owner ruling, 2026-09-04, issue 294) a fan-out
+ * nothing fans out to is the dead code issue 179 removed once already, so it
+ * is removed again rather than kept warm. Each watcher's own refresh() —
+ * the thirty-second poll and the visibility catch-up — is what refreshes a
+ * panel, exactly as before. */
 
 /* panelStaleAfterMs is how far behind the wall clock an ok envelope's own
  * generatedAt may fall before a panel must SAY its data has stopped advancing

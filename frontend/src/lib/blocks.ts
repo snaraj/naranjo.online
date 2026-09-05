@@ -338,8 +338,11 @@ export type CommitLogRow = {
   readonly mark: string;
 };
 
+/* No `title`: the block renders no panel label (owner directive, 2026-09-04,
+ * issue 294). The envelope's title names one source — the version-control
+ * host — and the calendar now opens on a token series, so a label over it
+ * would be false; the segments underneath name every source themselves. */
 export type CommitLogProps = {
-  readonly title: string;
   readonly status: PanelStatus;
   readonly generatedAt?: string;
   readonly sets: readonly CommitLogSet[];
