@@ -40,14 +40,23 @@ const stripComments = (text) => {
 };
 
 // The container image builds the frontend from a stage that holds ONLY the
-// frontend tree (Dockerfile: COPY frontend/ ./), so repo-level files do not
-// exist there. The two cross-tree pins below are therefore capability-gated
-// exactly like the provider-neutrality pin: in a full checkout — the PR
-// gate's application job, every local run — they are mandatory and a missing
-// file fails loudly; in the reduced build context they skip by name. The
-// gate condition probes the tree, never the files under pin, so deleting a
-// pinned file can never turn into a silent skip.
-const fullCheckout = existsSync(new URL('../../internal/panels', import.meta.url));
+// frontend tree plus the few repo files the build DECLARES as inputs
+// (Dockerfile: COPY frontend/ ./, plus VERSION and the model vocabulary), so
+// the rest of the repository does not exist there. The cross-tree pins below
+// are therefore capability-gated exactly like the provider-neutrality pin: in
+// a full checkout — the PR gate's application job, every local run — they are
+// mandatory and a missing file fails loudly; in the reduced build context
+// they skip by name. The gate condition probes a TREE, never a file under
+// pin, so deleting a pinned file can never turn into a silent skip.
+//
+// It probes the snapshots tree rather than the package directory, and issue
+// #302 is why: the frontend stage now carries one data file under
+// internal/panels/config/, so the package directory exists in BOTH contexts
+// and stopped telling them apart — the pins then ran in the image and failed
+// on the Go sources that are genuinely not there. A probe that cannot
+// distinguish the two contexts is worse than no probe, because it turns a
+// capability boundary into a red build nobody can act on.
+const fullCheckout = existsSync(new URL('../../internal/panels/snapshots', import.meta.url));
 const reducedContextNote = fullCheckout
   ? false
   : 'reduced build context ships only frontend/; the full-checkout gate enforces this pin';
