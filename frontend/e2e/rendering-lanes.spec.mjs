@@ -7370,7 +7370,13 @@ test('the calendar detail and the table detail are the same object, measured', a
     };
   };
   const boss = await page.evaluate(measure, '.grid-block .cell-tip');
-  const skill = await page.evaluate(measure, '.table-count .cell-tip');
+  /* The table's terse counters no longer carry a row: the provenance
+     sentence every counter used to state is gone (owner directive,
+     2026-09-06, issue 299), so a bare figure's detail is its heading alone.
+     The row's age cell still states the absolute instant as a row, through
+     the same primitive in the same parent form, so it is the table detail
+     this comparison measures. */
+  const skill = await page.evaluate(measure, '.table-age .cell-tip');
 
   for (const property of [
     'padding',
@@ -7394,10 +7400,11 @@ test('the calendar detail and the table detail are the same object, measured', a
   }
   /* Non-vacuity: a parity check between two empty boxes proves nothing, so
      both must actually carry a heading and at least one labelled row. Two
-     spans rather than the three the retired stat tiles carried, because a
-     repository counter states one fact and its provenance while a stat tile
-     stated two — the floor is "a heading and a row", which is what makes the
-     comparison above about real content. */
+     spans rather than the three the retired stat tiles carried: the age
+     cell states its phrase and the instant behind it, where a stat tile
+     stated two figures — the floor is "a heading and a row", which is what
+     makes the comparison above about real content, and which is why the
+     age cell rather than a terse counter is the table side of it. */
   expect(boss.rows, 'the calendar detail rendered no rows').toBeGreaterThanOrEqual(2);
   expect(skill.rows, 'the table detail rendered no rows').toBeGreaterThanOrEqual(2);
   /* The heading is the panel layer's one chromatic token and the rows are
