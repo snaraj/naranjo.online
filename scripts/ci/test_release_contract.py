@@ -689,6 +689,10 @@ REQUIRED_CHECKS = (
 
 def settings_receipt() -> dict[str, object]:
     return {
+        "active_main_branch_ruleset_count": 2,
+        "owner_update_ruleset": "Owner-PR-Updates",
+        "owner_update_ref": "~DEFAULT_BRANCH",
+        "owner_update_fetch_and_merge": False,
         "repository": "owner/site",
         "branch": "main",
         "actions_enabled": True,
@@ -739,7 +743,7 @@ def settings_api() -> dict[str, object]:
     checks = [
         {"context": context, "integration_id": 15368} for context in REQUIRED_CHECKS
     ]
-    return {
+    records = {
         # The exact shape GitHub returns to the publisher's least-privilege App
         # token: no allow_*_merge booleans, because those are only returned to
         # credentials carrying Contents write.  The merge-method proof therefore
@@ -840,6 +844,18 @@ def settings_api() -> dict[str, object]:
             ],
         },
     }
+
+    owner = {
+        "id": 44, "name": "Owner-PR-Updates", "target": "branch",
+        "source_type": "Repository", "source": "owner/site", "enforcement": "active",
+    }
+    records["repos/owner/site/rulesets"].append(owner)
+    records["repos/owner/site/rulesets/44"] = {
+        **owner,
+        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+        "rules": [{"type": "update", "parameters": {"update_allows_fetch_and_merge": False}}],
+    }
+    return records
 
 
 class VersionTests(unittest.TestCase):
@@ -1286,6 +1302,86 @@ class RawSBOMBindingTests(unittest.TestCase):
                 )
 
 
+
+class OwnerMergeRestrictionTests(unittest.TestCase):
+    def test_github_readback_omits_only_the_false_update_parameters(self):
+        exact = settings_api()
+        rule = exact["repos/owner/site/rulesets/44"]["rules"][0]
+        del rule["parameters"]
+        self.assertEqual(SettingsReceiptTests.observe(exact), settings_receipt())
+        for invalid in (None, {}, {"unknown": False},
+                        {"update_allows_fetch_and_merge": True},
+                        {"update_allows_fetch_and_merge": 0}):
+            changed = copy.deepcopy(exact)
+            changed["repos/owner/site/rulesets/44"]["rules"][0]["parameters"] = invalid
+            with self.subTest(parameters=invalid), self.assertRaises(RC.ContractError):
+                SettingsReceiptTests.observe(changed)
+
+    def test_owner_restriction_requires_exact_structure_and_scalar_types(self):
+        exact = settings_api()
+        self.assertEqual(SettingsReceiptTests.observe(exact), settings_receipt())
+        for path, value in (
+            (("id",), True), (("id",), 45), (("name",), "foreign"),
+            (("target",), "tag"), (("source_type",), "Organization"),
+            (("source",), "foreign/repository"), (("enforcement",), "disabled"),
+            (("conditions", "ref_name", "include"), ["~ALL"]),
+            (("conditions", "ref_name", "exclude"), ["refs/heads/main"]),
+            (("rules",), []),
+            (("rules", 0, "type"), "deletion"),
+            (("rules", 0, "parameters", "update_allows_fetch_and_merge"), True),
+            (("rules", 0, "parameters", "update_allows_fetch_and_merge"), 0),
+        ):
+            with self.subTest(path=path, value=value):
+                changed = copy.deepcopy(exact)
+                target = changed["repos/owner/site/rulesets/44"]
+                for key in path[:-1]: target = target[key]
+                target[path[-1]] = value
+                with self.assertRaises(RC.ContractError):
+                    SettingsReceiptTests.observe(changed)
+        for field in ("id", "conditions", "rules"):
+            changed = copy.deepcopy(exact)
+            del changed["repos/owner/site/rulesets/44"][field]
+            with self.subTest(missing=field), self.assertRaises(RC.ContractError):
+                SettingsReceiptTests.observe(changed)
+
+    def test_both_rulesets_are_required_without_ambiguous_or_foreign_inventory(self):
+        exact = settings_api()
+        summaries = exact["repos/owner/site/rulesets"]
+        for changed_summaries in (
+            [r for r in summaries if r["name"] != "Owner-PR-Updates"],
+            [r for r in summaries if r["name"] == "Owner-PR-Updates"],
+            [*summaries, summaries[-1]],
+            [*summaries, {**summaries[-1], "id": 45, "name": "foreign"}],
+            [*summaries[:-1], {**summaries[-1], "id": 42}],
+        ):
+            changed = copy.deepcopy(exact)
+            changed["repos/owner/site/rulesets"] = changed_summaries
+            with self.subTest(inventory=changed_summaries), self.assertRaises(RC.ContractError):
+                SettingsReceiptTests.observe(changed)
+
+    def test_receipt_cannot_drop_or_weaken_the_owner_restriction(self):
+        for field in ("active_main_branch_ruleset_count", "owner_update_ruleset",
+                      "owner_update_ref", "owner_update_fetch_and_merge"):
+            for invalid in (None, "foreign", True, 0):
+                changed = settings_receipt()
+                changed[field] = invalid
+                with self.subTest(field=field, value=invalid), self.assertRaises(RC.ContractError):
+                    RC.validate_settings_receipt(changed, "owner/site")
+
+    def test_ci_never_claims_to_observe_hidden_owner_bypass_actors(self):
+        exact = settings_api()
+        self.assertNotIn("bypass_actors", exact["repos/owner/site/rulesets/44"])
+        self.assertNotIn("owner_update_bypass", settings_receipt())
+        for value in (None, [], [{"actor_id": 1, "bypass_mode": "always"}], "unobservable"):
+            changed = copy.deepcopy(exact)
+            changed["repos/owner/site/rulesets/44"]["bypass_actors"] = value
+            self.assertEqual(SettingsReceiptTests.observe(changed), settings_receipt())
+        changed = settings_receipt()
+        changed["owner_update_bypass"] = "owner-user-pull-request"
+        with self.assertRaises(RC.ContractError):
+            RC.validate_settings_receipt(changed, "owner/site")
+
+
 class SettingsReceiptTests(unittest.TestCase):
     @staticmethod
     def require_documented_contract(text: str) -> None:
@@ -1466,6 +1562,7 @@ class SettingsReceiptTests(unittest.TestCase):
             "repos/owner/site/actions/permissions/workflow",
             "repos/owner/site/rulesets",
             "repos/owner/site/rulesets/42",
+            "repos/owner/site/rulesets/44",
         ]:
             raise AssertionError(f"unexpected settings endpoints: {self_calls}")
         if getter.call_args_list[5].kwargs != {"paginate": True}:
@@ -1751,6 +1848,7 @@ class SettingsReceiptTests(unittest.TestCase):
 
     #: Fields whose pinned value has an equal-valued integer/boolean twin.
     CONFLATABLE_RECEIPT_FIELDS = (
+        "owner_update_fetch_and_merge",
         "actions_can_approve_pull_request_reviews",
         "actions_enabled",
         "actions_sha_pinning_required",
@@ -6732,6 +6830,7 @@ func main() {
 		"repos/owner/site/actions/permissions/workflow": "workflow.json",
 		"repos/owner/site/rulesets": "rulesets.json",
 		"repos/owner/site/rulesets/42": "ruleset.json",
+		"repos/owner/site/rulesets/44": "owner-rule.json",
 	}
 	name, ok := files[endpoint]
 	if !ok {
@@ -6794,6 +6893,7 @@ func main() {
                 "workflow": "repos/owner/site/actions/permissions/workflow",
                 "rulesets": "repos/owner/site/rulesets",
                 "ruleset": "repos/owner/site/rulesets/42",
+                "owner-rule": "repos/owner/site/rulesets/44",
             }
             for name, endpoint in paths.items():
                 (runner / f"{name}.json").write_text(
@@ -6827,6 +6927,7 @@ case "${endpoint}" in
     printf ']'
     ;;
   repos/owner/site/rulesets/42) cat "${SETTINGS_FIXTURES}/ruleset.json" ;;
+  repos/owner/site/rulesets/44) cat "${SETTINGS_FIXTURES}/owner-rule.json" ;;
   *) exit 2 ;;
 esac
 '''
@@ -7349,7 +7450,7 @@ class GovernanceParityTests(unittest.TestCase):
                 ("- **`requires-review` — the review-readiness signal.**",
                  "340084c93dd72dbd2f93440ccc1f68955f3ad911ff08cf2904be70e0ff5d5694"),
                 ("- **Merge readiness.** Draft remains Draft until",
-                 "ae8e12d40d0dc1b2fd8f0b4af635ffe5a7481f9c653f67c5d73808f60bd0b956"),
+                 "7d814cc7bcf3711dd190fef76a1d7616b936b40b09b1d252fd049800f356a574"),
                 # Re-pinned for issue #285: step 2 of the list admits the
                 # `xhigh` effort to the branch grammar (owner ruling,
                 # 2026-09-03). The block's Ready sentences — step 1's "Never
@@ -7363,7 +7464,7 @@ class GovernanceParityTests(unittest.TestCase):
                 # step 1's "Never apply or interpret `requires-review` on
                 # the issue" and the later Ready/merge steps — are unchanged.
                 ("1. **Claim the work.** (the delivery-loop numbered list)",
-                 "58cefe80d5331501af88e4a18db87ec6632c54a67dfd223cc3f56c345a18060e"),
+                 "26d2c80ccac838832cac7c1b914cd585c77bbe3d4844719b6b528f2c8a1ba0ec"),
                 ("Comments the owner leaves on PRs ARE code reviews",
                  "e8e6f2dd0c82a28a8c280cd1705002f4faf8d2e9aa81195df5466d6db83a871c"),
                 ("The full local gate does not substitute for the server boundary",
@@ -8177,6 +8278,7 @@ class CoverageBadgeShellPathTests(unittest.TestCase):
                 {
                     "RUNNER_TEMP": ExistingImageShellPathTests.bash_path(fixture),
                     "GITHUB_OUTPUT": ExistingImageShellPathTests.bash_path(output),
+                    "GITHUB_STEP_SUMMARY": ExistingImageShellPathTests.bash_path(fixture / "summary"),
                 }
             )
             return subprocess.run(
@@ -8192,30 +8294,57 @@ class CoverageBadgeShellPathTests(unittest.TestCase):
                 timeout=30,
             )
 
-    def test_compute_block_exits_on_the_first_failed_tool(self):
-        block = self.run_block("Compute coverage percentages")
-        prelude = r'''
-pushd() { return 0; }
-popd() { return 0; }
-npm() {
-  if [ "${1-}" = ci ]; then
-    return 47
-  fi
-  return 0
-}
-node() { printf 'all files|100|\n'; }
-go() {
-  if [ "${1-}" = tool ]; then
-    printf 'total: (statements) 100.0%%\n'
-  fi
-  return 0
-}
-grep() { printf 'mode: atomic\n'; }
-'''
+    def test_frontend_failure_cannot_publish_a_plausible_total(self):
+        block = self.run_block("Report frontend test coverage")
+        prelude = """trap 'if test -s "$GITHUB_OUTPUT"; then printf OUTPUT_PUBLISHED; fi' EXIT
+node() { printf 'all files|100|\\n'; return 47; }"""
         strict = self.execute(block, prelude, {})
         self.assertEqual(strict.returncode, 47, strict.stdout + strict.stderr)
+        self.assertNotIn("OUTPUT_PUBLISHED", strict.stdout)
         fail_open = self.execute(block.replace("set -euo pipefail\n", "", 1), prelude, {})
         self.assertEqual(fail_open.returncode, 0, fail_open.stdout + fail_open.stderr)
+        self.assertIn("OUTPUT_PUBLISHED", fail_open.stdout)
+
+    def test_go_measurement_emits_only_after_the_tool_and_floor_pass(self):
+        block = self.run_block("Enforce and report Go test coverage")
+        prelude = r'''
+trap 'if test -s "$GITHUB_OUTPUT"; then cat "$GITHUB_OUTPUT"; fi' EXIT
+go() {
+  if [ "${1-}" = test ]; then
+    printf 'mode: atomic\n' > "${RUNNER_TEMP}/site.cover.out"
+  else
+    printf 'total: (statements) %s%%\n' "$REPORTED"
+    return "${TOOL_STATUS:-0}"
+  fi
+}
+'''
+        for total, status, accepted in (("96.3", "0", True), ("92", "0", False),
+                                        ("96.3", "47", False), ("101", "0", False),
+                                        ("NaN", "0", False), ("", "0", False)):
+            with self.subTest(total=total, status=status):
+                result = self.execute(block, prelude, {
+                    "REPORTED": total, "TOOL_STATUS": status, "GO_COVERAGE_FLOOR": "93.2",
+                })
+                self.assertEqual(result.returncode == 0, accepted, result.stdout + result.stderr)
+                self.assertEqual("total=" in result.stdout, accepted, result.stdout + result.stderr)
+
+    def test_frontend_measurement_refuses_ambiguous_or_invalid_totals(self):
+        block = self.run_block("Report frontend test coverage")
+        for report in ("", "all files|NaN|", "all files|101|", "all files|100.1|",
+                       "all files|100|\nall files|98|"):
+            with self.subTest(report=report):
+                result = self.execute(block, 'node() { printf "%s\\n" "$REPORT"; }', {"REPORT": report})
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_publisher_refuses_invalid_metrics_before_any_git_command(self):
+        block = self.run_block("Publish badge JSONs to the badges branch")
+        for name in ("GO_PCT", "FRONT_PCT"):
+            for invalid in ("", "NaN", "101", "100.1", "-1", "100\nextra=1"):
+                with self.subTest(name=name, invalid=invalid):
+                    environment = {"GO_PCT": "96.3", "FRONT_PCT": "100", name: invalid}
+                    result = self.execute(block, 'git() { printf "GIT_REACHED\\n"; return 0; }', environment)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertNotIn("GIT_REACHED", result.stdout)
 
     def test_publish_block_and_guarded_directory_transition_fail_closed(self):
         block = self.run_block("Publish badge JSONs to the badges branch")
@@ -8357,22 +8486,35 @@ class WorkflowStructureTests(unittest.TestCase):
         if gate.count(marker) != 1:
             raise ValueError("coverage-badges job identity is not exact")
         coverage = gate.split(marker, 1)[1]
-        compute_heading = "      - name: Compute coverage percentages\n"
         publish_heading = "      - name: Publish badge JSONs to the badges branch\n"
-        if coverage.count(compute_heading) != 1 or coverage.count(publish_heading) != 1:
+        if len(job_steps(gate, "coverage-badges")) != 1 or coverage.count(publish_heading) != 1:
             raise ValueError("coverage-badges step inventory is not exact")
-        compute = coverage.split(compute_heading, 1)[1].split(publish_heading, 1)[0]
+        for required in (
+            "    needs: application\n",
+            "          GO_PCT: ${{ needs.application.outputs.go }}\n",
+            "          FRONT_PCT: ${{ needs.application.outputs.front }}\n",
+        ):
+            if coverage.count(required) != 1:
+                raise ValueError("badge metrics must come from the successful application job")
+        application = gate.split("\n  application:\n", 1)[1].split("\n  chart:\n", 1)[0]
+        for required in (
+            "      go: ${{ steps.go_coverage.outputs.total }}\n",
+            "      front: ${{ steps.frontend_coverage.outputs.total }}\n",
+            "        id: go_coverage\n",
+            "        id: frontend_coverage\n",
+        ):
+            if application.count(required) != 1:
+                raise ValueError("application measurement output identity changed")
+        measurements = {
+            step["name"]: executable_commands(step["run"])
+            for step in job_steps(gate, "application")
+            if step["name"] in ("Enforce and report Go test coverage", "Report frontend test coverage")
+        }
+        if len(measurements) != 2 or any(commands[0] != "set -euo pipefail" for commands in measurements.values()):
+            raise ValueError("measurement failures must stop the application job")
         publish = coverage.split(publish_heading, 1)[1]
-        if compute.count("          set -euo pipefail\n") != 1:
-            raise ValueError("coverage computation must have one exact fail-fast boundary")
         if publish.count("          set -euo pipefail\n") != 1:
             raise ValueError("badge publication must have one exact fail-fast boundary")
-        for required in (
-            "          pushd frontend >/dev/null\n",
-            "          popd >/dev/null\n",
-        ):
-            if required not in compute:
-                raise ValueError(f"coverage computation directory guard lost: {required.strip()}")
         guarded_cd = '          cd "${work}" || exit 1\n'
         if publish.count(guarded_cd) != 1:
             raise ValueError("badge publication directory transition is not fail closed")
@@ -9156,25 +9298,30 @@ class WorkflowStructureTests(unittest.TestCase):
                 )
         self.require_coverage_badge_fail_fast(gate)
         badge_mutants = (
+            gate.replace("    needs: application\n", "", 1),
+            gate.replace("needs.application.outputs.go", "steps.cov.outputs.go", 1),
+            gate.replace("needs.application.outputs.front", "100", 1),
+            gate.replace("steps.go_coverage.outputs.total", "100", 1),
+            gate.replace("steps.frontend_coverage.outputs.total", "100", 1),
             gate.replace(
-                "        run: |\n          set -euo pipefail\n          pushd frontend",
-                "        run: |\n          pushd frontend",
+                "        run: |\n          set -euo pipefail\n          node --test",
+                "        run: |\n          node --test",
                 1,
             ),
             gate.replace(
-                "        run: |\n          set -euo pipefail\n          color()",
-                "        run: |\n          color()",
+                '        run: |\n          set -euo pipefail\n          [[ "${GO_PCT}"',
+                '        run: |\n          [[ "${GO_PCT}"',
                 1,
             ),
             gate.replace('          cd "${work}" || exit 1', '          cd "${work}"', 1),
         )
         combined_badge_mutant = gate.replace(
-            "        run: |\n          set -euo pipefail\n          pushd frontend",
-            "        run: |\n          pushd frontend",
+            "        run: |\n          set -euo pipefail\n          node --test",
+            "        run: |\n          node --test",
             1,
         ).replace(
-            "        run: |\n          set -euo pipefail\n          color()",
-            "        run: |\n          color()",
+            '        run: |\n          set -euo pipefail\n          [[ "${GO_PCT}"',
+            '        run: |\n          [[ "${GO_PCT}"',
             1,
         ).replace('          cd "${work}" || exit 1', '          cd "${work}"', 1)
         for index, mutant in enumerate((*badge_mutants, combined_badge_mutant)):
