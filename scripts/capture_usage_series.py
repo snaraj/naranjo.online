@@ -226,9 +226,13 @@ CATEGORY_KEYS = ("input", "output", "cache-read", "cache-write", "reasoning")
 # vocabulary member falls into. It is never a named entity's slot, so a
 # reader's colour for a named model never lands on the residual.
 #
-# The list is APPEND-ONLY. An index is a colour, so reusing or reordering one
-# repaints history under a different entity; a retired model keeps its slot
-# as a tombstone rather than freeing it.
+# The list is CLOSED, not append-only: a member joins in its SERVE position
+# (`fable-5-1` beside `fable-5`, issue #299), because this order is what the
+# origin walks to emit rows deterministically. An index here is NOT a colour:
+# the frontend's modelSlots binds a fixed palette slot to each KEY, so a member
+# keeps its swatch wherever it sits in this list, and the residual draws the
+# neutral slot by rule. A retired model keeps its key as a tombstone rather
+# than freeing the name.
 MODEL_KEYS = ("other", "fable-5", "fable-5-1", "opus-5", "sonnet-5", "opus-4-8")
 
 # The reserved residual member, spelled once.

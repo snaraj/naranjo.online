@@ -1154,7 +1154,41 @@ class DatasetTest(unittest.TestCase):
         )
         self.assertEqual(categories["output"]["days"], 2)
         self.assertEqual(categories["input"]["first"], "2026-08-10")
-        self.assertEqual(dataset["sources"]["alpha"]["coverage"]["measuredDays"], 3)
+        # Span is the calendar distance, measured days the count of remembered
+        # ones; here they differ, which is what pins each (round-1 finding 3).
+        self.assertEqual(
+            dataset["sources"]["alpha"]["coverage"],
+            {"start": "2026-08-01", "end": "2026-08-11", "days": 11, "measuredDays": 3, "verifiedDays": 0},
+        )
+
+    def test_stats_are_carried_from_the_section(self):
+        cache = self.scratch / "cache.json"
+        cache.write_text(
+            json.dumps(
+                {
+                    capture.ACTIVITY_CACHE_DAILY_KEY: [],
+                    capture.ACTIVITY_CACHE_USAGE_KEY: {
+                        "avendor-alpha": {
+                            "inputTokens": 1,
+                            "outputTokens": 2,
+                            "cacheReadInputTokens": 3,
+                            "cacheCreationInputTokens": 4,
+                        }
+                    },
+                    capture.ACTIVITY_CACHE_SESSIONS_KEY: 5,
+                    capture.ACTIVITY_CACHE_COMPUTED_KEY: "2026-08-11",
+                }
+            ),
+            encoding="utf-8",
+        )
+        sources, _ = export_usage_series.export(
+            self.root, "alpha", [], MERGE_NOW, activity_cache=cache, history_store=self.history / "alpha.json"
+        )
+        dataset = export_usage_series.build_dataset(sources, self.history, MERGE_NOW)
+        self.assertEqual(
+            dataset["sources"]["alpha"]["stats"],
+            {"input": 1, "output": 2, "cache-read": 3, "cache-write": 4, "lifetime": 10, "sessions": 5},
+        )
 
     def test_a_source_without_a_store_carries_its_served_days_only(self):
         merge = self.scratch / "merge.json"
@@ -1170,9 +1204,34 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual(beta["coverage"]["verifiedDays"], 0)
 
     def test_the_dataset_is_written_by_rename_from_a_sibling(self):
-        path = self.history / "dataset.json"
-        export_usage_series.write_dataset(path, {"schema": export_usage_series.DATASET_SCHEMA})
-        self.assertTrue(path.is_file())
+        # The MECHANISM, not its residue (round-1 finding 2, the history
+        # store's own rule): the dataset path is never opened for writing,
+        # and the bytes arrive by a rename from a sibling in the same
+        # directory.
+        writes = []
+        renames = []
+        real_open = open
+        real_replace = pathlib.Path.replace
+
+        def recording_open(file, mode="r", *args, **kwargs):
+            if any(flag in mode for flag in ("w", "a", "x", "+")):
+                writes.append(pathlib.Path(file).resolve())
+            return real_open(file, mode, *args, **kwargs)
+
+        def recording_replace(source, target):
+            renames.append((pathlib.Path(source).resolve(), pathlib.Path(target).resolve()))
+            return real_replace(source, target)
+
+        path = (self.history / "dataset.json").resolve()
+        export_usage_series.open = recording_open
+        pathlib.Path.replace = recording_replace
+        try:
+            export_usage_series.write_dataset(path, {"schema": export_usage_series.DATASET_SCHEMA})
+        finally:
+            del export_usage_series.open
+            pathlib.Path.replace = real_replace
+        self.assertNotIn(path, writes, "the dataset was opened for writing directly")
+        self.assertEqual(renames, [(path.with_name("dataset.json.tmp"), path)])
         self.assertFalse(path.with_name("dataset.json.tmp").exists())
         text = path.read_text(encoding="utf-8")
         self.assertTrue(text.endswith("}\n"))

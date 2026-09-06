@@ -485,6 +485,28 @@ class PushTransportHardeningTest(unittest.TestCase):
         self.assertEqual(alpha["days"][0], {"date": earlier, "total": 5, "verified": True})
         self.assertEqual(alpha["coverage"]["verifiedDays"], 1)
         self.assertEqual(alpha["coverage"]["start"], earlier)
+        # A reading beside a MERGE source's store reaches that producer too
+        # (round-1 finding 1c). The argv file records only the last producer,
+        # so this is pinned by the RESULT: the day lands in that source's own
+        # store at the surface's figure, and the dataset marks it.
+        second = self.scratch / "second-transcripts"
+        transcript_fixture(second)
+        self.write_config(MERGE_CAPTURES="beta=messages=%s" % second, HISTORY_DIR=str(history))
+        (history / "beta.verified.json").write_text(
+            json.dumps(
+                {
+                    "schema": "usage-verified/v1",
+                    "readings": {earlier: {"total": 7, "readOn": TRANSCRIPT_FIXTURE_DAY}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        beta_days = json.loads((history / "beta.json").read_text(encoding="utf-8"))["days"]
+        self.assertEqual(beta_days[earlier], {"total": 7})
+        dataset = json.loads((history / "dataset.json").read_text(encoding="utf-8"))
+        self.assertEqual(dataset["sources"]["beta"]["days"][0], {"date": earlier, "total": 7, "verified": True})
 
     def test_the_log_brackets_every_stage_and_ends_with_one_summary_line(self):
         # Issue #299, the failure-logging rule: a START line per stage in

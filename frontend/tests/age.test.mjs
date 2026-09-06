@@ -122,9 +122,12 @@ test('the detail names the phrase and dates it, and a dash carries no row', () =
   const live = ageDetail('2026-08-29T07:02:14Z', Date.parse('2026-08-29T10:02:14Z'));
   assert.equal(live.name, 'updated 3 hours ago', 'the detail’s name is the full sentence');
   assert.deepEqual(live.rows, [{ label: '', value: 'Aug 29, 2026, 07:02 UTC' }]);
-  // The detail takes exactly the instant and the clock: the provenance
-  // argument left with the sentence it used to add (issue 299).
-  assert.equal(ageDetail.length, 1);
+  // The provenance argument left with the sentence it used to add (issue
+  // 299): a third argument, truthy or not, changes nothing about the rows.
+  assert.deepEqual(
+    ageDetail('2026-08-29T07:02:14Z', Date.parse('2026-08-29T10:02:14Z'), true).rows,
+    live.rows
+  );
 
   /* A DASH GETS NO ROW: there is no instant to print, and a dash is not a
      figure anything can vouch for. */

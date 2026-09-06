@@ -1469,29 +1469,48 @@ class VerifiedReadingsTest(unittest.TestCase):
         section, _ = self.run_capture()
         self.assertEqual(section["series"]["totals"], [20, 40, 60])
 
-    def test_a_malformed_readings_file_refuses(self):
+    def test_a_malformed_readings_file_refuses_with_its_reason(self):
+        # Each validation is pinned by ITS OWN message, so a check that only
+        # ever fired because a later one caught the same row cannot pass
+        # for present (round-1 review, finding 4).
         self.write_tree()
         schema = capture_usage_series.HISTORY_SCHEMA_KEY
         rows = capture_usage_series.VERIFIED_READINGS_KEY
+        valid = capture_usage_series.VERIFIED_SCHEMA
         good = {"total": 30, "readOn": "2026-08-12"}
-        for document in (
-            [],
-            {schema: "usage-verified/v0", rows: {"2026-08-11": good}},
-            {schema: capture_usage_series.VERIFIED_SCHEMA},
-            {schema: capture_usage_series.VERIFIED_SCHEMA, rows: {"2026-08-11": good}, "extra": 1},
-            {schema: capture_usage_series.VERIFIED_SCHEMA, rows: []},
-            {schema: capture_usage_series.VERIFIED_SCHEMA, rows: {"2026-13-01": good}},
-            {schema: capture_usage_series.VERIFIED_SCHEMA, rows: {"2026-08-11": {"total": 30}}},
-            {schema: capture_usage_series.VERIFIED_SCHEMA, rows: {"2026-08-11": {"total": 0, "readOn": "2026-08-12"}}},
-            {schema: capture_usage_series.VERIFIED_SCHEMA, rows: {"2026-08-11": {"total": True, "readOn": "2026-08-12"}}},
-            {schema: capture_usage_series.VERIFIED_SCHEMA, rows: {"2026-08-11": {"total": 30, "readOn": "2026-08-10"}}},
-            {schema: capture_usage_series.VERIFIED_SCHEMA, rows: {"2026-08-11": {"total": 30, "readOn": "soon"}}},
+        for document, reason in (
+            ([], "expected schema"),
+            ({schema: "usage-verified/v0", rows: {"2026-08-11": good}}, "expected schema"),
+            ({schema: valid}, "unknown section"),
+            ({schema: valid, rows: {"2026-08-11": good}, "extra": 1}, "unknown section"),
+            ({schema: valid, rows: []}, "no day index"),
+            # A key that is not a day yet sorts BEFORE its read-on day, so
+            # only the calendar check can refuse it.
+            ({schema: valid, rows: {"2026-08-1": good}}, "not a calendar day"),
+            ({schema: valid, rows: {"2026-13-01": good}}, "not a calendar day"),
+            ({schema: valid, rows: {"2026-08-11": {"total": 30}}}, "malformed day entry"),
+            ({schema: valid, rows: {"2026-08-11": {"total": 0, "readOn": "2026-08-12"}}}, "positive bounded total"),
+            ({schema: valid, rows: {"2026-08-11": {"total": True, "readOn": "2026-08-12"}}}, "positive bounded total"),
+            (
+                {schema: valid, rows: {"2026-08-11": {"total": capture_usage_series.MAX_COUNT + 1, "readOn": "2026-08-12"}}},
+                "positive bounded total",
+            ),
+            ({schema: valid, rows: {"2026-08-11": {"total": 30, "readOn": "2026-08-10"}}}, "before the day it names"),
+            ({schema: valid, rows: {"2026-08-11": {"total": 30, "readOn": "soon"}}}, "before the day it names"),
         ):
             self.readings.write_text(json.dumps(document), encoding="utf-8")
-            with self.assertRaises(capture_usage_series.CaptureError, msg=repr(document)):
+            with self.assertRaisesRegex(capture_usage_series.CaptureError, reason, msg=repr(document)):
                 self.run_capture()
         self.readings.write_text("{", encoding="utf-8")
         with self.assertRaisesRegex(capture_usage_series.CaptureError, "parsable"):
+            self.run_capture()
+
+    def test_an_oversized_readings_file_refuses(self):
+        self.write_tree()
+        self.readings.write_text(
+            "[" + " " * capture_usage_series.MAX_VERIFIED_READINGS_BYTES + "]", encoding="utf-8"
+        )
+        with self.assertRaisesRegex(capture_usage_series.CaptureError, "byte bound"):
             self.run_capture()
 
 
@@ -1592,6 +1611,34 @@ class CacheAccrualTest(unittest.TestCase):
         stats = self.stats(history=self.store)
         self.assertEqual(stats["lifetime"], 90)
         self.assertEqual(stats["input"], 36)
+
+    def test_an_accrual_past_the_shared_count_bound_refuses(self):
+        # The cache's own figures sit under the bound, so lifetime_stats
+        # admits them; the days after the as-of day carry the whole over it,
+        # and the accrual is what must refuse (round-1 review, finding 1b).
+        near = capture_usage_series.MAX_COUNT - 60
+        usage = {
+            "avendor-alpha": {
+                "inputTokens": near,
+                "outputTokens": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0,
+            }
+        }
+        self.write_cache(**{capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: usage})
+        with self.assertRaisesRegex(
+            capture_usage_series.CaptureError, "activity cache lifetime figures exceed"
+        ):
+            self.stats()
+        # The control: the same cache with nothing after its as-of day is
+        # admitted at exactly its own figure.
+        self.write_cache(
+            **{
+                capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: usage,
+                capture_usage_series.ACTIVITY_CACHE_COMPUTED_KEY: "2026-08-12",
+            }
+        )
+        self.assertEqual(self.stats()["lifetime"], near)
 
     def test_a_cache_without_a_calendar_as_of_day_refuses(self):
         for as_of in (None, "yesterday", "2026-13-01", 20260810):
@@ -2157,8 +2204,11 @@ class ModelVocabularyParityTest(unittest.TestCase):
     ORDER matters here as much as membership. modelServeOrder is the canonical
     SERVE order — the origin walks it to emit rows deterministically, so every
     replica's bytes and therefore its digest ETag stay identical — and the
-    palette slots are assigned down the same list, so a reordering on one side
-    alone would silently repaint every model (issue #170).
+    frontend admits by walking the same list, so a reordering on one side
+    alone is an origin and a reader that disagree about the rows (issue
+    #170). Palette slots are NOT positional: modelSlots binds one to each
+    KEY, which is what let issue #299 insert a member mid-list without
+    repainting the named ones.
     """
 
     REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]

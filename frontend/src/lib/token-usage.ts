@@ -688,8 +688,9 @@ export function categorySlot(key: string): number {
 const modelSlots: ReadonlyMap<string, number> = new Map([
   /* The residual member draws the NEUTRAL slot (issue #299): it is not an
      entity but the fold of every identifier the vocabulary does not name, and
-     its swatch says so. The chromatic slot it used to hold went to the member
-     that joined beside it, so no existing member repainted. */
+     its swatch says so — the residual itself repaints from chromatic to
+     neutral, which is the point. The chromatic slot it held went to the
+     member that joined beside it, so every NAMED member keeps its swatch. */
   ['other', 0],
   ['fable-5', 2],
   ['fable-5-1', 1],
