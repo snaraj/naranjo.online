@@ -21,7 +21,6 @@ import {
   boardEmptyNote,
   boardReturnLabel,
   boardTurnLabel,
-  provenanceIsMixed,
   resetsIn,
   tokenSquares,
   tokenSquaresProps,
@@ -35,7 +34,6 @@ import {
   usageStaleAfterMs,
   usageStaleNote
 } from '../src/lib/token-usage.ts';
-import { recordedOutOfBand } from '../src/lib/blocks.ts';
 import { commitLogProps } from '../src/lib/commits.ts';
 import { formatMagnitude, pendingWeeks } from '../src/lib/grid.ts';
 
@@ -623,57 +621,6 @@ describe('extended payload admission', () => {
   });
 });
 
-describe('provenanceIsMixed', () => {
-  const figure = (recorded) => ({ key: 'k', label: 'l', value: 1, unit: 'tokens', recorded });
-
-  it('says nothing to mark when every figure shares one provenance', () => {
-    // Both uniform cases, and they are the two the page is actually in. With
-    // live refresh off every figure is a recorded capture; with every source
-    // fetched every figure is live. Neither needs a per-figure word, because
-    // the word would appear on all of them and separate none of them.
-    assert.equal(
-      provenanceIsMixed({ label: 's', windows: [], stats: [figure(true), figure(true)] }),
-      false
-    );
-    assert.equal(
-      provenanceIsMixed({ label: 's', windows: [], stats: [figure(false), figure(false)] }),
-      false
-    );
-  });
-
-  it('marks by exception the moment a source carries both', () => {
-    // What a successful refresh produces: live tiles overlaid onto the
-    // recorded figures no usage API reports. Here the word earns its space.
-    assert.equal(
-      provenanceIsMixed({ label: 's', windows: [], stats: [figure(true), figure(false)] }),
-      true
-    );
-  });
-
-  it('reads stats and insights as one population', () => {
-    // A source whose tiles all went live while its insights stayed recorded
-    // is mixed, even though neither section is mixed on its own — they render
-    // in the same block and are read against each other.
-    assert.equal(
-      provenanceIsMixed({
-        label: 's',
-        windows: [],
-        stats: [figure(false)],
-        insights: [{ label: 'i', pct: 1, recorded: true }]
-      }),
-      true
-    );
-  });
-
-  it('treats an absent section and an absent flag as unrecorded', () => {
-    assert.equal(provenanceIsMixed({ label: 's', windows: [] }), false);
-    assert.equal(
-      provenanceIsMixed({ label: 's', windows: [], stats: [{ key: 'k', label: 'l', value: 1, unit: 'tokens' }] }),
-      false
-    );
-  });
-});
-
 describe('the board of squares: live surface', () => {
   it('keeps itself current through the block host instead of painting once at mount', () => {
     // The subscription moved to the ONE host every panel block shares
@@ -722,36 +669,22 @@ describe('the board of squares: live surface', () => {
     assert.equal(squares[0].label, 'Tokens tracked');
   });
 
-  it('marks provenance by exception, never once per figure', () => {
-    /* The marker is still decided in the adapter, beside provenanceIsMixed
-       itself, and it is still gated on the source's provenance being MIXED.
-       What changed with the owner's directive of 2026-09-03 (issue 287) is
-       WHERE it is decided FROM: the tiles and the insight rows became the
-       board's squares and bars, so the mark travels on LedgerBar.marked. The
-       ungated forms this replaces are still named exactly, in both components,
-       because either one returning is the regression. */
+  it('draws every bar without a provenance mark, whatever the source mixes', () => {
+    /* The per-bar mark, and the sentence it used to decide, left the page with
+       the owner's directive of 2026-09-06 (issue 299): provenance stays in
+       the payload's `recorded` flags and the board prints nothing for it. The
+       ungated forms this page retired earlier are still named exactly, in both
+       components, because either one returning is the regression. */
     for (const [name, source] of Object.entries({ component, commits })) {
       assert.doesNotMatch(source, /\{#if stat\.recorded\}|\{#if tile\.recorded\}/, name);
       assert.doesNotMatch(source, /\{#if insight\.recorded\}/, name);
     }
-    // EXECUTED both ways: a uniform source marks nothing, a mixed source
-    // marks exactly the recorded figures.
+    // EXECUTED on the case that used to mark: a source mixing recorded and
+    // live figures yields bars that carry no mark at all — not `false`, no
+    // such field — so a component could not render one even by accident.
     const figure = (key, recorded) => ({ key, label: key, value: 1, unit: 'tokens', recorded });
     const barsOf = (props) =>
       props.squares.find((square) => square.key === 'models')?.bars ?? [];
-    const uniform = tokenSquaresProps(
-      envelopeFor({
-        sources: [
-          {
-            label: 's',
-            windows: [],
-            stats: [figure('a', true), figure('b', true)],
-            insights: [{ label: 'i', pct: 4, recorded: true }]
-          }
-        ]
-      })
-    );
-    assert.deepEqual(barsOf(uniform).map((bar) => bar.marked), [false]);
     const mixed = tokenSquaresProps(
       envelopeFor({
         sources: [
@@ -764,7 +697,7 @@ describe('the board of squares: live surface', () => {
         ]
       })
     );
-    assert.deepEqual(barsOf(mixed).map((bar) => bar.marked), [true]);
+    assert.deepEqual(Object.keys(barsOf(mixed)[0]).sort(), ['fillPct', 'key', 'label', 'reading']);
     // An unreported insight draws NO fill and reads as the explicit dash.
     // Null rather than 0 is the whole point (owner directive, 2026-08-28): a
     // zero-width bar is pixel-identical to a measured 0%, so a row whose
@@ -1426,12 +1359,19 @@ describe('the model breakdown (token-usage/v2)', () => {
   });
 
   it('binds model color slots to the entity, and keeps the fallback unreachable', () => {
-    assert.equal(modelSlot('other'), 1);
+    // The residual member draws the neutral slot (issue 299): it is the fold
+    // of every identifier the vocabulary does not name, not an entity, and
+    // the chromatic slot it held went to the member that joined beside it.
+    assert.equal(modelSlot('other'), 0);
     assert.equal(modelSlot('fable-5'), 2);
+    assert.equal(modelSlot('fable-5-1'), 1);
     assert.equal(modelSlot('opus-5'), 3);
     assert.equal(modelSlot('sonnet-5'), 4);
     assert.equal(modelSlot('opus-4-8'), 5);
     assert.equal(modelSlot('opus-9'), 0);
+    // Every REAL member owns a chromatic slot, and no two share one.
+    const chromatic = ['fable-5', 'fable-5-1', 'opus-5', 'sonnet-5', 'opus-4-8'].map(modelSlot);
+    assert.deepEqual([...new Set(chromatic)].sort(), [1, 2, 3, 4, 5]);
   });
 
   it('writes a model name rather than humanizing its key', () => {
@@ -1441,12 +1381,13 @@ describe('the model breakdown (token-usage/v2)', () => {
     // producer's emission guard admits nothing else.
     assert.equal(modelLabel('opus-4-8'), 'Opus 4.8');
     assert.equal(modelLabel('fable-5'), 'Fable 5');
+    assert.equal(modelLabel('fable-5-1'), 'Fable 5.1');
     assert.equal(modelLabel('other'), 'Other');
     // Every member of the vocabulary has a written form. The fallback returns
     // the key, so a member missing from the label table would render a
     // machine identifier in public copy — this is the assertion that makes
     // the fallback defense rather than a supported spelling.
-    for (const key of ['other', 'fable-5', 'opus-5', 'sonnet-5', 'opus-4-8']) {
+    for (const key of ['other', 'fable-5', 'fable-5-1', 'opus-5', 'sonnet-5', 'opus-4-8']) {
       assert.notEqual(modelLabel(key), key, `${key} has no written name`);
     }
     assert.equal(modelLabel('opus-9'), 'opus-9');
@@ -1576,33 +1517,6 @@ describe('activity insights provenance', () => {
     });
     assert.deepEqual(bars.map((bar) => bar.label), ['Frozen']);
     assert.equal(bars[0].reading, formatShare(99));
-  });
-
-  it('weighs the DERIVED rows when it decides whether provenance is mixed', () => {
-    /* The rows must be resolved BEFORE the marks are, so a live-derived set is
-       weighed exactly as a served one. Here the one stat is live and the
-       derived rows inherit the series' recorded provenance, so the source is
-       mixed and the recorded figures carry the mark.
-
-       This is a property of the ADAPTER, unchanged by the owner's directive of
-       2026-09-03 (issue 287): a figure captured out of band says so, and
-       whether it needs to say so is decided against the whole population of
-       figures a surface shows — derived rows included. */
-    const bars = modelBars({
-      sources: [sourceWith({ stats: [{ key: 'lifetime', label: 'Lifetime', value: 7, unit: 'tokens' }] })]
-    });
-    assert.deepEqual(bars.map((bar) => bar.marked), [true, true]);
-  });
-
-  it('marks nothing when the derived rows and the tiles share one provenance', () => {
-    const bars = modelBars({
-      sources: [
-        sourceWith({
-          stats: [{ key: 'lifetime', label: 'Lifetime', value: 7, unit: 'tokens', recorded: true }]
-        })
-      ]
-    });
-    assert.deepEqual(bars.map((bar) => bar.marked), [false, false]);
   });
 
   it("carries the second source's split on the back of the same square", () => {
@@ -1902,48 +1816,42 @@ describe('the stale data-through note', () => {
   });
 });
 
-/* PROVENANCE BY EXCEPTION, ON THE FACE A READER OPENS (issue 268's wording,
- * carried into the board by the owner directive of 2026-09-03, issue 287).
+/* NO PROVENANCE SENTENCE, ANYWHERE (owner directive, 2026-09-06, issue 299).
  *
- * The retired tile panel put a visible "· recorded" suffix beside a figure.
- * The owner removed that mark from the repository rows in the same breath
- * ("just remove it") and moved provenance to the surface a reader opens, so
- * the board's answer is the same one the card's counters give: the sentence
- * lives where the figures it qualifies are, which for a square is its back.
- *
- * The rule is unchanged in both directions — a source whose every figure
- * shares one provenance marks none of them, and a source that mixes them says
- * so — and the sentence is the page's ONE constant rather than a copy. */
-describe('a figure captured out of band says so on the face that shows the breakdown', () => {
-  it('marks a recorded source, and says it in the shared wording', () => {
-    const [total, anthropic] = tokenSquares([
-      {
-        label: 'anthropic',
-        windows: [],
-        stats: [
-          { key: 'lifetime', label: 'Lifetime tokens', value: 10, unit: 'tokens', recorded: true },
-          { key: 'input', label: 'Input', value: 4, unit: 'tokens', recorded: true }
-        ]
-      }
-    ]);
-    assert.equal(anthropic.back.note, recordedOutOfBand);
-    assert.equal(total.back.note, recordedOutOfBand);
-    assert.equal(recordedOutOfBand, 'recorded out of band, not fetched live');
+ * The board used to print "recorded out of band, not fetched live" on the
+ * back of a square whose figures mixed provenance. The owner removed every
+ * instance of it. The `recorded` flags stay in the payload for the envelope's
+ * readers; the page says nothing about them, and the Sessions square lost its
+ * "N days active of M days tracked" line in the same directive. */
+describe('no square prints a provenance sentence or the days-tracked line', () => {
+  it('leaves the backs of recorded and live sources alike without a note', () => {
+    const recordedStats = [
+      { key: 'lifetime', label: 'Lifetime tokens', value: 10, unit: 'tokens', recorded: true },
+      { key: 'input', label: 'Input', value: 4, unit: 'tokens', recorded: true }
+    ];
+    const liveStats = recordedStats.map(({ recorded: _dropped, ...stat }) => stat);
+    for (const stats of [recordedStats, liveStats]) {
+      const [total, anthropic] = tokenSquares([{ label: 'anthropic', windows: [], stats }]);
+      assert.equal(anthropic.back.note, undefined);
+      assert.equal(total.back.note, undefined);
+    }
   });
 
-  it('marks nothing when every figure was fetched live', () => {
-    const [total, anthropic] = tokenSquares([
+  it('shows the session figure with no active-of-tracked line under it', () => {
+    const [, , sessions] = tokenSquares([
       {
         label: 'anthropic',
         windows: [],
         stats: [
-          { key: 'lifetime', label: 'Lifetime tokens', value: 10, unit: 'tokens' },
-          { key: 'input', label: 'Input', value: 4, unit: 'tokens' }
+          { key: 'sessions', label: 'Sessions', value: 26, unit: 'count', recorded: true },
+          { key: 'active-days', label: 'Active days', value: 26, unit: 'days', recorded: true },
+          { key: 'tracked-days', label: 'Days tracked', value: 66, unit: 'days', recorded: true }
         ]
       }
     ]);
-    assert.equal(anthropic.back.note, undefined, 'a live source claimed an out-of-band capture');
-    assert.equal(total.back.note, undefined);
+    assert.equal(sessions.key, 'sessions');
+    assert.equal(sessions.figure, '26');
+    assert.equal(sessions.sub, undefined, 'the days-tracked line came back');
   });
 
   it('renders the note on the back face, never on the front', () => {

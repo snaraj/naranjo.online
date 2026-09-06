@@ -1671,7 +1671,7 @@ main {
 }
 
 /* The line a section uses to tell the truth about itself — placeholder copy,
-   or a figure captured out of band. It reads the muted token rather than a
+   or a panel with nothing to show. It reads the muted token rather than a
    transparency, so its contrast is measured in every reading mode like every
    other ink on the page. */
 .section-note {

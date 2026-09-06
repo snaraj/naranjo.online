@@ -242,19 +242,22 @@ partition; and again for issue #276, which grew the derived set to five and
 added the captured-stats section. The structural maximum the origin can
 admit is one document
 covering both shipped snapshot sources, each at the 732-day series bound with
-the complete five-key category vocabulary, the complete five-key model
+the complete five-key category vocabulary, the complete six-key model
 vocabulary over its own 92-day window, the complete six-key captured-stats
 vocabulary, and every required section present.
-Compact-encoded and sealed, that measures **109,638 bytes** at ten-digit daily
+Compact-encoded and sealed, that measures **111,690 bytes** at ten-digit daily
 values — an order of magnitude above the shipped snapshot's own measured peak
-day of 1,911,380,289. Pretty-printed, the identical document is 217,482
-bytes, so compact output alone roughly halves it. 131,072 leaves **21,434
-bytes** of headroom: the same maximum still seals to 129,090 bytes at
-twelve-digit values and only crosses the ceiling at thirteen, where it
-reaches 138,816.
+day of 1,911,380,289. Pretty-printed, the identical document is 221,596
+bytes, so compact output alone roughly halves it. 131,072 leaves **19,382
+bytes** of headroom: the same maximum still seals to 121,600 bytes at
+eleven-digit values and only crosses the ceiling at twelve, where it
+reaches 131,510.
 
 The models section spent one decimal digit of that headroom — it was three
-before #170 — and that is precisely the trade its 92-day window bounds. One
+before #170 — and the sixth model member (issue #299) spent the second:
+every member costs one integer per window day on every source, so the next
+member is a measured decision, not a free edit. That is precisely the trade
+the section's 92-day window bounds. One
 integer per day per member over the full 732-day series would cost roughly
 eight times what the window costs and would not fit under this ceiling at
 all, which is why the section declares the range it covers instead of
@@ -309,7 +312,15 @@ source's activity cache carries the tool's per-model lifetime totals and
 session tally, and every push now reads them into the document's `stats`
 section, so the lifetime, class-total, and session tiles move with every
 push instead of freezing at the release snapshot (the defect the owner
-reported: a lifetime tile 10B behind the vendor's own page).
+reported: a lifetime tile 10B behind the vendor's own page). The cache is
+exact as of its own `lastComputedDate` and frozen after it until the tool
+recomputes, so between recomputations every PARTITIONED served day strictly
+after that day accrues onto the whole and its class figures together
+(issue #288) — the whole stays the sum of its classes, a day the walk could
+not split accrues nothing, and the as-of day never re-accrues. The session
+tally is the cache's own; the transcript walk de-duplicates restarts and
+resumed sessions, which is why a walked tally would read lower, and that
+methodology awaits an owner ruling rather than a guess here.
 
 **A source whose full accounting never reaches this machine gets a
 baseline.** Retention floors mean the local record starts long after the
@@ -467,6 +478,33 @@ change.
    Configure it; the option exists as an option only so an unconfigured
    workstation still exports.
 
+   Two files live beside the stores (issue #299). `$HISTORY_DIR/dataset.json`
+   is the graphing dataset (`usage-dataset/v1`), rebuilt from the stores on
+   every run: per source a coverage object, the lifetime and captured
+   stats, the windows and derived figures, one metadata object per category
+   and per model — key, kind, unit, total, share of the days that carry the
+   split, covered days, first and last day — and every remembered day with
+   its partitions, verified days marked. It is machine-local OUTPUT, never
+   sealed and never pushed; it carries shares and marks the wire's emission
+   guard would rightly refuse. `$HISTORY_DIR/<key>.verified.json` is INPUT,
+   written by hand (`usage-verified/v1`): a vendor surface's own figure for a
+   named day, beside the day it was read:
+
+   ```json
+   {"schema": "usage-verified/v1",
+    "readings": {"2026-08-29": {"total": 435000000, "readOn": "2026-09-04"}}}
+   ```
+
+   A reading is the day's figure in BOTH directions — the one path that can
+   lower a day, where the store's evidence-survives rule only ever raises
+   one — and a breakdown that no longer partitions the corrected total is
+   dropped for that day, so the windowed breakdowns retreat behind it
+   exactly as they do behind any stored day without one. Readings are
+   applied through the store, so the store, the served series and the
+   dataset agree; a reading for a day outside the record or after today,
+   a read-on day before the day it names, or a malformed file refuses the
+   run rather than serving a figure the owner has already corrected.
+
    `MERGE_SOURCES` is how a second tool's ALREADY-CAPTURED series joins the
    same document: point it at that tool's capture output (the capture tool's
    stdout shape). The export validates and re-guards whatever it merges.
@@ -493,6 +531,18 @@ change.
    job, so a capture that runs long does not overlap itself. Logs live under
    `~/Library/Logs/naranjo-online-usage-export/`. One manual run first is good
    practice: `scripts/usage-export/push-usage-series.sh`.
+
+   What one run writes to the log (issue #299): a `START <stage>` line as
+   each stage begins — `recapture-<key>`, `export`, `seal`, `push` — so a
+   stage that never ends is a START with no SUMMARY; the export's own
+   `coverage <key>=<first>..<last>` line naming the newest day each source
+   reaches; on failure the reason, then `FAILED stage=<stage>
+   elapsed=<s>s`; on success the `pushed <n> sealed bytes; checksum
+   verified` line, then one `SUMMARY` line with the sealed size, the
+   checksum prefix, the exporter's checkout revision — the fault class where
+   a scheduled job ran a tree nine commits behind what the origin admits
+   (issue #288) — the total elapsed time, and every stage's duration. Stage
+   names and counts only, never payload content or a path.
 
    The installed job is anchored to the PRIMARY checkout
    (`~/code/naranjo.online` by default; override with

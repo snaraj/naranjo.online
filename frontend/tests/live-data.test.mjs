@@ -18,7 +18,6 @@ import { describe, it, test } from 'node:test';
 
 import { contributionsLabel, parseVCSActivity } from '../src/lib/activity.ts';
 import { commitLogProps } from '../src/lib/commits.ts';
-import { recordedOutOfBand } from '../src/lib/blocks.ts';
 import {
   codingProjectsPanelId,
   projectHost,
@@ -146,30 +145,25 @@ describe('the Coding Projects feed follows the host', () => {
     }
   });
 
-  it('marks the commit count as recorded however fresh the row is', () => {
-    // No repository API reports a commit total, so the count is captured no
-    // matter what — and the page says so rather than letting it pass as live.
+  it('carries no provenance mark on any counter of a live row', () => {
+    // The mark left with the provenance sentence (owner directive, 2026-09-06,
+    // issue 299): a counter is its glyph, figure, words and detail, and no
+    // field on it claims or denies freshness.
     const props = projectTableProps(
       projectsEnvelope(projects.map((project) => liveRow(project.name))),
       noon
     );
     const counts = [props.rows[0].counts[0], props.rows[0].updated, ...props.rows[0].counts.slice(1)];
     assert.deepEqual(
-      counts.map((count) => [count.key, count.marked]),
-      [
-        ['stars', false],
-        ['updated', false],
-        // These fixture rows carry no tallies, which is the ADDITIVE path: the
-        // exact shape a payload written before the two counters existed still
-        // has. A figure that is not there renders as a dash, and a dash has no
-        // provenance to mark.
-        ['issues', undefined],
-        ['pulls', undefined]
-      ]
+      counts.map((count) => count.key),
+      ['stars', 'updated', 'issues', 'pulls']
     );
+    for (const count of counts) {
+      assert.ok(!('marked' in count), `${count.key} carries a provenance mark`);
+    }
   });
 
-  it('falls back per row, and marks every figure of a row that fell back', () => {
+  it('falls back per row, serving the captured description for the row that fell back', () => {
     // The origin degrades per row — five repositories read and one refused is
     // five live rows beside one that says it is not — and the page has to
     // render that mixture legibly rather than flattening it.
@@ -187,22 +181,20 @@ describe('the Coding Projects feed follows the host', () => {
     // by its captured one — so position is a property of the data here, not an
     // index into the module list.
     const rowFor = (name) => props.rows.find((row) => row.key === name);
-    const marksOf = (row) => [row.counts[0], row.updated, ...row.counts.slice(1)].map((count) => count.marked);
-    assert.deepEqual(
-      marksOf(rowFor(projects[1].name)),
-      [true, true, true, true],
-      'a recorded row left a figure unmarked'
-    );
+    for (const count of [rowFor(projects[1].name).counts, rowFor(projects[1].name).updated].flat()) {
+      assert.ok(!('marked' in count), `${count.key} carries a provenance mark`);
+    }
     assert.equal(
       rowFor(projects[1].name).summary,
       projects[1].description,
       'a recorded row served the payload description instead of the captured one'
     );
-    assert.deepEqual(
-      marksOf(rowFor(projects[0].name)),
-      [false, false, undefined, undefined],
-      'a live row inherited the recorded row’s marks'
-    );
+    // The live row beside it is exactly as unmarked, and serves the host's
+    // description rather than the captured one.
+    for (const count of [rowFor(projects[0].name).counts, rowFor(projects[0].name).updated].flat()) {
+      assert.ok(!('marked' in count), `${count.key} carries a provenance mark`);
+    }
+    assert.notEqual(rowFor(projects[0].name).summary, projects[0].description);
   });
 
   it('renders a tally the host did not report as unknown, never as zero', () => {
@@ -245,14 +237,10 @@ describe('the Coding Projects feed follows the host', () => {
       );
       for (const entry of props.rows) {
         for (const count of [...entry.counts, entry.updated]) {
-          // A captured figure is marked; the two open-work counters have no
-          // captured figure at all and render as an unmarked dash, which is
-          // the same honesty by a different route.
-          if (count.value === '—') {
-            assert.equal(count.marked, undefined, `${entry.key}/${count.key} marked a figure it does not have`);
-            continue;
-          }
-          assert.equal(count.marked, true, `${entry.key}/${count.key} claimed freshness it does not have`);
+          // The two open-work counters have no captured figure at all and
+          // render as a dash; no counter carries a provenance mark either way
+          // (owner directive, 2026-09-06, issue 299).
+          assert.ok(!('marked' in count), `${entry.key}/${count.key} carries a provenance mark`);
         }
       }
     }
@@ -317,52 +305,28 @@ test('the Coding Projects block is bound to the panel, not to a frozen props obj
   assert.equal(codingProjectsPanelId, 'coding-projects');
 });
 
-test('one wording says a figure was recorded out of band, wherever it appears', async () => {
-  /* THE CLAIM SURVIVES THE MOVE (issue 268). The entry log's half of it used
-     to be an inline italic mark on every counter, and this test pinned the two
-     components' source text against each other so the page could not grow two
-     vocabularies for one idea. The owner removed the visible mark from the
-     repo rows — "stale, static and ugly" — and provenance moved into the
-     counter's detail, so the two halves are no longer the same MARKUP and
-     pinning them as such would pin the arrangement rather than the property.
-
-     What is worth having is the claim it always was: a reader learns one
-     sentence for "this was recorded out of band" across the whole page. It is
-     pinned here as one exported CONSTANT plus the surviving literal — the
-     usage tiles' visible suffix, verbatim and unchanged — proved to be that
-     same string, and the entry log's half proved to reach the reader through
-     the constant rather than through a copy of it. */
-  /* BOTH HALVES ARE DATA NOW (owner directive, 2026-09-03, issue 287). The
-     usage panel carried the last VISIBLE copy of this sentence — a "· recorded"
-     suffix beside a tile, with the full wording in a title attribute — and the
-     tile grid it lived in is gone: the token panel is a board of squares whose
-     provenance rides the same detail every other figure on this page uses. So
-     the wording no longer appears as a literal in any component at all, which
-     is strictly stronger than it appearing in one: there is nothing left to
-     drift from the constant, because there is only the constant.
-
-     A title attribute is also what issue 219 removed everywhere else — it has
-     no touch trigger in any engine — so a component reintroducing one for this
-     sentence would be reintroducing a reading no phone can reach. */
-  const table = await read('../src/lib/components/LedgerTable.svelte');
-  const board = await read('../src/lib/components/LedgerBoard.svelte');
-  assert.equal(recordedOutOfBand, 'recorded out of band, not fetched live');
-  for (const [name, source] of Object.entries({ table, board })) {
-    assert.ok(
-      !source.includes(recordedOutOfBand),
-      `${name} spells the provenance wording itself; it is one constant, carried as data`
-    );
-    assert.doesNotMatch(
-      source,
-      /title="recorded out of band/,
-      `${name} reintroduced a title-attribute reading no touch device can open`
-    );
+test('no source file prints a provenance sentence, and no detail carries one (issue 299)', async () => {
+  /* The owner removed every instance of "recorded out of band, not fetched
+     live" (2026-09-06, issue 299). The sentence used to be ONE exported
+     constant; now it is nothing — no constant, no literal, no detail row —
+     and this pin reads every frontend source file so a copy cannot come back
+     under another name. The `recorded` flags stay in the payload types, which
+     is why the sweep keys on the sentence and not on the word. */
+  const { readdir } = await import('node:fs/promises');
+  const root = new URL('../src/', import.meta.url);
+  const files = (await readdir(root, { recursive: true })).filter((name) => /\.(ts|svelte|css)$/.test(name));
+  assert.ok(files.length > 20, 'the sweep found too few source files to be a sweep');
+  for (const name of files) {
+    const source = await read(new URL(name, root));
+    assert.doesNotMatch(source, /out of band|not fetched live/i, `${name} still prints the provenance sentence`);
   }
-  // And the reader still reaches it: the table renders the counter's detail
-  // through the one hover-detail primitive.
+  // The table still renders each counter's detail through the one hover-detail
+  // primitive; the detail names the phrase and carries no provenance row.
+  const table = await read('../src/lib/components/LedgerTable.svelte');
   assert.match(table, /<DetailTip detail=\{count\.detail\} \/>/);
   const commits = projectCounts({ ...projects[0], commits: 1, stars: 1 }, undefined, noon).find(
     (count) => count.key === 'commits'
   );
-  assert.deepEqual(commits.detail.rows, [{ label: '', value: recordedOutOfBand }]);
+  assert.equal(commits.detail.name, '1 commit');
+  assert.deepEqual(commits.detail.rows, []);
 });

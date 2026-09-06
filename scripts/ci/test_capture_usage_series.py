@@ -767,6 +767,9 @@ class ActivityCacheTest(unittest.TestCase):
                     }
                 },
                 capture_usage_series.ACTIVITY_CACHE_SESSIONS_KEY: 3,
+                # As of the walked fixture day itself, so nothing accrues
+                # past the cache here; CacheAccrualTest owns the accrual.
+                capture_usage_series.ACTIVITY_CACHE_COMPUTED_KEY: "2026-08-10",
             }
         )
 
@@ -1328,6 +1331,322 @@ class HistoryStoreTest(unittest.TestCase):
         self.assertEqual(section["series"]["totals"], [100, 0, 40])
 
 
+class VerifiedReadingsTest(unittest.TestCase):
+    """A verified reading is the day's figure in both directions (issue #299).
+
+    The store's evidence-survives rule can only ever RAISE a day, so a walk
+    that over-counted a day could never be corrected from the one surface
+    that is the reference — the vendor's own dashboard. A readings file
+    beside the store names a day and its figure; the capture serves that
+    figure, drops a split that no longer partitions it, writes it back, and
+    refuses the readings that cannot be honest: a day outside the record, a
+    day still in progress, a malformed file.
+    """
+
+    def setUp(self):
+        self.scratch = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.tree = self.scratch / "tree"
+        self.tree.mkdir()
+        self.store = self.scratch / "store.json"
+        self.readings = self.scratch / "store.verified.json"
+
+    def day_line(self, day, ident, tokens):
+        return transcript_line(
+            timestamp=day + "T12:00:00Z",
+            requestId="req_%s" % ident,
+            message={
+                "id": "msg_%s" % ident,
+                "model": "avendor-%s" % capture_usage_series.MODEL_KEYS[1],
+                "usage": {"input_tokens": tokens, "output_tokens": tokens},
+            },
+        )
+
+    def write_tree(self, *lines):
+        if not lines:
+            lines = (
+                self.day_line("2026-08-10", "a", 10),
+                self.day_line("2026-08-11", "b", 20),
+                self.day_line("2026-08-12", "c", 30),
+            )
+        (self.tree / "session.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def write_readings(self, days, read_on="2026-08-12"):
+        self.readings.write_text(
+            json.dumps(
+                {
+                    capture_usage_series.HISTORY_SCHEMA_KEY: capture_usage_series.VERIFIED_SCHEMA,
+                    capture_usage_series.VERIFIED_READINGS_KEY: {
+                        day: {
+                            capture_usage_series.HISTORY_TOTAL_KEY: total,
+                            capture_usage_series.VERIFIED_READ_ON_KEY: read_on,
+                        }
+                        for day, total in days.items()
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def run_capture(self, history=True, verified=True):
+        return capture_usage_series.capture(
+            self.tree,
+            capture_usage_series.FORMAT_MESSAGES,
+            today=datetime.date(2026, 8, 12),
+            history_store=self.store if history else None,
+            verified_readings=self.readings if verified else None,
+        )
+
+    def stored_days(self):
+        return json.loads(self.store.read_text(encoding="utf-8"))["days"]
+
+    def test_a_reading_lowers_a_day_the_walk_over_counted_and_drops_its_split(self):
+        # The direction the store's own rule cannot take. The walk says 40,
+        # the surface says 30: 30 is served AND written back, and the day's
+        # split goes with it — a split summing to a figure nobody serves
+        # would be a fabrication — so the windowed breakdowns begin after it.
+        self.write_tree()
+        self.write_readings({"2026-08-11": 30})
+        section, _ = self.run_capture()
+        self.assertEqual(section["series"]["totals"], [20, 30, 60])
+        self.assertEqual(section["categoriesStartDate"], "2026-08-12")
+        self.assertEqual(section["categories"]["input"], [30])
+        self.assertEqual(section["modelsStartDate"], "2026-08-12")
+        self.assertEqual(self.stored_days()["2026-08-11"], {"total": 30})
+
+    def test_a_reading_raises_a_day_and_survives_the_next_walk(self):
+        self.write_tree()
+        self.write_readings({"2026-08-11": 90})
+        for _ in range(2):
+            section, _ = self.run_capture()
+            self.assertEqual(section["series"]["totals"], [20, 90, 60])
+        self.assertEqual(self.stored_days()["2026-08-11"]["total"], 90)
+
+    def test_a_reading_that_matches_the_walk_keeps_the_split(self):
+        self.write_tree()
+        self.write_readings({"2026-08-11": 40})
+        section, _ = self.run_capture()
+        self.assertEqual(section["series"]["totals"], [20, 40, 60])
+        self.assertNotIn("categoriesStartDate", section)
+        self.assertEqual(
+            self.stored_days()["2026-08-11"],
+            {
+                "total": 40,
+                "categories": {"input": 20, "output": 20},
+                "models": {capture_usage_series.MODEL_KEYS[1]: 40},
+            },
+        )
+
+    def test_a_reading_before_the_record_extends_it(self):
+        # A day the walk never held but the surface reports joins the record
+        # with its total and no split; the days between stay the zeros the
+        # series contract defines and are never written back.
+        self.write_tree()
+        self.write_readings({"2026-08-01": 7})
+        section, _ = self.run_capture()
+        self.assertEqual(section["series"]["startDate"], "2026-08-01")
+        self.assertEqual(section["series"]["totals"], [7] + [0] * 8 + [20, 40, 60])
+        self.assertEqual(section["categoriesStartDate"], "2026-08-10")
+        self.assertEqual(self.stored_days()["2026-08-01"], {"total": 7})
+        self.assertNotIn("2026-08-02", self.stored_days())
+
+    def test_the_most_recent_day_and_the_future_refuse_before_the_store_is_written(self):
+        self.write_tree()
+        for day, reason in (("2026-08-12", "most recent day"), ("2026-08-13", "outside the record")):
+            self.write_readings({day: 5}, read_on="2026-08-13")
+            with self.assertRaisesRegex(capture_usage_series.CaptureError, reason):
+                self.run_capture()
+            self.assertFalse(self.store.exists(), "a refused reading still wrote the store")
+
+    def test_readings_are_applied_through_a_history_store_only(self):
+        self.write_tree()
+        self.write_readings({"2026-08-11": 30})
+        with self.assertRaisesRegex(capture_usage_series.CaptureError, "history store"):
+            self.run_capture(history=False)
+
+    def test_a_missing_readings_file_is_no_readings(self):
+        self.write_tree()
+        section, _ = self.run_capture()
+        self.assertEqual(section["series"]["totals"], [20, 40, 60])
+
+    def test_a_malformed_readings_file_refuses_with_its_reason(self):
+        # Each validation is pinned by ITS OWN message, so a check that only
+        # ever fired because a later one caught the same row cannot pass
+        # for present (round-1 review, finding 4).
+        self.write_tree()
+        schema = capture_usage_series.HISTORY_SCHEMA_KEY
+        rows = capture_usage_series.VERIFIED_READINGS_KEY
+        valid = capture_usage_series.VERIFIED_SCHEMA
+        good = {"total": 30, "readOn": "2026-08-12"}
+        for document, reason in (
+            ([], "expected schema"),
+            ({schema: "usage-verified/v0", rows: {"2026-08-11": good}}, "expected schema"),
+            ({schema: valid}, "unknown section"),
+            ({schema: valid, rows: {"2026-08-11": good}, "extra": 1}, "unknown section"),
+            ({schema: valid, rows: []}, "no day index"),
+            # A key that is not a day yet sorts BEFORE its read-on day, so
+            # only the calendar check can refuse it.
+            ({schema: valid, rows: {"2026-08-1": good}}, "not a calendar day"),
+            ({schema: valid, rows: {"2026-13-01": good}}, "not a calendar day"),
+            ({schema: valid, rows: {"2026-08-11": {"total": 30}}}, "malformed day entry"),
+            ({schema: valid, rows: {"2026-08-11": {"total": 0, "readOn": "2026-08-12"}}}, "positive bounded total"),
+            ({schema: valid, rows: {"2026-08-11": {"total": True, "readOn": "2026-08-12"}}}, "positive bounded total"),
+            (
+                {schema: valid, rows: {"2026-08-11": {"total": capture_usage_series.MAX_COUNT + 1, "readOn": "2026-08-12"}}},
+                "positive bounded total",
+            ),
+            ({schema: valid, rows: {"2026-08-11": {"total": 30, "readOn": "2026-08-10"}}}, "before the day it names"),
+            ({schema: valid, rows: {"2026-08-11": {"total": 30, "readOn": "soon"}}}, "before the day it names"),
+        ):
+            self.readings.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(capture_usage_series.CaptureError, reason, msg=repr(document)):
+                self.run_capture()
+        self.readings.write_text("{", encoding="utf-8")
+        with self.assertRaisesRegex(capture_usage_series.CaptureError, "parsable"):
+            self.run_capture()
+
+    def test_an_oversized_readings_file_refuses(self):
+        self.write_tree()
+        self.readings.write_text(
+            "[" + " " * capture_usage_series.MAX_VERIFIED_READINGS_BYTES + "]", encoding="utf-8"
+        )
+        with self.assertRaisesRegex(capture_usage_series.CaptureError, "byte bound"):
+            self.run_capture()
+
+
+class CacheAccrualTest(unittest.TestCase):
+    """Lifetime-class stats accrue the partitioned days strictly after the
+    activity cache's own as-of day (issue #288).
+
+    The cache is exact as of the day it was last recomputed and frozen after
+    it, so between recomputations the lifetime-class tiles sat still while
+    the series under them kept moving. The accrual keeps the whole the sum
+    of its classes, never re-accrues the as-of day, skips a day the walk
+    could not split, and refuses a cache that cannot say when it was
+    computed.
+    """
+
+    def setUp(self):
+        self.scratch = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.tree = self.scratch / "tree"
+        self.tree.mkdir()
+        self.cache = self.scratch / "cache.json"
+        self.store = self.scratch / "store.json"
+
+    def day_line(self, day, ident, tokens):
+        return transcript_line(
+            timestamp=day + "T12:00:00Z",
+            requestId="req_%s" % ident,
+            message={
+                "id": "msg_%s" % ident,
+                "model": "avendor-%s" % capture_usage_series.MODEL_KEYS[1],
+                "usage": {"input_tokens": tokens, "output_tokens": tokens},
+            },
+        )
+
+    def write_cache(self, **overrides):
+        document = {
+            capture_usage_series.ACTIVITY_CACHE_DAILY_KEY: [],
+            capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: {
+                "avendor-alpha": {
+                    "inputTokens": 6,
+                    "outputTokens": 7,
+                    "cacheReadInputTokens": 8,
+                    "cacheCreationInputTokens": 9,
+                }
+            },
+            capture_usage_series.ACTIVITY_CACHE_SESSIONS_KEY: 3,
+            capture_usage_series.ACTIVITY_CACHE_COMPUTED_KEY: "2026-08-10",
+        }
+        document.update(overrides)
+        self.cache.write_text(json.dumps(document), encoding="utf-8")
+
+    def stats(self, history=None):
+        (self.tree / "session.jsonl").write_text(
+            "\n".join(
+                (
+                    self.day_line("2026-08-10", "a", 10),
+                    self.day_line("2026-08-11", "b", 20),
+                    self.day_line("2026-08-12", "c", 30),
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        section, _ = capture_usage_series.capture(
+            self.tree,
+            capture_usage_series.FORMAT_MESSAGES,
+            self.cache,
+            today=datetime.date(2026, 8, 12),
+            history_store=history,
+        )
+        return section["stats"]
+
+    def test_days_after_the_as_of_day_accrue_onto_the_whole_and_its_classes(self):
+        self.write_cache()
+        self.assertEqual(
+            self.stats(),
+            {"input": 56, "output": 57, "cache-read": 8, "cache-write": 9, "lifetime": 130, "sessions": 3},
+        )
+
+    def test_the_as_of_day_itself_never_re_accrues(self):
+        self.write_cache(**{capture_usage_series.ACTIVITY_CACHE_COMPUTED_KEY: "2026-08-12"})
+        self.assertEqual(self.stats()["lifetime"], 30)
+
+    def test_a_day_the_walk_could_not_split_accrues_nothing(self):
+        # A stored day after the as-of day carrying a total and no partition
+        # (its records were never walked): the whole must not move by a
+        # figure whose classes are unknown, so only the split day accrues.
+        self.store.write_text(
+            json.dumps(
+                {
+                    capture_usage_series.HISTORY_SCHEMA_KEY: capture_usage_series.HISTORY_SCHEMA,
+                    capture_usage_series.HISTORY_DAYS_KEY: {"2026-08-11": {"total": 1_000}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_cache()
+        stats = self.stats(history=self.store)
+        self.assertEqual(stats["lifetime"], 90)
+        self.assertEqual(stats["input"], 36)
+
+    def test_an_accrual_past_the_shared_count_bound_refuses(self):
+        # The cache's own figures sit under the bound, so lifetime_stats
+        # admits them; the days after the as-of day carry the whole over it,
+        # and the accrual is what must refuse (round-1 review, finding 1b).
+        near = capture_usage_series.MAX_COUNT - 60
+        usage = {
+            "avendor-alpha": {
+                "inputTokens": near,
+                "outputTokens": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0,
+            }
+        }
+        self.write_cache(**{capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: usage})
+        with self.assertRaisesRegex(
+            capture_usage_series.CaptureError, "activity cache lifetime figures exceed"
+        ):
+            self.stats()
+        # The control: the same cache with nothing after its as-of day is
+        # admitted at exactly its own figure.
+        self.write_cache(
+            **{
+                capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: usage,
+                capture_usage_series.ACTIVITY_CACHE_COMPUTED_KEY: "2026-08-12",
+            }
+        )
+        self.assertEqual(self.stats()["lifetime"], near)
+
+    def test_a_cache_without_a_calendar_as_of_day_refuses(self):
+        for as_of in (None, "yesterday", "2026-13-01", 20260810):
+            self.write_cache(**{capture_usage_series.ACTIVITY_CACHE_COMPUTED_KEY: as_of})
+            with self.assertRaisesRegex(capture_usage_series.CaptureError, "as-of day"):
+                self.stats()
+
+
 class ModelWindowTest(unittest.TestCase):
     """The per-model section is a DECLARED trailing window, never a silent one."""
 
@@ -1885,8 +2204,11 @@ class ModelVocabularyParityTest(unittest.TestCase):
     ORDER matters here as much as membership. modelServeOrder is the canonical
     SERVE order — the origin walks it to emit rows deterministically, so every
     replica's bytes and therefore its digest ETag stay identical — and the
-    palette slots are assigned down the same list, so a reordering on one side
-    alone would silently repaint every model (issue #170).
+    frontend admits by walking the same list, so a reordering on one side
+    alone is an origin and a reader that disagree about the rows (issue
+    #170). Palette slots are NOT positional: modelSlots binds one to each
+    KEY, which is what let issue #299 insert a member mid-list without
+    repainting the named ones.
     """
 
     REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -2060,15 +2382,14 @@ class CapParityTest(unittest.TestCase):
         days = capture_usage_series.MAX_SERIES_DAYS
         model_days = capture_usage_series.MAX_MODEL_DAYS
         # The model rows partition the SAME totals over the trailing window,
-        # so the two vocabularies being the same length is what lets one
-        # `value` serve both. Asserting it means a vocabulary that grows on
-        # one side alone fails here instead of silently measuring a document
-        # the origin would refuse.
-        self.assertEqual(
-            len(capture_usage_series.MODEL_KEYS),
-            len(capture_usage_series.CATEGORY_KEYS),
-            "the structural maximum divides one total across both vocabularies",
-        )
+        # divided as evenly as integers allow across a vocabulary that need
+        # not be the categories' size (issue #299 added a member): every row
+        # keeps the ladder's digit count, so the measurement stays the widest
+        # document the origin would admit rather than one it would refuse.
+        share, remainder = divmod(total, len(capture_usage_series.MODEL_KEYS))
+        model_values = [share + remainder] + [share] * (len(capture_usage_series.MODEL_KEYS) - 1)
+        self.assertEqual(sum(model_values), total)
+        self.assertTrue(all(len(str(amount)) == digits for amount in model_values), model_values)
         models_start = datetime.date(2024, 1, 1) + datetime.timedelta(days=days - model_days)
         document = {
             "schema": "usage-series/v1",
@@ -2085,7 +2406,8 @@ class CapParityTest(unittest.TestCase):
                         key: [value] * days for key in capture_usage_series.CATEGORY_KEYS
                     },
                     "models": {
-                        key: [value] * model_days for key in capture_usage_series.MODEL_KEYS
+                        key: [amount] * model_days
+                        for key, amount in zip(capture_usage_series.MODEL_KEYS, model_values)
                     },
                     "modelsStartDate": models_start.isoformat(),
                     "windows": {
@@ -2122,15 +2444,16 @@ class CapParityTest(unittest.TestCase):
         self.assertEqual(cap, 131072)
         maximum = self.structural_maximum(10)
         self.assertGreater(cap, maximum)
-        # The headroom is two further decimal digits on every value: the same
-        # maximum still fits at twelve digits and only crosses at thirteen.
+        # The headroom is one further decimal digit on every value: the same
+        # maximum still fits at eleven digits and only crosses at twelve.
         # That is the claim docs/usage-export.md makes, measured. It was
-        # three digits before the models section (issue #170) — the window
-        # spends one digit of headroom, which is exactly the trade
+        # three digits before the models section (issue #170) and two before
+        # the sixth model member (issue #299): every member costs its window
+        # of integers on every source, which is exactly the trade
         # MAX_MODEL_DAYS was chosen to bound, and the number moved here
         # rather than in a comment somewhere because it is MEASURED.
-        self.assertLess(self.structural_maximum(12), cap)
-        self.assertGreater(self.structural_maximum(13), cap)
+        self.assertLess(self.structural_maximum(11), cap)
+        self.assertGreater(self.structural_maximum(12), cap)
 
     def test_matches_the_origin_admission_cap(self):
         source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")

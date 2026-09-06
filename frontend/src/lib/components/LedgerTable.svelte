@@ -48,8 +48,8 @@
           <span class="table-summary">{row.summary}</span>
           {#each row.counts as count (count.key)}
             <!-- Focusable so the detail's keyboard reveal matches its hover
-              reveal: the counter's words and its provenance live in the
-              detail, and a detail no keyboard can open is half the feature.
+              reveal: the counter's words live in the detail, and a detail no
+              keyboard can open is half the feature.
               There is no action to perform, so a button would be the wrong
               semantics — the same shape the retired stat tiles used. -->
             <!-- svelte-ignore a11y_no_noninteractive_tabindex -->

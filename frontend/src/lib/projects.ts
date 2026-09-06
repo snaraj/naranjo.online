@@ -57,7 +57,6 @@
 
 import { ageDetail, relativeAge } from './age.ts';
 import {
-  recordedOutOfBand,
   type EntryCount,
   type LedgerCount,
   type LedgerTableProps,
@@ -116,7 +115,7 @@ export const projectsCapturedOn = '2026-08-29';
  * panel's payload does, and a repository created after this capture renders
  * from the payload alone. What these rows still are: the complete fallback
  * face when no payload has arrived or none was admitted (a true thing to
- * show, dated and marked), and the only source of each repository's captured
+ * show, dated), and the only source of each repository's captured
  * commit total, which no listing endpoint reports. The order is a
  * MAINTENANCE order; the feed sorts by last push (issue 252). */
 export const projects: readonly Project[] = [
@@ -195,28 +194,21 @@ export function projectLinkLabel(project: Pick<Project, 'name'>): string {
  * one of them is supported. */
 const unknownFigure = '—';
 
-/* The detail one counter carries: the full phrase as its name, and the
- * provenance row when the figure was recorded out of band.
- *
- * The grammar is bossLog.ts's `summaryDetail`, deliberately — a tile shows the
- * short form and the detail's NAME is the long one — so the two grids and this
- * feed present one idea one way rather than three. A DASH gets no provenance
- * row: there is no figure there to have been recorded, and marking an absence
- * would claim a capture nobody made. */
-function countDetail(label: string, value: string, marked: boolean): TipDetail {
-  return {
-    name: label,
-    rows: marked && value !== unknownFigure ? [{ label: '', value: recordedOutOfBand }] : []
-  };
+/* The detail one counter carries: the full phrase as its name. The grammar is
+ * bossLog.ts's `summaryDetail`, deliberately — a tile shows the short form and
+ * the detail's NAME is the long one — so the two grids and this feed present
+ * one idea one way rather than three. */
+function countDetail(label: string): TipDetail {
+  return { name: label, rows: [] };
 }
 
 /* projectCounts renders one row's five figures against whatever the panel
  * could actually vouch for.
  *
  * `live` is the panel's row when one arrived and was admitted; absent means
- * this row is serving its captured values, and every figure on it is then
- * marked. The commit count is marked either way — no repository API reports a
- * total, so it is captured no matter how fresh the row beside it is.
+ * this row is serving its captured values. The commit count is captured either
+ * way — no repository API reports a total — and the page says nothing about
+ * provenance on any counter (owner directive, 2026-09-06, issue 299).
  *
  * EVERY FIGURE IS NOW TERSE (issue 268, owner directive): the visible channel
  * is the glyph and the bare number, and the WORD it counts moves into the
@@ -251,10 +243,9 @@ export function projectCounts(
       glyph: 'star',
       label: starLabel,
       value: starFigure,
-      marked: recorded,
-      detail: countDetail(starLabel, starFigure, recorded)
+      detail: countDetail(starLabel)
     },
-    updatedCount(pushedAt, recorded, now),
+    updatedCount(pushedAt, now),
     commitCount(project),
     /* The two open-work counters (owner directive, issue 252 — the first two
      * counters to go terse, and since issue 268 the shape every counter has).
@@ -266,8 +257,8 @@ export function projectCounts(
      * as a dash, which says "not known"; a reported zero renders as 0, which
      * says "nothing open". Those are different claims and the card makes only
      * the one it can support. */
-    openWorkCount('issues', 'issue', live?.openIssues, recorded),
-    openWorkCount('pulls', 'pull', live?.openPulls, recorded)
+    openWorkCount('issues', 'issue', live?.openIssues),
+    openWorkCount('pulls', 'pull', live?.openPulls)
   ];
 }
 
@@ -279,7 +270,7 @@ export function projectCounts(
  * stays true. An instant nobody reported — representable since a payload row
  * may omit pushedAt and a dynamic row has no captured fallback — renders as
  * the honest dash, never as an age of nothing. */
-function updatedCount(pushedAt: string | undefined, recorded: boolean, now: number): EntryCount {
+function updatedCount(pushedAt: string | undefined, now: number): EntryCount {
   if (pushedAt === undefined) {
     const label = 'last update not reported';
     return {
@@ -287,7 +278,7 @@ function updatedCount(pushedAt: string | undefined, recorded: boolean, now: numb
       glyph: 'clock',
       label,
       value: unknownFigure,
-      detail: countDetail(label, unknownFigure, false)
+      detail: countDetail(label)
     };
   }
   const age = relativeAge(pushedAt, now);
@@ -297,16 +288,13 @@ function updatedCount(pushedAt: string | undefined, recorded: boolean, now: numb
     label: age.phrase,
     value: age.compact,
     since: pushedAt,
-    marked: recorded,
-    detail: ageDetail(pushedAt, now, recorded)
+    detail: ageDetail(pushedAt, now)
   };
 }
 
-/* The captured commit total — always marked, since no listing reports one —
- * or the honest dash for a repository the module list has no capture for,
- * which is every repository discovered after the capture date (issue 281).
- * The dash carries no provenance row: there is no figure there to have been
- * recorded. */
+/* The captured commit total — no listing reports one — or the honest dash
+ * for a repository the module list has no capture for, which is every
+ * repository discovered after the capture date (issue 281). */
 function commitCount(project: Project | undefined): EntryCount {
   if (project === undefined) {
     const label = 'commit total not recorded';
@@ -315,7 +303,7 @@ function commitCount(project: Project | undefined): EntryCount {
       glyph: 'node',
       label,
       value: unknownFigure,
-      detail: countDetail(label, unknownFigure, false)
+      detail: countDetail(label)
     };
   }
   const figure = formatWhole(project.commits);
@@ -325,9 +313,7 @@ function commitCount(project: Project | undefined): EntryCount {
     glyph: 'node',
     label,
     value: figure,
-    /* Always: the count is captured however fresh the row beside it is. */
-    marked: true,
-    detail: countDetail(label, figure, true)
+    detail: countDetail(label)
   };
 }
 
@@ -335,12 +321,7 @@ function commitCount(project: Project | undefined): EntryCount {
  * panel reported no figure. The accessible sentence is always complete and
  * always plural-correct, because "1 open issues" is the kind of small lie a
  * page tells when nobody reads its labels out loud. */
-function openWorkCount(
-  key: string,
-  glyph: 'issue' | 'pull',
-  tally: number | undefined,
-  recorded: boolean
-): EntryCount {
+function openWorkCount(key: string, glyph: 'issue' | 'pull', tally: number | undefined): EntryCount {
   const noun = glyph === 'issue' ? 'issue' : 'pull request';
   if (tally === undefined) {
     const label = `open ${noun}s not reported`;
@@ -349,7 +330,7 @@ function openWorkCount(
       glyph,
       label,
       value: unknownFigure,
-      detail: countDetail(label, unknownFigure, false)
+      detail: countDetail(label)
     };
   }
   const figure = formatWhole(tally);
@@ -359,8 +340,7 @@ function openWorkCount(
     glyph,
     label,
     value: figure,
-    marked: recorded,
-    detail: countDetail(label, figure, recorded)
+    detail: countDetail(label)
   };
 }
 
@@ -568,7 +548,7 @@ function tableCount(count: EntryCount, glyph: LedgerCount['glyph']): LedgerCount
     label: count.label,
     detail: count.detail
   };
-  return count.marked === undefined ? row : { ...row, marked: count.marked };
+  return row;
 }
 
 function tableCounts(counts: readonly EntryCount[]): LedgerCount[] {

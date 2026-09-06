@@ -487,12 +487,26 @@ def apply_lifetime_baselines(sources, baselines):
         stats[capture.STAT_LIFETIME] = lifetime
 
 
-def export(root, source_key, merge_files, now, activity_cache=None, history_store=None, baselines=None):
+def export(
+    root,
+    source_key,
+    merge_files,
+    now,
+    activity_cache=None,
+    history_store=None,
+    baselines=None,
+    verified_readings=None,
+):
     """Walk, merge, guard, and return (sources payload, counters)."""
     section, counters = capture.capture(
         # The capture buckets LOCAL days (issue #276), so the "today" its
         # windows read is this instant's local date, not its UTC one.
-        root, capture.FORMAT_MESSAGES, activity_cache, now.astimezone().date(), history_store
+        root,
+        capture.FORMAT_MESSAGES,
+        activity_cache,
+        now.astimezone().date(),
+        history_store,
+        verified_readings,
     )
     sources = {source_key: section}
     # The walked tree is captured by THIS run, so its instant is this run's.
@@ -521,6 +535,120 @@ def export(root, source_key, merge_files, now, activity_cache=None, history_stor
     for key, instant in captured.items():
         sources[key]["capturedAt"] = instant.strftime(INSTANT_FORMAT)
     return sources, counters
+
+
+DATASET_SCHEMA = "usage-dataset/v1"
+DATASET_UNIT = "tokens"
+DATASET_BREAKDOWNS = (
+    ("categories", "category", capture.CATEGORY_KEYS),
+    ("models", "model", capture.MODEL_KEYS),
+)
+
+
+def breakdown_metadata(name, kind, vocabulary, rows):
+    """One metadata object per breakdown member the source's days carry.
+
+    Shares are taken over the days that CARRY the breakdown, never over the
+    whole series: a member's share of days that never split is a percentage
+    of a question nobody asked (the frontend's modelShares rule).
+    """
+    covered = [(day, row[name]) for day, row in rows if row.get(name)]
+    grand = sum(sum(split.values()) for _, split in covered)
+    entries = []
+    for key in vocabulary:
+        member = [(day, split[key]) for day, split in covered if key in split]
+        if not member:
+            continue
+        total = sum(value for _, value in member)
+        entries.append(
+            {
+                "key": key,
+                "kind": kind,
+                "unit": DATASET_UNIT,
+                "total": total,
+                "sharePct": round(100 * total / grand, 2) if grand else None,
+                "days": len(member),
+                "first": member[0][0],
+                "last": member[-1][0],
+            }
+        )
+    return entries
+
+
+def build_dataset(sources, history_dir, now):
+    """The graphing dataset (issue #299): every source at full depth, with
+    one metadata object per category and per model, beside the day rows.
+
+    It is read from the history stores the captures just wrote — the
+    pipeline's durable memory, so the dataset carries every remembered day
+    with its partitions rather than the windowed breakdowns the sealed
+    document carries — and from the verified readings, whose days it marks.
+    A source with no store (an operator merge file) carries its served days
+    only. This file is MACHINE-LOCAL output, never sealed and never served:
+    it says which day is verified and what share a member holds, which the
+    emission guard would rightly refuse on the wire.
+    """
+    dataset = {
+        "schema": DATASET_SCHEMA,
+        "generatedAt": now.strftime(INSTANT_FORMAT),
+        "unit": DATASET_UNIT,
+        "dayBucketing": "local",
+        "sources": {},
+    }
+    for key, section in sources.items():
+        stored = capture.read_history_store(history_dir / ("%s.json" % key))
+        verified = capture.read_verified_readings(history_dir / ("%s.verified.json" % key))
+        series = section["series"]
+        start = datetime.date.fromisoformat(series["startDate"])
+        end = (start + datetime.timedelta(days=len(series["totals"]) - 1)).isoformat()
+        if not stored:
+            stored = {
+                (start + datetime.timedelta(days=offset)).isoformat(): {capture.HISTORY_TOTAL_KEY: total}
+                for offset, total in enumerate(series["totals"])
+                if total > 0
+            }
+        rows = sorted(stored.items())
+        days = []
+        for day, entry in rows:
+            row = {"date": day, "total": entry[capture.HISTORY_TOTAL_KEY]}
+            for name, _, _ in DATASET_BREAKDOWNS:
+                if entry.get(name):
+                    row[name] = dict(sorted(entry[name].items()))
+            if day in verified:
+                row["verified"] = True
+            days.append(row)
+        first = min(rows[0][0], series["startDate"]) if rows else series["startDate"]
+        last = max(rows[-1][0], end) if rows else end
+        span = (datetime.date.fromisoformat(last) - datetime.date.fromisoformat(first)).days + 1
+        dataset["sources"][key] = {
+            "capturedAt": section.get("capturedAt"),
+            "coverage": {
+                "start": first,
+                "end": last,
+                "days": span,
+                "measuredDays": len(days),
+                "verifiedDays": sum(1 for row in days if row.get("verified")),
+            },
+            "stats": section.get("stats"),
+            "derived": section["derived"],
+            "windows": section["windows"],
+            "categories": breakdown_metadata("categories", "category", capture.CATEGORY_KEYS, rows),
+            "models": breakdown_metadata("models", "model", capture.MODEL_KEYS, rows),
+            "days": days,
+        }
+    return dataset
+
+
+def write_dataset(path, dataset):
+    """Write the dataset atomically, human-readable, beside the stores."""
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(dataset, handle, indent=2)
+            handle.write("\n")
+        temporary.replace(path)
+    except OSError:
+        raise capture.CaptureError("the dataset could not be written")
 
 
 def parse_arguments(argv):
@@ -555,6 +683,14 @@ def parse_arguments(argv):
     parser.add_argument(
         "--lifetime-baselines",
         help="committed baselines table for sources whose lifetime tracks baseline plus delta",
+    )
+    parser.add_argument(
+        "--verified-readings",
+        help="verified per-day readings for the walked tree, applied over its history store",
+    )
+    parser.add_argument(
+        "--dataset",
+        help="machine-local graphing dataset to write from the history stores beside --history-store",
     )
     parser.add_argument(
         "--out",
@@ -593,6 +729,24 @@ def main(argv=None):
             # the store would silently remember nothing, run after run.
             print("no such history store directory", file=sys.stderr)
             return 2
+    verified = None
+    if arguments.verified_readings is not None:
+        verified = pathlib.Path(arguments.verified_readings).expanduser()
+        if not verified.parent.is_dir():
+            print("no such verified readings directory", file=sys.stderr)
+            return 2
+    dataset_path = None
+    if arguments.dataset is not None:
+        if history_store is None:
+            # The dataset is READ from the stores; without one there is no
+            # full-depth memory to write it from, and a dataset silently
+            # built from the windowed document would claim a depth it lacks.
+            print("the dataset is built from the history stores; configure --history-store", file=sys.stderr)
+            return 2
+        dataset_path = pathlib.Path(arguments.dataset).expanduser()
+        if not dataset_path.parent.is_dir():
+            print("no such dataset directory", file=sys.stderr)
+            return 2
     now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
     baselines = None
     if arguments.lifetime_baselines is not None:
@@ -608,8 +762,17 @@ def main(argv=None):
             return 1
     try:
         sources, counters = export(
-            root, arguments.source, merge_files, now, activity_cache, history_store, baselines
+            root,
+            arguments.source,
+            merge_files,
+            now,
+            activity_cache,
+            history_store,
+            baselines,
+            verified,
         )
+        if dataset_path is not None:
+            write_dataset(dataset_path, build_dataset(sources, history_store.parent, now))
     except capture.CaptureError as error:
         print(str(error), file=sys.stderr)
         return 1
@@ -632,6 +795,25 @@ def main(argv=None):
             counters.get("unpartitioned", 0),
             counters.get("unattributed", 0),
             len(sources),
+        ),
+        file=sys.stderr,
+    )
+    # One coverage line per run — the newest day each source reaches, which
+    # is what a stale panel is measured against — so the scheduler's log says
+    # how far the data reached, not only that a push happened (issue #267).
+    print(
+        "coverage "
+        + " ".join(
+            "%s=%s..%s"
+            % (
+                key,
+                section["series"]["startDate"],
+                (
+                    datetime.date.fromisoformat(section["series"]["startDate"])
+                    + datetime.timedelta(days=len(section["series"]["totals"]) - 1)
+                ).isoformat(),
+            )
+            for key, section in sorted(sources.items())
         ),
         file=sys.stderr,
     )

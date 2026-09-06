@@ -727,6 +727,7 @@ included; it is the same battery CI enforces:
     go vet ./...
     CGO_ENABLED=0 go test ./...
     go test -race ./...
+    python3 -I -B -m unittest discover -s scripts/ci -p 'test_*.py' -v
     helm lint chart && helm template smoke chart \
       --kube-version v1.36.0                    # chart changes
     ./scripts/ci/chart-ingress-pin.sh           # chart changes
@@ -790,7 +791,9 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
 ## CI map
 
 - **pr-gate.yml** — pull requests AND pushes to `main` (plus manual
-  dispatch): `security` (checksum-verified tool install, actionlint,
+  dispatch): `security` (checksum-verified tool install, actionlint, the
+  Python contract suites under `scripts/ci/` — `unittest discover -s
+  scripts/ci`, the same command the local gate above lists (issue #296) —
   `gitleaks git` over full history, `gitleaks dir`),
   `dependency-review` (PRs only; fails on high severity), `application`
   (toolchain pinned AND verified — Node 24.19.0, npm 11.17.0,
@@ -951,10 +954,12 @@ Structural promises of the panels subsystem, pinned by
 - **Panels tell the truth about where a number came from.** The envelope's
   `status` carries provenance for the whole payload, and inside
   `token-usage/v1` each stat tile and insight carries `recorded` for its
-  own. A figure captured out of band says so rather than borrowing the
-  panel's freshness, an unreported figure serves `null` and renders as a
-  dash rather than a zero, and an invented figure is a doctrine violation
-  no matter how good the panel looks with it.
+  own. Those flags are DATA for the envelope's readers: the page prints no
+  provenance sentence for a recorded figure (owner directive, 2026-09-06,
+  issue #299), and the flags never leave the payload. An unreported figure
+  serves `null` and renders as a dash rather than a zero, and an invented
+  figure is a doctrine violation no matter how good the panel looks with
+  it.
 - **Vendor names are data, never code.** Tool and vendor names appear
   only as data labels inside snapshots and the embedded fetch config
   (see `vendorMarks` in `internal/panels/doctrine_test.go`); the pin

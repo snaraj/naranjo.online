@@ -7,6 +7,44 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.78] - 2026-09-06
+
+### Added
+
+- The usage exporter writes a machine-local graphing dataset
+  (`usage-dataset/v1`) beside the history stores on every run: per source, a
+  coverage object, the lifetime and captured stats, one metadata object per
+  category and per model (key, unit, total, share, covered days, first and
+  last day), and every remembered day with its partitions (issue #299).
+- Verified readings (`usage-verified/v1`): a per-source, machine-local file
+  of a vendor surface's own figure for a named day, applied over the history
+  store in BOTH directions, so a recorded dashboard figure can correct a day
+  the walk over-counted rather than only ever raise it (issue #299).
+- The model split carries Fable 5.1 as its own member; its tokens were
+  folding into "Other" (issue #299). The residual member now draws the
+  neutral palette slot.
+- The walked source's lifetime-class stats accrue every partitioned day
+  strictly after the activity cache's `lastComputedDate`, so the tiles track
+  between the tool's own recomputations (issue #288).
+- The push script logs one START line per stage, the stage and elapsed time
+  on failure, and one SUMMARY line per run with every stage's duration, the
+  sealed size and checksum prefix, and the exporter's checkout revision; the
+  export prints one coverage line naming the newest day each source reaches
+  (issues #267, #288, #299).
+
+### Removed
+
+- The provenance sentence ("recorded out of band, not fetched live") and the
+  detail rows and notes that carried it (owner directive, 2026-09-06,
+  issue #299). The `recorded` flags stay in the envelope.
+- The "N days active of M days tracked" line under the Sessions square
+  (owner directive, 2026-09-06, issue #299).
+
+### Changed
+
+- The documented local gate names the Python contract suites CI's `security`
+  job runs (issue #296).
+
 ## [0.1.77] - 2026-09-05
 
 ### Changed

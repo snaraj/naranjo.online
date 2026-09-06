@@ -226,10 +226,14 @@ CATEGORY_KEYS = ("input", "output", "cache-read", "cache-write", "reasoning")
 # vocabulary member falls into. It is never a named entity's slot, so a
 # reader's colour for a named model never lands on the residual.
 #
-# The list is APPEND-ONLY. An index is a colour, so reusing or reordering one
-# repaints history under a different entity; a retired model keeps its slot
-# as a tombstone rather than freeing it.
-MODEL_KEYS = ("other", "fable-5", "opus-5", "sonnet-5", "opus-4-8")
+# The list is CLOSED, not append-only: a member joins in its SERVE position
+# (`fable-5-1` beside `fable-5`, issue #299), because this order is what the
+# origin walks to emit rows deterministically. An index here is NOT a colour:
+# the frontend's modelSlots binds a fixed palette slot to each KEY, so a member
+# keeps its swatch wherever it sits in this list, and the residual draws the
+# neutral slot by rule. A retired model keeps its key as a tombstone rather
+# than freeing the name.
+MODEL_KEYS = ("other", "fable-5", "fable-5-1", "opus-5", "sonnet-5", "opus-4-8")
 
 # The reserved residual member, spelled once.
 MODEL_OTHER = "other"
@@ -420,6 +424,11 @@ MAX_ACTIVITY_CACHE_BYTES = 1 << 20
 # stats vocabulary below.
 ACTIVITY_CACHE_USAGE_KEY = "modelUsage"
 ACTIVITY_CACHE_SESSIONS_KEY = "totalSessions"
+# The day the cache was last recomputed. Its lifetime accounting is exact as
+# of that day and FROZEN after it until the tool recomputes, so the served
+# days strictly after it accrue on top (issue #288) — the strict-after rule
+# the baselined sources already follow, so the as-of day never re-accrues.
+ACTIVITY_CACHE_COMPUTED_KEY = "lastComputedDate"
 ACTIVITY_CACHE_USAGE_FIELDS = (
     ("inputTokens", "input"),
     ("outputTokens", "output"),
@@ -444,6 +453,19 @@ HISTORY_SCHEMA_KEY = "schema"
 HISTORY_DAYS_KEY = "days"
 HISTORY_TOTAL_KEY = "total"
 MAX_HISTORY_STORE_BYTES = 1 << 20
+
+# Verified readings (issue #299): a vendor surface's OWN figure for a named
+# day — the dashboard the owner compares this panel against — recorded by
+# hand beside the day it was read. The store's evidence-survives rule can only
+# ever RAISE a day, so a walk that over-counted could never be corrected from
+# the one surface that is the reference; a reading here is the day's figure
+# in both directions. It is the pipeline's other memory: machine-local, never
+# in any repository, calendar days and positive integers only, and applied
+# through the history store so the store and the served series agree.
+VERIFIED_SCHEMA = "usage-verified/v1"
+VERIFIED_READINGS_KEY = "readings"
+VERIFIED_READ_ON_KEY = "readOn"
+MAX_VERIFIED_READINGS_BYTES = 1 << 20
 
 # The stat keys a daily series defines on its own — the same set
 # internal/panels/types.go's usageSeriesDerivedKeys lists, and pinned against
@@ -1500,6 +1522,37 @@ def lifetime_stats(document):
     return stats
 
 
+def accrue_after_cache(stats, document, series, categories, partitioned):
+    """Carry the cache's lifetime accounting over the days after its own.
+
+    The cache is exact as of the day it was last recomputed and frozen after
+    it, so between recomputations the lifetime-class tiles sat still while
+    the series under them kept moving (issue #288). Every PARTITIONED day of
+    the served series strictly after that day accrues onto the whole and
+    onto its class figures together, so the whole stays the sum of its
+    classes; a day the walk could not split accrues nothing rather than
+    guessing a split, and the as-of day itself never re-accrues. A cache
+    that cannot say when it was computed refuses the run, exactly as one
+    that cannot say what it counted does.
+    """
+    as_of = document.get(ACTIVITY_CACHE_COMPUTED_KEY)
+    if not valid_calendar_day(as_of):
+        raise CaptureError("the activity cache carries no calendar as-of day for its accounting")
+    boundary = datetime.date.fromisoformat(as_of)
+    start = datetime.date.fromisoformat(series["startDate"])
+    partitioned = set(partitioned)
+    for offset, total in enumerate(series["totals"]):
+        day = start + datetime.timedelta(days=offset)
+        if day <= boundary or total <= 0 or day.isoformat() not in partitioned:
+            continue
+        stats[STAT_LIFETIME] += total
+        for _, key in ACTIVITY_CACHE_USAGE_FIELDS:
+            stats[key] += categories[key][offset] if key in categories else 0
+    if any(value > MAX_COUNT for value in stats.values()):
+        raise CaptureError("the activity cache lifetime figures exceed the shared count bound")
+    return stats
+
+
 def extend_with_cache(series, categories, models, partitioned, cached):
     """Union the walked series with the cache's days; the WALK wins a conflict.
 
@@ -1759,6 +1812,106 @@ def write_history_store(path, remembered):
         raise CaptureError("the history store could not be written")
 
 
+def read_verified_readings(path):
+    """Read the verified readings: {day: total}, or {} when the file is absent.
+
+    Validation is the history store's own: a real calendar day per entry, a
+    positive integer under the shared count bound, and a read-on day that is
+    a calendar day no earlier than the day it vouches for — no surface can
+    report a day before that day exists. Anything else refuses the run, for
+    the store's reason: this file is the pipeline's memory, and silently
+    ignoring it would serve a figure the owner has already corrected.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            text = handle.read(MAX_VERIFIED_READINGS_BYTES + 1)
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        raise CaptureError("the verified readings could not be read")
+    if len(text) > MAX_VERIFIED_READINGS_BYTES:
+        raise CaptureError(
+            "the verified readings are larger than the %d byte bound" % MAX_VERIFIED_READINGS_BYTES
+        )
+    try:
+        document = json.loads(text)
+    except (ValueError, RecursionError):
+        raise CaptureError("the verified readings are not a parsable JSON document")
+    if not isinstance(document, dict) or document.get(HISTORY_SCHEMA_KEY) != VERIFIED_SCHEMA:
+        raise CaptureError("the verified readings do not declare the expected schema")
+    if set(document) != {HISTORY_SCHEMA_KEY, VERIFIED_READINGS_KEY}:
+        raise CaptureError("the verified readings carry an unknown section")
+    rows = document[VERIFIED_READINGS_KEY]
+    if not isinstance(rows, dict):
+        raise CaptureError("the verified readings carry no day index")
+    readings = {}
+    for day, entry in rows.items():
+        if not valid_calendar_day(day):
+            raise CaptureError("the verified readings carry a key that is not a calendar day")
+        if not isinstance(entry, dict) or set(entry) != {HISTORY_TOTAL_KEY, VERIFIED_READ_ON_KEY}:
+            raise CaptureError("the verified readings carry a malformed day entry")
+        total = entry[HISTORY_TOTAL_KEY]
+        if not isinstance(total, int) or isinstance(total, bool) or total <= 0 or total > MAX_COUNT:
+            raise CaptureError("the verified readings carry a day without a positive bounded total")
+        read_on = entry[VERIFIED_READ_ON_KEY]
+        if not valid_calendar_day(read_on) or read_on < day:
+            raise CaptureError("the verified readings carry a reading dated before the day it names")
+        readings[day] = total
+    return readings
+
+
+def apply_verified_readings(series, categories, models, partitioned, remembered, readings, today):
+    """A verified reading is the day's figure, whichever way the walk disagrees.
+
+    The store's rule only ever raises a day; this is the one path that can
+    lower one, and what lowers it is the owner's reading of the reference
+    surface rather than a capture. A breakdown that no longer partitions the
+    corrected total is dropped for that day — a split summing to a figure
+    nobody serves would be a fabrication — and the day leaves the partitioned
+    set, so the windowed breakdowns retreat behind it exactly as they do
+    behind any stored day without one. The corrected entry is what the
+    caller writes back, so the store and the served series cannot disagree.
+    A reading for a day that has not happened is a refusal: the series would
+    otherwise reach into the future.
+    """
+    if not readings:
+        return series, categories, models, partitioned, remembered
+    start = datetime.date.fromisoformat(series["startDate"])
+    offsets = {
+        (start + datetime.timedelta(days=offset)).isoformat(): offset
+        for offset in range(len(series["totals"]))
+    }
+    partitioned = set(partitioned)
+    for day, total in readings.items():
+        offset = offsets.get(day)
+        if offset is None or datetime.date.fromisoformat(day) > today:
+            raise CaptureError("a verified reading names a day outside the record")
+        if offset == len(series["totals"]) - 1:
+            # The breakdowns cover a trailing window that must reach the
+            # newest day, and a corrected day loses its split; correcting the
+            # newest day would leave the window figures nothing to measure.
+            # Refused here, before the store is written, so the run pushes
+            # nothing and the store keeps what it had.
+            raise CaptureError(
+                "a verified reading names the record's most recent day; the window "
+                "figures need that day's split, so verify it once a later day is measured"
+            )
+        series["totals"][offset] = total
+        entry = {HISTORY_TOTAL_KEY: total, "categories": None, "models": None}
+        for name, rows in (("categories", categories), ("models", models)):
+            kept = {key: values[offset] for key, values in rows.items() if values[offset] > 0}
+            whole = day in partitioned if name == "categories" else bool(kept)
+            if whole and sum(kept.values()) == total:
+                entry[name] = kept
+                continue
+            for values in rows.values():
+                values[offset] = 0
+            if name == "categories":
+                partitioned.discard(day)
+        remembered[day] = entry
+    return series, categories, models, sorted(partitioned), remembered
+
+
 def valid_calendar_day(value):
     """True only for a real YYYY-MM-DD calendar date with no extra bytes.
 
@@ -1842,7 +1995,14 @@ def _assert_emission(value, where, extra_keys, allow_bool):
     raise CaptureError("%s carries a value that is neither a date nor an integer" % where)
 
 
-def capture(root, record_format=FORMAT_MESSAGES, activity_cache=None, today=None, history_store=None):
+def capture(
+    root,
+    record_format=FORMAT_MESSAGES,
+    activity_cache=None,
+    today=None,
+    history_store=None,
+    verified_readings=None,
+):
     """Walk the transcripts and return (section, counters).
 
     The shape decides only HOW a record becomes a (day, integer, parts,
@@ -1865,10 +2025,17 @@ def capture(root, record_format=FORMAT_MESSAGES, activity_cache=None, today=None
     """
     if record_format not in RECORD_FORMATS:
         raise CaptureError("unknown record format")
+    if today is None:
+        # The LOCAL date, matching the series' own bucketing (issue #276): a
+        # window keyed to the UTC date would ask about a day the series does
+        # not bucket by, and every evening past UTC midnight would read as
+        # tomorrow's usage.
+        today = datetime.datetime.now().astimezone().date()
     counters = new_counters()
     reader = read_records if record_format == FORMAT_MESSAGES else read_running_totals
     series, categories, models, partitioned = daily_series(reader(root, counters))
     stats = None
+    cache_document = None
     if activity_cache is not None:
         cache_document = read_activity_cache(activity_cache)
         series, categories, models, partitioned = extend_with_cache(
@@ -1881,10 +2048,25 @@ def capture(root, record_format=FORMAT_MESSAGES, activity_cache=None, today=None
         # refusal in daily_series stands), because a source that suddenly
         # reads completely empty is a misconfiguration to surface, never a
         # gap for remembered history to paper over.
+        stored = read_history_store(history_store)
+        readings = {} if verified_readings is None else read_verified_readings(verified_readings)
+        for day, total in readings.items():
+            # Seeded so the union window reaches every verified day; the
+            # figure itself is imposed after the merge, in both directions.
+            stored.setdefault(day, {HISTORY_TOTAL_KEY: total, "categories": None, "models": None})
         series, categories, models, partitioned, remembered = merge_history(
-            series, categories, models, partitioned, read_history_store(history_store)
+            series, categories, models, partitioned, stored
+        )
+        series, categories, models, partitioned, remembered = apply_verified_readings(
+            series, categories, models, partitioned, remembered, readings, today
         )
         write_history_store(history_store, remembered)
+    elif verified_readings is not None:
+        raise CaptureError("verified readings are applied through a history store; none is configured")
+    if stats is not None:
+        # AFTER the store, so the accrual reads the deepest series this run
+        # serves — the same days the panel draws.
+        stats = accrue_after_cache(stats, cache_document, series, categories, partitioned)
     section = {"series": series}
     totals = series["totals"]
     start = datetime.date.fromisoformat(series["startDate"])
@@ -1932,16 +2114,7 @@ def capture(root, record_format=FORMAT_MESSAGES, activity_cache=None, today=None
         if model_offset > 0:
             section["modelsStartDate"] = window[model_offset]
 
-    section["windows"] = windows_from(
-        series,
-        categories,
-        offset,
-        # The LOCAL date, matching the series' own bucketing (issue #276): a
-        # window keyed to the UTC date would ask about a day the series does
-        # not bucket by, and every evening past UTC midnight would read as
-        # tomorrow's usage.
-        today if today is not None else datetime.datetime.now().astimezone().date(),
-    )
+    section["windows"] = windows_from(series, categories, offset, today)
     section["derived"] = derived_figures(series)
     if stats is not None:
         section["stats"] = stats
@@ -2028,6 +2201,10 @@ def parse_arguments(argv):
         help="durable per-source day store, read and rewritten so pruned days survive",
     )
     parser.add_argument(
+        "--verified-readings",
+        help="verified per-day readings applied over the history store, in both directions",
+    )
+    parser.add_argument(
         "--snapshot",
         help="snapshot file to splice the series into; prints to stdout when omitted",
     )
@@ -2062,8 +2239,16 @@ def main(argv=None):
             # silently remember nothing, run after run.
             print("no such history store directory", file=sys.stderr)
             return 2
+    verified = None
+    if arguments.verified_readings is not None:
+        verified = pathlib.Path(arguments.verified_readings).expanduser()
+        if not verified.parent.is_dir():
+            print("no such verified readings directory", file=sys.stderr)
+            return 2
     try:
-        section, counters = capture(root, arguments.record_format, cache, history_store=history)
+        section, counters = capture(
+            root, arguments.record_format, cache, history_store=history, verified_readings=verified
+        )
     except CaptureError as error:
         print(str(error), file=sys.stderr)
         return 1
